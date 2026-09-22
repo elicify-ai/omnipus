@@ -333,6 +333,9 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	if state := subagentStateForOutcome(event.Outcome); state != "" {
 		al.deliverSubagentState(ownerKey, childRec, state)
 	}
+	if isTerminalOutcome(event.Outcome) {
+		al.deliverSubagentEnd(ownerKey, childRec, event.Outcome)
+	}
 
 	if !class.WakeEligible {
 		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil

@@ -28,6 +28,7 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/goal"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -152,19 +153,9 @@ func (l *SteerLauncher) publishSteeredLaunch(req steer.LaunchRequest, result ste
 	if l == nil || l.al == nil || req.SteeringSessionID == "" || req.Origin.CallID == "" || result.SessionID == "" {
 		return
 	}
-	l.al.emitEvent(EventKindSubTurnSpawn,
-		EventMeta{Source: "steer", TracePath: "steer.launch", SessionKey: req.SteeringSessionID},
-		SubTurnSpawnPayload{
-			AgentID:           req.TargetAgentID,
-			Label:             result.SessionID,
-			SpanID:            subagentSpanID(req.Origin.CallID),
-			ParentSpawnCallID: session.ToolCallID(req.Origin.CallID),
-			TaskLabel:         title,
-			SessionID:         req.SteeringSessionID,
-		},
-	)
 	if lifecycle := l.al.GetSessionLifecycleStore(); lifecycle != nil {
 		if rec, err := lifecycle.Load(result.SessionID); err == nil {
+			l.al.deliverSubagentStart(req.SteeringSessionID, rec, title)
 			l.al.deliverSubagentState(req.SteeringSessionID, rec, string(session.LifecycleQueued))
 		}
 	}
@@ -673,6 +664,9 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 			al.drainSteerQueue(sessionID, gen)
 			return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %v", steer.ErrStoreWrite, persistErr)
 		}
+		if rec.SteeredBy != nil {
+			al.deliverSubagentState(rec.SteeringSessionID(), rec, string(session.LifecycleRunning))
+		}
 		return steer.DispatchResult{State: steer.DispatchRunning, Generation: gen}, nil
 	}
 
@@ -694,6 +688,9 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 		al.drainSteerQueue(sessionID, gen)
 		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %v", steer.ErrStoreWrite, persistErr)
 	}
+	if rec.SteeredBy != nil {
+		al.deliverSubagentState(rec.SteeringSessionID(), rec, string(session.LifecycleRunning))
+	}
 
 	// Fire-and-forget (I-2 "Return timing", founder decision round 9): the
 	// delegate tool returns as soon as Launch+Dispatch have returned; there
@@ -707,7 +704,11 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 				rec.CreatedAt.Add(time.Duration(rec.SteeredBy.Limits.TimeoutSeconds)*time.Second))
 		}
 		defer cancel()
-		_, _ = al.runTurn(runCtx, ts)
+		result, runErr := al.runTurn(runCtx, ts)
+		if finishErr := al.completeSteeredTurn(context.Background(), rec, result, runErr); finishErr != nil {
+			logger.WarnCF("agent", "steer: complete dispatched turn failed",
+				map[string]any{"session_id": sessionID, "generation": gen, "error": finishErr.Error()})
+		}
 	}()
 
 	return steer.DispatchResult{State: steer.DispatchRunning, Generation: gen}, nil
