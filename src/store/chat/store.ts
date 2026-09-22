@@ -10,7 +10,7 @@ import { clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId
 import { EMPTY_BUCKET, FALLBACK_SID, RATE_LIMIT_CLEAR_MS, rateLimitClearTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from './runtime-state'
 import { applyMessageArray, emptySessionState, omitKeys } from './session'
 import { orphanTimers, pendingByParentCallId } from './types'
-import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SubagentSpanRunning, SubagentSpanTerminal } from './types'
+import type { ChatMessage, ChatStore, OutboundQueueItem, RateLimitEventData, SessionChatState, SubagentSpanRunning, SubagentSpanTerminal } from './types'
 import { createOutboundResponseSlice } from './slices/outbound-responses'
 import { createOutboundLifecycleSlice } from './slices/outbound-lifecycle'
 import { createFrameSlice } from './slices/frames'
@@ -18,6 +18,18 @@ import { createFrameSlice } from './slices/frames'
 // HIGH-2: consecutive unknown frame counter. Reset on any known-good frame.
 // On threshold (5), promotes to a user-visible warning toast.
 const chatRuntime = { unknownFrameCount: 0, agentIdAtLastMintSend: null as string | null }
+
+/** Sends one drained queue item, forwarding its #823 correlation id/timestamp
+ * for a QueuedOutboundMessage (a legacy plain-string entry has neither).
+ * Module scope so it doesn't count against maybeDrainNext's/create()'s
+ * grandfathered line budget (scripts/budgets/functions.txt). */
+function drainQueuedMessage(get: () => ChatStore, next: OutboundQueueItem): void {
+  if (typeof next === 'string') {
+    get().sendMessage(next)
+  } else {
+    get().sendMessage(next.content, { clientMessageId: next.id, queuedAt: next.timestamp })
+  }
+}
 
 // agentIdAtLastMintSend records the agent that was active when the most recent
 // session-minting message went out (a send with no session_id). The
@@ -194,7 +206,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     if (pendingDrainQueue.length === 0 || isStreaming) return
     const [next, ...rest] = pendingDrainQueue
     set({ pendingDrainQueue: rest })
-    get().sendMessage(next)
+    drainQueuedMessage(get, next)
   }
 
   return {

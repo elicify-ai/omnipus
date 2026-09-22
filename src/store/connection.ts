@@ -15,6 +15,13 @@ interface ConnectionStore {
   reconnectPhase: 'reconnecting' | 'slow' | 'gave_up' | null
   /** Current attempt number within the active reconnect phase (1-based). */
   reconnectAttempt: number
+  /** Wall-clock markers used by the quiet 15 s / 2 min reconnect UI. */
+  disconnectedAt: number | null
+  reconnectedAt: number | null
+  lastDisconnectDurationMs: number | null
+  lastDisconnectWasTerminal: boolean
+  /** Assistant bubble that was running when this socket dropped. */
+  disconnectedAssistantMessageId: string | null
   /**
    * W2: lite mode is activated when heap pressure exceeds 250 MiB (iOS threshold).
    * When true the UI skips auto-expanding tool calls and the ring-buffer cap is
@@ -23,6 +30,7 @@ interface ConnectionStore {
   liteMode: boolean
   setConnection: (conn: WsConnection | null) => void
   setConnected: (connected: boolean) => void
+  recordDisconnect: (assistantMessageId: string | null) => void
   setConnectionError: (error: string | null) => void
   setReconnectState: (phase: 'reconnecting' | 'slow' | 'gave_up' | null, attempt: number) => void
   setLiteMode: (liteMode: boolean) => void
@@ -35,16 +43,41 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   connectionError: null,
   reconnectPhase: null,
   reconnectAttempt: 0,
+  disconnectedAt: null,
+  reconnectedAt: null,
+  lastDisconnectDurationMs: null,
+  lastDisconnectWasTerminal: false,
+  disconnectedAssistantMessageId: null,
   liteMode: false,
   setConnection: (conn) => set({ connection: conn }),
-  setConnected: (connected) =>
+  setConnected: (connected) => {
+    const current = get()
+    const now = Date.now()
     set({
       isConnected: connected,
-      connectionError: connected ? null : get().connectionError,
-      // Clear reconnect state on connect so banner disappears immediately.
-      reconnectPhase: connected ? null : get().reconnectPhase,
-      reconnectAttempt: connected ? 0 : get().reconnectAttempt,
-    }),
+      connectionError: connected ? null : current.connectionError,
+      reconnectPhase: connected ? null : current.reconnectPhase,
+      reconnectAttempt: connected ? 0 : current.reconnectAttempt,
+      disconnectedAt: connected ? null : (current.disconnectedAt ?? now),
+      reconnectedAt: connected && current.disconnectedAt !== null ? now : current.reconnectedAt,
+      lastDisconnectDurationMs: connected && current.disconnectedAt !== null
+        ? now - current.disconnectedAt
+        : current.lastDisconnectDurationMs,
+      lastDisconnectWasTerminal: connected && current.disconnectedAt !== null
+        ? current.reconnectPhase === 'gave_up'
+        : current.lastDisconnectWasTerminal,
+      disconnectedAssistantMessageId: connected ? null : current.disconnectedAssistantMessageId,
+    })
+  },
+  recordDisconnect: (assistantMessageId) => {
+    const current = get()
+    set({
+      isConnected: false,
+      disconnectedAt: current.disconnectedAt ?? Date.now(),
+      reconnectedAt: null,
+      disconnectedAssistantMessageId: assistantMessageId ?? current.disconnectedAssistantMessageId,
+    })
+  },
   setConnectionError: (error) => set({ connectionError: error }),
   setReconnectState: (phase, attempt) => set({ reconnectPhase: phase, reconnectAttempt: attempt }),
   setLiteMode: (liteMode) => set({ liteMode }),

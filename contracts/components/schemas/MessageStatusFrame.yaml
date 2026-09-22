@@ -1,0 +1,33 @@
+title: MessageStatusFrame
+description: >
+  Server → client delivery status for one user message. Session-scoped. The
+  gateway emits received only after the user transcript entry is durably
+  appended, working after the message is successfully admitted to the agent
+  bus, and failed when processing stops before admission. Emitted only for a
+  MessageFrame carrying client_message_id, preserving compatibility with older
+  clients.
+type: object
+required:
+  - type
+  - session_id
+  - client_message_id
+  - state
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: message_status
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  client_message_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  state:
+    type: string
+    enum:
+      - received
+      - working
+      - failed

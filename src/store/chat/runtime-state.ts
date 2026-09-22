@@ -40,6 +40,7 @@ export const SESSION_SCOPED_FRAME_TYPES = new Set([
   'agent_switched', 'task_status_changed',
   'tool_approval_required', 'rate_limit', 'media', 'session_started',
   'system_overload', 'session_close_ack', 'cancel_stage',
+  'message_status',
   // ADR-049 R3: goal_status/loop_status always carry `session_id` (schema
   // `min(1)`, required) — session-scoped like rate_limit. plan_status
   // deliberately does NOT carry session_id (correlated by plan_id instead,

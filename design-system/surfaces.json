@@ -6302,6 +6302,10 @@
       "lane": 4
     },
     {
+      "source": "src/components/chat/ConnectionStatus.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/GoalCommandMarker.tsx",
       "lane": 3
     },

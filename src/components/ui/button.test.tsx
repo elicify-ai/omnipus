@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Button } from './button'
+import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from './alert-dialog'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from './dialog'
 
 // test_button_default_variant_colors
@@ -407,7 +408,12 @@ describe('Button persistent action announcements', () => {
     const { rerender } = render(<Button>Save</Button>)
     const region = screen.getByRole('status')
     expect(region).toBeEmptyDOMElement()
-    expect(region).toHaveAttribute('aria-live', 'polite')
+    // role=status already carries implicit aria-live=polite (WAI-ARIA role
+    // mapping), so the explicit attribute is redundant. It does not need to
+    // be present for a background dialog to still get correctly hidden by a
+    // nested modal — see the "lets a nested modal hide..." test below, which
+    // proves Radix's hideOthers has no `[aria-live]` carve-out either way.
+    expect(region).not.toHaveAttribute('aria-live')
     expect(region).toHaveAttribute('aria-atomic', 'true')
     rerender(<Button actionState="success">Save</Button>)
     expect(screen.getByRole('status')).toBe(region)
@@ -421,19 +427,56 @@ describe('Button persistent action announcements', () => {
     expect(screen.getByRole('button', { name: /^Save$/ })).toBeInTheDocument()
   })
 
-  // The region is portalled to document.body, outside the dialog's own DOM
-  // subtree — so this asserts it survives Radix's `hideOthers` (which the
-  // Dialog primitive uses to hide background content while open) rather
-  // than asserting DOM containment inside the dialog, which no longer
-  // holds by construction.
-  it('keeps action announcements reachable and unhidden while a modal is open', () => {
+  it('keeps action announcements in the active modal subtree and unhidden', () => {
     render(<Dialog open><DialogContent><DialogTitle>Edit</DialogTitle><DialogDescription>Save your changes</DialogDescription><Button actionState="success">Save</Button></DialogContent></Dialog>)
+    const dialog = screen.getByRole('dialog', { name: 'Edit' })
     const region = screen.getByRole('status')
     expect(document.body).toContainElement(region)
+    expect(dialog).toContainElement(region)
     expect(region.closest('[aria-hidden="true"]')).toBeNull()
     expect(region).not.toHaveAttribute('aria-hidden')
     expect(region).toHaveTextContent('Action succeeded')
     expect(screen.getByRole('button', { name: /^Save$/ })).toBeInTheDocument()
+  })
+
+  it('lets a nested modal hide the dialog containing an action announcement', () => {
+    const outer = (
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>Edit</DialogTitle>
+          <DialogDescription>Save your changes</DialogDescription>
+          <Button actionState="success">Save</Button>
+        </DialogContent>
+      </Dialog>
+    )
+    const { rerender } = render(outer)
+    expect(screen.getByRole('dialog', { name: 'Edit' })).toBeInTheDocument()
+
+    rerender(
+      <>
+        {outer}
+        <AlertDialog open>
+          <AlertDialogContent>
+            <AlertDialogTitle>Confirm</AlertDialogTitle>
+            <AlertDialogDescription>Confirm the action</AlertDialogDescription>
+          </AlertDialogContent>
+        </AlertDialog>
+      </>,
+    )
+
+    expect(screen.getByRole('alertdialog', { name: 'Confirm' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'Edit' })).not.toBeInTheDocument()
+  })
+
+  it('preserves React 19 callback-ref cleanup on unmount', () => {
+    const cleanup = vi.fn()
+    const ref = vi.fn(() => cleanup)
+    const { unmount } = render(<Button ref={ref}>Save</Button>)
+
+    expect(ref).toHaveBeenCalledTimes(1)
+    unmount()
+    expect(cleanup).toHaveBeenCalledTimes(1)
+    expect(ref).toHaveBeenCalledTimes(1)
   })
 })
 

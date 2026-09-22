@@ -13,7 +13,61 @@ import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { EMPTY_BUCKET, pendingCancelAckSids, replayingClearTimers } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
-import type { ChatMessage, ChatStore, PositionedToolCall, SessionChatState } from '../types'
+import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
+
+// ── #823 message-status helpers ──────────────────────────────────────────────
+// Kept at module scope (not nested inside createOutboundLifecycleSlice/
+// sendMessage) so their bodies do not count against those two functions'
+// grandfathered line budgets (scripts/budgets/functions.txt) — see
+// docs/internal/architecture/draft-module-map.md, "Size budgets".
+
+/** Resolves the client-generated correlation id + queued timestamp for a
+ * send, defaulting both when the caller (a fresh sendMessage call, not a
+ * queue replay) didn't supply them. */
+function beginSend(content: string, opts?: { clientMessageId?: string; queuedAt?: string }) {
+  const clientMessageId = opts?.clientMessageId ?? generateId()
+  const queuedAt = opts?.queuedAt ?? new Date().toISOString()
+  return { clientMessageId, queuedAt, queuedMessage: { id: clientMessageId, content, timestamp: queuedAt } }
+}
+
+/** Builds the optimistic user bubble for a send, carrying the correlation id
+ * that MessageStatusFrame will later echo back (#823 state A). */
+function buildQueuedUserMessage(
+  sessionId: string,
+  content: string,
+  clientMessageId: string,
+  queuedAt: string,
+  attachments: MediaAttachment[] = [],
+): ChatMessage {
+  return {
+    id: clientMessageId,
+    session_id: sessionId,
+    role: 'user',
+    content,
+    timestamp: queuedAt,
+    status: 'done',
+    deliveryStatus: 'sending',
+    ...(attachments.length > 0 ? { media: attachments } : {}),
+  }
+}
+
+/** Marks a user message 'failed' (#823 state A) after a send attempt that
+ * never reached the gateway. Mutates an immer draft in place. */
+function markUserMessageFailed(draft: { messagesById: Record<string, { status?: string; deliveryStatus?: string } | undefined> }, id: string): void {
+  const um = draft.messagesById[id]
+  if (um) {
+    um.status = 'error'
+    um.deliveryStatus = 'failed'
+  }
+}
+
+/** Same as markUserMessageFailed, for an array-mapped (non-draft) message list. */
+function withUserMessageFailed(m: ChatMessage, targetId: string): ChatMessage {
+  // #3: UserMessage allows status:'error'; cast is safe because a caller only
+  // ever passes this the message it just constructed with role:'user'. The
+  // discriminated union prevents inline spread without the cast.
+  return m.id === targetId ? ({ ...m, status: 'error' as const, deliveryStatus: 'failed' as const } as ChatMessage) : m
+}
 
 
 type OutboundLifecycleSlice = Pick<ChatStore,
@@ -39,13 +93,13 @@ interface OutboundLifecycleContext {
 
 export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, abandonPendingKickoffInternal, maybeDrainNext, runtime }: OutboundLifecycleContext): OutboundLifecycleSlice {
   return {
-    enqueueOutboundMessage: (content) => {
+    enqueueOutboundMessage: (content, queuedMessage) => {
       const MAX_QUEUE = 5
       const current = get().outboundQueue
       if (current.length >= MAX_QUEUE) {
         return false
       }
-      set({ outboundQueue: [...current, content] })
+      set({ outboundQueue: [...current, queuedMessage ?? content] })
       return true
     },
 
@@ -130,6 +184,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
     sendMessage: (content, opts) => {
       const mediaRefs = opts?.mediaRefs ?? []
       const attachments = opts?.attachments ?? []
+      const { clientMessageId, queuedAt, queuedMessage } = beginSend(content, opts)
       // Phase 1 / FR-010: per-turn model override. Trim and strip empty
       // strings so absent and "" are equivalent (the WS frame is omitted
       // entirely when no model was picked this session, per spec §18 Q3).
@@ -203,7 +258,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       if (!connection || !isConnected) {
         // WS is disconnected — buffer the message for when the connection
         // recovers rather than losing it silently or showing a hard error.
-        const enqueued = get().enqueueOutboundMessage(content)
+        const enqueued = get().enqueueOutboundMessage(content, queuedMessage)
         if (!enqueued) {
           useConnectionStore.getState().setConnectionError(
             'Queue full (5 messages max) — waiting to reconnect. Oldest pending messages will be sent first.'
@@ -217,15 +272,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // a temporary bucket that we'd have to migrate on the ack, at the cost
       // of ~1 round-trip of perceived latency on the very first message.
       if (activeSessionId !== null) {
-        const userMsg: ChatMessage = {
-          id: generateId(),
-          session_id: activeSessionId,
-          role: 'user',
-          content,
-          timestamp: new Date().toISOString(),
-          status: 'done',
-          ...(attachments.length > 0 ? { media: attachments } : {}),
-        }
+        const userMsg: ChatMessage = buildQueuedUserMessage(activeSessionId, content, clientMessageId, queuedAt, attachments)
 
         // Mid-turn steering send: a turn is already streaming, so this
         // message does NOT start a new turn — the gateway injects it into
@@ -268,7 +315,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           // comment), so this cannot race the in-flight first turn — it
           // simply becomes the next queued message once turn 1 completes.
           if (activeSessionId === '__pending') {
-            const enqueued = get().enqueueOutboundMessage(content)
+            const enqueued = get().enqueueOutboundMessage(content, queuedMessage)
             if (!enqueued) {
               useConnectionStore.getState().setConnectionError(
                 'Queue full (5 messages max) — waiting to reconnect. Oldest pending messages will be sent first.'
@@ -286,6 +333,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             type: 'message' as const,
             content,
             session_id: activeSessionId,
+            client_message_id: userMsg.id,
             agent_id: activeAgentId ?? undefined,
             ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
             ...metadataFrame,
@@ -307,8 +355,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             // unconditionally alongside the append broke the assertion this
             // branch's own pre-existing test pins).
             withBucket(activeSessionId, (b) => produce(b, (draft) => {
-              const um = draft.messagesById[userMsg.id]
-              if (um) { um.status = 'error' }
+              markUserMessageFailed(draft, userMsg.id)
             }) as Partial<SessionChatState>)
             useConnectionStore.getState().setConnectionError(
               'Message could not be sent — connection dropped. Your message was kept; press Retry to resend.'
@@ -421,6 +468,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           type: 'message' as const,
           content,
           session_id: activeSessionId,
+          client_message_id: userMsg.id,
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
           ...metadataFrame,
@@ -451,8 +499,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
               if (aIdx !== -1) draft.messageOrder.splice(aIdx, 1)
               delete draft.messagesById[assistantMsg.id]
               // Keep the user message, but flag it as failed.
-              const um = draft.messagesById[userMsg.id]
-              if (um) { um.status = 'error' }
+              markUserMessageFailed(draft, userMsg.id)
               draft.isStreaming = false
             }) as Partial<SessionChatState>
           })
@@ -475,7 +522,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         // (every kickoff-terminal cleanup path calls `drainOutboundQueue()`
         // to release it).
         if (get().pendingKickoff !== null) {
-          const enqueued = get().enqueueOutboundMessage(content)
+          const enqueued = get().enqueueOutboundMessage(content, queuedMessage)
           if (!enqueued) {
             useConnectionStore.getState().setConnectionError(
               'Queue full (5 messages max) — waiting to reconnect. Oldest pending messages will be sent first.'
@@ -495,14 +542,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         // 'session_started'). If the send succeeds, the message stays visible
         // until session_started migrates the bucket.
         const pendingSid = '__pending'
-        const userMsg: ChatMessage = {
-          id: generateId(),
-          session_id: pendingSid,
-          role: 'user',
-          content,
-          timestamp: new Date().toISOString(),
-          status: 'done',
-        }
+        const userMsg: ChatMessage = buildQueuedUserMessage(pendingSid, content, clientMessageId, queuedAt)
         const assistantMsg: ChatMessage = {
           id: generateId(),
           session_id: pendingSid,
@@ -526,6 +566,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         const payload2 = {
           type: 'message' as const,
           content,
+          client_message_id: userMsg.id,
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
           ...metadataFrame,
@@ -541,11 +582,9 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           // optimistic assistant placeholder. This preserves the typed content
           // as a retriable error bubble rather than silently dropping the message.
           withBucket(pendingSid, (b) => {
-            const msgs = getMessages(b).map((m) =>
-              // #3: UserMessage allows status:'error'; cast is safe because userMsg was created
-              // with role:'user'. The discriminated union prevents inline spread without cast.
-              m.id === userMsg.id ? ({ ...m, status: 'error' as const } as ChatMessage) : m
-            ).filter((m) => m.id !== assistantMsg.id)
+            const msgs = getMessages(b)
+              .map((m) => withUserMessageFailed(m, userMsg.id))
+              .filter((m) => m.id !== assistantMsg.id)
             return { ...applyMessageArray(msgs, b), isStreaming: false }
           })
           useConnectionStore.getState().setConnectionError('Message could not be sent — connection dropped. Please try again.')

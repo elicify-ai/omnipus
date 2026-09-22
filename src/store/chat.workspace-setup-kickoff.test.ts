@@ -74,6 +74,10 @@ function resetStore() {
 
 beforeEach(resetStore)
 
+function outboundQueueContents(): string[] {
+  return useChatStore.getState().outboundQueue.map((item) => typeof item === 'string' ? item : item.content)
+}
+
 function connectMock(sendReturn = true) {
   const mockSend = vi.fn().mockReturnValue(sendReturn)
   act(() => {
@@ -375,7 +379,7 @@ describe('chat store — sendMessage composer guard for a stuck "__pending" sess
     // Mid-turn steering under '__pending' degrades to offline-style
     // buffering (sendMessage's own isStreaming branch) — no send call.
     expect(mockSend).not.toHaveBeenCalled()
-    expect(useChatStore.getState().outboundQueue).toContain('steer me')
+    expect(outboundQueueContents()).toContain('steer me')
   })
 })
 
@@ -717,7 +721,7 @@ describe('chat store — collision guard prevents the __pending bucket hijack', 
     })
 
     expect(mockSend).not.toHaveBeenCalled()
-    expect(useChatStore.getState().outboundQueue).toEqual(['a plain message'])
+    expect(outboundQueueContents()).toEqual(['a plain message'])
     // No second '__pending' turn was activated.
     expect(useSessionStore.getState().activeSessionId).toBeNull()
     // The kickoff's own bucket is untouched — still exactly its own
@@ -749,7 +753,7 @@ describe('chat store — collision guard prevents the __pending bucket hijack', 
       useChatStore.getState().sendMessage('hello from ws-other')
     })
     expect(mockSend).not.toHaveBeenCalled()
-    expect(useChatStore.getState().outboundQueue).toContain('hello from ws-other')
+    expect(outboundQueueContents()).toContain('hello from ws-other')
 
     // The kickoff's late ack arrives for the ORIGINATING workspace, which
     // the user has since left — resolved via the "wrong workspace"

@@ -225,7 +225,10 @@ function WsLifecycle() {
         useChatStore.getState().drainOutboundQueue();
       },
       onDisconnected: () => {
-        setConnected(false);
+        const chatState = useChatStore.getState();
+        useConnectionStore.getState().recordDisconnect(
+          chatState.isStreaming ? chatState.lastAssistantMessageId : null,
+        );
         // C8: a socket close mid-turn means the terminal (done/error) frame for
         // any in-flight turn will never arrive on THIS connection. Clear the
         // streaming/in-flight state now so the composer re-enables and the

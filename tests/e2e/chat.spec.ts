@@ -314,48 +314,37 @@ test(
     // enters its automatic reconnect-retry loop.
     await context.setOffline(true);
 
-    // Wait for the disconnect to be detected (the persistent reconnect
-    // banner is the ground-truth signal — data-testid="reconnect-banner",
-    // ChatScreen.tsx).
-    await expect(page.getByTestId('reconnect-banner')).toBeVisible({ timeout: 10_000 });
+    // A short disconnect is deliberately quiet (#823); queued messages carry
+    // their own status instead of a global reconnect banner.
+    await expect(page.getByTestId('connection-status-line')).not.toBeVisible();
 
     // The composer must stay usable during the reconnect-retry window (the
     // #105 fix) — NOT disabled, NOT silently inert. Type and submit TWO
     // messages while still fully offline, to prove ordering across the
     // queue as well as buffering itself.
     //
-    // NOTE: a buffered (queued) message does NOT mint a chat bubble —
-    // useChatStore's disconnected-WS branch in sendMessage only pushes the
-    // raw text onto `outboundQueue` and returns; the optimistic user bubble
-    // is only created once the message is actually dispatched (by
-    // maybeDrainNext -> sendMessage, after reconnect). The queue is
-    // therefore NOT silent: the outbound-queue-indicator banner is the
-    // user-visible proof-of-buffering for this window, counting up
-    // deterministically with each queued send.
+    // Each buffered message appears immediately with its own Clock status.
     await expect(input).toBeEnabled();
     await input.fill('Say exactly: QUEUEDONE');
     await input.press('Enter');
-    await expect(page.getByTestId('outbound-queue-indicator')).toContainText('1 message queued', { timeout: 5_000 });
+    await expect(page.getByRole('button', { name: 'Not sent yet, will be sent automatically' })).toHaveCount(1, { timeout: 5_000 });
     await input.fill('Say exactly: QUEUEDTWO');
     await input.press('Enter');
-    await expect(page.getByTestId('outbound-queue-indicator')).toContainText('2 messages queued', { timeout: 5_000 });
+    await expect(page.getByRole('button', { name: 'Not sent yet, will be sent automatically' })).toHaveCount(2, { timeout: 5_000 });
 
-    // Neither message has been dispatched yet — no assistant reply, and no
-    // user bubble either (see the NOTE above): the ONLY visible evidence at
-    // this point is the queue indicator's count, which is exactly why that
-    // count is the assertion that actually distinguishes "queued" from
-    // "silently dropped" here.
+    // Neither message has been dispatched yet, but both user bubbles and
+    // their per-message status are visible.
     expect(await assistantMessages(page).count()).toBe(0);
-    expect(await userMessages(page).count()).toBe(0);
+    expect(await userMessages(page).count()).toBe(2);
 
     // Reconnect.
     await context.setOffline(false);
 
     // The queue drains automatically, ONE message at a time as each turn
     // completes (see maybeDrainNext in store/chat.ts) — wait for the
-    // indicator (and the reconnect banner) to fully clear...
-    await expect(page.getByTestId('outbound-queue-indicator')).not.toBeVisible({ timeout: 120_000 });
-    await expect(page.getByTestId('reconnect-banner')).not.toBeVisible({ timeout: 20_000 });
+    // per-message Clock states to clear...
+    await expect(page.getByRole('button', { name: 'Not sent yet, will be sent automatically' })).toHaveCount(0, { timeout: 120_000 });
+    await expect(page.getByTestId('connection-status-line')).not.toBeVisible({ timeout: 20_000 });
 
     // ...then for BOTH replies to actually arrive — proving the messages
     // were genuinely sent and answered, not just silently dequeued.

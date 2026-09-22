@@ -53,6 +53,8 @@ channels:
         $ref: '#/components/messages/WhatsAppPairingSubscribeFrame'
       SessionStartedFrame:
         $ref: '#/components/messages/SessionStartedFrame'
+      MessageStatusFrame:
+        $ref: '#/components/messages/MessageStatusFrame'
       TokenFrame:
         $ref: '#/components/messages/TokenFrame'
       DoneFrame:
@@ -295,6 +297,16 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/SessionStartedFrame'
+  receiveMessageStatus:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Message-level delivery status. received means the user message is
+      persisted; working means the turn was admitted; failed means admission
+      stopped permanently. Correlated by client_message_id.
+    messages:
+    - $ref: '#/channels/chat/messages/MessageStatusFrame'
   receiveToken:
     action: receive
     channel:
@@ -961,6 +973,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SessionStartedFrame'
+    MessageStatusFrame:
+      name: MessageStatusFrame
+      title: message_status
+      summary: User-message persistence and turn-admission status (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/MessageStatusFrame'
     TokenFrame:
       name: TokenFrame
       title: token
@@ -1400,6 +1419,7 @@ components:
       - device_pairing_response
       - session_close
       - session_started
+      - message_status
       - token
       - done
       - error
@@ -1505,6 +1525,13 @@ components:
         type:
           type: string
           const: message
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            Client-generated correlation id echoed by MessageStatusFrame.
+            Optional for compatibility with older clients.
         content:
           type: string
           maxLength: 5242880
@@ -1688,6 +1715,38 @@ components:
           description: >
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (b) (FR-089): absent for this frame type.
+    MessageStatusFrame:
+      title: MessageStatusFrame
+      description: >
+        Server → client delivery status for one user message. Session-scoped.
+        received follows durable transcript persistence; working follows
+        successful turn admission; failed means processing stopped before
+        admission. Emitted only when the client supplied client_message_id.
+      type: object
+      required:
+      - type
+      - session_id
+      - client_message_id
+      - state
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: message_status
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        state:
+          type: string
+          enum:
+          - received
+          - working
+          - failed
     TokenFrame:
       title: TokenFrame
       description: >

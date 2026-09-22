@@ -90,6 +90,10 @@ function connectWithSendSpy() {
   return send
 }
 
+function outboundQueueContents(): string[] {
+  return useChatStore.getState().outboundQueue.map((item) => typeof item === 'string' ? item : item.content)
+}
+
 // ── enqueueOutboundMessage ─────────────────────────────────────────────────────
 
 describe('outboundQueue — enqueueOutboundMessage', () => {
@@ -268,7 +272,7 @@ describe('outboundQueue — drainOutboundQueue', () => {
       useChatStore.getState().clearStreamingState()
     })
     expect(send).toHaveBeenCalledTimes(1) // B did NOT reach the wire
-    expect(useChatStore.getState().outboundQueue).toEqual(['B'])
+    expect(outboundQueueContents()).toEqual(['B'])
     expect(useChatStore.getState().pendingDrainQueue).toEqual(['C'])
 
     // Second reconnect: drainOutboundQueue must merge the bounced-back
@@ -338,7 +342,7 @@ describe('sendMessage — queues when disconnected (Fix 3)', () => {
     act(() => {
       useChatStore.getState().sendMessage('queued message')
     })
-    expect(useChatStore.getState().outboundQueue).toContain('queued message')
+    expect(outboundQueueContents()).toContain('queued message')
     // The old hard-error message must NOT appear.
     const err = useConnectionStore.getState().connectionError
     expect(err).not.toBe(
@@ -353,7 +357,7 @@ describe('sendMessage — queues when disconnected (Fix 3)', () => {
     act(() => {
       useChatStore.getState().sendMessage('slow-phase message')
     })
-    expect(useChatStore.getState().outboundQueue).toContain('slow-phase message')
+    expect(outboundQueueContents()).toContain('slow-phase message')
   })
 
   it('sets connectionError when queue is full and another message is attempted', () => {
@@ -367,5 +371,31 @@ describe('sendMessage — queues when disconnected (Fix 3)', () => {
     const err = useConnectionStore.getState().connectionError
     expect(err).not.toBeNull()
     expect(err).toContain('Queue full')
+  })
+})
+
+describe('message_status acknowledgements (#823)', () => {
+  it('correlates the server acknowledgement to the optimistic user message', () => {
+    const send = connectWithSendSpy()
+
+    act(() => useChatStore.getState().sendMessage('acknowledge me'))
+    const payload = send.mock.calls[0][0] as { client_message_id: string }
+    expect(payload.client_message_id).toBeTruthy()
+
+    act(() => useChatStore.getState().handleFrame({
+      type: 'message_status',
+      session_id: 'test-session',
+      client_message_id: payload.client_message_id,
+      state: 'received',
+    }))
+    expect(useChatStore.getState().messagesById[payload.client_message_id]?.deliveryStatus).toBe('received')
+
+    act(() => useChatStore.getState().handleFrame({
+      type: 'message_status',
+      session_id: 'test-session',
+      client_message_id: payload.client_message_id,
+      state: 'working',
+    }))
+    expect(useChatStore.getState().messagesById[payload.client_message_id]?.deliveryStatus).toBe('working')
   })
 })
