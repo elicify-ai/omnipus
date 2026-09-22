@@ -285,7 +285,7 @@ func providerRegionsToJSON(regions []ProviderRegion) []providerRegionJSON {
 	}
 	out := make([]providerRegionJSON, 0, len(regions))
 	for _, r := range regions {
-		out = append(out, providerRegionJSON{ID: r.ID, Group: r.Group})
+		out = append(out, providerRegionJSON(r))
 	}
 	return out
 }

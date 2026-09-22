@@ -573,7 +573,7 @@ func parseResponse(output *converseResponse) (*LLMResponse, error) {
 		}
 		args, err := decodeToolInput(block.ToolUse.Input)
 		if err != nil {
-			cause := fmt.Errorf("%w: tool %q (id %q): %v",
+			cause := fmt.Errorf("%w: tool %q (id %q): %w",
 				common.ErrToolArgumentsUndecodable, block.ToolUse.Name, block.ToolUse.ToolUseID, err)
 			tae := common.NewToolArgumentsError(block.ToolUse.Name, cause, output.StopReason == "max_tokens")
 			return nil, common.AttachToolArgumentsEvidence(tae, output.StopReason, usage)

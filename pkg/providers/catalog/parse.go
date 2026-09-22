@@ -252,7 +252,7 @@ func parseProviderRegions(path string, dtos []providerRegionDTO) ([]ProviderRegi
 		if !isKnownRegionGroup(r.Group) {
 			return nil, invalid(rpath+".group", "%q is not one of \"\"|us|eu|apac|jp|au|global", r.Group)
 		}
-		out = append(out, ProviderRegion{ID: r.ID, Group: r.Group})
+		out = append(out, ProviderRegion(r))
 	}
 	return out, nil
 }

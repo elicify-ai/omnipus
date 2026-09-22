@@ -491,7 +491,7 @@ func TestInputFromFlags_Validation(t *testing.T) {
 			// provider at all.
 			name: "unsupported provider carries the catalog's reason",
 			f: inputFlags{
-				providerID: "amazon-bedrock",
+				providerID: "google-vertex",
 				apiKey:     "k",
 			},
 			want: "cloud-iam",

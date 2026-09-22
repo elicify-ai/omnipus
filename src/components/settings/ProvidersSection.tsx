@@ -420,6 +420,7 @@ function ProviderConfigSheet({
               </label>
               <select
                 id={`aws-region-input-${draftKey}`}
+                tabIndex={0}
                 value={awsRegions[draftKey] ?? defaultAwsRegion}
                 onChange={(e) => {
                   setAwsRegions((prev) => ({ ...prev, [draftKey]: e.target.value }))
