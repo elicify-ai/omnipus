@@ -9,7 +9,7 @@
 //
 //	An attacker who has successfully prompt-injected one agent can call
 //	`remember` (or `retrospective`) in a tight loop to:
-//	  1. Fill the disk with junk MEMORY.md entries (DoS via disk pressure)
+//	  1. Fill the memrooms store with junk per-memory files (DoS via disk pressure)
 //	  2. Pollute the recall corpus so unrelated agents return tainted hits
 //	  3. Burn LLM dollars indirectly (every remember call ends a turn cleanly,
 //	     but the next turn still costs a request)

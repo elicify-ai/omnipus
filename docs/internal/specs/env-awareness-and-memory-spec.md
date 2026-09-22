@@ -1,7 +1,7 @@
 # Env-Awareness + Agent Memory Architecture Spec (v7)
 
 **Created**: 2026-04-24 (v5), extended 2026-04-23 (v6), revised 2026-04-24 (v7 post-grill).
-**Status**: Draft — v7 resolves all 6 CRITICAL and 8 MAJOR findings from the v6 grill with code-verified fixes. Fix A (env-awareness) + Fix C (v5 memory) ship together. **Fix B remains out of scope**.
+**Status**: Superseded. The memory sections below describe the pre-rooms design and must not be treated as current behavior. The implemented direction is [Spec-5 — Memory Rooms](v01-spec5-memory-tasks-calendar-spec.md): per-memory files in private/shared `.omnipus/` rooms; the old `MEMORY.md` store is not read or migrated.
 **Scope**: One PR. Parallel subagent implementation. Full-codebase tests + new tests. 6 PR-review agents gate the merge (strict pass).
 
 ## v7 change log (one line per CRIT/MAJ resolved, each with file:line verification)

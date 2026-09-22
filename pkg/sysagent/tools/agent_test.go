@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -793,7 +794,7 @@ func TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass(t *testing.T) {
 // exists anywhere in this package and were removed along with the tool.
 //
 // Scenario A: seed heartbeat content on disk, read it back → exact match.
-// Scenario B: read a non-existent file → NOT_FOUND error.
+// Scenario B: the retired memory kind → typed redirect to the memory tools.
 // Scenario C: an unknown file key is rejected.
 //
 // Traces to: issue #240 regression lock B; tool-manifest-tier-redesign review F6.
@@ -834,21 +835,32 @@ func TestAgentMetadataTools_RoundTrip(t *testing.T) {
 		}
 	})
 
-	t.Run("read_nonexistent_returns_not_found", func(t *testing.T) {
+	t.Run("retired_memory_kind_redirects_to_memory_tools", func(t *testing.T) {
+		legacyContent := "leftover data from an older install"
+		if err := os.WriteFile(filepath.Join(wsPath, "MEMORY.md"), []byte(legacyContent), 0o600); err != nil {
+			t.Fatalf("seed leftover MEMORY.md: %v", err)
+		}
+
 		readResult := readTool.Execute(context.Background(), map[string]any{
 			"file":     "memory",
 			"agent_id": agentID,
 		})
 		if !readResult.IsError {
-			t.Fatalf("reading nonexistent MEMORY.md should fail, got success: %s", readResult.ForLLM)
+			t.Fatalf("retired memory kind should fail, got success: %s", readResult.ForLLM)
 		}
 		var m map[string]any
 		if err := json.Unmarshal([]byte(readResult.ForLLM), &m); err != nil {
 			t.Fatalf("result not JSON: %v", err)
 		}
 		errObj, _ := m["error"].(map[string]any)
-		if errObj["code"] != "NOT_FOUND" {
-			t.Errorf("expected NOT_FOUND error code, got %v", errObj["code"])
+		if errObj["code"] != "INVALID_INPUT" {
+			t.Errorf("expected INVALID_INPUT error code, got %v", errObj["code"])
+		}
+		if !strings.Contains(readResult.ForLLM, "recall_memory") {
+			t.Errorf("retired memory error must name recall_memory, got: %s", readResult.ForLLM)
+		}
+		if !strings.Contains(readResult.ForLLM, "remember") {
+			t.Errorf("retired memory error must name remember, got: %s", readResult.ForLLM)
 		}
 	})
 
@@ -869,6 +881,50 @@ func TestAgentMetadataTools_RoundTrip(t *testing.T) {
 			t.Errorf("expected INVALID_INPUT, got %v", errObj["code"])
 		}
 	})
+}
+
+// TestAgentReadMetadataTool_DefinitionHasThreeKinds locks the public tool
+// contract after retiring the inert MEMORY.md metadata surface. The schema
+// must expose exactly the three files that read_agent_metadata can read, and
+// neither description may advertise MEMORY.md as real memory.
+//
+// Traces to: issue #627.
+func TestAgentReadMetadataTool_DefinitionHasThreeKinds(t *testing.T) {
+	deps, _ := newTestDepsWithHome(t)
+	tool := systools.NewAgentReadMetadataTool(deps)
+
+	properties, ok := tool.Parameters()["properties"].(map[string]any)
+	if !ok {
+		t.Fatal("parameters.properties is not an object")
+	}
+	fileSchema, ok := properties["file"].(map[string]any)
+	if !ok {
+		t.Fatal("parameters.properties.file is not an object")
+	}
+	gotEnum, ok := fileSchema["enum"].([]string)
+	if !ok {
+		t.Fatalf("file enum has type %T, want []string", fileSchema["enum"])
+	}
+	wantEnum := []string{"soul", "heartbeat", "agent"}
+	if !reflect.DeepEqual(gotEnum, wantEnum) {
+		t.Fatalf("file enum = %v, want exactly %v", gotEnum, wantEnum)
+	}
+
+	description := tool.Description()
+	for _, filename := range []string{"SOUL.md", "HEARTBEAT.md", "AGENT.md"} {
+		if !strings.Contains(description, filename) {
+			t.Errorf("tool description must name %s: %s", filename, description)
+		}
+	}
+	if strings.Count(description, ".md") != 3 {
+		t.Errorf("tool description must name exactly three metadata files: %s", description)
+	}
+	if strings.Contains(description, "MEMORY.md") {
+		t.Errorf("tool description must not advertise MEMORY.md: %s", description)
+	}
+	if fileDescription, _ := fileSchema["description"].(string); strings.Contains(strings.ToLower(fileDescription), "memory") {
+		t.Errorf("file parameter description must not advertise memory: %s", fileDescription)
+	}
 }
 
 // TestBash_NewCustomAgentDeniedByDefault proves FR-B12 (bash-tool-spec.md,

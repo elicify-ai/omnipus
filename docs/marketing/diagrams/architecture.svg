@@ -145,9 +145,9 @@
   <g font-family="'Inter', sans-serif" font-size="12" fill="#E2E8F0">
     <rect x="80"  y="514" width="190" height="92" rx="6" fill="#111113" stroke="#10B981" stroke-width="1.2"/>
     <text x="175" y="534" text-anchor="middle" font-weight="700" font-size="12" fill="#10B981">Memory</text>
-    <text x="175" y="552" text-anchor="middle" font-size="10" fill="#4a5568">MEMORY.md</text>
-    <text x="175" y="568" text-anchor="middle" font-size="10" fill="#4a5568">LAST_SESSION.md</text>
-    <text x="175" y="584" text-anchor="middle" font-size="10" fill="#4a5568">30d retros</text>
+    <text x="175" y="552" text-anchor="middle" font-size="10" fill="#4a5568">per-memory Markdown</text>
+    <text x="175" y="568" text-anchor="middle" font-size="10" fill="#4a5568">private + shared rooms</text>
+    <text x="175" y="584" text-anchor="middle" font-size="10" fill="#4a5568">.omnipus/ stores</text>
     <text x="175" y="600" text-anchor="middle" font-size="9" fill="#4a5568" font-style="italic">+ idle auto-retro</text>
 
     <rect x="285" y="514" width="190" height="92" rx="6" fill="#111113" stroke="#10B981" stroke-width="1.2"/>

@@ -246,7 +246,7 @@ func newAuditLoggerForTest(t *testing.T, tmpDir string) *audit.Logger {
 
 // TestRememberTool_WithinBudget_Succeeds proves the happy path. The
 // rate-limit gate is configured with a generous budget so it never fires;
-// every Execute call is expected to write a MEMORY.md entry.
+// every Execute call is expected to write an entry through the test store.
 func TestRememberTool_WithinBudget_Succeeds(t *testing.T) {
 	tmpDir := t.TempDir()
 	store := newSimpleMemStore(tmpDir)

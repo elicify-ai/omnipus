@@ -1,11 +1,15 @@
 // Package tools — metadata path guard.
 //
-// Implements the fail-closed guard for agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md:
+// Implements the fail-closed guard for agents/<id>/(SOUL|HEARTBEAT|AGENT).md:
 // any generic file tool (read_file, write_file, edit_file, append_file) that
 // resolves to one of these paths is rejected with a structured error that
 // suggests update_agent (write) / read_agent_metadata (read) instead.
 //
-// The guard is case-insensitive over the four canonical names.
+// A vestigial agents/<id>/MEMORY.md left by an older install is also blocked,
+// with a memory-specific redirect to remember / recall_memory. It is not an
+// addressable metadata kind.
+//
+// The guard is case-insensitive over all protected names.
 //
 // Security property: the guard runs BEFORE ResolvePath — it resolves the
 // tool's path argument itself (via resolveAbsPath, which applies
@@ -23,21 +27,23 @@ import (
 )
 
 // canonicalMetadataNames maps the canonical key (lowercase) to the on-disk
-// capitalised filename.  These are the four files that must only be read
+// capitalised filename. These are the three files that must only be read
 // through read_agent_metadata, or written through update_agent.
 //
-// This is the single source of truth for the metadata-guard / metadata-tool
-// security pair; pkg/sysagent/tools/metadata.go consumes it via the exported
-// CanonicalMetadataFilename function below.
+// This is the single source of truth for addressable metadata kinds shared by
+// the metadata guard and metadata tool; pkg/sysagent/tools/metadata.go consumes
+// it via the exported CanonicalMetadataFilename function below. The protected
+// legacy filename is deliberately separate so it cannot become addressable.
 var canonicalMetadataNames = map[string]string{
 	"soul":      "SOUL.md",
 	"heartbeat": "HEARTBEAT.md",
-	"memory":    "MEMORY.md",
 	"agent":     "AGENT.md",
 }
 
+const legacyMemoryFilename = "MEMORY.md"
+
 // CanonicalMetadataFilename returns the on-disk filename for a metadata key
-// (soul/heartbeat/memory/agent). Returns ("", false) for unknown keys. The key
+// (soul/heartbeat/agent). Returns ("", false) for unknown keys. The key
 // match is case-insensitive. This is the exported single source of truth shared
 // by the metadata guard (pkg/tools) and the metadata tools (pkg/sysagent/tools).
 func CanonicalMetadataFilename(key string) (string, bool) {
@@ -91,11 +97,13 @@ func userProfileGuardError() string {
 	return string(encoded)
 }
 
-// metadataFileMatch reports whether absPath is one of the four canonical
-// metadata files inside an agents/<id>/ directory tree.
+// metadataFileMatch reports whether absPath is one of the three canonical
+// metadata files or the protected legacy MEMORY.md inside an agents/<id>/
+// directory tree.
 //
 // Returns:
-//   - fileKey  — canonical key (soul/heartbeat/memory/agent), or ""
+//   - fileKey  — canonical key (soul/heartbeat/agent), "memory" for the
+//     protected legacy filename, or ""
 //   - agentID  — the agent ID segment from the path, or ""
 //   - ok       — true when the path matched
 func metadataFileMatch(absPath string) (fileKey, agentID string, ok bool) {
@@ -117,12 +125,15 @@ func metadataFileMatch(absPath string) (fileKey, agentID string, ok bool) {
 		return "", "", false
 	}
 
-	// Case-insensitive match against the four canonical filenames.
+	// Case-insensitive match against the three canonical filenames.
 	baseLower := strings.ToLower(base)
 	for key, canonical := range canonicalMetadataNames {
 		if strings.ToLower(canonical) == baseLower {
 			return key, id, true
 		}
+	}
+	if strings.EqualFold(base, legacyMemoryFilename) {
+		return "memory", id, true
 	}
 
 	return "", "", false
@@ -130,19 +141,20 @@ func metadataFileMatch(absPath string) (fileKey, agentID string, ok bool) {
 
 // MetadataGuardNotice is the shared, single-source-of-truth explanation of the
 // metadata guard's policy: which tool to use instead of a generic file tool
-// for agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md. Referenced by the
+// for agents/<id>/(SOUL|HEARTBEAT|AGENT).md, plus the separate protection for
+// a vestigial MEMORY.md. Referenced by the
 // write_file, edit_file, and append_file tool descriptions
 // (pkg/tools/filesystem.go, pkg/tools/edit.go) and by metadataGuardError
 // below, so a future change to this policy (e.g. a renamed replacement tool)
 // only needs one edit.
-const MetadataGuardNotice = "Agent metadata files (SOUL.md, HEARTBEAT.md, AGENT.md, MEMORY.md under agents/<id>/) are off-limits to generic file tools — use update_agent to write them, or read_agent_metadata to read them."
+const MetadataGuardNotice = "Agent metadata files (SOUL.md, HEARTBEAT.md, and AGENT.md under agents/<id>/) are off-limits to generic file tools — use update_agent to write them, or read_agent_metadata to read them. A vestigial MEMORY.md from an older install is also blocked; use remember to save memories or recall_memory to access them."
 
 // updateAgentFieldForMetadataKey maps a metadata key to the update_agent
 // parameter that writes it, for the keys update_agent has a direct field for
 // (soul, heartbeat — see pkg/sysagent/tools/agent.go's AgentUpdateTool.
-// Parameters()). "memory" (written via the remember tool) and "agent" (raw
-// AGENT.md frontmatter, redundant with update_agent's structured fields) have
-// no direct field and fall back to a generic update_agent(...) pointer.
+// Parameters()). "agent" (raw AGENT.md frontmatter, redundant with
+// update_agent's structured fields) has no direct field and falls back to a
+// generic update_agent(...) pointer.
 var updateAgentFieldForMetadataKey = map[string]string{
 	"soul":      "soul",
 	"heartbeat": "heartbeat",
@@ -159,6 +171,9 @@ func metadataGuardError(absPath, op string) string {
 	fileKey, agentID, _ := metadataFileMatch(absPath)
 	if agentID == "" {
 		agentID = "(unknown)"
+	}
+	if fileKey == "memory" {
+		return legacyMemoryGuardError(agentID, op)
 	}
 
 	var suggestion string
@@ -185,6 +200,30 @@ func metadataGuardError(absPath, op string) string {
 	b, err := json.Marshal(msg)
 	if err != nil {
 		return `{"error":{"code":"USE_METADATA_TOOL","message":"metadata file is managed by agent metadata tools","suggestion":"` + suggestion + `"}}`
+	}
+	return string(b)
+}
+
+// legacyMemoryGuardError returns a specific refusal for a leftover MEMORY.md.
+// The file remains protected from generic tools so old inert content cannot be
+// mistaken for live memory or overwritten through a bypass, but the error does
+// not describe it as agent metadata or redirect to read_agent_metadata.
+func legacyMemoryGuardError(agentID, op string) string {
+	suggestion := "use recall_memory to access saved memories"
+	if op == "write" {
+		suggestion = "use remember to save a memory"
+	}
+
+	msg := map[string]any{
+		"error": map[string]any{
+			"code":       "USE_MEMORY_TOOL",
+			"message":    "agents/" + agentID + "/" + legacyMemoryFilename + " is a vestigial file from the retired memory system and is not used for current memories.",
+			"suggestion": suggestion,
+		},
+	}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		return `{"error":{"code":"USE_MEMORY_TOOL","message":"legacy MEMORY.md is not the active memory store","suggestion":"` + suggestion + `"}}`
 	}
 	return string(b)
 }
