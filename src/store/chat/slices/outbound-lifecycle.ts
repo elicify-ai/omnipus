@@ -31,7 +31,7 @@ interface OutboundLifecycleContext {
   get: StoreApi<ChatStore>['getState']
   getActiveSid: () => string | null
   withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void
-  bucketToForeground: (bucket: SessionChatState) => Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null }
+  bucketToForeground: (bucket: SessionChatState) => Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanBySpanId' | 'pendingSpanUpdatesBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null }
   abandonPendingKickoffInternal: () => void
   maybeDrainNext: () => void
   runtime: { agentIdAtLastMintSend: string | null }

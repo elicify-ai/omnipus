@@ -26,6 +26,7 @@ export function emptySessionState(): SessionChatState {
     cancelStage: null,
     lastReceivedEventTime: null,
     spanBySpanId: {},
+    pendingSpanUpdatesBySpanId: {},
     mergedReplayMessageIds: {},
     goalStatus: null,
     goalPills: {},

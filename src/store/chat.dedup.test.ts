@@ -161,9 +161,10 @@ describe('chat.dedup — T1.7: sendMessage merges duplicate tool_call ids', () =
 
 describe('chat.dedup — T1.8: replay_message tail dedup drops identical re-emit', () => {
   it('second replay_message with same role+content leaves messages.length unchanged', () => {
-    // Arrange: empty bucket at SID (no live WS needed for replay frames)
-    // The FALLBACK_SID in test mode routes frames without session_id to '__default',
-    // but we use explicit session_id here for determinism.
+    // Arrange: empty bucket at SID (no live WS needed for replay frames).
+    // We use an explicit session_id here for determinism — a frame missing
+    // one is dropped outright (ADR-091 D7/FR-E-002), never routed to a
+    // fallback bucket.
     act(() => {
       // The session bucket must exist before handling replay frames
       useChatStore.setState(() => ({

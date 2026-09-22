@@ -54,12 +54,11 @@ interface ReplayAndStatusFrameContext {
   frame: Frame
   targetSid: string | null
   get: StoreApi<ChatStore>['getState']
-  getActiveSid: () => string | null
   withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void
   armRateLimitClear: (sid: string, event: RateLimitEventData) => void
 }
 
-export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid, withBucket, armRateLimitClear }: ReplayAndStatusFrameContext): boolean {
+export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, armRateLimitClear }: ReplayAndStatusFrameContext): boolean {
   switch (frame.type) {
         case 'replay_error': {
           // ADR-051 — historical (replay) error frame. Mirrors the live
@@ -699,9 +698,15 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
         }
 
         case 'rate_limit': {
+          // ADR-091 D7/FR-E-002: rate_limit is session-scoped
+          // (SESSION_SCOPED_FRAME_TYPES) — a missing-id instance is already
+          // dropped at the top of handleFrame, so targetSid is guaranteed
+          // non-null here. No `?? getActiveSid()` fallback (cross-family
+          // review finding 18: that fallback is exactly what let an untagged
+          // rate_limit get filed under whatever session happened to be
+          // active).
+          if (!targetSid) break
           const rlFrame = frame as WsRateLimitFrame
-          const sid = targetSid ?? getActiveSid()
-          if (!sid) break
           const event: RateLimitEventData = {
             scope: rlFrame.scope,
             resource: rlFrame.resource,
@@ -710,7 +715,7 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
             agentId: rlFrame.agent_id,
             tool: rlFrame.tool,
           }
-          armRateLimitClear(sid, event)
+          armRateLimitClear(targetSid, event)
           break
         }
 
@@ -913,6 +918,10 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
         }
 
         case 'tool_approval_required':
+          // ADR-091 D7/FR-E-002: session-scoped (SESSION_SCOPED_FRAME_TYPES)
+          // — a missing-id instance is already dropped at the top of
+          // handleFrame, so frame.session_id (which enqueue reads directly)
+          // is guaranteed present here.
           useToolApprovalStore.getState().enqueue(frame)
           break
 

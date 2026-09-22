@@ -71,11 +71,46 @@ function appendUnmatchedToolError(
   }) as Partial<SessionChatState>
 }
 
+// ADR-091 D7/I-4 (cross-family review finding 19): bounds
+// SessionChatState.pendingSpanUpdatesBySpanId growth for a span_id whose
+// subagent_start never arrives (e.g. an old transcript missing it — edge
+// case table). Small, matching GOAL_PILLS_CAP's role for the same shape of
+// "bounded pending map" problem (goals.ts::evictGoalPillsOverCap) — there is
+// no realistic scenario with dozens of concurrently in-flight replay gaps.
+const PENDING_SPAN_UPDATE_CAP = 50
+
+type PendingSpanUpdate = NonNullable<SessionChatState['pendingSpanUpdatesBySpanId']>[string]
+
+/**
+ * Merge a subagent_message/subagent_state update into span_id's pending
+ * slot (created on first miss) when the span itself can't be found — the
+ * frame arrived before its span's own subagent_start. Each field in `patch`
+ * is applied independently: `patch` must omit a key entirely rather than
+ * set it to `undefined`, or a later-arriving update of the OTHER frame type
+ * would clobber an earlier one's field (e.g. a pending statusLine from
+ * subagent_message wiped by a subsequent subagent_state's patch that never
+ * meant to touch it). Evicts the oldest entry (insertion order) once over
+ * PENDING_SPAN_UPDATE_CAP.
+ */
+function recordPendingSpanUpdate(
+  existing: SessionChatState['pendingSpanUpdatesBySpanId'],
+  spanId: string,
+  patch: PendingSpanUpdate,
+): NonNullable<SessionChatState['pendingSpanUpdatesBySpanId']> {
+  const next = { ...(existing ?? {}) }
+  next[spanId] = { ...next[spanId], ...patch }
+  const keys = Object.keys(next)
+  if (keys.length > PENDING_SPAN_UPDATE_CAP) {
+    delete next[keys[0]]
+  }
+  return next
+}
+
 interface FrameContext {
   set: StoreApi<ChatStore>['setState']
   get: StoreApi<ChatStore>['getState']
   getActiveSid: () => string | null
-  bucketToForeground: (bucket: SessionChatState) => Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null }
+  bucketToForeground: (bucket: SessionChatState) => Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanBySpanId' | 'pendingSpanUpdatesBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null }
   withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void
   deleteBucket: (sid: string) => void
   resolveKickoffAttempt: (workspaceId: string, outcome: 'done' | 'failed') => void
@@ -97,15 +132,42 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       const frameSessionId =
         (frame as { session_id?: string }).session_id ??
         (frame as { card?: { session_id?: string } }).card?.session_id
+
+      // ADR-091 D7/FR-E-002 (cross-family review finding 18): the required-
+      // session check runs FIRST, before anything else — timestamp advance,
+      // handleReplayAndStatusFrame, the cancel-ack disambiguation below, and
+      // every switch-case reducer — and returns from `handleFrame` itself.
+      // A session-scoped frame identifies its own session; when it doesn't,
+      // that is a routing error, never a "guess the session" situation, so
+      // it is dropped outright — never filed under whatever happens to be
+      // foreground, and never reassigned to some OTHER session either (see
+      // the CANCEL_ACK_FRAME_TYPES note below, which is why that mechanism
+      // is scoped to non-session-scoped frame types only). Doing this here,
+      // before the switch, is what makes every session-scoped case arm
+      // downstream able to assume `targetSid` is non-null once reached —
+      // upstream fallbacks (`rate_limit`'s `targetSid ?? getActiveSid()`,
+      // `tool_approval_required`'s unconditional `enqueue(frame)`) were the
+      // two production paths that used to file such a frame anyway.
+      if (SESSION_SCOPED_FRAME_TYPES.has(frame.type) && !frameSessionId) {
+        console.error('[chat] server frame missing session_id — dropping', { type: frame.type })
+        logDiagnostic('chatFrameMissingSessionId', { frameType: frame.type })
+        useConnectionStore.getState().setConnectionError(
+          'internal: server frame missing session_id — please reload'
+        )
+        return
+      }
+
       const activeSid = getActiveSid()
 
-      // F-S1: Route to the correct bucket.
-      // Session-scoped frames missing session_id are treated differently per environment.
+      // F-S1: Route to the correct bucket. By this point a session-scoped
+      // frame is guaranteed to carry frameSessionId (the branch above
+      // returned otherwise), so only a GLOBAL frame (error, ping, pong,
+      // device_pairing_*, session_state) can still be missing one.
       const targetSid: string | null = (() => {
         if (frame.type === 'session_started') return activeSid // handled below, value unused
         if (frameSessionId) return frameSessionId
         // F-S3 (UAT, browser-panel "Take over"): an untagged (no session_id)
-        // token/done/error frame that is really the server's cancellation
+        // `error` frame that is really the server's cancellation
         // acknowledgment for a BACKGROUND session (cancelStream(sessionId),
         // e.g. the browser panel's "Take over" pausing its own pinned
         // session while a different chat is foreground) must not be
@@ -119,23 +181,16 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         // pending one IS the active session — the ordinary single-session
         // Stop-button flow) falls through unchanged to the existing
         // behaviour below.
+        //
+        // CANCEL_ACK_FRAME_TYPES no longer includes `token`/`done`: both are
+        // session-scoped (SESSION_SCOPED_FRAME_TYPES), so a missing-id
+        // instance of either already returned above — this disambiguation
+        // can only ever apply to `error`, which is global. Reassigning a
+        // session-scoped frame to a guessed session (rather than dropping
+        // it) is exactly the bug cross-family review finding 18 reported.
         if (CANCEL_ACK_FRAME_TYPES.has(frame.type) && pendingCancelAckSids.size === 1) {
           const [onlyPendingSid] = pendingCancelAckSids
           if (onlyPendingSid !== activeSid) return onlyPendingSid
-        }
-        if (SESSION_SCOPED_FRAME_TYPES.has(frame.type)) {
-          // ADR-091 D7/FR-E-002: the test-mode active-session fallback is
-          // deleted — a session-scoped frame missing session_id is dropped
-          // in every environment, never filed under whatever happens to be
-          // foreground. That fallback is exactly the mechanism that let a
-          // relabelled child frame (the ADR-057 workaround this ADR
-          // removes) pass a weak fixture without a real session_id.
-          console.error('[chat] server frame missing session_id — dropping', { type: frame.type })
-          logDiagnostic('chatFrameMissingSessionId', { frameType: frame.type })
-          useConnectionStore.getState().setConnectionError(
-            'internal: server frame missing session_id — please reload'
-          )
-          return null
         }
         // Global frame (error, ping, pong, device_pairing_*, session_state) — use active.
         return activeSid
@@ -182,7 +237,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         }
       }
 
-      if (handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid, withBucket, armRateLimitClear })) {
+      if (handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, armRateLimitClear })) {
         syncForeground()
         return
       }
@@ -1475,6 +1530,14 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 draft.messageOrder.push(placeholder.id)
                 lastMsgId = placeholder.id
               }
+              // ADR-091 D7/I-4 (cross-family review finding 19): a
+              // subagent_message/subagent_state that arrived BEFORE this
+              // subagent_start (replay-gap ordering) left its update parked
+              // here, keyed by span_id — apply and clear it now rather than
+              // seeding the span with nothing and waiting for a NEXT update
+              // that may never come.
+              const pendingUpdate = draft.pendingSpanUpdatesBySpanId?.[sf.span_id]
+
               // ADR-091 D7/I-4: `child_session_id` (additive, CP-0) is now
               // the open control's target — populated from whichever front
               // door launched it (`delegate` or `create_task`, both stamp
@@ -1490,13 +1553,17 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 status: 'running',
                 agentId: sf.agent_id,
                 childSessionId: sf.child_session_id,
+                statusLine: pendingUpdate?.statusLine,
+                lifecycleState: pendingUpdate?.lifecycleState,
                 // Seeds the status line's "last update N s ago" fallback
                 // (D7 table) from the moment the span itself appears — a
                 // real subagent_message/subagent_state, each carrying its
                 // own created_at, supersedes this the instant one arrives.
                 // subagent_start carries no created_at of its own (wire
-                // gap), so Date.now() is the only source.
-                lastUpdateAt: new Date().toISOString(),
+                // gap), so Date.now() is the only source — UNLESS a pending
+                // update (above) already carries the true event time of the
+                // update that arrived first.
+                lastUpdateAt: pendingUpdate?.lastUpdateAt ?? new Date().toISOString(),
               }
               const lastMsg = draft.messagesById[lastMsgId]
               const spanIdx = (lastMsg.spans ?? []).length
@@ -1507,6 +1574,9 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               // backward linear scan.
               if (!draft.spanBySpanId) draft.spanBySpanId = {}
               draft.spanBySpanId[sf.span_id] = { messageId: lastMsgId, spanIdx }
+              if (pendingUpdate && draft.pendingSpanUpdatesBySpanId) {
+                delete draft.pendingSpanUpdatesBySpanId[sf.span_id]
+              }
             }) as Partial<SessionChatState>
           })
           break
@@ -1630,8 +1700,25 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 msg.spans[spanIdx] = applyToSpan(msg.spans[spanIdx])
                 return
               }
-              console.warn('[chat] subagent_message received for unknown span_id', { spanId: mf.span_id })
-              logDiagnostic('chatSubagentMessageUnknownSpanId', { spanId: mf.span_id, sessionId: targetSid })
+              // ADR-091 D7/I-4 (cross-family review finding 19): no span
+              // exists yet anywhere in this session — a genuine replay-gap
+              // ordering (this frame arrived before its span's own
+              // subagent_start), not necessarily a real "unknown" frame.
+              // Park the update; subagent_start applies and clears it.
+              // `patch` omits `statusLine` entirely when there is nothing to
+              // apply (mirrors applyToSpan's own `?? span.statusLine`
+              // no-op above) so a PRIOR pending statusLine from an earlier
+              // subagent_message for the same span_id is never overwritten
+              // with `undefined`.
+              console.warn('[chat] subagent_message received before its span\'s subagent_start — parked as a pending update', { spanId: mf.span_id })
+              logDiagnostic('chatSubagentMessageReplayGap', { spanId: mf.span_id, sessionId: targetSid })
+              draft.pendingSpanUpdatesBySpanId = recordPendingSpanUpdate(
+                draft.pendingSpanUpdatesBySpanId,
+                mf.span_id,
+                nextStatusLine !== undefined
+                  ? { statusLine: nextStatusLine, lastUpdateAt: mf.created_at }
+                  : { lastUpdateAt: mf.created_at },
+              )
             }) as Partial<SessionChatState>
           })
           break
@@ -1664,8 +1751,16 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 msg.spans[spanIdx] = applyToSpan(msg.spans[spanIdx])
                 return
               }
-              console.warn('[chat] subagent_state received for unknown span_id', { spanId: sf2.span_id })
-              logDiagnostic('chatSubagentStateUnknownSpanId', { spanId: sf2.span_id, sessionId: targetSid })
+              // ADR-091 D7/I-4 (cross-family review finding 19): see the
+              // matching comment in the 'subagent_message' case above —
+              // same replay-gap parking, keyed by the same pending map.
+              console.warn('[chat] subagent_state received before its span\'s subagent_start — parked as a pending update', { spanId: sf2.span_id })
+              logDiagnostic('chatSubagentStateReplayGap', { spanId: sf2.span_id, sessionId: targetSid })
+              draft.pendingSpanUpdatesBySpanId = recordPendingSpanUpdate(
+                draft.pendingSpanUpdatesBySpanId,
+                sf2.span_id,
+                { lifecycleState: sf2.state, lastUpdateAt: sf2.created_at },
+              )
             }) as Partial<SessionChatState>
           })
           break

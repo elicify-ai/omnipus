@@ -345,6 +345,26 @@ export interface SessionChatState {
    */
   spanBySpanId?: Record<string, { messageId: string; spanIdx: number }>
   /**
+   * ADR-091 D7/I-4 (cross-family review finding 19): bounded per-session map
+   * from span_id → the fields a `subagent_message`/`subagent_state` frame
+   * would have reduced onto that span, captured when the frame arrives
+   * BEFORE its span's own `subagent_start` — a genuine replay-gap ordering
+   * (I-4 frames from concurrently running children can interleave on
+   * reconnect), not a bug. Without this, that update used to be logged and
+   * discarded outright, and the child's actual first status/state never
+   * reached the row until (if ever) a later update arrived for the same
+   * span_id.
+   *
+   * Consulted and cleared by the `subagent_start` handler in frames.ts the
+   * moment it creates the span (`PENDING_SPAN_UPDATE_CAP` bounds growth for
+   * a span_id whose `subagent_start` never arrives — an old transcript
+   * missing it, edge case table). Each field is written independently
+   * (never overwriting an already-pending field with `undefined`) so a
+   * message-only update and a later state-only update for the SAME span_id
+   * both survive to be applied together.
+   */
+  pendingSpanUpdatesBySpanId?: Record<string, { statusLine?: string; lifecycleState?: SubagentStateFrame['state']; lastUpdateAt?: string }>
+  /**
    * Session-scoped record of every replay_message id that has EVER been
    * merged (via the `replay_message` same-turn/same-agent coalesce branch)
    * into ANY assistant bubble in this session — independent of which bubble

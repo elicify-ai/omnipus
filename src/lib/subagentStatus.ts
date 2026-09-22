@@ -7,7 +7,9 @@
 // sole consumers of this formatting for the same field
 // (SubagentSpanTerminal.reason).
 
-import type { SubagentSpanTerminal } from '@/store/chat'
+import type { SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
+import { getSpanStatusDot, statusDot } from '@/lib/toolStatusConfig'
+import type { SpanStatusConfigOptions, SpanStatusDotConfig } from '@/lib/toolStatusConfig'
 
 export type SubagentInterruptReason = NonNullable<SubagentSpanTerminal['reason']>
 
@@ -40,4 +42,59 @@ export function formatLastUpdateAge(ageMs: number): string {
   const hours = Math.floor(minutes / 60)
   if (hours < 24) return `${hours} h ago`
   return `${Math.floor(hours / 24)} d ago`
+}
+
+export type SubagentLifecycleState = NonNullable<SubagentSpan['lifecycleState']>
+
+/**
+ * ADR-091 D7/FR-E-004 (cross-family review finding 21): the eight-state
+ * `lifecycleState` domain (`subagent_state`, ADR-053) mapped onto the
+ * existing dot vocabulary (`toolStatusConfig.tsx::getSpanStatusDot`'s
+ * `statusDot`/spinner) — ActivityPanel's row must prefer THIS whenever
+ * `lifecycleState` is present, with the span's own `status` (the parent's
+ * "still open" flag, a different axis — see `SubagentSpanBase.lifecycleState`'s
+ * doc comment) only as a legacy fallback for a span with no lifecycleState
+ * yet (an old transcript pre-dating this delivery, or the brief window
+ * before a span's first `subagent_state` arrives).
+ *
+ * `'running'` delegates to `getSpanStatusDot('running', opts)` to reuse its
+ * exact spinner construction rather than duplicating it — every other state
+ * gets its own dot color + label, none of them the spinner (only a
+ * genuinely running child spins; queued, waiting-on-a-human, and every
+ * terminal state get a static dot).
+ */
+export function getLifecycleStatusDot(
+  state: SubagentLifecycleState,
+  opts: SpanStatusConfigOptions = {},
+): SpanStatusDotConfig {
+  switch (state) {
+    case 'running':
+      return getSpanStatusDot('running', opts)
+    case 'queued':
+      // Distinct from 'running' — a queued launch stamps subagent_start (so
+      // the SPAN is already status: 'running') before the child has
+      // actually started executing (D7 table). Must NOT reuse the spinner.
+      return { indicator: statusDot('bg-[var(--color-muted)]'), label: 'queued' }
+    case 'needs_input':
+      // Same warning color as `getSpanStatusDot`'s 'parked' case (the
+      // pre-ADR-091 span-status equivalent of "waiting on a human") — own
+      // label, since this is the precise lifecycle signal, not a fallback.
+      return { indicator: statusDot('bg-[var(--color-warning)]'), label: 'needs input' }
+    case 'paused':
+      return { indicator: statusDot('bg-[var(--color-warning)]'), label: 'paused' }
+    case 'completed':
+      return { indicator: statusDot('bg-[var(--color-success)]'), label: 'done' }
+    case 'failed':
+      return { indicator: statusDot('bg-[var(--color-error)]'), label: 'failed' }
+    case 'cancelled':
+      return { indicator: statusDot('bg-[var(--color-cancelled)]'), label: 'cancelled' }
+    case 'timed_out':
+      return { indicator: statusDot('bg-[var(--color-muted)]'), label: 'timed out' }
+    default: {
+      // Safe fallback for any unexpected state value arriving from the wire.
+      const _exhaustive: never = state
+      void _exhaustive
+      return { indicator: statusDot('bg-[var(--color-muted)]'), label: 'unknown' }
+    }
+  }
 }
