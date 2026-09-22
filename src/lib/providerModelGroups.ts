@@ -15,9 +15,26 @@
 // know those numbers, and inventing them would both mislead the reader and
 // hand the model a "Recommended for chat" chip it never earned.
 
-import type { CatalogModel, CatalogProvider, Provider, ProvidersCatalog } from '@/lib/api/generated/openapi-types'
-import type { ModelCatalogGroup } from '@/components/ui/model-selector'
+import type { CatalogModel, CatalogProvider, Provider, ProvidersCatalog, components } from '@/lib/api/generated/openapi-types'
 import { catalogEntryById, catalogLabel } from '@/lib/catalogDisplay'
+
+/**
+ * ADR-068 FR-030 catalog mode. Where a legacy `ModelGroup` carries bare slugs,
+ * this carries the catalog rows themselves, which is what ordering by release
+ * date and awarding a "Recommended for chat" chip need — neither is derivable
+ * from a string. Owned here (the code that builds it from real provider/
+ * catalog data) and re-exported by `@/components/ui/model-selector`, which
+ * renders it, so existing consumers keep importing it from the selector.
+ */
+export interface ModelCatalogGroup {
+  /** Provider routing key — the configured provider's `id`. */
+  providerId: string
+  /** Display name, used as the vendor heading fallback for bare model ids. */
+  providerName: string
+  /** Connection status, so `filterProviders` can keep connected rows only. */
+  status?: components['schemas']['Provider']['status']
+  models: CatalogModel[]
+}
 
 /** Display name for a configured row: catalog label → wire display name → id. */
 export function providerDisplayName(

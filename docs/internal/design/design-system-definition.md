@@ -425,6 +425,18 @@ Evidence: `docs/internal/design/evidence/zoom-live-2026-09-19/`.
 - **Browser tests** measure the opening scale against the 12px label floor.
 - **The in-context touch check (D17)** runs pinch, pan and opening scale on the real routes at phone and tablet sizes. It asserts that the page's own zoom stays at 1 during a pinch.
 
+### D19. Composites may compose primitives inside the kit — founder-approved 2026-09-22
+
+**Decision.** Two layers live inside `src/components/ui/`: primitives (for example `Button`, `AlertDialog`, `Popover`, `Select`, `Calendar`, and the date-picker's trigger) and composites (for example `ConfirmDialog`, `DateTimePicker`, `ModelSelector`). A composite may import a primitive's named exports from inside the kit — that is intended composition, the Operating model's own "Composites… may depend on: Foundations and primitives" line, not the boundary violation the outside-kit rule exists to catch. The relationship is one-directional only: a primitive never imports a composite, and no import cycle exists among `src/components/ui/*` files. Outside the kit — screens, `src/lib`, stores, routes — code may use only what the catalog publishes (`publicExports`/`publicTypes`, D8); that boundary is unchanged.
+
+**Why.** Before this decision, the outside-the-kit public-boundary check also applied inside the kit, so a composite could not legally build on a primitive at all — only on the primitive's curated public surface, which is usually just the top-level component. The only way to comply was copying code: an agent duplicated `model-ordering.ts`'s sorting functions into `model-selector.tsx`, and duplicated the date-trigger's classes a third time into `date-time-picker.tsx` (both rejected on review), and `ConfirmDialog` could not be built on `AlertDialog` at all. That is exactly the drift a design system exists to prevent, not the compliance it is meant to produce.
+
+**Visual delta: Invisible.** This changes which source-level imports are legal; it does not change any rendered output.
+
+**Evidence (facts only).** `design-system/catalog.json` already carries a `classification` field (`foundations`/`primitive`/`composite`/`domain`/`application`, `design-system/catalog.schema.json`) matching the Operating model table above, but `scripts/design-system-locks/controls.mjs`'s `controls/shadcn-low-level-import` rule did not consult it for imports between two `src/components/ui/*` files — it applied the same public-boundary check used for outside-kit consumers. That blocked `confirm-dialog.tsx` → `alert-dialog.tsx`, `date-time-picker.tsx` → `date-picker.tsx`'s `DateTriggerButton`, and `model-selector.tsx` → `model-ordering.ts` as checkpoint-C1 blockers.
+
+**Enforcement.** `controls/shadcn-low-level-import` does not fire when the importer is itself a `src/components/ui/*` file classified `composite` and the imported module is a `src/components/ui/*` file classified `primitive`; it keeps firing, unchanged, for every importer outside `src/components/ui/`, and for a composite reaching a non-public name in another composite. A new rule, `controls/ui-layering`, fires when a file classified `primitive` imports a `src/components/ui/*` file classified `composite`, and when an import cycle exists among `src/components/ui/*` files, regardless of classification.
+
 ## Non-goals and governance
 
 - The system remains dark-first; a light theme is not implied.

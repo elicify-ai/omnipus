@@ -1156,3 +1156,158 @@ test('RADIX-SCOPE: a real ledger file scanned WITHOUT a catalog still reports (r
   const findings = scan({ path, source, policy: {} })
   assert.ok(findings.some((finding) => finding.ruleId === 'controls/radix-import'), 'expected controls/radix-import to still fire with no catalog supplied')
 })
+
+// ---------------------------------------------------------------------------
+// D19 lane — two layers inside src/components/ui/ (design-system-definition.md
+// D19, founder-approved 2026-09-22): a composite may import a primitive's
+// named exports from inside the kit — that is intended composition, not the
+// outside-kit boundary controls/shadcn-low-level-import exists to enforce.
+// The relationship stays one-directional: a primitive never imports a
+// composite, and no import cycle exists among src/components/ui/ files —
+// either shape is the NEW rule, controls/ui-layering. Everything outside
+// src/components/ui/ is unaffected: only the catalog's publicExports/
+// publicTypes are legal to import, exactly as before D19 (the alert-dialog.tsx
+// "no public exports" fixtures above are that unchanged boundary and are not
+// touched by this section).
+//
+// Expected values below derive from design-system-definition.md D19 and the
+// catalog schema's classification field, never from controls.mjs's
+// implementation.
+// ---------------------------------------------------------------------------
+
+const LAYERING_CATALOG = {
+  version: 1,
+  entries: [
+    { source: 'src/components/ui/layering-primitive.tsx', classification: 'primitive', exports: ['Root', 'RootProps'], publicExports: [], publicTypes: [] },
+    { source: 'src/components/ui/layering-composite-a.tsx', classification: 'composite', exports: ['CompositeA'], publicExports: ['CompositeA'], publicTypes: [] },
+    { source: 'src/components/ui/layering-composite-b.tsx', classification: 'composite', exports: ['CompositeB'], publicExports: ['CompositeB'], publicTypes: [] },
+  ],
+}
+
+test('D19: a composite importing a non-public named export of a primitive inside the kit is clean', () => {
+  const source = "import { Root } from '@/components/ui/layering-primitive'\nexport const CompositeA = () => Root"
+  const findings = scan({ path: 'src/components/ui/layering-composite-a.tsx', source, policy: {}, catalog: LAYERING_CATALOG })
+  assert.deepEqual(findings, [])
+})
+
+test('D19: a composite importing a non-public TYPE export of a primitive inside the kit is also clean', () => {
+  const source = "import type { RootProps } from '@/components/ui/layering-primitive'\nexport type Alias = RootProps"
+  const findings = scan({ path: 'src/components/ui/layering-composite-a.tsx', source, policy: {}, catalog: LAYERING_CATALOG })
+  assert.deepEqual(findings, [])
+})
+
+test('D19: the same import from OUTSIDE the kit is still flagged — the exemption is in-kit only', () => {
+  const source = "import { Root } from '@/components/ui/layering-primitive'"
+  const findings = scan({ path: 'src/features/screen.tsx', source, policy: {}, catalog: LAYERING_CATALOG })
+  assert.deepEqual(findings.map((finding) => finding.ruleId), ['controls/shadcn-low-level-import'])
+})
+
+test('D19: a composite reaching a non-public export of ANOTHER composite is still flagged — the carve-out is composite-to-primitive only', () => {
+  const source = "import { InternalHelper } from '@/components/ui/layering-composite-b'"
+  const findings = scan({ path: 'src/components/ui/layering-composite-a.tsx', source, policy: {}, catalog: LAYERING_CATALOG })
+  assert.deepEqual(findings.map((finding) => finding.ruleId), ['controls/shadcn-low-level-import'])
+})
+
+test('controls/ui-layering: a primitive importing a composite is flagged, even via its public export', () => {
+  const source = "import { CompositeA } from '@/components/ui/layering-composite-a'"
+  const findings = scan({ path: 'src/components/ui/layering-primitive.tsx', source, policy: {}, catalog: LAYERING_CATALOG })
+  assert.deepEqual(findings.map((finding) => finding.ruleId), ['controls/ui-layering'])
+  assert.match(findings[0].message, /primitive .* imports composite/i)
+})
+
+test('controls/ui-layering: a primitive importing a composite is unaffected by classification order in the catalog', () => {
+  // Same fixture, reversed catalog entry order — the check is by classification lookup, not array position.
+  const reordered = { version: 1, entries: [...LAYERING_CATALOG.entries].reverse() }
+  const source = "import { CompositeA } from '@/components/ui/layering-composite-a'"
+  const findings = scan({ path: 'src/components/ui/layering-primitive.tsx', source, policy: {}, catalog: reordered })
+  assert.deepEqual(findings.map((finding) => finding.ruleId), ['controls/ui-layering'])
+})
+
+test('controls/ui-layering: an import cycle between two composites is flagged on both edges', () => {
+  const sourceA = "import { CompositeB } from '@/components/ui/layering-composite-b'\nexport const CompositeA = () => CompositeB"
+  const sourceB = "import { CompositeA } from '@/components/ui/layering-composite-a'\nexport const CompositeB = () => CompositeA"
+  const modules = {
+    'src/components/ui/layering-composite-a.tsx': sourceA,
+    'src/components/ui/layering-composite-b.tsx': sourceB,
+  }
+  const findingsA = scan({ path: 'src/components/ui/layering-composite-a.tsx', source: sourceA, policy: {}, catalog: LAYERING_CATALOG, modules })
+  const findingsB = scan({ path: 'src/components/ui/layering-composite-b.tsx', source: sourceB, policy: {}, catalog: LAYERING_CATALOG, modules })
+  assert.deepEqual(findingsA.map((finding) => finding.ruleId), ['controls/ui-layering'])
+  assert.deepEqual(findingsB.map((finding) => finding.ruleId), ['controls/ui-layering'])
+  assert.match(findingsA[0].message, /cycle/i)
+})
+
+test('controls/ui-layering: an indirect three-file cycle (A -> B -> C -> A) is flagged on every edge', () => {
+  const catalog = {
+    version: 1,
+    entries: [
+      { source: 'src/components/ui/cycle-a.tsx', classification: 'composite', exports: ['A'], publicExports: ['A'], publicTypes: [] },
+      { source: 'src/components/ui/cycle-b.tsx', classification: 'composite', exports: ['B'], publicExports: ['B'], publicTypes: [] },
+      { source: 'src/components/ui/cycle-c.tsx', classification: 'composite', exports: ['C'], publicExports: ['C'], publicTypes: [] },
+    ],
+  }
+  const sourceA = "import { B } from '@/components/ui/cycle-b'\nexport const A = () => B"
+  const sourceB = "import { C } from '@/components/ui/cycle-c'\nexport const B = () => C"
+  const sourceC = "import { A } from '@/components/ui/cycle-a'\nexport const C = () => A"
+  const modules = {
+    'src/components/ui/cycle-a.tsx': sourceA,
+    'src/components/ui/cycle-b.tsx': sourceB,
+    'src/components/ui/cycle-c.tsx': sourceC,
+  }
+  for (const [path, source] of Object.entries(modules)) {
+    const findings = scan({ path, source, policy: {}, catalog, modules })
+    assert.deepEqual(findings.map((finding) => finding.ruleId), ['controls/ui-layering'], `${path} should report the cycle`)
+  }
+})
+
+test('controls/ui-layering: without a modules map, cross-file cycle detection cannot run — fails closed to no cycle finding, not a crash', () => {
+  const source = "import { CompositeB } from '@/components/ui/layering-composite-b'"
+  const findings = scan({ path: 'src/components/ui/layering-composite-a.tsx', source, policy: {}, catalog: LAYERING_CATALOG })
+  assert.deepEqual(findings, [])
+})
+
+test('controls/ui-layering: two files that import from each other\'s module but are not actually mutually reachable are not flagged as a cycle', () => {
+  // A imports B; B does NOT import A (imports something unrelated instead) — no cycle.
+  const sourceA = "import { CompositeB } from '@/components/ui/layering-composite-b'\nexport const CompositeA = () => CompositeB"
+  const sourceB = "export const CompositeB = () => null"
+  const modules = {
+    'src/components/ui/layering-composite-a.tsx': sourceA,
+    'src/components/ui/layering-composite-b.tsx': sourceB,
+  }
+  const findingsA = scan({ path: 'src/components/ui/layering-composite-a.tsx', source: sourceA, policy: {}, catalog: LAYERING_CATALOG, modules })
+  assert.deepEqual(findingsA, [])
+})
+
+// D19 real-repo evidence: the four checkpoint-C1 blockers this decision
+// exists to close (each was a real ledger.json controls/shadcn-low-level-import
+// fingerprint with expiryCheckpoint "C1" before this fix; the lead prunes
+// exactly the fingerprints the live scan no longer produces).
+
+test('D19: confirm-dialog.tsx importing AlertDialog parts from alert-dialog.tsx is clean under the real catalog', () => {
+  const path = 'src/components/ui/confirm-dialog.tsx'
+  const source = readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8')
+  const findings = scan({ path, source, policy: {}, catalog: CATALOG })
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'controls/shadcn-low-level-import'), [])
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'controls/ui-layering'), [])
+})
+
+test('D19: date-time-picker.tsx importing DateTriggerButton from date-picker.tsx is clean under the real catalog', () => {
+  const path = 'src/components/ui/date-time-picker.tsx'
+  const source = readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8')
+  const findings = scan({ path, source, policy: {}, catalog: CATALOG })
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'controls/shadcn-low-level-import'), [])
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'controls/ui-layering'), [])
+})
+
+test('D19: model-selector.tsx no longer reaches src/components/ui/model-ordering — the module moved to src/lib', () => {
+  const path = 'src/components/ui/model-selector.tsx'
+  const source = readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8')
+  const findings = scan({ path, source, policy: {}, catalog: CATALOG })
+  const modelOrderingFindings = findings.filter((finding) => finding.ruleId === 'controls/shadcn-low-level-import' && finding.syntax.includes('model-ordering'))
+  assert.deepEqual(modelOrderingFindings, [])
+})
+
+test('D19: date-picker.tsx is classified "primitive" in the real catalog (composite-to-primitive precondition)', () => {
+  const entry = CATALOG.entries.find((item) => item.source === 'src/components/ui/date-picker.tsx')
+  assert.equal(entry.classification, 'primitive')
+})

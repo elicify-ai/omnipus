@@ -239,7 +239,7 @@
     },
     {
       "source": "src/components/ui/date-picker.tsx",
-      "classification": "composite",
+      "classification": "primitive",
       "exports": [
         "DatePicker",
         "DATE_TRIGGER_CLASSNAME",
@@ -511,27 +511,6 @@
       "publicExports": [
         "Label"
       ],
-      "publicTypes": []
-    },
-    {
-      "source": "src/components/ui/model-ordering.ts",
-      "classification": "domain",
-      "exports": [
-        "RECOMMENDED_MIN_CONTEXT_WINDOW",
-        "MAX_RECOMMENDED_CHIPS",
-        "RECOMMENDED_CHIP_LABEL",
-        "MODEL_VIRTUALISATION_THRESHOLD",
-        "ModelVendorGroup",
-        "vendorOfModel",
-        "compareModelsWithinGroup",
-        "orderModels",
-        "orderedModelList",
-        "isRecommendedEligible",
-        "selectRecommendedModels",
-        "recommendedModelIds",
-        "shouldVirtualiseModelList"
-      ],
-      "publicExports": [],
       "publicTypes": []
     },
     {

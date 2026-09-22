@@ -317,15 +317,6 @@
       "expiryCheckpoint": "C6"
     },
     {
-      "fingerprint": "3c9d5e55173d18c91f7736f62ff2cef240b1b60cbdf638c726043e3103a074cc",
-      "ruleId": "controls/shadcn-low-level-import",
-      "path": "src/components/ui/model-selector.tsx",
-      "syntax": "import { orderModels, RECOMMENDED_CHIP_LABEL, recommendedModelIds, shouldVirtualiseModelList } from \"src/components/ui/model-ordering\"",
-      "owner": "C1 Lead—shared foundations: UI feedback and picker primitives",
-      "replacement": "Relocate `import { orderModels, RECOMMENDED_CHIP_LABEL, recommendedModelIds, shouldVirtualiseModelList } from …`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "3e0a61b46c61517be9f40eb5e5956647ad9189ccb8f5c017cc0da6acf8f74563",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/library/LibraryEntryRow.tsx",
@@ -758,12 +749,12 @@
       "expiryCheckpoint": "C5"
     },
     {
-      "fingerprint": "914352e6b657fc3827d7d8c6e757922821b1c7eb8a872582abcac52a3c016ff3",
+      "fingerprint": "ee23b2b215b52f970f4497b891faf07440681b5d0015ee0d297233580ee7d8ef",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/routes/onboarding.tsx",
-      "syntax": "import { type ModelCatalogGroup, ModelSelector } from \"src/components/ui/model-selector\"",
+      "syntax": "import { ModelSelector } from \"src/components/ui/model-selector\"",
       "owner": "C5 Lane 1: Workspace board, list, graph and task/plan controls",
-      "replacement": "Relocate `import { type ModelCatalogGroup, ModelSelector } from \"src/components/ui/model-selector\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead.",
+      "replacement": "Relocate `import { ModelSelector } from \"src/components/ui/model-selector\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead.",
       "expiryCheckpoint": "C5"
     },
     {
@@ -821,15 +812,6 @@
       "expiryCheckpoint": "C5"
     },
     {
-      "fingerprint": "9fc4b3102043aa928316f1813100e51c441e8c9e5d97fa4fb9823b4d63b9cab8",
-      "ruleId": "controls/shadcn-low-level-import",
-      "path": "src/components/ui/confirm-dialog.tsx",
-      "syntax": "import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from \"src/components/ui/alert-dialog\"",
-      "owner": "C1 Lead—shared foundations: Catalog foundation/primitive/composite internals",
-      "replacement": "Relocate `import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescripti…`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "a09c4b6abd8bbe8267e881453369292020496746b380560a7b567355873e041e",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/mermaid-renderer.tsx",
@@ -846,15 +828,6 @@
       "owner": "C5 Lane 2: Calendar and workspace management/team/settings",
       "replacement": "Relocate `import { DateTriggerButton } from \"src/components/ui/date-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead.",
       "expiryCheckpoint": "C5"
-    },
-    {
-      "fingerprint": "a2c551194e7fe16a294bc8e0660b3883898a7429b39cf1fe4d6e85a27b778650",
-      "ruleId": "controls/shadcn-low-level-import",
-      "path": "src/components/ui/date-time-picker.tsx",
-      "syntax": "import { DateTriggerButton } from \"src/components/ui/date-picker\"",
-      "owner": "C1 Lead—shared foundations: Catalog foundation/primitive/composite internals",
-      "replacement": "Relocate `import { DateTriggerButton } from \"src/components/ui/date-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead.",
-      "expiryCheckpoint": "C1"
     },
     {
       "fingerprint": "a3c012de8e05dc08ff6bae08b7929400198537c6c021e1a7e064830c3215ad6a",
@@ -1314,15 +1287,6 @@
       "owner": "C6 Lane 5: Agents and skills",
       "replacement": "Avatar colour palette (AVATAR_COLORS/AVATAR_COLORS_BY_NAME, src/lib/constants.ts) consumed here — governed data, not design-system chrome (SKILL.md rule 6). No sound permanent exception mechanism exists for a resolved ts-colors/raw-color literal (contract.json isAllowedExceptionRuleId permits only */extension-boundary or exactly ts-colors/unverified-governed-value — neither applies to a fully statically-resolved literal). Kept as owned temporary debt at the latest checkpoint (C6) pending a structural fix (e.g. reading through a scanner-recognised governed accessor) that would require a src/ change; re-review at next audit.",
       "expiryCheckpoint": "C6"
-    },
-    {
-      "fingerprint": "eb4cc13352ec7c8a55a40ce016d5ffa5b7bb87e9093d478cb3832700532a448b",
-      "ruleId": "controls/shadcn-low-level-import",
-      "path": "src/lib/providerModelGroups.ts",
-      "syntax": "import type { ModelCatalogGroup } from \"src/components/ui/model-selector\"",
-      "owner": "C1 Lane 6: Settings, providers, connectors and policy controls",
-      "replacement": "Relocate `import type { ModelCatalogGroup } from \"src/components/ui/model-selector\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead.",
-      "expiryCheckpoint": "C1"
     },
     {
       "fingerprint": "ed0df11f7bf9dcb54c7b9a2af8b3a267b487feac7392fb7e8b7eb26d17c46692",

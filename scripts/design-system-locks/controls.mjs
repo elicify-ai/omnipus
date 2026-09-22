@@ -24,7 +24,25 @@
 //   controls/shadcn-low-level-import — ui-kit imports of names outside the registered public
 //                                      boundary (design-system/catalog.json publicExports and
 //                                      publicTypes); namespaces and whole-module reach are
-//                                      never the curated surface
+//                                      never the curated surface. EXCEPTION (design-system-
+//                                      definition.md D19, founder-approved 2026-09-22): when
+//                                      the importing file is itself under src/components/ui/
+//                                      and classified "composite", and the imported file is
+//                                      under src/components/ui/ and classified "primitive",
+//                                      any of the primitive's named exports may be imported —
+//                                      that is intended in-kit composition, not the boundary
+//                                      violation this rule exists to catch. A composite
+//                                      reaching a non-public name in ANOTHER composite, or
+//                                      any importer outside src/components/ui/, is unaffected
+//                                      and still restricted to the catalog's public lists.
+//   controls/ui-layering             — the one-directional half of D19: a file under
+//                                      src/components/ui/ classified "primitive" importing
+//                                      another src/components/ui/ file classified "composite"
+//                                      (the reverse of the sanctioned direction), or an import
+//                                      cycle among src/components/ui/ files (any classification
+//                                      pair). Requires the `modules` map (every scanned file's
+//                                      path -> source) to detect cycles across files; without
+//                                      it only the direct-import-shape checks run.
 //   controls/parse-error             — fail-closed: parse failures are explicit findings
 //
 // All findings are raw: this scanner never exempts directories or files by path alone. The
@@ -39,7 +57,8 @@
 // them, and an uncatalogued file in src/components/ui/ is never blessed at all. The approved
 // registered boundary for ui-kit CONSUMERS (controls/shadcn-low-level-import) remains the
 // catalog's exact export lists, not a broad allowance of src/components/ui (domain widgets
-// live there too and stay reported).
+// live there too and stay reported) — except for the composite-importing-primitive shape
+// carved out by D19 above.
 //
 // Attribute case policy: the HTML input `type` attribute is ASCII case-insensitive
 // (so type="CHECKBOX" is a checkbox), while ARIA role tokens are case-sensitive
@@ -74,6 +93,7 @@ const RULES = {
   CHECKBOX_AS_SWITCH: 'controls/checkbox-as-switch',
   RADIX_IMPORT: 'controls/radix-import',
   SHADCN_LOW_LEVEL: 'controls/shadcn-low-level-import',
+  UI_LAYERING: 'controls/ui-layering',
   PARSE_ERROR: 'controls/parse-error',
 }
 
@@ -100,7 +120,7 @@ const EXTENSION_PATTERN = /\.(?:tsx|ts|jsx|js|mjs|cjs)$/
 // Scanner entry point
 // ---------------------------------------------------------------------------
 
-export function scan({ path: rawPath, source, catalog } = {}) {
+export function scan({ path: rawPath, source, catalog, modules } = {}) {
   const filePath = normalizeScanPath(rawPath)
   if (typeof source !== 'string' || source.length === 0) {
     throw new Error('controls.mjs: source must be a non-empty string')
@@ -109,7 +129,7 @@ export function scan({ path: rawPath, source, catalog } = {}) {
   if (sourceFile.parseDiagnostics.length > 0) {
     return [parseErrorFinding(filePath, sourceFile, sourceFile.parseDiagnostics[0])]
   }
-  const findings = analyze(filePath, sourceFile, catalog)
+  const findings = analyze(filePath, sourceFile, catalog, modules)
   findings.sort(byRuleThenSyntaxThenPosition)
   return findings
 }
@@ -171,13 +191,14 @@ function byRuleThenSyntaxThenPosition(a, b) {
 // Analysis driver
 // ---------------------------------------------------------------------------
 
-function analyze(filePath, sourceFile, catalog) {
+function analyze(filePath, sourceFile, catalog, modules) {
   const context = {
     filePath,
     findings: [],
     importMap: new Map(),
     uiBoundaries: null,
     catalog,
+    modules,
     scopes: [{ names: new Map(), isFunctionScope: true }],
   }
   for (const statement of sourceFile.statements) {
@@ -1085,6 +1106,7 @@ function handleModuleDeclaration(context, node) {
     return
   }
   if (!resolved || !resolved.startsWith(UI_PREFIX)) return
+  reportUiLayeringViolation(context, node, parts, resolved)
   reportUiKitImport(context, node, parts, resolved)
 }
 
@@ -1194,7 +1216,13 @@ function reportUiKitImport(context, node, parts, resolved) {
     if (parts.kind === 'import' && entry) return
     if (parts.kind === 'export' && entry && entry.allValueExportsPublic) return
   }
-  const offending = offendingNames(parts, entry)
+  // D19 carve-out: a composite inside src/components/ui/ importing a primitive
+  // inside src/components/ui/ may use any of the primitive's named exports, not
+  // just its curated public ones — that is the sanctioned in-kit composition
+  // direction, not the outside-kit boundary this rule exists to enforce. See
+  // isKitCompositeImportingPrimitive below and the rule's doc comment above.
+  const allowAllNamed = isKitCompositeImportingPrimitive(context, resolvedSource)
+  const offending = offendingNames(parts, entry, allowAllNamed)
   if (offending.length === 0) return
   const detail = entry
     ? `Import of non-public ui-kit name(s) ${offending.join(', ')} from "${resolvedSource}"; use the public export from design-system/catalog.json or register an exact exception.`
@@ -1202,9 +1230,10 @@ function reportUiKitImport(context, node, parts, resolved) {
   context.findings.push(makeFinding(RULES.SHADCN_LOW_LEVEL, context.filePath, renderDeclaration(parts, resolvedSource), detail, ...positionOf(node)))
 }
 
-function offendingNames(parts, entry) {
+function offendingNames(parts, entry, allowAllNamed) {
   if (parts.namespace) return [parts.namespace]
   if (!parts.hasClause) return ['*']
+  if (allowAllNamed) return []
   const names = []
   if (parts.defaultName) names.push(parts.defaultName)
   for (const named of parts.named) {
@@ -1214,6 +1243,172 @@ function offendingNames(parts, entry) {
     if (!allowed) names.push(named.exportedName)
   }
   return names
+}
+
+// ---------------------------------------------------------------------------
+// D19 — the two-layer kit rule: a composite may build on a primitive inside
+// src/components/ui/ (controls/shadcn-low-level-import carve-out, above); a
+// primitive never imports a composite, and no import cycle exists among
+// src/components/ui/ files, regardless of classification pair
+// (controls/ui-layering, both checked here).
+// ---------------------------------------------------------------------------
+
+function isKitCompositeImportingPrimitive(context, resolvedSource) {
+  if (!context.filePath.startsWith(UI_PREFIX)) return false
+  if (classificationOf(context, resolvedSource) !== 'primitive') return false
+  return classificationOf(context, stripExtension(context.filePath)) === 'composite'
+}
+
+function classificationOf(context, source) {
+  context.classificationBySource ??= loadClassificationBySource(context.catalog)
+  return context.classificationBySource.get(source)
+}
+
+function loadClassificationBySource(catalog) {
+  const map = new Map()
+  if (!catalog || !Array.isArray(catalog.entries)) return map
+  for (const entry of catalog.entries) map.set(stripExtension(entry.source), entry.classification)
+  return map
+}
+
+// Only an importer that is itself inside src/components/ui/ can violate kit
+// layering — an outside-kit importer is already fully governed by the public
+// boundary above, and this rule only exists to keep the kit's own internal
+// dependency direction sound.
+function reportUiLayeringViolation(context, node, parts, resolved) {
+  if (!context.filePath.startsWith(UI_PREFIX)) return
+  const resolvedSource = stripExtension(resolved)
+  const importerSource = stripExtension(context.filePath)
+  if (importerSource === resolvedSource) return
+  const importerClassification = classificationOf(context, importerSource)
+  const targetClassification = classificationOf(context, resolvedSource)
+  if (importerClassification === 'primitive' && targetClassification === 'composite') {
+    context.findings.push(
+      makeFinding(
+        RULES.UI_LAYERING,
+        context.filePath,
+        renderDeclaration(parts, resolvedSource),
+        `Primitive "${importerSource}" imports composite "${resolvedSource}"; a primitive may depend only on foundations and other primitives (design-system-definition.md D19). Move the shared logic into a primitive, or reclassify one of the two files.`,
+        ...positionOf(node),
+      )
+    )
+    return
+  }
+  if (isUiKitCycleEdge(context, importerSource, resolvedSource)) {
+    context.findings.push(
+      makeFinding(
+        RULES.UI_LAYERING,
+        context.filePath,
+        renderDeclaration(parts, resolvedSource),
+        `Import cycle inside src/components/ui/: "${importerSource}" and "${resolvedSource}" are mutually reachable through kit-internal imports; break the cycle (design-system-definition.md D19).`,
+        ...positionOf(node),
+      )
+    )
+  }
+}
+
+const uiInternalGraphCache = new WeakMap()
+
+// Whether the edge importerSource -> resolvedSource closes a cycle among
+// src/components/ui/ files. Requires context.modules (every scanned file's
+// path -> source, threaded through from the audit orchestrator); without it,
+// cross-file cycle detection cannot run and this returns false — the direct
+// primitive-importing-composite shape above still fires regardless.
+function isUiKitCycleEdge(context, importerSource, resolvedSource) {
+  const info = uiInternalGraph(context.modules)
+  if (!info) return false
+  const importerScc = info.sccId.get(importerSource)
+  const resolvedScc = info.sccId.get(resolvedSource)
+  if (importerScc === undefined || resolvedScc === undefined) return false
+  if (importerScc !== resolvedScc) return false
+  return (info.sccSize.get(importerScc) ?? 0) > 1
+}
+
+function uiInternalGraph(modules) {
+  if (!modules || typeof modules !== 'object') return null
+  const cached = uiInternalGraphCache.get(modules)
+  if (cached) return cached
+  const graph = new Map()
+  for (const [path, source] of Object.entries(modules)) {
+    if (!path.startsWith(UI_PREFIX) || typeof source !== 'string') continue
+    if (!EXTENSION_PATTERN.test(path)) continue
+    graph.set(stripExtension(path), collectUiInternalDependencies(path, source))
+  }
+  const { sccId, sccSize } = computeStronglyConnectedComponents(graph)
+  const result = { graph, sccId, sccSize }
+  uiInternalGraphCache.set(modules, result)
+  return result
+}
+
+// Top-level import/export specifiers only — module-level declarations are
+// always top-level in JS/TS, so no recursive walk is needed here (unlike the
+// findings-producing analyze() pass, which also tracks scoped/dynamic reach
+// for the other rules).
+function collectUiInternalDependencies(path, source) {
+  const deps = new Set()
+  let sourceFile
+  try {
+    sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, scriptKindFor(path))
+  } catch {
+    return deps
+  }
+  if (sourceFile.parseDiagnostics.length > 0) return deps
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) continue
+    const specifier = statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : null
+    if (!specifier) continue
+    const resolved = resolveSpecifier(specifier, path)
+    if (resolved && resolved.startsWith(UI_PREFIX)) deps.add(stripExtension(resolved))
+  }
+  return deps
+}
+
+// Tarjan's SCC algorithm: every node in a strongly-connected component of
+// size > 1 (or a self-loop) participates in a cycle. Recursion depth is
+// bounded by the size of src/components/ui/ (low hundreds at most).
+function computeStronglyConnectedComponents(graph) {
+  let index = 0
+  let sccCounter = 0
+  const indices = new Map()
+  const lowlink = new Map()
+  const onStack = new Set()
+  const stack = []
+  const sccId = new Map()
+  const sccSize = new Map()
+
+  function strongConnect(v) {
+    indices.set(v, index)
+    lowlink.set(v, index)
+    index += 1
+    stack.push(v)
+    onStack.add(v)
+    for (const w of graph.get(v) ?? []) {
+      if (!indices.has(w)) {
+        strongConnect(w)
+        lowlink.set(v, Math.min(lowlink.get(v), lowlink.get(w)))
+      } else if (onStack.has(w)) {
+        lowlink.set(v, Math.min(lowlink.get(v), indices.get(w)))
+      }
+    }
+    if (lowlink.get(v) === indices.get(v)) {
+      const id = sccCounter
+      sccCounter += 1
+      let size = 0
+      let w
+      do {
+        w = stack.pop()
+        onStack.delete(w)
+        sccId.set(w, id)
+        size += 1
+      } while (w !== v)
+      sccSize.set(id, size)
+    }
+  }
+
+  for (const v of graph.keys()) {
+    if (!indices.has(v)) strongConnect(v)
+  }
+  return { sccId, sccSize }
 }
 
 // Canonical declaration text: normalized spacing, named specifiers sorted by

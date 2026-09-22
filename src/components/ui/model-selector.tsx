@@ -13,8 +13,10 @@ import {
   orderModels,
   recommendedModelIds,
   shouldVirtualiseModelList,
-} from '@/components/ui/model-ordering'
+} from '@/lib/model-ordering'
 import type { CatalogModel, components } from '@/lib/api/generated/openapi-types'
+import type { ModelCatalogGroup } from '@/lib/providerModelGroups'
+
 
 /** The six provider statuses, straight off the wire contract (ADR-068 FR-038). */
 export type ProviderStatus = components['schemas']['Provider']['status']
@@ -36,23 +38,6 @@ export interface ModelPair {
    *  backend. Empty string when the provider could not be resolved (e.g. the
    *  group has no `providerId` or the model was entered via free-text). */
   provider: string
-}
-
-/**
- * ADR-068 FR-030 catalog mode. Where `providerGroups` carries bare slugs, this
- * carries the catalog rows themselves, which is what ordering by release date
- * and awarding a "Recommended for chat" chip need — neither is derivable from a
- * string. Supplying `catalogGroups` switches the list to catalog rendering;
- * omitting it leaves every existing call site on the string path untouched.
- */
-export interface ModelCatalogGroup {
-  /** Provider routing key — the configured provider's `id`. */
-  providerId: string
-  /** Display name, used as the vendor heading fallback for bare model ids. */
-  providerName: string
-  /** Connection status, so `filterProviders` can keep connected rows only. */
-  status?: ProviderStatus
-  models: CatalogModel[]
 }
 
 /**

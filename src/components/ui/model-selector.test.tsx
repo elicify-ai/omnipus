@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import * as React from 'react'
-import { ModelSelector, type ModelGroup, type ModelCatalogGroup } from './model-selector'
+import { ModelSelector, type ModelGroup } from './model-selector'
+import type { ModelCatalogGroup } from '@/lib/providerModelGroups'
 import type { CatalogModel } from '@/lib/api/generated/openapi-types'
 
 // cmdk (used by Command) uses ResizeObserver and scrollIntoView which are not

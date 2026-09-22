@@ -247,13 +247,6 @@
       "count": 1
     },
     {
-      "fingerprint": "3c9d5e55173d18c91f7736f62ff2cef240b1b60cbdf638c726043e3103a074cc",
-      "ruleId": "controls/shadcn-low-level-import",
-      "path": "src/components/ui/model-selector.tsx",
-      "syntax": "import { orderModels, RECOMMENDED_CHIP_LABEL, recommendedModelIds, shouldVirtualiseModelList } from \"src/components/ui/model-ordering\"",
-      "count": 1
-    },
-    {
       "fingerprint": "3e0a61b46c61517be9f40eb5e5956647ad9189ccb8f5c017cc0da6acf8f74563",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/library/LibraryEntryRow.tsx",
@@ -590,10 +583,10 @@
       "count": 1
     },
     {
-      "fingerprint": "914352e6b657fc3827d7d8c6e757922821b1c7eb8a872582abcac52a3c016ff3",
+      "fingerprint": "ee23b2b215b52f970f4497b891faf07440681b5d0015ee0d297233580ee7d8ef",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/routes/onboarding.tsx",
-      "syntax": "import { type ModelCatalogGroup, ModelSelector } from \"src/components/ui/model-selector\"",
+      "syntax": "import { ModelSelector } from \"src/components/ui/model-selector\"",
       "count": 1
     },
     {
@@ -639,13 +632,6 @@
       "count": 1
     },
     {
-      "fingerprint": "9fc4b3102043aa928316f1813100e51c441e8c9e5d97fa4fb9823b4d63b9cab8",
-      "ruleId": "controls/shadcn-low-level-import",
-      "path": "src/components/ui/confirm-dialog.tsx",
-      "syntax": "import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from \"src/components/ui/alert-dialog\"",
-      "count": 1
-    },
-    {
       "fingerprint": "a09c4b6abd8bbe8267e881453369292020496746b380560a7b567355873e041e",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/mermaid-renderer.tsx",
@@ -656,13 +642,6 @@
       "fingerprint": "a26c627fcc15d6ecb8b9bf69a02ecf9484c40f1d055a8a2048ff85be35358461",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/calendar/RecurrenceEditor.tsx",
-      "syntax": "import { DateTriggerButton } from \"src/components/ui/date-picker\"",
-      "count": 1
-    },
-    {
-      "fingerprint": "a2c551194e7fe16a294bc8e0660b3883898a7429b39cf1fe4d6e85a27b778650",
-      "ruleId": "controls/shadcn-low-level-import",
-      "path": "src/components/ui/date-time-picker.tsx",
       "syntax": "import { DateTriggerButton } from \"src/components/ui/date-picker\"",
       "count": 1
     },
@@ -1021,13 +1000,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/agents/AgentFormFields.tsx",
       "syntax": "#a855f7",
-      "count": 1
-    },
-    {
-      "fingerprint": "eb4cc13352ec7c8a55a40ce016d5ffa5b7bb87e9093d478cb3832700532a448b",
-      "ruleId": "controls/shadcn-low-level-import",
-      "path": "src/lib/providerModelGroups.ts",
-      "syntax": "import type { ModelCatalogGroup } from \"src/components/ui/model-selector\"",
       "count": 1
     },
     {

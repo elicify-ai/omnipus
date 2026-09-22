@@ -35,12 +35,27 @@ Use the catalogued component instead — `Button`, `IconButton`, `SegmentedContr
 `design-system/catalog.json`).
 
 **Enforced by** `scripts/design-system-locks/controls.mjs` (1,319 lines), which fires one
-of seven rules: `controls/raw-button`, `controls/raw-dialog`, `controls/global-confirm`,
+of eight rules: `controls/raw-button`, `controls/raw-dialog`, `controls/global-confirm`,
 `controls/checkbox-as-switch`, `controls/radix-import`,
-`controls/shadcn-low-level-import`, and `controls/parse-error` (fails closed on a parse
-failure — an unparseable file is treated as a violation, not skipped). There is no
-separate "element factory" rule: `document.createElement` and JSX/React factory calls are
-folded into `raw-button`/`raw-dialog` whenever they construct a `button`/`dialog` tag.
+`controls/shadcn-low-level-import`, `controls/ui-layering`, and `controls/parse-error`
+(fails closed on a parse failure — an unparseable file is treated as a violation, not
+skipped). There is no separate "element factory" rule: `document.createElement` and
+JSX/React factory calls are folded into `raw-button`/`raw-dialog` whenever they construct
+a `button`/`dialog` tag.
+
+**A composite may build on a primitive inside the kit (D19, founder-approved
+2026-09-22).** `src/components/ui/` has two layers, carried by each catalog entry's
+`classification` field (`design-system/catalog.json`): `primitive` (`Button`,
+`AlertDialog`, `Popover`, `Select`, `Calendar`, the date-picker's trigger) and
+`composite` (`ConfirmDialog`, `DateTimePicker`, `ModelSelector`). A composite importing a
+primitive's named exports from inside the kit — `confirm-dialog.tsx` importing
+`AlertDialog` from `alert-dialog.tsx`, `date-time-picker.tsx` importing
+`DateTriggerButton` from `date-picker.tsx` — is intended composition and does not fire
+`controls/shadcn-low-level-import`. The relationship is one-directional only: a primitive
+never imports a composite, and there is no import cycle among `src/components/ui/*`
+files — either shape fires the new `controls/ui-layering` rule instead. Outside the kit
+(screens, `src/lib`, stores, routes) nothing changes: only the catalog's
+`publicExports`/`publicTypes` are legal to import, exactly as before.
 
 ## 2. Values come from tokens — never infer a value from a token's name
 
