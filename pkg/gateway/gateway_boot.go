@@ -951,6 +951,13 @@ func (stg *setupAndStartServicesState) setupPlans() (*services, bool, error) {
 	if stg.agentLoop.GetMessageInboxStore() == nil {
 		return nil, true, fmt.Errorf("gateway: session-messaging store wiring failed — SetSessionMessagingStores did not install a non-nil inbox")
 	}
+	if hook := stg.runningServices.SteerDeps.BootHook; hook != nil {
+		if err := hook(stg.ctx); err != nil {
+			// Match the existing boot-sweep contract: recovery damage is
+			// operator-visible but never wedges the whole gateway at startup.
+			slog.Error("gateway: ADR-091 boot recovery failed", "error", err)
+		}
+	}
 	fmt.Println("✓ Session-messaging plane wired (delegate + message_parent stores injected)")
 	return nil, false, nil
 }
@@ -989,14 +996,20 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 		Classifier:     classifier,
 		LifecycleStore: stg.lifecycleStore,
 		SessionStore:   sessionStore,
-		// BootHook is a CP-0 placeholder (returns nil unconditionally) so
-		// I-7's fixture Reboot() hook — "reopen the stores and run
-		// BootHook, the same function gateway_boot.go runs" — has a real
-		// function to call before WP-D's boot sweep exists. WP-D replaces
-		// this closure's body with the real boot sweep at CP-3; the
-		// closure itself stays here (one wiring section, not a second
-		// path).
-		BootHook: func(context.Context) error { return nil },
+		BootHook: func(ctx context.Context) error {
+			deps := stg.runningServices.SteerDeps
+			recovery := &agent.SteerBootRecovery{
+				Lifecycle:  deps.LifecycleStore,
+				Sessions:   deps.SessionStore,
+				Inbox:      stg.agentLoop.GetMessageInboxStore(),
+				Classifier: deps.Classifier,
+				Deliverer:  deps.Deliverer,
+				OperatorNotice: func(message string) {
+					slog.Warn("gateway: ADR-091 boot recovery notice", "message", message)
+				},
+			}
+			return recovery.Run(ctx)
+		},
 	}
 }
 
