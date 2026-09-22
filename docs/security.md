@@ -66,6 +66,7 @@ The viewer refreshes every 30 seconds. The log includes security events, policy 
 - Security controls reduce risk but do not make every agent action safe. Read approval details before allowing a request.
 - **Permissive** sandbox mode observes violations but does not stop them. **Off** removes operating-system protection.
 - Kernel-level protection varies by operating system and kernel capability. Trust the status shown on your Security screen for this installation.
+- On Linux, the kernel version decides which sandbox rights you get. Kernels 5.19 and newer give kernel-level file protection; 5.13–5.18 run application-level checks only and are not recommended. When Omnipus falls back, it reports the fallback on the Security screen and logs a `sandbox.degraded` warning. See [sandbox limitations](operations/sandbox-limitations.md).
 - The Open filesystem model allows agents to read anything your account can read, except protected Omnipus secret files.
 - Secret filtering is best-effort and can be switched off. It only knows registered credential values. Rotate a secret if you think it was exposed.
 - Removing a credential is permanent. Services that refer to it may stop working.

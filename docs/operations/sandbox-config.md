@@ -81,7 +81,7 @@ The flag is parsed and validated in `cmd/omnipus/internal/gateway/command.go:23-
 
 ### `GET /health`
 
-Always returns a `sandbox` sub-object with `{applied, mode, backend}`. Additional fields are conditionally present: `disabled_by` (when `mode=off`), `audit_only` (when permissive), `landlock_enforced` and `seccomp_enforced` (when true). The closure that builds the response is in `pkg/gateway/sandbox_apply.go:471-497`; values are computed once at boot and never change.
+Always returns a `sandbox` sub-object with `{applied, mode, backend}`. `applied` is true only when a kernel backend actually enforced the policy; on the application-level fallback `applied` is false even when `mode` is `enforce` or `permissive`. Additional fields are conditionally present: `disabled_by` (when `mode=off`), `audit_only` (when permissive), `landlock_enforced` and `seccomp_enforced` (when true). The closure that builds the response is in `pkg/gateway/sandbox_apply.go:471-497`; values are computed once at boot and never change.
 
 Example payload (mode=enforce on Linux 6.8 with Landlock ABI v4):
 
@@ -147,7 +147,9 @@ The exit-code contract is in `cmd/omnipus/internal/gateway/command.go:34-36` and
 
 ### Exit 78 (`EX_CONFIG`)
 
-Apply or Install failed on a kernel that claims Landlock support (`linuxApplier` type assertion succeeded). The error path in `pkg/gateway/sandbox_apply.go:389-406` returns a `SandboxBootError` and the gateway main loop exits before any HTTP listener binds. External TCP probes see `ECONNREFUSED`, not HTTP 503.
+Apply or Install failed on a kernel that claims Landlock support (`linuxApplier` type assertion succeeded) for a reason other than a right the kernel does not know — a malformed rule, a net-port rule the kernel rejects, or a `restrict_self` failure. The error path in `pkg/gateway/sandbox_apply.go:389-406` returns a `SandboxBootError` and the gateway main loop exits before any HTTP listener binds. External TCP probes see `ECONNREFUSED`, not HTTP 503.
+
+A ruleset rejection caused by a right the kernel does not know is **not** exit 78 — it degrades to application-level enforcement instead (see the note below).
 
 ### Exit 1
 
@@ -157,7 +159,7 @@ Any other boot failure (credential unlock, config load, port already in use, etc
 
 Usage error (invalid `--sandbox` value).
 
-Graceful degradation is **not** a failure: an operator who asks for `enforce` on a pre-5.13 kernel gets a `FallbackBackend` and a `sandbox.degraded` log entry, and boot continues to completion.
+Graceful degradation is **not** a failure. Omnipus boots to completion with application-level enforcement instead of exiting in two cases: an operator asks for `enforce` on a pre-5.13 kernel, or the kernel's Landlock version does not know a right Omnipus requested. Both get a `FallbackBackend`, a `sandbox.degraded` WARN in the log naming the kernel's Landlock ABI, and `/health` reporting `applied: false`. See [sandbox-limitations.md](sandbox-limitations.md).
 
 ## Restart-required UX
 

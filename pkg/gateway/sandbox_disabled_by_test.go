@@ -65,6 +65,40 @@ func TestSandboxHealth_DisabledByOnlyWhenOff(t *testing.T) {
 	}
 }
 
+// TestSandboxHealth_AppliedFalseOnFallback pins the one clause that keeps
+// /health's "applied" field honest after a degrade: a process whose backend
+// was swapped to "fallback" reports applied=false even when the operator asked
+// for enforce mode. BackendName is what distinguishes real kernel enforcement
+// from a degraded boot — Mode stays "enforce" through the degrade and cannot
+// tell them apart.
+func TestSandboxHealth_AppliedFalseOnFallback(t *testing.T) {
+	cases := []struct {
+		name        string
+		mode        sandbox.Mode
+		backendName string
+		wantApplied bool
+	}{
+		{"enforce_with_landlock_is_applied", sandbox.ModeEnforce, "landlock-v7", true},
+		{"enforce_degraded_to_fallback_is_not_applied", sandbox.ModeEnforce, "fallback", false},
+		{"permissive_degraded_to_fallback_is_not_applied", sandbox.ModePermissive, "fallback", false},
+		{"off_is_not_applied", sandbox.ModeOff, "fallback", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := &SandboxApplyResult{Mode: tc.mode, BackendName: tc.backendName}
+			srv := &fakeSandboxHealthSetter{}
+			registerSandboxHealthCheck(srv, result)
+			if srv.fn == nil {
+				t.Fatal("registerSandboxHealthCheck did not install an info func")
+			}
+			info := srv.fn()
+			if got := info["applied"]; got != tc.wantApplied {
+				t.Errorf("applied = %v, want %v (mode=%s backend=%s)", got, tc.wantApplied, tc.mode, tc.backendName)
+			}
+		})
+	}
+}
+
 type fakeSandboxHealthSetter struct{ fn func() map[string]any }
 
 func (f *fakeSandboxHealthSetter) SetSandboxInfoFunc(fn func() map[string]any) { f.fn = fn }

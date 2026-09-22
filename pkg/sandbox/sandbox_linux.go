@@ -43,32 +43,9 @@ const (
 	landlockCreateRulesetVersion = 1 << 0
 )
 
-// Landlock ABI v1 filesystem access rights (kernel 5.13+).
-const (
-	landlockAccessFSExecute    uint64 = 1 << 0
-	landlockAccessFSWriteFile  uint64 = 1 << 1
-	landlockAccessFSReadFile   uint64 = 1 << 2
-	landlockAccessFSReadDir    uint64 = 1 << 3
-	landlockAccessFSRemoveDir  uint64 = 1 << 4
-	landlockAccessFSRemoveFile uint64 = 1 << 5
-	landlockAccessFSMakeChar   uint64 = 1 << 6
-	landlockAccessFSMakeDir    uint64 = 1 << 7
-	landlockAccessFSMakeReg    uint64 = 1 << 8
-	landlockAccessFSMakeSock   uint64 = 1 << 9
-	landlockAccessFSMakeFifo   uint64 = 1 << 10
-	landlockAccessFSMakeBlock  uint64 = 1 << 11
-	landlockAccessFSMakeSym    uint64 = 1 << 12
-	landlockAccessFSRefer      uint64 = 1 << 13
-	landlockAccessFSTruncate   uint64 = 1 << 14 // ABI v2
-	// landlockAccessFSIoctlDev removed: does not exist in kernel headers on this
-	// system (6.8.0-107). Adding unknown bits to handledAccessFS causes EINVAL.
-)
-
-// Landlock ABI v4 network access rights (kernel 6.8+).
-const (
-	landlockAccessNetBindTcp    uint64 = 1 << 0
-	landlockAccessNetConnectTcp uint64 = 1 << 1
-)
+// Landlock ABI v4 network access rights (kernel 6.8+) — declared in
+// landlock_abi_rights.go so the per-ABI gating tests can read them on
+// every OS without a Linux kernel.
 
 type landlockRulesetAttr struct {
 	handledAccessFS  uint64
@@ -138,22 +115,14 @@ func NewLinuxBackend() (*LinuxBackend, bool) {
 	return lb, true
 }
 
+// computeRights resolves the FS and net access-rights masks this backend
+// declares to the kernel when it builds a ruleset. Every bit is gated by
+// the ABI version that introduced it (see landlockRightsForABI for the
+// single source of truth), so no bit requested here is one the reported
+// ABI lacks.
 func (lb *LinuxBackend) computeRights() {
-	lb.allRights = landlockAccessFSExecute | landlockAccessFSWriteFile |
-		landlockAccessFSReadFile | landlockAccessFSReadDir |
-		landlockAccessFSRemoveDir | landlockAccessFSRemoveFile |
-		landlockAccessFSMakeChar | landlockAccessFSMakeDir |
-		landlockAccessFSMakeReg | landlockAccessFSMakeSock |
-		landlockAccessFSMakeFifo | landlockAccessFSMakeBlock |
-		landlockAccessFSMakeSym | landlockAccessFSRefer
+	lb.allRights = landlockRightsForABI(lb.abiVersion)
 
-	if lb.abiVersion >= 2 {
-		lb.allRights |= landlockAccessFSTruncate
-	}
-	// Note: landlockAccessFSIoctlDev is commented out because
-	// LANDLOCK_ACCESS_FS_IOCTL does not exist in kernel headers
-	// on this system (6.8.0-107). Setting unknown bits causes EINVAL.
-	//
 	// Landlock ABI v4+ adds NET_BIND_TCP and NET_CONNECT_TCP. We declare
 	// BOTH as handled (v0.2 #155 item 4):
 	//
@@ -202,6 +171,44 @@ func (lb *LinuxBackend) PolicyApplied() bool {
 // See ApplyWithMode for the mode-aware variant that supports permissive mode.
 func (lb *LinuxBackend) Apply(policy SandboxPolicy) error {
 	return lb.ApplyWithMode(policy, ModeEnforce)
+}
+
+// rulesetAttrWellFormed probes landlock_create_ruleset(2) with a minimal,
+// guaranteed-known mask (EXECUTE, valid since ABI v1) and no net rights. A
+// clean fd proves the attr struct's shape is accepted by this kernel; any
+// errno means the attr itself is malformed, not that a specific bit is
+// unknown. Used to disambiguate an EINVAL from create_ruleset.
+func rulesetAttrWellFormed() bool {
+	attr := landlockRulesetAttr{handledAccessFS: landlockAccessFSExecute}
+	fd, _, errno := unix.Syscall(
+		sysLandlockCreateRuleset,
+		uintptr(unsafe.Pointer(&attr)), // #nosec G103 -- attr is a stack-allocated struct passed by pointer for this synchronous probe; the kernel copies and does not retain it.
+		unsafe.Sizeof(attr),
+		0,
+	)
+	if errno != 0 {
+		return false
+	}
+	_ = unix.Close(int(fd)) // #nosec G115 -- fd is a file descriptor from the success path (errno checked above), bounded by RLIMIT_NOFILE.
+	return true
+}
+
+// createRulesetErrnoIsDegradable reports whether a landlock_create_ruleset(2)
+// errno means "the kernel cannot deliver the requested rights mask" (degrade to
+// FallbackBackend) rather than "this backend's attr struct is malformed"
+// (hard-fail to SandboxBootError). EOPNOTSUPP is unambiguous. EINVAL is not —
+// the kernel returns it for both an unknown access-right bit and a rejected
+// attr struct — so it degrades only when attrWellFormed confirms the struct is
+// accepted. Every other errno (EFAULT, E2BIG, EPERM, ENOSYS, ...) hard-fails.
+func createRulesetErrnoIsDegradable(errno unix.Errno, attrWellFormed bool) bool {
+	switch errno {
+	case unix.EOPNOTSUPP:
+		return true
+	case unix.EINVAL:
+		return attrWellFormed
+	default:
+		return false
+	}
 }
 
 // ApplyWithMode applies Landlock restrictions to the current process.
@@ -275,6 +282,18 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 		0,
 	)
 	if errno != 0 {
+		// Only EINVAL is ambiguous and needs the well-formedness probe.
+		attrWellFormed := errno == unix.EINVAL && rulesetAttrWellFormed()
+		if createRulesetErrnoIsDegradable(errno, attrWellFormed) {
+			// Wraps ErrLandlockRulesetRejected so the boot path identifies this
+			// failure class with errors.Is, distinct from a rule-add rejection
+			// or a restrict_self failure below.
+			return fmt.Errorf("%w: %w", ErrLandlockRulesetRejected, errno)
+		}
+		// A malformed attr (EINVAL with a failed probe) or any other errno is
+		// a bug in this backend's own syscall plumbing on a kernel that would
+		// otherwise work. Hard-fail so it surfaces via SandboxBootError rather
+		// than degrading silently to app-level enforcement.
 		return fmt.Errorf("landlock: create_ruleset failed: %w", errno)
 	}
 	// #nosec G115 -- landlock_create_ruleset(2) returned this fd on the success path (errno is checked directly above). A Linux file descriptor is a small non-negative int the kernel allocates below RLIMIT_NOFILE, so the uintptr the syscall ABI hands back never exceeds what int holds. Hoisted to one conversion so the suppression covers exactly this narrowing and nothing else.
@@ -296,7 +315,7 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 	var ruleErrors []error
 	for _, rule := range gatewayRules {
 		rights := lb.accessToLandlockRights(rule.Access)
-		if err := addLandlockPathRule(rulesetFdInt, rule.Path, rights); err != nil {
+		if err := addLandlockPathRule(rulesetFdInt, rule.Path, rights, lb.allRights); err != nil {
 			// ENOENT for system paths (e.g. /lib64 on ARM64) is expected —
 			// the directory simply doesn't exist on that architecture. Log
 			// as a warning and skip rather than aborting sandbox setup.
@@ -422,21 +441,23 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 }
 
 // accessToLandlockRights maps generic Access flags to Landlock-specific rights.
+//
+// Read and Execute rights exist from ABI v1 and are constant. Write-class
+// rights are derived from lb.allRights (the kernel's known set, gated by ABI)
+// so a bit that the running kernel does not know can never reach the
+// ruleset attr, and the access mask cannot drift from what computeRights
+// declared on create_ruleset. The explicit writeMask filter drops the
+// non-write bits (READ_FILE, READ_DIR, EXECUTE) that allRights also
+// contains; the same source means REFER is ORed only on ABI v2+ and
+// TRUNCATE only on ABI v3+.
 func (lb *LinuxBackend) accessToLandlockRights(access uint64) uint64 {
+	const writeMask = landlockFSWriteClassV1 | landlockAccessFSRefer | landlockAccessFSTruncate
 	var rights uint64
 	if access&AccessRead != 0 {
 		rights |= landlockAccessFSReadFile | landlockAccessFSReadDir
 	}
 	if access&AccessWrite != 0 {
-		rights |= landlockAccessFSWriteFile | landlockAccessFSRemoveDir |
-			landlockAccessFSRemoveFile | landlockAccessFSMakeChar |
-			landlockAccessFSMakeDir | landlockAccessFSMakeReg |
-			landlockAccessFSMakeSock | landlockAccessFSMakeFifo |
-			landlockAccessFSMakeBlock | landlockAccessFSMakeSym |
-			landlockAccessFSRefer
-		if lb.abiVersion >= 2 {
-			rights |= landlockAccessFSTruncate
-		}
+		rights |= lb.allRights & writeMask
 	}
 	if access&AccessExecute != 0 {
 		rights |= landlockAccessFSExecute
@@ -501,7 +522,7 @@ func isDirMode(mode uint32) bool {
 	return mode&unix.S_IFMT == unix.S_IFDIR
 }
 
-func addLandlockPathRule(rulesetFd int, path string, rights uint64) error {
+func addLandlockPathRule(rulesetFd int, path string, rights, allRights uint64) error {
 	fd, err := unix.Open(path, unix.O_PATH|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return fmt.Errorf("open %q: %w", path, err)
@@ -526,14 +547,17 @@ func addLandlockPathRule(rulesetFd int, path string, rights uint64) error {
 	// directory made every command fail under mode=enforce. Measured on a
 	// Landlock v7 runner (2026-08-19): a leftover
 	// /tmp/dotnet-diagnostic-*-socket broke `echo`.
+	//
+	// The strip mask is AND-ed with allRights (the kernel-known FS rights
+	// computed by landlockRightsForABI from the running ABI) so we never
+	// strip a right the running kernel does not know — REFER (ABI v2+) only
+	// enters the mask when allRights contains it, keeping the v1 kernel
+	// safe (an unsupported bit in the strip is harmless today, but a future
+	// ABI drift that put a file-applicable bit in landlockFSDirOnlyV1 would
+	// silently strip it on every non-directory FD without this guard).
 	var stat unix.Stat_t
 	if err := unix.Fstat(fd, &stat); err == nil && !isDirMode(stat.Mode) {
-		dirOnly := landlockAccessFSReadDir |
-			landlockAccessFSRemoveDir | landlockAccessFSRemoveFile |
-			landlockAccessFSMakeChar | landlockAccessFSMakeDir |
-			landlockAccessFSMakeReg | landlockAccessFSMakeSock |
-			landlockAccessFSMakeFifo | landlockAccessFSMakeBlock |
-			landlockAccessFSMakeSym | landlockAccessFSRefer
+		dirOnly := allRights & (landlockFSDirOnlyV1 | landlockAccessFSRefer)
 		rights &^= dirOnly
 	}
 
@@ -744,7 +768,7 @@ func (lb *LinuxBackend) RestrictCurrentThreadWithPolicy(policy *SandboxPolicy) e
 	}
 	for _, rule := range childRules {
 		rights := lb.accessToLandlockRights(rule.Access)
-		if err := addLandlockPathRule(rulesetFdInt, rule.Path, rights); err != nil {
+		if err := addLandlockPathRule(rulesetFdInt, rule.Path, rights, lb.allRights); err != nil {
 			if errors.Is(err, unix.ENOENT) {
 				continue
 			}

@@ -101,6 +101,24 @@ func (al *AgentLoop) SetAppliedSandboxMode(mode sandbox.Mode) {
 	al.appliedSandboxMode = mode
 }
 
+// SetSandboxBackend replaces the active sandbox backend and re-runs
+// wireEnvProviders so every agent's environment-context provider observes the
+// new object. Call from the gateway boot path only, immediately after
+// applySandbox returns, where no HTTP listener or turn is running yet —
+// degradeAfterLandlockFailure swaps the backend, and this threads that swap
+// into both the sandbox-status handler and each agent's system preamble.
+func (al *AgentLoop) SetSandboxBackend(backend sandbox.SandboxBackend) {
+	if al == nil || backend == nil {
+		return
+	}
+	al.sandboxBackend = backend
+	cfg := al.GetConfig()
+	registry := al.GetRegistry()
+	if cfg != nil && registry != nil {
+		al.wireEnvProviders(cfg, registry)
+	}
+}
+
 // RegisterTool installs tool into every currently-registered agent's tool
 // registry. It is exported test/instrumentation surface only (58 call sites,
 // all in _test.go files as of this writing) — the standard pattern is a test

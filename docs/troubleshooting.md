@@ -17,9 +17,11 @@ A symptom-first fix list for startup failures, unreachable gateways, login and A
 
 If it exits with no output at all, read `gateway_panic.log`, as above.
 
-### Exit code 78: the kernel sandbox failed to apply
+### Exit code 78: the sandbox failed on a capable kernel
 
-The sandbox (Omnipus's process-level confinement for agent work) refused to start on a kernel that claims to support it, and the gateway fails closed rather than listen half-protected. Look for `sandbox apply failed` in `gateway.log`, then start with `omnipus start --sandbox=permissive` (violations logged, not blocked) or, for development only, `--sandbox=off`. Valid values are `enforce`, `permissive`, and `off`; a typo exits with code 2. `OMNIPUS_ENV=production` with the sandbox weakened prints a repeating warning banner — deliberate, not a fault. Full detail: [operations/sandbox-config.md](operations/sandbox-config.md).
+Exit 78 now happens only when a kernel that claims to support Landlock fails for a reason other than a right the kernel does not know — a malformed rule, a port rule the kernel rejects, or the step that activates the policy. Omnipus refuses to start rather than listen half-protected. Look for `sandbox.apply_failed` in `gateway.log`, then start with `omnipus start --sandbox=permissive` (violations logged, not blocked) or, for development only, `--sandbox=off`. Valid values are `enforce`, `permissive`, and `off`; a typo exits with code 2.
+
+A kernel that is too old for a right Omnipus asks for is different: Omnipus starts anyway, at application-level enforcement, and logs `sandbox.degraded` instead of exiting — see [operations/sandbox-limitations.md](operations/sandbox-limitations.md). `OMNIPUS_ENV=production` with the sandbox weakened prints a repeating warning banner — deliberate, not a fault. Full detail: [operations/sandbox-config.md](operations/sandbox-config.md).
 
 ### It exits with "bind: address already in use"
 

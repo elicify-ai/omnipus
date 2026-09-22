@@ -24,6 +24,28 @@ Windows has no kernel sandbox: `selectBackendPlatform` (`pkg/sandbox/sandbox_oth
 
 `/health` and `/api/v1/security/sandbox-status` both report `backend: "fallback"` and `kernel_level: false` in this configuration, and the field `disabled_by: "kernel_unsupported"` may appear when the operator asked for `enforce` but the kernel cannot deliver it.
 
+## Landlock rights are gated by kernel version
+
+Omnipus asks the kernel for a set of Landlock rights when it applies the sandbox. Each right arrived with a specific kernel version, so an older kernel may not know all of them. The ABI (application binary interface — here, the version of Landlock's interface your kernel exposes) is reported by the kernel; Omnipus asks only for the rights that version supports.
+
+| Right | Kernel that introduced it |
+|---|---|
+| Filesystem access (read, write, create, remove, and the like) | 5.13 (ABI v1) |
+| REFER — linking or moving files | 5.19 (ABI v2) |
+| TRUNCATE | 6.2 (ABI v3) |
+| Network rules (TCP bind and connect) | 6.7 (ABI v4) |
+| Device controls (ioctl) | 6.10 (ABI v5) — recognised, not yet requested |
+
+If the kernel rejects the ruleset anyway — it reports an ABI it does not actually enforce — Omnipus no longer refuses to boot. It falls back to application-level checks, logs a `sandbox.degraded` warning naming the kernel and its ABI, and reports the fallback truthfully in the sandbox status, each agent's environment preamble, and `/health` (`applied: false`). A ruleset rejection that is not a rights-support problem — a malformed rule, a net-port rule rejected on a capable kernel, or a `restrict_self` failure — still stops the boot, as before.
+
+## Kernels 5.13–5.18 (Landlock ABI v1): handled in code, not run on real hardware
+
+Omnipus is tested on Linux kernels 6.x. Kernel 5.13–5.18 (Landlock ABI v1) — notably Ubuntu 22.04's original 5.15 kernel — is handled in code and covered by unit tests, but has not been exercised on a real ABI v1 kernel. Docker, Fly.io machines, and GitHub's `ubuntu-22.04` runner all provide a modern kernel (6.8–6.17) regardless of the distribution image, so no available environment reproduces ABI v1.
+
+Running Omnipus on such a kernel is not recommended. Use kernel 5.19 or newer for kernel-level file protection. On an older kernel you get application-level checks only: a program that ignores those checks is not contained by the operating system.
+
+To see what you have: open the Security screen (or the sandbox status), and look for the `sandbox.degraded` warning in the log.
+
 ## Permissive mode on kernels < 6.12
 
 Linux did not gain a native permissive Landlock semantic until 6.12. On older kernels (which covers most production hosts as of mid-2026), `sandbox.mode = "permissive"` follows the audit-only degradation path in `pkg/sandbox/sandbox_linux.go:367-383`.

@@ -79,10 +79,13 @@ func TestDescribeBackend_LinuxReportsABI_Enforcing(t *testing.T) {
 	assert.True(t, status.SeccompEnabled, "seccomp must be reported as enabled when policy is applied")
 	assert.Empty(t, status.Notes, "enforcing backend must have no status notes")
 
-	// ABI v3 must include all features including IOCTL_DEV.
+	// ABI v3 includes REFER (ABI v2) and TRUNCATE (ABI v3) but NOT IOCTL_DEV
+	// (ABI v5 / kernel 6.10) or the net TCP rights (ABI v4 / kernel 6.7).
 	require.NotEmpty(t, status.LandlockFeatures, "ABI v3 must have Landlock features")
-	assert.Contains(t, status.LandlockFeatures, "IOCTL_DEV", "ABI v3 must include IOCTL_DEV")
-	assert.Contains(t, status.LandlockFeatures, "TRUNCATE", "ABI v3 must include TRUNCATE")
+	assert.Contains(t, status.LandlockFeatures, "REFER", "ABI v3 must include REFER (ABI v2)")
+	assert.Contains(t, status.LandlockFeatures, "TRUNCATE", "ABI v3 must include TRUNCATE (ABI v3)")
+	assert.NotContains(t, status.LandlockFeatures, "IOCTL_DEV", "ABI v3 must NOT include IOCTL_DEV (ABI v5)")
+	assert.NotContains(t, status.LandlockFeatures, "NET_BIND_TCP", "ABI v3 must NOT include NET_BIND_TCP (ABI v4)")
 	assert.Contains(t, status.LandlockFeatures, "EXECUTE", "ABI v3 must include EXECUTE")
 
 	// Blocked syscalls must list the canonical set from BuildSeccompProgram.
@@ -113,26 +116,31 @@ func TestDescribeBackend_CapableButNotEnforcing(t *testing.T) {
 }
 
 // TestDescribeBackend_ABI1Features verifies that ABI version 1 only reports
-// base features (no TRUNCATE, no IOCTL_DEV).
+// base features (no REFER, no TRUNCATE, no IOCTL_DEV).
 func TestDescribeBackend_ABI1Features(t *testing.T) {
 	mock := &mockABIBackend{abiVersion: 1, applied: true}
 	status := DescribeBackend(mock)
 
 	assert.Equal(t, 1, status.ABIVersion)
-	assert.NotContains(t, status.LandlockFeatures, "TRUNCATE", "ABI v1 must not include TRUNCATE")
-	assert.NotContains(t, status.LandlockFeatures, "IOCTL_DEV", "ABI v1 must not include IOCTL_DEV")
+	assert.NotContains(t, status.LandlockFeatures, "REFER", "ABI v1 must not include REFER (added in ABI v2 / kernel 5.19)")
+	assert.NotContains(t, status.LandlockFeatures, "TRUNCATE", "ABI v1 must not include TRUNCATE (added in ABI v3 / kernel 6.2)")
+	assert.NotContains(t, status.LandlockFeatures, "IOCTL_DEV", "ABI v1 must not include IOCTL_DEV (added in ABI v5 / kernel 6.10)")
+	assert.NotContains(t, status.LandlockFeatures, "NET_BIND_TCP", "ABI v1 must not include NET_BIND_TCP (added in ABI v4 / kernel 6.7)")
 	assert.Contains(t, status.LandlockFeatures, "EXECUTE", "ABI v1 must include base EXECUTE feature")
 }
 
-// TestDescribeBackend_ABI2Features verifies that ABI version 2 includes TRUNCATE
-// but not IOCTL_DEV.
+// TestDescribeBackend_ABI2Features verifies that ABI version 2 includes
+// REFER (kernel 5.19) but NOT TRUNCATE (kernel 6.2) or IOCTL_DEV (kernel
+// 6.10).
 func TestDescribeBackend_ABI2Features(t *testing.T) {
 	mock := &mockABIBackend{abiVersion: 2, applied: true}
 	status := DescribeBackend(mock)
 
 	assert.Equal(t, 2, status.ABIVersion)
-	assert.Contains(t, status.LandlockFeatures, "TRUNCATE", "ABI v2 must include TRUNCATE")
-	assert.NotContains(t, status.LandlockFeatures, "IOCTL_DEV", "ABI v2 must not include IOCTL_DEV")
+	assert.Contains(t, status.LandlockFeatures, "REFER", "ABI v2 must include REFER")
+	assert.NotContains(t, status.LandlockFeatures, "TRUNCATE", "ABI v2 must NOT include TRUNCATE (added in ABI v3 / kernel 6.2)")
+	assert.NotContains(t, status.LandlockFeatures, "IOCTL_DEV", "ABI v2 must not include IOCTL_DEV (added in ABI v5)")
+	assert.NotContains(t, status.LandlockFeatures, "NET_BIND_TCP", "ABI v2 must not include NET_BIND_TCP (added in ABI v4)")
 }
 
 // TestDescribeBackendWithState_DisabledByCliFlag verifies that when the

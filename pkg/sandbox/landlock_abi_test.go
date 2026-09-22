@@ -101,6 +101,24 @@ func TestLandlockABIProbeResult_V4Works(t *testing.T) {
 					t.Errorf("missing feature %q; got %v", want, status.LandlockFeatures)
 				}
 			}
+			// Assert the specific absence properties each ABI must satisfy:
+			// IOCTL_DEV (bit 15) is ABI v5 only, so it must not appear in
+			// the feature list for v3 / v4; NET_* is ABI v4 only, so it
+			// must not appear for v3.
+			switch tc.abiVersion {
+			case 3:
+				for _, f := range status.LandlockFeatures {
+					if f == "IOCTL_DEV" || f == "NET_BIND_TCP" || f == "NET_CONNECT_TCP" {
+						t.Errorf("ABI v3 must NOT advertise %q; got %v", f, status.LandlockFeatures)
+					}
+				}
+			case 4:
+				for _, f := range status.LandlockFeatures {
+					if f == "IOCTL_DEV" {
+						t.Errorf("ABI v4 must NOT advertise IOCTL_DEV (added in ABI v5); got %v", status.LandlockFeatures)
+					}
+				}
+			}
 		})
 	}
 }
