@@ -46,6 +46,11 @@ properties:
     type: string
     enum:
       - session_to_ui
+      - session_to_parent
+    description: >
+      Direction this verdict travels. `session_to_ui` for verdicts meant
+      for the operator; `session_to_parent` for verdicts from a steered
+      child to its steering parent (ADR-091 I-5).
     example: "session_to_ui"
   kind:
     type: string
@@ -72,13 +77,37 @@ properties:
     type: string
     enum:
       - met
+      - not_met
       - waiting_on_user
     description: >
-      The typed `GOAL_STATUS:` marker outcome (US-2). No marker on a turn
+      The typed condition outcome. `met` — goal conditions met.
+      `not_met` — goal conditions failed (founder decision, round 10).
+      `waiting_on_user` — waiting on operator input. No marker on a turn
       means "not waiting" — a deterministic fallback, never inferred by a
-      prose classifier, and never represented as a third enum value here
+      prose classifier, and never represented as a fourth enum value here
       (absence of this message IS the not-waiting state).
     example: "met"
+  evidence:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      properties:
+        criterion:
+          type: string
+          description: The criterion being evaluated.
+          example: "checkout complete"
+        met:
+          type: boolean
+          description: Whether this criterion was met.
+          example: true
+        note:
+          type: string
+          description: Optional contextual note about this criterion.
+          example: "Order confirmed with confirmation number XYZ"
+    description: >
+      Optional evidence list supporting the verdict. Each entry explains
+      one criterion and whether it was met (ADR-091 I-5, founder decision round 10).
   goal_id:
     type: string
     minLength: 1

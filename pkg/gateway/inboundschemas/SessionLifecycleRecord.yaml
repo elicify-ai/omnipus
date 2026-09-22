@@ -194,3 +194,159 @@ properties:
     format: date-time
     description: RFC3339 timestamp of the last state transition or persist.
     example: "2026-07-22T10:05:00Z"
+  origin:
+    type: object
+    description: >
+      Every record carries its origin: how and where this session was launched
+      (ADR-091 I-1). Kind discriminates the launch path.
+    additionalProperties: false
+    required:
+      - kind
+    properties:
+      kind:
+        type: string
+        enum:
+          - delegate
+          - task
+          - chat
+          - channel
+          - scheduled
+          - heartbeat
+          - verifier
+          - plan
+          - human
+        description: >
+          The launch path that created this session. Root kinds
+          (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived
+          kinds (delegate/task) — the kind's own definition.
+        example: "delegate"
+      call_id:
+        type: string
+        description: >
+          For delegate/task-origin sessions, the tool-call id (span key)
+          of the originating delegate or create_task call. Absent for
+          other kinds.
+        example: "span_01J3ZQK8N2H8VXNRP5T7C9M4WE"
+      task_id:
+        type: string
+        description: >
+          For task-origin sessions, the persistent task id from the
+          task record (persisted on the task disk-only, by tools/task.go).
+          Absent for delegate-origin and other kinds.
+        example: "task_01J3ZQK8N2H8VXNRP5T7C9M4WF"
+  steered_by:
+    type: object
+    description: >
+      Present for steered sessions (a session launched by another session's
+      delegate or create_task). Absent for ordinary-root sessions
+      that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object
+      field should use optional-only semantics to avoid Zod/openapi-typescript
+      codegen mismatch (see needs_input field comment).
+    additionalProperties: false
+    properties:
+      steering_session_id:
+        type: string
+        description: The direct parent session; the inbox owner key.
+        example: "550e8400-e29b-41d4-a716-446655440001"
+      root_session_id:
+        type: string
+        description: >
+          The cascade root, verified by walking the chain at launch.
+          Equal to steering_session_id at depth 1.
+        example: "550e8400-e29b-41d4-a716-446655440002"
+      reporting_target:
+        type: object
+        description: The steering session's own address; where completion wakes it.
+        additionalProperties: false
+        properties:
+          session_id:
+            type: string
+            example: "550e8400-e29b-41d4-a716-446655440001"
+          channel:
+            type: string
+            example: "web"
+          chat_id:
+            type: string
+            example: "chat_01J3ZQK8N2H8VXNRP5T7C9M4WL"
+      authorization:
+        type: object
+        description: The gate verdict at launch.
+        additionalProperties: false
+        properties:
+          mode:
+            type: string
+            enum:
+              - direct
+              - task
+            description: >
+              How the child was authorized. `direct` for delegate-origin,
+              `task` for task-origin.
+            example: "direct"
+          remaining_depth:
+            type: integer
+            minimum: 0
+            description: >
+              Remaining delegation depth budget for this child's own
+              onward delegations. Decremented from the edge or global default.
+            example: 2
+      limits:
+        type: object
+        description: Creator-set session limits.
+        additionalProperties: false
+        properties:
+          timeout_seconds:
+            type: integer
+            minimum: 0
+            description: >
+              Maximum seconds before this delegation is force-cancelled.
+              0 = the configured default. Scope is the session's lifetime
+              across re-entries (ADR-091 I-1).
+            example: 300
+      tool_exclusions:
+        type: array
+        items:
+          type: string
+        description: >
+          Tool names excluded for this steered session (e.g., switch_agent).
+          Applied at launch.
+        example:
+          - "switch_agent"
+  stop:
+    type: object
+    description: >
+      Present when this session's own record carries a Stop marker,
+      written by the cancel cascade on the stopped node and every reachable
+      non-terminal descendant (ADR-091 I-6). Absent for sessions
+      that were not stopped. No `nullable: true` — an optional-object
+      field should use optional-only semantics to avoid Zod/openapi-typescript
+      codegen mismatch (see needs_input field comment).
+    additionalProperties: false
+    properties:
+      at:
+        type: string
+        format: date-time
+        description: RFC3339 timestamp when the Stop marker was written.
+        example: "2026-07-22T10:05:00Z"
+      generation:
+        type: integer
+        minimum: 0
+        description: >
+          The generation this Stop marker names. A revived generation is a
+          newer generation number.
+        example: 1
+      by:
+        type: object
+        description: Who or what initiated the stop.
+        additionalProperties: false
+        properties:
+          kind:
+            type: string
+            enum:
+              - agent
+              - human
+            description: Principal kind (agent or human).
+            example: "human"
+          id:
+            type: string
+            description: The agent id (if kind=agent) or user id (if kind=human).
+            example: "user-123"

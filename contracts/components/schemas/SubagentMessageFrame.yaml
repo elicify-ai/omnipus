@@ -66,11 +66,12 @@ properties:
       - handback
       - steer
       - respond
+      - goal_status
     description: >
-      The underlying SessionMessage kind. `revision_entry` and
-      `goal_status` are excluded — they ride their own existing
-      plan/goal-scoped frame families, not the span-scoped mid-span
-      channel.
+      The underlying SessionMessage kind. `revision_entry` is excluded —
+      it rides its own existing plan-scoped frame family, not the
+      span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this
+      span-scoped frame for child-to-parent verdicts.
     example: "progress"
   text:
     type: string

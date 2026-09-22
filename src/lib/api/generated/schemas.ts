@@ -2402,13 +2402,22 @@ type SessionMessageGoalStatus = {
   session_id: string;
   parent_session_id?: (string | null) | undefined;
   generation?: number | undefined;
-  direction: "session_to_ui";
+  direction: "session_to_ui" | "session_to_parent";
   kind: "goal_status";
   depth: number;
   created_at: string;
   sender_identity: string;
   untrusted_origin: boolean;
-  condition: "met" | "waiting_on_user";
+  condition: "met" | "not_met" | "waiting_on_user";
+  evidence?:
+    | Array<
+        Partial<{
+          criterion: string;
+          met: boolean;
+          note: string;
+        }>
+      >
+    | undefined;
   goal_id: string;
 };
 type SessionMessageSteer = {
@@ -2519,6 +2528,7 @@ type DelegateRunAction = {
         notes: string;
       }>
     | undefined;
+  goal?: Goal | undefined;
 };
 type DelegateStatusAction = {
   action: "status";
@@ -2614,6 +2624,51 @@ type SessionLifecycleRecord = {
   failed_reason?: string | undefined;
   created_at: string;
   updated_at: string;
+  origin?:
+    | {
+        kind:
+          | "delegate"
+          | "task"
+          | "chat"
+          | "channel"
+          | "scheduled"
+          | "heartbeat"
+          | "verifier"
+          | "plan"
+          | "human";
+        call_id?: string | undefined;
+        task_id?: string | undefined;
+      }
+    | undefined;
+  steered_by?:
+    | Partial<{
+        steering_session_id: string;
+        root_session_id: string;
+        reporting_target: Partial<{
+          session_id: string;
+          channel: string;
+          chat_id: string;
+        }>;
+        authorization: Partial<{
+          mode: "direct" | "task";
+          remaining_depth: number;
+        }>;
+        limits: Partial<{
+          timeout_seconds: number;
+        }>;
+        tool_exclusions: Array<string>;
+      }>
+    | undefined;
+  stop?:
+    | Partial<{
+        at: string;
+        generation: number;
+        by: Partial<{
+          kind: "agent" | "human";
+          id: string;
+        }>;
+      }>
+    | undefined;
 };
 type DelegateInboxResponse = {
   messages: Array<SessionMessage>;
@@ -2627,6 +2682,7 @@ type DelegateRespondResponse = {
 type DelegateSessionResponse = {
   session_id: string;
   generation: number;
+  queue_position?: number | undefined;
   resumed_from?: (string | null) | undefined;
   is_3p: boolean;
   state:
@@ -6199,13 +6255,20 @@ export const SessionMessageGoalStatus =
     session_id: z.string().min(1),
     parent_session_id: z.string().nullish(),
     generation: z.number().int().gte(0).optional(),
-    direction: z.literal("session_to_ui"),
+    direction: z.enum(["session_to_ui", "session_to_parent"]),
     kind: z.literal("goal_status"),
     depth: z.number().int().gte(0).lte(5),
     created_at: z.string().datetime({ offset: true }),
     sender_identity: z.string().min(1),
     untrusted_origin: z.boolean(),
-    condition: z.enum(["met", "waiting_on_user"]),
+    condition: z.enum(["met", "not_met", "waiting_on_user"]),
+    evidence: z
+      .array(
+        z
+          .object({ criterion: z.string(), met: z.boolean(), note: z.string() })
+          .partial()
+      )
+      .optional(),
     goal_id: z.string().min(1),
   }) satisfies z.ZodType<SessionMessageGoalStatus>;
 export const SessionMessageSteer = z.object({
@@ -6290,6 +6353,57 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
     failed_reason: z.string().optional(),
     created_at: z.string().datetime({ offset: true }),
     updated_at: z.string().datetime({ offset: true }),
+    origin: z
+      .object({
+        kind: z.enum([
+          "delegate",
+          "task",
+          "chat",
+          "channel",
+          "scheduled",
+          "heartbeat",
+          "verifier",
+          "plan",
+          "human",
+        ]),
+        call_id: z.string().optional(),
+        task_id: z.string().optional(),
+      })
+      .optional(),
+    steered_by: z
+      .object({
+        steering_session_id: z.string(),
+        root_session_id: z.string(),
+        reporting_target: z
+          .object({
+            session_id: z.string(),
+            channel: z.string(),
+            chat_id: z.string(),
+          })
+          .partial(),
+        authorization: z
+          .object({
+            mode: z.enum(["direct", "task"]),
+            remaining_depth: z.number().int().gte(0),
+          })
+          .partial(),
+        limits: z
+          .object({ timeout_seconds: z.number().int().gte(0) })
+          .partial(),
+        tool_exclusions: z.array(z.string()),
+      })
+      .partial()
+      .optional(),
+    stop: z
+      .object({
+        at: z.string().datetime({ offset: true }),
+        generation: z.number().int().gte(0),
+        by: z
+          .object({ kind: z.enum(["agent", "human"]), id: z.string() })
+          .partial(),
+      })
+      .partial()
+      .optional(),
   });
 export const Goal: z.ZodType<Goal> = z.object({
   goal_id: z.string().min(1),
@@ -6370,6 +6484,7 @@ export const DelegateRunAction = z.object({
     .object({ references: z.array(z.string()), notes: z.string().max(8192) })
     .partial()
     .optional(),
+  goal: Goal.optional(),
 }) satisfies z.ZodType<DelegateRunAction>;
 export const DelegateStatusAction = z.object({
   action: z.literal("status"),
@@ -6433,6 +6548,7 @@ export const DelegateSessionResponse: z.ZodType<DelegateSessionResponse> =
   z.object({
     session_id: z.string().min(1),
     generation: z.number().int().gte(0),
+    queue_position: z.number().int().gte(0).optional(),
     resumed_from: z.string().nullish(),
     is_3p: z.boolean(),
     state: z.enum([

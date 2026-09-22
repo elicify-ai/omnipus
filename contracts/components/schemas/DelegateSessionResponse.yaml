@@ -25,6 +25,13 @@ properties:
     minimum: 0
     description: The generation this response corresponds to.
     example: 1
+  queue_position:
+    type: integer
+    minimum: 0
+    description: >
+      1-based position in the admission queue when `state == queued`, else 0.
+      Lets the caller know its place in line for execution (ADR-091 I-2).
+    example: 1
   resumed_from:
     type: string
     nullable: true
