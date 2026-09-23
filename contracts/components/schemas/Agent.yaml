@@ -152,7 +152,7 @@ properties:
   auto_approve_disabled:
     type: boolean
     description: >
-      ADR-091 per-agent override of the global Auto-approve default
+      ADR-092 per-agent override of the global Auto-approve default
       (SandboxConfig.auto_approve). Off-only, by construction: this field
       can only ever mean "force Auto off for this agent's ask-policy tool
       calls" — there is no value meaning "force it on," so a per-agent
@@ -160,7 +160,7 @@ properties:
       matching every scope except the per-chat session modifier,
       SessionModeUpdateFrame). false (the default) means this agent
       inherits the global default unchanged. Distinct from
-      `tools_cfg.builtin.policies`, which is unchanged by ADR-091 and
+      `tools_cfg.builtin.policies`, which is unchanged by ADR-092 and
       still governs the ordinary allow/deny/ask value per tool — this
       field only ever narrows what "ask" DOES for this agent's tools,
       never which tools are allow/deny/ask.

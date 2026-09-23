@@ -4,9 +4,9 @@
  * God-mode is the single global "bypass-permissions" switch. When ON it:
  *   - flips every agent's tool permissions from "ask" → "allow" (no prompts),
  *   - disables the kernel sandbox (full host filesystem + syscalls),
- *   - opens outbound network egress (no network pre-flight, ADR-091 D8).
+ *   - opens outbound network egress (no network pre-flight, ADR-092 D8).
  * Audit logging, the prompt-guard, and rate limiting STAY ON — and operator
- * `command_rules` deny entries (ADR-091 D3) still refuse a matching command,
+ * `command_rules` deny entries (ADR-092 D3) still refuse a matching command,
  * since they are enforced inside the shell tool, downstream of this floor.
  *
  * Because it removes capability restraints globally, flipping it ALWAYS asks for
@@ -338,7 +338,7 @@ export function GodModeControl() {
 }
 
 /**
- * GodModeActiveBanner — persistent, app-wide indicator (ADR-091 FR-034:
+ * GodModeActiveBanner — persistent, app-wide indicator (ADR-092 FR-034:
  * rendered from AppShell, not just the Gateway section) shown while god-mode
  * is active. Reads the live state from AppState; renders nothing when
  * god-mode is off. Carries its own working "Turn off" action — a move to

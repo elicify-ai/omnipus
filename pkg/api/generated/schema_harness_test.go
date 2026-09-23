@@ -334,8 +334,8 @@ func TestCompileInboundSchema_ConcurrentDifferentSchemas(t *testing.T) {
 	t.Parallel()
 
 	// 10 different schema names to compile concurrently.
-	// "ExecAllowlist" (retired ADR-091 D2/D5, file deleted) was replaced with
-	// "SessionModeUpdateFrame" (ADR-091 D1/FR-004) rather than dropped: a
+	// "ExecAllowlist" (retired ADR-092 D2/D5, file deleted) was replaced with
+	// "SessionModeUpdateFrame" (ADR-092 D1/FR-004) rather than dropped: a
 	// missing-file compile error here reaches require.NoError inside this
 	// goroutine, and require.FailNow from a non-test goroutine hangs the
 	// whole test until the 10-minute panic (observed when ExecAllowlist.yaml

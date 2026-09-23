@@ -56,7 +56,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     // the coexistence test needs it to actually mount) resolves workspace
     // names via this call.
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
-    // ADR-091 FR-034: GodModeActiveBanner now mounts app-wide from AppShell
+    // ADR-092 FR-034: GodModeActiveBanner now mounts app-wide from AppShell
     // and queries god-mode status directly. Default to a definitive "off"
     // response so the tests below — none of which are about god-mode —
     // don't each pick up an unmocked, always-failing fetch and a stray
@@ -607,7 +607,7 @@ describe('AppShell — cross-workspace approval banner coexists with other banne
   })
 })
 
-// ── God-mode active banner is app-wide (ADR-091 FR-034) ──────────────────────
+// ── God-mode active banner is app-wide (ADR-092 FR-034) ──────────────────────
 //
 // Before this ADR the banner only rendered inside GatewaySection (Settings →
 // Gateway) — an operator on any other screen had no signal god-mode was on.
@@ -615,7 +615,7 @@ describe('AppShell — cross-workspace approval banner coexists with other banne
 // carries its own "Turn off" action since a GodModeControl toggle may not be
 // anywhere nearby. Uses `identity.mode: 'platform'` so the step-up gate opens
 // the simpler ConfirmDialog path rather than the password ReAuthDialog.
-describe('AppShell — god-mode active banner (ADR-091 FR-034)', () => {
+describe('AppShell — god-mode active banner (ADR-092 FR-034)', () => {
   const PLATFORM_APP_STATE: AppState = {
     onboarding_complete: true,
     dev_mode_bypass: false,

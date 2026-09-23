@@ -1385,7 +1385,7 @@ func newMountRootHandle(mountRoot, rawPath, realAbs string, policy fspolicy.FSPo
 // through this function, opting a turn in here reaches read_file,
 // list_directory and send_file at once; there is no per-tool wiring to
 // forget.
-// grantOverlay is ADR-091 FR-036's optional grant-overlay parameter: a set of
+// grantOverlay is ADR-092 FR-036's optional grant-overlay parameter: a set of
 // D7 filesystem-widening PathGrants to fold into the returned policy on top
 // of whatever fspolicy.EffectiveFSPolicyWithReadConfined itself resolves.
 // Tool scope (FR-036): only the bash tool's own pre-flight/exec call sites

@@ -413,7 +413,7 @@ func TestHandleSandboxConfig_GET_ReturnsShape(t *testing.T) {
 	_, hasAllowInternal := ssrf["allow_internal"]
 	assert.True(t, hasAllowInternal, `ssrf.allow_internal must be present`)
 
-	// ADR-091 D1: auto_approve must be present. (This harness builds a bare
+	// ADR-092 D1: auto_approve must be present. (This harness builds a bare
 	// config.Config{} literal, not config.DefaultConfig(), so it does not
 	// carry the fresh-install true seed — see
 	// TestDefaultConfig_SeedsAutoApprove in pkg/config for that assertion.)
@@ -421,7 +421,7 @@ func TestHandleSandboxConfig_GET_ReturnsShape(t *testing.T) {
 	assert.True(t, hasAutoApprove, `response must include "auto_approve"`)
 }
 
-// TestHandleSandboxConfig_AutoApprove_PersistAndEcho is the ADR-091 D1
+// TestHandleSandboxConfig_AutoApprove_PersistAndEcho is the ADR-092 D1
 // round trip: PUT auto_approve=false, confirm the PUT response echoes it,
 // confirm it is hot-reloaded (requires_restart is NOT forced true by this
 // field alone), and confirm a follow-up GET independently reflects the
@@ -457,7 +457,7 @@ func TestHandleSandboxConfig_AutoApprove_PersistAndEcho(t *testing.T) {
 
 // TestHandleSandboxConfig_AutoApprove_RequiresReAuth verifies that the
 // global auto_approve write is routed through the same password step-up
-// God Mode and credential writes use (ADR-091 D1/FR-045) — a PUT with no
+// God Mode and credential writes use (ADR-092 D1/FR-045) — a PUT with no
 // fresh re-auth token is refused, even though this handler's OTHER fields
 // (e.g. ssrf.allow_internal) are also hot-reload; the gate is on the whole
 // handler via authenticateAndDecode, not per-field.

@@ -238,7 +238,7 @@ export function AppShell() {
             </div>
           )}
 
-          {/* ADR-091 FR-034: god-mode-active banner, relocated app-wide from
+          {/* ADR-092 FR-034: god-mode-active banner, relocated app-wide from
               the Gateway settings section — a real user or agent can trip
               God Mode from any screen, so the warning (and its "Turn off"
               action) must be visible from any screen too, not just Gateway. */}

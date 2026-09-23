@@ -157,7 +157,7 @@ function GlobalToolPoliciesSection() {
   )
 }
 
-// ── Auto-approve (ADR-091) — global default ───────────────────────────────────
+// ── Auto-approve (ADR-092) — global default ───────────────────────────────────
 //
 // Auto-approve is a SEPARATE setting from tool policy (allow/deny/ask) — it
 // only has meaning for a tool currently resolved to "ask", for every such
@@ -524,7 +524,7 @@ export function SecuritySection() {
           />
         </Card>
 
-        {/* 1b. Auto-approve (ADR-091) — separate from tool policy above, only
+        {/* 1b. Auto-approve (ADR-092) — separate from tool policy above, only
             meaningful for a tool resolved to "ask". */}
         <AutoApproveControl />
 

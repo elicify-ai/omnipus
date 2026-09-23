@@ -1257,7 +1257,7 @@ func TestUpdateAgent_NoSandboxProfile_StillSucceeds(t *testing.T) {
 		"an ordinary update with no sandbox_profile key must still succeed; body: %s", w.Body.String())
 }
 
-// TestUpdateAgent_RejectsRetiredShellPolicyField pins ADR-091 removal item
+// TestUpdateAgent_RejectsRetiredShellPolicyField pins ADR-092 removal item
 // R-2/SC-014: a stale client still sending shell_policy gets a hard 400 from
 // rest_agents_update.go's raw-body sniff — not a silent 200 with the field
 // dropped. decodeAndValidate's fast path (validate_inbound defaults false)

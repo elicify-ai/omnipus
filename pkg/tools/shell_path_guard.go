@@ -163,19 +163,19 @@ var (
 // --- deny-pattern guard ------------------------------------------------------
 
 // guardCommand applies, in order: (1) the structural command-substitution
-// guard (FR-B4's surviving half — ADR-091 D2 retired the regex block-list
+// guard (FR-B4's surviving half — ADR-092 D2 retired the regex block-list
 // half that used to run first here) and (2) a defense-in-depth scan for
 // absolute paths referenced in the command TEXT (independent of the cwd
 // parameter guard above), gated on restrictToWorkspace exactly as before.
 //
-// pathGrants is ADR-091 FR-036's grant-overlay parameter: the D7 filesystem
+// pathGrants is ADR-092 FR-036's grant-overlay parameter: the D7 filesystem
 // widenings already on file for this session (omitted, or nil, for Ask/God
 // Mode calls, which never populate it — see shell_permission_mode.go's
 // callers). When non-empty, checkPathSegment treats a covered candidate as
 // contained the same way it already treats a workspace mount (FR-036:
 // "guardCommand's path scan checks PathGrants the same way it already checks
 // AllowedRoots"). Variadic (like ResolveTurnFSPolicy's own grantOverlay
-// parameter) purely so every pre-ADR-091 3-argument call site — dozens of
+// parameter) purely so every pre-ADR-092 3-argument call site — dozens of
 // them, across this package's test files — keeps compiling unchanged; only
 // the first slice is honored.
 //
@@ -188,7 +188,7 @@ var (
 // distinguishes the two: a path reference outside the working directory that is
 // PROVABLY a read is allowed; anything else — every write, and every reference
 // this scanner cannot prove is a read — still requires a workspace mount (or,
-// under ADR-091 Auto mode, a D7 grant), exactly as before. The proof lives in
+// under ADR-092 Auto mode, a D7 grant), exactly as before. The proof lives in
 // pathUseClassifier below, and it is deliberately allowlist-shaped: see its
 // doc comment for why "not provably a read" must mean "treat as a write",
 // never the other way round.
@@ -199,7 +199,7 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string, pathGr
 	}
 	// FR-B4, structural half: command substitutions are judged by what they
 	// run and where they sit, not by their mere presence. Unconditional and
-	// not disableable — ADR-091 D2's removal inventory names this guard a
+	// not disableable — ADR-092 D2's removal inventory names this guard a
 	// survivor, unlike the regex baseline it used to sit beside.
 	if msg := substitutionGuard(command); msg != "" {
 		return msg
@@ -489,7 +489,7 @@ func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, tu
 			return ""
 		}
 
-		// ADR-091 D7/FR-036: a bash-scoped filesystem widening approved
+		// ADR-092 D7/FR-036: a bash-scoped filesystem widening approved
 		// through the Auto pre-flight escalation covers this exact path for
 		// exactly the access class it was granted (never a subtree, unlike
 		// AllowedRoots above). Checked the same way AllowedRoots is checked —

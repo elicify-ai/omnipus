@@ -173,7 +173,7 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 		)
 		return true
 	}
-	// ADR-091: shell_policy is retired from the wire entirely.
+	// ADR-092: shell_policy is retired from the wire entirely.
 	// gen.AgentUpdateRequest no longer has a ShellPolicy field at all, and
 	// decodeAndValidate's fast path below is non-strict by default
 	// (validate_inbound defaults false) — without this explicit raw-body
@@ -184,7 +184,7 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	// sandbox_profile/delegation_policy raw-body-sniff precedent above).
 	if bytes.Contains(uf.rawBody, []byte(`"shell_policy"`)) {
 		jsonErr(uf.w, http.StatusBadRequest,
-			`shell_policy is retired — the built-in shell deny list and its per-agent override are gone; use the Ask/Auto/God Mode selector instead (ADR-091)`)
+			`shell_policy is retired — the built-in shell deny list and its per-agent override are gone; use the Ask/Auto/God Mode selector instead (ADR-092)`)
 		return true
 	}
 	// model_params.top_p (T2): removed from the wire entirely (see
@@ -1051,7 +1051,7 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 	if rp.ru.req.Voice != nil {
 		agentRec.Voice = strings.TrimSpace(*rp.ru.req.Voice)
 	}
-	// auto_approve_disabled (ADR-091 D1): off-only, tighten-only by
+	// auto_approve_disabled (ADR-092 D1): off-only, tighten-only by
 	// construction — there is no wire value meaning "force it on," so this
 	// write can never loosen past the global sandbox.auto_approve default
 	// (FR-003's tighten-only requirement is satisfied by the type itself,

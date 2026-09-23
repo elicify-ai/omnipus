@@ -382,7 +382,7 @@ func (rn *run) handleFrame(raw []byte) runFlow {
 		action := generated.ToolApprovalActionRequestActionDeny
 		if rn.o.Yes {
 			// Single-invocation approval, no session grant recorded — matches
-			// this one-shot CLI run's lifetime (ADR-091 D4/FR-023).
+			// this one-shot CLI run's lifetime (ADR-092 D4/FR-023).
 			action = generated.ToolApprovalActionRequestActionAllowOnce
 		}
 		resolveErr := resolveApprovalWithRetry(rn.ctx, rn.httpBase, rn.o.Token, f.ApprovalId, action)

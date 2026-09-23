@@ -137,7 +137,7 @@ export function ChatControls({ className }: ChatControlsProps) {
           redundant (Hick's Law). It lives where the user already is: the
           sidebar's per-workspace "New chat" row and the /new slash command. */}
 
-      {/* ADR-091: resolved permission-mode badge — Ask / Auto / "Auto → Ask".
+      {/* ADR-092: resolved permission-mode badge — Ask / Auto / "Auto → Ask".
           Natural DOM tab order (no explicit tabIndex): it's a status
           indicator, not an action in the closed composer tab ring. */}
       <ChatModeBadge className="mr-[var(--space-1)]" />

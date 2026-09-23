@@ -8,14 +8,14 @@
 // local timestamp (expiresAt = Date.now() + expires_in_ms) so the countdown
 // is independent of gateway clock skew.
 //
-// Buttons — wire action values renamed by ADR-091 D4 (visible labels/testids
+// Buttons — wire action values renamed by ADR-092 D4 (visible labels/testids
 // UNCHANGED for now, see note below):
 //   Approve      → POST /api/v1/tool-approvals/{id} {action:"allow_once"}
 //   Always Allow → POST /api/v1/tool-approvals/{id} {action:"allow"}
 //   Deny         → POST /api/v1/tool-approvals/{id} {action:"deny"}
 //   Cancel       → POST /api/v1/tool-approvals/{id} {action:"cancel"}
 //
-// ADR-091 D4 note: the full three-button redesign ([Deny][Allow once][Allow]
+// ADR-092 D4 note: the full three-button redesign ([Deny][Allow once][Allow]
 // labels, no rendered Cancel button, a scope choice — exact vs. prefix grant
 // — shown above the buttons whenever Allow is selected, and chained-command
 // segments listed per part) is still open work in this lane. This pass only

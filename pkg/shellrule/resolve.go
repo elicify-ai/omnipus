@@ -15,7 +15,7 @@ import (
 // BinaryResolver resolves a command name — bare ("git") or already
 // path-shaped ("./git", "/usr/bin/git") — to its actual, symlink-resolved,
 // absolute executable path, searching the given PATH-style list for a bare
-// name. Two independent PATH lists matter to ADR-091 D3's look-alike
+// name. Two independent PATH lists matter to ADR-092 D3's look-alike
 // defence: the CHILD's effective (and potentially attacker-influenced) PATH
 // used to resolve what a segment will actually execute, and a caller-chosen
 // TRUSTED PATH used to resolve what an operator rule's Binary field means —
@@ -135,7 +135,7 @@ func tryResolveExecutable(full string) (string, bool) {
 }
 
 // Verify re-resolves head against pathList and reports whether it still
-// resolves to expected — the immediate-before-spawn re-check ADR-091 D3
+// resolves to expected — the immediate-before-spawn re-check ADR-092 D3
 // requires ("re-verifies that resolution immediately before spawn"). A
 // mismatch means the PATH/filesystem changed between the earlier decision
 // and now (a TOCTOU window the kernel sandbox, not this package, is the

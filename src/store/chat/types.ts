@@ -314,7 +314,7 @@ export interface SessionChatState {
    */
   cancelStage: 'graceful' | 'hard' | 'detached' | null
   /**
-   * ADR-091: this session's resolved per-chat Auto-approve state, or null
+   * ADR-092: this session's resolved per-chat Auto-approve state, or null
    * when no `session_mode_updated` ack has arrived yet for this session
    * (the header badge falls back to the global x per-agent resolution in
    * that case). Set by `session_mode_updated` frames; there is no
@@ -651,7 +651,7 @@ export interface ChatStore {
   lastUserMessageAt: number | null
   /** B3: cancel progress stage for the active session, or null when idle. */
   cancelStage: 'graceful' | 'hard' | 'detached' | null
-  /** ADR-091: active session's resolved per-chat Auto-approve state. See SessionChatState.autoApproveEffective. */
+  /** ADR-092: active session's resolved per-chat Auto-approve state. See SessionChatState.autoApproveEffective. */
   autoApproveEffective?: boolean | null
   /** ISO timestamp of the most recent server frame for the active session. */
   lastReceivedEventTime: string | null
@@ -909,7 +909,7 @@ export interface ChatStore {
    */
   sendAskUserAnswer: (answer: Omit<AskUserAnswerFrame, 'type'>) => void
   /**
-   * ADR-091: set or clear this session's per-chat Auto-approve modifier
+   * ADR-092: set or clear this session's per-chat Auto-approve modifier
    * (`session_mode_update`). A human-only action — nothing agent-facing
    * calls this. `true` turns Auto ON for this chat even when the resolved
    * agent x global default has it off (the one deliberate loosening

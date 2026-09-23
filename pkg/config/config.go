@@ -620,7 +620,7 @@ type AgentConfig struct {
 	// Nil means all tools allowed by the agent's type are available.
 	Tools *AgentToolsCfg `json:"tools,omitempty"`
 	// AutoApproveDisabled is the per-agent tighten-only override for
-	// ADR-091 D1's Auto shell-permission mode (sandbox.AutoApprove is the
+	// ADR-092 D1's Auto shell-permission mode (sandbox.AutoApprove is the
 	// global default). false (default) means this agent follows the global
 	// default; true forces this agent's shell calls into Ask (every
 	// command prompts) even when the global default is Auto. There is
@@ -652,7 +652,7 @@ type AgentConfig struct {
 type AgentType string
 
 // AgentShellPolicy is unreferenced by config.go — kept here only because
-// pkg/tools/shell.go's ExecToolDeps.AgentShellPolicy field (ADR-091 lane L4,
+// pkg/tools/shell.go's ExecToolDeps.AgentShellPolicy field (ADR-092 lane L4,
 // out of this lane's scope) still names it as of this commit; deleting it
 // here would break that concurrently-developed, unowned file. Delete this
 // type in the same change that removes that field from pkg/tools/shell.go.

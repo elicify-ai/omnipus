@@ -11,7 +11,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
-// TestPathGrantAccessBitsMatchSandboxConstants pins ADR-091 FR-036's own
+// TestPathGrantAccessBitsMatchSandboxConstants pins ADR-092 FR-036's own
 // requirement — PathGrant "reus[es] the same sandbox.AccessRead|AccessWrite|
 // AccessExecute bitmask ... not a new vocabulary" — as a byte-for-byte
 // equivalence test. fspolicy cannot import pkg/sandbox (stdlib-only leaf,

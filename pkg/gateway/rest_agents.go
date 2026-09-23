@@ -594,7 +594,7 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 	if v := strings.TrimSpace(ac.Voice); v != "" {
 		ag.Voice = &v
 	}
-	// auto_approve_disabled (ADR-091 D1): echo the persisted per-agent
+	// auto_approve_disabled (ADR-092 D1): echo the persisted per-agent
 	// override of the global Auto-approve default. Off-only by construction
 	// (see AutoApproveDisabled's own doc comment on config.go) — always
 	// echo the actual stored value (false is a meaningful "inherits the

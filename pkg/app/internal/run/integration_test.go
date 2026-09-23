@@ -781,7 +781,7 @@ func TestRun_URLFlagRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestApprovalDecision_DefaultDenyAndYesAllow verifies the approval decision
-// mapping: deny without --yes, allow_once with --yes (ADR-091 D4/FR-023 —
+// mapping: deny without --yes, allow_once with --yes (ADR-092 D4/FR-023 —
 // single-invocation approval, no session grant recorded, for a one-shot CLI run).
 // Traces to: cli-minimization-spec.md §TDD Plan #5, Dataset: approval decision
 func TestApprovalDecision_DefaultDenyAndYesAllow(t *testing.T) {

@@ -1,5 +1,5 @@
 // shell_permission_gate_test.go: functional proof for ShellPermissionGate
-// (loop_policy.go) — the ADR-091 D1/FR-039 adapter connecting pkg/tools'
+// (loop_policy.go) — the ADR-092 D1/FR-039 adapter connecting pkg/tools'
 // bash-tool enforcement to AgentLoop's existing mode-resolution and
 // grant-consultation primitives, and for the CheckGrantOrRequestApproval
 // bash-prefix-grant extension (also loop_policy.go, this lane's own file).

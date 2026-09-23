@@ -92,7 +92,7 @@ properties:
     items:
       $ref: './CommandSegmentInfo.yaml'
     description: >
-      ADR-091 D3/D4/D7/D8 per-segment breakdown — present only when
+      ADR-092 D3/D4/D7/D8 per-segment breakdown — present only when
       tool_name is "bash" and the approval was raised by the D3 rule
       matcher or a D7/D8 pre-flight escalation, not for an ordinary
       non-shell tool approval. A single, unchained bash command still

@@ -24,7 +24,7 @@ func baseOptions(trusted string) Options {
 }
 
 // TestEvaluateCommand_LookAlikeBinary_DoesNotAutoApprove is the GitHub
-// issue #83 "Additional" regression and ADR-091 scenario S24: an `allow`
+// issue #83 "Additional" regression and ADR-092 scenario S24: an `allow`
 // rule authored against the real `git`, and an attacker-placed executable
 // also named `git` earlier on the CHILD's PATH, must not auto-approve —
 // the two resolve to different absolute paths, so the rule does not match.
@@ -78,7 +78,7 @@ func TestEvaluateCommand_LookAlikeBinary_DoesNotAutoApprove(t *testing.T) {
 // behaviour as production code.
 func TestEvaluateCommand_LookAlikeBinary_BEFORE_would_have_matched(t *testing.T) {
 	command := "git evil-script"
-	rulePattern := "git" // the pre-ADR-091 shape: a bare string glob, no resolution at all
+	rulePattern := "git" // the pre-ADR-092 shape: a bare string glob, no resolution at all
 	head, _, _ := fakeHeadResolver(command)
 	if head != rulePattern {
 		t.Fatalf("sanity check failed: %q vs %q", head, rulePattern)

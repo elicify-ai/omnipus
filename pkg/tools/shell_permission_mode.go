@@ -2,14 +2,14 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// This file wires ADR-091's shell permission modes (Ask/Auto/God, D1), the
+// This file wires ADR-092's shell permission modes (Ask/Auto/God, D1), the
 // unified D3 rule engine (pkg/shellrule), and the D7/D8 Auto-mode
 // pre-flights (pkg/tools/preflight.go, lane L3) into the bash tool's real
 // execution path — the fix for the B-1 reachability defect the spec names:
 // grant consultation used to be reachable ONLY from the classic "ask"
 // tool-policy branch (pkg/agent/loop_run_turn_tools.go::resolveAskPolicy),
 // so an "allow" ceiling (which is exactly what Auto mode presents as,
-// ADR-091 D1/FR-001) never touched the grant store at all. The two NEW call
+// ADR-092 D1/FR-001) never touched the grant store at all. The two NEW call
 // sites this ADR requires (FR-039) are enforceShellPermissionMode's D3
 // ask-rule branch and its D7/D8 pre-flight-escalation branches, both of
 // which call through ExecToolDeps.ApprovalRequester into
@@ -46,12 +46,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/shellrule"
 )
 
-// emitGrantAudit writes an audit entry for a newly-recorded ADR-091 D7/D8/D3
+// emitGrantAudit writes an audit entry for a newly-recorded ADR-092 D7/D8/D3
 // grant — SEC-15/FR-032's "grant recorded" event, routed through the
 // EXISTING audit.EventExec/Details-map shape (ExecTool.emitAudit's own
 // established pattern) rather than a new audit.Event constant: pkg/audit
 // isn't this lane's file to extend, and Details is already the documented
-// home for event-specific fields (ADR-091 spec §"Audit," FR-046). kind is
+// home for event-specific fields (ADR-092 spec §"Audit," FR-046). kind is
 // one of "rule_ask_approved", "fs_widen", "network_widen"; extra carries the
 // grant's own shape (path/access, or nothing for a network grant). Nil
 // auditLogger is a no-op, matching every other audit call site in this
@@ -60,7 +60,7 @@ func (t *ExecTool) emitGrantAudit(ctx context.Context, command, kind string, ext
 	if t.auditLogger == nil {
 		return
 	}
-	details := map[string]any{"adr091_kind": kind}
+	details := map[string]any{"adr092_kind": kind}
 	for k, v := range extra {
 		details[k] = v
 	}
@@ -72,11 +72,11 @@ func (t *ExecTool) emitGrantAudit(ctx context.Context, command, kind string, ext
 		Command:  command,
 		Details:  details,
 	}); err != nil {
-		slog.Warn("bash: ADR-091 grant audit write failed", "agent_id", ToolAgentID(ctx), "kind", kind, "error", err)
+		slog.Warn("bash: ADR-092 grant audit write failed", "agent_id", ToolAgentID(ctx), "kind", kind, "error", err)
 	}
 }
 
-// ShellMode is pkg/tools' own copy of the ADR-091 D1 named shell-permission
+// ShellMode is pkg/tools' own copy of the ADR-092 D1 named shell-permission
 // mode. String-identical to pkg/agent's agent.ShellMode by construction —
 // see the package comment for why this is a mirror, not an import.
 type ShellMode string
@@ -92,7 +92,7 @@ const (
 	ShellModeGod ShellMode = "god"
 )
 
-// ShellModeResolver resolves the ADR-091 D1 three-level, tighten-only mode
+// ShellModeResolver resolves the ADR-092 D1 three-level, tighten-only mode
 // merge (global -> per-agent -> per-chat) governing one bash call. Injected
 // via ExecToolDeps.ShellMode, exactly like ExecPolicyAuditor is injected for
 // the (now-retired) exec allowlist — a dependency edge pkg/agent satisfies,
@@ -106,7 +106,7 @@ type ShellModeResolver interface {
 }
 
 // ShellApprovalRequester is the interactive escalation fallback for the two
-// NEW ADR-091 FR-039 call sites (D3 ask-rule verdict, D7/D8 pre-flight
+// NEW ADR-092 FR-039 call sites (D3 ask-rule verdict, D7/D8 pre-flight
 // escalation). Deliberately the SAME shape as
 // AgentLoop.CheckGrantOrRequestApproval (pkg/agent/loop_policy.go), so
 // pkg/agent's adapter is a one-line forward: pkg/tools does its OWN grant
@@ -139,7 +139,7 @@ func (r *shellPermissionResult) grants() []fspolicy.PathGrant {
 	return r.pathGrants
 }
 
-// resolveShellMode resolves the effective ADR-091 mode for this call,
+// resolveShellMode resolves the effective ADR-092 mode for this call,
 // folding in FR-008's Auto->Ask kernel-sandbox fallback: "Where no active
 // kernel sandbox is active, Auto behaves like Ask" — sandbox.
 // TurnPolicyBaseInstalled() is the same predicate turnKernelPolicy already
@@ -149,7 +149,7 @@ func (r *shellPermissionResult) grants() []fspolicy.PathGrant {
 // directly, or a build that has not yet wired ExecToolDeps.ShellMode) fails
 // CLOSED to ShellModeAsk rather than silently skipping D1 altogether:
 // with no D3 command_rules configured (the common unwired-test case) this
-// is a pure no-op vs. pre-ADR-091 behaviour (D3 evaluates to ActionNone
+// is a pure no-op vs. pre-ADR-092 behaviour (D3 evaluates to ActionNone
 // either way, and Ask/God mode never triggers the D7/D8 pre-flight), while
 // with rules configured it is the SAFE direction, never the permissive one.
 func (t *ExecTool) resolveShellMode(ctx context.Context) ShellMode {
@@ -166,7 +166,7 @@ func (t *ExecTool) resolveShellMode(ctx context.Context) ShellMode {
 // shellRuleOptions builds the shellrule.Options every D3 evaluation in this
 // file shares: POSIX/Windows platform selection, the EXISTING
 // splitShellSegments/shellCommandHeadDetailed tokenizer wired in as function
-// values (ADR-091 D3: "no new parser"), and the child/trusted PATH lists.
+// values (ADR-092 D3: "no new parser"), and the child/trusted PATH lists.
 //
 // ChildPath and TrustedPath are both the SERVER process's own PATH
 // (os.Getenv). This is a deliberate simplification, not an oversight: the
@@ -189,7 +189,7 @@ func shellRuleOptions() shellrule.Options {
 	}
 }
 
-// evaluateCommandRules runs the ADR-091 D3 unified rule engine against this
+// evaluateCommandRules runs the ADR-092 D3 unified rule engine against this
 // tool's operator-configured command_rules (ExecToolDeps.CommandRules,
 // config-file-only, no wire schema — FR-018). Every mode consults this: God
 // Mode's only surviving prompt-free control is a D3 deny rule (D1); Auto's
@@ -211,17 +211,17 @@ func shellRuleDenialMessage(v shellrule.CommandVerdict) string {
 		}
 		if seg.MatchedRule != nil {
 			return fmt.Sprintf(
-				"Command blocked by operator rule (ADR-091 D3, deny beats ask beats allow): "+
+				"Command blocked by operator rule (ADR-092 D3, deny beats ask beats allow): "+
 					"segment %q matched a deny rule (binary=%q arg_prefix=%q).",
 				seg.Segment, seg.MatchedRule.Binary, seg.MatchedRule.ArgPrefix)
 		}
-		return fmt.Sprintf("Command blocked by operator rule (ADR-091 D3): segment %q is denied.", seg.Segment)
+		return fmt.Sprintf("Command blocked by operator rule (ADR-092 D3): segment %q is denied.", seg.Segment)
 	}
-	return "Command blocked by operator rule (ADR-091 D3)."
+	return "Command blocked by operator rule (ADR-092 D3)."
 }
 
 // segmentArgWords recovers a D3 segment's argument words (after its resolved
-// head) for prefix-grant matching (ADR-091 D4/FR-024) — reusing preflight.
+// head) for prefix-grant matching (ADR-092 D4/FR-024) — reusing preflight.
 // go's own tokenizeShellWords/resolveShellHead (lane L3, same package)
 // rather than a second tokenizer.
 func segmentArgWords(seg string) []string {
@@ -267,7 +267,7 @@ func (t *ExecTool) requestRuleApproval(
 	}
 	args := map[string]any{
 		"command":     command,
-		"adr091_kind": "rule_ask",
+		"adr092_kind": "rule_ask",
 	}
 	return t.approvalRequester.RequestShellApproval(ctx, sessionID, agentID, t.Name(), toolCallID, "", args)
 }
@@ -288,7 +288,7 @@ func accessLabel(access uint64) string {
 // preflightDenialMessage explains a refused D7/D8 escalation.
 func preflightDenialMessage(kind, reason string) string {
 	return fmt.Sprintf(
-		"Command blocked: the ADR-091 Auto %s pre-flight escalation was not approved (%s). "+
+		"Command blocked: the ADR-092 Auto %s pre-flight escalation was not approved (%s). "+
 			"The command did not run — Auto never runs a command un-widened after a denied escalation.",
 		kind, reason)
 }
@@ -302,7 +302,7 @@ func (t *ExecTool) requestPreflightApproval(ctx context.Context, sessionID, agen
 	}
 	args := map[string]any{
 		"command":     command,
-		"adr091_kind": kind,
+		"adr092_kind": kind,
 		"note":        note,
 	}
 	return t.approvalRequester.RequestShellApproval(ctx, sessionID, agentID, t.Name(), toolCallID, "", args)
@@ -326,7 +326,7 @@ func resolvePreflightPath(raw string) string {
 	return clean
 }
 
-// enforceFSPreflight is ADR-091 D7's Auto-mode orchestration: classify the
+// enforceFSPreflight is ADR-092 D7's Auto-mode orchestration: classify the
 // command's {path, operation} references (FR-038), evaluate each against
 // the session's already-known grants plus WorkDir/AllowedRoots (FR-009),
 // and escalate exactly the references that need it — refusing outright for
@@ -367,7 +367,7 @@ func (t *ExecTool) enforceFSPreflight(ctx context.Context, command, sessionID, a
 		verdict := EvaluateFSPreflight(policy, resolved, op.Access, readConfined)
 		if verdict.Refused {
 			return nil, ErrorResult(fmt.Sprintf(
-				"Command blocked by safety guard (secret set, ADR-091 FR-037): %s — %s", resolved, verdict.PolicyRule))
+				"Command blocked by safety guard (secret set, ADR-092 FR-037): %s — %s", resolved, verdict.PolicyRule))
 		}
 		if verdict.Contained {
 			continue
@@ -387,7 +387,7 @@ func (t *ExecTool) enforceFSPreflight(ctx context.Context, command, sessionID, a
 	return t.approvalGrants.PathGrantsFor(sessionID, agentID), nil
 }
 
-// enforceNetworkPreflight is ADR-091 D8's Auto-mode orchestration: classify
+// enforceNetworkPreflight is ADR-092 D8's Auto-mode orchestration: classify
 // whether the command needs outbound network (FR-043) and, if so, escalate
 // unless the session already holds the D8 network grant (FR-044). Returns
 // whether the session's per-turn kernel policy should render
@@ -409,7 +409,7 @@ func (t *ExecTool) enforceNetworkPreflight(ctx context.Context, command, session
 	return true, nil
 }
 
-// enforceShellPermissionMode is ADR-091's entry point, called once per
+// enforceShellPermissionMode is ADR-092's entry point, called once per
 // executeRun before guardCommand and turnKernelPolicy (shell.go): resolves
 // the effective mode (D1), evaluates the D3 rule engine unconditionally
 // (every mode — deny beats ask beats allow), and — Auto mode only, and only
@@ -433,7 +433,7 @@ func (t *ExecTool) enforceShellPermissionMode(ctx context.Context, command strin
 		approved, reason := t.requestRuleApproval(ctx, sessionID, agentID, toolCallID, command, verdict)
 		if !approved {
 			return nil, ErrorResult(fmt.Sprintf(
-				"Command blocked: the ADR-091 D3 operator rule requires approval, and it was not approved (%s).", reason))
+				"Command blocked: the ADR-092 D3 operator rule requires approval, and it was not approved (%s).", reason))
 		}
 	}
 
@@ -456,7 +456,7 @@ func (t *ExecTool) enforceShellPermissionMode(ctx context.Context, command strin
 	return result, nil
 }
 
-// applyAutoNetworkPosture implements ADR-091 D8/FR-042 for bash's own
+// applyAutoNetworkPosture implements ADR-092 D8/FR-042 for bash's own
 // per-turn kernel policy: under Auto mode, outbound network is denied by
 // default and widens to exactly DefaultConnectPorts once the session holds
 // the D8 network grant.

@@ -54,7 +54,7 @@ type TurnPolicyInput struct {
 	ConnectPorts []uint16
 
 	// NetworkAutoDeny renders BindPortRules/ConnectPortRules EMPTY instead of
-	// DefaultPolicyForModel's unconditional DefaultConnectPorts seed (ADR-091
+	// DefaultPolicyForModel's unconditional DefaultConnectPorts seed (ADR-092
 	// D8/FR-042 — Auto denies bash's outbound network by default). On Linux,
 	// ABI v4+ installs handledAccessNet unconditionally at the backend level
 	// (sandbox_linux.go::computeRights), independent of whether the ruleset
@@ -105,7 +105,7 @@ type TurnPolicyInput struct {
 //     exception through fspolicy.DeniedPathsFor.
 //   - AllowedRoots (mounts) become write grants. Reads need no grant under the
 //     open model, so a mount is a write grant and nothing else — see ADR-063 D4.
-//   - PathGrants (ADR-091 D7/FR-036) each become one additional PathRule,
+//   - PathGrants (ADR-092 D7/FR-036) each become one additional PathRule,
 //     exactly the access class the pre-flight escalation approved — never
 //     a path this turn's own secret set already covers (FR-037; see
 //     pathGrantIsDenied).
@@ -113,7 +113,7 @@ type TurnPolicyInput struct {
 //     open, and Scope now governs writes only (spec FR-2.5). Rendering it as a
 //     read restriction here would put the kernel back out of step with the app
 //     layer in the one place this whole change exists to fix.
-//   - TurnPolicyInput.NetworkAutoDeny/NetworkGranted (ADR-091 D8/FR-042)
+//   - TurnPolicyInput.NetworkAutoDeny/NetworkGranted (ADR-092 D8/FR-042)
 //     render bash's Auto per-turn ConnectPortRules/BindPortRules empty by
 //     default and widen to exactly DefaultConnectPorts on a network grant —
 //     independent of fspolicy.FSPolicy, which carries no network vocabulary
@@ -274,7 +274,7 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 	// a root that is already denied wholesale is redundant, never wrong.
 	policy.DeniedNodes = fspolicy.KernelDeniedNodesFor(in.HomePath, authored.WorkDir)
 
-	// PathGrants (ADR-091 D7/FR-036): each is rendered as one additional
+	// PathGrants (ADR-092 D7/FR-036): each is rendered as one additional
 	// PathRule, additive to the WorkDir/AllowedRoots rendering above — the
 	// same DeriveKernelPolicy call, no parallel construction site.
 	//
@@ -360,7 +360,7 @@ func isSharedTmpPath(p string) bool {
 // a deniedNodes entry (a directory that must never carry a right of its own,
 // even a single-path one; see SandboxPolicy.DeniedNodes's own doc comment).
 //
-// ADR-091 FR-037's "never widenable" guarantee is enforced HERE, at the one
+// ADR-092 FR-037's "never widenable" guarantee is enforced HERE, at the one
 // function that renders every PathGrant into the kernel policy — not only
 // assumed from fspolicy.FSPolicy.Validate having already refused a
 // secret-set grant, and not only from ExpandRulesExcluding's later,

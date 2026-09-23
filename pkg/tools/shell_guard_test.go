@@ -27,7 +27,7 @@ import (
 // is true (guardCommand's own early return: "if !t.restrictToWorkspace {
 // return \"\" }"). An unrestricted tool (restrict=false) has no text-level
 // secret-path protection at all — the kernel sandbox is the real boundary
-// there (ADR-091 D2) — so restrict=true is the realistic, default posture
+// there (ADR-092 D2) — so restrict=true is the realistic, default posture
 // this test exercises.
 func TestBashSafetyGuard_StructuralGuardsSurvive(t *testing.T) {
 	tool, err := NewExecTool(t.TempDir(), true)
@@ -67,7 +67,7 @@ func TestBashSafetyGuard_StructuralGuardsSurvive(t *testing.T) {
 	}
 }
 
-// TestBashSafetyGuard_AcceptedD2ResidualRisk documents ADR-091 D2's accepted
+// TestBashSafetyGuard_AcceptedD2ResidualRisk documents ADR-092 D2's accepted
 // trade explicitly rather than leaving it implicit: `rm -rf`, a blanket
 // `${...}` parameter expansion, and `sudo` inside the WORKSPACE are not
 // blocked by any text guard (they never touch anything a kernel sandbox
@@ -86,7 +86,7 @@ func TestBashSafetyGuard_AcceptedD2ResidualRisk(t *testing.T) {
 		t.Run(cmd, func(t *testing.T) {
 			msg := tool.guardCommand(context.Background(), cmd, t.TempDir())
 			require.Empty(t, msg,
-				"ADR-091 D2 accepts this residual risk for an in-workspace command; "+
+				"ADR-092 D2 accepts this residual risk for an in-workspace command; "+
 					"if this now fails, a guard was reintroduced that the ADR deliberately removed: %q", cmd)
 		})
 	}

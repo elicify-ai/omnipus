@@ -52,11 +52,11 @@ type grantKey struct {
 // false, i.e. "ask"; Record/InheritFrom/ClearSession => no-op). This lets
 // callers hold a possibly-unwired store (e.g. in a test fixture) without an
 // extra nil check at every call site.
-// ShellPrefixGrant is the ADR-091 D4 "prefix" scope Allow grant: `{binary,
+// ShellPrefixGrant is the ADR-092 D4 "prefix" scope Allow grant: `{binary,
 // arg_prefix}`, ignoring cwd, token-boundary matched against a segment's
 // argument words following the resolved binary — "npm run test" does not
 // match "npm run testfoo" (FR-024). Binary is the RESOLVED absolute
-// executable path (D3's resolve-and-verify, ADR-091 S24's look-alike
+// executable path (D3's resolve-and-verify, ADR-092 S24's look-alike
 // defence: a grant recorded against the real `git` must never match a
 // same-named look-alike earlier on a later, attacker-influenced PATH).
 // RunInBackground is a separate match dimension (D4): a grant recorded for
@@ -97,13 +97,13 @@ type ApprovalGrantStore struct {
 	mu     sync.Mutex
 	grants map[grantKey]map[string]map[string]struct{}
 
-	// prefixGrants holds the ADR-091 D4 "prefix" scope grants, keyed the same
+	// prefixGrants holds the ADR-092 D4 "prefix" scope grants, keyed the same
 	// way exact grants are (session, agent), then by tool name — a session may
 	// hold several prefix grants for the same tool (e.g. `npm run test` and
 	// `npm run build`, recorded on two separate Allow clicks).
 	prefixGrants map[grantKey]map[string][]ShellPrefixGrant
 
-	// pathGrants holds the ADR-091 D7 filesystem-widening grants (FR-016/
+	// pathGrants holds the ADR-092 D7 filesystem-widening grants (FR-016/
 	// FR-036): bash-scoped, single-path, single-access-class widenings
 	// approved through the Auto pre-flight escalation. Keyed by (session,
 	// agent) only — not by tool — because ResolveTurnFSPolicy's grant-overlay
@@ -111,7 +111,7 @@ type ApprovalGrantStore struct {
 	// per-call fingerprint.
 	pathGrants map[grantKey][]fspolicy.PathGrant
 
-	// networkGrants holds the ADR-091 D8 network-widening grant (FR-044): a
+	// networkGrants holds the ADR-092 D8 network-widening grant (FR-044): a
 	// session either holds it or does not — there is no finer scope (D8 is
 	// port-level, not domain-level, and applies uniformly to the session's
 	// bash child once granted).
@@ -239,7 +239,7 @@ func (s *ApprovalGrantStore) Record(sessionID, agentID, tool string, args map[st
 	return true
 }
 
-// RecordPrefixGrant grants ADR-091 D4 "prefix" scope for tool, scoped to
+// RecordPrefixGrant grants ADR-092 D4 "prefix" scope for tool, scoped to
 // (sessionID, agentID). A later RecordPrefixGrant of the same tool with a
 // different {binary, arg_prefix, run_in_background} adds a second entry; it
 // does not replace the first. Returns false (no-op) for a nil store, an
@@ -293,7 +293,7 @@ func (s *ApprovalGrantStore) IsPrefixAllowed(sessionID, agentID, tool, resolvedB
 	return false
 }
 
-// RecordPathGrant adds one ADR-091 D7 filesystem-widening grant (FR-016) to
+// RecordPathGrant adds one ADR-092 D7 filesystem-widening grant (FR-016) to
 // (sessionID, agentID)'s session-scoped set. A later RecordPathGrant for the
 // same Path unions its Access bits into the existing entry rather than
 // appending a duplicate — a session that first widens {P, read} and later
@@ -322,7 +322,7 @@ func (s *ApprovalGrantStore) RecordPathGrant(sessionID, agentID string, grant fs
 	return true
 }
 
-// PathGrantsFor returns a defensive copy of every ADR-091 D7 filesystem
+// PathGrantsFor returns a defensive copy of every ADR-092 D7 filesystem
 // widening recorded for (sessionID, agentID) this session — the value
 // ResolveTurnFSPolicy's grant-overlay parameter (FR-036) is populated from
 // at every bash pre-flight/exec call site. Nil-safe; returns nil for a nil
@@ -343,7 +343,7 @@ func (s *ApprovalGrantStore) PathGrantsFor(sessionID, agentID string) []fspolicy
 	return out
 }
 
-// RecordNetworkGrant grants the ADR-091 D8 network-widening scope (FR-044)
+// RecordNetworkGrant grants the ADR-092 D8 network-widening scope (FR-044)
 // for (sessionID, agentID) — the whole session's bash child, port-level
 // (DefaultConnectPorts), not domain-level. Idempotent: recording it twice
 // leaves the same single grant. Returns false (no-op) for a nil store or an
@@ -362,7 +362,7 @@ func (s *ApprovalGrantStore) RecordNetworkGrant(sessionID, agentID string) bool 
 }
 
 // HasNetworkGrant reports whether (sessionID, agentID) already holds the
-// ADR-091 D8 network-widening grant this session. Fail-safe: a nil store or
+// ADR-092 D8 network-widening grant this session. Fail-safe: a nil store or
 // an empty sessionID/agentID always returns false.
 func (s *ApprovalGrantStore) HasNetworkGrant(sessionID, agentID string) bool {
 	if s == nil || sessionID == "" || agentID == "" {
@@ -440,7 +440,7 @@ func (s *ApprovalGrantStore) InheritFrom(srcSessionID, srcAgentID, dstSessionID,
 	s.mu.Lock()
 	srcSet := s.grants[srcKey]
 	_, srcHasNetwork := s.networkGrants[srcKey]
-	// ADR-091: the source-miss short-circuit must consider all FOUR grant
+	// ADR-092: the source-miss short-circuit must consider all FOUR grant
 	// kinds, not only the exact-fingerprint map — a session holding nothing
 	// but a D7 path widening (no exact "Always Allow" ever recorded) must
 	// still inherit it on delegation, not be treated as an empty source and
@@ -476,7 +476,7 @@ func (s *ApprovalGrantStore) InheritFrom(srcSessionID, srcAgentID, dstSessionID,
 			}
 		}
 	}
-	// ADR-091: the three new grant kinds inherit on delegation exactly like
+	// ADR-092: the three new grant kinds inherit on delegation exactly like
 	// the exact-fingerprint grant above — "a delegate inherits it via the
 	// same InheritFrom mechanism as command grants" (D7), "same session/
 	// delegate/clear-on-close lifetime as PathGrants" (D8's own text about
@@ -572,7 +572,7 @@ func (s *ApprovalGrantStore) ClearSession(sessionID string) {
 			delete(s.grants, key)
 		}
 	}
-	// ADR-091: the three new grant kinds die with the session exactly like
+	// ADR-092: the three new grant kinds die with the session exactly like
 	// the exact-fingerprint grant above (D4's "session grants ... end with
 	// the chat"; D7/D8 explicitly cite the same clear-on-close lifetime).
 	for key := range s.prefixGrants {

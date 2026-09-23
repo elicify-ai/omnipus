@@ -13,7 +13,7 @@ export interface ResolvedAutoApprove {
 }
 
 /**
- * useResolvedAutoApprove — the single source of ADR-091's Auto-approve
+ * useResolvedAutoApprove — the single source of ADR-092's Auto-approve
  * resolution, shared by the composer's per-chat toggle (AutoApprovePicker)
  * and the chat-header mode badge so the two can never disagree.
  *

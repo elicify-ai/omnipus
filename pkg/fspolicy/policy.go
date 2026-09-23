@@ -49,7 +49,7 @@ const (
 	FSScopeAllow FSScope = "allow"
 )
 
-// PathGrant access bits (ADR-091 FR-036). These MUST stay bit-for-bit
+// PathGrant access bits (ADR-092 FR-036). These MUST stay bit-for-bit
 // identical to sandbox.AccessRead/AccessWrite/AccessExecute
 // (pkg/sandbox/sandbox.go) — the same vocabulary reused, not a new one, per
 // FR-036's own text. They are duplicated as untyped constants here, rather
@@ -65,7 +65,7 @@ const (
 )
 
 // PathGrant is one bash-scoped filesystem widening approved through the D7
-// pre-flight escalation (ADR-091 FR-016/FR-036): EXACTLY one path and
+// pre-flight escalation (ADR-092 FR-016/FR-036): EXACTLY one path and
 // EXACTLY the access class the pre-flight verdict found missing — never a
 // subtree grant the way AllowedRoots is.
 type PathGrant struct {
@@ -113,7 +113,7 @@ type FSPolicy struct {
 	AllowedRoots []string
 
 	// PathGrants are bash-scoped, single-path widenings approved through the
-	// D7 pre-flight escalation flow (ADR-091 FR-016/FR-036,
+	// D7 pre-flight escalation flow (ADR-092 FR-016/FR-036,
 	// pkg/tools/preflight.go's filesystem evaluator). Unlike AllowedRoots (a
 	// subtree WRITE grant populated from workspace mounts), a PathGrant is
 	// exactly one path and exactly the access class the pre-flight verdict
@@ -243,7 +243,7 @@ func (p FSPolicy) Validate() error {
 		return fmt.Errorf("fspolicy: unknown Scope %q", p.Scope)
 	}
 
-	// PathGrants (ADR-091 FR-036/FR-037): each grant must be an absolute
+	// PathGrants (ADR-092 FR-036/FR-037): each grant must be an absolute
 	// path, and none may name a path IsCarveOut denies — the secret set is
 	// never widenable, asserted here as a structural invariant rather than
 	// left to each consumer (the app-layer guard, the pre-flight evaluator,

@@ -11119,7 +11119,7 @@ type Agent struct {
 	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
 	ActivationStatus *AgentActivationStatus `json:"activation_status,omitempty"`
 
-	// AutoApproveDisabled ADR-091 per-agent override of the global Auto-approve default (SandboxConfig.auto_approve). Off-only, by construction: this field can only ever mean "force Auto off for this agent's ask-policy tool calls" — there is no value meaning "force it on," so a per-agent write can never loosen past the global default (tighten-only, matching every scope except the per-chat session modifier, SessionModeUpdateFrame). false (the default) means this agent inherits the global default unchanged. Distinct from `tools_cfg.builtin.policies`, which is unchanged by ADR-091 and still governs the ordinary allow/deny/ask value per tool — this field only ever narrows what "ask" DOES for this agent's tools, never which tools are allow/deny/ask.
+	// AutoApproveDisabled ADR-092 per-agent override of the global Auto-approve default (SandboxConfig.auto_approve). Off-only, by construction: this field can only ever mean "force Auto off for this agent's ask-policy tool calls" — there is no value meaning "force it on," so a per-agent write can never loosen past the global default (tighten-only, matching every scope except the per-chat session modifier, SessionModeUpdateFrame). false (the default) means this agent inherits the global default unchanged. Distinct from `tools_cfg.builtin.policies`, which is unchanged by ADR-092 and still governs the ordinary allow/deny/ask value per tool — this field only ever narrows what "ask" DOES for this agent's tools, never which tools are allow/deny/ask.
 	AutoApproveDisabled *bool     `json:"auto_approve_disabled,omitempty"`
 	ChangedFields       *[]string `json:"changed_fields,omitempty"`
 
@@ -11321,7 +11321,7 @@ type AgentCreateRequest struct {
 
 // AgentCreateRequestMain Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice is Main-only; executor is absent (Main never has one).
 type AgentCreateRequestMain struct {
-	// AutoApproveDisabled Initial per-agent override forcing Auto-approve off (ADR-091) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
+	// AutoApproveDisabled Initial per-agent override forcing Auto-approve off (ADR-092) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
 	AutoApproveDisabled *bool `json:"auto_approve_disabled,omitempty"`
 
 	// Color Hex color code for the agent avatar.
@@ -11411,7 +11411,7 @@ type AgentCreateRequestMainType string
 
 // AgentCreateRequestSubagent Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
 type AgentCreateRequestSubagent struct {
-	// AutoApproveDisabled Initial per-agent override forcing Auto-approve off (ADR-091) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
+	// AutoApproveDisabled Initial per-agent override forcing Auto-approve off (ADR-092) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
 	AutoApproveDisabled *bool `json:"auto_approve_disabled,omitempty"`
 
 	// Color Hex color code for the agent avatar.
@@ -11846,7 +11846,7 @@ type AgentToolsUpdateRequestConfigBuiltinPolicies string
 
 // AgentUpdateRequest Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected.
 type AgentUpdateRequest struct {
-	// AutoApproveDisabled Force Auto-approve off for this agent (ADR-091), overriding the global default (SandboxConfig.auto_approve) for every tool this agent resolves to "ask". Off-only: true disables Auto for this agent; false (or omitting the field, which leaves the stored value unchanged) does not loosen past the global default — there is no value here that turns Auto on when the global default has it off. Distinct from `tool_policy_changes`, which is unchanged and still governs allow/deny/ask per tool.
+	// AutoApproveDisabled Force Auto-approve off for this agent (ADR-092), overriding the global default (SandboxConfig.auto_approve) for every tool this agent resolves to "ask". Off-only: true disables Auto for this agent; false (or omitting the field, which leaves the stored value unchanged) does not loosen past the global default — there is no value here that turns Auto on when the global default has it off. Distinct from `tool_policy_changes`, which is unchanged and still governs allow/deny/ask per tool.
 	AutoApproveDisabled *bool `json:"auto_approve_disabled,omitempty"`
 
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
@@ -18403,7 +18403,7 @@ type SandboxConfig struct {
 	// AppliedMode The mode the gateway is currently enforcing. Differs from `mode` when the operator saved a change but has not restarted yet.
 	AppliedMode *string `json:"applied_mode,omitempty"`
 
-	// AutoApprove ADR-091's global default for Auto-approve (fresh-install default: true). Auto is NOT a tool-policy value — every tool, including bash, keeps the ordinary three-value policy ("allow" runs unprompted with none of this machinery, "deny" makes the tool invisible to the agent, "ask" is where Auto applies). For every tool currently resolved to "ask", Auto-approve ON auto-approves the cases the pre-flight/rule matcher can positively clear against the kernel sandbox (ADR-091 D3/D7/D8) and still prompts for everything else; Auto-approve OFF means an "ask" tool always prompts. Auto never touches an "allow" or "deny" tool, and never reaches past what the kernel sandbox can actually confine (no active kernel sandbox ⇒ nothing can be positively cleared ⇒ every "ask" call prompts regardless of this setting — see SandboxStatus.kernel_sandbox_active).
+	// AutoApprove ADR-092's global default for Auto-approve (fresh-install default: true). Auto is NOT a tool-policy value — every tool, including bash, keeps the ordinary three-value policy ("allow" runs unprompted with none of this machinery, "deny" makes the tool invisible to the agent, "ask" is where Auto applies). For every tool currently resolved to "ask", Auto-approve ON auto-approves the cases the pre-flight/rule matcher can positively clear against the kernel sandbox (ADR-092 D3/D7/D8) and still prompts for everything else; Auto-approve OFF means an "ask" tool always prompts. Auto never touches an "allow" or "deny" tool, and never reaches past what the kernel sandbox can actually confine (no active kernel sandbox ⇒ nothing can be positively cleared ⇒ every "ask" call prompts regardless of this setting — see SandboxStatus.kernel_sandbox_active).
 	// This is the GLOBAL default only. Two narrower scopes layer on top, neither stored here: a per-agent setting (Agent.auto_approve_disabled) that may only turn Auto OFF for that agent, and a per-chat session modifier (SessionModeUpdateFrame, asyncapi.yaml) that may turn Auto ON OR OFF for that one chat — deliberately allowed to loosen, since a human is present in that session; every other scope in this contract is tighten-only.
 	// Deliberately named `auto_approve`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide. Hot-reloaded, like the rest of this handler's fields — no restart required.
 	AutoApprove *bool `json:"auto_approve,omitempty"`
@@ -18412,7 +18412,7 @@ type SandboxConfig struct {
 	// Reported here, and settable via SandboxConfigUpdate, because the two postures are indistinguishable from outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because that path happened to be on the enumerated list. Without a control, the only way to change it was to hand-edit config.json.
 	FilesystemModel *SandboxConfigFilesystemModel `json:"filesystem_model,omitempty"`
 
-	// GodMode O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool-policy ceiling is floored at "allow" (for every tool, not just bash) — which also makes `auto_approve` below moot for that agent, since Auto only ever applies to a tool resolved to "ask" and nothing is left in "ask" state once the ceiling is floored. The kernel sandbox is off and network egress is open. Operator `deny` command rules (ADR-091 D3) still apply — the floor cannot erase them. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable. Independent of `auto_approve` — the two are separate mechanisms.
+	// GodMode O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool-policy ceiling is floored at "allow" (for every tool, not just bash) — which also makes `auto_approve` below moot for that agent, since Auto only ever applies to a tool resolved to "ask" and nothing is left in "ask" state once the ceiling is floored. The kernel sandbox is off and network egress is open. Operator `deny` command rules (ADR-092 D3) still apply — the floor cannot erase them. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable. Independent of `auto_approve` — the two are separate mechanisms.
 	GodMode *bool `json:"god_mode,omitempty"`
 
 	// GodModeAvailable Whether god mode CAN be enabled in this gateway: the build supports it (not compiled with the nogodmode tag) AND --allow-god-mode was passed at boot. The runtime god_mode switch is a no-op when this is false.
@@ -18453,7 +18453,7 @@ type SandboxConfigFilesystemModel string
 // SandboxConfigMode Configured sandbox enforcement mode.
 type SandboxConfigMode string
 
-// SandboxConfigUpdate Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and auto_approve are hot-reloaded. This endpoint is the routing target for ADR-091's global Auto-approve default write (auto_approve below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use. No new auth mechanism; the requirement is routing the write through this handler rather than a bespoke endpoint that bypasses it.
+// SandboxConfigUpdate Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and auto_approve are hot-reloaded. This endpoint is the routing target for ADR-092's global Auto-approve default write (auto_approve below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use. No new auth mechanism; the requirement is routing the write through this handler rather than a bespoke endpoint that bypasses it.
 type SandboxConfigUpdate struct {
 	// AllowNetworkOutbound Allow agent tool calls to make outbound network connections.
 	AllowNetworkOutbound *bool `json:"allow_network_outbound,omitempty"`
@@ -18461,7 +18461,7 @@ type SandboxConfigUpdate struct {
 	// AllowedPaths List of host filesystem paths the agent is allowed to read/write. Restart-gated. Must be absolute paths; empty list clears all exceptions.
 	AllowedPaths *[]string `json:"allowed_paths,omitempty"`
 
-	// AutoApprove Set the ADR-091 global default for Auto-approve. Auto is a SEPARATE setting from tool policy — it only has meaning for a tool currently resolved to "ask" (see SandboxConfig.auto_approve for the full behavioural description) and applies to every such tool, not only bash. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
+	// AutoApprove Set the ADR-092 global default for Auto-approve. Auto is a SEPARATE setting from tool policy — it only has meaning for a tool currently resolved to "ask" (see SandboxConfig.auto_approve for the full behavioural description) and applies to every such tool, not only bash. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
 	// Per-agent and per-chat Auto settings are NOT set here: a per-agent override is `auto_approve_disabled` on PUT /agents/{id} (AgentUpdateRequest) — off-only, tighten-only. A chat's session modifier is the session_mode_update WS frame (asyncapi.yaml, SessionModeUpdateFrame) — the one place in this contract allowed to LOOSEN (turn Auto on for that chat even when the agent or this global default has it off), because a human is present in that session. The per-agent field is tighten-only relative to this global default; this global default has no scope above it to tighten against.
 	AutoApprove *bool `json:"auto_approve,omitempty"`
 
@@ -18543,7 +18543,7 @@ type SandboxStatus struct {
 	// KernelLevel Whether the backend can enforce at the kernel level. True for Landlock on Linux 5.13+. False for the fallback (app-level) backend.
 	KernelLevel bool `json:"kernel_level"`
 
-	// KernelSandboxActive ADR-091's platform predicate — whether a kernel sandbox is actually confining processes right now, the fact Auto-approve needs to decide anything: Linux — Landlock applied in enforce mode (`mode: enforce` above), not degraded. macOS — the Seatbelt backend's own active/enabled state, read directly rather than derived from `policy_applied` above, which reports the gateway's OWN confinement and is documented false on macOS by design (Seatbelt confines children only). Windows — always false, no kernel sandbox backend exists. Distinct from `policy_applied`/`kernel_level` above (which describe this process's own sandboxing posture, not specifically whether Auto's pre-flight has anything to check a command against).
+	// KernelSandboxActive ADR-092's platform predicate — whether a kernel sandbox is actually confining processes right now, the fact Auto-approve needs to decide anything: Linux — Landlock applied in enforce mode (`mode: enforce` above), not degraded. macOS — the Seatbelt backend's own active/enabled state, read directly rather than derived from `policy_applied` above, which reports the gateway's OWN confinement and is documented false on macOS by design (Seatbelt confines children only). Windows — always false, no kernel sandbox backend exists. Distinct from `policy_applied`/`kernel_level` above (which describe this process's own sandboxing posture, not specifically whether Auto's pre-flight has anything to check a command against).
 	KernelSandboxActive *bool `json:"kernel_sandbox_active,omitempty"`
 
 	// LandlockEnforced Whether Landlock file-system access rules are enforced.
@@ -21432,28 +21432,28 @@ type TokenUsageSummary struct {
 	TokensCacheWrite *int `json:"tokens_cache_write,omitempty"`
 }
 
-// ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-091 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `cancel` is retained in the enum with no corresponding UI button — see its own description.
+// ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `cancel` is retained in the enum with no corresponding UI button — see its own description.
 type ToolApprovalActionRequest struct {
 	// Action Action to take on this approval. deny       — reject this single invocation (also the resolution for Escape/overlay-click/X in the UI, none of which render a Cancel button any more). allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — client-issued resolution for the stuck-approval recovery path only (a lost-server 404), distinct from `deny` (a network failure, which leaves the approval unresolved so a later snapshot can restore it) — ToolApprovalModal.resolution.test.tsx and the headless CLI approval path (pkg/app/internal/run/run.go) both depend on `deny` and `cancel` remaining distinct wire values. Never shown as a button.
 	Action ToolApprovalActionRequestAction `json:"action"`
 
-	// Scope Grant scope (ADR-091 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-091 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
+	// Scope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
 	// Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — approving one of those records the path-widening or network-widening grant the frame described, not an exact/prefix command grant; `scope` is ignored for those approvals.
-	// When the pending approval covers a chained command (multiple unmatched segments in ToolApprovalRequiredFrame.segments), this one scope choice applies uniformly to every currently-unmatched segment resolved by this action (ADR-091 D4: "one rule per segment" is a server-side recording detail, not a per-segment client choice).
+	// When the pending approval covers a chained command (multiple unmatched segments in ToolApprovalRequiredFrame.segments), this one scope choice applies uniformly to every currently-unmatched segment resolved by this action (ADR-092 D4: "one rule per segment" is a server-side recording detail, not a per-segment client choice).
 	Scope *ToolApprovalActionRequestScope `json:"scope,omitempty"`
 }
 
 // ToolApprovalActionRequestAction Action to take on this approval. deny       — reject this single invocation (also the resolution for Escape/overlay-click/X in the UI, none of which render a Cancel button any more). allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — client-issued resolution for the stuck-approval recovery path only (a lost-server 404), distinct from `deny` (a network failure, which leaves the approval unresolved so a later snapshot can restore it) — ToolApprovalModal.resolution.test.tsx and the headless CLI approval path (pkg/app/internal/run/run.go) both depend on `deny` and `cancel` remaining distinct wire values. Never shown as a button.
 type ToolApprovalActionRequestAction string
 
-// ToolApprovalActionRequestScope Grant scope (ADR-091 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-091 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
+// ToolApprovalActionRequestScope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
 // Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — approving one of those records the path-widening or network-widening grant the frame described, not an exact/prefix command grant; `scope` is ignored for those approvals.
-// When the pending approval covers a chained command (multiple unmatched segments in ToolApprovalRequiredFrame.segments), this one scope choice applies uniformly to every currently-unmatched segment resolved by this action (ADR-091 D4: "one rule per segment" is a server-side recording detail, not a per-segment client choice).
+// When the pending approval covers a chained command (multiple unmatched segments in ToolApprovalRequiredFrame.segments), this one scope choice applies uniformly to every currently-unmatched segment resolved by this action (ADR-092 D4: "one rule per segment" is a server-side recording detail, not a per-segment client choice).
 type ToolApprovalActionRequestScope string
 
 // ToolApprovalResponse Response from POST /api/v1/tool-approvals/{approval_id}. Confirms that the approval action was processed.
 type ToolApprovalResponse struct {
-	// Action The action that was applied. Echoes the request action (ADR-091 D4), including "allow" (approve-and-remember, renamed from "always").
+	// Action The action that was applied. Echoes the request action (ADR-092 D4), including "allow" (approve-and-remember, renamed from "always").
 	Action ToolApprovalResponseAction `json:"action"`
 
 	// ApprovalId The approval ID that was resolved.
@@ -21462,17 +21462,17 @@ type ToolApprovalResponse struct {
 	// GrantRecorded Present only when action is "allow". True when the grant was stored — a session command grant (scope: exact/prefix), or the pre-flight escalation's own path-widening/network-widening grant when this approval resolved a D7/D8 escalation instead of an ordinary tool-approval-required frame. False means this call was approved once, but the next identical call (or the next command needing the same widening) will ask again — the grant did not stick (missing session, agent, or tool identity on the approval).
 	GrantRecorded *bool `json:"grant_recorded,omitempty"`
 
-	// Scope Echoes the request's `scope` (ADR-091 D4/FR-024). Present only when action is "allow" AND the resolved approval was a D3/D4 command grant — omitted for a D7/D8 path-widening or network-widening grant, and omitted when action is not "allow".
+	// Scope Echoes the request's `scope` (ADR-092 D4/FR-024). Present only when action is "allow" AND the resolved approval was a D3/D4 command grant — omitted for a D7/D8 path-widening or network-widening grant, and omitted when action is not "allow".
 	Scope *ToolApprovalResponseScope `json:"scope,omitempty"`
 
 	// Status Result status. Always "ok" when the action was accepted.
 	Status ToolApprovalResponseStatus `json:"status"`
 }
 
-// ToolApprovalResponseAction The action that was applied. Echoes the request action (ADR-091 D4), including "allow" (approve-and-remember, renamed from "always").
+// ToolApprovalResponseAction The action that was applied. Echoes the request action (ADR-092 D4), including "allow" (approve-and-remember, renamed from "always").
 type ToolApprovalResponseAction string
 
-// ToolApprovalResponseScope Echoes the request's `scope` (ADR-091 D4/FR-024). Present only when action is "allow" AND the resolved approval was a D3/D4 command grant — omitted for a D7/D8 path-widening or network-widening grant, and omitted when action is not "allow".
+// ToolApprovalResponseScope Echoes the request's `scope` (ADR-092 D4/FR-024). Present only when action is "allow" AND the resolved approval was a D3/D4 command grant — omitted for a D7/D8 path-widening or network-widening grant, and omitted when action is not "allow".
 type ToolApprovalResponseScope string
 
 // ToolApprovalResponseStatus Result status. Always "ok" when the action was accepted.

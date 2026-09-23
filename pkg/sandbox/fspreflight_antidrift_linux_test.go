@@ -4,7 +4,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// ADR-091 D7/FR-012 — Level 1's Linux-only second leg: a real
+// ADR-092 D7/FR-012 — Level 1's Linux-only second leg: a real
 // Landlock-confined child, not just a Go-level rules comparison. The rest of
 // this lane's anti-drift coverage (fspreflight_antidrift_test.go) proves the
 // pre-flight verdict agrees with sandbox.DeriveKernelPolicy's RENDERED
@@ -64,9 +64,9 @@ import (
 // (Apply the boot profile once) followed by a per-turn spawn (Run with
 // KernelPolicy set) — so this function performs both steps, in that order.
 func runPathGrantChild() {
-	home := os.Getenv("OMNIPUS_ADR091_HOME")
-	workDir := os.Getenv("OMNIPUS_ADR091_WORKDIR")
-	grantFile := os.Getenv("OMNIPUS_ADR091_GRANT")
+	home := os.Getenv("OMNIPUS_ADR092_HOME")
+	workDir := os.Getenv("OMNIPUS_ADR092_WORKDIR")
+	grantFile := os.Getenv("OMNIPUS_ADR092_GRANT")
 	if home == "" || workDir == "" || grantFile == "" {
 		fmt.Fprintln(os.Stderr, "runPathGrantChild: missing required env vars")
 		os.Exit(77)
@@ -106,8 +106,8 @@ func runPathGrantChild() {
 		Model:    sandbox.FilesystemModelConfined,
 	})
 
-	victimFile := os.Getenv("OMNIPUS_ADR091_VICTIM")
-	secretFile := os.Getenv("OMNIPUS_ADR091_SECRET")
+	victimFile := os.Getenv("OMNIPUS_ADR092_VICTIM")
+	secretFile := os.Getenv("OMNIPUS_ADR092_SECRET")
 
 	// Step 2: the actual test subject. One shell grandchild attempts all
 	// three writes and reports each over its own stdout — sandbox.Run is
@@ -172,7 +172,7 @@ w %q SECRET_WRITE
 //     Go-level rendering (fspreflight_antidrift_test.go's
 //     TestAntiDrift_SecretSet_NeverWidenable already covers that half).
 func TestAntiDrift_Linux_PathGrantEnforcedByKernel(t *testing.T) {
-	if os.Getenv("OMNIPUS_ADR091_CHILD") == "1" {
+	if os.Getenv("OMNIPUS_ADR092_CHILD") == "1" {
 		runPathGrantChild()
 		return // unreachable
 	}
@@ -221,12 +221,12 @@ func TestAntiDrift_Linux_PathGrantEnforcedByKernel(t *testing.T) {
 		"-test.v",
 	)
 	cmd.Env = append(os.Environ(),
-		"OMNIPUS_ADR091_CHILD=1",
-		"OMNIPUS_ADR091_HOME="+home,
-		"OMNIPUS_ADR091_WORKDIR="+workDir,
-		"OMNIPUS_ADR091_GRANT="+grantFile,
-		"OMNIPUS_ADR091_VICTIM="+victimFile,
-		"OMNIPUS_ADR091_SECRET="+secretFile,
+		"OMNIPUS_ADR092_CHILD=1",
+		"OMNIPUS_ADR092_HOME="+home,
+		"OMNIPUS_ADR092_WORKDIR="+workDir,
+		"OMNIPUS_ADR092_GRANT="+grantFile,
+		"OMNIPUS_ADR092_VICTIM="+victimFile,
+		"OMNIPUS_ADR092_SECRET="+secretFile,
 	)
 	out, err := cmd.CombinedOutput()
 	outStr := string(out)

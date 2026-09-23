@@ -1,6 +1,6 @@
 title: CommandSegmentInfo
 description: >
-  ADR-091 D3/D4/D7/D8. One chained-command segment (split via
+  ADR-092 D3/D4/D7/D8. One chained-command segment (split via
   splitShellSegments/shellCommandHead) awaiting an approval decision, listed
   inside ToolApprovalRequiredFrame.segments. Only unmatched segments appear
   here — a segment already covered by an existing D3 rule or session grant

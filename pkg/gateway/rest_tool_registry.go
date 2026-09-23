@@ -427,7 +427,7 @@ func resolveConfiguredPolicy(toolName string, cfg *config.AgentToolsCfg, globalP
 // HandleToolApprovals handles POST /api/v1/tool-approvals/{approval_id}.
 //
 // Body: {"action": "allow"|"allow_once"|"deny"|"cancel", "scope"?: "exact"|"prefix"}
-// (ADR-091 D4/FR-023 — renamed and re-shaped from the pre-ADR-091
+// (ADR-092 D4/FR-023 — renamed and re-shaped from the pre-ADR-092
 // approve/deny/cancel/always enum; "cancel" stays in the wire enum but is
 // never shown as a button, see ToolApprovalActionRequest's generated doc
 // comment.)
@@ -443,7 +443,7 @@ func resolveConfiguredPolicy(toolName string, cfg *config.AgentToolsCfg, globalP
 //     path, restoring the "Always Allow" grant that agent-delegation-spec.md's
 //     FR-D8 grant-inheritance depends on. `scope` (exact/prefix, default
 //     exact) travels with the request but ApprovalGrantStore.Record
-//     (pkg/security/approvalgrants.go, ADR-091 lane L4) is exact-fingerprint
+//     (pkg/security/approvalgrants.go, ADR-092 lane L4) is exact-fingerprint
 //     only as of this handler — a "prefix" request is honoured as "exact"
 //     until L4 lands prefix-scoped recording; this fails toward MORE
 //     re-prompts, never fewer, so it is a safe interim behaviour, not a
@@ -567,7 +567,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	}
 	if recordGrant {
 		// ApprovalGrantStore.Record (pkg/security/approvalgrants.go) is
-		// exact-fingerprint only as of this handler — ADR-091 lane L4 adds
+		// exact-fingerprint only as of this handler — ADR-092 lane L4 adds
 		// prefix-scoped recording separately. A "prefix" request is recorded
 		// as "exact" until that lands: strictly more re-prompting than the
 		// client asked for, never less, so it is safe to serve today and the

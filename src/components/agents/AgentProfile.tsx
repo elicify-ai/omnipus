@@ -387,7 +387,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   })
   // US-E6: per-agent skill assignment (opt-in, default none).
   const [agentSkills, setAgentSkills] = useState<string[]>([])
-  // ADR-091: per-agent Auto-approve off-switch — off-only, default false
+  // ADR-092: per-agent Auto-approve off-switch — off-only, default false
   // (inherit the global/per-chat default).
   const [autoApproveDisabled, setAutoApproveDisabled] = useState(false)
   // Spec-4 FR-4.1: sub-agent executor (native default / external-cli / remote-a2a).
@@ -614,7 +614,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     }))
     // US-E6: hydrate agent skills from the API response (default none).
     setAgentSkills(agent.skills ?? [])
-    // ADR-091: hydrate the per-agent Auto-approve off-switch (default false).
+    // ADR-092: hydrate the per-agent Auto-approve off-switch (default false).
     setAutoApproveDisabled(agent.auto_approve_disabled ?? false)
     reviewedAgentRef.current = agent
     hasHydrated.current = true
@@ -746,7 +746,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // Omitting it (undefined) leaves the backend on its "native" default
       // rather than forcing an empty value over the wire.
       executor,
-      // ADR-091: per-agent Auto-approve off-switch. Sent unconditionally
+      // ADR-092: per-agent Auto-approve off-switch. Sent unconditionally
       // (false is the harmless "inherit the default" no-op), matching every
       // other simple boolean field in this payload.
       auto_approve_disabled: autoApproveDisabled,

@@ -73,7 +73,7 @@ package tools
 // this file's own scan can extract (`sudo -n true` has no path reference; a
 // bare trailing `/` with nothing after it does not match
 // absolutePathPattern's `/[^...]+`, which requires at least one more
-// character), so this scan never protected either shape. ADR-091 D2 names
+// character), so this scan never protected either shape. ADR-092 D2 names
 // both — process-signal-adjacent commands (`sudo`) and an in-workspace-
 // shaped destructive command (`rm -rf`) — as accepted residual risk, "the
 // same accepted trade Claude Code and Codex ship." See

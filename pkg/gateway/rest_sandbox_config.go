@@ -45,7 +45,7 @@ var validSandboxModes = map[string]bool{
 // success each changed field is persisted atomically via safeUpdateConfigJSON.
 // mode and allowed_paths are restart-gated (requires_restart=true).
 // ssrf.allow_internal and auto_approve are hot-reload (requires_restart=false).
-// auto_approve is ADR-091 D1's global Auto-approve default — this handler is
+// auto_approve is ADR-092 D1's global Auto-approve default — this handler is
 // its routing target specifically because it already gates every write
 // behind requireReAuth (see authenticateAndDecode below).
 //
@@ -123,7 +123,7 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		cfg.Sandbox.FilesystemModel, sandboxpkg.FilesystemModelConfined)
 	resolvedFsModel := gen.SandboxConfigFilesystemModel(fsModel)
 
-	// ADR-091 D1: the global default for Auto-approve. Read directly, no
+	// ADR-092 D1: the global default for Auto-approve. Read directly, no
 	// resolution step — unlike GodMode there is no availability gate on this
 	// value, it is a plain operator setting.
 	autoApprove := cfg.Sandbox.AutoApprove
@@ -386,7 +386,7 @@ func (ps *restAPIPutSandboxConfig) resolveAndValidate() bool {
 	ps.changedAllowInternal = ps.resolvedAllowInternal != nil
 	ps.changedFilesystemModel = ps.body.FilesystemModel != nil
 	ps.changedWorkspacePathGuard = ps.body.WorkspacePathGuard != nil
-	// ADR-091 D1/FR-045: routing the global Auto-approve default write
+	// ADR-092 D1/FR-045: routing the global Auto-approve default write
 	// through THIS handler (rather than a bespoke endpoint) is the whole
 	// point — it inherits authenticateAndDecode's requireReAuth step-up for
 	// free, the same password gate God Mode and credential writes use.

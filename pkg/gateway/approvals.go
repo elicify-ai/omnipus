@@ -11,7 +11,7 @@
 //
 // State machine (8 states, 1 active, 7 terminal):
 //
-//	pending → approved            (allow / allow_once action, ADR-091 D4)
+//	pending → approved            (allow / allow_once action, ADR-092 D4)
 //	pending → denied_user         (deny action)
 //	pending → denied_cancel       (cancel action)
 //	pending → denied_timeout      (timer fires, configurable, default 600 s)
@@ -68,7 +68,7 @@ func (s ApprovalState) isTerminal() bool {
 
 // ApprovalAction is this package's internal transition vocabulary — approve/deny/cancel —
 // distinct from the wire enum (ToolApprovalActionRequestAction: allow/allow_once/deny/cancel,
-// ADR-091 D4/FR-023). The gateway HTTP handler (rest_tool_registry.go) maps both wire values
+// ADR-092 D4/FR-023). The gateway HTTP handler (rest_tool_registry.go) maps both wire values
 // "allow" and "allow_once" onto ApprovalActionApprove — they share the identical state
 // transition, differing only in whether a session grant is additionally recorded.
 type ApprovalAction string

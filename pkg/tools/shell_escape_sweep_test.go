@@ -257,6 +257,6 @@ func TestGuardCommand_RefusalNamesWhatWasRefused(t *testing.T) {
 
 // D-65 requires every refusal to name what tripped it, not a bare "blocked".
 // shellRuleDenialMessage (shell_permission_mode.go) carries that obligation
-// for an ADR-091 D3 operator-rule denial, naming the matched rule's binary
+// for an ADR-092 D3 operator-rule denial, naming the matched rule's binary
 // and arg_prefix; see TestShellRuleDenialMessage_NamesTheMatchedRule in
 // shell_permission_mode_test.go for its own regression coverage.

@@ -35,7 +35,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSkillTrust: vi.fn(),
     updateSkillTrust: vi.fn(),
     fetchAppState: vi.fn(),
-    // ADR-091: AutoApproveControl mounts in the primary (always-rendered)
+    // ADR-092: AutoApproveControl mounts in the primary (always-rendered)
     // layer, unlike SandboxSection (Advanced, collapsed by default) — its
     // ['sandbox-config'] query fires on every render, so it needs a mock
     // here too, not just inside SandboxSection's own test file.
@@ -331,9 +331,9 @@ describe('SecuritySection — US-B2 risky policy mode control', () => {
   })
 })
 
-// ── ADR-091: global Auto-approve switch ───────────────────────────────────────
+// ── ADR-092: global Auto-approve switch ───────────────────────────────────────
 
-describe('SecuritySection — ADR-091 Auto-approve global switch', () => {
+describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
   it('reflects the persisted auto_approve value from sandbox-config', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: true } as never)
     renderSection()

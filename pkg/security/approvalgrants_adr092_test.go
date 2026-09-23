@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Functional proof for the three ADR-091 grant kinds (D4 prefix, D7 path
+// Functional proof for the three ADR-092 grant kinds (D4 prefix, D7 path
 // widening, D8 network widening) this lane (L4) adds to ApprovalGrantStore.
 
 package security

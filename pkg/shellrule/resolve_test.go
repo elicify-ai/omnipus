@@ -93,7 +93,7 @@ func TestResolveBinary_NonExecutableFile_NotResolved(t *testing.T) {
 }
 
 // TestVerify_Reresolution is the "immediately before spawn" re-check
-// ADR-091 D3 requires: Verify re-resolves head against pathList and reports
+// ADR-092 D3 requires: Verify re-resolves head against pathList and reports
 // whether it still matches expected, catching a PATH/filesystem change
 // between an earlier decision and now.
 func TestVerify_Reresolution(t *testing.T) {

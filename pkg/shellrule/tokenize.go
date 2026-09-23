@@ -86,7 +86,7 @@ func splitHeadArgs(seg string) (headToken string, args []string, ok bool) {
 // so args may then include a stray keyword token. This is an accepted
 // simplification: ArgPrefix matching and prefix suggestion are a friction
 // layer over ordinary commands, not a shell-keyword-complete parser
-// (ADR-091 D3's own "friction layer, not containment" framing).
+// (ADR-092 D3's own "friction layer, not containment" framing).
 func headAndArgsFor(seg string, resolve HeadResolver) (head string, args []string, ok bool) {
 	h, reason := classifySegment(seg, resolve, false)
 	if reason != blindNone {

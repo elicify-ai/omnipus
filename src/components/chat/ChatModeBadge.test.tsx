@@ -1,5 +1,5 @@
 /**
- * ChatModeBadge tests (ADR-091).
+ * ChatModeBadge tests (ADR-092).
  *
  * Three renderings per the founder's ruling ("safe" = what never leaves the
  * kernel sandbox, judged per call): Auto off -> "Ask"; Auto on + kernel

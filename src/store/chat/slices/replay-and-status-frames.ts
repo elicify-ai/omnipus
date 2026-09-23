@@ -1062,7 +1062,7 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
           break
 
         case 'session_mode_updated':
-          // ADR-091: acknowledgement of a session_mode_update send (or a
+          // ADR-092: acknowledgement of a session_mode_update send (or a
           // reconnect snapshot echo) — the session's resolved per-chat
           // Auto-approve state. Always an ack; there is no rejection case.
           // targetSid (not frame.session_id directly) matches every other

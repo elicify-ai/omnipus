@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// ADR-091 D8/FR-042/FR-044 — network pre-flight rendering tests. Unlike D7's
+// ADR-092 D8/FR-042/FR-044 — network pre-flight rendering tests. Unlike D7's
 // filesystem grant (a per-path {path, operation} value the anti-drift
 // comparator checks one row at a time), D8's grant is SESSION-scoped and
 // binary in shape: TurnPolicyInput.NetworkAutoDeny/NetworkGranted gate the

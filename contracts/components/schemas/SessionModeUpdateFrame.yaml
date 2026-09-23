@@ -1,6 +1,6 @@
 title: SessionModeUpdateFrame
 description: >
-  Client → server. Set or clear this session's ADR-091 per-chat
+  Client → server. Set or clear this session's ADR-092 per-chat
   Auto-approve modifier — new, session-keyed state
   (pkg/agent/sessionmode.go), structurally like ApprovalGrantStore, never
   written into config.json and never a chat_id key on any policy map (Hard

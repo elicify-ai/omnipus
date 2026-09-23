@@ -524,7 +524,7 @@ type OmnipusSandboxConfig struct {
 	SSRF OmnipusSSRFConfig `json:"ssrf,omitempty"`
 
 	// GodMode is the runtime global "bypass-permissions" switch (O14),
-	// renamed "God Mode" (ADR-091 D1/D6). It is DISTINCT from the
+	// renamed "God Mode" (ADR-092 D1/D6). It is DISTINCT from the
 	// --allow-god-mode boot flag: the boot flag (and the nogodmode build tag) gate AVAILABILITY;
 	// this field is the live ON/OFF state, and — per D1's storage note —
 	// God Mode is one of the three named modes (Ask/Auto/God Mode), sharing
@@ -583,7 +583,7 @@ type OmnipusSandboxConfig struct {
 	// authorization entirely requires editing config.json directly.
 	GodModeAllowed bool `json:"god_mode_allowed,omitempty"`
 
-	// AutoApprove is the global default for ADR-091 D1's "Auto" shell
+	// AutoApprove is the global default for ADR-092 D1's "Auto" shell
 	// permission mode. Ships true on a fresh install (founder decision,
 	// 2026-09-23): the shipped "bash" ceiling is "ask" (config/defaults.go),
 	// and Auto is the presentation that runs a command while a kernel

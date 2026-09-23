@@ -75,10 +75,10 @@ type ExecPolicyAuditor interface {
 	EvaluateExec(agentID, command string) policy.Decision
 }
 
-// ExecToolDeps bundles the ADR-035/ADR-036/ADR-091 dependencies for the bash
+// ExecToolDeps bundles the ADR-035/ADR-036/ADR-092 dependencies for the bash
 // tool. All fields are optional — a nil PolicyAuditor disables binary
 // allowlist enforcement (useful when the policy layer is not configured);
-// nil ShellMode/ApprovalRequester disable the ADR-091 D1/D3/D7/D8 machinery
+// nil ShellMode/ApprovalRequester disable the ADR-092 D1/D3/D7/D8 machinery
 // and fail CLOSED to ShellModeAsk (see shell_permission_mode.go's
 // resolveShellMode) rather than silently running unconfined.
 //
@@ -87,7 +87,7 @@ type ExecPolicyAuditor interface {
 // (HookManager.ApproveTool / the compositor's EffectiveToolPolicy resolution)
 // — a "deny" verdict means Execute is never called at all, so bash does not
 // re-implement that check. What DOES live here is the narrower, automated
-// binary allowlist (SEC-05), the surviving structural guards, and — ADR-091
+// binary allowlist (SEC-05), the surviving structural guards, and — ADR-092
 // — the D1 mode-sensitive escalation machinery that applies WITHIN an
 // "allow" (Auto mode) or "ask" (Ask mode) ceiling, which the upstream
 // allow/ask/deny gate alone cannot express.
@@ -110,7 +110,7 @@ type ExecToolDeps struct {
 	// (FR-B7) rather than proceeding unaudited.
 	AuditFailClosed bool
 
-	// ShellMode resolves the ADR-091 D1 effective mode (Ask/Auto/God)
+	// ShellMode resolves the ADR-092 D1 effective mode (Ask/Auto/God)
 	// governing each call. Wired by pkg/agent (ShellPermissionGate,
 	// loop_policy.go) to agent.GlobalShellMode / agent.
 	// AgentShellModeOverride / agent.SessionModeStore through agent.
@@ -124,7 +124,7 @@ type ExecToolDeps struct {
 	ApprovalRequester ShellApprovalRequester
 
 	// ApprovalGrants is the session-scoped grant store (pkg/security).
-	// ADR-091's D7/D8 escalation flows consult and record directly against
+	// ADR-092's D7/D8 escalation flows consult and record directly against
 	// this reference (prefix/path-widening/network-widening — none of which
 	// fit the classic exact-fingerprint IsAllowed check ApprovalRequester's
 	// own fallback still performs for its own, narrower purpose). Wired by
@@ -133,7 +133,7 @@ type ExecToolDeps struct {
 	// every other consumer of that store.
 	ApprovalGrants *security.ApprovalGrantStore
 
-	// CommandRules is the ADR-091 D3 operator rule set (config.SandboxConfig.
+	// CommandRules is the ADR-092 D3 operator rule set (config.SandboxConfig.
 	// CommandRules, json command_rules, config-file-only, no wire schema —
 	// FR-018), evaluated in every mode. Empty/nil means no operator rules are
 	// configured — D3 then defers entirely to the ceiling/mode machinery,
@@ -186,7 +186,7 @@ type ExecTool struct {
 
 	sessionManager *SessionManager
 
-	// ADR-091 D1/D3/D7/D8: mode resolution, interactive escalation, the
+	// ADR-092 D1/D3/D7/D8: mode resolution, interactive escalation, the
 	// session grant store, and the operator command-rule set. See
 	// ExecToolDeps' own doc comments; all four are nil-safe to leave unwired
 	// (shell_permission_mode.go's resolveShellMode/enforce* functions fail
@@ -509,13 +509,13 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// The document probe is an immutable first-party command whose manifest
 	// lives outside the agent work directory by design. Its filesystem access
 	// is still confined by the per-turn kernel policy augmented below, and it
-	// is exempt from the ADR-091 D1/D3/D7/D8 machinery for the same reason it
+	// is exempt from the ADR-092 D1/D3/D7/D8 machinery for the same reason it
 	// is exempt from guardCommand below: it is a fixed, non-attacker-
 	// influenced, system-triggered command, not a candidate for an
 	// escalation prompt.
 	isDocumentProbe := t.documentRuntime != nil && command == strings.Join(documentruntime.ProbeArgv(*t.documentRuntime), " ")
 
-	// ADR-091 D1/D3/D7/D8: resolve the effective shell mode, evaluate the
+	// ADR-092 D1/D3/D7/D8: resolve the effective shell mode, evaluate the
 	// unified operator rule engine (every mode), and — Auto mode only — run
 	// the filesystem/network pre-flights, escalating and recording any
 	// newly-approved grant. This is the fix for the B-1 reachability defect:
@@ -532,9 +532,9 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	}
 
 	// FR-B4 surviving guards (the structural substitution guard) + the
-	// legacy command-text absolute-path scan, now grant-aware (ADR-091
+	// legacy command-text absolute-path scan, now grant-aware (ADR-092
 	// FR-036): perm.grants() is nil for Ask/God Mode and for the document
-	// probe, so guardCommand behaves exactly as it did before ADR-091 in
+	// probe, so guardCommand behaves exactly as it did before ADR-092 in
 	// both of those cases (FR-050's Ask/God branches) — Auto mode's own
 	// widenings were already resolved and recorded above, so this scan
 	// passes cleanly for exactly what was approved.
@@ -786,7 +786,7 @@ func escapeSweepMountsUnresolvedNote() string {
 // could not be derived. Falling back on failure would hand the child the boot
 // profile, which is the WIDER of the two — a derivation bug would then quietly
 // restore the very cross-agent reach this exists to remove.
-// perm is ADR-091's resolved permission state for this call (nil for the
+// perm is ADR-092's resolved permission state for this call (nil for the
 // document probe, which bypasses the whole D1/D3/D7/D8 machinery — see
 // executeRun). When perm is non-nil and its mode is Auto, the returned
 // policy's PathGrants render the D7 widenings already resolved this call

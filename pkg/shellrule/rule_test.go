@@ -6,7 +6,7 @@ package shellrule
 
 import "testing"
 
-// TestDecide_DenyBeatsAskBeatsAllow proves ADR-091 D3's precedence: "deny
+// TestDecide_DenyBeatsAskBeatsAllow proves ADR-092 D3's precedence: "deny
 // beats ask beats allow, specificity-blind" — a narrower rule (more of a
 // match, e.g. one with an ArgPrefix) is never preferred merely for being
 // narrower; only the strictest Action among the matched set wins,

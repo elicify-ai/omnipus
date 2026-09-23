@@ -665,13 +665,13 @@ func TestDocumentRuntimeSocketPolicyUsesResolvedWorkspaceCWD(t *testing.T) {
 // TestDocumentProbeFormatFlagDoesNotRelaxDiskWipeGuard used to pin that the
 // document probe's own `--format all` flag never tripped the disk-wipe deny
 // pattern (`format`/`mkfs`/`diskpart`), and that real disk-wipe commands
-// still did. ADR-091 D2 deletes the whole regex block-list layer those
+// still did. ADR-092 D2 deletes the whole regex block-list layer those
 // patterns lived in — disk-wipe-by-device-name is one of the categories D2's
 // own text names as accepted, undefended residual risk ("neither filesystem
 // nor network operations... nothing in this ADR covers them"), so there is
 // nothing left for this test to pin: the probe's format flag was never
 // blocked by anything else, and neither is a real disk-wipe command anymore.
-// See ADR-091 D2/D8's own accepted-risk language, not a gap introduced here.
+// See ADR-092 D2/D8's own accepted-risk language, not a gap introduced here.
 
 func TestDocumentSkillLoadPublishesAuthorizedRuntimeRoot(t *testing.T) {
 	layout, err := documentruntime.ResolveLayout(t.TempDir(), documentruntime.ManifestRevision, "mia")

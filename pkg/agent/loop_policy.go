@@ -295,7 +295,7 @@ func (al *AgentLoop) loadToolApprover() PolicyApprover {
 	return a
 }
 
-// ResolveEffectiveShellMode resolves the ADR-091 D1 three-level, tighten-only
+// ResolveEffectiveShellMode resolves the ADR-092 D1 three-level, tighten-only
 // mode merge — global -> per-agent -> per-chat modifier — into the single
 // named ShellMode (Ask/Auto/God) in force for one turn's bash calls. This is
 // the mode-resolution CONTRACT other lanes build against:
@@ -398,7 +398,7 @@ func ResolveEffectiveShellMode(global ShellMode, agentOverride, chatModifier *Sh
 // write side, TestCheckGrantOrRequestApproval_UsesActingSessionKey below for
 // this one). ClearSession (session teardown, U17b) uses the same key for the
 // same reason: it is the acting session's own bucket, not a shared one.
-// ADR-091 D4/FR-024 extension: for the "bash" tool specifically, this
+// ADR-092 D4/FR-024 extension: for the "bash" tool specifically, this
 // consultation ALSO checks the prefix-scope grant kind
 // (ApprovalGrantStore.IsPrefixAllowed) alongside the classic exact-
 // fingerprint IsAllowed check above — closing the gap where a human's
@@ -548,7 +548,7 @@ func (al *AgentLoop) emitScheduledAutoDenyAudit(
 }
 
 // ShellPermissionGate implements tools.ShellModeResolver and
-// tools.ShellApprovalRequester — the ADR-091 D1/FR-039 adapter connecting
+// tools.ShellApprovalRequester — the ADR-092 D1/FR-039 adapter connecting
 // pkg/tools' bash-tool enforcement (mode resolution, and the D3 ask-rule /
 // D7 / D8 escalation call sites) to the AgentLoop primitives that already
 // exist for exactly this purpose, without pkg/tools importing pkg/agent
@@ -568,7 +568,7 @@ type ShellPermissionGate struct {
 }
 
 // ResolveShellMode implements tools.ShellModeResolver: the three-level
-// tighten-only mode merge (global -> per-agent -> per-chat) ADR-091 D1/FR-002
+// tighten-only mode merge (global -> per-agent -> per-chat) ADR-092 D1/FR-002
 // describes, built entirely from ResolveEffectiveShellMode and the two
 // presentation-layer readers (GlobalShellMode, AgentShellModeOverride) lane
 // L2 already built — this function adds no new merge logic of its own, it
@@ -600,7 +600,7 @@ func (g *ShellPermissionGate) ResolveShellMode(ctx context.Context, agentID, ses
 }
 
 // RequestShellApproval implements tools.ShellApprovalRequester — the two
-// NEW ADR-091 FR-039 call sites (D3 ask-rule verdict, D7/D8 pre-flight
+// NEW ADR-092 FR-039 call sites (D3 ask-rule verdict, D7/D8 pre-flight
 // escalation) reach AgentLoop.CheckGrantOrRequestApproval through here, the
 // SAME consultation function the classic "ask" tool-policy path
 // (resolveAskPolicy) already used, fixing the B-1 reachability defect: an

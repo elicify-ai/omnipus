@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// This file implements ADR-091's Auto-mode pre-flight: the filesystem
+// This file implements ADR-092's Auto-mode pre-flight: the filesystem
 // evaluator (D7) and the network evaluator (D8). Both run BEFORE a bash
 // command spawns and decide whether the turn's already-authored
 // fspolicy.FSPolicy (filesystem) or network-grant state (network) already
@@ -23,7 +23,7 @@
 //
 // # Why this file does not touch pkg/tools/shell*.go
 //
-// ADR-091's delivery plan (spec §8.2) splits ownership: this file (L3) owns
+// ADR-092's delivery plan (spec §8.2) splits ownership: this file (L3) owns
 // both pre-flight evaluators; pkg/tools/shell*.go and resolvepath.go (L4)
 // own the runtime call sites that invoke them, the approval-dialog wiring,
 // and ApprovalGrantStore consultation. FR-038's operation classifier is

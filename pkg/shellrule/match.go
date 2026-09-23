@@ -6,7 +6,7 @@ package shellrule
 
 import "strings"
 
-// Platform selects which decision shape EvaluateCommand applies. ADR-091
+// Platform selects which decision shape EvaluateCommand applies. ADR-092
 // D3, founder decision: splitShellSegments is a POSIX operator set that
 // does not model PowerShell grammar, and there is no argv[0] slot on
 // Windows either, so Windows rules/grants are exact-command only.
@@ -37,7 +37,7 @@ func PlatformForGOOS(goos string) Platform {
 // ResolveBinary when nil. ChildPath is the PATH the spawned process will
 // actually search (the untrusted value — a session/agent may have altered
 // it); TrustedPath is the PATH an operator rule's Binary field resolves
-// against (ADR-091 D3's look-alike defence: the two are deliberately kept
+// against (ADR-092 D3's look-alike defence: the two are deliberately kept
 // separate, see doc.go and Verify).
 type Options struct {
 	Platform     Platform
@@ -64,7 +64,7 @@ type SegmentVerdict struct {
 // action across every segment (deny beats ask beats allow beats none —
 // ActionNone means no D3 rule applied to that segment and D3 defers to the
 // caller's ceiling policy for it, not that the segment is denied); Segments
-// carries each segment's own verdict for audit/UI purposes (ADR-091
+// carries each segment's own verdict for audit/UI purposes (ADR-092
 // FR-032/FR-027 — per-segment display) and for FullyAllowed.
 type CommandVerdict struct {
 	Action   Action
@@ -72,7 +72,7 @@ type CommandVerdict struct {
 }
 
 // FullyAllowed reports whether every segment independently cleared via an
-// explicit ALLOW rule match — ADR-091 D3's replacement for the retired
+// explicit ALLOW rule match — ADR-092 D3's replacement for the retired
 // per-binary exec allowlist, which must pre-approve a WHOLE chained
 // command, not merely part of it ("each segment must independently clear,
 // or the whole call asks", FR-020). A single segment with no matching rule
@@ -101,7 +101,7 @@ func (v CommandVerdict) FullyAllowed() bool {
 // (skipped on Windows — the whole string is one segment), resolve and
 // match each segment against rules, and combine per-segment verdicts into
 // one overall Action. "Each segment must independently clear, or the whole
-// call asks" (ADR-091 D3) is realised by Decide's deny > ask > allow > none
+// call asks" (ADR-092 D3) is realised by Decide's deny > ask > allow > none
 // precedence applied across segments, where a blind spot (FR-020) is
 // treated as an ask verdict for its segment, never as "no rule applied".
 func EvaluateCommand(command string, rules []Rule, opts Options) CommandVerdict {

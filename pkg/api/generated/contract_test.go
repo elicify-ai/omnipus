@@ -2992,7 +2992,7 @@ func TestContract_ChannelEntry_RejectsExtraneousField(t *testing.T) {
 
 func TestContract_ToolApprovalActionRequest_RejectsExtraneousField(t *testing.T) {
 	// Traces to: ToolApprovalActionRequest.yaml — additionalProperties: false.
-	// Replaces the retired ExecAllowlist coverage (ADR-091 D2/D5 — the exec
+	// Replaces the retired ExecAllowlist coverage (ADR-092 D2/D5 — the exec
 	// allowlist and its wire schema are deleted outright, no shim).
 	doc := map[string]any{
 		"action":      "allow",

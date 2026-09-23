@@ -1,5 +1,5 @@
 /**
- * AutoApprovePicker tests (ADR-091).
+ * AutoApprovePicker tests (ADR-092).
  *
  * Scaffolding (QueryClient wrapper, store reset) mirrors ModelPicker.test.tsx
  * — same composer, same pattern.

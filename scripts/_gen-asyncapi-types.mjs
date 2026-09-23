@@ -121,7 +121,7 @@ function schemaToTs(schema, indent = 0, schemaName = "") {
   // rather than threading nullable-awareness through every branch — every
   // pre-existing `nullable: true` field in contracts/asyncapi.yaml
   // (SubagentStateFrame.steering_receipt, TaskRunStatusFrame.occurrence_ms)
-  // silently generated as non-nullable before this, which ADR-091's
+  // silently generated as non-nullable before this, which ADR-092's
   // auto_approve field (also nullable: true) surfaced.
   if (schema.nullable) {
     const { nullable, ...rest } = schema;
@@ -410,7 +410,7 @@ lines.push("");
 // This used to be a hand-written array sitting next to the authoritative
 // source, and it silently drifted: at the point this derivation replaced it,
 // THREE real client→server frames were missing from the array and therefore
-// misclassified as ServerFrame-only — SessionModeUpdateFrame (ADR-091, the
+// misclassified as ServerFrame-only — SessionModeUpdateFrame (ADR-092, the
 // bug that forced this fix — L6 correctly refused to cast around
 // connection.send() taking a ClientFrame it wasn't in) and two independent,
 // pre-existing misses, BrowserTabActionFrame and BrowserViewportFrame (both

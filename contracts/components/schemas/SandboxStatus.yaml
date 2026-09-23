@@ -104,7 +104,7 @@ properties:
   kernel_sandbox_active:
     type: boolean
     description: >
-      ADR-091's platform predicate — whether a kernel sandbox is actually
+      ADR-092's platform predicate — whether a kernel sandbox is actually
       confining processes right now, the fact Auto-approve needs to decide
       anything: Linux — Landlock applied in enforce mode (`mode: enforce`
       above), not degraded. macOS — the Seatbelt backend's own

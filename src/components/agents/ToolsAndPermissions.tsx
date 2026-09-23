@@ -66,7 +66,7 @@ interface ToolsAndPermissionsProps {
   onChange: (tools: AgentToolsCfg) => void
   onRevisionChange?: (revision: string) => void
   /**
-   * ADR-091: whether this agent forces the global Auto-approve default off
+   * ADR-092: whether this agent forces the global Auto-approve default off
    * for its own "ask" tool calls (`Agent.auto_approve_disabled`). Off-only by
    * construction — there is no value meaning "force it on" at this scope, so
    * this is always rendered as an off-switch, never a tri-state. Distinct
@@ -536,7 +536,7 @@ export function ToolsAndPermissions({
         </div>
       )}
 
-      {/* ADR-091: per-agent Auto-approve off-switch. Off-only — checking it
+      {/* ADR-092: per-agent Auto-approve off-switch. Off-only — checking it
           means "force Auto off for this agent"; unchecking means "inherit
           the global/per-chat default", never "force it on". Editable for
           locked core agents too (this field is not gated by toolsEditable —

@@ -600,7 +600,7 @@ describe('ToolsAndPermissions — external-cli agent (subagent_3p) is read-only 
   })
 })
 
-describe('ToolsAndPermissions — ADR-091 per-agent Auto-approve off-switch', () => {
+describe('ToolsAndPermissions — ADR-092 per-agent Auto-approve off-switch', () => {
   it('renders unchecked when the agent does not force Auto off', async () => {
     renderWithQuery(
       <ToolsAndPermissions

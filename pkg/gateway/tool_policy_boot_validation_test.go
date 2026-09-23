@@ -25,7 +25,7 @@
 //  3. A tool an agent never mentions in its own map — e.g. bash for an agent
 //     with no explicit bash entry — resolves from the reconciled ceiling's
 //     shipped default. For bash that default is "ask" on a FRESH install
-//     (founder decision, 2026-09-23, ADR-091 D1: the three-mode selector,
+//     (founder decision, 2026-09-23, ADR-092 D1: the three-mode selector,
 //     the D7 filesystem pre-flight, and the D8 network deny-by-default only
 //     engage when the "bash" ceiling resolves to "ask" — paired with
 //     sandbox.AutoApprove seeded true, a fresh install still runs
@@ -60,7 +60,7 @@ import (
 // per-agent deny backfill is ever reintroduced into the load path, this test
 // fails loudly — either the agent's own policies map stops being empty, or
 // bash stops resolving its shipped ceiling default (currently "ask",
-// ADR-091 D1) from the ceiling alone.
+// ADR-092 D1) from the ceiling alone.
 func TestRepairAndValidate_BothSidesGap_ResolvesFromReconciledCeiling_NoDenyBackfill(t *testing.T) {
 	cfg := &config.Config{
 		// A deliberately EMPTY global ceiling: without ReconcileToolPolicyCeiling
@@ -85,13 +85,13 @@ func TestRepairAndValidate_BothSidesGap_ResolvesFromReconciledCeiling_NoDenyBack
 			"tool must ride the global ceiling, not gain a synthesized entry of its own")
 
 	// bash resolves its shipped ceiling default from the reconciled global
-	// ceiling alone — not a hardcoded "allow" (ADR-091 D1 changed the
+	// ceiling alone — not a hardcoded "allow" (ADR-092 D1 changed the
 	// fresh-install shipped default to "ask", 2026-09-23); this test asserts
 	// against config.DefaultConfig() itself so it does not silently drift
 	// from whatever that default is.
 	require.Contains(t, cfg.Sandbox.ToolPolicies, "bash", "ReconcileToolPolicyCeiling must have filled bash into the global ceiling")
 	wantBash := config.DefaultConfig().Sandbox.ToolPolicies["bash"]
-	require.Equal(t, "ask", wantBash, "fixture assumption: bash ships ask by default (ADR-091 D1)")
+	require.Equal(t, "ask", wantBash, "fixture assumption: bash ships ask by default (ADR-092 D1)")
 	assert.Equal(t, wantBash, cfg.Sandbox.ToolPolicies["bash"],
 		"bash must resolve to its shipped default from the reconciled ceiling, not a deny backfill")
 

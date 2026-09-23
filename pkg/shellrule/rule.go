@@ -12,7 +12,7 @@ type Action string
 
 const (
 	// ActionDeny hard-refuses the matched command, in every mode including
-	// God Mode (ADR-091 D1: "Operator deny rules stay in force in God Mode").
+	// God Mode (ADR-092 D1: "Operator deny rules stay in force in God Mode").
 	ActionDeny Action = "deny"
 	// ActionAsk requires the approval dialog even under an `allow` ceiling.
 	ActionAsk Action = "ask"
@@ -40,11 +40,11 @@ func (a Action) Valid() bool {
 }
 
 // Rule is the one shape operator `command_rules` (config.SandboxConfig,
-// config-file-only, no wire schema) and user grants (ADR-091 D4) share.
+// config-file-only, no wire schema) and user grants (ADR-092 D4) share.
 //
 // Binary is a bare command name (e.g. "git") or an absolute path; it is
 // never matched against raw command text — see ResolveBinary and Verify.
-// ArgPrefix, when set, is matched token-boundary (ADR-091 D4: "npm run
+// ArgPrefix, when set, is matched token-boundary (ADR-092 D4: "npm run
 // test" does not match "npm run testfoo") against the segment's argument
 // words following the resolved binary. An empty ArgPrefix matches any
 // arguments (a bare-binary rule).
@@ -54,7 +54,7 @@ type Rule struct {
 	ArgPrefix string `json:"arg_prefix,omitempty"`
 }
 
-// Decide implements ADR-091 D3's "deny beats ask beats allow,
+// Decide implements ADR-092 D3's "deny beats ask beats allow,
 // specificity-blind" precedence over a set of rules already established to
 // match the same segment. It does not itself decide whether a rule matches
 // — that is MatchRules/EvaluateCommand's job — only which action wins once
@@ -85,7 +85,7 @@ func Decide(matched []Rule) Action {
 
 // tokenBoundaryHasPrefix reports whether args (already word-split) begins
 // with every word of prefix, matched whole-token — "run test" is a prefix
-// of ["run","test","-v"] but not of ["run","testfoo"] (ADR-091 D4/FR-024).
+// of ["run","test","-v"] but not of ["run","testfoo"] (ADR-092 D4/FR-024).
 // An empty prefix always matches (a bare-binary rule/grant matches any
 // arguments).
 func tokenBoundaryHasPrefix(args []string, prefix []string) bool {
@@ -105,7 +105,7 @@ func tokenBoundaryHasPrefix(args []string, prefix []string) bool {
 
 // tokenBoundaryExact reports whether args, joined back with single spaces,
 // equals full exactly — the Windows-only "exact-command" matching mode
-// (ADR-091 FR-041), where an ArgPrefix has no "startswith" meaning and must
+// (ADR-092 FR-041), where an ArgPrefix has no "startswith" meaning and must
 // instead equal the whole remaining argument text.
 func tokenBoundaryExact(args []string, full string) bool {
 	return strings.Join(args, " ") == full

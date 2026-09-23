@@ -82,7 +82,7 @@ properties:
       that agent, since Auto only ever applies to a tool resolved to "ask"
       and nothing is left in "ask" state once the ceiling is floored. The
       kernel sandbox is off and network egress is open. Operator `deny`
-      command rules (ADR-091 D3) still apply — the floor cannot erase them.
+      command rules (ADR-092 D3) still apply — the floor cannot erase them.
       Audit logging, the prompt-injection guard, and rate limiting stay on.
       Toggled via POST /api/v1/gateway/god-mode (password step-up). Always
       false when god mode is unavailable. Independent of `auto_approve` —
@@ -119,14 +119,14 @@ properties:
   auto_approve:
     type: boolean
     description: >
-      ADR-091's global default for Auto-approve (fresh-install default:
+      ADR-092's global default for Auto-approve (fresh-install default:
       true). Auto is NOT a tool-policy value — every tool, including bash,
       keeps the ordinary three-value policy ("allow" runs unprompted with
       none of this machinery, "deny" makes the tool invisible to the
       agent, "ask" is where Auto applies). For every tool currently
       resolved to "ask", Auto-approve ON auto-approves the cases the
       pre-flight/rule matcher can positively clear against the kernel
-      sandbox (ADR-091 D3/D7/D8) and still prompts for everything else;
+      sandbox (ADR-092 D3/D7/D8) and still prompts for everything else;
       Auto-approve OFF means an "ask" tool always prompts. Auto never
       touches an "allow" or "deny" tool, and never reaches past what the
       kernel sandbox can actually confine (no active kernel sandbox ⇒

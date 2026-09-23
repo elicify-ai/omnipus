@@ -86,7 +86,7 @@ func TestValidateConfigKey_NamedEscalationsRefused(t *testing.T) {
 		{"sandbox.god_mode_allowed", "persist god-mode authorization"},
 		{"sandbox.tool_policies", "rewrite its own tool policies"},
 		{"sandbox.tool_policies.bash", "grant itself shell access"},
-		{"sandbox.auto_approve", "loosen the global Auto-approve default (ADR-091 D1) — must go through the password step-up on rest_sandbox_config.go, never the agent-facing config tool"},
+		{"sandbox.auto_approve", "loosen the global Auto-approve default (ADR-092 D1) — must go through the password step-up on rest_sandbox_config.go, never the agent-facing config tool"},
 		{"sandbox.allowed_paths", "widen the filesystem write boundary"},
 		{"sandbox.allowed_exec_paths", "widen what it may execute"},
 		{"sandbox.filesystem_model", "switch reads/exec from confined to open"},

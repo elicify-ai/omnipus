@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 
 /**
  * AutoApprovePicker — the composer's per-chat Auto-approve quick switch
- * (ADR-091). A human-only action: nothing agent-facing can reach
+ * (ADR-092). A human-only action: nothing agent-facing can reach
  * `sendSessionModeUpdate` — it is a session-scoped WS send this component is
  * the only caller of.
  *

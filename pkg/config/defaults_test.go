@@ -241,10 +241,10 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// ADR-052 plan-execution tools (2026-07-28): all four are now seeded
 	// "allow" at the ceiling, same as any other non-destructive tool, with the
 	// real gating done per-agent.
-	// bash is a fourth, ADR-091-specific exception, distinct from destructive/
+	// bash is a fourth, ADR-092-specific exception, distinct from destructive/
 	// operatorOnly: it is neither irreversible (destructive) nor about an
 	// agent widening its own boundary (operatorOnly) — it ships "ask"
-	// (founder decision, 2026-09-23) because ADR-091's D1 three-mode
+	// (founder decision, 2026-09-23) because ADR-092's D1 three-mode
 	// selector, D7 filesystem pre-flight, and D8 network deny-by-default all
 	// only engage when the "bash" ceiling resolves to "ask"; a shipped
 	// "allow" would give a fresh install none of that machinery. Paired with
@@ -270,12 +270,12 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		t.Errorf("disable_channel is reversible, not a delete — expected 'allow', got %q", got)
 	}
 	if got := cfg.Sandbox.ToolPolicies["bash"]; got != "ask" {
-		t.Errorf("bash must be seeded 'ask' (ADR-091 D1, founder decision 2026-09-23), got %q", got)
+		t.Errorf("bash must be seeded 'ask' (ADR-092 D1, founder decision 2026-09-23), got %q", got)
 	}
 }
 
 // TestDefaultConfig_SeedsAutoApprove pins the shipped fresh-install defaults
-// for ADR-091's Auto shell-permission mode (founder decision, 2026-09-23):
+// for ADR-092's Auto shell-permission mode (founder decision, 2026-09-23):
 // paired with the "bash": "ask" ceiling above, sandbox.AutoApprove ships
 // true so a fresh install resolves to Auto, not literal Ask — commands the
 // kernel sandbox can positively clear run without a prompt; anything that
@@ -285,10 +285,10 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 func TestDefaultConfig_SeedsAutoApprove(t *testing.T) {
 	cfg := DefaultConfig()
 	if !cfg.Sandbox.AutoApprove {
-		t.Error("sandbox.auto_approve must be seeded true on a fresh install (ADR-091 D1)")
+		t.Error("sandbox.auto_approve must be seeded true on a fresh install (ADR-092 D1)")
 	}
 	if got := cfg.Sandbox.ToolPolicies["bash"]; got != "ask" {
-		t.Errorf(`bash must be seeded "ask" for auto_approve to have any effect (ADR-091 D1 — Auto only applies to a tool resolved to "ask"), got %q`, got)
+		t.Errorf(`bash must be seeded "ask" for auto_approve to have any effect (ADR-092 D1 — Auto only applies to a tool resolved to "ask"), got %q`, got)
 	}
 }
 

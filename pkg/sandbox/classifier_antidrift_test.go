@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// ADR-091 FR-012 Level 2 — the classifier self-check (S21b). Level 1
+// ADR-092 FR-012 Level 2 — the classifier self-check (S21b). Level 1
 // (fspreflight_antidrift_test.go) proves the pre-flight VERDICT agrees with
 // DeriveKernelPolicy's RENDERING, for paths and operations the test itself
 // supplies directly. That alone does not prove the classifier's own
@@ -25,7 +25,7 @@ import (
 
 // TestLevel2_OperationClassifier_MatchesSpecDataset is the §5.4 C1-C8
 // dataset, transcribed verbatim from
-// docs/internal/specs/adr-091-shell-permission-modes-spec.md.
+// docs/internal/specs/adr-092-shell-permission-modes-spec.md.
 func TestLevel2_OperationClassifier_MatchesSpecDataset(t *testing.T) {
 	read := fspolicy.PathGrantAccessRead
 	write := fspolicy.PathGrantAccessWrite

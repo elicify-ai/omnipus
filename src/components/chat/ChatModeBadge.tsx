@@ -4,7 +4,7 @@ import { useResolvedAutoApprove } from '@/hooks/useResolvedAutoApprove'
 
 /**
  * ChatModeBadge — chat-header indicator of the active chat's resolved
- * ADR-091 permission state. Three renderings, per the founder's ruling that
+ * ADR-092 permission state. Three renderings, per the founder's ruling that
  * "safe" is what never leaves the kernel sandbox, judged per call:
  *
  *   Auto-approve off                        → "Ask" (kernel state irrelevant —

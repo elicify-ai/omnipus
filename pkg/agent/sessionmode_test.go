@@ -1,4 +1,4 @@
-// sessionmode_test.go: tests for the ADR-091 D1 mode types, the
+// sessionmode_test.go: tests for the ADR-092 D1 mode types, the
 // global/per-agent presentation derivation (FR-001), and the session-scoped
 // per-chat modifier store (FR-004).
 

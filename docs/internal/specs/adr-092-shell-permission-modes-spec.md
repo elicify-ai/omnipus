@@ -1,17 +1,17 @@
-# ADR-091 Implementation Specification — Shell permission modes (Ask / Auto / God Mode)
+# ADR-092 Implementation Specification — Shell permission modes (Ask / Auto / God Mode)
 
 - **Spec status:** Draft for lead review (plan-spec output; not committed — lead commits)
-- **ADR implemented:** [ADR-091 — Shell permission modes](../architecture/ADR-091-shell-permission-modes.md) (revised 2026-09-23 after a two-pass grill returned BLOCK — see the ADR's Revision note)
+- **ADR implemented:** [ADR-092 — Shell permission modes](../architecture/ADR-092-shell-permission-modes.md) (revised 2026-09-23 after a two-pass grill returned BLOCK — see the ADR's Revision note)
 - **Evidence baseline:** `release/v0.1.1` @ `838d8092c` (read-only)
 - **Depends on:** ADR-036, ADR-063, ADR-077, ADR-090
 - **Repo rule honoured throughout:** greenfield — no migration, no shims. `file::symbol` citations, never line numbers.
-- **Revision note:** this pass resolves 14 confirmed blockers from two independent grills (`/tmp/squads/grill-spec-opus.md`, 9 findings + 5 confirmed second-pass; and the untracked `adr-091-shell-permission-modes-spec-review.md`, 49 findings) plus the highest-value MAJOR/minor findings from both. Where the two disagreed, the architect's own code re-verification (cited inline) is followed. The untracked review file is scratch, not a deliverable, and is deleted at the end of this pass.
+- **Revision note:** this pass resolves 14 confirmed blockers from two independent grills (`/tmp/squads/grill-spec-opus.md`, 9 findings + 5 confirmed second-pass; and the untracked `adr-092-shell-permission-modes-spec-review.md`, 49 findings) plus the highest-value MAJOR/minor findings from both. Where the two disagreed, the architect's own code re-verification (cited inline) is followed. The untracked review file is scratch, not a deliverable, and is deleted at the end of this pass.
 
 ---
 
 ## 1. Purpose and scope
 
-Testable requirements, BDD scenarios, test data, contract-first work, removal tasks, an 8-lane delivery plan, and acceptance criteria for ADR-091.
+Testable requirements, BDD scenarios, test data, contract-first work, removal tasks, an 8-lane delivery plan, and acceptance criteria for ADR-092.
 
 **In scope:** three modes and their resolution (storage clarified — no new field at global/per-agent, D1); the filesystem pre-flight (D7) **and its data model** (`FSPolicy.PathGrants`, bash-scoped); the network pre-flight (D8, new); the unified rule format, decision order, and **grant-consultation reachability** (corrected — D3); resolve-and-verify binary binding (corrected from "rewrite argv0" — D3); the approval dialog redesign (`cancel` retained in the wire enum); God Mode; the platform predicate; audit events (routed via `emitAudit`, not `logDecision`); the status contract field (extends `SandboxStatus`, not a new schema); the global-mode write's password step-up; and the full removal inventory including four previously-missed live surfaces.
 

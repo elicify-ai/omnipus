@@ -10,7 +10,7 @@ import "strings"
 // contains, at chain operators (`&&`/`||`/`;`/`|`/newline). The caller
 // passes in pkg/tools/shell_subst_guard.go::splitShellSegments (a package
 // value, not an export — see doc.go) so this package never implements a
-// second tokenizer for the same job (ADR-091 D3: "no new parser").
+// second tokenizer for the same job (ADR-092 D3: "no new parser").
 type Segmenter func(command string) []string
 
 // HeadResolver extracts the normalised command-name token at the head of
@@ -20,13 +20,13 @@ type Segmenter func(command string) []string
 // head is built from a shell expansion (`$C f`) and therefore cannot be
 // resolved by any text-based matcher. normalised is true when the returned
 // token is not byte-identical to the command literal (case-folded, or a
-// directory prefix stripped) — ADR-091 FR-040 requires an ALLOW rule never
+// directory prefix stripped) — ADR-092 FR-040 requires an ALLOW rule never
 // be satisfied from a normalised head, since normalisation is exactly the
 // shape a look-alike binary (`./cat`, `CAT`) exploits.
 type HeadResolver func(segment string) (head string, fromExpansion bool, normalised bool)
 
 // blindSpotReason names why a segment's head cannot be confidently resolved
-// to a rule-matchable binary. ADR-091 FR-020 requires each of these route
+// to a rule-matchable binary. ADR-092 FR-020 requires each of these route
 // to ask, never to a resolved head.
 type blindSpotReason string
 
@@ -74,7 +74,7 @@ func classifySegment(seg string, resolve HeadResolver, allowRuleContext bool) (h
 // hasUnbalancedQuote reports whether seg contains an odd number of
 // unescaped `'` or `"` characters — the signature of a segment produced by
 // splitting a quoted separator (`echo "a;b"` splits, byte-wise, into `echo
-// "a` and `b"`, each holding one dangling quote). ADR-091 FR-020 (R12)
+// "a` and `b"`, each holding one dangling quote). ADR-092 FR-020 (R12)
 // requires this route to ask rather than resolve a head from either half.
 func hasUnbalancedQuote(seg string) bool {
 	single, double := 0, 0
@@ -94,7 +94,7 @@ func hasUnbalancedQuote(seg string) bool {
 // looksLikeBraceExpansion reports whether seg's head is shaped like a bash
 // brace expansion (`{cat,/etc/passwd}`), which the reused segment/head
 // tokenizer does not model (it sees the literal token, not the words bash
-// would expand it into). ADR-091 FR-020 (R14) requires this route to ask.
+// would expand it into). ADR-092 FR-020 (R14) requires this route to ask.
 func looksLikeBraceExpansion(seg string) bool {
 	trimmed := strings.TrimLeft(seg, " \t")
 	if !strings.HasPrefix(trimmed, "{") {

@@ -587,7 +587,7 @@ operations:
     action: send
     channel:
       $ref: '#/channels/chat'
-    summary: 'Turn this session''s ADR-091 Auto-approve modifier on or off (or clear it). Unlike the global default and
+    summary: 'Turn this session''s ADR-092 Auto-approve modifier on or off (or clear it). Unlike the global default and
       the per-agent override, this may LOOSEN — turn Auto on for this chat even when the resolved agent x global default
       has it off — because a human is present in the session.
 
@@ -3482,7 +3482,7 @@ components:
     CommandSegmentInfo:
       title: CommandSegmentInfo
       description: >
-        ADR-091 D3/D4/D7/D8. One chained-command segment (split via
+        ADR-092 D3/D4/D7/D8. One chained-command segment (split via
         splitShellSegments/shellCommandHead) awaiting an approval decision,
         listed inside ToolApprovalRequiredFrame.segments. Only unmatched
         segments appear here — a segment already covered by an existing D3
@@ -3634,7 +3634,7 @@ components:
           items:
             $ref: '#/components/schemas/CommandSegmentInfo'
           description: >
-            ADR-091 D3/D4/D7/D8 per-segment breakdown — present only when
+            ADR-092 D3/D4/D7/D8 per-segment breakdown — present only when
             tool_name is "bash" and the approval was raised by the D3 rule
             matcher or a D7/D8 pre-flight escalation, not for an ordinary
             non-shell tool approval. A single, unchained bash command still
@@ -4118,7 +4118,7 @@ components:
     SessionModeUpdateFrame:
       title: SessionModeUpdateFrame
       description: >
-        Client → server. Set or clear this session's ADR-091 per-chat
+        Client → server. Set or clear this session's ADR-092 per-chat
         Auto-approve modifier — new, session-keyed state
         (pkg/agent/sessionmode.go), structurally like ApprovalGrantStore,
         never written into config.json and never a chat_id key on any

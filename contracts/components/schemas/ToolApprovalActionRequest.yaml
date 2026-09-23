@@ -1,7 +1,7 @@
 title: ToolApprovalActionRequest
 description: >
   Request body for POST /api/v1/tool-approvals/{approval_id}.
-  Resolves a pending tool call approval (ADR-091 D4). Renamed from the
+  Resolves a pending tool call approval (ADR-092 D4). Renamed from the
   4-value approve|deny|cancel|always set: "approve" -> "allow_once",
   "always" -> "allow" (greenfield, no upgrade path). `cancel` is retained
   in the enum with no corresponding UI button — see its own description.
@@ -39,9 +39,9 @@ properties:
       - exact
       - prefix
     description: >
-      Grant scope (ADR-091 D4/FR-024). Present only when action is "allow";
+      Grant scope (ADR-092 D4/FR-024). Present only when action is "allow";
       ignored otherwise. "exact" (default when omitted) — command text +
-      cwd, unchanged from the pre-ADR-091 "always" grant. "prefix" — a
+      cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a
       new {binary, arg_prefix} grant, ignores cwd, token-boundary matched
       (e.g. "npm run test" does not match "npm run testfoo").
       run_in_background is a separate match dimension for both scopes and
@@ -56,6 +56,6 @@ properties:
       When the pending approval covers a chained command (multiple
       unmatched segments in ToolApprovalRequiredFrame.segments), this one
       scope choice applies uniformly to every currently-unmatched segment
-      resolved by this action (ADR-091 D4: "one rule per segment" is a
+      resolved by this action (ADR-092 D4: "one rule per segment" is a
       server-side recording detail, not a per-segment client choice).
     example: exact

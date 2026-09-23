@@ -1,4 +1,4 @@
-// loop_policy_mode_test.go: tests for ResolveEffectiveShellMode (ADR-091 D1
+// loop_policy_mode_test.go: tests for ResolveEffectiveShellMode (ADR-092 D1
 // mode resolution — loop_policy.go). Separated from loop_policy_test.go
 // (owned by lane L4's CheckGrantOrRequestApproval-reachability work on the
 // same file) so the two lanes' test files never collide.

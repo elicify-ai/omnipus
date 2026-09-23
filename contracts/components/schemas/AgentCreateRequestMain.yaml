@@ -67,7 +67,7 @@ properties:
   auto_approve_disabled:
     type: boolean
     description: >
-      Initial per-agent override forcing Auto-approve off (ADR-091) for
+      Initial per-agent override forcing Auto-approve off (ADR-092) for
       this agent, regardless of the global default
       (SandboxConfig.auto_approve). Off-only — omit or send false to
       inherit the global default. Distinct from `tools_cfg`, which is

@@ -240,12 +240,12 @@ func TestBash_CwdRejectsAbsolutePathEvenWhenAllowlisted(t *testing.T) {
 // path-containment scan runs at all — see guardCommand's own early return
 // on restrictToWorkspace).
 //
-// It also asserts ADR-091 D2's accepted residual risk explicitly: rm -rf and
+// It also asserts ADR-092 D2's accepted residual risk explicitly: rm -rf and
 // the fork bomb are not blocked by any text guard (they touch nothing
 // outside the workspace, and the kernel sandbox — not exercised by this
 // no-sandbox unit test — is the real boundary there); curl-pipe-to-shell is
 // a network operation D8's kernel-level deny-by-default covers under Auto
-// mode specifically (also not exercised here — this test wires no ADR-091
+// mode specifically (also not exercised here — this test wires no ADR-092
 // ShellMode/ApprovalRequester deps, so mode resolution fails closed to Ask,
 // which never reaches D8 for an already-"allow"-ceiling unit-test call).
 func TestBash_DenyPatternBaseline(t *testing.T) {
@@ -267,7 +267,7 @@ func TestBash_DenyPatternBaseline(t *testing.T) {
 	for _, cmd := range accepted {
 		result := tool.Execute(bashCtx(t), map[string]any{"command": cmd})
 		assert.NotContains(t, result.ForLLM, "blocked by safety guard",
-			"ADR-091 D2 accepts this residual risk — no text guard should refuse it: %q", cmd)
+			"ADR-092 D2 accepts this residual risk — no text guard should refuse it: %q", cmd)
 	}
 }
 

@@ -2,13 +2,13 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package shellrule implements the ADR-091 D3 "one rule format, one decision
+// Package shellrule implements the ADR-092 D3 "one rule format, one decision
 // order" command-rule engine: operator `command_rules` and user grants (D4)
 // share this shape and this precedence.
 //
 // # Decision order
 //
-// deny beats ask beats allow, specificity-blind (ADR-091 D3): if a broad
+// deny beats ask beats allow, specificity-blind (ADR-092 D3): if a broad
 // `allow` rule and a narrower `deny` rule both match the same segment, the
 // call is denied — a rule is never preferred merely for being more specific.
 // See Decide.
@@ -23,7 +23,7 @@
 // ABSOLUTE PATH, never the command text. See ResolveBinary and Verify.
 //
 // The look-alike defence (GitHub issue #83's live "Additional" claim, and
-// ADR-091 scenario S24) depends on resolving a rule's own Binary field
+// ADR-092 scenario S24) depends on resolving a rule's own Binary field
 // against a caller-supplied TRUSTED path list, separate from the CHILD path
 // list used to resolve the segment actually about to run: an attacker who
 // prepends a malicious `git` onto the untrusted child PATH changes what the
@@ -44,7 +44,7 @@
 // # Windows
 //
 // splitShellSegments is a POSIX operator set that does not model PowerShell
-// grammar, and there is no argv[0] slot on Windows either (ADR-091 D3,
+// grammar, and there is no argv[0] slot on Windows either (ADR-092 D3,
 // founder decision). On Windows, EvaluateCommand treats the whole command
 // string as one segment (Segmenter is never called) and an ArgPrefix, if
 // set, must match the full remaining argument text exactly — there is no

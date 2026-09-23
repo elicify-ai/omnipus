@@ -187,13 +187,13 @@ func DefaultConfig() *Config {
 func defaultToolPoliciesGeneral() map[string]string {
 	return map[string]string{
 		// --- General builtin tools ---
-		// bash ships "ask" (founder decision, 2026-09-23, ADR-091): the D1
+		// bash ships "ask" (founder decision, 2026-09-23, ADR-092): the D1
 		// three-mode selector (Ask/Auto/God Mode), the D7 filesystem
 		// pre-flight, and the D8 network deny-by-default only engage when
 		// the "bash" ceiling resolves to "ask" — a shipped "allow" would
 		// give a fresh install none of that machinery. sandbox.AutoApprove
 		// (pkg/config/sandbox.go, seeded true in DefaultConfig) is the
-		// fresh-install default for ADR-091 D1's Auto mode, so a new
+		// fresh-install default for ADR-092 D1's Auto mode, so a new
 		// install's actual behaviour is: commands the kernel sandbox can
 		// confine run without a prompt, and anything that would leave the
 		// sandbox, reach the network, or touch a secret still asks. This is
@@ -787,7 +787,7 @@ func defaultSandboxConfig() OmnipusSandboxConfig {
 		// loudly at boot by the same coverage validator, not silently ignored.
 		ToolPolicies: defaultToolPolicyCeiling(),
 
-		// AutoApprove ships true (founder decision, 2026-09-23, ADR-091 D1):
+		// AutoApprove ships true (founder decision, 2026-09-23, ADR-092 D1):
 		// paired with the "bash": "ask" ceiling seed above, a fresh install
 		// resolves to Auto mode — safe commands the kernel sandbox can
 		// confine run without a prompt; anything that would leave the

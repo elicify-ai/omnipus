@@ -6,7 +6,7 @@ package shellrule
 
 import "strings"
 
-// wrapperTokens are the command wrappers ADR-091 D4/FR-026 names by name:
+// wrapperTokens are the command wrappers ADR-092 D4/FR-026 names by name:
 // the suggested prefix is derived STARTING FROM the wrapper, never from
 // what it executes. Per the spec's pinned reading, the prefix stops at the
 // wrapper's first argument — for a bare single-word wrapper that means the
@@ -19,7 +19,7 @@ var wrapperTokens = map[string]bool{
 	"xargs":   true,
 }
 
-// SuggestedPrefix implements ADR-091 D4/FR-026's suggested-prefix
+// SuggestedPrefix implements ADR-092 D4/FR-026's suggested-prefix
 // algorithm for the approval dialog's "Allow" scope=prefix option:
 // resolved binary plus leading sub-command words, stopping at the first
 // flag-, path-, or URL-shaped token. A leading env-assignment is stripped

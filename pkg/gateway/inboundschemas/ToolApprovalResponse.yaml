@@ -15,7 +15,7 @@ properties:
   action:
     type: string
     description: >
-      The action that was applied. Echoes the request action (ADR-091 D4),
+      The action that was applied. Echoes the request action (ADR-092 D4),
       including "allow" (approve-and-remember, renamed from "always").
     enum:
       - deny
@@ -29,7 +29,7 @@ properties:
       - exact
       - prefix
     description: >
-      Echoes the request's `scope` (ADR-091 D4/FR-024). Present only when
+      Echoes the request's `scope` (ADR-092 D4/FR-024). Present only when
       action is "allow" AND the resolved approval was a D3/D4 command grant
       — omitted for a D7/D8 path-widening or network-widening grant, and
       omitted when action is not "allow".

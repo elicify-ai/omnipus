@@ -286,11 +286,11 @@ func (nal *newAgentLoop) initializeSecurity() {
 	//
 	// policy.Evaluator/PolicyAuditor are still constructed here because
 	// pkg/tools/shell.go's ExecPolicyAuditor interface and
-	// ExecToolDeps.PolicyAuditor field (ADR-091 lane L4, out of this lane's
+	// ExecToolDeps.PolicyAuditor field (ADR-092 lane L4, out of this lane's
 	// scope) still consume policy.Decision/PolicyAuditor as of this commit —
 	// deleting pkg/policy/evaluator.go or auditor.go here would break that
 	// concurrently-developed, unowned file. pkg/policy/saturation.go is
-	// unrelated to ADR-091 (consumed by pkg/gateway/gateway_boot.go for the
+	// unrelated to ADR-092 (consumed by pkg/gateway/gateway_boot.go for the
 	// approval-saturation cap) and was never a candidate for deletion.
 	secCfg := &policy.SecurityConfig{
 		DefaultPolicy: policy.PolicyAllow,

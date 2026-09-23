@@ -6,7 +6,7 @@ package shellrule
 
 import "testing"
 
-// TestSuggestedPrefix_Pinned covers ADR-091 spec FR-026's three PINNED
+// TestSuggestedPrefix_Pinned covers ADR-092 spec FR-026's three PINNED
 // rows (P7, P10, P14) verbatim.
 func TestSuggestedPrefix_Pinned(t *testing.T) {
 	cases := []struct {
@@ -31,7 +31,7 @@ func TestSuggestedPrefix_Pinned(t *testing.T) {
 	}
 }
 
-// TestSuggestedPrefix_Wrappers exercises every ADR-091 D4-named wrapper,
+// TestSuggestedPrefix_Wrappers exercises every ADR-092 D4-named wrapper,
 // including the two-word "sh -c" compound.
 func TestSuggestedPrefix_Wrappers(t *testing.T) {
 	cases := []struct {

@@ -1,4 +1,6 @@
-# ADR-091 — Shell permission modes: Ask / Auto / God Mode; drop the block list; one rule format
+# ADR-092 — Shell permission modes: Ask / Auto / God Mode; drop the block list; one rule format
+
+> Numbering: this ADR was drafted as ADR-091 and renumbered to ADR-092 on 2026-09-23 (ADR-091 is "A sub-agent is a session steered by another session"). Commits pushed before the rename still say ADR-091.
 
 - **Status:** Proposed (founder-approved decisions incl. UI, 2026-09-23; revised 2026-09-23 after a two-pass spec grill returned BLOCK — see Revision note)
 - **Date:** 2026-09-23
@@ -173,7 +175,7 @@ Three-level, tighten-only mode choice (Settings → Security; Tools & Permission
 
 ## Test plan (summary — BDD detail lives in the implementation spec)
 
-Mode resolution and tighten-only merge across all three levels; Auto pre-flight for both filesystem (D7) and network (D8), including the anti-drift lock test and its deliberate-mismatch self-check; resolve-and-verify against a look-alike PATH binary (issue #83 regression); God Mode + D3 `deny` still refuses; the four audit events fire with correct payloads in all three modes; deletion regressions (surviving guards' existing suites still pass); a `release/v0.1.1`-shaped config with every retired key loads cleanly; the stale-client `PUT` 400 (B-7); the secret-set non-widenability adversarial case (C-5); a denied escalation refuses the command outright, never runs un-widened. Full scenario-level detail: `docs/internal/specs/adr-091-shell-permission-modes-spec.md`.
+Mode resolution and tighten-only merge across all three levels; Auto pre-flight for both filesystem (D7) and network (D8), including the anti-drift lock test and its deliberate-mismatch self-check; resolve-and-verify against a look-alike PATH binary (issue #83 regression); God Mode + D3 `deny` still refuses; the four audit events fire with correct payloads in all three modes; deletion regressions (surviving guards' existing suites still pass); a `release/v0.1.1`-shaped config with every retired key loads cleanly; the stale-client `PUT` 400 (B-7); the secret-set non-widenability adversarial case (C-5); a denied escalation refuses the command outright, never runs un-widened. Full scenario-level detail: `docs/internal/specs/adr-092-shell-permission-modes-spec.md`.
 
 ## Open questions
 

@@ -4,7 +4,7 @@
 
 package tools
 
-// Functional proof for ADR-091's D1/D3/D7/D8 enforcement wired in this
+// Functional proof for ADR-092's D1/D3/D7/D8 enforcement wired in this
 // package (lane L4). RegisterTurnPolicyBase is process-global (see
 // environment_setup_lifecycle_kernel_test.go's own note), so these tests do
 // not run in parallel with each other.
@@ -65,7 +65,7 @@ func (f *fakeShellApprovalRequester) callCount() int {
 	return f.calls
 }
 
-// permTestFixture builds an ExecTool with the ADR-091 deps wired to fakes,
+// permTestFixture builds an ExecTool with the ADR-092 deps wired to fakes,
 // a real turn-policy base registered (so resolveShellMode's FR-008
 // kernel-sandbox predicate is satisfied and Auto does not degrade to Ask),
 // and a context carrying the agent/session identity enforceShellPermissionMode
@@ -156,7 +156,7 @@ func TestEnforceShellPermissionMode_ApprovalWidensAndSecondCommandReuses(t *test
 
 	// A second command writing the SAME already-granted path must not
 	// re-prompt — "the next identical command in the session resolves the
-	// widened policy directly" (ADR-091 D7).
+	// widened policy directly" (ADR-092 D7).
 	perm2, result2 := tool.enforceShellPermissionMode(ctx, cmd)
 	require.Nil(t, result2)
 	require.NotNil(t, perm2)
@@ -378,7 +378,7 @@ func TestResolveShellMode_AutoWithNoKernelSandboxFallsBackToAsk(t *testing.T) {
 }
 
 // D-65: every guard refusal names what tripped it, not a bare "blocked".
-// shellRuleDenialMessage carries that obligation for an ADR-091 D3 deny
+// shellRuleDenialMessage carries that obligation for an ADR-092 D3 deny
 // verdict — it must name the matched rule's binary and arg_prefix, not just
 // report that something was denied.
 func TestShellRuleDenialMessage_NamesTheMatchedRule(t *testing.T) {

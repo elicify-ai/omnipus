@@ -247,7 +247,7 @@ func TestBashSubstitutionGuard_DangerousSubstitutionsBlocked(t *testing.T) {
 		//
 		// See TestBash_DenyPatternBaseline (bash_test.go) and
 		// shell_guard_test.go's TestBashSafetyGuard_AcceptedD2ResidualRisk
-		// for ADR-091 D2's accepted residual risk outside substitutionGuard's
+		// for ADR-092 D2's accepted residual risk outside substitutionGuard's
 		// own scope (a fork bomb, curl-pipe-to-shell, and a bare `${...}`
 		// parameter expansion are not this guard's concern).
 		{"legacy_backtick_dangerous_find", "echo `find . -name '*.go'`",

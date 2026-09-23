@@ -8,7 +8,7 @@ description: >
   mode and allowed_paths are restart-gated
   (the response includes requires_restart=true when either changes).
   ssrf.allow_internal and auto_approve are hot-reloaded.
-  This endpoint is the routing target for ADR-091's global Auto-approve
+  This endpoint is the routing target for ADR-092's global Auto-approve
   default write (auto_approve below) specifically because it already
   gates every write behind requireReAuth (see putSandboxConfig ->
   authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same
@@ -81,7 +81,7 @@ properties:
   auto_approve:
     type: boolean
     description: >
-      Set the ADR-091 global default for Auto-approve. Auto is a SEPARATE
+      Set the ADR-092 global default for Auto-approve. Auto is a SEPARATE
       setting from tool policy — it only has meaning for a tool currently
       resolved to "ask" (see SandboxConfig.auto_approve for the full
       behavioural description) and applies to every such tool, not only

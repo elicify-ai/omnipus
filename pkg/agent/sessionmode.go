@@ -1,4 +1,4 @@
-// sessionmode.go: ADR-091 D1 shell permission modes — mode types, the
+// sessionmode.go: ADR-092 D1 shell permission modes — mode types, the
 // presentation-layer derivation of the global/per-agent modes from EXISTING
 // config state (no new fields at those two levels, FR-001), and the
 // session-scoped per-chat modifier store (FR-004) — the ONE genuinely new
@@ -8,7 +8,7 @@
 // ApprovalGrantStore (pkg/security/approvalgrants.go) keys grants on
 // (sessionID, agentID, tool, argsFingerprint) because a grant is scoped to
 // one tool call shape for one agent in one session. A shell MODE modifier is
-// coarser — ADR-091's "composer quick switch" sets one mode for the whole
+// coarser — ADR-092's "composer quick switch" sets one mode for the whole
 // chat, not per agent within it — so SessionModeStore keys on sessionID
 // alone (FR-004: "new, separate, session-keyed state"). The per-agent
 // dimension of the three-level merge is supplied separately, by
@@ -22,7 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
-// ShellMode is one of the three ADR-091 D1 named shell-permission modes.
+// ShellMode is one of the three ADR-092 D1 named shell-permission modes.
 // Global and per-agent mode are a PRESENTATION over existing state (FR-001):
 // they are computed by GlobalShellMode / AgentShellModeOverride below, never
 // stored as a ShellMode on disk. The per-chat modifier (SessionModeStore) is
@@ -33,7 +33,7 @@ const (
 	// ShellModeAsk is the tightest mode: every shell command shows the
 	// approval dialog. Presentation of the existing bash tool-policy value
 	// "ask" (or any value stricter than "allow" that has no named-mode
-	// equivalent, e.g. an explicit per-agent "deny" — ADR-091 D1: "the UI
+	// equivalent, e.g. an explicit per-agent "deny" — ADR-092 D1: "the UI
 	// shows such an agent as its nearest named mode (Ask)").
 	ShellModeAsk ShellMode = "ask"
 	// ShellModeAuto is the middle mode: commands run while a kernel sandbox
@@ -80,7 +80,7 @@ func tighterShellMode(a, b ShellMode) ShellMode {
 }
 
 // GlobalShellMode derives the operator's global default mode from the
-// EXISTING sandbox config state — no new field (ADR-091 D1/FR-001): the
+// EXISTING sandbox config state — no new field (ADR-092 D1/FR-001): the
 // "bash" entry in cfg.Sandbox.ToolPolicies (config.ToolPolicy's "allow"/
 // "ask"/"deny" values) and the EXISTING cfg.Sandbox.GodMode flag.
 //
@@ -149,7 +149,7 @@ func AgentShellModeOverride(cfg *config.Config, agentID string) (mode ShellMode,
 	return "", false
 }
 
-// SessionModeStore is a thread-safe, session-scoped store of the ADR-091 D1
+// SessionModeStore is a thread-safe, session-scoped store of the ADR-092 D1
 // per-chat mode modifier (FR-004) — the "composer quick switch." It holds at
 // most one ShellMode per session id. Structurally mirrors
 // security.ApprovalGrantStore (session-keyed, nil-receiver-safe, dies with
@@ -197,7 +197,7 @@ func (s *SessionModeStore) Get(sessionID string) (ShellMode, bool) {
 //
 // Set does NOT itself enforce tighten-only — it has no config access to
 // derive the ceiling it must not loosen below. Tighten-only is enforced two
-// ways, by design (ADR-091 D1's "server-side, enforced" language plus its
+// ways, by design (ADR-092 D1's "server-side, enforced" language plus its
 // own resolution-time backstop): the WRITE-TIME caller (lane L5's REST/WS
 // handler, FR-003) re-reads the global default and rejects a loosening
 // write with 4xx BEFORE calling Set at all; and even if a looser value were
@@ -263,7 +263,7 @@ func (s *SessionModeStore) InheritFrom(srcSessionID, dstSessionID string) {
 }
 
 // ClearSession removes sessionID's recorded modifier — the session modifier
-// "ends with the chat" (ADR-091 D4's grant-lifetime language applies
+// "ends with the chat" (ADR-092 D4's grant-lifetime language applies
 // identically here: FR-006, "Modifier clears on restart with the session").
 // No-op on a nil store or an empty sessionID.
 func (s *SessionModeStore) ClearSession(sessionID string) {

@@ -294,7 +294,7 @@ export function GatewaySection() {
 
   return (
     <div className="space-y-[var(--space-4)]">
-      {/* ADR-091 FR-034: the god-mode-active banner is now rendered app-wide
+      {/* ADR-092 FR-034: the god-mode-active banner is now rendered app-wide
           from AppShell, not here — a change here would be a second copy. */}
 
       {/* FR-107b: persistent unauthenticated-access banner (dev_mode_bypass only) */}

@@ -1,4 +1,4 @@
-// ADR-091: session_mode_update (client → server) send, and the
+// ADR-092: session_mode_update (client → server) send, and the
 // session_mode_updated (server → client) ack's effect on per-session state.
 //
 // Mirrors the existing cancelStream/cancel_stage test pattern in chat.test.ts
@@ -27,7 +27,7 @@ function resetStore() {
 
 beforeEach(resetStore)
 
-describe('chat store — sendSessionModeUpdate (ADR-091, human-only per-chat Auto-approve)', () => {
+describe('chat store — sendSessionModeUpdate (ADR-092, human-only per-chat Auto-approve)', () => {
   it('sends a session_mode_update frame with auto_approve: true', () => {
     const mockSend = vi.fn()
     act(() => {
@@ -84,7 +84,7 @@ describe('chat store — sendSessionModeUpdate (ADR-091, human-only per-chat Aut
   })
 })
 
-describe('chat store — session_mode_updated frame (ADR-091 ack)', () => {
+describe('chat store — session_mode_updated frame (ADR-092 ack)', () => {
   it('sets autoApproveEffective on the target session bucket and syncs the foreground field', () => {
     act(() => {
       useChatStore.getState().handleFrame({

@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// ADR-091 D7/FR-012 — Level 1 anti-drift lock test.
+// ADR-092 D7/FR-012 — Level 1 anti-drift lock test.
 //
 // The single-source-of-truth guarantee D7 exists to make true: for a fixed
 // fspolicy.FSPolicy (INCLUDING a non-empty PathGrants), the D7 pre-flight
