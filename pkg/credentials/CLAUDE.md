@@ -63,7 +63,7 @@ decrypting under the name it was moved to. Entry failures return
 Greenfield, no fallback read: entries written before the binding carry a nil
 AAD and no longer decrypt, so an existing install must re-enter its
 credentials (worded for users in `docs/troubleshooting.md`). Bump
-`credentialAADPrefix` to change the AAD construction — ciphertexts sealed
+`aadDomainTag` to change the AAD construction — ciphertexts sealed
 under one tag cannot be opened under another.
 
 ## Error classification decides fatal-vs-degrade

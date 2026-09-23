@@ -74,12 +74,14 @@ const (
 	argonMemory  = 64 * 1024 // 64 MB
 	argonThreads = 4
 
-	// credentialAADPrefix is the domain-separation tag prefixed to every
-	// credential name before it is used as AES-GCM additional authenticated
-	// data. Bump it whenever the AAD construction changes: ciphertexts sealed
-	// under one tag cannot be opened under another, so the bump is what makes
-	// an accidental back-compat read impossible rather than merely discouraged.
-	credentialAADPrefix = "omnipus-credential-v1:"
+	// aadDomainTag is the domain-separation label prefixed to every entry
+	// name before it is used as AES-GCM additional authenticated data. It is
+	// not a secret — it is a fixed, public tag that scopes this sealing
+	// context so it can never collide with any other use of the master key.
+	// Bump it whenever the AAD construction changes: ciphertexts sealed under
+	// one tag cannot be opened under another, so the bump is what makes an
+	// accidental back-compat read impossible rather than merely discouraged.
+	aadDomainTag = "omnipus-credential-v1:"
 )
 
 // ErrStoreLocked is returned when the credential store is not unlocked.
@@ -574,7 +576,7 @@ func (s *Store) loadOrCreateSalt() ([]byte, error) {
 // the name it is stored under. See the package doc for why the version tag is
 // part of the AAD.
 func aadFor(name string) []byte {
-	return []byte(credentialAADPrefix + name)
+	return []byte(aadDomainTag + name)
 }
 
 // encrypt seals plaintext with AES-256-GCM using key, binding the envelope to
