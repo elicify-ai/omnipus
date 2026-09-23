@@ -8,12 +8,16 @@
 // local timestamp (expiresAt = Date.now() + expires_in_ms) so the countdown
 // is independent of gateway clock skew.
 //
-// Buttons — wire action values renamed by ADR-092 D4 (visible labels/testids
-// UNCHANGED, see note below):
-//   Approve      → POST /api/v1/tool-approvals/{id} {action:"allow_once"}
+// Buttons — wire action values renamed by ADR-092 D4:
+//   Approve Once → POST /api/v1/tool-approvals/{id} {action:"allow_once"}
 //   Always Allow → POST /api/v1/tool-approvals/{id} {action:"allow", scope}
 //   Deny         → POST /api/v1/tool-approvals/{id} {action:"deny"}
 //   Cancel       → POST /api/v1/tool-approvals/{id} {action:"cancel"}
+// "Approve" was relabelled "Approve Once" (review finding, post-D4) — as a
+// backend lane makes allow_once record NO grant, "Approve" alone read as
+// ambiguous next to "Always Allow"; the label must say one-time on its face.
+// The action mapping itself (Approve Once → allow_once, Always Allow →
+// allow) was already correct and is unchanged.
 //
 // ADR-092 D4 status: the wire-value rename (L0: approve→allow_once,
 // always→allow) landed first so the component compiled against the current
@@ -32,8 +36,7 @@
 //     could not fully resolve), each segment's command text is shown
 //     separately with its resolved binary highlighted, in the generic
 //     (non-`replace`-mode) tool-info area.
-// The visible button text/testids ("Approve"/"Always Allow"/"Cancel") and
-// the four-button layout (including the rendered Cancel button) are
+// The four-button layout (including the rendered Cancel button) is
 // UNCHANGED by this pass — D4's UI-presentation note describing a
 // [Deny][Allow once][Allow]-only layout with no rendered Cancel button is
 // not implemented here; `cancel` already behaves as a distinct wire value
@@ -154,6 +157,33 @@ function useCountdown(expiresAt: number): { remainingMs: number; progressPct: nu
     remainingMs,
     progressPct: totalMs > 0 ? ((totalMs - remainingMs) / totalMs) * 100 : 100,
     totalMs,
+  }
+}
+
+// ── ADR-092 D7/D8 Auto pre-flight escalations ──────────────────────────────
+// A tool call that hits an Auto-mode pre-flight escalation (D7 filesystem,
+// D8 network) carries the reason in its own args, not in a separate wire
+// field — pkg/tools/shell_permission_mode.go's requestPreflightApproval
+// sets args.adr092_kind ("fs_preflight" | "fs_preflight_blind" |
+// "network_preflight") and args.note (a human-readable sentence already
+// built server-side). Without this, the card looked exactly like an
+// ordinary "ask"-policy bash approval, with no hint that Auto had already
+// tried and failed to clear the call itself. The D3 "rule_ask" kind (an
+// ordinary ask-rule prompt, not an escalation) carries adr092_kind with NO
+// note field — describeEscalation only fires once both are present.
+const ESCALATION_HEADLINES: Record<string, string> = {
+  fs_preflight: 'This command wants to reach outside the workspace.',
+  fs_preflight_blind: "This command's filesystem reach could not be classified from its text alone.",
+  network_preflight: 'This command wants network access.',
+}
+
+function describeEscalation(args: Record<string, unknown>): { headline: string; detail: string } | null {
+  const kind = args.adr092_kind
+  const note = args.note
+  if (typeof kind !== 'string' || typeof note !== 'string' || note.length === 0) return null
+  return {
+    headline: ESCALATION_HEADLINES[kind] ?? 'This command needs more access than the sandbox currently grants.',
+    detail: note,
   }
 }
 
@@ -426,7 +456,8 @@ function ToolApprovalCard({
   const dialogTitleText = replaceEntry
     ? (replaceEntry.title?.(previewCtx) ?? 'Tool Approval Required')
     : 'Tool Approval Required'
-  const primaryLabel = replaceEntry?.primaryLabel ?? 'Approve'
+  const escalation = replaceEntry ? null : describeEscalation(args)
+  const primaryLabel = replaceEntry?.primaryLabel ?? 'Approve Once'
   const secondaryLabel = replaceEntry?.secondaryLabel ?? 'Deny'
   const showCancelButton = replaceEntry ? (replaceEntry.showCancel ?? true) : true
 
@@ -510,6 +541,23 @@ function ToolApprovalCard({
           <replaceEntry.Body {...previewCtx} />
         ) : (
           <div className="px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)]">
+            {escalation && (
+              <div
+                data-testid="auto-escalation-explanation"
+                className="flex items-start gap-[var(--space-2)] rounded-lg border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
+              >
+                <WarningCircle size={16} weight="bold" className="shrink-0 mt-[var(--space-0-5)] text-[var(--color-warning)]" aria-hidden="true" />
+                <div className="space-y-[var(--space-0-5)]">
+                  <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-warning)]">
+                    {escalation.headline}
+                  </p>
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]/80">
+                    {escalation.detail}
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div>
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]">Tool</p>
               <p className="font-mono text-[length:var(--type-body-compact-size)] text-[var(--color-accent)] font-semibold">

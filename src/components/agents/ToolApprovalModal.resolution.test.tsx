@@ -82,7 +82,7 @@ describe('ToolApprovalModal — an approval the server no longer holds (404 / 41
     vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(404, 'Not Found'))
     show(STUCK)
 
-    fireEvent.click(screen.getByRole('button', { name: /^Approve$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Approve Once$/ }))
 
     await waitFor(() => expect(queue()).toHaveLength(0))
     expect(resolvedIds()).toContain('appr-stuck')
@@ -121,7 +121,7 @@ describe('ToolApprovalModal — an approval the server no longer holds (404 / 41
     vi.mocked(api.submitToolApproval).mockRejectedValue(new api.ApiError(500, 'boom'))
     show(STUCK)
 
-    fireEvent.click(screen.getByRole('button', { name: /^Approve$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Approve Once$/ }))
 
     await waitFor(() => expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'error' })))
     expect(queue()).toHaveLength(1)

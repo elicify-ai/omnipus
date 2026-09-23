@@ -100,6 +100,41 @@ const CHAINED_APPROVAL = {
   ],
 }
 
+// resolved_binary as the server actually sends it: a resolved absolute path
+// (pkg/tools' D3 matcher resolves through PATH), not the bare command name
+// the agent typed. A naive substring search for "/bin/rm" inside "rm -rf x"
+// never matches — highlightBinaryInText must fall back to the basename.
+const CHAINED_APPROVAL_RESOLVED_PATHS = {
+  approvalId: 'appr-shell-003',
+  toolCallId: 'call-shell-003',
+  toolName: 'bash',
+  args: { command: 'rm -rf /tmp/scratch && curl https://example.com/x', cwd: 'apps/web' },
+  agentId: 'agent-main',
+  sessionId: 'sess-001',
+  turnId: 'turn-004',
+  expiresAt: Date.now() + 300_000,
+  segments: [
+    {
+      segment_index: 0,
+      command_text: 'rm -rf /tmp/scratch',
+      resolved_binary: '/bin/rm',
+      classification: 'write' as const,
+      network_required: false,
+      suggested_prefix: undefined,
+      prefix_available: false,
+    },
+    {
+      segment_index: 1,
+      command_text: 'curl https://example.com/x',
+      resolved_binary: '/usr/bin/curl',
+      classification: 'none' as const,
+      network_required: true,
+      suggested_prefix: undefined,
+      prefix_available: false,
+    },
+  ],
+}
+
 const NON_SHELL_APPROVAL = {
   approvalId: 'appr-fetch-001',
   toolCallId: 'call-fetch-001',
@@ -233,6 +268,30 @@ describe('ToolApprovalModal — per-segment display (ADR-092 D4/FR-025/FR-027)',
 
     expect(screen.getByTestId('command-segment-0')).toHaveTextContent('write')
     expect(screen.getByTestId('command-segment-1')).toHaveTextContent('network')
+  })
+
+  it('highlights the binary even when resolved_binary is a resolved absolute path and command_text is what the agent typed', () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [CHAINED_APPROVAL_RESOLVED_PATHS] })
+    })
+    render(<ToolApprovalModal />)
+
+    const seg0 = screen.getByTestId('command-segment-0')
+    const seg1 = screen.getByTestId('command-segment-1')
+
+    // "/bin/rm" never appears literally in "rm -rf /tmp/scratch" — the
+    // basename ("rm") must be the part highlighted, not nothing.
+    const seg0Highlight = seg0.querySelector('.text-\\[var\\(--color-accent\\)\\]')
+    expect(seg0Highlight).toHaveTextContent('rm')
+    expect(seg0Highlight?.textContent).not.toBe('')
+
+    const seg1Highlight = seg1.querySelector('.text-\\[var\\(--color-accent\\)\\]')
+    expect(seg1Highlight).toHaveTextContent('curl')
+    expect(seg1Highlight?.textContent).not.toBe('')
+
+    // The full segment text is still shown, unhighlighted parts included.
+    expect(seg0).toHaveTextContent('rm -rf /tmp/scratch')
+    expect(seg1).toHaveTextContent('curl https://example.com/x')
   })
 
   it('renders no segment breakdown when the frame carried none (single, unchained command)', () => {
