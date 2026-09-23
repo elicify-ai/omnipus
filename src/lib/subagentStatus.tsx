@@ -8,7 +8,8 @@
 // (SubagentSpanTerminal.reason).
 
 import type { SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
-import { getSpanStatusDot, statusDot } from '@/lib/toolStatusConfig'
+import { ArrowsClockwise } from '@phosphor-icons/react'
+import { statusDot } from '@/lib/toolStatusConfig'
 import type { SpanStatusConfigOptions, SpanStatusDotConfig } from '@/lib/toolStatusConfig'
 
 export type SubagentInterruptReason = NonNullable<SubagentSpanTerminal['reason']>
@@ -57,8 +58,13 @@ export type SubagentLifecycleState = NonNullable<SubagentSpan['lifecycleState']>
  * yet (an old transcript pre-dating this delivery, or the brief window
  * before a span's first `subagent_state` arrives).
  *
- * `'running'` delegates to `getSpanStatusDot('running', opts)` to reuse its
- * exact spinner construction rather than duplicating it — every other state
+ * `'running'` builds the same spinner `getSpanStatusDot('running', opts)`
+ * builds, inline rather than by delegating to it: the design-system status
+ * analyzer (scripts/design-system-locks/status.mjs) resolves each case's
+ * colour statically, and a cross-function hand-off is a shape it cannot
+ * follow — it reports `design-system/status-unsupported`, which is
+ * hard-blocking and cannot be baselined. Keep every case in this switch
+ * self-contained and its token literal in the source. Every other state
  * gets its own dot color + label, none of them the spinner (only a
  * genuinely running child spins; queued, waiting-on-a-human, and every
  * terminal state get a static dot).
@@ -68,8 +74,13 @@ export function getLifecycleStatusDot(
   opts: SpanStatusConfigOptions = {},
 ): SpanStatusDotConfig {
   switch (state) {
-    case 'running':
-      return getSpanStatusDot('running', opts)
+    case 'running': {
+      const { size = 13, runningLabel = 'working' } = opts
+      return {
+        indicator: <ArrowsClockwise size={size} className="animate-spin text-[var(--color-accent)]" aria-hidden="true" />,
+        label: runningLabel,
+      }
+    }
     case 'queued':
       // Distinct from 'running' — a queued launch stamps subagent_start (so
       // the SPAN is already status: 'running') before the child has
