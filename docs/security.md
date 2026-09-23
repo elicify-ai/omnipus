@@ -16,37 +16,134 @@ Use the credential vault when you add an application programming interface key, 
 
 ## How to control agent access
 
+Two separate things decide whether an agent's tool call runs:
+
+1. **The tool's policy: Allow, Ask or Deny.** This is set per tool. Allow runs without asking, Ask stops and waits for you, and Deny means the agent cannot use the tool at all.
+2. **Auto-approve.** This is an on/off switch on top of Ask. It never changes a tool set to Allow or Deny. For a tool set to Ask, it lets Omnipus skip the prompt for calls it can judge safe, and still ask for the rest.
+
+<!-- verify-after-build -->
+For example: `write_file` is set to Ask. With Auto-approve off, every file write shows an approval card. With Auto-approve on, a write to a file inside the workspace runs without a card, and a write to your Desktop still asks.
+
+### Set tool policies
+
 1. Open **Settings**, then select **Security**. You see the security health summary and the main protection settings.
-2. Under **Agent tool access**, choose **Must ask first (safer)** or **Run freely**. This sets the default behavior for every tool.
-3. Turn **Auto-approve** on or off. When it is on, a tool currently set to Ask skips the confirmation prompt for anything the sandbox can confirm stays contained, and still asks for everything else — see "What 'safe' means" below. On a new installation this is **on**.
-4. Set **Shell command approval** to **Auto-allow**, **Ask each time**, or **Always deny**. This is the shell tool's own Allow/Ask/Deny setting, separate from the general default in step 2. On a new installation this is **Ask each time** — paired with Auto-approve being on, that combination is what lets safe commands through without a prompt while anything riskier still asks.
-5. Open **Advanced / technical details** to set global rules for individual tools. Choose Allow, Ask, or Deny for each tool.
-6. Open an agent's **Tools & Permissions** panel when you need a rule for that agent, including a switch to turn Auto-approve off for that one agent. A global Deny, or a global Auto-approve that is already off, cannot be loosened there — an agent-level setting can only add restriction.
-7. In a conversation, use the **Auto-approve** switch next to the message box to turn it on or off for that chat only. This is the one place that can turn Auto-approve on even when the agent or global default has it off — you are watching the conversation, so Omnipus accepts that.
-8. Review each approval request before you respond. Choose **Approve**, **Always Allow**, or **Deny**. Always Allow remembers that exact command and folder, so an identical call does not ask again in that chat — for a shell command it can also offer to remember a whole family of similar commands; see "Command rules compared with one-time approvals" below.
+2. Open **Advanced / technical details**, then **Tool Access — Global Policies**. Choose Allow, Ask or Deny for each tool. This applies to every agent. Saving asks you to re-type your password.
+3. To tighten one agent, open that agent's **Tools & Permissions** panel. An agent's setting can only be stricter than the global one, never looser. See [tools](tools.md) for how the two combine.
 
-**What "safe" means for Auto-approve.** A command only skips the prompt when the sandbox itself can confirm it stays inside the boundaries you have set — both which files it touches and whether it reaches the network. Auto-approve does not judge intent or guess; it only relaxes the prompt when the sandbox can make that guarantee.
+On a new installation the shell tool, `bash`, is set to **Ask**.
 
-For example, with Auto-approve on, an agent reading and editing files inside your project folder runs immediately, because that activity never leaves the sandbox. The same agent running `curl https://example.com` or `git push` still asks, because reaching the network is outside what the sandbox confines. Once you approve one of those, Omnipus remembers it for that chat, so the same kind of request stops asking for the rest of the conversation.
+> **Known issue:** the **Agent tool access** choice near the top of the Security screen (**Must ask first (safer)** or **Run freely**) is saved but does not change how any tool behaves; nothing in the server reads it. The per-tool policies above are what decide.
 
-Without an active kernel-level sandbox — see the platform notes below — nothing can be positively confirmed as staying contained, so Auto-approve has no effect and every "Ask" tool prompts every time, the same as if it were off. The chat header shows this as **Auto → Ask**.
+### Turn Auto-approve on or off
 
-Auto-approve only ever matters for a tool currently set to **Ask**. It never changes a tool set to Allow (which already runs without asking) or Deny (which still cannot run at all).
+Auto-approve can be set in three places. On a new installation it is **on** globally.
 
-**Scheduled, unattended runs are different.** When a task runs on a schedule with nobody present to answer a prompt, a tool set to Ask is denied automatically the moment it would have asked — Auto-approve is not consulted, because there is no sandbox check that can substitute for a human simply not being there. Give a scheduled agent's tools an explicit Allow if it needs to use them unattended; see [tools](tools.md).
+| Where | What it does | Example |
+|---|---|---|
+| **Settings → Security → Auto-approve** | The default for every agent and chat. Changing it asks you to re-type your password. | You turn it off. Every tool set to Ask now prompts every time, in every chat. |
+| An agent's **Tools & Permissions** panel → **Never auto-approve for this agent** | Turns Auto-approve off for that one agent. It can only turn it off, never on. | A finance agent should always ask. You tick the box; its Ask tools always prompt. |
+| The **Auto** switch next to the message box in a chat | Turns Auto-approve on or off for that chat only. It is available once the chat has at least one message. | Auto-approve is off globally, but you are watching this chat closely. You switch it on here, and only this chat changes. |
+
+The chat switch is the one place that can turn Auto-approve **on** when the agent or the global default has it off, because you are present in that conversation. It has one limit: when the chat's agent hands work to another agent (a delegate), and that other agent has **Never auto-approve** ticked, the delegate's own switch wins. Your chat switch covers the agent you are talking to, not a delegate that was set to always ask.
+
+**Auto-approve needs an active kernel sandbox.** A kernel sandbox is protection enforced by the operating system itself: Landlock on Linux, Seatbelt on macOS, with the Process Sandbox set to **Enforce**. Without one, Auto-approve has no effect and every Ask tool prompts, the same as if it were off. There is no Auto-approve on Windows, because Windows has no kernel sandbox in Omnipus. God Mode also switches it off, because God Mode removes the sandbox (see "Limits and things to watch").
+
+### What the chat header shows
+
+The badge at the top of a chat shows which state applies to that chat right now.
+
+| Badge | Meaning |
+|---|---|
+| **God Mode** | God Mode is on. No approval prompts, no sandbox. |
+| **Ask** | Auto-approve is off for this chat. Every tool set to Ask prompts. |
+| **Auto** | Auto-approve is on and a kernel sandbox is active. Safe calls run; the rest ask. |
+| **Auto → Ask** | Auto-approve is on, but there is no active kernel sandbox, so it has no effect. Every tool set to Ask prompts. The badge's tooltip says so. |
+
+<!-- verify-after-build -->
+In an agent's **Tools & Permissions** panel and in the global tool list, each tool set to Ask carries a small marker showing what Auto-approve does with it: it runs, it runs only inside the workspace, or it still asks.
+
+### What Auto-approve runs and what still asks
+
+Auto-approve only matters for a tool set to **Ask**. Omnipus judges each call on its own, not the tool as a whole.
+
+<!-- verify-after-build -->
+**Most tools run without a prompt.** That includes reading and searching your workspace, web search and opening web pages, the browser (clicking, typing, navigating, screenshots), memory and the knowledge base, tasks, plans and goals, handing work to another agent, and read-only listings of settings, agents and workspaces. For example, with Auto-approve on, Mia editing a knowledge-base note set to Ask no longer shows an approval card.
+
+<!-- verify-after-build -->
+**File tools run only inside the workspace or a mounted folder.** `read_file`, `list_directory`, `write_file`, `edit_file` and `append_file` run without a prompt when every path they touch is inside the agent's workspace or a folder you mounted into it. Anything outside asks, **including reads**. For example, `write_file` to `notes/plan.md` runs; `read_file` of `/etc/hosts` asks. The same rule applies to the file `send_file` sends and to the file name `browser_screenshot` saves to. Omnipus secret files, such as the master key, are never covered.
+
+<!-- verify-after-build -->
+This is stricter than the shell. Under Auto-approve, the shell command `cat /etc/hosts` runs, because the sandbox lets commands read outside the workspace, while `read_file /etc/hosts` asks. That difference is deliberate.
+
+<!-- verify-after-build -->
+**Messages and files sent to chat channels go out with no prompt.** `send_message` and `send_file` run under Auto-approve. A message, or a file from the workspace, can leave the machine to Telegram, Slack or another connected channel without anyone approving it. If that is not acceptable for an agent, set those two tools to Ask and tick **Never auto-approve** for that agent, or set them to Deny. Email is different: `send_email` and `reply` always ask.
+
+<!-- verify-after-build -->
+**These 28 tools always ask, even with Auto-approve on:**
+
+| Group | Tools |
+|---|---|
+| Widening file access | `request_mount` |
+| Installing and publishing | `install_skill`, `environment_setup`, `serve_web` |
+| Email | `send_email`, `reply` |
+| Deleting | `delete_task`, `delete_task_in_workspace`, `delete_workspace`, `delete_agent` |
+| Browser scripts and uploads | `browser_evaluate`, `browser_upload_file` |
+| Settings and diagnostics | `set_config`, `run_doctor` |
+| Providers | `configure_provider`, `test_provider` |
+| Channels | `enable_channel`, `disable_channel`, `configure_channel`, `test_channel` |
+| Connected servers | `add_mcp_server`, `remove_mcp_server` |
+| Agents and workspaces | `create_agent`, `update_agent`, `update_workspace` |
+| Skills | `create_skill`, `edit_skill`, `remove_skill` |
+
+<!-- verify-after-build -->
+**Tools from connected servers (MCP) mostly still ask.** A connected server can label each of its tools. Under Auto-approve, a server tool runs only when its server labels it read-only or explicitly not destructive. Every other server tool asks, including one with no label at all. Most servers send no labels today, so in practice most server tools still ask. Omnipus trusts these labels because you chose to connect the server, and adding a server is on the always-ask list.
+
+**The shell tool, `bash`, has its own checks.** Under Auto-approve, a command runs without a prompt when the sandbox can contain it. It still asks when the command:
+
+- writes outside the workspace and its mounted folders. For example, `cp report.pdf /Users/you/Desktop/` asks; `cp report.pdf out/` runs;
+- may need the network. For example, `curl https://example.com`, `git push` or `npm install` ask. Omnipus recognises this from the program (such as `git`, `curl`, `wget`, `ssh`, `npm`, `pip`, `docker`, `gh` and the main cloud command-line tools) or from a web address in the command. Because it goes by the program, even `git status` asks the first time in a chat;
+- matches an `ask` command rule you wrote (see "Shell command rules" below).
+
+Under Auto-approve, a command that would touch an Omnipus secret file, such as the master key, is refused outright and never offered for approval. **Approve Once** on one of these prompts lets that one command through. **Always Allow** on a network prompt lets the shell reach the network for the rest of that chat, on the usual web and name-lookup ports (80, 443 and 53) and to any host. **Always Allow** on a file prompt opens that one path, for the access the command needed, for the rest of that chat. Denying either prompt refuses the command; it never runs with less access instead.
+
+Auto-approve does not check what a command means. A command that deletes files inside your workspace, or stops a process, runs without a prompt, because it stays inside the sandbox. Use a `deny` or `ask` command rule for commands like that.
+
+### Scheduled and unattended runs
+
+<!-- verify-after-build -->
+A scheduled task runs with nobody present to answer a prompt. The same rule applies there as in a chat: anything Auto-approve would run in a chat also runs in a scheduled run. Anything that would need a person is refused straight away, with a clear error in the task's transcript:
+
+```
+Not run: this is a headless scheduled run with no operator available to approve ask-policy tools.
+```
+
+For example, with Auto-approve on, a scheduled agent can write its report into the workspace, but a `delete_task` call is refused. If a scheduled agent must use a tool that still asks, set that tool to Allow for that agent. See [tools](tools.md).
+
+### Approve a request
+
+When an approval card appears, read what it says, then choose:
+
+| Button | What it does |
+|---|---|
+| **Approve Once** | Runs this one call. Nothing is remembered; the next identical call asks again. |
+| **Always Allow** | Runs the call and remembers it for the rest of this chat, so an identical call does not ask again. |
+| **Deny** | Refuses the call. |
+| **Cancel** | Closes the request without running it. |
+
+What **Always Allow** remembers lasts only for that chat and ends with it. Agents that this chat hands work to inherit it. Nobody else's chats are affected, and there is no list of remembered approvals to review. For most tools it remembers the exact call, with the same arguments. For a shell command it offers a choice; see "Command rules compared with one-time approvals" below.
 
 These controls answer different questions.
 
 | Control | What it decides | Use it when |
 |---|---|---|
-| Tool policy | Whether an agent may call a tool | You want Allow, Ask, or Deny for a specific capability |
-| Auto-approve | Whether an "Ask" tool skips the prompt for activity that stays inside the sandbox | You want fewer prompts without giving up a check on anything that reaches further |
-| Shell command approval | How the shell tool's own Allow/Ask/Deny is set | You want a separate default for shell commands specifically |
+| Tool policy | Whether an agent may call a tool: Allow, Ask or Deny | You want a standing decision for a specific capability |
+| Auto-approve | Whether an Ask tool skips the prompt for calls Omnipus can judge safe | You want fewer prompts without giving up a check on anything that reaches further |
+| Command rules | Allow, ask or deny for specific shell commands, written in the configuration file | You want a standing rule for one program, such as "always ask before `npm publish`" |
 | Process sandbox | What started programs may reach | You want operating-system isolation where the platform supports it |
 | Filesystem model | What agents may read and run | You want open access or a confined list of locations |
 | Shell workspace limit | Whether a command may name paths outside the working folder | You want a command-text check that still applies even when the sandbox is off |
 
-The process sandbox offers three modes. **Enforce** blocks violations. **Permissive** records violations without blocking them. **Off** removes operating-system protection, but it does not disable the shell workspace limit; with the sandbox off, Auto-approve has nothing it can confirm stays contained, so every "Ask" tool prompts regardless of the Auto-approve setting.
+The process sandbox offers three modes. **Enforce** blocks violations. **Permissive** records violations without blocking them. **Off** removes operating-system protection, but it does not disable the shell workspace limit. Only Enforce counts as an active kernel sandbox for Auto-approve; in Permissive or Off, the chat header shows **Auto → Ask** and every Ask tool prompts.
 
 The **Confined** filesystem model limits reads and execution to listed locations. The **Open** model lets agents read and run anything your account can reach, apart from Omnipus secret files. Writes remain limited to the workspace and mounted folders. Changes to the filesystem model take effect after a gateway restart.
 
@@ -54,7 +151,7 @@ The Security screen reports the protection available on your current platform. I
 
 ## Shell command rules
 
-Auto-approve and Shell command approval, above, set a default for shell commands as a whole. Command rules go further: an allow, ask, or deny decision for one specific program, or one specific program plus how it is called. There is no screen for this — you write rules directly into the configuration file. This is a deliberate choice: a rule that can quietly deny or approve real commands is a security control, and Omnipus keeps security controls in a file you own and can review, not behind a settings toggle that could be changed by mistake.
+The `bash` tool policy and Auto-approve, above, decide for shell commands as a whole. Command rules go further: an allow, ask, or deny decision for one specific program, or one specific program plus how it is called. There is no screen for this — you write rules directly into the configuration file. This is a deliberate choice: a rule that can quietly deny or approve real commands is a security control, and Omnipus keeps security controls in a file you own and can review, not behind a settings toggle that could be changed by mistake.
 
 ### Where rules live
 
@@ -67,7 +164,7 @@ Each rule is a small object with up to three fields:
 | Field | Required | What it means |
 |---|---|---|
 | `action` | Yes | `allow`, `ask`, or `deny` — same three outcomes as any other tool policy. |
-| `binary` | Yes | The program the rule applies to, such as `git`, `npm`, or `rm`. Omnipus matches this against the actual program the shell would run, not just the word your agent typed — so a rule on `git` still applies even if the command reaches `git` through a full path or a shell alias. |
+| `binary` | Yes | The program the rule applies to: a bare name such as `git`, `npm` or `rm`, or a full path such as `/usr/bin/git`. No spaces or shell symbols. Omnipus matches this against the actual program the shell would run, not just the word your agent typed. |
 | `arg_prefix` | No | Restricts the rule to calls whose arguments start with these words, matched whole word by whole word. `"test"` matches `go test ./...` but not `go testify`. Leave it out to match every call to that program, with any arguments. |
 
 A worked set of examples, as they would appear in `config.json`:
@@ -107,27 +204,60 @@ A command like `rm -rf /tmp/build` matches both rules — the narrower `/tmp`-sc
 
 ### Chained commands
 
-A command joined with `&&`, `||`, `;`, `|`, or a line break is checked one part at a time — each part is matched against your rules independently — and the command as a whole gets the strictest result among its parts. One denied part refuses the whole command; failing that, one part that needs to ask makes the whole command ask; only if every part is allowed or matches no rule at all does the whole command proceed without a rule-driven prompt.
+A command joined with `&&`, `||`, `;`, `|`, or a line break is checked one part at a time. Each part is matched against your rules on its own, and the command as a whole gets the strictest result among its parts. One denied part refuses the whole command. Failing that, one part with an `ask` rule makes the whole command ask. Parts with no rule at all fall back to the tool policy and Auto-approve as usual.
 
 Worked example: with the `ask`-before-`npm publish` rule above and no rule at all for `git`, the chained command `git pull && npm publish` asks before running, because its second part needs to ask — even though `git pull` on its own would not have.
 
-### How a rule interacts with Ask, Auto, and God Mode
+### How a rule interacts with Auto-approve and God Mode
 
-| Rule action | Ask mode | Auto mode | God Mode |
+The columns below match the badge at the top of the chat. **Ask** also covers **Auto → Ask**, which behaves the same.
+
+| Rule action | Ask | Auto | God Mode |
 |---|---|---|---|
-| `deny` | Refuses the command. Nobody is asked to approve something that cannot run. | Refuses the command. | Refuses the command — the one check God Mode does not turn off. |
-| `ask` | No extra effect — every command already asks in Ask mode. | Forces an approval prompt for that command, even though Auto would otherwise let it through without one. | No extra effect — God Mode shows no prompts, and an `ask` rule does not create one. |
-| `allow` | Skips the approval prompt, but only when **every** part of the command matches an allow rule and no part matches a deny or ask rule. | No extra effect on the prompt — Auto already runs a matching command without asking. Does **not** skip Auto's own safety checks. | No extra effect — God Mode already runs everything without asking. |
+| `deny` | Refuses the command. Nobody is asked to approve something that cannot run. | Refuses the command. | Refuses the command. This is the one check God Mode does not turn off. |
+| `ask` | Asks before the command runs. | Asks before the command runs, even when Auto-approve would otherwise have let it through. | No effect. God Mode shows no prompts, and an `ask` rule does not create one. |
+| `allow` | Skips the approval card, but only when **every** part of the command is a plain command that matches an allow rule (see below). | No extra effect. It does **not** skip Auto-approve's own checks: a matching command that writes outside the workspace or needs the network still asks. | No effect. God Mode already runs everything without asking. |
 
-A `deny` rule reaches into every mode, including God Mode, and always wins over an `allow` on another part of the same command. An `ask` rule only changes anything in Auto mode, where it adds a prompt Auto would not otherwise show. An `allow` rule's one real effect is in Ask mode: if every part of a chained command matches an allow rule — for example `git status && go test ./...` with the rules from the earlier example — the prompt is skipped entirely, the same way the old exec allowlist worked. One un-ruled or partially-matched part is enough to fall back to the normal prompt. An allow rule never widens what Auto itself checks: a command that writes outside the workspace or needs the network still asks under Auto, allow rule or not — the rule only ever removes a prompt, never a safety check.
+An `ask` rule prompts in every state except God Mode. That includes an agent whose `bash` policy you set to Allow: the rule still asks before `npm publish`, even though every other command runs freely.
+
+<!-- verify-after-build -->
+When an `ask` rule is what triggers the prompt, you see one approval card for the command, and it says the rule is the reason.
+
+**An allow rule only covers a plain command.** It skips the card only for a part with nothing added around the program and its arguments:
+
+- no redirection into a file (`git status > out.txt`);
+- no command substitution or subshell (`git status $(cat list)`, `` `…` ``, `( … )`);
+- no environment-variable prefix (`GIT_DIR=/tmp/x git status`);
+- no full or relative path in front of the program (`./git status`, `/usr/bin/git status`), because that is how a look-alike program would sneak past the rule.
+
+Any of these means the card appears as normal. A chained command skips the card only when every part passes this test. For example, with the rules above, `git status && go test ./...` runs without a card, but `git status && curl example.com` asks, because `curl` has no allow rule.
+
+A part Omnipus cannot read reliably, such as a program name built from a variable (`$X -rf /`), a brace expansion (`{cat,/etc/passwd}`) or a program that does not exist on the agent's path, can never satisfy an allow rule.
+
+Rules match the program by where it really is on disk, not by the word typed. A rule for `rm` also catches `/bin/rm -rf build` for `deny` and `ask`. An `allow` rule for `git` does not approve a different program that happens to be named `git` earlier on the agent's path.
+
+On Windows, a command is always judged as one unit, and `arg_prefix` must match the whole argument list exactly, not just its start.
 
 ### Command rules compared with one-time approvals
 
-When a shell approval prompt appears, choosing **Always Allow** offers a choice of how much it remembers: **Allow this exact command**, or — when Omnipus can suggest one — **Allow commands starting with `<program and its leading words>`**. Either way, the memory lasts for the rest of that conversation only; it disappears when the chat ends, and nobody else's conversations are affected. A chained command (`a && b`) is shown and approved one part at a time. A command rule in `config.json` is the opposite: it applies to every agent, every conversation, permanently, until you edit the file again.
+When a shell approval card appears, **Always Allow** offers a choice of how much to remember:
 
-The "starting with" choice is not always offered. Omnipus only suggests a prefix when approving that prefix would not quietly cover more than you actually saw: it is not offered for a chained command (the words after a prefix could belong to the next part), for a bare program with no arguments (`ls` — that would approve any use of `ls`), or for a command run through a wrapper like `sudo`, `env`, `timeout`, `xargs`, or `sh -c` (the wrapper alone would approve whatever it goes on to run). In any of those cases, only the exact-command choice is offered, and the confirmation tells you exactly what was recorded.
+- **Allow this exact command.** Only the identical command, run from the same folder, skips the card again.
+- **Allow commands starting with `<program and its leading words>`.** For example, approving `npm run test -- --watch` this way can remember `npm run test`, so `npm run test` with any later arguments skips the card. It does not match `npm run testfoo`.
 
-Use a one-time approval for something you only expect to approve in this conversation. Use a command rule for a standing decision — "this team always needs `npm publish` reviewed," or "never run `rm -rf` on this machine, ever" — that should not depend on remembering to click Allow the same way every time.
+Either way, the memory lasts for the rest of that chat only. It ends with the chat, and nobody else's chats are affected. **Approve Once** never remembers anything. A command rule in `config.json` is the opposite: it applies to every agent and every chat, permanently, until you edit the file again.
+
+The "starting with" choice is offered only for a single plain command, where approving the prefix cannot quietly cover more than you saw. It is not offered for:
+
+- a chained command (`a && b`), because the words after a prefix could belong to the next part;
+- a bare program with no arguments (`ls`), because that would approve any use of `ls`;
+- a command run through a wrapper such as `sudo`, `env`, `timeout`, `xargs` or `sh -c`, because the wrapper alone would approve whatever it goes on to run;
+- a command with redirection, substitution or an environment-variable prefix;
+- any command on Windows.
+
+In those cases **Always Allow** remembers the exact command only. The card shows a chained command part by part so you can see what each part runs, and the confirmation tells you exactly what was recorded.
+
+Use a one-time approval for something you only expect to approve in this chat. Use a command rule for a standing decision, such as "this team always needs `npm publish` reviewed" or "never run `rm -rf` on this machine", that should not depend on clicking the same way every time.
 
 ### Agents cannot change these rules
 
@@ -139,13 +269,25 @@ No restart needed. Omnipus checks `config.json` for changes every 2 seconds; whe
 
 ### If a rule is written incorrectly
 
-An invalid rule rejects the **entire** reload, not just that one rule — the previous, still-valid configuration stays in force, so a typo cannot leave you with fewer rules than you intended. The error names the specific rule and what is wrong with it, for example:
+An invalid rule rejects the **entire** reload, not just that one rule. The previous, still-valid configuration stays in force, so a typo cannot leave you with fewer rules than you intended. The error names the rule by its position in the list, counting from 0, and says what is wrong with it. For example, a capitalised action in the second rule gives:
 
 ```
 config error: sandbox.command_rules[1]: action "Deny" must be one of allow, ask, deny
 ```
 
-(Rule actions are lower-case — `allow`, `ask`, `deny` — a capitalized `"Deny"` is exactly the kind of typo this catches.) You will see this in the Omnipus server log at the time you saved the file, and `GET /health` reports the gateway as degraded, with the same message, until you fix the file and save it again.
+Rule actions are lower-case: `allow`, `ask`, `deny`. Other mistakes it catches: a missing `binary`, a `binary` with spaces or shell symbols, a relative path such as `./git`, control characters in `arg_prefix`, and more than 1,000 rules.
+
+You see the error in two places, until you fix the file and save it again:
+
+- the Omnipus server log, at the moment you saved, followed by `Using previous valid config`;
+- `GET /health`, which answers with status 503 and reports the gateway as degraded. The reason field carries the same error with two prefixes in front of it:
+
+```json
+{
+  "status": "degraded",
+  "reason": "config reload failed: config reload rejected: config error: sandbox.command_rules[1]: action \"Deny\" must be one of allow, ask, deny"
+}
+```
 
 ## How to manage saved secrets
 
