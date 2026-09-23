@@ -126,6 +126,42 @@ func (p *e2eBoundaryProbe) Execute(ctx context.Context, _ map[string]any) *tools
 	return result
 }
 
+// recordingUpwardDeliverer wraps the real deliverer and records every upward
+// event as it is delivered. Asserting on the root's RESIDUAL inbox is unsound
+// now that the harness runs AgentLoop.Run: Run is what consumes the root's
+// inbox entry and re-enters the root, so a passing delegation necessarily
+// empties the very queue the assertion read. Recording at delivery time is
+// race-free and strictly stronger -- it proves the event was delivered, not
+// merely that nothing has consumed it yet.
+type recordingUpwardDeliverer struct {
+	inner steer.UpwardDeliverer
+	mu    sync.Mutex
+	seen  []string // ChildSessionID of every delivered event, in order
+}
+
+var _ steer.UpwardDeliverer = (*recordingUpwardDeliverer)(nil)
+
+func (d *recordingUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEvent) (steer.Delivery, error) {
+	delivery, err := d.inner.Deliver(ctx, event)
+	if err == nil {
+		d.mu.Lock()
+		d.seen = append(d.seen, event.ChildSessionID)
+		d.mu.Unlock()
+	}
+	return delivery, err
+}
+
+func (d *recordingUpwardDeliverer) deliveredFor(childSessionID string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, id := range d.seen {
+		if id == childSessionID {
+			return true
+		}
+	}
+	return false
+}
+
 type e2eHarness struct {
 	al         *agent.AgentLoop
 	tree       *testutil.Tree
@@ -144,6 +180,8 @@ type e2eHarness struct {
 	// variant); nil for harnesses built with a different provider
 	// (newE2EHarnessWithProvider's other callers).
 	boundaryProvider *e2eBoundaryProvider
+	// upward records upward deliveries as they happen (see recordingUpwardDeliverer).
+	upward *recordingUpwardDeliverer
 }
 
 func newE2EHarness(t *testing.T) *e2eHarness {
@@ -234,7 +272,16 @@ func newE2EHarnessCustom(
 	if audienceOverride != nil {
 		audience = audienceOverride
 	}
-	deliverer := agent.NewSteerUpwardDeliverer()
+	concreteDeliverer := agent.NewSteerUpwardDeliverer()
+	recordingDeliverer := &recordingUpwardDeliverer{inner: concreteDeliverer}
+	var deliverer steer.UpwardDeliverer = recordingDeliverer
+	// SetSteerAudienceDeps back-wires the deliverer's *AgentLoop dependency
+	// ONLY when handed the concrete *SteerUpwardDeliverer (steer_boundary.go's
+	// type assertion). A wrapper hides that type, and every upward delivery
+	// then fails with "UpwardDeliverer not wired". Wire the concrete instance
+	// first; the second call installs the recording wrapper and the inner
+	// instance keeps the back-wiring from the first.
+	al.SetSteerAudienceDeps(audience, recorder, concreteDeliverer)
 	al.SetSteerAudienceDeps(audience, recorder, deliverer)
 	launcher := agent.NewSteerLauncher(al)
 	var probe *e2eBoundaryProbe
@@ -254,12 +301,21 @@ func newE2EHarnessCustom(
 		Launcher: launcher,
 		BootHook: func(context.Context) error { return nil },
 	}
+	// The delegation chain's upward wake is published onto the inbound bus
+	// (async_notifier.go), and AgentLoop.Run is the only thing that drains
+	// it — in production it is always running. Without it a completing
+	// grandchild's follow-up sat in the queue for ever and its ancestors
+	// never re-entered, so every level above the deepest stayed `running`.
+	runCtx, stopLoop := context.WithCancel(context.Background())
+	go func() { _ = al.Run(runCtx) }()
+	t.Cleanup(stopLoop)
+
 	harness := &e2eHarness{
 		al:   al,
 		tree: testutil.DelegationTree(t, deps, 3), sessions: sessions,
 		lifecycle: lifecycle, inbox: inbox, audience: audience, deliverer: deliverer,
 		canceller: canceller, classifier: classifier, launcher: launcher,
-		recorder: recorder, probe: probe, msgBus: msgBus,
+		recorder: recorder, probe: probe, msgBus: msgBus, upward: recordingDeliverer,
 	}
 	t.Cleanup(func() { harness.waitForTreeTurns() })
 	return harness
@@ -357,17 +413,13 @@ mediaDrained:
 
 	// Gap 4 (ADR-091 fix-lane 7): NoLeak's headline claim was containment
 	// only — nothing asserted that the chain's result actually reaches the
-	// root. Read the root's real message inbox (the production upward-
-	// delivery destination, steer_completion.go::completeSteeredTurn's
-	// cascade via completeWaitingAncestors) rather than re-deriving content
-	// from the tree fixture.
-	rootMessages, _, _, err := h.inbox.Drain(h.tree.Root.SessionID, "", "", 256)
-	if err != nil {
-		t.Fatalf("drain root inbox: %v", err)
-	}
-	if len(rootMessages) == 0 {
+	// root. Observe the real production upward-delivery path
+	// (steer_completion.go::completeSteeredTurn's Deliver, which since fix
+	// lane 1 is the ONLY path to an ancestor) rather than re-deriving
+	// content from the tree fixture.
+	if !h.upward.deliveredFor(h.tree.A.SessionID) {
 		t.Fatal("the root received NOTHING from its three-level delegation chain even though every " +
-			"level went terminal")
+			"level went terminal: no upward event for A (the root's own child) was ever delivered")
 	}
 	// "The root got a message" alone is not enough: A's OWN completion
 	// always delivers upward regardless of whether it ever heard from B/C —

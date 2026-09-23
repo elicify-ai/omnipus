@@ -146,7 +146,7 @@ func TestLaunch_GrandchildRemainingDepth_InheritsFromParentBudget_NotRecomputedF
 	if bRec.SteeredBy == nil {
 		t.Fatal("B has no SteeredBy edge")
 	}
-	const wantFromParentBudget = 0 // A's RemainingDepth(1) - 1
+	const wantFromParentBudget = 0       // A's RemainingDepth(1) - 1
 	const wouldBeIfRecomputedFromCap = 8 // (globalCap=10 - parentDepth(A)=1) - 1
 	if bRec.SteeredBy.Authorization.RemainingDepth != wantFromParentBudget {
 		if bRec.SteeredBy.Authorization.RemainingDepth == wouldBeIfRecomputedFromCap {

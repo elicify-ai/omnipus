@@ -169,9 +169,13 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 			map[string]any{"session_id": sessionID, "error": err.Error()})
 		return
 	}
-	if rec.SteeredBy != nil {
-		al.completeWaitingAncestors(ctx, rec.SteeringSessionID())
-	}
+	// No second upward path here on purpose. The Deliver call above is the
+	// only one: fix lane 1 deleted completeWaitingAncestors because it
+	// completed the ancestor from the ancestor's OWN stale last answer
+	// instead of re-entering it, so a nested child's real outcome never
+	// arrived. Deliver's wake is the re-entry (steer_completion.go,
+	// Finding A) and it carries this cancelled child's "interrupted:"
+	// outcome up exactly like a normal completion does.
 }
 
 // terminaliseNeverRanStop closes Finding 5's gap: SteerGenerationCancel found

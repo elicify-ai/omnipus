@@ -58,26 +58,8 @@ func newBoundaryHarness(t *testing.T, provider providers.LLMProvider) (*AgentLoo
 // takes a caller-supplied provider instead of the fixed &mockProvider{}, so
 // a boundary test can script the exact tool call / retry / text sequence it
 // needs to reach its target production code path.
-func newSteerALWithProvider(t *testing.T, provider providers.LLMProvider) (*AgentLoop, func()) {
-	t.Helper()
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"},
-				MaxTokens: 4096, MaxToolIterations: 10,
-			},
-			List: []config.AgentConfig{{ID: testDefaultAgentID, Home: tmpDir}},
-		},
-	}
-	msgBus := bus.NewMessageBus()
-	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-	home := al.GetConfig().Agents.Defaults.Home
-	lifecycle := session.NewLifecycleStore(home + "/session_lifecycle")
-	inbox := session.NewMessageInboxStore(home + "/session_messages")
-	al.SetSessionMessagingStores(inbox, lifecycle)
-	return al, func() { al.Close(); msgBus.Close() }
-}
+// newSteerALWithProvider lives in steer_completion_test.go (fix lane 1); this
+// lane's duplicate was removed when the two lanes merged.
 
 // allowProbeTool registers tool on al and grants every currently-registered
 // agent an explicit "allow" policy for it (test tools are unlisted, so the
@@ -403,7 +385,7 @@ func TestOrdinaryRoot_TaskResultNotification_StillPublished(t *testing.T) {
 	childID := "adr091-task-result-ordinary-root"
 	if err := lifecycle.Persist(&session.LifecycleRecord{
 		SessionID: childID, Generation: 1, State: session.LifecycleCompleted,
-		Origin: &session.Origin{Kind: session.OriginKindTask, TaskID: "task-2"},
+		Origin:         &session.Origin{Kind: session.OriginKindTask, TaskID: "task-2"},
 		OwnerScopeKind: session.OwnerScopeHuman,
 	}); err != nil {
 		t.Fatalf("persist ordinary_root task record: %v", err)

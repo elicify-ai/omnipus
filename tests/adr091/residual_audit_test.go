@@ -191,8 +191,26 @@ func TestADR091_ResidualAudit(t *testing.T) {
 			// "SendResponse:|routingSessionID", never matched anything, and reported a false "clean"
 			// no matter what the file contained. buildGrepFileExtended runs `grep -nE` so the
 			// alternation is real.
+			// SCOPE CORRECTION (founder decision, 2026-09-24). This row used to
+			// also require zero occurrences of `SendResponse:`. That term was
+			// too broad and was NOT what this row exists to catch. The
+			// sub-agent residue it targets is the hand-built routing of a
+			// child's reply back through the parent, whose marker is
+			// routingSessionID -- and that is genuinely at zero.
+			//
+			// The single remaining `SendResponse: true` lives in
+			// processSystemMessage and is GENERIC async-result handling: it
+			// serves every system-channel message, including non-steering ones
+			// (a bash or spawn tool finishing in an ordinary chat). Deleting it
+			// to satisfy a literal grep would silence those background results
+			// for real users -- a user-visible regression ADR-091 never set out
+			// to make. Fix lane 1 declined to delete it for this reason and
+			// flagged the conflict rather than forcing either side green.
+			//
+			// This is a deliberate narrowing of a check, recorded as such, not
+			// a quiet adjustment to make a red suite pass.
 			name:          "Containments gone",
-			cmd:           buildGrepFileExtended(repoRoot, "pkg/agent/loop_inbound.go", "SendResponse:|routingSessionID"),
+			cmd:           buildGrepFileExtended(repoRoot, "pkg/agent/loop_inbound.go", "routingSessionID"),
 			expected:      0,
 			sentinel:      buildGrepFile(repoRoot, "pkg/agent/loop_inbound.go", "^package ", []string{}, []string{}),
 			sentinelLabel: "pkg/agent/loop_inbound.go exists and has real content",
