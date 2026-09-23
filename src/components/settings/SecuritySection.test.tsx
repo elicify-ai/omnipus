@@ -91,10 +91,8 @@ const PLATFORM_APP_STATE = {
 const MINIMAL_CONFIG = {
   security: {
     policy_mode: 'deny' as const,
-    exec_approval: 'ask' as const,
     exec_timeout_seconds: 0,
     max_background_seconds: 0,
-    enable_deny_patterns: false,
     rate_limits: {
       max_agent_llm_calls_per_hour: null,
       max_agent_tool_calls_per_minute: null,
@@ -224,9 +222,29 @@ describe('SecuritySection — US-B1 two-layer IA', () => {
       expect(screen.getByTestId('plain-toggles')).toBeInTheDocument()
     })
 
-    // "Must ask first" button for policyMode (Deny = safe), and "Shell command approval" label
+    // "Must ask first" button for policyMode (Deny = safe).
     expect(screen.getByText(/must ask first/i)).toBeInTheDocument()
-    expect(screen.getByText(/shell command approval/i)).toBeInTheDocument()
+  })
+
+  it('does not render the retired Shell command approval or Enable deny patterns controls', async () => {
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('plain-toggles')).toBeInTheDocument()
+    })
+
+    // Both wrote fields the backend never read (security.exec_approval,
+    // security.enable_deny_patterns) — deleted outright, not just hidden.
+    // Expand Advanced too, since "Enable deny patterns" used to live there.
+    const advancedTrigger = screen.getByTestId('advanced-disclosure-trigger')
+    fireEvent.click(advancedTrigger)
+    await waitFor(() => {
+      expect(document.body.textContent).toMatch(/SSRF|Landlock|seccomp/i)
+    })
+
+    expect(screen.queryByText(/shell command approval/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/enable deny patterns/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/enable deny patterns/i)).not.toBeInTheDocument()
   })
 
   it('expanding Advanced reveals jargon (Landlock / SSRF) that was hidden', async () => {
@@ -401,6 +419,43 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
       expect(screen.getByText(/failed to load the auto-approve setting/i)).toBeInTheDocument()
     })
     expect(screen.queryByTestId('auto-approve-global-switch')).not.toBeInTheDocument()
+  })
+
+  it('cancelling the confirmation shows no toast at all (re-auth cancel stays silent)', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    renderSection()
+    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+
+    const toggle = await screen.findByTestId('auto-approve-global-switch')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).toBeNull()
+    })
+    expect(mockAddToast).not.toHaveBeenCalled()
+  })
+
+  it('a real save failure surfaces exactly one toast, from the mutation onError — the outer step-up catch never adds a second one', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    vi.mocked(updateSandboxConfig).mockRejectedValue(new Error('gateway unreachable'))
+    renderSection()
+    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+
+    const toggle = await screen.findByTestId('auto-approve-global-switch')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Turn Auto-approve on' }))
+
+    await waitFor(() => {
+      expect(mockAddToast).toHaveBeenCalledTimes(1)
+    })
+    expect(mockAddToast).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'error' }),
+    )
   })
 })
 

@@ -1,10 +1,19 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { fireEvent, render, screen, act } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Tooltip } from './tooltip'
 import { Button } from './button'
 
+beforeEach(() => {
+  vi.useFakeTimers()
+})
+
+afterEach(() => {
+  vi.runOnlyPendingTimers()
+  vi.useRealTimers()
+})
+
 describe('Tooltip — reveal/dismiss', () => {
-  it('is hidden until hovered, and hides again on mouse leave', () => {
+  it('is hidden until hovered, and hides again (after the close grace period) on mouse leave', () => {
     render(
       <Tooltip content="Explanation text" data-testid="trigger">
         <span>Auto → Ask</span>
@@ -16,10 +25,15 @@ describe('Tooltip — reveal/dismiss', () => {
     expect(screen.getByRole('tooltip')).toHaveTextContent('Explanation text')
 
     fireEvent.mouseLeave(screen.getByTestId('trigger'))
+    // Not closed synchronously — WCAG 1.4.13 hoverable content needs a
+    // grace period so the pointer can travel from the trigger onto the
+    // bubble without it disappearing first (see CLOSE_GRACE_MS).
+    expect(screen.getByRole('tooltip')).toBeInTheDocument()
+    act(() => vi.advanceTimersByTime(200))
     expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
   })
 
-  it('reveals on keyboard focus and hides on blur', () => {
+  it('reveals on keyboard focus and hides IMMEDIATELY on blur (no grace period for keyboard)', () => {
     render(
       <Tooltip content="Explanation text" data-testid="trigger">
         <span>Auto → Ask</span>
@@ -32,7 +46,65 @@ describe('Tooltip — reveal/dismiss', () => {
     expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
   })
 
-  it('toggles on click, for touch (no hover) reachability', () => {
+  // WCAG 1.4.13 (Content on Hover or Focus) — "hoverable": the pointer must
+  // be able to move off the trigger and onto the tooltip content without
+  // the content disappearing. Before this fix the bubble was
+  // pointer-events-none (couldn't receive its own hover at all) and the
+  // trigger's mouseleave closed — and un-rendered — the bubble immediately,
+  // so there was never a bubble left to hover onto.
+  it('stays open when the pointer moves from the trigger onto the bubble itself, and can then be left', () => {
+    render(
+      <Tooltip content="Explanation text" data-testid="trigger">
+        <span>Auto → Ask</span>
+      </Tooltip>,
+    )
+    fireEvent.mouseEnter(screen.getByTestId('trigger'))
+    const bubble = screen.getByRole('tooltip')
+
+    fireEvent.mouseLeave(screen.getByTestId('trigger'))
+    // Pointer arrives on the bubble within the grace period.
+    act(() => vi.advanceTimersByTime(30))
+    fireEvent.mouseEnter(bubble)
+    // The scheduled close must have been cancelled — advancing well past
+    // the grace period must NOT close it now.
+    act(() => vi.advanceTimersByTime(500))
+    expect(screen.getByRole('tooltip')).toBeInTheDocument()
+
+    // Leaving the bubble itself still closes it (after its own grace period).
+    fireEvent.mouseLeave(bubble)
+    act(() => vi.advanceTimersByTime(200))
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+  })
+
+  it('the bubble accepts pointer events (not pointer-events-none) so it can be hovered at all', () => {
+    render(
+      <Tooltip content="Explanation text" data-testid="trigger">
+        <span>Auto → Ask</span>
+      </Tooltip>,
+    )
+    fireEvent.mouseEnter(screen.getByTestId('trigger'))
+    expect(screen.getByRole('tooltip')).not.toHaveClass('pointer-events-none')
+  })
+
+  // A real tap synthesizes mouseenter + focus + click for the same gesture.
+  // The bug: a click handler that TOGGLED closed what hover/focus had just
+  // opened, in the same gesture — so the bubble could "never open on
+  // touch". openNow only ever opens; it must never close on a second tap
+  // either (that would reproduce the same failure for a deliberate re-tap).
+  it('a full touch gesture (hover+focus then click, as a real tap fires) ends OPEN, not closed', () => {
+    render(
+      <Tooltip content="Explanation text" data-testid="trigger">
+        <span>Auto → Ask</span>
+      </Tooltip>,
+    )
+    const trigger = screen.getByTestId('trigger')
+    fireEvent.mouseEnter(trigger)
+    fireEvent.focus(trigger)
+    fireEvent.click(trigger)
+    expect(screen.getByRole('tooltip')).toBeInTheDocument()
+  })
+
+  it('a second tap on the trigger does not toggle it closed', () => {
     render(
       <Tooltip content="Explanation text" data-testid="trigger">
         <span>Auto → Ask</span>
@@ -42,7 +114,7 @@ describe('Tooltip — reveal/dismiss', () => {
     fireEvent.click(trigger)
     expect(screen.getByRole('tooltip')).toBeInTheDocument()
     fireEvent.click(trigger)
-    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    expect(screen.getByRole('tooltip')).toBeInTheDocument()
   })
 })
 

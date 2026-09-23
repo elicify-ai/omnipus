@@ -298,6 +298,85 @@ describe('ToolApprovalModal — button dispatch', () => {
     expect(useToolApprovalStore.getState().queue).toHaveLength(0)
   })
 
+  // Item 4 (ADR-092 D4/FR-024): show the scope the server actually
+  // RECORDED (ToolApprovalResponse.scope), not the client's own request —
+  // this is the SPA's only confirmation of what stuck, since the card
+  // closes immediately after a successful allow.
+  it('toasts the actually-recorded scope ("prefix") after a successful Always Allow, distinct from the did-not-stick warning', async () => {
+    vi.mocked(api.submitToolApproval).mockResolvedValue({
+      approval_id: 'appr-shell-001',
+      action: 'allow',
+      status: 'ok',
+      grant_recorded: true,
+      scope: 'prefix',
+    })
+    act(() => {
+      useToolApprovalStore.setState({
+        queue: [
+          {
+            approvalId: 'appr-shell-001',
+            toolCallId: 'call-shell-001',
+            toolName: 'bash',
+            args: { command: 'npm run build' },
+            agentId: 'agent-main',
+            sessionId: 'sess-001',
+            turnId: 'turn-001',
+            expiresAt: Date.now() + 300_000,
+          },
+        ],
+      })
+    })
+    render(<ToolApprovalModal />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+
+    await waitFor(() => {
+      expect(capturedAddToast).toHaveBeenCalledWith({
+        message: 'Always allowed — every command starting with that prefix is now allowed for this session.',
+        variant: 'success',
+      })
+    })
+    expect(capturedAddToast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'warning' }),
+    )
+  })
+
+  it('toasts the actually-recorded "exact" scope, not a prefix, when the server recorded exact even though a prefix was offered', async () => {
+    vi.mocked(api.submitToolApproval).mockResolvedValue({
+      approval_id: 'appr-shell-002',
+      action: 'allow',
+      status: 'ok',
+      grant_recorded: true,
+      scope: 'exact',
+    })
+    act(() => {
+      useToolApprovalStore.setState({
+        queue: [
+          {
+            approvalId: 'appr-shell-002',
+            toolCallId: 'call-shell-002',
+            toolName: 'bash',
+            args: { command: 'npm run build' },
+            agentId: 'agent-main',
+            sessionId: 'sess-001',
+            turnId: 'turn-002',
+            expiresAt: Date.now() + 300_000,
+          },
+        ],
+      })
+    })
+    render(<ToolApprovalModal />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+
+    await waitFor(() => {
+      expect(capturedAddToast).toHaveBeenCalledWith({
+        message: 'Always allowed — this exact command is now allowed for this session.',
+        variant: 'success',
+      })
+    })
+  })
+
   it('removes approval from queue after successful Approve', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })

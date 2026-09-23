@@ -74,10 +74,8 @@ const LOCAL_APP_STATE = {
 const MINIMAL_CONFIG = {
   security: {
     policy_mode: 'deny' as const,
-    exec_approval: 'ask' as const,
     exec_timeout_seconds: 0,
     max_background_seconds: 0,
-    enable_deny_patterns: false,
     rate_limits: {
       max_agent_llm_calls_per_hour: null,
       max_agent_tool_calls_per_minute: null,

@@ -46,6 +46,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import * as api from '@/lib/api'
+import { ApiError } from '@/lib/api-error'
 import { GodModeControl, GodModeActiveBanner } from './GodModeControl'
 
 function makeClient() {
@@ -244,6 +245,24 @@ describe('GodModeControl', () => {
     expect(screen.getByTestId('god-mode-toggle')).toBeEnabled()
   })
 
+  // pkg/gateway/rest_god_mode.go:49 gates GET god-mode with RequireNotBypass,
+  // which returns 503 before the handler ever runs when dev_mode_bypass is
+  // on — an expected "not available in this mode" response, not a transport
+  // failure. Must show a distinct, quiet note, never the alarming
+  // "gateway may be offline" fetch-error copy (which used to fire on every
+  // dev-mode-bypass install, permanently).
+  it('shows a quiet "not available while bypass is active" note (not the offline error) on a 503', async () => {
+    vi.mocked(api.fetchGodMode).mockRejectedValue(
+      new ApiError(503, 'this action is disabled while dev_mode_bypass is active'),
+    )
+    renderControl()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('god-mode-bypass-unavailable-note')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('god-mode-fetch-error-note')).not.toBeInTheDocument()
+  })
+
   it('cancelling performs nothing', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_OFF)
     renderControl()
@@ -327,5 +346,31 @@ describe('GodModeActiveBanner', () => {
     })
     expect(screen.getByText(/god-mode status unavailable/i)).toBeInTheDocument()
     expect(screen.queryByTestId('god-mode-active-banner')).not.toBeInTheDocument()
+  })
+
+  // Regression for the false "gateway may be offline" banner reported on
+  // every screen under dev_mode_bypass (bypass_gate.go 503s this endpoint by
+  // design). Renders nothing — the dedicated dev-mode-bypass banner in
+  // AppShell already covers this case; a real error must still show.
+  it('renders nothing (not the status-unknown banner) when the fetch fails with a bypass-gate 503', async () => {
+    vi.mocked(api.fetchGodMode).mockRejectedValue(
+      new ApiError(503, 'this action is disabled while dev_mode_bypass is active'),
+    )
+    const { container } = renderBanner()
+
+    await waitFor(() => {
+      expect(api.fetchGodMode).toHaveBeenCalled()
+    })
+    expect(screen.queryByTestId('god-mode-status-unknown-banner')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('god-mode-active-banner')).not.toBeInTheDocument()
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it('still shows the status-unknown banner for a real (non-503) transport failure', async () => {
+    vi.mocked(api.fetchGodMode).mockRejectedValue(new ApiError(0, 'Network unavailable.'))
+    renderBanner()
+    await waitFor(() => {
+      expect(screen.getByTestId('god-mode-status-unknown-banner')).toBeInTheDocument()
+    })
   })
 })
