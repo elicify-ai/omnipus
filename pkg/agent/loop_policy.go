@@ -630,9 +630,44 @@ func (al *AgentLoop) bashShellModeFor(ts *turnState, toolName string) tools.Shel
 // permission state onto a delegate at spawn: its approval grants (ADR-057
 // two-key InheritFrom) and its per-chat Auto-approve modifier (ADR-092
 // FR-005), both keyed on the parent's own session id and the child's own.
+//
+// Review finding #6 (MEDIUM, 2026-09-23 security fix lane): a delegate must
+// never end up loosened past its OWN AutoApproveDisabled=true, however it
+// inherits — FR-005's "a delegate takes the tightest of (parent modifier,
+// its own override)" makes the delegate's own off-switch a floor the
+// inherited modifier cannot cross. sessionmode.go's per-chat scope is
+// documented and tested (TestResolveAutoApprove) as the one scope allowed
+// to loosen past an agent's off-switch for that CHAT'S OWN directly-
+// attached agent — a human is present and made the choice for exactly that
+// conversation. A delegate's session is not that: nobody reviewed THIS
+// agent's off-switch when the PARENT's chat toggle was set. Skipping the
+// SessionModes() copy here — rather than hardening ResolveAutoApprove
+// itself — leaves that documented direct-chat behaviour intact and closes
+// only the inheritance gap: with no per-chat modifier of its own, the
+// child's later ResolveAutoApprove call falls through to its own agent-level
+// AutoApproveDisabled check, which already resolves to Auto off correctly.
 func (al *AgentLoop) inheritSessionPermissions(parentSessionID, parentAgentID, childSessionID, childAgentID string) {
 	al.ApprovalGrants().InheritFrom(parentSessionID, parentAgentID, childSessionID, childAgentID)
+	if al.agentAutoApproveDisabled(childAgentID) {
+		return
+	}
 	al.SessionModes().InheritFrom(parentSessionID, childSessionID)
+}
+
+// agentAutoApproveDisabled reports whether agentID's own config carries
+// AutoApproveDisabled=true. A nil config or an agent absent from the list
+// reports false (not disabled).
+func (al *AgentLoop) agentAutoApproveDisabled(agentID string) bool {
+	cfg := al.GetConfig()
+	if cfg == nil {
+		return false
+	}
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID == agentID {
+			return cfg.Agents.List[i].AutoApproveDisabled
+		}
+	}
+	return false
 }
 
 // bashRulesSettlePrompt reports whether ADR-092 D3 operator command rules
