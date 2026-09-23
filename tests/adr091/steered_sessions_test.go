@@ -151,6 +151,20 @@ func (d *recordingUpwardDeliverer) Deliver(ctx context.Context, event steer.Upwa
 	return delivery, err
 }
 
+// countFor reports how many upward events were delivered for childSessionID
+// — "exactly one owner" needs a count, not a boolean.
+func (d *recordingUpwardDeliverer) countFor(childSessionID string) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	count := 0
+	for _, id := range d.seen {
+		if id == childSessionID {
+			count++
+		}
+	}
+	return count
+}
+
 func (d *recordingUpwardDeliverer) deliveredFor(childSessionID string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -405,9 +419,27 @@ textDrained:
 		}
 	}
 mediaDrained:
-	h.recorder.AssertBoundaryInvoked(steer.BoundarySyncToolText)
-	h.recorder.AssertBoundaryInvoked(steer.BoundaryFinalReply)
-	h.recorder.AssertBoundaryInvoked(steer.BoundaryMedia)
+	// ADR-091 fix lane RX-TESTS: these three assertions used to name only a
+	// boundary — "was this boundary ever reached by anyone?". That is true of
+	// a correctly contained system AND of a completely broken one, because a
+	// broken gate still RUNS the boundary; it just answers the wrong
+	// audience. Proof: mutating the production resolver
+	// (steer_audience.go::SteerAudienceResolver.Audience) so ClassSteered
+	// resolves AudienceNone instead of AudienceSteeringSession — every
+	// steered child silently losing the audience the ADR assigns it — left
+	// this whole test green, because nothing leaks to the user under that
+	// mutation either, so AssertNothingTo cannot see it.
+	//
+	// Each assertion now pins the SESSION the boundary ran for and the
+	// AUDIENCE its decision resolved to, on every one of the three levels:
+	// a steered child is addressed to its steering session at every
+	// boundary, never to the user and never to nobody.
+	for _, child := range []testutil.TreeNode{h.tree.A, h.tree.B, h.tree.C} {
+		scope := testutil.ForSession(child.SessionID, steer.AudienceSteeringSession)
+		h.recorder.AssertBoundaryInvoked(steer.BoundarySyncToolText, scope)
+		h.recorder.AssertBoundaryInvoked(steer.BoundaryFinalReply, scope)
+		h.recorder.AssertBoundaryInvoked(steer.BoundaryMedia, scope)
+	}
 	h.recorder.AssertReceived(h.tree.C.SessionID, "tool_error")
 	h.recorder.AssertNothingTo("human")
 
