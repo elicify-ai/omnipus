@@ -116,22 +116,20 @@ func TestDelegateRun_UsesLauncherAndReportsQueuedDispatch(t *testing.T) {
 		"agent_id": "worker",
 		"label":    "Inspect checkout",
 		"task":     "Inspect the checkout flow",
-		"goal": map[string]any{
-			"criteria": []any{map[string]any{
-				"kind":     "prose",
-				"judgment": "boolean",
-				"text":     "The checkout defect is identified",
-			}},
-			"dod": []any{map[string]any{
-				"kind":     "check",
-				"judgment": "boolean",
-				"text":     "Focused tests pass",
-				"check": map[string]any{
-					"command":            "go test ./pkg/checkout",
-					"expected_exit_code": 0,
-				},
-			}},
-		},
+		"criteria": []any{map[string]any{
+			"kind":     "prose",
+			"judgment": "boolean",
+			"text":     "The checkout defect is identified",
+		}},
+		"dod": []any{map[string]any{
+			"kind":     "check",
+			"judgment": "boolean",
+			"text":     "Focused tests pass",
+			"check": map[string]any{
+				"command":            "go test ./pkg/checkout",
+				"expected_exit_code": 0,
+			},
+		}},
 	})
 	if result.IsError {
 		t.Fatalf("delegate(run) returned error: %s", result.ForLLM)

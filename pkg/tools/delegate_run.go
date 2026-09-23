@@ -359,7 +359,7 @@ func (dt *delegateToolExecuteRun) validateRequest() (*ToolResult, bool) {
 	if err := ValidateContextSnapshot(dt.snap, dt.t.snapshotMaxBytes, dt.t.snapshotMaxRefs); err != nil {
 		return ErrorResult(err.Error()).WithError(err), true
 	}
-	goal, err := parseDelegateGoal(dt.args["goal"])
+	goal, err := parseDelegateGoal(dt.args["criteria"], dt.args["dod"])
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("goal: %v", err)).WithError(err), true
 	}

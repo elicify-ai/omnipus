@@ -20,12 +20,12 @@ func TestDelegateTool_Metadata(t *testing.T) {
 	if !ok {
 		t.Fatal("Parameters().properties is not an object")
 	}
-	for _, name := range []string{"task", "label", "agent_id", "action", "session_id", "goal", "snapshot", "requested_skill", "timeout_seconds", "critical"} {
+	for _, name := range []string{"task", "label", "agent_id", "action", "session_id", "criteria", "dod", "snapshot", "requested_skill", "timeout_seconds", "critical"} {
 		if _, found := props[name]; !found {
 			t.Errorf("Parameters() is missing %q", name)
 		}
 	}
-	for _, retired := range []string{"async", "allow_blocking_question", "task_id"} {
+	for _, retired := range []string{"async", "allow_blocking_question", "task_id", "goal"} {
 		if _, found := props[retired]; found {
 			t.Errorf("Parameters() still publishes retired argument %q", retired)
 		}

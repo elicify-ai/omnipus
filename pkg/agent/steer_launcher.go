@@ -109,12 +109,26 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 	if req.Origin.Kind == steer.OriginKindTask && req.Origin.TaskID == "" {
 		return steer.LaunchResult{}, steer.ErrTaskIDRequired
 	}
-	if req.Goal != nil && len(req.Goal.Criteria) == 0 {
+	if req.Goal != nil {
+		// A goal always has both acceptance criteria and a definition of
+		// done (founder decision, ADR-091 wp-tooldesc) — checked here too,
+		// not just at the delegate/create_task tool boundaries, so the rule
+		// holds however Launch is reached: a Goal missing either half is
+		// refused here, before createLaunchGoal ever calls goal.New, rather
+		// than failing deep inside pkg/goal.Goal.Validate's own "dod must
+		// contain at least one item" check.
+		//
 		// Mirrors create_task's own refusal text exactly (US-1/AS-5:
 		// "a LaunchRequest.Goal that create_task would reject is rejected
 		// with an identical message" — pkg/tools/task.go::validateRequest).
-		return steer.LaunchResult{}, errors.New(
-			"Add at least one acceptance criterion: say what must be true for this task to be done.")
+		if len(req.Goal.Criteria) == 0 {
+			return steer.LaunchResult{}, errors.New(
+				"Add at least one acceptance criterion: say what must be true for this task to be done.")
+		}
+		if len(req.Goal.DoD) == 0 {
+			return steer.LaunchResult{}, errors.New(
+				"Add at least one Definition of Done item, distinct from the acceptance criteria.")
+		}
 	}
 	if l.al == nil {
 		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: no AgentLoop wired", steer.ErrStoreWrite)

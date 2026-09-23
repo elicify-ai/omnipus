@@ -175,6 +175,33 @@ func TestLaunch_GoalWithNoCriteria_Refused(t *testing.T) {
 	}
 }
 
+// TestLaunch_GoalWithNoDoD_Refused proves the same rule holds symmetrically
+// however Launch is reached: a goal always has both acceptance criteria and
+// a definition of done (founder decision). A Goal with criteria but no DoD
+// must be refused here, cleanly, before createLaunchGoal ever calls
+// goal.New — not left to fail deep inside pkg/goal.Goal.Validate's own
+// "dod must contain at least one item" check.
+func TestLaunch_GoalWithNoDoD_Refused(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	l := NewSteerLauncher(al)
+
+	_, err := l.Launch(context.Background(), steer.LaunchRequest{
+		TargetAgentID: testDefaultAgentID,
+		Task:          "do something",
+		Goal: &steer.GoalSpec{
+			Criteria: []steer.Criterion{{Text: "The work is done"}},
+		},
+	})
+	if err == nil {
+		t.Fatal("Launch(goal with criteria but no dod) = nil error, want a refusal")
+	}
+	const want = "Add at least one Definition of Done item, distinct from the acceptance criteria."
+	if err.Error() != want {
+		t.Fatalf("Launch(goal with criteria but no dod) error = %q, want %q (create_task's own message)", err.Error(), want)
+	}
+}
+
 // TestLaunch_OrdinaryRoot_WritesCompleteRecord is US-1/AS-1's ordinary-root
 // half: a human/schedule-created launch (no SteeringSessionID) writes a
 // complete, readable-after-reopen record.
@@ -400,6 +427,14 @@ func TestLaunch_SteeredPersistsRequiredMetadataAndActiveGoal(t *testing.T) {
 	}
 	if g.OwnerKind != generated.GoalOwnerKindSession || g.OwnerID != res.SessionID {
 		t.Errorf("goal owner = %q/%q, want session/%q", g.OwnerKind, g.OwnerID, res.SessionID)
+	}
+	// The record a criteria+dod LaunchRequest.Goal produces must itself
+	// satisfy pkg/goal.Goal's own invariants — proof that "both supplied"
+	// never reaches the deep goal.New/Validate failure a criteria-only or
+	// dod-only goal used to hit (see TestLaunch_GoalWithNoDoD_Refused for
+	// the refused-early half of the same rule).
+	if err := g.Validate(); err != nil {
+		t.Errorf("the created goal record fails its own Validate(): %v", err)
 	}
 }
 

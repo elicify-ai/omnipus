@@ -7,24 +7,36 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-func parseDelegateGoal(raw any) (*steer.GoalSpec, error) {
-	if raw == nil {
+// parseDelegateGoal parses delegate's TOP-LEVEL "criteria"/"dod" arguments
+// (matching create_task's own flat shape, pkg/tools/task.go's Parameters)
+// into a *steer.GoalSpec. A goal always has both acceptance criteria and a
+// definition of done
+// (founder decision): neither supplied means no goal at all — the default,
+// and the only case that returns (nil, nil). One supplied without the
+// other is refused here, at the tool boundary, with a clear message —
+// never left to fail deep inside pkg/goal.Goal.Validate's own "dod must
+// contain at least one item" check once steer_launcher.go's createLaunchGoal
+// calls goal.New.
+func parseDelegateGoal(criteriaRaw, dodRaw any) (*steer.GoalSpec, error) {
+	criteria, err := parseDelegateCriteria(criteriaRaw, "criteria")
+	if err != nil {
+		return nil, err
+	}
+	dod, err := parseDelegateCriteria(dodRaw, "dod")
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case len(criteria) == 0 && len(dod) == 0:
 		return nil, nil
-	}
-	goalMap, ok := raw.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("must be an object")
-	}
-	criteria, err := parseDelegateCriteria(goalMap["criteria"], "criteria")
-	if err != nil {
-		return nil, err
-	}
-	dod, err := parseDelegateCriteria(goalMap["dod"], "dod")
-	if err != nil {
-		return nil, err
-	}
-	if len(criteria) == 0 && len(dod) == 0 {
-		return nil, fmt.Errorf("must contain at least one criterion or definition-of-done item")
+	case len(dod) == 0:
+		return nil, fmt.Errorf(
+			"a goal needs both criteria and dod — you gave criteria but no dod; add at least one " +
+				"Definition of Done item, or remove criteria to skip the goal entirely")
+	case len(criteria) == 0:
+		return nil, fmt.Errorf(
+			"a goal needs both criteria and dod — you gave dod but no criteria; add at least one " +
+				"acceptance criterion, or remove dod to skip the goal entirely")
 	}
 	return &steer.GoalSpec{Criteria: criteria, DoD: dod}, nil
 }

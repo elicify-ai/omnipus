@@ -655,8 +655,8 @@ func (t *DelegateTool) Scope() ToolScope { return ScopeCore }
 
 func (t *DelegateTool) Category() ToolCategory { return CategoryDelegation }
 
-// delegateCriterionItemSchema is the per-item schema shared by the "goal"
-// parameter's criteria/dod arrays below — the exact object shape
+// delegateCriterionItemSchema is the per-item schema shared by the
+// top-level "criteria"/"dod" parameters below — the exact object shape
 // parseDelegateCriterion (delegate_goal.go) accepts. It is a NARROWER subset
 // of create_task/create_plan's own criteria/dod item schema (task.go/plan.go):
 // delegate's goal only accepts kind "prose" or "check" — there is no
@@ -729,25 +729,21 @@ func (t *DelegateTool) Parameters() map[string]any {
 				"description": "The durable child session to target — the only way to address a " +
 					"child. Required for status/inbox/inbox_ack/steer/respond/cancel/follow_up/peek.",
 			},
-			"goal": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"criteria": map[string]any{
-						"type":        "array",
-						"items":       delegateCriterionItemSchema(),
-						"description": "Outcome-specific checks for this delegation.",
-					},
-					"dod": map[string]any{
-						"type":        "array",
-						"items":       delegateCriterionItemSchema(),
-						"description": "Generic standing quality gates for this delegation (same shape as criteria).",
-					},
-				},
-				"description": "Optional (action=\"run\" only): must be an object with a criteria and/or " +
-					"dod array — a plain string is not accepted — and at least one item across the two " +
-					"once the object is given. One sentence stating what 'done' means for this child, " +
-					"and how you would check it. Set one for multi-step work or work you must verify " +
-					"before relying on it; leave it off for a quick lookup or a single action.",
+			"criteria": map[string]any{
+				"type":  "array",
+				"items": delegateCriterionItemSchema(),
+				"description": "Optional (action=\"run\" only), together with dod: acceptance criteria for " +
+					"this delegation — the outcome-specific checks. Supplying criteria without dod (or dod " +
+					"without criteria) is refused: a goal always has both. Set one for multi-step work or " +
+					"work you must verify before relying on it; leave it off for a quick lookup or a single " +
+					"action.",
+			},
+			"dod": map[string]any{
+				"type":  "array",
+				"items": delegateCriterionItemSchema(),
+				"description": "Optional (action=\"run\" only), together with criteria: Definition of Done " +
+					"for this delegation — generic standing quality gates, distinct from criteria and never " +
+					"mixed into it (same shape as criteria).",
 			},
 			"snapshot": map[string]any{
 				"type": "object",
