@@ -836,6 +836,23 @@ export class WsConnection {
         forceLogout()
         return
       }
+      // #823 catch-up redesign (BE-DESIGN.md §6.7, founder decision Q5): the
+      // gateway closes with 4008 ("catch-up required") when this
+      // connection's per-connection queue overflowed (§2.1) — the journal
+      // still holds every frame; a fresh attach catches this connection
+      // back up from its cursor, so 4008 is never a real failure. Reconnect
+      // IMMEDIATELY: reset the backoff counters and open a new socket
+      // synchronously, bypassing `_scheduleReconnect` entirely so
+      // `onReconnectStateChange` never fires — that callback is exactly
+      // what the phase-1 quiet UI (ConnectionStatus.tsx) keys off to show
+      // "reconnecting…"/"unreachable", and this close must show nothing.
+      if (event.code === 4008) {
+        this.reconnectAttempts = 0
+        this.slowRetryAttempts = 0
+        this.inSlowPhase = false
+        this._createSocket()
+        return
+      }
       this._scheduleReconnect()
     }
   }
