@@ -274,6 +274,22 @@ interface ConnectionDisplayInput {
    * server's own signal says the turn is no longer in flight.
    */
   sessionHasActiveTurn: boolean
+  /**
+   * #823 catch-up redesign (BE-DESIGN.md §6.5) — true while this session's
+   * reconnect is still mid catch-up (between `session_snapshot`/the
+   * incremental journal tail and the matching `catch_up_complete`, or
+   * before any attach has resolved at all — SessionChatState.awaitingCatchUp,
+   * set true by the `session_snapshot` case and cleared by
+   * `catch_up_complete`, see src/store/chat/slices/catchup-frames.ts).
+   * `session_state` (sessionHasActiveTurn's own source) arrives BEFORE
+   * catch_up_complete in the real attach sequence (§4.1 A6), so treating it
+   * as authoritative before the catch-up it belongs to has actually
+   * finished being applied risks flashing "couldn't be finished" mid
+   * catch-up. This is the ONLY input change this lane makes to this
+   * function (BE-DESIGN.md §9's Lane C DoD: "phase-1 components untouched
+   * apart from the unfinished input").
+   */
+  awaitingCatchUp: boolean
 }
 
 export function deriveConnectionDisplay(input: ConnectionDisplayInput): {
@@ -286,8 +302,12 @@ export function deriveConnectionDisplay(input: ConnectionDisplayInput): {
     // Review finding 14: reconnected AND the server confirms no turn is
     // in flight for this session is the only honest "couldn't be
     // finished" signal — see sessionHasActiveTurn's doc comment.
+    // #823 catch-up redesign (§6.5): also gated on the catch-up for THIS
+    // attach having actually finished — see awaitingCatchUp's doc comment.
     const answer: 'hidden' | AssistantConnectionState =
-      input.hasInterruptedAnswer && !input.sessionHasActiveTurn ? 'unfinished' : 'hidden'
+      input.hasInterruptedAnswer && !input.sessionHasActiveTurn && !input.awaitingCatchUp
+        ? 'unfinished'
+        : 'hidden'
     return { answer, chat: showRecovery ? 'back' : 'hidden' }
   }
 
@@ -362,11 +382,19 @@ export function ChatConnectionNotice() {
   const sessionHasActiveTurn = useChatStore((state) =>
     activeSessionId != null && state.sessionsById[activeSessionId]?.activeTurnId != null,
   )
+  // #823 catch-up redesign (§6.5) — only affects `display.answer`, never
+  // `display.chat` (the only field this line renders), same as
+  // sessionHasActiveTurn above; read here purely so this call site stays a
+  // valid, honest ConnectionDisplayInput.
+  const awaitingCatchUp = useChatStore((state) =>
+    activeSessionId != null && !!state.sessionsById[activeSessionId]?.awaitingCatchUp,
+  )
   const display = deriveConnectionDisplay({
     ...connection,
     hasInterruptedAnswer: connection.disconnectedAssistantMessageId !== null,
     deviceOnline: typeof navigator === 'undefined' ? true : navigator.onLine,
     sessionHasActiveTurn,
+    awaitingCatchUp,
     now,
   })
   if (display.chat === 'hidden') return null
@@ -405,6 +433,11 @@ export function AssistantMessageConnectionStatus({ messageId, agentName }: { mes
   const sessionHasActiveTurn = useChatStore((state) =>
     activeSessionId != null && state.sessionsById[activeSessionId]?.activeTurnId != null,
   )
+  // #823 catch-up redesign (BE-DESIGN.md §6.5) — see
+  // ConnectionDisplayInput.awaitingCatchUp's doc comment.
+  const awaitingCatchUp = useChatStore((state) =>
+    activeSessionId != null && !!state.sessionsById[activeSessionId]?.awaitingCatchUp,
+  )
   if (!disconnectedHere) return null
   const display = deriveConnectionDisplay({
     isConnected,
@@ -416,6 +449,7 @@ export function AssistantMessageConnectionStatus({ messageId, agentName }: { mes
     hasInterruptedAnswer: true,
     deviceOnline: typeof navigator === 'undefined' ? true : navigator.onLine,
     sessionHasActiveTurn,
+    awaitingCatchUp,
     now,
   })
   if (display.answer === 'hidden') return null

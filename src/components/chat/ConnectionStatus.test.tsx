@@ -147,6 +147,12 @@ describe('deriveConnectionDisplay', () => {
     // way — default to false (the neutral "nothing confirmed running"
     // starting point most of these scenarios use).
     sessionHasActiveTurn: false,
+    // #823 catch-up redesign (BE-DESIGN.md §6.5) — true while this
+    // session's reconnect is still mid catch-up (between session_snapshot/
+    // the incremental tail and the matching catch_up_complete). Default
+    // false: most cases below represent an attach that has already fully
+    // resolved one way or the other.
+    awaitingCatchUp: false,
   }
 
   it('shows nothing for a drop shorter than 15 seconds', () => {
@@ -203,6 +209,30 @@ describe('deriveConnectionDisplay', () => {
         sessionHasActiveTurn: false,
       }).answer,
     ).toBe('unfinished')
+  })
+
+  // #823 catch-up redesign (BE-DESIGN.md §6.5) — the ONLY input change this
+  // lane makes to deriveConnectionDisplay itself (per the design's own DoD:
+  // "phase-1 components untouched apart from the unfinished input"). The
+  // gateway's session_state frame (which sessionHasActiveTurn is read from)
+  // arrives BEFORE catch_up_complete in the real attach sequence (§4.1 A6),
+  // so — even though it is already present locally — treating it as
+  // authoritative before the matching catch_up_complete has actually landed
+  // risks flashing "couldn't be finished" mid catch-up on a reconnect whose
+  // incremental tail (or snapshot replay) hasn't finished being applied yet.
+  it('never shows "couldn\'t be finished" while still mid catch-up, even if the connection is already reconnected and the server says no active turn', () => {
+    expect(
+      deriveConnectionDisplay({
+        ...base,
+        isConnected: true,
+        reconnectPhase: null,
+        disconnectedAt: null,
+        reconnectedAt: 1_000,
+        now: 1_000,
+        sessionHasActiveTurn: false,
+        awaitingCatchUp: true,
+      }).answer,
+    ).toBe('hidden')
   })
 
   it('shows Up to date only after a state that was visible, and only for two seconds', () => {
