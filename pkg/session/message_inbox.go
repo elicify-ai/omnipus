@@ -146,6 +146,10 @@ type envelopePeek struct {
 	// wake-eligible) from a non-fatal one (not wake-eligible). Absent/false
 	// on every other kind, which is the correct default for them too.
 	Fatal bool `json:"fatal"`
+	// Text is only read for kind=error, by isSteeringLifecycleNoticeText
+	// below (ADR-091 fix lane RX-HANG) — it never affects any other kind's
+	// classification.
+	Text string `json:"text"`
 }
 
 // messageInboxPeekEnvelopeCalls counts peekEnvelope invocations process-wide
@@ -207,9 +211,53 @@ func classifyEnvelope(peek envelopePeek) SessionMessageDeliveryClass {
 	case "handback", "question", "blocker", "goal_status":
 		class.WakeEligible = true
 	case "error":
-		class.WakeEligible = peek.Fatal
+		class.WakeEligible = peek.Fatal || isSteeringLifecycleNoticeText(peek.Text)
 	}
 	return class
+}
+
+// LifecycleNoticeReasonPrefixToolIterations is the exact failureReason
+// prefix pkg/agent/steer_completion.go::completionDisposition stamps on a
+// steered child's `error` message when its turn hits the tool-iteration
+// ceiling with no final answer (steer.OutcomeLifecycleNotice). It is
+// exported so that call site and isSteeringLifecycleNoticeText below share
+// ONE literal instead of two that could silently drift apart.
+const LifecycleNoticeReasonPrefixToolIterations = "max_tool_iterations:"
+
+// steeringLifecycleNoticeTextPrefixes lists every machine-authored
+// failureReason prefix (never user-supplied free text) that marks a
+// kind=error, Fatal=false SessionMessage as a genuine ADR-091 steering
+// lifecycle notice rather than an ordinary non-fatal error — the ONLY
+// signal available here to tell the two apart, since this package cannot
+// import pkg/agent (which owns steer.Outcome) and the wire schema
+// (pkg/api/generated) has no dedicated notice kind to discriminate on.
+//
+// ADR-091 fix lane RX-HANG: a steered child that hit the tool-iteration
+// ceiling used to leave the child `running` (deliberately resumable — see
+// completionDisposition's own comment) but ALSO never woke its parent,
+// because ordinary non-fatal errors are not wake-eligible
+// (TestMessageInboxStore_FatalErrorBypasses_NonFatalDoesNot pins that
+// general rule and is UNCHANGED by this list — it uses non-matching text).
+// With nothing ever telling the parent, hasRunningOrQueuedDescendant
+// (steer_completion.go) saw the child forever and the whole ancestor chain
+// hung silently. A lifecycle notice must still wake the parent — deciding
+// whether to retry, raise the budget, or give up is the parent's call, not
+// a machine default — while Fatal stays false so the child does not look
+// dead in the UI. Matching on a stable, code-authored Text prefix mirrors
+// the SAME sub-classification convention pkg/agent/boot_sweep.go::
+// bootOutcome already relies on (its own "interrupted:"/"timeout:" prefix
+// matches inside this same generic `error` envelope).
+var steeringLifecycleNoticeTextPrefixes = []string{
+	LifecycleNoticeReasonPrefixToolIterations,
+}
+
+func isSteeringLifecycleNoticeText(text string) bool {
+	for _, prefix := range steeringLifecycleNoticeTextPrefixes {
+		if strings.HasPrefix(text, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // AppendResult reports the outcome of a successful (non-error) Append.
