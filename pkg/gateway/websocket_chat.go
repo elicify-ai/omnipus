@@ -644,6 +644,29 @@ func (hcm *wsHandlerHandleChatMessage) collectAcceptedMedia() {
 	}
 }
 
+// applyMintTimeAutoApproveChoice records a per-chat Auto-approve choice
+// carried on THIS minting message (MessageFrame.auto_approve, ADR-092
+// founder ruling 2026-09-24) into SessionModeStore for the just-minted
+// newSessionID. A no-op when hcm.autoApprove is nil (no choice sent).
+//
+// Called from recordSessionAndTranscript's mint branch, strictly BEFORE
+// buildInboundMessage/PublishInbound further down in
+// handleChatMessageWithClientID: the choice must already be in the store
+// before the turn reaches the agent loop, or the new chat's first
+// ask-policy tool call can be decided under the wrong mode — the LLM round
+// trip that produces that first tool call runs on a separate goroutine, so
+// "soon after" is not good enough. This closes that race outright, unlike
+// the SPA's superseded post-session_started session_mode_update send it
+// replaces. Shares the exact set-and-audit path
+// handleSessionModeUpdateFrame (ws_session_mode.go) uses for a live chat's
+// toggle, so the two can never diverge.
+func (hcm *wsHandlerHandleChatMessage) applyMintTimeAutoApproveChoice(newSessionID string) {
+	if hcm.autoApprove == nil {
+		return
+	}
+	hcm.h.applySessionModeChoice(hcm.ctx, hcm.targetAgentID, newSessionID, hcm.autoApprove, "message")
+}
+
 // recordSessionAndTranscript consumes the workspace-setup kickoff, mints or resumes the session, and persists the user (or neutral kickoff) transcript entry.
 func (hcm *wsHandlerHandleChatMessage) recordSessionAndTranscript() bool {
 	if hcm.store != nil {
@@ -757,22 +780,7 @@ func (hcm *wsHandlerHandleChatMessage) recordSessionAndTranscript() bool {
 				}
 				slog.Warn("ws: could not set session title/owner", "session_id", meta.ID, "error", err)
 			}
-			// ADR-092 founder ruling (2026-09-24): a per-chat Auto-approve
-			// choice carried on THIS minting message must already be in
-			// SessionModeStore before the turn reaches the agent loop, or the
-			// new chat's first ask-policy tool call can be decided under the
-			// wrong mode — the LLM round trip that produces that first tool
-			// call runs on a separate goroutine (PublishInbound below), so
-			// "soon after" is not good enough. Writing it here — strictly
-			// before buildInboundMessage/PublishInbound further down in
-			// handleChatMessageWithClientID — closes that race outright,
-			// unlike the SPA's superseded post-session_started
-			// session_mode_update send it replaces. Shares the exact
-			// set-and-audit path handleSessionModeUpdateFrame uses for a
-			// live chat's toggle, so the two can never diverge.
-			if hcm.autoApprove != nil {
-				hcm.h.applySessionModeChoice(hcm.ctx, hcm.targetAgentID, meta.ID, hcm.autoApprove, "message")
-			}
+			hcm.applyMintTimeAutoApproveChoice(meta.ID)
 			// Ack the new session_id so the SPA can associate all subsequent frames.
 			startedFrame := generated.SessionStartedFrame{
 				Type:      string(generated.WsFrameTypeSessionStarted),

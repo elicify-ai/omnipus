@@ -31,13 +31,27 @@ type autoRecordingApprover struct {
 	mu      sync.Mutex
 	reqs    []PolicyApprovalReq
 	approve bool
+	// onRequest, when set, runs once per RequestApproval call, AFTER the
+	// request is recorded but BEFORE the scripted approve/deny decision is
+	// returned — outside the mutex, so it may safely call back into the loop
+	// (e.g. al.SessionModes().Set) without deadlocking against a concurrent
+	// countFor/requests() read. Stands in for a WS session_mode_update
+	// handler flipping the per-chat mode on a different goroutine while this
+	// prompt is showing (ADR-092 rule C: a mid-turn flip). nil is a no-op —
+	// every existing caller of this type is unaffected.
+	onRequest func(req PolicyApprovalReq)
 }
 
 func (a *autoRecordingApprover) RequestApproval(_ context.Context, req PolicyApprovalReq) (bool, string, bool) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.reqs = append(a.reqs, req)
-	if a.approve {
+	approve := a.approve
+	onRequest := a.onRequest
+	a.mu.Unlock()
+	if onRequest != nil {
+		onRequest(req)
+	}
+	if approve {
 		return true, "", false
 	}
 	return false, "user", false

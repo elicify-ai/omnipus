@@ -288,3 +288,56 @@ func TestAutoApprove_Reachability_ProductionWiring(t *testing.T) {
 	assert.Contains(t, written, "File written: notes/reach.md", "write_file must run unprompted")
 	assert.Contains(t, toolResultText(t, provider, "reach-delete"), "permission_denied")
 }
+
+// TestAutoApprove_RuleC_MidTurnFlipChangesNextToolCall proves the founder's
+// ADR-092 rule C (2026-09-24): in a chat that already has a real session, the
+// per-chat Auto choice takes effect at the NEXT tool-call dispatch, including
+// the very next call of a turn already in progress — not merely "the next
+// turn". One turn scripts two separate ask-policy tool calls, each its own
+// LLM round-trip: an unclassified tool first (asks unconditionally whenever
+// Auto is not active — see pkg/tools/auto_approve.go::ClassifyAutoApprove's
+// "unclassified tools ask" branch, unrelated to the per-chat modifier under
+// test), then one of T4's own catalog RUNS tools (autoRunsSample) — a tool
+// that DOES auto-run once Auto is active, so its dispatch is a real
+// discriminator between "Auto active" and "Auto not active". Global Auto is
+// OFF and no per-chat modifier is set when the turn starts, so the FIRST
+// call must prompt. The recording approver's onRequest hook flips the
+// per-chat modifier ON the instant that first prompt is shown — standing in
+// for pkg/gateway/ws_session_mode.go::handleSessionModeUpdateFrame running
+// concurrently on the WS read loop's own goroutine while this turn's
+// goroutine is blocked waiting on the prompt, exactly as AutoApprovePicker's
+// `handleToggle` can send at any moment (no isStreaming gate — see
+// AutoApprovePicker.tsx's doc comment). The SECOND call must then be
+// auto-approved with ZERO further approver calls, proving
+// pkg/agent/auto_approve_gate.go::autoApproveActive reads SessionModeStore
+// fresh at each dispatch rather than a value snapshotted once at turn start.
+func TestAutoApprove_RuleC_MidTurnFlipChangesNextToolCall(t *testing.T) {
+	withKernelSandbox(t)
+	names := []string{"ask_tool_unclassified", autoRunsSample[0]} // autoRunsSample[0] == "delegate"
+	provider := testutil.NewScenario().
+		WithToolCall(names[0], "{}").
+		WithToolCall(names[1], "{}").
+		WithText("done")
+	al := newAutoTestLoop(t, provider, false, nil) // global Auto OFF at turn start
+	stubs := installAutoStubs(t, al, "mia", names)
+
+	approver := &autoRecordingApprover{approve: true}
+	approver.onRequest = func(req PolicyApprovalReq) {
+		if req.ToolName == names[0] {
+			al.SessionModes().Set(req.SessionID, true)
+		}
+	}
+	al.SetToolApprover(approver)
+
+	_, err := al.ProcessDirect(context.Background(), "use the tools", "auto-gate-rule-c-turn")
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, approver.countFor(names[0]),
+		"the first ask-policy call must prompt — no per-chat modifier is set at turn start")
+	assert.Zero(t, approver.countFor(names[1]),
+		"the second call must be auto-approved with ZERO approver calls once the mid-turn flip landed")
+	assert.Equal(t, int32(1), stubs[names[0]].calls.Load(), "%s runs after the human approved it", names[0])
+	assert.Equal(t, int32(1), stubs[names[1]].calls.Load(), "%s runs unprompted after the flip", names[1])
+	assert.False(t, stubs[names[0]].pinned.Load(), "the prompted call carries no Auto pin")
+	assert.True(t, stubs[names[1]].pinned.Load(), "the auto-approved call must carry the Auto pin")
+}
