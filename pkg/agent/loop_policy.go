@@ -370,10 +370,7 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 	sessionID, agentID, toolName, toolCallID, turnID string,
 	args map[string]any,
 ) (approved bool, denialReason string, recordGrant bool) {
-	if al.ApprovalGrants().IsAllowed(sessionID, agentID, toolName, args) {
-		return true, "", false
-	}
-	if toolName == "bash" && tools.BashPrefixGrantCheck(al.ApprovalGrants(), sessionID, agentID, toolName, args) {
+	if al.checkStandingGrant(sessionID, agentID, toolName, args) {
 		return true, "", false
 	}
 	approver := al.loadToolApprover()
@@ -385,6 +382,28 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 		SessionID:  sessionID,
 		TurnID:     turnID,
 	})
+}
+
+// checkStandingGrant reports whether a standing "Always Allow" grant already
+// covers this call — the classic exact-fingerprint IsAllowed check, plus
+// bash's D4 prefix-scope grant. Split out of CheckGrantOrRequestApproval
+// (§5.7 fix, review finding "spurious waiting-for-approval placeholder") so a
+// caller that must decide whether to render an "awaiting approval" placeholder
+// can consult the EXACT SAME grant check the interactive path uses BEFORE
+// writing one: a call a standing grant already settles must never flash a
+// pending-approval card for a human nobody is about to ask. args MUST be
+// fingerprinted identically to how the grant was recorded — for a bash call
+// whose one upfront prompt also settles a D3 {action: ask} operator rule,
+// that means the adr092_kind:"rule_ask" augmented map ruleAskRequestArgs
+// builds (loop_run_turn_tools.go), not the tool's own bare arguments; every
+// grant-lookup call site along this path (resolveAskPolicy's fast path,
+// requestAskApproval's pre-placeholder check, and this function's own
+// interactive fallback) now shares that one rule via this function.
+func (al *AgentLoop) checkStandingGrant(sessionID, agentID, toolName string, args map[string]any) bool {
+	if al.ApprovalGrants().IsAllowed(sessionID, agentID, toolName, args) {
+		return true
+	}
+	return toolName == "bash" && tools.BashPrefixGrantCheck(al.ApprovalGrants(), sessionID, agentID, toolName, args)
 }
 
 // emitPolicyDenyAudit writes a tool.policy.deny.attempted audit entry.

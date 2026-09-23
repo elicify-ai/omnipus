@@ -875,10 +875,29 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 	ex.autoPin = ex.autoApproveFor()
 	rules := bashCommandRuleVerdict(rt.ts, ex.toolName, ex.toolArgs)
 	ruleSettled := rules.settlesPrompt()
+	// §5.7 fix: the standing-grant lookup MUST fingerprint against the same
+	// argument object a "rule_ask" grant was actually recorded under. A bash
+	// call whose one upfront prompt also settles a D3 {action: ask} rule
+	// carries the adr092_kind:"rule_ask" + note augmentation
+	// (ruleAskRequestArgs) into BOTH the approval request and the recorded
+	// "Always Allow" grant (rest_tool_registry.go::approvalGrantRecorder
+	// records entry.Args verbatim) — looking this up against the tool's own
+	// bare ex.toolArgs, as this used to, fingerprints a DIFFERENT JSON object
+	// than the one actually granted, so a repeat of the exact same command
+	// could never find its own grant here and always fell through to
+	// requestAskApproval, which wrote a pending-approval placeholder for a
+	// call a grant already settles (confirmed: the placeholder write in
+	// requestAskApproval ran unconditionally, before its own
+	// CheckGrantOrRequestApproval call ever consulted the grant store).
+	ruleAsk := rules.needsRuleAsk(ex.shellModePin)
+	grantLookupArgs := ex.toolArgs
+	if ruleAsk {
+		grantLookupArgs = ruleAskRequestArgs(ex.toolArgs, rules.verdict)
+	}
 	approved := ex.shellModePin == tools.ShellModeAuto ||
 		ex.autoPin.Run ||
 		ruleSettled ||
-		rt.al.ApprovalGrants().IsAllowed(rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, ex.toolArgs)
+		rt.al.checkStandingGrant(rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, grantLookupArgs)
 	if ruleSettled {
 		// Review finding #8(c) (LOW): a prompt an operator D3 ALLOW rule
 		// fully settled left no audit trail before this fix —
@@ -887,6 +906,13 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 		rt.al.emitShellRuleSettledAudit(rt.ts, ex.toolArgs)
 	}
 	if approved {
+		if ruleAsk {
+			// A standing grant settled the same rule_ask this call would
+			// otherwise need to ask about — pin it exactly as the
+			// interactive path does (below) so the bash tool's own D3
+			// enforcement does not ask a second time for this call.
+			ex.ruleAskSettled = true
+		}
 		return agentLoopRunTurnToolsExecuteNext
 	}
 	if rt.ts.opts.AutoDenyAsk {
@@ -906,6 +932,29 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 // second time.
 func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall, rules bashRuleVerdict) agentLoopRunTurnToolsExecuteFlow {
 	rt := ex.rx.rr.rq.ri.rf.rt
+	requestArgs := ex.toolArgs
+	decisionKind := "classic_ask"
+	ruleAsk := rules.needsRuleAsk(ex.shellModePin)
+	if ruleAsk {
+		requestArgs = ruleAskRequestArgs(ex.toolArgs, rules.verdict)
+		decisionKind = "rule_ask"
+	}
+	// §5.7 fix: re-check the standing grant, with the SAME args
+	// CheckGrantOrRequestApproval below would, BEFORE writing the pending
+	// placeholder — closing the window between resolveAskPolicy's own grant
+	// check (which may have missed, e.g. a grant recorded by a concurrent
+	// call between that check and this one) and CheckGrantOrRequestApproval's
+	// own internal grant check. Before this fix the placeholder was written
+	// unconditionally, ahead of any grant consultation at all, so a call a
+	// grant already settles could still flash an "awaiting approval" card
+	// for a human nobody was actually about to ask.
+	if rt.al.checkStandingGrant(rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, requestArgs) {
+		if ex.toolName == "bash" {
+			rt.al.emitShellClassicAskDecisionAudit(rt.ts, ex.toolArgs, decisionKind, true, "")
+		}
+		ex.ruleAskSettled = ruleAsk
+		return agentLoopRunTurnToolsExecuteNext
+	}
 	// About to block on a human, for up to the approval registry's timeout
 	// (600 s by default, configurable — pkg/gateway/gateway.go's
 	// defaultToolApprovalTimeout). The wait is server-side and needs no
@@ -914,15 +963,9 @@ func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall
 	// Record the call as `pending` FIRST so the thread shows what the turn is
 	// waiting on for the whole wait, and so a reload mid-wait still shows it:
 	// the tool_approval_required WS frame is live-only and does not survive a
-	// refresh.
+	// refresh. Reached only now that the standing-grant check above has
+	// already ruled out a grant settling this call without ever asking.
 	recordAskPendingToolCall(rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs)
-	requestArgs := ex.toolArgs
-	decisionKind := "classic_ask"
-	ruleAsk := rules.needsRuleAsk(ex.shellModePin)
-	if ruleAsk {
-		requestArgs = ruleAskRequestArgs(ex.toolArgs, rules.verdict)
-		decisionKind = "rule_ask"
-	}
 	// The third return (recordGrant, review finding #5) is consumed only by
 	// pkg/tools' D7/D8 pre-flight escalation call sites, reached through
 	// ShellPermissionGate.RequestShellApproval — this classic ask-policy
