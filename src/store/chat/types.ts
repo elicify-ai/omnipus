@@ -205,22 +205,6 @@ export type ChatMessage = Message & {
    */
   closedBySteer?: boolean
   /**
-   * Finding 4 (SQUAD-BRIEF-AY, REVIEW-OPUS-823) — true when this assistant
-   * bubble was closed by `clearStreamingState()` (a hard WS disconnect),
-   * rather than because the turn actually finished. Debugging/bookkeeping
-   * only, mirroring `closedBySteer` immediately above: deliberately NOT a
-   * new status value — status stays `'done'` so every other site keeps its
-   * current behavior. The ONE thing this flag drives: the 'token' case's
-   * catch-up boundary check (frames.ts) reopens/retargets a bubble carrying
-   * this flag instead of abandoning it when a `replace: true` catch-up token
-   * lands — the server-side turn this bubble belongs to was never actually
-   * done, so the reconnect's catch-up is the REST of this same answer, not a
-   * new one. Cleared the moment either path resolves it for real: the 'done'
-   * case's own finalize sweep (a genuine done DID eventually arrive) and the
-   * reopen itself (the catch-up token landed). Never serialized to the wire.
-   */
-  closedByDisconnect?: boolean
-  /**
    * Operator-reported UX fix (2026-09-08 — a `/goal` activation left the
    * user staring at a generic thinking indicator for 17 minutes with no
    * sign the goal had registered). Set ONLY on the synthetic `role:
@@ -317,12 +301,8 @@ export interface SessionChatState {
   replayCompletedForSession: string | null
   /**
    * Issue #822: a real turn done arrived during replay before catch-up opened
-   * any assistant bubble. The next token carrying `replace: true` is the
-   * completed catch-up snapshot, not a new live stream — see
-   * isTerminalCatchUpToken's doc comment (frames.ts) for why BOTH this flag
-   * and the frame's own `replace` marker are required (finding 11: the flag
-   * alone can go stale across an unrelated later turn). Optional for
-   * hand-built fixture compatibility.
+   * any assistant bubble. The next token is the completed catch-up snapshot,
+   * not a new live stream. Optional for hand-built fixture compatibility.
    */
   terminalCatchUpPending?: boolean
   sessionTokens: number

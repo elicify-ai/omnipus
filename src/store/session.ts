@@ -888,20 +888,3 @@ async function resolveRememberedSessionFromServer(
     })
   }
 }
-
-// Expose the active session id on window.__omnipus_test_hooks in DEV/test
-// builds and in production-with-webdriver — mirrors the established pattern
-// (src/lib/ws.ts, src/lib/api.ts, src/lib/calendar/useOccurrences.ts).
-// SQUAD-BRIEF-AY: tests/e2e/reconnect-mid-turn.spec.ts's S-11 needs to
-// capture the id of a session it started so it can navigate back to that
-// EXACT session later via the sidebar/search (an attach, not a reload —
-// page.goto() was the finding-4/S-11 bug: it clears the SPA's in-memory
-// per-session sequence cursors) even though root '/' redirects into a
-// workspace's Chat TAB, not a per-session URL (workspaces.$workspaceId.chat
-// has no sessionId route param — only /sessions/$sessionId does, the
-// "Unfiled" case), so there is no URL to read the id back from.
-if ((import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver)) && typeof window !== 'undefined') {
-  const w = window as unknown as { __omnipus_test_hooks?: Record<string, unknown> }
-  w.__omnipus_test_hooks ??= {}
-  w.__omnipus_test_hooks.getActiveSessionId = () => useSessionStore.getState().activeSessionId
-}

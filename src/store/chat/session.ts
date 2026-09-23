@@ -132,10 +132,6 @@ export function stampToolCallOffset(
     duration_ms: tc.duration_ms,
     error: tc.error,
     ...(textOffset !== undefined ? { textOffset } : {}),
-    // Finding 4 (SQUAD-BRIEF-AY): pass the disconnect-only-cancellation
-    // marker through baking so a reopened bubble (frames.ts's 'token' case)
-    // can still find and restore it after clearStreamingState bakes it here.
-    ...(tc.cancelledByDisconnect ? { cancelledByDisconnect: true } : {}),
   }
 }
 

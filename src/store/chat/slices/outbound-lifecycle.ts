@@ -983,17 +983,11 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
               const m = messagesById[order[i]]
               if (m?.role === 'assistant' && (m.isStreaming || m.status === 'streaming')) {
                 // Preserve an already-'interrupted' status; otherwise close as 'done'.
-                // Finding 4: an already-'interrupted' bubble was closed by an
-                // explicit user cancel, not this disconnect — closedByDisconnect
-                // is deliberately NOT stamped on it, so a later catch-up token
-                // (which should never resurrect a cancel the user asked for)
-                // still abandons it as before.
                 messagesById[order[i]] = {
                   ...m,
                   isStreaming: false,
                   status: m.status === 'interrupted' ? 'interrupted' : 'done',
                   pendingTextBoundary: false,
-                  ...(m.status === 'interrupted' ? {} : { closedByDisconnect: true }),
                 } as ChatMessage
               }
             }
@@ -1003,12 +997,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             const toolCalls = { ...bucket.toolCalls }
             for (const key of Object.keys(toolCalls)) {
               if (toolCalls[key].status === 'running') {
-                // Finding 4: tag this cancellation as disconnect-only (never
-                // an explicit user cancel — cancelStream's own tool-cancel
-                // block, above, does not bake and does not set this flag) so
-                // a reopened bubble (frames.ts's 'token' case) can tell it
-                // apart from a real cancellation and restore it.
-                toolCalls[key] = { ...toolCalls[key], status: 'cancelled', cancelledByDisconnect: true }
+                toolCalls[key] = { ...toolCalls[key], status: 'cancelled' }
               }
             }
             // Bake every pending tool call — not just the ones just flipped to
