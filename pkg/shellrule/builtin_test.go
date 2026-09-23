@@ -16,7 +16,7 @@ func TestEvaluateCommand_HarmlessBuiltin_IsNotBlind(t *testing.T) {
 	dir := t.TempDir() // deliberately empty — no "cd" executable anywhere on PATH
 	opts := baseOptions(dir)
 
-	for _, cmd := range []string{"cd /tmp", "export FOO=bar", "set -e", "unset FOO", "pwd"} {
+	for _, cmd := range []string{"cd /tmp", "export FOO=bar", "set -e", "unset FOO", "alias ll=ls"} {
 		got := EvaluateCommand(cmd, nil, opts)
 		if len(got.Segments) != 1 {
 			t.Fatalf("EvaluateCommand(%q): expected 1 segment, got %d", cmd, len(got.Segments))

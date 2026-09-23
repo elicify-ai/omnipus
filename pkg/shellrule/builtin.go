@@ -26,26 +26,43 @@ package shellrule
 // primitives, not benign builtins) — and both are already refused
 // structurally wherever they appear inside a command substitution by
 // substitutionDenyAnySegment (pkg/tools/shell_subst_guard.go).
+//
+// Deliberately EXCLUDED even though POSIX also defines them as builtins:
+// `true`, `false`, `echo`, `printf`, `pwd`, `test`, `[` — every shell ships
+// these, but so does /bin (coreutils ships standalone /bin/true, /bin/pwd,
+// /usr/bin/printf, /usr/bin/test, …), and resolveHeadOrBuiltin's own
+// resolve-first order below means the shortcut never fires for them anyway
+// on any system that has the standalone binary — listing them here would
+// only matter on a hypothetical system with NEITHER, and keeping the map to
+// genuinely PATH-absent builtins keeps this file honest about what it is
+// actually compensating for.
 var posixBuiltins = map[string]bool{
-	"cd": true, "pwd": true, "export": true, "set": true, "unset": true,
+	"cd": true, "export": true, "set": true, "unset": true,
 	"alias": true, "unalias": true, "read": true, "shift": true,
 	"exit": true, "return": true, "break": true, "continue": true,
 	"local": true, "declare": true, "typeset": true, "readonly": true,
-	"trap": true, "umask": true, "wait": true, "test": true, "[": true,
-	"true": true, "false": true, "let": true, "printf": true, "type": true,
+	"trap": true, "umask": true, "wait": true, "let": true, "type": true,
 	"hash": true, "times": true, "ulimit": true, "getopts": true,
-	"echo": true,
 }
 
-// resolveHeadOrBuiltin resolves name to an absolute path via resolve/
-// pathList, unless name is a recognised harmless POSIX builtin (above), in
-// which case name itself stands in for the resolved form — there is no
-// on-PATH executable to find, and none is needed to judge the segment
-// safely. Used for BOTH the segment's own head (evaluateSegment) and an
-// operator rule's Binary field (matchRules), so a rule authored with
-// `binary: "cd"` resolves consistently with what the segment scanner
-// itself would report.
+// resolveHeadOrBuiltin resolves name against pathList via resolve FIRST —
+// exactly ResolveBinary's own ordinary behaviour, unchanged whenever a real
+// on-PATH executable exists — and falls back to treating name as a
+// recognised harmless POSIX builtin (above) ONLY when that real resolution
+// fails. This order is deliberate, not cosmetic: it is what keeps `true`,
+// `pwd`, and every other command that happens to ALSO be a shell builtin
+// resolving to their real, symlink-resolved binary path on any system that
+// has one (matching every existing rule/test that resolves against the
+// genuine ResolveBinary("true", PATH) result) — only `cd`/`export`/etc.,
+// which have no on-PATH executable to find at all, ever take the fallback.
+//
+// Used for BOTH the segment's own head (evaluateSegment) and an operator
+// rule's Binary field (matchRules), so a rule authored with `binary: "cd"`
+// resolves consistently with what the segment scanner itself would report.
 func resolveHeadOrBuiltin(name, pathList string, resolve BinaryResolver) (string, error) {
+	if resolved, err := resolve(name, pathList); err == nil {
+		return resolved, nil
+	}
 	if posixBuiltins[name] {
 		return name, nil
 	}
