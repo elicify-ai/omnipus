@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -265,56 +263,6 @@ func (tree *Tree) Revive(sessionID string) (int, error) {
 	return tree.deps.Canceller.Revive(context.Background(), sessionID, steer.Principal{
 		Kind: steer.PrincipalKindHuman, ID: "adr091-fixture-operator",
 	})
-}
-
-// CorruptRecord writes one named invariant violation to a lifecycle record.
-func (tree *Tree) CorruptRecord(sessionID, invariant string) error {
-	if invariant == "unreadable" {
-		return os.WriteFile(filepath.Join(tree.lifecycleDir, sessionID+".jsonl"), []byte("{not-json\n"), 0o600)
-	}
-	rec, err := tree.deps.LifecycleStore.Load(sessionID)
-	if err != nil {
-		return err
-	}
-	switch invariant {
-	case "wrong_root":
-		if rec.SteeredBy == nil {
-			return errors.New("DelegationTree: wrong_root requires a steered record")
-		}
-		rec.SteeredBy.RootSessionID = "wrong-root"
-	case "cycle":
-		if rec.SteeredBy == nil {
-			return errors.New("DelegationTree: cycle requires a steered record")
-		}
-		rec.SteeredBy.SteeringSessionID = sessionID
-	case "missing_parent":
-		if rec.SteeredBy == nil {
-			return errors.New("DelegationTree: missing_parent requires a steered record")
-		}
-		rec.SteeredBy.SteeringSessionID = "missing-parent"
-	default:
-		return fmt.Errorf("DelegationTree: unknown invariant %q", invariant)
-	}
-	return tree.deps.LifecycleStore.Persist(rec)
-}
-
-// DeleteRecord removes the lifecycle record while preserving session metadata.
-func (tree *Tree) DeleteRecord(sessionID string) error {
-	err := os.Remove(filepath.Join(tree.lifecycleDir, sessionID+".jsonl"))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return err
-}
-
-// DeleteEdge persists a record with its SteeredBy edge removed.
-func (tree *Tree) DeleteEdge(sessionID string) error {
-	rec, err := tree.deps.LifecycleStore.Load(sessionID)
-	if err != nil {
-		return err
-	}
-	rec.SteeredBy = nil
-	return tree.deps.LifecycleStore.Persist(rec)
 }
 
 // Crash closes the real session store without running BootHook.
