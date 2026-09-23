@@ -70,14 +70,17 @@ func TestAllowRule_DoesNotSuppressFSPreflightUnderAuto(t *testing.T) {
 		c.Agents.Defaults.RestrictToWorkspace = true // the shipped default (workspace_path_guard)
 		c.Sandbox.ToolPolicies = map[string]string{"bash": "ask"}
 		c.Sandbox.AutoApprove = true
-		c.Sandbox.CommandRules = []shellrule.Rule{{Action: shellrule.ActionAllow, Binary: "echo"}}
+		c.Sandbox.CommandRules = []shellrule.Rule{{Action: shellrule.ActionAllow, Binary: "touch"}}
 	})
 	inst, ok := al.GetRegistry().GetAgent(testDefaultAgentID)
 	require.True(t, ok)
 	ts := &turnState{agent: inst, agentID: testDefaultAgentID}
 	approver := &countingApprover{}
 	al.SetToolApprover(approver)
-	cmd := "echo probe > /etc/omnipus-adr092-allow-probe"
+	// A simple segment with no redirection: an allow rule never settles a
+	// redirected command (review finding #1), so the write target is an
+	// argument of the allowed binary instead.
+	cmd := "touch /etc/omnipus-adr092-allow-probe"
 	require.True(t, bashCommandRuleVerdict(ts, "bash", bashArgs(cmd)).settlesPrompt())
 
 	tool, ok := ts.agent.Tools.Get("bash")
