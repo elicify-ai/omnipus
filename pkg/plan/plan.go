@@ -13,6 +13,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -707,6 +708,40 @@ type Plan struct { //nolint:revive // exported name matches package purpose
 	ApprovedAt    string `json:"approved_at,omitempty"`
 	StartedAt     string `json:"started_at,omitempty"`
 	CompletedAt   string `json:"completed_at,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler for Plan.
+//
+// This is a DATA migration for pre-existing $OMNIPUS_HOME/plans/<id>.json
+// files, not an agent-facing alias, and it does NOT reintroduce `goal` as an
+// accepted name anywhere an agent or user can reach: create_plan's tool
+// argument, the REST wire field (PlanCreateRequest/PlanUpdateRequest/Plan),
+// and the schema all still reject `goal` outright with no fallback (ADR-091
+// vocab rename — "goal" was renamed to "objective" to stop colliding with
+// delegate/create_task's judged-standard meaning of "goal"). It tolerates
+// ONLY the legacy on-disk shape written before that rename — `"goal": "..."`
+// with no `"objective"` key — so an existing install's plans do not silently
+// lose their stated aim on the first load after upgrade. `objective` always
+// wins when both keys are present (a file already in the new shape is never
+// overridden by a stale legacy one). Store.write always marshals the current
+// struct, which has no Goal field at all, so any subsequent Update drains
+// the legacy key away — this migration is a one-way ratchet, not a
+// steady-state dual-write. DO NOT remove this as "cleanup": doing so is a
+// silent data-loss regression for every plan file written before this
+// rename, exactly what an operator flagged reading their own installation.
+func (p *Plan) UnmarshalJSON(data []byte) error {
+	type alias Plan // breaks the recursive UnmarshalJSON call
+	aux := struct {
+		Goal *string `json:"goal"`
+		*alias
+	}{alias: (*alias)(p)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if p.Objective == "" && aux.Goal != nil {
+		p.Objective = *aux.Goal
+	}
+	return nil
 }
 
 // Plan authorship kinds (Plan.CreatedByKind), mirroring

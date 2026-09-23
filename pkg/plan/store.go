@@ -653,7 +653,7 @@ func (su *storeUpdateLocked) persist() (*Plan, error) {
 	// combination violates (e.g. FailedReason set without State==failed in
 	// the same call — the per-field FailedReason check above only validates
 	// the enum value, not this coupling; normalize() re-checks the whole
-	// object). Every field normalize() re-validates (title/goal/description/
+	// object). Every field normalize() re-validates (title/objective/description/
 	// workspace_id/owner_agent_id/state/DoD/bounds) already has an on-disk
 	// value that passed normalize() at Create time or a prior Update, so
 	// these re-checks are a no-op whenever the field itself wasn't patched
