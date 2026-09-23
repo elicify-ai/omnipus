@@ -290,7 +290,7 @@ func (dt *delegateToolExecuteRun) validateRequest() (*ToolResult, bool) {
 		dt.agentID = s
 	}
 
-	for _, removed := range []string{"async", "allow_" + "blocking_question"} {
+	for _, removed := range []string{"async", "allow_blocking_question"} {
 		if _, present := dt.args[removed]; present {
 			return ErrorResult("invalid_argument: " + removed), true
 		}
