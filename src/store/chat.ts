@@ -6,19 +6,10 @@ import { registerChatSetReplaying, registerChatResetForReplay } from '@/store/se
 
 import { registerSyncChatForeground } from '@/store/session'
 
-import { registerChatLastAppliedSeq, registerChatPrepareForReplay } from '@/store/session'
-
 // Register callbacks with the session store to break circular imports.
 registerChatSetReplaying((value) => useChatStore.getState().setReplaying(value))
 
 registerChatResetForReplay((sessionId) => useChatStore.getState().resetSessionForReplay(sessionId))
-
-// #823 phase 2: the attach sites in session.ts need the session's applied-frame
-// cursor and the wipe-or-keep decision that depends on it, both of which live
-// in this store.
-registerChatPrepareForReplay((sessionId) => useChatStore.getState().prepareSessionForReplay(sessionId))
-
-registerChatLastAppliedSeq((sessionId) => useChatStore.getState().getLastAppliedSeq(sessionId))
 
 registerSyncChatForeground(syncChatForeground)
 

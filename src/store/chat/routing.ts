@@ -131,32 +131,6 @@ export function isTurnFinished(sessionId: string, turnId: string): boolean {
 
 // ── Frame-routing helpers ─────────────────────────────────────────────────────
 
-/**
- * Drop every buffered orphan frame (and its TTL timer) for one session.
- *
- * Both buffer maps are keyed `${sessionId}:${parentCallId}`, so the prefix is
- * the session. Called wherever a session's bucket is REPLACED rather than
- * patched — `session_snapshot` and the attach-time replay reset: a buffered
- * `tool_call_start`/`result` that arrived before its `subagent_start` belongs
- * to the state being discarded, and nothing in the rebuilt history can adopt
- * it, so leaving it buffered would let its timer fire later and splice a frame
- * from the discarded transcript into the new one.
- */
-export function discardBufferedFramesForSession(sessionId: string): void {
-  const prefix = `${sessionId}:`
-  for (const key of Object.keys(orphanTimers)) {
-    if (key.startsWith(prefix)) {
-      clearTimeout(orphanTimers[key])
-      delete orphanTimers[key]
-    }
-  }
-  for (const key of Object.keys(pendingByParentCallId)) {
-    if (key.startsWith(prefix)) {
-      delete pendingByParentCallId[key]
-    }
-  }
-}
-
 /** O(1) span check using the spanByParentCallId index. */
 export function hasOpenSpanFast(bucket: SessionChatState, parentCallId: string): boolean {
   return parentCallId in bucket.spanByParentCallId

@@ -1,69 +1,3 @@
-/**
- * #823 phase 2: append or replace the open bubble's text from a token frame.
- *
- * A catch-up token (`replace: true`) REPLACES the bubble's text instead of
- * appending. The gateway cannot know how much of the in-flight turn this client
- * already applied before the drop, so appending could only duplicate; replacing
- * is idempotent by construction — applying the same catch-up token twice leaves
- * the same text. A closed bubble needs no special case here: the boundary rule
- * in the token case has already abandoned any finished bubble and opened a
- * fresh placeholder, so a late catch-up token cannot rewrite an answer the user
- * has already read.
- *
- * Module scope on purpose: the token case sits inside handleFrame, which is
- * grandfathered in scripts/budgets/functions.txt and may only shrink.
- */
-function applyTokenContent(msg: ChatMessage, frame: { content: string; replace?: boolean }): void {
-  if (frame.replace === true) {
-    msg.content = frame.content
-    msg.pendingTextBoundary = false
-    return
-  }
-  msg.content = msg.content + frame.content
-}
-
-/**
- * #823 phase 2: position an inbound frame before it is dispatched. Returns false
- * when the frame is CONSUMED — already applied (dropped by the sequence gate) or
- * a session_snapshot that replaced a session's state — and true when the caller
- * should dispatch it normally.
- *
- * Folds three steps that must happen in this order, and that all four dispatch
- * paths depend on:
- *
- *  1. the legacy timestamp cursor (`since`) still advances — it is the only
- *     cursor a session with no sequence position has, and is still sent as the
- *     `since` fallback;
- *  2. the per-session sequence gate — a frame at or below this session's cursor
- *     was already applied, and the gateway re-delivers retained frames
- *     byte-exact, so dropping it is what makes catch-up idempotent;
- *  3. `session_snapshot` replaces that session's state instead of merging —
- *     handled BEFORE dispatch because the 'done' and 'replay_message' cases both
- *     assume the local bucket is meaningful, and the gateway sends a snapshot
- *     precisely when it is not.
- *
- * Module scope on purpose: handleFrame is grandfathered in
- * scripts/budgets/functions.txt and may only shrink.
- */
-function applyFramePosition(
-  frame: unknown,
-  targetSid: string | null,
-  withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void,
-  get: () => ChatStore,
-  syncForeground: () => void,
-): boolean {
-  advanceReceivedEventTime(frame, targetSid, withBucket)
-  if (!gateFrameBySequence(frame, targetSid, () => get().sessionsById, withBucket)) return false
-  if (isSessionSnapshotFrame(frame)) {
-    if (targetSid) {
-      withBucket(targetSid, (bucket) => applySessionSnapshot(bucket, frame as SessionSnapshotFrame))
-      syncForeground()
-    }
-    return false
-  }
-  return true
-}
-
 // frames.ts: inbound websocket frame routing and reduction
 
 
@@ -97,8 +31,6 @@ import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallB
 import { ORPHAN_BUFFER_TTL_MS, orphanTimers, pendingByParentCallId } from '../types'
 import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
 import { handleReplayAndStatusFrame } from './replay-and-status-frames'
-import type { SessionSnapshotFrame } from '@/lib/api/generated/asyncapi-types'
-import { applySessionSnapshot, gateFrameBySequence, isSessionSnapshotFrame } from './sequence'
 
 
 
@@ -298,11 +230,10 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       // HIGH-2: reset unknown-frame counter on every known-good frame.
       runtime.unknownFrameCount = 0
 
-      // I1/#823 phase 2: position the frame before dispatch — the legacy
-      // timestamp cursor, the per-session sequence gate, and the snapshot
-      // replacement. Module-scope so handleFrame stays inside its grandfathered
-      // line budget; see slices/sequence.ts for the rules and exemptions.
-      if (!applyFramePosition(frame, targetSid, withBucket, get, syncForeground)) return
+      // I1: advance the reconnect `since` cursor — see advanceReceivedEventTime's
+      // own doc comment above (moved there so this addition doesn't grow
+      // handleFrame past its grandfathered line budget).
+      advanceReceivedEventTime(frame, targetSid, withBucket)
 
       if (handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid, withBucket, armRateLimitClear })) {
         syncForeground()
@@ -657,7 +588,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   if (msg.content) msg.content += '\n\n'
                   msg.pendingTextBoundary = false
                 }
-                applyTokenContent(msg, frame)
+                msg.content = msg.content + frame.content
                 applyTokenStreamingState(draft, msg)
                 // ADR-082 review S1/CR1: a token proves the announced turn's
                 // bubble now exists, regardless of which frame order got us

@@ -65,4 +65,3 @@ properties:
     type: string
     format: date-time
     description: RFC 3339 timestamp of when the server computed this snapshot.
-

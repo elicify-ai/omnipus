@@ -189,14 +189,6 @@ type WSHandler struct {
 	taskChatIDs map[string]string  // browser chatID → task chatID for live event forwarding
 	webchatCh   *webchatChannel    // reference to mark streaming complete
 
-	// sequences is the per-session sequence-number counter and retained frame
-	// window used by reconnect catch-up (#823 phase 2). Keyed by session id —
-	// NOT by connection — so a client's "last applied seq" cursor means the
-	// same thing across reconnects and on every tab of that session. Guarded by
-	// mu, like the connection maps above. Lazily created by assignSeqLocked.
-	// See ws_sequence.go for the numbering, retention and snapshot-fallback rules.
-	sequences map[string]*sessionSeq
-
 	// liveStreamers tracks, per session id, the wsStreamer instance CURRENTLY
 	// streaming a foreground turn's live round (ADR-082 D2/D3). Registered by
 	// GetStreamer on every streaming round (a turn spanning several
@@ -1303,7 +1295,7 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			"requested_session_id", f.SessionId,
 		)
 		if f.SessionId != "" {
-			wh.h.handleAttachSession(wh.ctx, wh.chatID, f.SessionId, f.Since, f.SinceSeq, wh.wc)
+			wh.h.handleAttachSession(wh.ctx, wh.chatID, f.SessionId, f.Since, wh.wc)
 		} else {
 			slog.Warn("ws: attach_session with empty session_id", "chat_id", wh.chatID)
 		}

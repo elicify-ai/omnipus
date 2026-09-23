@@ -154,7 +154,6 @@ type wsHandlerHandleAttachSession struct {
 	chatID         string
 	attachID       string
 	since          *string
-	sinceSeq       *int64
 	wc             *wsConn
 	store          *session.UnifiedStore
 	entries        []session.TranscriptEntry
@@ -166,26 +165,6 @@ type wsHandlerHandleAttachSession struct {
 	framesEmitted  int
 	replayErr      error
 	durationMS     int64
-
-	// Incremental catch-up state (#823 phase 2). incremental is set when the
-	// client's sequence cursor could be served contiguously from the session's
-	// retained window; catchUp holds those already-numbered frames for
-	// byte-exact re-delivery. useSnapshot is set instead when the position
-	// cannot be served (retention, unknown position, or a cursor at/ahead of
-	// anything emitted) — the client is then told to replace its state and gets
-	// a full replay. When neither is set, the client sent no cursor at all and
-	// gets the ordinary full replay.
-	incremental    bool
-	catchUp        []sequencedFrame
-	useSnapshot    bool
-	snapshotReason string
-	// resetSeq is the session's high-water sequence number as captured BEFORE
-	// bindConnection emits anything, and is what a snapshot tells the client to
-	// reset its cursor to. It must predate the bind: frames emitted from the
-	// bind onward are delivered AFTER the snapshot's full replay, so if the
-	// snapshot claimed a later position the client would discard exactly those
-	// frames as "already applied".
-	resetSeq uint64
 }
 
 // handleAttachSession loads an existing session's transcript and replays it to
@@ -197,40 +176,26 @@ type wsHandlerHandleAttachSession struct {
 // channel; after the done frame is emitted the buffer is drained to the WS in
 // arrival order.
 //
-// since is the legacy RFC3339/RFC3339Nano cursor from AttachSessionFrame.Since;
-// sinceSeq is the per-session sequence cursor from AttachSessionFrame.SinceSeq
-// (#823 phase 2) and supersedes it when present.
-//
-// Three catch-up modes, decided by planCatchUp:
-//
-//   - no cursor at all   → full replay (the first-load path).
-//   - since_seq servable → the retained, already-numbered frames strictly after
-//     the cursor are re-delivered byte-for-byte, then a replay-terminating done
-//     carrying the session's current high-water seq. O(missed window), and
-//     idempotent because every frame carries the number it was first emitted
-//     with.
-//   - since_seq unservable → a session_snapshot frame, then a full replay, so
-//     the client replaces that session's state rather than merging a partial
-//     history. Never a silent drop.
+// since is the optional RFC3339/RFC3339Nano cursor from AttachSessionFrame.Since.
+// When non-nil and non-empty, only transcript entries with Timestamp > cursor
+// are replayed (O(missed-window) replay).  When nil or empty, a full replay is
+// performed (legacy behavior).
 func (h *WSHandler) handleAttachSession(
 	ctx context.Context,
 	chatID string,
 	attachID string,
 	since *string,
-	sinceSeq *int64,
 	wc *wsConn,
 ) {
-	wh := &wsHandlerHandleAttachSession{h: h, ctx: ctx, chatID: chatID, attachID: attachID, since: since, sinceSeq: sinceSeq, wc: wc}
+	wh := &wsHandlerHandleAttachSession{h: h, ctx: ctx, chatID: chatID, attachID: attachID, since: since, wc: wc}
 
 	if wh.loadReplay() {
 		return
 	}
 
-	wh.planCatchUp()
-
 	wh.bindConnection()
 
-	wh.runCatchUp()
+	wh.runReplay()
 
 	if wh.finishReplay() {
 		return
@@ -239,138 +204,6 @@ func (h *WSHandler) handleAttachSession(
 	wh.sendCatchUp()
 
 	wh.resumeLiveSession()
-}
-
-// planCatchUp decides which of the three modes this attach uses, by asking the
-// session's retained window whether it can serve everything after the client's
-// cursor. It runs BEFORE bindConnection so the decision is taken against a
-// stable window and the frames it returns are the exact bytes already emitted.
-func (wh *wsHandlerHandleAttachSession) planCatchUp() {
-	if wh.sinceSeq == nil || *wh.sinceSeq <= 0 {
-		// No usable cursor: first load, or a client that predates since_seq.
-		return
-	}
-	frames, reason, ok := wh.h.catchUpFrames(wh.attachID, uint64(*wh.sinceSeq))
-	if !ok {
-		wh.useSnapshot = true
-		wh.snapshotReason = reason
-		// Captured before the bind, deliberately — see resetSeq's doc comment.
-		wh.resetSeq = wh.h.sessionHighSeq(wh.attachID)
-		slog.Info("ws: attach_session: cursor not servable — sending snapshot",
-			"event", "replay_snapshot_fallback",
-			"session_id", wh.attachID,
-			"since_seq", *wh.sinceSeq,
-			"reason", reason,
-		)
-		return
-	}
-	wh.incremental = true
-	wh.catchUp = frames
-	slog.Info("ws: attach_session: incremental catch-up",
-		"event", "replay_incremental_catchup",
-		"session_id", wh.attachID,
-		"since_seq", *wh.sinceSeq,
-		"frame_count", len(frames),
-	)
-}
-
-// runCatchUp delivers this attach's frames: a snapshot notice plus a full replay
-// (state replacement), the retained window's frames plus a terminator
-// (incremental), or a bare full replay (no cursor).
-func (wh *wsHandlerHandleAttachSession) runCatchUp() {
-	if wh.useSnapshot {
-		wh.emitSnapshotFrame()
-		wh.runReplay()
-		return
-	}
-	if wh.incremental {
-		wh.emitIncrementalCatchUp()
-		return
-	}
-	wh.runReplay()
-}
-
-// emitSnapshotFrame tells the client to replace this session's state, naming why
-// the position it asked for could not be served. Its seq is the session's
-// current high-water mark, which is also what the replay terminator will carry,
-// so the client ends up positioned exactly at the gateway's newest frame.
-func (wh *wsHandlerHandleAttachSession) emitSnapshotFrame() {
-	frame := generated.SessionSnapshotFrame{
-		Type:      string(generated.WsFrameTypeSessionSnapshot),
-		SessionId: wh.attachID,
-		Seq:       int64(wh.resetSeq),
-	}
-	reason := wh.snapshotReason
-	if reason != "" {
-		frame.Reason = &reason
-	}
-	if err := wh.emitReplayFrame(frame); err != nil {
-		slog.Warn("ws: snapshot frame emit failed", "session_id", wh.attachID, "error", err)
-	}
-}
-
-// emitIncrementalCatchUp re-delivers the retained frames the client missed,
-// byte-exact and in order, then a replay-terminating done so the client clears
-// its replaying state and adopts the session's current high-water position.
-func (wh *wsHandlerHandleAttachSession) emitIncrementalCatchUp() {
-	for _, sf := range wh.catchUp {
-		if err := wh.emitReplayRaw(sf.raw); err != nil {
-			wh.replayErr = err
-			return
-		}
-		wh.framesEmitted++
-	}
-	wh.emitIncrementalTerminator()
-}
-
-// emitIncrementalTerminator sends the same shape of replay terminator
-// streamReplay emits (stats.frames_emitted only — never tokens/cost, which is
-// what the SPA keys on to tell a replay terminator from a real turn done).
-//
-// It carries NO sequence number, deliberately. The terminator is delivered
-// before the divert-buffered live frames, which were emitted earlier in wall
-// time but hold numbers ABOVE the ones just re-delivered; stamping the
-// terminator with the session's high-water mark would set the client's cursor
-// past those frames and make it discard them. The client's position after an
-// incremental catch-up is the last re-delivered frame's own number.
-func (wh *wsHandlerHandleAttachSession) emitIncrementalTerminator() {
-	emitted := float64(wh.framesEmitted)
-	frame := generated.DoneFrame{
-		Type:      string(generated.WsFrameTypeDone),
-		SessionId: wh.attachID,
-		Stats:     &generated.DoneStats{FramesEmitted: &emitted},
-	}
-	if err := wh.emitReplayFrame(frame); err != nil {
-		wh.replayErr = err
-	}
-}
-
-// emitReplayFrame marshals one frame and hands it to the attach emitter. These
-// frames go straight to sendCh (never through the divert), so they land ahead of
-// any live frame buffered during the catch-up window.
-func (wh *wsHandlerHandleAttachSession) emitReplayFrame(f any) error {
-	data, err := json.Marshal(f)
-	if err != nil {
-		return err
-	}
-	return wh.emitReplayRaw(data)
-}
-
-// emitReplayRaw hands already-marshalled bytes to the attach emitter. The
-// retained catch-up frames travel this path so their bytes — and therefore
-// their sequence numbers — are exactly what the client would have received live.
-func (wh *wsHandlerHandleAttachSession) emitReplayRaw(data []byte) error {
-	if wh.ctx.Err() != nil {
-		return wh.ctx.Err()
-	}
-	select {
-	case wh.wc.sendCh <- data:
-		return nil
-	case <-wh.ctx.Done():
-		return wh.ctx.Err()
-	case <-time.After(5 * time.Second):
-		return errSendTimeout
-	}
 }
 
 // loadReplay validates the session, loads its transcript, applies the cursor, and records replay-start statistics.
@@ -403,22 +236,15 @@ func (wh *wsHandlerHandleAttachSession) loadReplay() bool {
 		return true
 	}
 
-	// Apply the legacy since-cursor filter only when the client did NOT send a
-	// sequence cursor. Since #823 phase 2, sequence numbers supersede the
-	// timestamp filter: the timestamp filter loses entries whenever two share a
-	// timestamp or a persisted entry predates the client's last live frame, and
-	// a client that sends since_seq never goes through it. With since_seq the
-	// transcript read below still backs the full-replay (snapshot) path, but no
-	// timestamp filtering is applied to it — a snapshot replays everything.
+	// Apply since-cursor filter when the client requests incremental replay.
+	// On parse failure we log a warning, send an error frame, and fall through
+	// to full replay — the client stays functional.
 	//
-	// Boundary condition (legacy path): entries with Timestamp == cursor are
-	// skipped (<=). Rationale: the cursor is the most recent frame the SPA has
-	// *already processed*, so an entry at exactly that timestamp was already
-	// seen. Strict less-than would re-emit the boundary entry and cause a
-	// duplicate on the SPA.
-	if wh.sinceSeq == nil {
-		wh.entries = applySinceCursor(wh.ctx, wh.attachID, wh.since, wh.entries, wh.wc)
-	}
+	// Boundary condition: entries with Timestamp == cursor are skipped (<=).
+	// Rationale: the cursor is the most recent frame the SPA has *already processed*,
+	// so an entry at exactly that timestamp was already seen.  Strict less-than would
+	// re-emit the boundary entry and cause a duplicate on the SPA.
+	wh.entries = applySinceCursor(wh.ctx, wh.attachID, wh.since, wh.entries, wh.wc)
 
 	wh.rs = computeReplayStats(wh.entries)
 
@@ -665,29 +491,14 @@ func (wh *wsHandlerHandleAttachSession) sendCatchUp() {
 	// gap. Skipped when there is no in-flight turn (hasCatchUp false) or
 	// its accumulated text is still empty.
 	if wh.hasCatchUp && wh.catchUpText != "" {
-		// #823 phase 2: this catch-up token REPLACES the open bubble's content
-		// rather than appending to it. The client may already have applied part
-		// of this turn's text before the drop, and the gateway cannot know how
-		// much, so replacing is the only way the frame is idempotent: applying
-		// it twice leaves the same text. It carries a freshly assigned
-		// per-session seq so it is ordered with (and deduped against) the rest
-		// of the session's numbered stream.
-		replace := true
 		catchUpFrame := generated.TokenFrame{
 			Type:      string(generated.WsFrameTypeToken),
 			Content:   wh.catchUpText,
 			SessionId: wh.attachID,
-			Replace:   &replace,
 		}
 		if wh.catchUpAgentID != "" {
 			catchUpFrame.AgentId = &wh.catchUpAgentID
 		}
-		// #823 phase 2: this frame carries NO sequence number. It is emitted here,
-		// after the divert buffer has already been filled by frames emitted
-		// during the replay window, but delivered BEFORE them (the drain runs
-		// below). Numbering it by emission order would put a higher number ahead
-		// of lower ones and make the client discard those live frames. It is a
-		// state frame, not an event: Replace makes it idempotent on its own.
 		if data, mErr := json.Marshal(catchUpFrame); mErr == nil {
 			// ADR-082 review CR9/F4: route this through the SAME droppedTokens
 			// accounting path every other token send uses (sendRawFrameBytes),

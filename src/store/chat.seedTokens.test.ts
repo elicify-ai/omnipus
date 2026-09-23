@@ -13,10 +13,6 @@ vi.mock('@/store/session', () => ({
   useSessionStore: { getState: () => ({ activeSessionId: 'sess-1' }) },
   registerChatSetReplaying: vi.fn(),
   registerChatResetForReplay: vi.fn(),
-  // #823 phase 2: the barrel wires two more registrations; this partial mock
-  // must expose them or importing the barrel throws.
-  registerChatPrepareForReplay: vi.fn(),
-  registerChatLastAppliedSeq: vi.fn(),
   registerSyncChatForeground: vi.fn(),
 }))
 vi.mock('@/store/connection', () => ({
