@@ -1,10 +1,3 @@
-// Owner: WP-B (landing order §7: "the WP-A lane writes the compiled no-op
-// bodies for the interfaces WP-B and WP-D later implement, in files named
-// for their owners ... ownership of those files passes to WP-B and WP-D at
-// CP-0"). WP-A (this lane) writes this file's CP-0 stub bodies only; WP-B
-// replaces them with the real I-5 rule and Deliver path at CP-2. Do not
-// add production logic here after CP-0 — that is WP-B's.
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -31,21 +24,20 @@ import (
 // wired at all (a bare test AgentLoop, or a boot ordering bug).
 var errSteerUpwardDelivererNotWired = errors.New("agent: steer: UpwardDeliverer not wired (SetSteerAudienceDeps was never called)")
 
-// SteerAudienceResolver is the CP-0 compiled stub for
-// steer.AudienceResolver, owned by WP-B from CP-0 onward. It returns
-// today's behaviour — every session's audience is the human user — until
-// WP-B lands I-5's real rule (ordinary_root -> user, steered -> steering
-// session, everything else -> none).
+// SteerAudienceResolver implements steer.AudienceResolver with I-5's real
+// rule: ordinary_root -> the human user, steered -> the steering session,
+// everything else -> none. D3 says answer none on any doubt, so a
+// classifier error and every unrecognised class both fall to none rather
+// than publishing.
 type SteerAudienceResolver struct {
-	// Classifier supplies the Class half of the answer (I-8, already real
-	// as of CP-0 — see steer_classify.go); only the Audience half is a
-	// placeholder here.
+	// Classifier supplies the Class half of the answer (I-8 — see
+	// steer_classify.go).
 	Classifier steer.RecordClassifier
 }
 
 var _ steer.AudienceResolver = (*SteerAudienceResolver)(nil)
 
-// NewSteerAudienceResolver returns the CP-0 stub AudienceResolver.
+// NewSteerAudienceResolver returns an AudienceResolver backed by classifier.
 func NewSteerAudienceResolver(classifier steer.RecordClassifier) *SteerAudienceResolver {
 	return &SteerAudienceResolver{Classifier: classifier}
 }
