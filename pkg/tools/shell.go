@@ -19,8 +19,6 @@
 //     can disable it (FR-B4). It is layered with an operator-extensible
 //     custom-pattern mechanism (global + per-agent), which IS opt-in/off by
 //     default.
-//   - `pkg/policy.Evaluator.EvaluateExec` (the binary allowlist, SEC-05)
-//     applies identically to foreground and background calls (FR-B5).
 //   - Every non-god-mode invocation routes through `sandbox.ResolveLimits` +
 //     `sandbox.ApplyChildHardening`/`sandbox.Run` (ADR-035 §7) — there is no
 //     longer a separate "sandbox off but not god mode" state; the fixed
@@ -56,46 +54,26 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/environmentsetup"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
-	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/shellrule"
 )
 
-// ExecPolicyAuditor evaluates a bash command against the policy engine and
-// audit-logs the decision. Implemented by *policy.PolicyAuditor. Defined as an
-// interface so tests can supply lightweight mocks and so this package does not
-// need to directly import the audit package through this dependency edge.
-//
-// Contract: implementations MUST audit-log every decision (allow AND deny) as
-// a side effect of EvaluateExec. Returning a decision without logging violates
-// the SEC-15/ADR-002 §W-3 contract. This is not expressible in the signature
-// but is part of the type's invariant — test doubles must honor it.
-type ExecPolicyAuditor interface {
-	EvaluateExec(agentID, command string) policy.Decision
-}
-
 // ExecToolDeps bundles the ADR-035/ADR-036/ADR-092 dependencies for the bash
-// tool. All fields are optional — a nil PolicyAuditor disables binary
-// allowlist enforcement (useful when the policy layer is not configured);
-// nil ShellMode/ApprovalRequester disable the ADR-092 D1/D3/D7/D8 machinery
-// and fail CLOSED to ShellModeAsk (see shell_permission_mode.go's
-// resolveShellMode) rather than silently running unconfined.
+// tool. All fields are optional — nil ShellMode/ApprovalRequester disable
+// the ADR-092 D1/D3/D7/D8 machinery and fail CLOSED to ShellModeAsk (see
+// shell_permission_mode.go's resolveShellMode) rather than silently running
+// unconfined.
 //
 // Note: the interactive approval layer (SEC-08, "ask" prompts) and the
 // allow/ask/deny TOOL POLICY gate are handled upstream of this tool entirely
 // (HookManager.ApproveTool / the compositor's EffectiveToolPolicy resolution)
 // — a "deny" verdict means Execute is never called at all, so bash does not
-// re-implement that check. What DOES live here is the narrower, automated
-// binary allowlist (SEC-05), the surviving structural guards, and — ADR-092
-// — the D1 mode-sensitive escalation machinery that applies WITHIN an
-// "allow" (Auto mode) or "ask" (Ask mode) ceiling, which the upstream
-// allow/ask/deny gate alone cannot express.
+// re-implement that check. What DOES live here is the surviving structural
+// guards and — ADR-092 — the D1 mode-sensitive escalation machinery that
+// applies WITHIN an "allow" (Auto mode) or "ask" (Ask mode) ceiling, which
+// the upstream allow/ask/deny gate alone cannot express.
 type ExecToolDeps struct {
-	// PolicyAuditor enforces the binary allowlist (SEC-05) and audit-logs the
-	// decision. Nil disables the check (default-permissive).
-	PolicyAuditor ExecPolicyAuditor
-
 	// GodMode reflects agent.GodModeActive(cfg), resolved ONCE at wiring time.
 	// When true, ApplyChildHardening/sandbox.Run are skipped entirely and the
 	// command runs with full host latitude (see runUnconstrained).
@@ -135,9 +113,9 @@ type ExecToolDeps struct {
 
 	// CommandRules is the ADR-092 D3 operator rule set (config.SandboxConfig.
 	// CommandRules, json command_rules, config-file-only, no wire schema —
-	// FR-018), evaluated in every mode. Empty/nil means no operator rules are
-	// configured — D3 then defers entirely to the ceiling/mode machinery,
-	// exactly the retired exec allowlist's own default-permissive posture.
+	// FR-018), evaluated in every mode. Empty/nil means no operator rules
+	// are configured — D3 then defers entirely to the ceiling/mode
+	// machinery, which is default-permissive by design.
 	CommandRules []shellrule.Rule
 }
 
@@ -195,10 +173,6 @@ type ExecTool struct {
 	approvalRequester ShellApprovalRequester
 	approvalGrants    *security.ApprovalGrantStore
 	commandRules      []shellrule.Rule
-
-	// policyAuditor enforces the binary allowlist (SEC-05) uniformly for
-	// foreground and background calls (FR-B5).
-	policyAuditor ExecPolicyAuditor
 
 	// godMode / proxy: see ExecToolDeps. Resolved once at wiring time.
 	godMode bool
@@ -286,7 +260,6 @@ func NewExecToolWithDeps(
 	if err != nil {
 		return nil, err
 	}
-	tool.policyAuditor = deps.PolicyAuditor
 	tool.godMode = deps.GodMode
 	tool.proxy = deps.Proxy
 	tool.auditFailClosed = deps.AuditFailClosed
@@ -340,11 +313,10 @@ func (t *ExecTool) Description() string {
 		"session cancel. Output is truncated beyond a size cap — a SUCCEEDING command keeps up to 64,000 " +
 		"characters, a FAILING one only 10,000 (the failure cap is smaller, so a large error command's output " +
 		"is cut harder than a successful one's); redirect to a file and read it with read_file/offset when you " +
-		"need all of it. Commands are screened by a safety guard (deny patterns, a binary allowlist, and a " +
-		"path-use check) before they run — writing outside your workspace requires a mount first (see " +
-		"list_mounts / request_mount); a \"blocked by safety guard\" or \"blocked by exec allowlist\" error means " +
-		"the guard refused the command, not that it failed to run. Document runtime provisioning goes " +
-		"through the environment_setup tool, not a bash command."
+		"need all of it. Commands are screened by a safety guard (deny patterns and a path-use check) before " +
+		"they run — writing outside your workspace requires a mount first (see list_mounts / request_mount); " +
+		"a \"blocked by safety guard\" error means the guard refused the command, not that it failed to run. " +
+		"Document runtime provisioning goes through the environment_setup tool, not a bash command."
 }
 
 func (t *ExecTool) Parameters() map[string]any {
@@ -541,18 +513,6 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	if guardErr := t.guardCommand(ctx, command, cwd, perm.grants()); guardErr != "" && !isDocumentProbe {
 		t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
 		return ErrorResult(guardErr)
-	}
-
-	// FR-B5: binary allowlist (SEC-05), applied uniformly to foreground and
-	// background — this check runs BEFORE the foreground/background branch
-	// below, so both paths are covered by the same call site.
-	if t.policyAuditor != nil {
-		agentID := ToolAgentID(ctx)
-		decision := t.policyAuditor.EvaluateExec(agentID, command)
-		if !decision.Allowed {
-			t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
-			return ErrorResult(fmt.Sprintf("Command blocked by exec allowlist: %s", decision.PolicyRule))
-		}
 	}
 
 	// FR-B7: audit-log write failure fails CLOSED.

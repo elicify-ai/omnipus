@@ -278,39 +278,8 @@ func (nal *newAgentLoop) initializeAudit() (*AgentLoop, bool, error) {
 	return nil, false, nil
 }
 
-// initializeSecurity builds policy enforcement, sandboxing, prompt protection, and the exec proxy.
+// initializeSecurity builds sandboxing, prompt protection, and the exec proxy.
 func (nal *newAgentLoop) initializeSecurity() {
-	// There is no config source for an exec binary allowlist any more, so
-	// the evaluator below always constructs with an empty allowlist and the
-	// "allow" default policy.
-	//
-	// policy.Evaluator/PolicyAuditor are still constructed here because
-	// pkg/tools/shell.go's ExecPolicyAuditor interface and
-	// ExecToolDeps.PolicyAuditor field (ADR-092 lane L4, out of this lane's
-	// scope) still consume policy.Decision/PolicyAuditor as of this commit —
-	// deleting pkg/policy/evaluator.go or auditor.go here would break that
-	// concurrently-developed, unowned file. pkg/policy/saturation.go is
-	// unrelated to ADR-092 (consumed by pkg/gateway/gateway_boot.go for the
-	// approval-saturation cap) and was never a candidate for deletion.
-	secCfg := &policy.SecurityConfig{
-		DefaultPolicy: policy.PolicyAllow,
-	}
-	policyEval := policy.NewEvaluator(secCfg)
-
-	// Wrap the evaluator in a PolicyAuditor so every decision is audit-logged
-	// (ADR-002 §W-3). When audit logging is disabled the bridge is nil; the
-	// PolicyAuditor tolerates a nil logger and still enforces — enforcement
-	// must NOT depend on audit logging being enabled.
-	var auditBridgeImpl *auditBridge
-	if nal.al.auditLogger != nil {
-		auditBridgeImpl = newAuditBridge(nal.al.auditLogger)
-	}
-	var policyAuditorLogger policy.AuditLogger
-	if auditBridgeImpl != nil {
-		policyAuditorLogger = auditBridgeImpl
-	}
-	nal.al.policyAuditor = policy.NewPolicyAuditor(policyEval, policyAuditorLogger, "")
-
 	// SEC-01/02/03: Select the best-available sandbox backend. This never
 	// fails: on unsupported kernels SelectBackend returns a FallbackBackend.
 	backend, backendName := sandbox.SelectBackend()

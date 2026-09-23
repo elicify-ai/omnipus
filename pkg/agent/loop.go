@@ -26,7 +26,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/plan"
-	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -196,10 +195,9 @@ type AgentLoop struct {
 	// gateway constructs once.
 	sessionLifecycleStoreForTools *session.LifecycleStore
 
-	// Security (SEC-15, SEC-17): audit logging and policy evaluation.
+	// Security (SEC-15): audit logging.
 	// Initialized in NewAgentLoop when sandbox.audit_log is enabled.
-	auditLogger   *audit.Logger
-	policyAuditor *policy.PolicyAuditor
+	auditLogger *audit.Logger
 
 	// Kernel-level sandbox backend (SEC-01, SEC-02, SEC-03). Selected at startup
 	// via sandbox.SelectBackend: LinuxBackend on Linux 5.13+ (Landlock+seccomp),

@@ -33,7 +33,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/media"
-	"github.com/elicify-ai/omnipus/pkg/policy"
 )
 
 // bashCtx returns a context with standard test wiring (channel + agentID).
@@ -283,7 +282,7 @@ func TestBash_PolicyAllowDoesNotBypassDenyPatterns(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 	tool, _ := newBashTool(t, true)
-	// No PolicyAuditor wired at all — the most permissive possible config.
+	// No ExecToolDeps wired at all — the most permissive possible config.
 	result := tool.Execute(bashCtx(t), map[string]any{"command": "cat " + home + "/master.key"})
 	require.True(t, result.IsError, "master.key guard must fire regardless of policy, got ForLLM=%q", result.ForLLM)
 	assert.Contains(t, result.ForLLM, "blocked")
@@ -658,34 +657,6 @@ func TestBash_PersistentWithoutBackground_Rejected(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// EvaluateExec applies to background too (test 20)
-// ---------------------------------------------------------------------------
-
-type denyAllExecAuditor struct{ calls int }
-
-func (d *denyAllExecAuditor) EvaluateExec(agentID, command string) policy.Decision {
-	d.calls++
-	return policy.Decision{Allowed: false, PolicyRule: "test deny-all"}
-}
-
-func TestBash_EvaluateExecAppliesToBackgroundToo(t *testing.T) {
-	workspace := t.TempDir()
-	auditor := &denyAllExecAuditor{}
-	tool, err := NewExecToolWithDeps(workspace, false, nil, ExecToolDeps{PolicyAuditor: auditor})
-	require.NoError(t, err)
-
-	fgResult := tool.Execute(bashCtx(t), map[string]any{"command": "echo hi"})
-	require.True(t, fgResult.IsError, "foreground must be blocked by EvaluateExec")
-
-	bgResult := tool.Execute(bashCtx(t), map[string]any{
-		"command":           "echo hi",
-		"run_in_background": true,
-	})
-	require.True(t, bgResult.IsError, "background must ALSO be blocked by EvaluateExec")
-	assert.Equal(t, 2, auditor.calls, "EvaluateExec must be consulted for both foreground and background")
-}
-
-// ---------------------------------------------------------------------------
 // God-mode skips hardening uniformly (test 21)
 // ---------------------------------------------------------------------------
 
@@ -783,49 +754,6 @@ func TestBash_AuditNotFailClosed_ContinuesOnWriteFailure(t *testing.T) {
 	result := tool.Execute(bashCtx(t), map[string]any{"command": "echo still-runs"})
 	require.False(t, result.IsError, "AuditFailClosed=false must not block execution, got ForLLM=%q", result.ForLLM)
 	assert.Contains(t, result.ForLLM, "still-runs")
-}
-
-// ---------------------------------------------------------------------------
-// Denied binary via a real PolicyAuditor writes an audit deny entry
-// ---------------------------------------------------------------------------
-
-type mockPolicyAuditSinkBash struct {
-	entries []*policy.AuditEntry
-}
-
-func (m *mockPolicyAuditSinkBash) LogPolicyDecision(entry *policy.AuditEntry) error {
-	m.entries = append(m.entries, entry)
-	return nil
-}
-
-func TestBash_DeniedBinaryAuditor_WritesAuditDenyEntry(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("test uses POSIX shell")
-	}
-	sink := &mockPolicyAuditSinkBash{}
-	secCfg := &policy.SecurityConfig{
-		DefaultPolicy: policy.PolicyDeny,
-		Policy: policy.PolicySection{
-			Exec: policy.ExecPolicy{AllowedBinaries: nil},
-		},
-	}
-	eval := policy.NewEvaluator(secCfg)
-	realAuditor := policy.NewPolicyAuditor(eval, sink, "test-session-001")
-
-	workspace := t.TempDir()
-	tool, err := NewExecToolWithDeps(workspace, false, nil, ExecToolDeps{PolicyAuditor: realAuditor})
-	require.NoError(t, err)
-
-	result := tool.Execute(bashCtx(t), map[string]any{"command": "echo hello"})
-	require.True(t, result.IsError, "empty allowlist + deny default must reject, got ForLLM=%q", result.ForLLM)
-
-	var foundDeny bool
-	for _, entry := range sink.entries {
-		if entry.Event == "exec" && entry.Decision == "deny" {
-			foundDeny = true
-		}
-	}
-	assert.True(t, foundDeny, "audit sink must contain an exec/deny entry; got %d entries", len(sink.entries))
 }
 
 // ---------------------------------------------------------------------------

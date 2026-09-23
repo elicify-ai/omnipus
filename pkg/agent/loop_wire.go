@@ -78,19 +78,12 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry, cfg *config.Con
 		if al.sandboxEgressProxy != nil {
 			deps.Proxy = al.sandboxEgressProxy
 		}
-		// Nil-guarded to avoid the typed-nil-in-interface trap: storing a nil
-		// *policy.PolicyAuditor in an interface field would create a non-nil
-		// interface holding a nil pointer, defeating downstream `!= nil` checks.
-		if al.policyAuditor != nil {
-			deps.PolicyAuditor = al.policyAuditor
-		}
 		// ADR-092: mode resolution, the interactive escalation fallback,
 		// the session grant store (the SAME instance AgentLoop.
 		// ApprovalGrants() returns, so a grant recorded by the tool is the
 		// one the gateway and delegate inheritance see), and the operator
-		// command rules. Nil-guarded for the same typed-nil reason as
-		// PolicyAuditor above; a nil gate leaves the tool failing closed to
-		// Ask.
+		// command rules. Nil-guarded: a nil gate leaves the tool failing
+		// closed to Ask.
 		if al.shellGate != nil {
 			deps.ShellMode = al.shellGate
 			deps.ApprovalRequester = al.shellGate
