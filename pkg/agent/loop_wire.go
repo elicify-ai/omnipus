@@ -138,7 +138,7 @@ func (al *AgentLoop) WireTier13Deps(deps Tier13Deps) {
 		al.sandboxEgressProxy = deps.EgressProxy
 	}
 
-	al.wireTier13DepsLocked(al.registry, deps)
+	al.wireTier13DepsLocked(al.registry, deps, al.GetConfig())
 
 	// Re-wire exec deps now that we have the egress proxy. Without this,
 	// the exec tool's hardened path runs without HTTP_PROXY env vars.
@@ -147,15 +147,20 @@ func (al *AgentLoop) WireTier13Deps(deps Tier13Deps) {
 
 // wireTier13DepsLocked is the actual wiring logic, factored out so hot-reload
 // can re-apply it against a freshly-built registry without re-stashing.
-func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13Deps) {
-	if registry == nil {
-		return
-	}
-	// Read al.cfg under al.mu.RLock (GetConfig), NOT bare: this helper runs
-	// in the unlocked wiring pass of UpsertAgentFast/ReloadProviderAndConfig,
-	// and a bare al.cfg read races every pointer-swap publisher of al.cfg.
-	cfg := al.GetConfig()
-	if cfg == nil {
+//
+// cfg is the config the registry was (or is being) built from, passed in
+// rather than read via al.GetConfig(): ReloadProviderAndConfig publishes the
+// new config only AFTER this wiring pass (the atomic al.cfg swap happens
+// later), so reading the live pointer here would build every web_serve tool
+// from the PREVIOUS config's ServeWorkspace duration bounds, dev-server port
+// range/concurrency cap, Tier3Commands and EgressAllowList — the same bug
+// class wireExecToolDepsOn had (fixed in 42657cc64). This does NOT apply to
+// the al.GetConfig method value passed into tools.NewWebServeTool below,
+// which the tool calls again on every serve_web request to read the LIVE
+// config at call time (preview-on-main-listener v5) — that live read is the
+// intended behavior, not the bug.
+func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13Deps, cfg *config.Config) {
+	if registry == nil || cfg == nil {
 		return
 	}
 

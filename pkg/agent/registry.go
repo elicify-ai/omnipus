@@ -747,7 +747,7 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 		// design note) while giving the one new/updated instance full parity.
 		registerSharedTools(al, cfg, al.bus, newRegistry, provider)
 		if al.tier13Deps != nil {
-			al.wireTier13DepsLocked(newRegistry, *al.tier13Deps)
+			al.wireTier13DepsLocked(newRegistry, *al.tier13Deps, cfg)
 		}
 		al.wireExecToolDepsOn(newRegistry, cfg)
 		if al.sysagentDeps != nil {

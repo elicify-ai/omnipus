@@ -81,7 +81,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// fresh AgentInstances whose Tools registries don't know about the shared
 	// ServedSubdirs / DevServerRegistry / EgressProxy singletons.
 	if al.tier13Deps != nil {
-		al.wireTier13DepsLocked(registry, *al.tier13Deps)
+		al.wireTier13DepsLocked(registry, *al.tier13Deps, cfg)
 	}
 
 	// Re-wire exec tool deps (sandbox mode + egress proxy) on the new
