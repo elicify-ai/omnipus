@@ -1,5 +1,6 @@
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
+import { Tooltip } from '@/components/ui/tooltip'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useResolvedAutoApprove } from '@/hooks/useResolvedAutoApprove'
@@ -39,27 +40,37 @@ export function AutoApprovePicker({
     sendSessionModeUpdate(activeSessionId, next)
   }
 
+  // Design-system rule 14: a recurring "explain this control" job goes
+  // through the catalogued Tooltip, never a native title= — a title
+  // tooltip is also mouse-only (never shown on keyboard focus at all),
+  // which mattered most for the DISABLED reason: a disabled Switch is
+  // pulled out of the tab order, so without Tooltip's own focusable
+  // trigger a keyboard user had no way to discover why it's disabled.
   return (
-    <Label
-      className={cn(
-        'flex items-center gap-[var(--space-1)] shrink-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]',
-        isDisabled ? 'opacity-50' : 'cursor-pointer',
-        className,
-      )}
-      title={
+    <Tooltip
+      content={
         hasRealSession
           ? 'Auto-approve for this chat — turns on or off for this conversation only'
           : 'Send a message first to enable per-chat Auto-approve'
       }
+      data-testid="composer-auto-approve-tooltip-trigger"
     >
-      <Switch
-        checked={resolved}
-        disabled={isDisabled}
-        onCheckedChange={handleToggle}
-        aria-label="Auto-approve for this chat"
-        data-testid="composer-auto-approve-toggle"
-      />
-      <span className="hidden @2xl:inline">Auto</span>
-    </Label>
+      <Label
+        className={cn(
+          'flex items-center gap-[var(--space-1)] shrink-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]',
+          isDisabled ? 'opacity-50' : 'cursor-pointer',
+          className,
+        )}
+      >
+        <Switch
+          checked={resolved}
+          disabled={isDisabled}
+          onCheckedChange={handleToggle}
+          aria-label="Auto-approve for this chat"
+          data-testid="composer-auto-approve-toggle"
+        />
+        <span className="hidden @2xl:inline">Auto</span>
+      </Label>
+    </Tooltip>
   )
 }
