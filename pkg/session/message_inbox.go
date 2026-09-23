@@ -556,20 +556,25 @@ func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage
 		return &AppendResult{Accepted: true, Deduped: true, MessageID: peek.MessageID}, nil
 	}
 
-	// FR-B-010 (I-5): a wake-eligible kind bypasses the unacked-cap and rate
-	// checks, including the question/blocker ceiling, entirely — it never even consults them, so it also never
-	// consumes a rate-window slot that would otherwise count against an
-	// unrelated later message. The D15 per-type ceiling above is untouched.
-	if !classifyEnvelope(peek).WakeEligible {
-		if questionOrBlockerKind(peek.Kind) {
-			ceiling := s.InboxPerTypeCeiling
-			if ceiling <= 0 {
-				ceiling = DefaultInboxPerTypeCeiling
-			}
-			if openTypeCount >= ceiling {
-				return nil, fmt.Errorf("%w (%d/%d for session %s)", ErrInboxPerChildCeiling, openTypeCount, ceiling, peek.SessionID)
-			}
+	// FR-B-010 (I-5): the D15 per-type question/blocker ceiling bounds
+	// every kind, wake-eligible or not (this function's own doc comment
+	// above), so it is checked unconditionally, before the wake-eligible
+	// bypass below.
+	if questionOrBlockerKind(peek.Kind) {
+		ceiling := s.InboxPerTypeCeiling
+		if ceiling <= 0 {
+			ceiling = DefaultInboxPerTypeCeiling
 		}
+		if openTypeCount >= ceiling {
+			return nil, fmt.Errorf("%w (%d/%d for session %s)", ErrInboxPerChildCeiling, openTypeCount, ceiling, peek.SessionID)
+		}
+	}
+
+	// A wake-eligible kind bypasses the unacked-cap and rate checks
+	// entirely — it never even consults them, so it also never consumes a
+	// rate-window slot that would otherwise count against an unrelated
+	// later message.
+	if !classifyEnvelope(peek).WakeEligible {
 		unackedMax := s.InboxUnackedMax
 		if unackedMax <= 0 {
 			unackedMax = DefaultInboxUnackedMax

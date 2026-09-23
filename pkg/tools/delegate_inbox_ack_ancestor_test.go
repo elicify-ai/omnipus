@@ -181,7 +181,7 @@ func TestDelegateInboxAck_UnrelatedCallerDenied(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("an unrelated caller must NOT be able to ack another owner's inbox, got success: %s", res.ForLLM)
 	}
-	if !strings.Contains(res.ForLLM, "not owned by the calling session") {
+	if !strings.Contains(res.ForLLM, "not steered by the calling principal") {
 		t.Errorf("expected an ownership denial, got: %s", res.ForLLM)
 	}
 

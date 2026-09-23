@@ -110,10 +110,21 @@ func TestMessageInboxStore_DedupeByMessageID(t *testing.T) {
 	}
 }
 
-// TestMessageInboxStore_WakeEligibleQuestionBypassesCeiling proves a question
-// cannot be dropped by the per-child ceiling: wake-eligible entries always
-// reach the steering session.
-func TestMessageInboxStore_WakeEligibleQuestionBypassesCeiling(t *testing.T) {
+// TestMessageInboxStore_PerChildCeiling_FailsBackNeverDrops proves D15: a
+// child hitting the 20-open-question+blocker ceiling gets a CLEAR ERROR
+// (never a silent drop), and a SIBLING child under the same owner key is
+// unaffected.
+//
+// FR-B-010's wake-eligible bypass (handback/question/blocker/fatal
+// error/goal_status "always admitted") is scoped to the unacked-cap and
+// the rate check — Append's own doc comment says so explicitly ("but
+// never the D15 per-type ceiling, which still bounds every kind"). D15
+// (ADR-053, AC-15) is a separate, narrower abuse guard against a
+// misbehaving child and applies regardless of wake-eligibility — question
+// and blocker are the ONLY two kinds the ceiling ever gates, and both are
+// also always wake-eligible, so bypassing the ceiling for wake-eligible
+// kinds would make the ceiling permanently unreachable dead code.
+func TestMessageInboxStore_PerChildCeiling_FailsBackNeverDrops(t *testing.T) {
 	s := newTestInboxStore(t)
 	s.InboxPerTypeCeiling = 20      // explicit, matches D15 default
 	s.ChildSendRatePerMinute = 1000 // disable the UNRELATED rate cap for this test
@@ -125,10 +136,15 @@ func TestMessageInboxStore_WakeEligibleQuestionBypassesCeiling(t *testing.T) {
 		}
 	}
 
-	// The 21st open question remains admitted because it is wake-eligible.
+	// The 21st open question must be REJECTED with a clear, typed error —
+	// never silently dropped.
 	overCeiling := questionMsg(t, "child-noisy", "q-overflow")
-	if _, err := s.Append("owner-1", overCeiling); err != nil {
-		t.Fatalf("wake-eligible question was rejected at the per-child ceiling: %v", err)
+	_, err := s.Append("owner-1", overCeiling)
+	if err == nil {
+		t.Fatal("expected the 21st open question to be rejected, got nil error")
+	}
+	if !errors.Is(err, ErrInboxPerChildCeiling) {
+		t.Errorf("expected ErrInboxPerChildCeiling, got: %v", err)
 	}
 
 	// A SIBLING child under the SAME owner key must be entirely unaffected.

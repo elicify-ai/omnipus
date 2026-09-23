@@ -706,8 +706,15 @@ func TestListJobs_ActionableTracksProcessLifetimeAndTerminality(t *testing.T) {
 	roster := decodeRoster(t, tool.Execute(jobCtx("mia", "ws1"), map[string]any{"include_terminal": true}))
 
 	want := map[string]bool{
-		"ses-live":   true,  // live and resolvable
-		"ses-orphan": false, // durable record survived a restart; the index did not
+		// classify-steered-sessions-durably: the lifecycle record is the
+		// durable authority after restart; whether an old in-memory
+		// delegate index happens to still contain the id cannot make a
+		// running or parked session unactionable (see
+		// collectSubagentRows's own doc comment in list_jobs_sources.go).
+		// ses-orphan is Actionable=true on that basis even though it is
+		// absent from the resolver's `live` map.
+		"ses-live":   true,  // live: non-terminal
+		"ses-orphan": true,  // durable record survived a restart; non-terminal
 		"ses-dead":   false, // terminal
 		"pln-live":   true,
 		"pln-done":   false, // terminal: execute_plan will not run a done plan
@@ -722,10 +729,12 @@ func TestListJobs_ActionableTracksProcessLifetimeAndTerminality(t *testing.T) {
 		}
 	}
 
-	// The delegate index is guarded by the hottest mutex in the delegation
-	// path, so it is read once per CALL, never once per row.
-	if resolver.calls != 1 {
-		t.Errorf("the session resolver must be called exactly once per call, got %d", resolver.calls)
+	// The session resolver is wired but no longer consulted for
+	// Actionable: terminality of the durable lifecycle record decides it
+	// alone now. Asserting zero calls pins that down, so a regression back
+	// to resolver-gated Actionable is caught here again.
+	if resolver.calls != 0 {
+		t.Errorf("the session resolver must not be called for Actionable classification anymore, got %d calls", resolver.calls)
 	}
 }
 
