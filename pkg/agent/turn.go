@@ -1118,14 +1118,18 @@ func (al *AgentLoop) GetActiveTurnHookForSession(sessionID string) TurnCancelHoo
 // the consumer-side seam `delegate action=status` reaches through to read a
 // running native child's LIVE tool-call-argument progress, wired in via
 // delegateTool.SetProgressReader at DelegateTool construction (loop.go),
-// mirroring the existing SubTurnSpawner/DelegateAgentRegistry/
+// mirroring the existing steer.SessionLauncher/DelegateAgentRegistry/
 // DelegateSessionStore seams this tool already uses to avoid a tools<->agent
-// import cycle.
+// import cycle. (It used to name SubTurnSpawner here; that interface was
+// deleted with the sub-turn path and has zero definitions today.)
 //
-// sessionKey here is expected to be a DelegateTaskState.DelegateSessionID —
-// the SAME id spawnSubTurn (subturn.go) registers the child's own turnState
-// under in al.activeTurnStates (`al.activeTurnStates.Store(childID, childTS)`
-// where childID := cfg.DelegateSessionID). This is a direct Load on that
+// sessionKey here is expected to be the delegate session id
+// (session.LifecycleRecord.SessionID, the id `delegate action=run` returns)
+// — the SAME id this file's registerActiveTurn registers the child's own
+// turnState under in al.activeTurnStates
+// (`al.activeTurnStates.Store(ts.sessionKey, ts)`, where a steered child's
+// ts.sessionKey is set to rec.SessionID by
+// steer_reconstruct.go::reconstructSteeredTurn). This is a direct Load on that
 // existing registry, not a new one: activeTurnStates already exists
 // specifically to let cross-goroutine callers reach a live turn by a key
 // they hold (GetActiveTurnHookForSession/claimAnyTurnForSession above do the

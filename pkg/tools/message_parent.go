@@ -812,6 +812,24 @@ func (t *MessageParentTool) parkNeedsInput(childSessionID string, correlationID 
 	})
 }
 
+// toIntArg is the ONE integer-argument parser for this package's tool
+// front doors: message_parent's `pct`, delegate_status's `max`, and
+// delegate_goal's `check.expected_exit_code`.
+//
+// It REJECTS a fractional float rather than truncating it. Every call site
+// reports the same contract to the model on failure ("must be an integer",
+// "must be an integer 0-100", "must be an integer from 0 to 255"), so
+// silently turning pct=50.7 into 50, or expected_exit_code=1.5 into 1, told
+// the model its value was accepted as written when it was not. A whole-valued
+// float (50.0, the shape a JSON decoder produces for `50`) still converts.
+//
+// int64 is accepted alongside int because a Go-side caller and the stdjson
+// build tag can both produce one where encoding/json would produce float64.
+//
+// This replaces delegate_goal.go's `integerArgument`, which had the strict
+// float rule but no int64 case, and the previous truncating form of this
+// function. Deleted, not deprecated: there is one parser, and it is this one.
+// Guarded by message_parent_test.go::TestToIntArg_RejectsFractionalFloat.
 func toIntArg(v any) (int, error) {
 	switch n := v.(type) {
 	case int:
@@ -819,7 +837,11 @@ func toIntArg(v any) (int, error) {
 	case int64:
 		return int(n), nil
 	case float64:
-		return int(n), nil
+		integer := int(n)
+		if float64(integer) != n {
+			return 0, fmt.Errorf("not an integer")
+		}
+		return integer, nil
 	default:
 		return 0, fmt.Errorf("not a number")
 	}

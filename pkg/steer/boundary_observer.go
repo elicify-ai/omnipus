@@ -6,9 +6,10 @@ package steer
 
 // NopBoundaryObserver is the production BoundaryObserver — every
 // publication boundary calls Observe before acting, and in
-// production that call does nothing. The I-7 test fixture supplies the only
-// other implementation (RecordingOutbound), used in tests to distinguish
-// "boundary exercised and blocked" from "never exercised".
+// production that call does nothing. Every OTHER implementation is a test
+// recorder used to distinguish "boundary exercised and blocked" from "never
+// exercised"; there are several, not one — see BoundaryObserver's own doc
+// comment in steer.go for where they live.
 type NopBoundaryObserver struct{}
 
 var _ BoundaryObserver = NopBoundaryObserver{}

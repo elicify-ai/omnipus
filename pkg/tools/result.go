@@ -11,7 +11,6 @@ import (
 	"unicode"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 const artifactPathsLLMNote = "Use `send_file` with one of these paths to send it to the user, or use file/exec tools to save it inside the workspace if requested."
@@ -54,10 +53,6 @@ type ToolResult struct {
 	// Agent presentation may copy it into the current provider request, while
 	// durable history retains only ForLLM's re-read marker.
 	InspectionImages []InspectionImage `json:"-"`
-
-	// Messages: reserved. No production writer since ADR-091 deleted the
-	// sub-turn ephemeral ring; always nil today.
-	Messages []providers.Message `json:"-"`
 
 	// ArtifactTags exposes local artifact paths back to the LLM in a structured
 	// form, e.g. "[file:/tmp/example.png]". This is used when a tool produced a
@@ -152,7 +147,7 @@ type ToolResult struct {
 	//
 	// Meaningful ONLY on a SYNCHRONOUS result: it rides the tool's own
 	// *ToolResult pointer back through ToolRegistry.Execute and
-	// normalizeToolResult exactly like Err/Messages above, but a result
+	// normalizeToolResult exactly like Err above, but a result
 	// reconstituted from a stored payload (a background dispatch, an async
 	// notifier round-trip) has crossed a serialisation boundary that
 	// json:"-" deliberately strips.

@@ -500,21 +500,29 @@ func (n *asyncNotifierImpl) allowWake(debounceKey string) bool {
 	return true
 }
 
-// WakeParent implements tools.MessageParentWaker — the interface
-// pkg/tools/message_parent.go depends on (defined on the tools side to
-// avoid a tools<->agent import cycle; asyncNotifierImpl satisfies it
-// structurally). kind is the originating SessionMessage's discriminator
-// (question/blocker/error/handback — anything else is rejected, since only
-// those four kinds may wake a new turn per the ADR). event carries the
-// already-resolved routing (Channel/ChatID/AgentID/TranscriptSessionID) the
-// caller assembled from the ORIGINAL delegation's own OriginChannel/
-// OriginChatID (DelegateTaskState / the durable SessionLifecycleRecord's
-// owner scope) — this file does not itself resolve "where does the parent
-// live", only whether/when to wake it.
+// WakeParent is the legacy bus-consumer wake path
+// (session_messaging_wire.go::fireWakeForBusMessage). It is NOT an
+// implementation of tools.MessageParentWaker: ADR-091 deleted that interface
+// and replaced it with steer.UpwardDeliverer, whose Deliver method
+// (steer_audience.go) is the only upward path from a child to its parent. It
+// still takes a tools.MessageParentWakeEvent, which survives as a plain
+// value type on the tools side.
+//
+// kind is the originating SessionMessage's discriminator and must be a
+// member of wakeableSessionMessageKinds above — FIVE kinds since ADR-091 I-5
+// added goal_status, not the original four. Keep the rejection message below
+// in step with that map; they drifted once already.
+//
+// event carries the already-resolved routing
+// (Channel/ChatID/AgentID/TranscriptSessionID) the caller assembled from the
+// ORIGINAL delegation's own OriginChannel/OriginChatID on the durable
+// session.LifecycleRecord — this file does not itself resolve "where does
+// the parent live", only whether/when to wake it.
 func (n *asyncNotifierImpl) WakeParent(ctx context.Context, kind string, event tools.MessageParentWakeEvent) error {
 	if !wakeableSessionMessageKinds[kind] {
 		return fmt.Errorf(
-			"async notifier: wake parent: kind %q is not wakeable (question/blocker/error/handback only)", kind,
+			"async notifier: wake parent: kind %q is not wakeable "+
+				"(question/blocker/error/handback/goal_status only)", kind,
 		)
 	}
 	if event.Channel == "" || event.ChatID == "" {

@@ -24,8 +24,11 @@ import (
 // (FR-B-001/FR-B-014). Package-level (not a wsStreamer field) because
 // wsStreamer itself is defined in websocket.go — adding a new per-instance
 // field there is a cross-file change, not something this
-// lane edits directly. Mirrors pkg/tools/message_parent.go's
-// logMessageParentWakeFailure package-var-plus-setter precedent.
+// lane edits directly. The package-var-plus-setter shape has one other
+// user in this package: SetGatewaySteerAudienceDeps below is its only
+// writer. (This used to cite pkg/tools/message_parent.go's
+// logMessageParentWakeFailure as the precedent; that symbol was deleted and
+// message_parent.go now has no package-level vars at all.)
 var (
 	steerAudienceMu       sync.RWMutex
 	steerAudienceResolver steer.AudienceResolver

@@ -504,3 +504,59 @@ func TestMessageParentTool_KillSwitchDisabled_FailsClosed_ArchM2(t *testing.T) {
 		t.Fatalf("unset closure must fail open, got: %+v", openRes)
 	}
 }
+
+// TestToIntArg_RejectsFractionalFloat pins the semantics chosen when
+// delegate_goal.go's `integerArgument` and this file's `toIntArg` — same
+// package, same signature, opposite behaviour on a fractional float — were
+// unified into the single parser in message_parent.go.
+//
+// The strict rule won because all three call sites promise the model an
+// integer in their own rejection message (message_parent `pct`: "must be an
+// integer 0-100"; delegate_status `max`: "must be an integer";
+// delegate_goal `check.expected_exit_code`: "must be an integer from 0 to
+// 255"). Truncating 50.7 to 50 accepted a value the tool had just told the
+// model it would not accept. int64 is carried over from the truncating
+// version because a Go-side caller can produce one.
+//
+// Expected values come from that contract, not from reading the
+// implementation: a whole-valued float converts, a fractional one is an
+// error, and a non-number is an error.
+func TestToIntArg_RejectsFractionalFloat(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		in      any
+		want    int
+		wantErr bool
+	}{
+		{name: "int", in: 42, want: 42},
+		{name: "int64", in: int64(7), want: 7},
+		{name: "whole float (the shape a JSON decoder produces for 50)", in: float64(50), want: 50},
+		{name: "negative whole float", in: float64(-3), want: -3},
+		{name: "zero", in: float64(0), want: 0},
+		{name: "fractional float is rejected, never truncated", in: 50.7, wantErr: true},
+		{name: "fractional float below one is rejected", in: 0.5, wantErr: true},
+		{name: "negative fractional float is rejected", in: -1.5, wantErr: true},
+		{name: "string is not a number", in: "50", wantErr: true},
+		{name: "bool is not a number", in: true, wantErr: true},
+		{name: "nil is not a number", in: nil, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := toIntArg(tc.in)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("toIntArg(%#v) = (%d, nil), want an error", tc.in, got)
+				}
+				if got != 0 {
+					t.Fatalf("toIntArg(%#v) returned %d alongside its error, want the zero value", tc.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("toIntArg(%#v) returned error %v, want (%d, nil)", tc.in, err, tc.want)
+			}
+			if got != tc.want {
+				t.Fatalf("toIntArg(%#v) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
