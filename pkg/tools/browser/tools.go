@@ -13,6 +13,7 @@ import (
 	"github.com/chromedp/chromedp"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -711,6 +712,78 @@ func (t *ScreenshotTool) Parameters() map[string]any {
 	}
 }
 
+var _ tools.AutoApproveClassifier = (*ScreenshotTool)(nil)
+
+// screenshotFilename generates the JPEG's fixed, timestamp-based relative
+// filename. browser_screenshot exposes no filename argument (see
+// Parameters above — the schema takes no properties at all), so this is the
+// ONLY value ever handed to ResolvePath for a write: nothing a caller
+// supplies can steer the destination.
+func screenshotFilename() string {
+	return fmt.Sprintf("omnipus-screenshot-%d.jpg", time.Now().UnixMilli())
+}
+
+// AutoApproveVerdict implements ADR-092 D9 §3.5: browser_screenshot's
+// founder verdict is RUNS-IF, gated on the §2 J2 workspace-path rule
+// applied to the JPEG's write destination, through tools.AutoWorkspacePath
+// — the shared classify-time preview (ResolveTurnFSPolicy, then resolution
+// with no grant overlay) every RUNS-IF file tool uses, closing the handle
+// without writing.
+//
+// args is unused: this tool takes no arguments a caller could steer the
+// destination with (Parameters above has no properties), so the verdict
+// depends only on the turn's own filesystem policy.
+func (t *ScreenshotTool) AutoApproveVerdict(ctx context.Context, _ map[string]any) tools.AutoVerdict {
+	pinned, ok, reason := tools.AutoWorkspacePath(
+		ctx, t.agentHome, t.restrict, t.Name(), tools.FSOpWrite,
+		screenshotFilename(), nil, fspolicy.PathGrantAccessWrite,
+	)
+	if !ok {
+		return tools.AutoVerdict{Run: false, Class: tools.AutoVerdictClassAsks, Reason: reason}
+	}
+	return tools.AutoVerdict{
+		Run:    true,
+		Class:  tools.AutoVerdictClassRunsIfArgs,
+		Reason: "screenshot destination resolves inside the workspace or a mount",
+		Paths:  []tools.PinnedPath{pinned},
+	}
+}
+
+// writeScreenshot resolves this call's destination through the same
+// chokepoint every write in this tool uses (ADR-046 FR-003/FR-009/FR-034:
+// ResolveTurnFSPolicy, then ResolvePath(FSOpWrite)) — an independent
+// resolution from AutoApproveVerdict's, using whatever the workspace's
+// mounts and the agent's home look like right NOW — then applies ADR-092
+// D9 §5.3's write-time re-check (tools.RecheckAutoPin) before writing buf.
+// The re-check is a no-op unless this call was pinned as Auto-approved; a
+// call approved by a human or a policy allow is unaffected. Returns the
+// saved file's real path, or a ToolResult explaining the refusal — nothing
+// is written when it refuses.
+func (t *ScreenshotTool) writeScreenshot(ctx context.Context, buf []byte) (string, *tools.ToolResult) {
+	policy, err := tools.ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
+	if err != nil {
+		return "", tools.PermissionDeniedResult(
+			"browser_screenshot", err, fmt.Sprintf("failed to resolve filesystem policy: %s", err))
+	}
+	handle, err := tools.ResolvePath(ctx, policy, t.Name(), "", tools.FSOpWrite, screenshotFilename())
+	if err != nil {
+		return "", tools.PermissionDeniedResult("browser_screenshot", err, err.Error())
+	}
+	defer handle.Close()
+
+	real, err := handle.RealPath()
+	if err != nil {
+		return "", tools.ErrorResult(fmt.Sprintf("browser_screenshot: failed to resolve destination path: %s", err))
+	}
+	if recheckErr := tools.RecheckAutoPin(ctx, t.Name(), policy, real, fspolicy.PathGrantAccessWrite); recheckErr != nil {
+		return "", tools.PermissionDeniedResult("browser_screenshot", recheckErr, recheckErr.Error())
+	}
+	if err = handle.WriteFile(buf); err != nil {
+		return "", tools.ErrorResult(fmt.Sprintf("browser_screenshot: failed to save: %s", err))
+	}
+	return real, nil
+}
+
 // waitForPageSettle polls document.readyState until it reports "complete"
 // (up to 30 tries, 100ms apart), then sleeps 500ms more for client-side JS
 // frameworks to finish painting. Best-effort readyState poll: any error
@@ -800,27 +873,18 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 	// in the turn's effective working directory (the per-turn Workspace
 	// re-root when present, else the agent's own home's work/ dir) rather
 	// than a process-wide shared temp directory no per-agent/per-turn
-	// confinement ever covered.
-	filename := fmt.Sprintf("omnipus-screenshot-%d.jpg", time.Now().UnixMilli())
-	policy, err := tools.ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
-	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: failed to resolve filesystem policy: %s", err))
-	}
-	handle, err := tools.ResolvePath(ctx, policy, "browser_screenshot", "", tools.FSOpWrite, filename)
-	if err != nil {
-		return tools.PermissionDeniedResult("browser_screenshot", err, err.Error())
-	}
-	defer handle.Close()
-	if err = handle.WriteFile(buf); err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: failed to save: %s", err))
-	}
-	// RealPath is the ONE documented exception to "never hand back a bare
-	// string" (PathHandle.RealPath's doc comment) — used here solely because
-	// ArtifactTags' [file:...] marker is an OS-boundary reference consumed
-	// later by send_file/the media pipeline, not a PathHandle-based read.
-	path, err := handle.RealPath()
-	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: failed to resolve saved path: %s", err))
+	// confinement ever covered. writeScreenshot's resolution is independent
+	// of AutoApproveVerdict's own preview above (ADR-092 D9 §5.3): it
+	// re-checks against the pin, if any, and the CURRENT state of the
+	// world, and refuses — without writing — if the destination no longer
+	// qualifies. path is the ONE documented exception to "never hand back a
+	// bare string" (PathHandle.RealPath's doc comment) — used here solely
+	// because ArtifactTags' [file:...] marker is an OS-boundary reference
+	// consumed later by send_file/the media pipeline, not a
+	// PathHandle-based read.
+	path, failure := t.writeScreenshot(ctx, buf)
+	if failure != nil {
+		return failure
 	}
 
 	// FullScreenshot with quality>0 produces JPEG. Return as data URL so
