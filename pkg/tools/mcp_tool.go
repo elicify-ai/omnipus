@@ -154,6 +154,51 @@ func (t *MCPTool) Category() ToolCategory { return CategoryMCP }
 
 func (t *MCPTool) MCPSource() (string, string) { return t.serverName, t.tool.Name }
 
+var _ AutoApproveClassifier = (*MCPTool)(nil)
+
+// AutoApproveVerdict implements ADR-092 D9 §4: under Auto, an MCP tool on
+// Ask runs only when its server marked it read-only (ReadOnlyHint: true) or
+// explicitly not destructive (DestructiveHint: false). Every other shape —
+// no annotations at all, annotations present with DestructiveHint nil and
+// ReadOnlyHint false, or DestructiveHint true — asks. This follows the MCP
+// specification's own default: DestructiveHint defaults to true when it is
+// absent, and the hint is meaningful only when ReadOnlyHint is false, so an
+// unlabelled tool is treated as destructive and must ask (founder decision
+// 2026-09-23, "following the MCP specification").
+//
+// args is intentionally unused: the verdict depends only on the server's
+// own tool annotations (t.tool.Annotations), never on this call's
+// arguments — an MCP tool has no J2 workspace-path condition of its own.
+func (t *MCPTool) AutoApproveVerdict(_ context.Context, _ map[string]any) AutoVerdict {
+	ann := t.tool.Annotations
+	if ann == nil {
+		return AutoVerdict{
+			Run:    false,
+			Class:  AutoVerdictClassAsks,
+			Reason: fmt.Sprintf("mcp tool %s has no annotations; the MCP specification treats an unlabelled tool as destructive", t.Name()),
+		}
+	}
+	if ann.ReadOnlyHint {
+		return AutoVerdict{
+			Run:    true,
+			Class:  AutoVerdictClassMCPNotDestructive,
+			Reason: fmt.Sprintf("server %s marked %s read-only (readOnlyHint=true)", t.serverName, t.tool.Name),
+		}
+	}
+	if ann.DestructiveHint != nil && !*ann.DestructiveHint {
+		return AutoVerdict{
+			Run:    true,
+			Class:  AutoVerdictClassMCPNotDestructive,
+			Reason: fmt.Sprintf("server %s marked %s explicitly not destructive (destructiveHint=false)", t.serverName, t.tool.Name),
+		}
+	}
+	return AutoVerdict{
+		Run:    false,
+		Class:  AutoVerdictClassAsks,
+		Reason: fmt.Sprintf("mcp tool %s is not marked read-only and is not explicitly non-destructive", t.Name()),
+	}
+}
+
 // Parameters returns the tool parameters schema
 func (t *MCPTool) Parameters() map[string]any {
 	// The InputSchema is already a JSON Schema object
