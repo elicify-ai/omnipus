@@ -100,18 +100,7 @@ func TestJudgeVerdictFrame_LiveAndReplayCarryTheSameSessionID(t *testing.T) {
 	require.NotNil(t, replayed.SessionId, "the replayed frame must carry session_id so a reload still shows the card")
 	assert.Equal(t, sessionID, *live.SessionId)
 	assert.Equal(t, sessionID, *replayed.SessionId)
-	// PR #823 (ws_sequence.go::emitSessionFrame) made every live session frame
-	// carry a `seq` for reconnect catch-up, JudgeVerdictFrame included. Replay
-	// frames deliberately stay unnumbered — streamReplay reconstructs history
-	// out of live real-time order, and stamping a number on something replayed
-	// would hand a reconnecting client a cursor position it never legitimately
-	// reached (the same reasoning fe1801fce documents for SessionStateFrame).
-	// So `seq` is the one field expected to differ; everything else must not.
-	require.NotNil(t, live.Seq, "the live push must be numbered for catch-up")
-	assert.Nil(t, replayed.Seq, "replay frames are deliberately unnumbered")
-	liveContent := live
-	liveContent.Seq = nil
-	assert.Equal(t, liveContent, replayed, "live and replayed frames must carry identical content once the transport-only seq is set aside")
+	assert.JSONEq(t, string(liveRaw), string(replayRaw[0]), "live and replayed frames for one round must be identical")
 
 	// The frame carries the contract's fields verbatim.
 	assert.Equal(t, "judge_verdict", replayed.Type)
