@@ -32,6 +32,8 @@
 package gateway
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -79,6 +81,35 @@ func subagentEndEntry(spanID, status string, durationMS int) session.TranscriptE
 			DurationMs: &d,
 		},
 	}
+}
+
+// subagentStartEntryFull builds a persisted subagent_start system entry
+// carrying agentID and childSessionID exactly as steer_frames.go's
+// deliverSubagentStart writes them from the LifecycleRecord it launched
+// (AgentId := childRec.AgentID, ChildSessionId := childRec.SessionID) — the
+// real, current (ADR-091) shape RX-CI's fix reads back in
+// dispatchSpecialEntry, as opposed to subagentStartEntry above (which
+// leaves both fields unset for tests that don't care about them).
+func subagentStartEntryFull(spanID, parentCallID, taskLabel, agentID, childSessionID string) session.TranscriptEntry {
+	e := subagentStartEntry(spanID, parentCallID, taskLabel)
+	if agentID != "" {
+		e.SubagentStart.AgentId = &agentID
+	}
+	if childSessionID != "" {
+		e.SubagentStart.ChildSessionId = &childSessionID
+	}
+	return e
+}
+
+// subagentEndEntryWithAgent builds a persisted subagent_end system entry
+// carrying agentID exactly as deliverSubagentEnd writes it (AgentId :=
+// childRec.AgentID) — subagentEndEntry above leaves it unset.
+func subagentEndEntryWithAgent(spanID, status string, durationMS int, agentID string) session.TranscriptEntry {
+	e := subagentEndEntry(spanID, status, durationMS)
+	if agentID != "" {
+		e.SubagentEnd.AgentId = &agentID
+	}
+	return e
 }
 
 // TestStreamReplay_ActiveSpawnSpan_WithholdsFabricatedDoneSnapshot is the
@@ -287,14 +318,28 @@ func TestStreamReplay_InactiveSpawnCall_EmitsNormally(t *testing.T) {
 
 // TestStreamReplay_SpawnSpan_UsesRealChildAgentID_NotDelegatorID is the
 // regression test for Symptom B: the span-level subagent_start/subagent_end
-// agent_id must be resolved from the REAL delegate's own identity (the
-// nested child tool call's own transcript entry.AgentID — written by the
-// CHILD sub-turn per ADR-032) rather than the delegator's identity (the
-// outer spawn/delegate ToolCall's own entry.AgentID, written by the
-// PARENT). The flat "Delegate task" pill (tool_call_start/tool_call_result
-// for the spawn call itself) intentionally keeps the delegator's own
-// attribution — matching the live UAT observation that the raw pill
-// replayed correctly while the specialized named sub-span did not.
+// agent_id must be resolved from the REAL delegate's own identity rather
+// than the delegator's identity (the outer spawn/delegate ToolCall's own
+// entry.AgentID, written by the PARENT). The flat "Delegate task" pill
+// (tool_call_start/tool_call_result for the spawn call itself) intentionally
+// keeps the delegator's own attribution — matching the live UAT observation
+// that the raw pill replayed correctly while the specialized named sub-span
+// did not.
+//
+// RX-CI fixture rewrite: this test used to hand-build a PRE-ADR-091 shape —
+// a nested child tool call (ParentToolCallID: "c1") recorded directly under
+// the parent's own transcript, which is what buildSpanRealAgentIDs resolves
+// the real agent id from. The ADR-091 launcher never produces that shape (a
+// delegated/task child owns its own store-backed session, D1 — its tool
+// calls are never recorded under the parent's outer span), so that fixture
+// was proving the fallback reconstruction path works for data the system no
+// longer writes, while leaving the actual bug (reconstruction silently
+// falling back to the delegator's id whenever no nested child call exists —
+// i.e. always, post-ADR-091) uncovered. The fixture below instead persists
+// subagent_start/subagent_end exactly as steer_frames.go's
+// deliverSubagentStart/deliverSubagentEnd do — the real, current shape —
+// with AgentId set to the real delegate's identity ("ray") and NO nested
+// child tool call at all.
 func TestStreamReplay_SpawnSpan_UsesRealChildAgentID_NotDelegatorID(t *testing.T) {
 	spawnTC := session.ToolCall{
 		ID:         "c1",
@@ -302,13 +347,6 @@ func TestStreamReplay_SpawnSpan_UsesRealChildAgentID_NotDelegatorID(t *testing.T
 		Status:     "success",
 		DurationMS: 18000,
 		Parameters: map[string]any{"task": "browse and summarize", "label": "web research"},
-	}
-	nestedTC := session.ToolCall{
-		ID:               "t2",
-		Tool:             "web_search",
-		Status:           "success",
-		DurationMS:       900,
-		ParentToolCallID: "c1",
 	}
 	// The PARENT (delegator) writes the outer spawn call's own transcript
 	// entry under ITS OWN identity ("mia").
@@ -319,26 +357,24 @@ func TestStreamReplay_SpawnSpan_UsesRealChildAgentID_NotDelegatorID(t *testing.T
 		AgentID:   "mia",
 		ToolCalls: []session.ToolCall{spawnTC},
 	}
-	// The CHILD sub-turn writes its own nested tool call under ITS OWN
-	// (the real delegate's) identity ("ray") — this is what live rendering
-	// already gets right for subagent_start/subagent_end (childTS.agentID).
-	childEntry := session.TranscriptEntry{
-		ID:        "entry-child",
-		Role:      "assistant",
-		Content:   "researching",
-		AgentID:   "ray",
-		ToolCalls: []session.ToolCall{nestedTC},
+	entries := []session.TranscriptEntry{
+		parentEntry,
+		// Current (ADR-091) shape: the launcher persists subagent_start/
+		// subagent_end synchronously, carrying the REAL delegate's own
+		// identity directly (childRec.AgentID) — no nested child tool call
+		// exists to derive an agent id from.
+		subagentStartEntryFull("span_c1", "c1", "web research", "ray", ""),
+		subagentEndEntryWithAgent("span_c1", "success", 18000, "ray"),
 	}
-	entries := []session.TranscriptEntry{parentEntry, childEntry}
 
 	frames, _ := runReplay(t, entries)
 
 	subStart := findFrame(frames, "subagent_start")
 	require.NotNil(t, subStart, "subagent_start frame must be emitted")
 	assert.Equal(t, "ray", subStart.AgentID,
-		"BUG REGRESSION: subagent_start.agent_id must reflect the REAL delegate's own identity "+
-			"(resolved from the nested child's own entry.AgentID), matching live rendering — "+
-			"not the delegator's identity")
+		"BUG REGRESSION: subagent_start.agent_id must reflect the REAL delegate's own identity as "+
+			"persisted by deliverSubagentStart — not the delegator's identity, and not an empty "+
+			"fallback from a nested-child-tool-call lookup that finds nothing in the current shape")
 
 	subEnd := findFrame(frames, "subagent_end")
 	require.NotNil(t, subEnd, "subagent_end frame must be emitted")
@@ -359,6 +395,100 @@ func TestStreamReplay_SpawnSpan_UsesRealChildAgentID_NotDelegatorID(t *testing.T
 	require.NotNil(t, spawnStart)
 	assert.Equal(t, "mia", spawnStart.AgentID,
 		"the outer 'Delegate task' pill must keep the delegator's own attribution, unaffected by the fix")
+}
+
+// TestStreamReplay_SpawnSpan_EmitsPersistedStart_NotDuplicated proves the
+// suppression half of the RX-CI fix: when a span has a REAL persisted
+// subagent_start entry, replay must emit it exactly ONCE — from
+// dispatchSpecialEntry's own case, at that entry's transcript position —
+// and must NOT also emit a second, synthetic tool-call-derived subStart
+// from emitSpawnParentToolCall. Mirrors the existing duplicate-suppression
+// contract subagent_end already has (see the "Finding 1" test block below).
+func TestStreamReplay_SpawnSpan_EmitsPersistedStart_NotDuplicated(t *testing.T) {
+	spawnTC := session.ToolCall{
+		ID:         "c1",
+		Tool:       "delegate",
+		Status:     "success",
+		DurationMS: 18000,
+		Parameters: map[string]any{"task": "browse and summarize", "label": "web research"},
+	}
+	entries := []session.TranscriptEntry{
+		assistantEntry("delegating", "mia", spawnTC),
+		subagentStartEntryFull("span_c1", "c1", "web research", "ray", ""),
+		subagentEndEntryWithAgent("span_c1", "success", 18000, "ray"),
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	starts := filterByType(frames, "subagent_start")
+	require.Len(t, starts, 1,
+		"BUG REGRESSION: a span with a persisted subagent_start entry must emit exactly ONE "+
+			"subagent_start frame, not one from the persisted entry AND a second, synthetic one "+
+			"reconstructed from the tool call")
+}
+
+// TestStreamReplay_SpawnSpan_PersistsChildSessionID is the regression test
+// for the RX-CI reviewer finding (task 3): subagent_start.child_session_id
+// must survive replay by reading it back from the persisted entry
+// deliverSubagentStart wrote (steer_frames.go), not by reconstructing it
+// from tc.Result["session_id"] — a key NO production writer ever sets
+// (delegate_run.go's result shape carries the child id only as JSON text
+// inside Result["text"]; see pkg/gateway/replay.go's buildSubagentStart doc
+// comment). Before the fix, ChildSessionId was always nil on replay and the
+// "open child session" control vanished after a page reload.
+//
+// Decodes the emitted frame's raw JSON directly, rather than through the
+// shared replayFrameDecoder test helper (pkg/gateway/websocket.go, which
+// has no child_session_id field) — RX-CI does not own that file, and this
+// keeps the regression test fully inside files RX-CI does own.
+func TestStreamReplay_SpawnSpan_PersistsChildSessionID(t *testing.T) {
+	spawnTC := session.ToolCall{
+		ID:         "c1",
+		Tool:       "delegate",
+		Status:     "success",
+		DurationMS: 18000,
+		Parameters: map[string]any{"task": "browse and summarize", "label": "web research"},
+	}
+	entries := []session.TranscriptEntry{
+		assistantEntry("delegating", "mia", spawnTC),
+		subagentStartEntryFull("span_c1", "c1", "web research", "ray", "session_child_42"),
+		subagentEndEntryWithAgent("span_c1", "success", 18000, "ray"),
+	}
+
+	var raw [][]byte
+	emit := func(f any) error {
+		data, err := json.Marshal(f)
+		if err != nil {
+			return err
+		}
+		raw = append(raw, data)
+		return nil
+	}
+	rs := computeReplayStats(entries)
+	_, err := streamReplay(context.Background(), "session_test", entries, rs, emit, nil, nil, nil)
+	require.NoError(t, err, "streamReplay must not return an error for valid input")
+
+	var got struct {
+		Type           string  `json:"type"`
+		ChildSessionID *string `json:"child_session_id"`
+	}
+	found := false
+	for _, r := range raw {
+		var probe struct {
+			Type string `json:"type"`
+		}
+		if jsonErr := json.Unmarshal(r, &probe); jsonErr != nil || probe.Type != "subagent_start" {
+			continue
+		}
+		require.NoError(t, json.Unmarshal(r, &got))
+		found = true
+		break
+	}
+	require.True(t, found, "subagent_start frame must be emitted")
+	require.NotNil(t, got.ChildSessionID,
+		"BUG REGRESSION: subagent_start.child_session_id must survive replay — read back from the "+
+			`persisted entry, not reconstructed from tc.Result["session_id"], a key nothing writes`)
+	assert.Equal(t, "session_child_42", *got.ChildSessionID)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

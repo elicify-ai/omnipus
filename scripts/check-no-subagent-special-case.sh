@@ -22,7 +22,13 @@
 # 2. Wait-inline (blocking delegation):
 #    - executeSync
 #    - DelegationModeAwait
-#    - allow_blocking_question
+#    - allow_blocking_question, with ONE deliberate, founder-approved exception:
+#      pkg/tools/delegate_run.go's validateRequest must name the literal in
+#      order to refuse it ("invalid_argument: allow_blocking_question"). A
+#      tool cannot refuse an argument it is not allowed to name, so this
+#      script path-scopes the ban to exclude that single rejection site —
+#      see ALLOW_BLOCKING_QUESTION_HITS below for the exact mechanism, which
+#      mirrors the ProducingSessionID path-scoping already used in this file.
 #
 # 3. Borrowed parent addresses (internal channel sharing):
 #    - parentTS.channel
@@ -71,14 +77,17 @@ for d in pkg cmd src; do
   fi
 done
 
-# Patterns for deleted symbols (regex alternation)
+# Patterns for deleted symbols (regex alternation).
+#
+# allow_blocking_question is deliberately NOT in this list — see the
+# ALLOW_BLOCKING_QUESTION_HITS section below, which bans it everywhere
+# except the one file allowed to name it.
 BANNED_PATTERNS=(
   'newEphemeralSession'
   'maxEphemeralHistorySize'
   'ephemeralSessionStore'
   'executeSync'
   'DelegationModeAwait'
-  'allow_blocking_question'
   'parentTS\.channel'
   'parentTS\.chatID'
   'ParentDurableKey'
@@ -106,10 +115,35 @@ for f in pkg/agent/events.go pkg/gateway/websocket_forward.go; do
   fi
 done
 
+# allow_blocking_question: founder-approved narrowing (ADR-091 fix round, RX-CI
+# lane), mirroring the ProducingSessionID path-scoping immediately above but
+# inverted. ProducingSessionID is banned ONLY inside a fixed, named set of
+# files; allow_blocking_question is banned EVERYWHERE except a fixed, named
+# rejection site: pkg/tools/delegate_run.go's validateRequest, which returns
+# "invalid_argument: allow_blocking_question" for a caller that still sends
+# the deleted argument. A tool has to NAME an argument in order to REFUSE it,
+# so a strict zero-occurrence rule for this one symbol is unsatisfiable by
+# construction — the rejection site would always trip it. That is also why a
+# string-concatenation trick ("allow_" + "blocking_question") to hide the
+# literal from this exact guard is explicitly rejected: hiding code from our
+# own guard is worse than a guard with one pinned, documented exception.
+# tests/adr091/residual_audit_test.go independently pins this to exactly one
+# occurrence, in exactly this file — see its "allow_blocking_question refused
+# by name, not accepted anywhere" case.
+ALLOW_BLOCKING_QUESTION_HITS="$(grep -rnE 'allow_blocking_question' \
+  --include='*.go' --include='*.ts' --include='*.tsx' --include='*.yaml' \
+  --exclude='*_test.go' --exclude='*.test.ts' --exclude='*.test.tsx' \
+  pkg cmd src 2>/dev/null \
+  | grep -v -E '^pkg/tools/delegate_run\.go:' \
+  || true)"
+
 # Combine all hits
 ALL_HITS="$HITS"
 if [ -n "$PRODUCING_SESSION_HITS" ]; then
   ALL_HITS="$(printf '%s\n%s\n' "$ALL_HITS" "$PRODUCING_SESSION_HITS")"
+fi
+if [ -n "$ALLOW_BLOCKING_QUESTION_HITS" ]; then
+  ALL_HITS="$(printf '%s\n%s\n' "$ALL_HITS" "$ALLOW_BLOCKING_QUESTION_HITS")"
 fi
 
 # Drop comment-only lines: a retirement comment naming the symbol in prose is
