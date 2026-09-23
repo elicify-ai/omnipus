@@ -18,6 +18,9 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"sort"
 	"strings"
 	"testing"
@@ -272,9 +275,9 @@ type stubNonClassifierTool struct{ name string }
 
 func (s stubNonClassifierTool) Name() string                 { return s.name }
 func (s stubNonClassifierTool) Description() string          { return "stub" }
-func (s stubNonClassifierTool) Parameters() map[string]any    { return map[string]any{} }
-func (s stubNonClassifierTool) Scope() tools.ToolScope        { return tools.ScopeGeneral }
-func (s stubNonClassifierTool) Category() tools.ToolCategory  { return tools.CategoryFilesystem }
+func (s stubNonClassifierTool) Parameters() map[string]any   { return map[string]any{} }
+func (s stubNonClassifierTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
+func (s stubNonClassifierTool) Category() tools.ToolCategory { return tools.CategoryFilesystem }
 func (s stubNonClassifierTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	return tools.ErrorResult("stub: not callable")
 }
@@ -409,5 +412,66 @@ func TestAutoApproveClassification_CatalogSanity(t *testing.T) {
 	}
 	if !sysNames["set_config"] {
 		t.Fatal("systools.AllTools(nil) is missing \"set_config\" — the system family the ask-list golden copy depends on is not what this test assumed")
+	}
+}
+
+// --- T16: GET /api/v1/tools carries auto_approve for every entry ---
+
+// TestGetTools_CarriesAutoApproveForEveryEntry wires the SAME registry
+// buildCentralBuiltinRegistry(nil) produces (the function boot itself calls
+// — same precedent as catalogToolNames above) into a restAPI, then asserts
+// every response entry other than "bash" carries a valid auto_approve
+// value, and "bash" carries none at all — the contract's "never appears
+// with this field set" (§7/J14), proved over the wire response, not just
+// the Go struct.
+func TestGetTools_CarriesAutoApproveForEveryEntry(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	reg, _ := buildCentralBuiltinRegistry(nil)
+	api.builtinRegistry = reg
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools", nil)
+	r = withAdminRole(r)
+	w := httptest.NewRecorder()
+	api.HandleToolsRegistry(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/tools = %d, want 200: %s", w.Code, w.Body)
+	}
+
+	var entries []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &entries); err != nil {
+		t.Fatalf("response did not unmarshal as a JSON array: %v", err)
+	}
+	if len(entries) < 100 {
+		t.Fatalf("only %d entries in GET /api/v1/tools with the combined registry wired — the fixture is not building the catalog this test assumed", len(entries))
+	}
+
+	validValues := map[string]bool{"runs": true, "runs_if_args": true, "asks": true}
+	checked := 0
+	for _, entry := range entries {
+		name, _ := entry["name"].(string)
+		if entry["source"] != "builtin" {
+			continue // MCP entries are covered by rest_tool_registry_mcp_test.go's own fixtures.
+		}
+		raw, present := entry["auto_approve"]
+		if name == "bash" {
+			if present {
+				t.Errorf("bash entry carries auto_approve=%v; the contract says it never appears with this field set", raw)
+			}
+			continue
+		}
+		if !present {
+			t.Errorf("tool %q has no auto_approve field in the GET /api/v1/tools response", name)
+			continue
+		}
+		str, ok := raw.(string)
+		if !ok || !validValues[str] {
+			t.Errorf("tool %q auto_approve = %v, want one of runs|runs_if_args|asks", name, raw)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("no non-bash builtin entries were checked — the fixture produced no usable entries")
 	}
 }
