@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -759,7 +761,8 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 		Criteria:        criteria,
 		Attempt:         p.JudgeRounds + 1,
 		ClaimText:       buildPlanClaimText(tasks, superseded),
-		ExtraContext:    buildPlanJudgeExtraContext(p) + gamingGuardEvidence(tasks, superseded, postUnmet),
+		ExtraContext: buildPlanJudgeExtraContext(p, tasks, resolveGoalRecordStore()) +
+			gamingGuardEvidence(tasks, superseded, postUnmet),
 		// Product-blocker fix (ADR-052 FR-011/012 x ADR-046 P1): the plan's
 		// own workspace (plan.go:264) — same rationale as task_executor.go's
 		// task-scope call. See JudgeCriteriaInput.WorkspaceID.
@@ -1654,7 +1657,29 @@ func truncateForClaim(s string) string {
 	return s[:planClaimTruncateLimit] + "..."
 }
 
-func buildPlanJudgeExtraContext(p *plan.Plan) string {
+// buildPlanJudgeExtraContext renders the plan judge's per-round context: the
+// plan's title/objective/description, the IMPLICIT criterion every plan is
+// actually judged against, and the evidence for it.
+//
+// A plan carries no acceptance criteria of its own (SD-A7's soft tier reads
+// title/description/objective only when DoD is empty — that is a FALLBACK for
+// judging the plan's OWN framing, not a substitute for this). The founder's
+// ruling: a plan's real acceptance criterion is implicit — the plan is done
+// when EVERY member task's own acceptance criteria are met, alongside
+// whatever Definition of Done the plan record itself carries. The judge was
+// never told this and was never shown evidence of it, so it had to infer both
+// from buildPlanClaimText's task.Status lines alone — which is exactly how a
+// task marked `done` whose own goal was never adjudicated could pass as
+// evidence of nothing in particular. gs is read via GetByOwner per task
+// (never via task.Status) for precisely that reason: this package's own
+// task_goal_terminal.go narrative records live UAT cases of a `done` task
+// left with an ACTIVE (non-terminal) paired goal record.
+//
+// Does NOT invent acceptance criteria on the plan record — the plan's DoD
+// (rendered by the caller into Criteria, not here) is the only EXPLICIT
+// criterion set a plan may carry; this function states the implicit one in
+// words and stops.
+func buildPlanJudgeExtraContext(p *plan.Plan, tasks []task.Task, gs *goal.Store) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Plan: %s\n", p.Title)
 	if p.Objective != "" {
@@ -1662,6 +1687,128 @@ func buildPlanJudgeExtraContext(p *plan.Plan) string {
 	}
 	if p.Description != "" {
 		fmt.Fprintf(&sb, "\nDescription: %s\n", p.Description)
+	}
+	sb.WriteString("\nImplicit acceptance criterion: a plan carries no acceptance criteria of " +
+		"its own — this plan is done when EVERY member task's own acceptance criteria are met, " +
+		"alongside the plan's Definition of Done (if any, judged separately). Judge that implicit " +
+		"criterion against the member verdicts below — a member's task status alone is not " +
+		"evidence that its own goal was ever adjudicated.\n")
+	sb.WriteString(buildPlanMemberGoalEvidence(tasks, gs))
+	return sb.String()
+}
+
+// planMemberGoalVerdict is one member task's own goal-record outcome, read
+// from the real record rather than assumed from task.Status.
+type planMemberGoalVerdict int
+
+const (
+	// planMemberGoalNeverAdjudicated covers BOTH shapes that mean "no final
+	// verdict exists": no paired goal record at all (GOAL-FR-023 legacy/
+	// Scratchpad task, or one whose own goal was simply never set), and a
+	// paired record that exists but has not reached a terminal state —
+	// exactly the task_goal_terminal.go UAT case of a `done` task left with
+	// an ACTIVE record. Neither is silently treated as met.
+	planMemberGoalNeverAdjudicated planMemberGoalVerdict = iota
+	planMemberGoalMet
+	planMemberGoalUnmet
+)
+
+// classifyPlanMemberGoal reads taskID's paired goal record (if any) and
+// returns its verdict plus, for an unmet verdict, the record's own
+// TerminalReason (the evidence a judge needs, not just the verdict word).
+func classifyPlanMemberGoal(gs *goal.Store, taskID string) (planMemberGoalVerdict, string) {
+	if gs == nil {
+		return planMemberGoalNeverAdjudicated, ""
+	}
+	g, err := gs.GetByOwner(generated.GoalOwnerKindTask, taskID)
+	if err != nil {
+		return planMemberGoalNeverAdjudicated, ""
+	}
+	switch g.State {
+	case generated.GoalStateMet:
+		return planMemberGoalMet, ""
+	case generated.GoalStateExhausted, generated.GoalStateExpired, generated.GoalStateCleared:
+		return planMemberGoalUnmet, g.TerminalReason
+	default: // active, defining — not yet terminal, so not yet adjudicated
+		return planMemberGoalNeverAdjudicated, ""
+	}
+}
+
+// planMemberGoalEvidenceFullListMax bounds how many member tasks are listed
+// in full before this switches to a summary + failures-only listing (spec:
+// "mind the size — a plan can have many tasks, and this text goes into a
+// prompt that is already clamped"). Arbitrary but generous for the common
+// case: most plans have well under this many members.
+const planMemberGoalEvidenceFullListMax = 20
+
+// buildPlanMemberGoalEvidence renders one line per member task — its title,
+// its task.Status, and its OWN goal verdict (MET / UNMET with reason / never
+// adjudicated) — preceded by a met/unmet/never-adjudicated tally.
+//
+// Below planMemberGoalEvidenceFullListMax members, every task is listed —
+// TestBuildPlanJudgeExtraContext_AllMembersMet_NamesEachOne names each one
+// even when every verdict is MET, because the judge needs to see the plan's
+// membership, not just a bare "all fine" count. At or above the cap, only the
+// tally is a full count, and only non-MET members (unmet AND never
+// adjudicated — both are missing/negative evidence, which is what a verdict
+// actually turns on) are listed in full; a long run of "MET" lines adds
+// tokens without adding anything a verdict could act on.
+func buildPlanMemberGoalEvidence(tasks []task.Task, gs *goal.Store) string {
+	if len(tasks) == 0 {
+		return "\nMember tasks: (this plan has no member tasks)\n"
+	}
+
+	type memberRow struct {
+		task    *task.Task
+		verdict planMemberGoalVerdict
+		reason  string
+	}
+	rows := make([]memberRow, len(tasks))
+	var metCount, unmetCount, neverCount int
+	for i := range tasks {
+		verdict, reason := classifyPlanMemberGoal(gs, tasks[i].ID)
+		rows[i] = memberRow{task: &tasks[i], verdict: verdict, reason: reason}
+		switch verdict {
+		case planMemberGoalMet:
+			metCount++
+		case planMemberGoalUnmet:
+			unmetCount++
+		default:
+			neverCount++
+		}
+	}
+
+	renderLine := func(r memberRow) string {
+		var verdictText string
+		switch r.verdict {
+		case planMemberGoalMet:
+			verdictText = "MET"
+		case planMemberGoalUnmet:
+			verdictText = "UNMET"
+			if r.reason != "" {
+				verdictText += ": " + truncateForClaim(r.reason)
+			}
+		default:
+			verdictText = "never adjudicated"
+		}
+		return fmt.Sprintf("- %s [%s] (%s): own goal %s\n", r.task.Title, r.task.ID, r.task.Status, verdictText)
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "\nMember tasks (%d total — %d met, %d unmet, %d never adjudicated):\n",
+		len(tasks), metCount, unmetCount, neverCount)
+
+	if len(tasks) < planMemberGoalEvidenceFullListMax {
+		for _, r := range rows {
+			sb.WriteString(renderLine(r))
+		}
+		return sb.String()
+	}
+
+	for _, r := range rows {
+		if r.verdict != planMemberGoalMet {
+			sb.WriteString(renderLine(r))
+		}
 	}
 	return sb.String()
 }
