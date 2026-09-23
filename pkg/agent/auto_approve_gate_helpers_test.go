@@ -196,17 +196,28 @@ func swapAuditLogger(t *testing.T, al *AgentLoop) func() []map[string]any {
 	}
 }
 
-// auditRowsFor filters rows to one event name (and one tool, when set).
+// auditRowsFor filters rows to one event name (and one tool, when set). It
+// reads both audit row shapes: an Entry names its tool in "tool", a Record
+// (audit.Emit) in "fields.tool_name".
 func auditRowsFor(rows []map[string]any, event, tool string) []map[string]any {
 	var out []map[string]any
 	for _, r := range rows {
 		if r["event"] != event {
 			continue
 		}
-		if tool != "" && r["tool"] != tool {
+		if tool != "" && auditRowTool(r) != tool {
 			continue
 		}
 		out = append(out, r)
 	}
 	return out
+}
+
+func auditRowTool(r map[string]any) string {
+	if name, ok := r["tool"].(string); ok && name != "" {
+		return name
+	}
+	fields, _ := r["fields"].(map[string]any)
+	name, _ := fields["tool_name"].(string)
+	return name
 }
