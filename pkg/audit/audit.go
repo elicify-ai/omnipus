@@ -346,6 +346,9 @@ var validEventNames = map[EventName]struct{}{
 	EventShellPreflightEscalation: {},
 	EventShellGrantRecorded:       {},
 	EventShellApprovalDecision:    {},
+	// ADR-092 (Auto-approve for tools other than bash) §5.5 typed audit
+	// event. See tool_auto_approve_events.go for the wire shape contract.
+	EventToolAutoApproved: {},
 	// Legacy pre-rename project.* events, retained for back-compat with
 	// audit logs written before the project→workspace rename. No current
 	// handler emits them.
