@@ -102,7 +102,18 @@ func TestGoalOutcomeFrame_LiveAndReplayCarryTheSameIDAndOutcome(t *testing.T) {
 	assert.Equal(t, entry.ID, replayed.MessageId, "the replayed frame's message id is the persisted entry's id")
 	assert.Equal(t, sessionID, live.SessionId)
 	assert.Equal(t, sessionID, replayed.SessionId)
-	assert.JSONEq(t, string(liveRaw), string(replayRaw[0]), "live and replayed frames for one ending must be identical")
+	// PR #823 (ws_sequence.go::emitSessionFrame) made every live session frame
+	// carry a `seq` for reconnect catch-up, GoalOutcomeFrame included. Replay
+	// frames deliberately stay unnumbered — streamReplay reconstructs history
+	// out of live real-time order, and stamping a number on something replayed
+	// would hand a reconnecting client a cursor position it never legitimately
+	// reached (the same reasoning fe1801fce documents for SessionStateFrame).
+	// So `seq` is the one field expected to differ; everything else must not.
+	require.NotNil(t, live.Seq, "the live push must be numbered for catch-up")
+	assert.Nil(t, replayed.Seq, "replay frames are deliberately unnumbered")
+	liveContent := live
+	liveContent.Seq = nil
+	assert.Equal(t, liveContent, replayed, "live and replayed frames must carry identical content once the transport-only seq is set aside")
 
 	// The frame carries the contract's fields verbatim.
 	assert.Equal(t, "goal_outcome", replayed.Type)
