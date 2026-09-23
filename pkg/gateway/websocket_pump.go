@@ -137,7 +137,11 @@ func sendConnGenFrame(wc *wsConn, frameType string, frame any) {
 		slog.Error("ws: marshal generated frame failed", "type", frameType, "error", err)
 		return
 	}
-	sendRawFrameBytes(wc, frameType, data)
+	// Frames sent through this helper never carry a session sequence number
+	// (validation failures before a session is even established, the
+	// whatsapp_pairing/cancel_stage/media paths that bypass the numbering
+	// system entirely) — see sendRawFrameBytes' numbered parameter doc.
+	sendRawFrameBytes(wc, frameType, data, false)
 }
 
 // broadcastRaw fans one pre-marshaled frame out to every connected WS client
@@ -193,6 +197,12 @@ const droppedFramesWarnThreshold = 20
 // backpressure drop logic shared by sendConnGenFrame and wsStreamer.Update.
 // frameType is used to determine criticality (done, error, exec_approval_*).
 //
+// numbered reports whether data was produced by the session sequence-number
+// path (emitSessionFrame — #823 review finding 5). It only changes behaviour
+// for frameType=="error": see bypassDivertWhileReplaying's doc comment below.
+// Every other caller passes false; it costs them nothing since only a
+// numbered "error" frame's bypass decision depends on it.
+//
 // Ordering guarantee (see docs/internal/investigation/bug-5-replay-order.md, code-reviewer
 // Finding #2): the channel-selection decision (read isReplayingLive + pick targetCh)
 // and the channel send are performed while holding wc.replayMu.RLock().  The drain in
@@ -203,12 +213,14 @@ const droppedFramesWarnThreshold = 20
 //
 // On the non-replay hot path (isReplayingLive==false) the RLock is never acquired,
 // keeping the common case lock-free.
-func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
+func sendRawFrameBytes(wc *wsConn, frameType string, data []byte, numbered bool) {
 	// W1-1: if replay mode is active, divert live frames into the replay buffer
 	// instead of wc.sendCh, so writePump never sees them while replay is running.
-	// "error" and the exec_approval_* control frames are always sent to the
-	// canonical sendCh regardless of replay state — they are rare, connection-
-	// scoped signals that must reach the client immediately.
+	// An UNNUMBERED "error" (and the exec_approval_* control frames) are always
+	// sent to the canonical sendCh regardless of replay state — they are rare,
+	// connection-scoped signals with no cursor position to protect, so nothing
+	// is lost by letting them jump the replay queue. A NUMBERED error is
+	// different — see below.
 	isCritical := frameType == "done" || frameType == "error" ||
 		frameType == "exec_approval_request" || frameType == "exec_approval_expired"
 
@@ -226,7 +238,20 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 	// replay's OWN synthetic "done" (streamReplay's frames_emitted summary)
 	// is written directly into wc.sendCh by handleAttachSession's emitFn, not
 	// through this function, so it is entirely unaffected by this change.
-	bypassDivertWhileReplaying := isCritical && frameType != "done"
+	//
+	// #823 review finding 5: a NUMBERED "error" frame carries a seq the
+	// client's cursor advances past, exactly like "done" — so it must be
+	// diverted during replay for the same reason. Before this fix, EVERY
+	// error frame bypassed the divert unconditionally: a numbered session
+	// error emitted while a reconnecting client was still replaying jumped
+	// the queue, landed on the client immediately, and advanced its cursor
+	// past the still-parked, lower-numbered replay/catch-up frames — which
+	// the client then discarded as "already seen" once they were finally
+	// drained, silently losing whatever text they carried. An unnumbered
+	// error (pre-session validation failures, the connection-degraded
+	// backpressure warning) has no cursor position to protect, so it keeps
+	// bypassing.
+	bypassDivertWhileReplaying := isCritical && frameType != "done" && !(numbered && frameType == "error")
 
 	// Fast path: not replaying (atomic check, no lock). This is the common case.
 	if !wc.isReplayingLive.Load() || bypassDivertWhileReplaying {
