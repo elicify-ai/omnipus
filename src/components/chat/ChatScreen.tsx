@@ -383,20 +383,15 @@ function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): str
   return 'Working in the background…'
 }
 
-/**
- * Derives the thinking-indicator label for an in-progress `delegate` call's
- * "run" sub-case — the only delegate sub-case with a specific label (its
- * `status`-poll sub-case, and any other hidden tool with no rule, fall
- * through to the generic pool). Resolves the target agent's display name
- * from the call's `agent_id` arg (pkg/tools/delegate.go's Parameters())
- * against the agents list; never invents a name — falls back to a bare
- * "Delegating…" when the id is absent or unresolvable.
- */
-function deriveDelegateThinkingLabel(args: Record<string, unknown> | undefined, agents: Agent[]): string {
-  const agentId = typeof args?.agent_id === 'string' ? args.agent_id : ''
-  const target = agentId ? agents.find((a) => a.id === agentId) : undefined
-  return target?.name ? `Delegating to ${target.name}…` : 'Delegating…'
-}
+// ADR-091 D7/AC-7: `deriveDelegateThinkingLabel` ("Delegating to <name>…" /
+// "Delegating…" for a hidden `delegate` 'run' call) is deleted — a `run`
+// call is visible unconditionally now (toolVisibility.ts's
+// shouldRenderToolCall), so `deriveHiddenRunningToolLabel` below always
+// returns null for it before ever reaching a delegate-specific branch (its
+// own `shouldRenderToolCall` check short-circuits first). The one delegate
+// sub-case that still hides, `status` (polling), has no specific-label rule
+// and falls through to the generic rotating pool, same as any other hidden
+// tool with no rule.
 
 /**
  * Finds the LAST tool-call part in a live message's `content` whose live
@@ -406,16 +401,18 @@ function deriveDelegateThinkingLabel(args: Record<string, unknown> | undefined, 
  * shouldRenderToolCall — derives a specific, stable label for it.
  *
  * Returns null (generic rotating pool applies) when: the tool is visible
- * (its own chip already shows progress), it's ToolSearch or any other
- * hidden tool with no specific-label rule, or nothing is currently running.
- * Defensive: never throws — an unexpected message/part shape falls back to
- * the generic pool via the null return, exactly like "nothing found".
+ * (its own chip already shows progress — a `delegate` 'run' call included,
+ * ADR-091 D7/AC-7: it is visible unconditionally now, so it never reaches
+ * this function's tool-name branches below), it's ToolSearch, a delegate
+ * `status` poll, or any other hidden tool with no specific-label rule, or
+ * nothing is currently running. Defensive: never throws — an unexpected
+ * message/part shape falls back to the generic pool via the null return,
+ * exactly like "nothing found".
  */
 function deriveHiddenRunningToolLabel(
   content: unknown,
   storeToolCalls: Record<string, { status?: string }>,
   verboseChatEnabled: boolean,
-  agents: Agent[],
 ): string | null {
   try {
     if (!Array.isArray(content)) return null
@@ -436,14 +433,10 @@ function deriveHiddenRunningToolLabel(
         return null
       }
 
-      if (toolName === 'delegate') {
-        const action = typeof args?.action === 'string' ? args.action : 'run'
-        return action === 'run' ? deriveDelegateThinkingLabel(args, agents) : null
-      }
       if (toolName === 'bash') {
         return deriveBashThinkingLabel(args)
       }
-      return null // ToolSearch, or any other hidden tool with no rule — generic pool.
+      return null // ToolSearch, a delegate status poll, or any other hidden tool with no rule — generic pool.
     }
     return null
   } catch {
@@ -558,11 +551,13 @@ function AssistantTextPart() {
 // Uses useMessage() for reactive state (not getState() which is a snapshot).
 //
 // Context-aware: when the current in-progress step is a HIDDEN tool call
-// (ToolSearch, background bash, delegate — see toolVisibility.ts) whose
-// tool-call part is present in message.content but rendered invisible, this
-// shows a specific, stable label for it (e.g. "Delegating to Ray…",
+// (ToolSearch, background bash, a delegate status poll — see
+// toolVisibility.ts) whose tool-call part is present in message.content but
+// rendered invisible, this shows a specific, stable label for it (e.g.
 // "Running the test suite…") instead of the generic rotating pool — see
-// deriveHiddenRunningToolLabel above.
+// deriveHiddenRunningToolLabel above. ADR-091 D7/AC-7 removed the
+// `agents`-dependent "Delegating to <name>…" case: a `delegate` 'run' call
+// is visible unconditionally now, so it no longer reaches this label at all.
 function InlineThinkingIndicator() {
   const message = useMessage()
   const isRunning = message.status?.type === 'running'
@@ -574,11 +569,6 @@ function InlineThinkingIndicator() {
   // frame (same field GoalIndicator already reads), so this needs no extra
   // subscription setup.
   const goalStatus = useChatStore((s) => s.goalStatus)
-  const { data: agents = [] } = useQuery<Agent[]>({
-    queryKey: ['agents'],
-    queryFn: fetchAgents,
-    staleTime: 60_000,
-  })
 
   if (!isRunning) return null
 
@@ -586,7 +576,7 @@ function InlineThinkingIndicator() {
   const goalLabel = goalRecordEmpty
     ? deriveGoalAwareThinkingLabel(runningToolNamesFromLiveContent(message.content, storeToolCalls), true)
     : null
-  const label = goalLabel ?? deriveHiddenRunningToolLabel(message.content, storeToolCalls, verboseChatEnabled, agents)
+  const label = goalLabel ?? deriveHiddenRunningToolLabel(message.content, storeToolCalls, verboseChatEnabled)
   return <ThinkingIndicator label={label} />
 }
 
@@ -791,11 +781,12 @@ function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled')
  * ToolCallBadge each apply at render time (Fix 3, 2026-07-16). Used ONLY to
  * decide whether a message has any VISIBLE content, so the ghost-bubble
  * empty-placeholder / bare-Copy-bar logic below doesn't unmask a bubble
- * whose only content is a hidden delegation or background-bash dispatch
- * (the D-fix UAT defect resurfacing once the thread started hiding
- * delegation/background-bash by default — toolVisibility.ts). Reuses the
- * same sentinel-detection semantics and the shouldRenderToolCall classifier
- * those components call directly.
+ * whose only content is a hidden delegate status poll or background-bash
+ * dispatch (the D-fix UAT defect resurfacing once the thread started hiding
+ * those by default — toolVisibility.ts; a `delegate` 'run' call no longer
+ * hides at all, ADR-091 D7/AC-7, so it no longer exercises this path).
+ * Reuses the same sentinel-detection semantics and the shouldRenderToolCall
+ * classifier those components call directly.
  *
  * F2 (second review wave on branch fix/615-617-618-hardening): the three
  * structured-failure sentinels (delegation-denied, file-exists refusal,
@@ -1214,10 +1205,12 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // as the live path (see AssistantMessage's showEmptyPlaceholder).
   //
   // Fix 3 (2026-07-16): emptiness is judged on VISIBLE content only — a
-  // message whose only content is a hidden delegation/background-bash
-  // dispatch (default thread policy, toolVisibility.ts) must not render an
-  // empty bubble with a bare Copy action bar (the D-fix UAT defect
-  // resurfacing once the thread started hiding those by default).
+  // message whose only content is a hidden delegate status poll or
+  // background-bash dispatch (default thread policy, toolVisibility.ts) must
+  // not render an empty bubble with a bare Copy action bar (the D-fix UAT
+  // defect resurfacing once the thread started hiding those by default). A
+  // `delegate` 'run' call is visible by default now (ADR-091 D7/AC-7), so it
+  // counts as real content here rather than triggering this guard.
   // visibleToolCalls is also what's actually rendered below — hoisted here
   // so both the emptiness check and the render loop share one computation
   // instead of drifting into two different notions of "visible". Subagent
@@ -1834,10 +1827,11 @@ function AssistantMessage() {
   )
   // Fix 3 (2026-07-16): VISIBLE tool calls only — mirrors the historical
   // path's wouldToolCallBeVisible check (same function, same rationale: a
-  // hidden delegation/background-bash dispatch must not count as "content"
-  // for the ghost-bubble guard below). part.isError is the closest
-  // available proxy for this surface's outcome signal — see
-  // wouldToolCallBeVisible's own doc comment for why.
+  // hidden delegate status poll or background-bash dispatch must not count
+  // as "content" for the ghost-bubble guard below — a `delegate` 'run' call
+  // IS content, ADR-091 D7/AC-7). part.isError is the closest available
+  // proxy for this surface's outcome signal — see wouldToolCallBeVisible's
+  // own doc comment for why.
   const hasVisibleToolCall = message.content?.some(
     (part) =>
       part.type === 'tool-call' &&

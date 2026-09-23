@@ -1,14 +1,22 @@
-// Client-side render filter, governing TWO chat surfaces:
-//   - The chat THREAD (transcript) — shouldRenderToolCall (tool-call chips)
-//     and shouldRenderJudgeVerdictInThread (judge-verdict cards). ADR-091
-//     D7/D10 deleted `shouldRenderSubagentSpan` (the SubagentBlock
-//     delegation-card gate) along with SubagentBlock itself — a child's own
-//     frames never arrive in the parent's bucket any more, so there is no
-//     span content left in the thread at any verbosity; the `delegate`
-//     tool-call line (shouldRenderToolCall's own case, below) is the
-//     thread's only remaining delegation surface.
-//   - The ActivityPanel slide-out — shouldRenderToolCallInPanel (expanded
-//     native-agent step rows), whose default INVERTS the thread's.
+// Client-side render filter for the chat THREAD (transcript) —
+// shouldRenderToolCall (tool-call chips) and shouldRenderJudgeVerdictInThread
+// (judge-verdict cards). ADR-091 D7/D10 deleted `shouldRenderSubagentSpan`
+// (the SubagentBlock delegation-card gate) along with SubagentBlock itself —
+// a child's own frames never arrive in the parent's bucket any more, so
+// there is no span content left in the thread at any verbosity. The
+// `delegate` tool-call line (shouldRenderToolCall's own case, below) is
+// therefore the thread's ONLY delegation surface, and ADR-091 D7/AC-7
+// requires it to carry that job alone: the parent's chat must show exactly
+// the one line a delegation produces, so a `run` delegation (the default
+// action) is visible in the normal, non-verbose thread — not deferred to a
+// span/step surface that no longer exists.
+//
+// The ActivityPanel slide-out's own step-level policy
+// (`shouldRenderToolCallInPanel`, ToolCallBadge's `surface="panel"` prop) is
+// ALSO deleted: ActivityPanel.tsx no longer renders ToolCallBadge at all —
+// its rows are a flat ActivityRow (status line + open control), not
+// expanded native-agent step rows — so that policy had zero production
+// callers left. See ToolCallBadge.tsx for the corresponding simplification.
 //
 // This is a PURE UI decision — it never touches the persisted session
 // transcript (JSONL on disk keeps every tool call untouched). It only
@@ -55,9 +63,9 @@ function paramBool(params: Record<string, unknown> | undefined, key: string): bo
  * short-circuit above the switch —
  *   - `ToolSearch` (renamed from `load_tool`, ADR-071 D1): an error still
  *     forces visibility. It has no calling agent's own turn to explain the
- *     failure in, and the panel hides ToolSearch by default too
- *     (shouldRenderToolCallInPanel below) — so without this exception the
- *     failure would be invisible everywhere except verbose chat.
+ *     failure in, and no other render surface exists for it — so without
+ *     this exception the failure would be invisible everywhere except
+ *     verbose chat.
  *   - `Skill` (ADR-072 D3): mirrors `ToolSearch` exactly — hidden on success,
  *     forced visible on error. A refused/denied or not-found skill load is a
  *     real, security-relevant outcome the reader needs to see; a successful
@@ -65,26 +73,20 @@ function paramBool(params: Record<string, unknown> | undefined, key: string): bo
  *     narrate (see the ADR's D3 §3 and D3.1's audit-vs-render distinction —
  *     the call is still audited and still in the transcript either way, this
  *     is render-only).
- *   - `delegate` and the background-dispatch/poll/read sub-cases of `bash`:
- *     NO error exception. A failed/denied delegation or background shell
- *     command is returned to the CALLING agent's own turn as the tool
- *     result — that agent decides how (and whether) to explain the failure
- *     in its own response text. The ActivityPanel slide-out is the durable
- *     fallback for THIS case, but its coverage is narrower than "fully
- *     transparent": it only ever shows subagent SPANS (running, plus a
- *     recently-finished list capped at 8 — RECENTLY_FINISHED_CAP in
- *     useRunningActivity.ts) and background bash SESSIONS, and (Fix 1,
- *     2026-07-16) stays reachable at idle only while a failure is still
- *     retained in that capped list (ActivityBar.tsx). A delegation DENIED
- *     outright at dispatch time never opens a span, so it never reaches the
- *     panel either — verbose chat (which reveals this row directly,
- *     DelegationFailureDisplay included) is the only render surface for
- *     that specific case; absent verbose chat, the calling agent's own
- *     narration is the only place the denial surfaces. A delegation that
- *     DOES dispatch (a span opens) has its own nested step-level failures
- *     shown in the panel via shouldRenderToolCallInPanel below (shows
- *     everything except ToolSearch). Only verbose chat brings any of these
- *     rows back into the thread itself.
+ *   - `delegate` (ADR-091 D7/AC-7): visibility is param-based only —
+ *     `isError` is never consulted. The `run` action (the default) is
+ *     visible unconditionally: it is the parent's chat surface for a
+ *     delegation, full stop, now that the span/step surfaces this case used
+ *     to defer to (SubagentBlock's delegation card, `shouldRenderSubagentSpan`)
+ *     are deleted — a child's own frames never arrive in the parent's bucket
+ *     any more, so there is nothing left for a span to show. Only `status`
+ *     (polling a previously-delegated task) stays hidden, unconditionally —
+ *     pure noise with no standalone meaning to a reader, on any outcome.
+ *   - The background-dispatch/poll/read sub-cases of `bash`: NO error
+ *     exception. A failed background shell command is returned to the
+ *     CALLING agent's own turn as the tool result — that agent decides how
+ *     (and whether) to explain the failure in its own response text. Only
+ *     verbose chat brings one of these rows back into the thread.
  *   - Every other case ignores `isError` entirely (they're either always
  *     visible or, for `bash`'s foreground/`kill` cases, don't depend on it).
  *
@@ -116,9 +118,9 @@ export function shouldRenderToolCall(
       // Every call is infrastructure (loading a tool's full definition into
       // context) — never a meaningful standalone action to a chat reader.
       // Exception: an error/failure outcome still forces visibility (see
-      // this function's doc comment) — unlike delegate/background-bash
-      // below, there is no calling-agent turn that narrates a ToolSearch
-      // failure on its behalf.
+      // this function's doc comment) — unlike background-bash below, there
+      // is no calling-agent turn that narrates a ToolSearch failure on its
+      // behalf.
       // `load_tool` is the pre-ADR-071-D1 name for this same tool — kept
       // here (mirroring humanizeToolName.ts's EXPLICIT_LABELS entry, FR-015)
       // solely so a conversation transcript recorded before the rename still
@@ -163,21 +165,21 @@ export function shouldRenderToolCall(
       const action = paramString(params, 'action') ?? 'run'
       if (action === 'status') {
         // Polling a previously-delegated task's status — noisy, and wins
-        // over async since delegate.go dispatches on action first.
+        // over async since delegate.go dispatches on action first. Hidden
+        // unconditionally (isError is not consulted): a poll's own outcome
+        // has no standalone meaning to a reader either way.
         return false
       }
-      if (action === 'run') {
-        // Fix 2 (user-approved, revised 2026-07-16): a 'run' delegation is
-        // hidden from the thread by default for BOTH sync and async, AND
-        // regardless of outcome (`isError` is deliberately not consulted
-        // here — see this function's doc comment for the LLM-mediated
-        // rationale). The thread's delegation surface is now the span card
-        // alone (gated separately by shouldRenderSubagentSpan, below), and
-        // that card carries the same no-error-exception, verbose-only rule.
-        return false
-      }
-      // Any other action (e.g. 'kill') is unchanged — a deliberate,
-      // standalone-meaningful action, always visible.
+      // ADR-091 D7/AC-7: `run` (sync or async, the default) and every other
+      // action (e.g. 'kill') are visible — unconditionally, `isError`
+      // included. The span/step surfaces this case used to defer to
+      // (SubagentBlock's delegation card, `shouldRenderSubagentSpan`) are
+      // deleted: a child's own frames never arrive in the parent's bucket
+      // any more, so there is nothing left for a span to render. This line
+      // — the delegate tool call itself — is therefore now the parent's
+      // ONLY delegation surface in the thread, at any verbosity, and AC-7
+      // requires it to show by default rather than only when verbose chat
+      // is on.
       return true
     }
 
@@ -240,40 +242,18 @@ export function shouldRenderToolCall(
 }
 
 /**
- * Panel-only visibility policy for ToolCallBadge rows expanded inside the
- * ActivityPanel slide-out (Fix 2, user-approved 2026-07-16 — inverted from
- * the thread's policy). The panel is the designated home for exactly the
- * background/noisy detail the thread (shouldRenderToolCall) hides — a user
- * who opened the panel already asked to see what's happening, so default
- * to showing everything EXCEPT `ToolSearch` (renamed from `load_tool`,
- * ADR-071 D1 — pure internal tool-definition-loading infra — "Find & load
- * tools" humanized — with no standalone meaning even in a detail view).
- * `load_tool` (the pre-rename name) is excluded alongside it for the same
- * FR-015 back-compat reason as the thread-side case above — an old
- * transcript's pre-rename calls get the same panel treatment as new ones.
- * Verbose chat reveals both there too. Deliberately name-based only, no
- * params: unlike shouldRenderToolCall this isn't classifying dispatch
- * shape/outcome, only excluding two always-noisy tool names (one current,
- * one legacy alias for the same tool).
- */
-export function shouldRenderToolCallInPanel(
-  tool: string,
-  verboseChatEnabled: boolean,
-): boolean {
-  return verboseChatEnabled || (tool !== 'ToolSearch' && tool !== 'load_tool')
-}
-
-/**
  * Decide whether a `Message.type === 'judge_verdict'` transcript entry
- * renders as a standalone card in the chat THREAD (ADR-049 SD-C10). Mirrors
- * `shouldRenderSubagentSpan` exactly: judge calls are out-of-turn internal
- * LLM actions with no standalone meaning to a reader — same class as
- * `delegate`/background-`bash` — so they follow the same hide-by-default,
- * verbose-only rule rather than a bespoke policy. The verdict is still fully
- * persisted (transcript entry) and fully transparent via the ActivityPanel
- * (panel visibility is NOT gated by this function at all — see
- * `useRunningActivity`/`ActivityPanel`, which always render a judge row
- * regardless of verbose chat).
+ * renders as a standalone card in the chat THREAD (ADR-049 SD-C10). Judge
+ * calls are out-of-turn internal LLM actions with no standalone meaning to a
+ * reader — same class as background-`bash` — so they follow the same
+ * hide-by-default, verbose-only rule rather than a bespoke policy (this is
+ * unlike `delegate`, ADR-091 D7/AC-7: a delegation IS a standalone,
+ * reader-meaningful action, which is why that case is visible by default —
+ * a judge verdict is not). The verdict is still fully persisted (transcript
+ * entry) and fully transparent via the ActivityPanel (panel visibility is
+ * NOT gated by this function at all — see `useRunningActivity`/
+ * `ActivityPanel`, which always render a judge row regardless of verbose
+ * chat).
  */
 export function shouldRenderJudgeVerdictInThread(verboseChatEnabled: boolean): boolean {
   return verboseChatEnabled

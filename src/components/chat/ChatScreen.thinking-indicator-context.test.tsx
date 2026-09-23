@@ -18,9 +18,11 @@
 //   Then:  the indicator shows a stable, context-specific label derived from
 //          the call's `description` (capped) or a command-verb mapping —
 //          and NEVER the raw command string
-//   Given: the only in-progress step is a hidden `delegate` 'run' call
-//   Then:  the indicator shows "Delegating to <name>…" when the target
-//          agent's name resolves, else a bare "Delegating…"
+//   Given: the only in-progress step is a hidden `delegate` STATUS poll
+//   Then:  the indicator falls through to the generic rotating pool (no
+//          specific-label rule for it — ADR-091 D7/AC-7 removed the `run`
+//          case's "Delegating to <name>…" label, since a `run` call is
+//          visible unconditionally now and never reaches this mechanism)
 //   Given: the only in-progress step is a hidden `ToolSearch` call
 //   Then:  the indicator falls through to the generic rotating pool (no
 //          special-cased label)
@@ -392,14 +394,22 @@ describe('ChatScreen thinking indicator — hidden background bash', () => {
   })
 })
 
-describe('ChatScreen thinking indicator — hidden delegate', () => {
-  it('shows "Delegating to <name>…" when the target agent resolves', async () => {
-    const sid = 'sess_thinking_delegate_named'
+// ADR-091 D7/AC-7: a `delegate` 'run' call (the default) is visible
+// unconditionally now — it never reaches deriveHiddenRunningToolLabel's
+// tool-name branches (the `shouldRenderToolCall` check inside it returns
+// early), so the old "Delegating to <name>…" / "Delegating…" specific-label
+// tests for that case are deleted along with `deriveDelegateThinkingLabel`
+// itself (ChatScreen.tsx). Only `status` (polling) still hides by default,
+// and it has no specific-label rule — same generic-pool fallback as
+// ToolSearch below.
+describe('ChatScreen thinking indicator — hidden delegate status poll falls through to the generic pool', () => {
+  it('shows a generic rotating phrase, not a delegate-specific label', async () => {
+    const sid = 'sess_thinking_delegate_status'
     seedStreamingAssistantWithToolCall(
       sid,
-      'tc_delegate_named',
+      'tc_delegate_status',
       'delegate',
-      { action: 'run', async: true, agent_id: 'agent-ray', task: 'investigate the flaky test' },
+      { action: 'status', call_id: 'tc_prior_dispatch' },
       'running',
     )
 
@@ -414,34 +424,7 @@ describe('ChatScreen thinking indicator — hidden delegate', () => {
     })
 
     const bubble = container.querySelector('[data-testid="assistant-message"]') as HTMLElement
-    // The mocked fetchAgents() resolves asynchronously — findByText waits
-    // for the agents query to settle and the label to update from the bare
-    // "Delegating…" fallback to the name-resolved text.
-    expect(await within(bubble).findByText('Delegating to Ray…')).toBeInTheDocument()
-  })
-
-  it('falls back to a bare "Delegating…" when the target agent id is absent — never invents a name', async () => {
-    const sid = 'sess_thinking_delegate_unnamed'
-    seedStreamingAssistantWithToolCall(
-      sid,
-      'tc_delegate_unnamed',
-      'delegate',
-      { action: 'run', async: true, task: 'do the thing' },
-      'running',
-    )
-
-    let container!: HTMLElement
-    await act(async () => {
-      const result = render(
-        <Providers>
-          <ChatScreen />
-        </Providers>,
-      )
-      container = result.container
-    })
-
-    const bubble = container.querySelector('[data-testid="assistant-message"]') as HTMLElement
-    expect(within(bubble).getByText('Delegating…')).toBeInTheDocument()
+    expect(within(bubble).getByText(GENERIC_THINKING_RE)).toBeInTheDocument()
   })
 })
 

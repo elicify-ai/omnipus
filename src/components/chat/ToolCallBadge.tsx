@@ -5,25 +5,13 @@ import { cn } from '@/lib/utils'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { humanizeToolName } from '@/lib/humanizeToolName'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { shouldRenderToolCall, shouldRenderToolCallInPanel } from '@/lib/toolVisibility'
+import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { SetGoalCardBlock, partStatusFromToolCallStatus } from './tools/SetGoalToolUI'
 
 interface ToolCallBadgeProps {
   toolCall: ToolCall & { call_id: string }
-  /**
-   * Which chat surface is rendering this badge — selects the visibility
-   * policy (Fix 2, user-approved 2026-07-16). Defaults to 'thread': the
-   * hidden-by-default noisy-infra set (ToolSearch, background delegate/bash
-   * dispatch, status polls) via shouldRenderToolCall — used by MessageItem's
-   * historical list and SubagentBlock's nested steps. 'panel' swaps in
-   * shouldRenderToolCallInPanel — ActivityPanel is the designated home for
-   * that same noisy detail, so its default INVERTS to show everything except
-   * `ToolSearch`. Kept as a prop switch (not a second component) so the two
-   * policies never leak into each other's call sites.
-   */
-  surface?: 'thread' | 'panel'
 }
 
 /**
@@ -41,27 +29,22 @@ function isMarshalErrorResult(value: unknown): value is MarshalErrorResult {
   )
 }
 
-export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgeProps) {
+export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
   const [expanded, setExpanded] = useState(false)
 
   // Client-side render gate (verbose-chat off by default): hides noisy
-  // background infra calls (ToolSearch, background delegate/bash dispatch,
-  // status polls) unless the user has opted into verbose chat. surface=
-  // 'thread' (MessageItem's historical list, SubagentBlock's nested steps)
-  // uses shouldRenderToolCall, whose error/marshal-failure override is now
-  // per-tool-class (see that function's doc comment) — ToolSearch still
-  // forces visible on error, but delegate/background-bash do NOT (that
-  // failure is left to the calling agent's own response text). surface=
-  // 'panel' (ActivityPanel's expanded native-agent step rows) uses
-  // shouldRenderToolCallInPanel instead — an inverted, outcome-blind policy
-  // that shows everything except ToolSearch, since the panel is the
-  // designated transparency surface for exactly what the thread hides,
-  // failures included. That transparency is scoped to steps belonging to a
-  // span that made it into the panel at all (running or retained in
-  // recentlyFinished) — a top-level delegation denied outright (no span ever
-  // opens) never reaches this component via 'panel' either; see
-  // toolVisibility.ts's shouldRenderToolCall doc comment for that gap. Must
-  // sit after every hook above and before the JSX return (Rules of Hooks).
+  // background infra calls (ToolSearch, background-bash dispatch/poll/read)
+  // unless the user has opted into verbose chat, via shouldRenderToolCall —
+  // this component's ONE caller is MessageItem's historical/live list
+  // (ADR-091 D10 deleted SubagentBlock, this badge's other former caller,
+  // along with the ActivityPanel step list it fed — see toolVisibility.ts's
+  // header comment). shouldRenderToolCall's error/marshal-failure override
+  // is per-tool-class (see that function's doc comment): ToolSearch still
+  // forces visible on error, delegate does not consult isError at all
+  // (ADR-091 D7/AC-7: the `run` action is already visible unconditionally),
+  // and background-bash does not either (that failure is left to the
+  // calling agent's own response text). Must sit after every hook above and
+  // before the JSX return (Rules of Hooks).
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   const marshalErr = isMarshalErrorResult(toolCall.result)
   // F1: the three structured-failure sentinels (delegation-denied,
@@ -69,24 +52,18 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
   // module (./tools/toolResultSentinels) GenericToolCall.tsx also uses —
   // previously this component carried its own byte-identical copy of all
   // three detectors plus their amber statusConfig branches. Detected here so
-  // the historical-list / SubagentBlock-step badge (this component) renders
-  // the SAME amber "Delegation denied · <axis>" / "File already exists" /
-  // "Permission denied" chip GenericToolCall's live/replay path does,
-  // instead of a generic red "Failed" — this surface is the one that most
-  // needed it: ToolCallBadge renders SubagentBlock's nested steps, a
-  // DELEGATED worker's tool calls, which is exactly where a
-  // filesystem-scope or tool-policy denial reaches the model.
+  // this badge renders the SAME amber "Delegation denied · <axis>" /
+  // "File already exists" / "Permission denied" chip GenericToolCall's
+  // live/replay path does, instead of a generic red "Failed".
   const sentinels = detectToolResultSentinels(toolCall.result)
-  // ADR-082 D9 review S11: a `set_goal` step in this thread-surface list
-  // (SubagentBlock's nested steps — a DELEGATED worker's own attempt, which
-  // the tool refuses on a sub-turn, ADR-088 FR-005) used to fall into
-  // shouldRenderToolCall's hide-by-default `set_goal` case and vanish. Route
-  // it to the same dedicated UI the top-level thread uses: the record card
-  // on success, the quiet "Goal registration failed" line on the refusal.
-  // Verbose chat falls through to this badge's own raw rendering below
-  // (shouldRenderToolCall returns true there), matching SetGoalCardBlock's
-  // own verbose contract. The 'panel' surface keeps its outcome-blind policy.
-  if (toolCall.tool === 'set_goal' && surface === 'thread' && !verboseChatEnabled) {
+  // ADR-082 D9 review S11: a `set_goal` call in this historical list used to
+  // fall into shouldRenderToolCall's hide-by-default `set_goal` case and
+  // vanish. Route it to the same dedicated UI the top-level thread uses: the
+  // record card on success, the quiet "Goal registration failed" line on the
+  // refusal. Verbose chat falls through to this badge's own raw rendering
+  // below (shouldRenderToolCall returns true there), matching
+  // SetGoalCardBlock's own verbose contract.
+  if (toolCall.tool === 'set_goal' && !verboseChatEnabled) {
     return (
       <SetGoalCardBlock
         args={toolCall.params}
@@ -99,15 +76,12 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
       />
     )
   }
-  const isVisible =
-    surface === 'panel'
-      ? shouldRenderToolCallInPanel(toolCall.tool, verboseChatEnabled)
-      : shouldRenderToolCall(
-          toolCall.tool,
-          toolCall.params,
-          verboseChatEnabled,
-          toolCall.status === 'error' || marshalErr || sentinels.any,
-        )
+  const isVisible = shouldRenderToolCall(
+    toolCall.tool,
+    toolCall.params,
+    verboseChatEnabled,
+    toolCall.status === 'error' || marshalErr || sentinels.any,
+  )
   if (!isVisible) {
     return null
   }

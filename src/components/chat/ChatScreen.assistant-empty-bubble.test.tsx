@@ -330,17 +330,17 @@ describe('Fix 3 (2026-07-16): ghost bubble when the only live content is a hidde
 
     const bubble = screen.getByTestId('assistant-message')
     expect(within(bubble).queryByLabelText('Copy message')).toBeNull()
-    // The call is a STILL-RUNNING, hidden delegate('run') — the thinking
-    // indicator's context-aware override (InlineThinkingIndicator /
-    // deriveHiddenRunningToolLabel, ChatScreen.tsx) renders a stable
-    // "Delegating…" label for it instead of a generic rotating phrase
-    // (this file's mocked `fetchAgents` doesn't include the fixture's
-    // `target_agent_id: 'ray'`, and the real arg name is `agent_id` — no
-    // name resolves, so the label stays the bare fallback, never inventing
-    // a name).
+    // ADR-091 D7/AC-7 deleted the "Delegating…" specific-label case
+    // (deriveDelegateThinkingLabel, ChatScreen.tsx) — a `delegate` 'run'
+    // call is visible unconditionally now, so it never reaches
+    // deriveHiddenRunningToolLabel's tool-name branches at all (see
+    // ChatScreen.thinking-indicator-context.test.tsx for that mechanism's
+    // own coverage, using a delegate STATUS poll instead). This assertion
+    // only pins the generic rotating pool showing instead of a bare Copy
+    // bubble; it does not exercise a delegate-specific label.
     expect(
       within(bubble).getByText(
-        /Thinking…|Working on it…|Composing a response…|Processing your request…|Analyzing…|Considering the details…|Piecing it together…|Reasoning it through…|Working through this…|Gathering my thoughts…|Figuring out the approach…|Reviewing the context…|Drafting a response…|Making sense of it…|Weighing the options…|Delegating…|Delegating to /,
+        /Thinking…|Working on it…|Composing a response…|Processing your request…|Analyzing…|Considering the details…|Piecing it together…|Reasoning it through…|Working through this…|Gathering my thoughts…|Figuring out the approach…|Reviewing the context…|Drafting a response…|Making sense of it…|Weighing the options…/,
       ),
     ).toBeInTheDocument()
   })

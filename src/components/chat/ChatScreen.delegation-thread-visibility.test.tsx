@@ -1,11 +1,16 @@
 /**
- * ChatScreen.delegation-thread-visibility.test.tsx — Fix 2 (user-approved
- * 2026-07-16, revised same day): delegation is hidden from the chat THREAD
- * by default, with NO failed-state exception — a subagent/background-shell
- * error is returned to the delegating agent's own turn as the tool result,
- * and that agent explains it in its own response text; the raw result stays
- * transparent in the ActivityPanel slide-out. Only the Verbose-chat setting
- * (useChatPreferencesStore) reveals the delegate tool-call row in the thread.
+ * ChatScreen.delegation-thread-visibility.test.tsx — ADR-091 D7/AC-7: the
+ * parent's chat THREAD must show exactly the one line a `delegate` call
+ * produces — a `run` action (the default, sync or async) is VISIBLE by
+ * default, with no isError exception either way (see toolVisibility.ts's
+ * shouldRenderToolCall doc comment). This supersedes the pre-ADR-091 Fix 2
+ * rule (delegation hidden from the thread by default) — the span/step
+ * surface that rule deferred to (SubagentBlock's delegation card,
+ * `shouldRenderSubagentSpan`) is deleted: a child's own frames never arrive
+ * in the parent's bucket any more, so there is nothing left for a span to
+ * show, and this tool-call line is the thread's ONLY delegation surface.
+ * Only `status` (polling a previously-delegated task) still stays hidden by
+ * default — pure noise, no standalone meaning to a reader.
  *
  * ADR-091 D7/D10: this file's original first describe block asserted
  * presence/absence of the SubagentBlock span card (a `./SubagentBlock`
@@ -16,7 +21,7 @@
  * verbosity. That block, and the stub, are removed with it. The remaining
  * two blocks — the flat `delegate` tool-call row (GenericToolCall's own
  * `shouldRenderToolCall` gate) and the ghost-bubble guard — are untouched
- * by that deletion and stay.
+ * by that deletion and stay, updated for the new default-visible `run` rule.
  *
  * Style mirrors ChatScreen.tool-order.test.tsx: full ChatScreen render,
  * PlainMessageList fallback (ResizeObserver forced undefined) so a finished
@@ -209,16 +214,16 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('ChatScreen — synchronous delegate GenericToolCall row thread visibility (Fix 2, revised)', () => {
+describe('ChatScreen — synchronous delegate GenericToolCall row thread visibility (ADR-091 D7/AC-7)', () => {
   /** GenericToolCall row for a flat (non-spanned) tool call — no parent_call_id. */
-  function seedSyncDelegateCall(opts: { status: 'success' | 'error'; error?: string }) {
+  function seedSyncDelegateCall(opts: { status: 'success' | 'error'; error?: string; params?: Record<string, unknown> }) {
     act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Delegating now. ', session_id: SID }) })
     act(() => {
       useChatStore.getState().handleFrame({
         type: 'tool_call_start',
         call_id: 'tc_delegate_sync',
         tool: 'delegate',
-        params: { action: 'run', async: false, target_agent_id: 'ray', task: 'do X' },
+        params: opts.params ?? { action: 'run', async: false, target_agent_id: 'ray', task: 'do X' },
         session_id: SID,
       })
     })
@@ -236,7 +241,7 @@ describe('ChatScreen — synchronous delegate GenericToolCall row thread visibil
     act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
   }
 
-  it('an explicit synchronous (async:false) delegate run renders NO tool-call badge by default — the SubagentBlock card, not this row, was the pre-Fix-2 duplicate', async () => {
+  it('an explicit synchronous (async:false) delegate run renders a tool-call badge by default — the parent chat\'s ONLY delegation surface (ADR-091 D7/AC-7)', async () => {
     seedSyncDelegateCall({ status: 'success' })
 
     let container!: HTMLElement
@@ -245,10 +250,10 @@ describe('ChatScreen — synchronous delegate GenericToolCall row thread visibil
       container = result.container
     })
 
-    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).toBeNull()
+    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).not.toBeNull()
   })
 
-  it('a FAILED synchronous delegate run is ALSO hidden by default — no isError exception (LLM-mediated failure presentation)', async () => {
+  it('a FAILED synchronous delegate run is ALSO visible by default — no isError exception either way', async () => {
     seedSyncDelegateCall({ status: 'error', error: 'delegation_denied' })
 
     let container!: HTMLElement
@@ -257,10 +262,10 @@ describe('ChatScreen — synchronous delegate GenericToolCall row thread visibil
       container = result.container
     })
 
-    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).toBeNull()
+    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).not.toBeNull()
   })
 
-  it('a FAILED synchronous delegate run becomes visible once verbose chat is enabled', async () => {
+  it('a FAILED synchronous delegate run stays visible once verbose chat is enabled too', async () => {
     act(() => {
       useChatPreferencesStore.setState({ verboseChatEnabled: true })
     })
@@ -275,30 +280,61 @@ describe('ChatScreen — synchronous delegate GenericToolCall row thread visibil
     const badge = container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')
     expect(badge).not.toBeNull()
   })
+
+  it('a delegate STATUS poll (the one shape that still hides by default) renders NO tool-call badge by default', async () => {
+    seedSyncDelegateCall({ status: 'success', params: { action: 'status', call_id: 'tc_delegate_sync' } })
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+
+    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).toBeNull()
+  })
+
+  it('a delegate STATUS poll becomes visible once verbose chat is enabled', async () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    seedSyncDelegateCall({ status: 'success', params: { action: 'status', call_id: 'tc_delegate_sync' } })
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+
+    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).not.toBeNull()
+  })
 })
 
 // ── Fix 3 (2026-07-16): ghost bubble — a turn whose only content is a
-// hidden delegation must not render "avatar + empty body + Copy" (the D-fix
-// UAT defect resurfacing once delegation started hiding by default). Both
-// tests render via the PlainMessageList fallback (ResizeObserver forced
-// undefined, per this file's header) so VirtualAssistantMessageRow handles
-// a still-in-progress (isStreaming:true) message, exactly the D-fix
-// scenario this fix wave's finding cites. `tool_call_start` for a top-level
-// call auto-creates a fresh streaming assistant placeholder when there is
-// no trailing assistant message (chat.ts) — no prior `token` frame needed to
-// seed one.
+// hidden tool call must not render "avatar + empty body + Copy" (the D-fix
+// UAT defect resurfacing once a call starts hiding by default). ADR-091
+// D7/AC-7 made a `delegate` 'run' call visible by default (see the describe
+// block above), so it no longer exercises this concern — these two tests
+// use a delegate STATUS poll instead, the one delegate shape that still
+// hides by default (pure noise, no standalone meaning), to keep covering the
+// actual ghost-bubble scenario. Both tests render via the PlainMessageList
+// fallback (ResizeObserver forced undefined, per this file's header) so
+// VirtualAssistantMessageRow handles a still-in-progress (isStreaming:true)
+// message, exactly the D-fix scenario this fix wave's finding cites.
+// `tool_call_start` for a top-level call auto-creates a fresh streaming
+// assistant placeholder when there is no trailing assistant message
+// (chat.ts) — no prior `token` frame needed to seed one.
 
 const THINKING_TEXT_RE =
   /Thinking…|Working on it…|Composing a response…|Processing your request…|Analyzing…|Considering the details…|Piecing it together…|Reasoning it through…|Working through this…|Gathering my thoughts…|Figuring out the approach…|Reviewing the context…|Drafting a response…|Making sense of it…|Weighing the options…/
 
-describe('ChatScreen — Fix 3: ghost bubble when the only content is a hidden delegation', () => {
-  it('a delegate call that has already FINISHED, on an otherwise-empty still-streaming message, shows the thinking placeholder and no bare Copy bar', async () => {
+describe('ChatScreen — Fix 3: ghost bubble when the only content is a hidden delegate status poll', () => {
+  it('a delegate status poll that has already FINISHED, on an otherwise-empty still-streaming message, shows the thinking placeholder and no bare Copy bar', async () => {
     act(() => {
       useChatStore.getState().handleFrame({
         type: 'tool_call_start',
         call_id: 'tc_ghost_finished',
         tool: 'delegate',
-        params: { action: 'run', async: true, target_agent_id: 'ray', task: 'do X' },
+        params: { action: 'status', call_id: 'tc_prior_dispatch' },
         session_id: SID,
       })
     })
@@ -329,17 +365,17 @@ describe('ChatScreen — Fix 3: ghost bubble when the only content is a hidden d
     expect(container.querySelector('[aria-label="Copy message"]')).toBeNull()
   })
 
-  it('a delegate call that is STILL RUNNING, on an otherwise-empty streaming message rendered via the PlainMessageList fallback, shows the thinking placeholder', async () => {
+  it('a delegate status poll that is STILL RUNNING, on an otherwise-empty streaming message rendered via the PlainMessageList fallback, shows the thinking placeholder', async () => {
     act(() => {
       useChatStore.getState().handleFrame({
         type: 'tool_call_start',
         call_id: 'tc_ghost_running',
         tool: 'delegate',
-        params: { action: 'run', async: true, target_agent_id: 'ray', task: 'do Y' },
+        params: { action: 'status', call_id: 'tc_prior_dispatch' },
         session_id: SID,
       })
     })
-    // No tool_call_result yet — the delegate dispatch is still running, and
+    // No tool_call_result yet — the delegate poll is still running, and
     // no 'done' frame — the message stays isStreaming:true throughout.
 
     let container!: HTMLElement
