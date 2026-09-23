@@ -6,12 +6,33 @@ package gateway
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
+	"log/slog"
 	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// newHubBootID mints a fresh 128-bit, hex-encoded boot id (BE-DESIGN.md
+// §3.4): one per WSHandler instance (i.e. one per gateway process run in
+// practice), used by the cursor-servability rule (§3.3) to tell a stale
+// cursor from a previous run apart from one that is merely behind. A
+// crypto/rand failure here is treated as non-fatal (falls back to a
+// time-based id) rather than panicking gateway boot — see the "unknown
+// position" and "boot_mismatch" snapshot reasons downstream, both of which
+// degrade a wrong/weak boot id to "always answer with a snapshot", never to
+// a wrong catch-up.
+func newHubBootID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		slog.Error("ws: crypto/rand failed for hub boot id, falling back to a time-derived id", "error", err)
+		return hex.EncodeToString([]byte(time.Now().Format(time.RFC3339Nano)))
+	}
+	return hex.EncodeToString(b[:])
+}
 
 // This file is the #823 catch-up-redesign chokepoint described in
 // .squads/BE-DESIGN.md §1-§3: a single per-session event log ("hub") that

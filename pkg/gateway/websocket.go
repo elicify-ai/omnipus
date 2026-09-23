@@ -320,6 +320,17 @@ type WSHandler struct {
 	// chat".
 	streamOwners sync.Map
 
+	// hubs is the #823 catch-up-redesign session hub registry
+	// (ws_session_hub.go): the single chokepoint conversation frames are
+	// meant to pass through exactly once, whether or not any tab is
+	// attached (BE-DESIGN.md §1). Initialized by newWSHandler with a fresh
+	// per-process boot id; never nil on a handler built through the normal
+	// constructor. INTEGRATION STATUS: wsStreamer.Update/Finalize use it for
+	// numbering and retention (getOrCreate + publishBytes); the real
+	// attach/bind algorithm (BE-DESIGN.md §4) is not wired yet — see
+	// ws_session_hub.go's file header for the full honest status.
+	hubs *hubRegistry
+
 	upgrader websocket.Upgrader
 }
 
@@ -494,6 +505,7 @@ func newWSHandler(
 		liveStreamers:         make(map[string]*wsStreamer),
 		devicePairingRegistry: newDevicePairingRegistry(),
 		pairingStore:          pairing.NewPairingStore(),
+		hubs:                  newHubRegistry(newHubBootID()),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: wsCheckOrigin(allowedOrigin),
 		},
