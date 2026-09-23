@@ -26,15 +26,31 @@ import (
 
 const e2eProbeToolName = "adr091_boundary_probe"
 
-type e2eBoundaryProvider struct{}
+// e2eBoundaryProvider's chatCalls (Gap 4, ADR-091 fix-lane 7) is the
+// distinguishing signal TestE2E_ThreeLevelDelegation_NoLeak uses to prove
+// the chain did real work end to end, not merely stayed contained: this
+// provider's response is IDENTICAL regardless of trigger (a fixed canned
+// string), so content alone cannot tell "A was genuinely re-entered and
+// processed its child's completion" apart from "A's stale pre-delegation
+// answer was reused" (lane 1's depth-two result-loss finding: a steered
+// child's empty reporting channel makes WakeParentAlways refuse the live
+// wake, so completeWaitingAncestors falls back to the parent's OWN last
+// answer instead of a real re-entry). A naive, un-re-entered chain makes
+// exactly 2 Chat calls per level (the tool call, then its own finalize) —
+// 6 total for three levels. Any additional call proves at least one level
+// was actually re-entered.
+type e2eBoundaryProvider struct {
+	chatCalls atomic.Int32
+}
 
-func (*e2eBoundaryProvider) Chat(
+func (p *e2eBoundaryProvider) Chat(
 	_ context.Context,
 	messages []providers.Message,
 	_ []providers.ToolDefinition,
 	_ string,
 	_ map[string]any,
 ) (*providers.LLMResponse, error) {
+	p.chatCalls.Add(1)
 	for _, message := range messages {
 		if message.Role == "tool" {
 			return &providers.LLMResponse{Content: "child turn completed after the boundary probe"}, nil
@@ -99,13 +115,23 @@ func (p *e2eBoundaryProbe) Execute(ctx context.Context, _ map[string]any) *tools
 	p.calls.Add(1)
 	sessionID := tools.ToolTranscriptSessionID(ctx)
 	p.recorder.Record(steer.BoundarySyncToolText, sessionID, sessionID, "tool_error")
-	return tools.ErrorResult("intentional boundary probe failure")
+	result := tools.ErrorResult("intentional boundary probe failure")
+	// Gap 2 (ADR-091 fix-lane 7): also carry media on the SAME probe call so
+	// the real production media gate (boundary 4, loop_run_turn_tools.go —
+	// "UNGATED before ADR-091") is exercised by this suite, not just the
+	// text boundary. Previously this probe never returned Media at all, so
+	// AssertBoundaryInvoked(steer.BoundaryMedia) could never have passed
+	// here, and the e2e drain never touched the outbound MEDIA channel.
+	result.Media = []string{"adr091-e2e-media-ref.png"}
+	return result
 }
 
 type e2eHarness struct {
+	al         *agent.AgentLoop
 	tree       *testutil.Tree
 	sessions   *session.UnifiedStore
 	lifecycle  *session.LifecycleStore
+	inbox      *session.MessageInboxStore
 	audience   steer.AudienceResolver
 	deliverer  steer.UpwardDeliverer
 	canceller  steer.Canceller
@@ -114,18 +140,47 @@ type e2eHarness struct {
 	recorder   *testutil.OutboundRecorder
 	probe      *e2eBoundaryProbe
 	msgBus     *bus.MessageBus
+	// boundaryProvider is set only by newE2EHarness (the e2eBoundaryProvider
+	// variant); nil for harnesses built with a different provider
+	// (newE2EHarnessWithProvider's other callers).
+	boundaryProvider *e2eBoundaryProvider
 }
 
 func newE2EHarness(t *testing.T) *e2eHarness {
 	t.Helper()
-	return newE2EHarnessWithProvider(t, &e2eBoundaryProvider{}, testutil.RecordingOutbound(t), true)
+	provider := &e2eBoundaryProvider{}
+	h := newE2EHarnessWithProvider(t, provider, testutil.RecordingOutbound(t), true)
+	h.boundaryProvider = provider
+	return h
 }
 
+// newE2EHarnessWithProvider builds the harness with the REAL production
+// steer.AudienceResolver (agent.NewSteerAudienceResolver). Delegates to
+// newE2EHarnessCustom, which a test needing a different resolver (Gap 3's
+// leak-detection control) calls directly.
 func newE2EHarnessWithProvider(
 	t *testing.T,
 	provider providers.LLMProvider,
 	recorder *testutil.OutboundRecorder,
 	registerProbe bool,
+) *e2eHarness {
+	t.Helper()
+	return newE2EHarnessCustom(t, provider, recorder, registerProbe, nil)
+}
+
+// newE2EHarnessCustom is newE2EHarnessWithProvider's full body, plus an
+// audienceOverride hook: nil means "use the real production resolver"
+// (agent.NewSteerAudienceResolver over the real classifier); non-nil
+// replaces it outright — used by
+// TestE2E_ThreeLevelDelegation_LeakIsDetected to prove the leak suite's
+// AssertNothingTo has teeth against a resolver that answers AudienceUser
+// for everyone, WITHOUT touching any production code.
+func newE2EHarnessCustom(
+	t *testing.T,
+	provider providers.LLMProvider,
+	recorder *testutil.OutboundRecorder,
+	registerProbe bool,
+	audienceOverride steer.AudienceResolver,
 ) *e2eHarness {
 	t.Helper()
 	home := t.TempDir()
@@ -175,7 +230,10 @@ func newE2EHarnessWithProvider(
 	inbox := session.NewMessageInboxStore(filepath.Join(home, "inbox"))
 	al.SetSessionMessagingStores(inbox, lifecycle)
 	classifier := agent.NewSteerRecordClassifier(lifecycle, sessions)
-	audience := agent.NewSteerAudienceResolver(classifier)
+	var audience steer.AudienceResolver = agent.NewSteerAudienceResolver(classifier)
+	if audienceOverride != nil {
+		audience = audienceOverride
+	}
 	deliverer := agent.NewSteerUpwardDeliverer()
 	al.SetSteerAudienceDeps(audience, recorder, deliverer)
 	launcher := agent.NewSteerLauncher(al)
@@ -199,8 +257,9 @@ func newE2EHarnessWithProvider(
 		BootHook: func(context.Context) error { return nil },
 	}
 	harness := &e2eHarness{
+		al:   al,
 		tree: testutil.DelegationTree(t, deps, 3), sessions: sessions,
-		lifecycle: lifecycle, audience: audience, deliverer: deliverer,
+		lifecycle: lifecycle, inbox: inbox, audience: audience, deliverer: deliverer,
 		canceller: canceller, classifier: classifier, launcher: launcher,
 		recorder: recorder, probe: probe, msgBus: msgBus,
 	}
@@ -251,6 +310,20 @@ func TestE2E_ThreeLevelDelegation_NoLeak(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	// Gap 4 (ADR-091 fix-lane 7): the polling loop above used to break out
+	// unconditionally at the deadline WITHOUT checking whether it actually
+	// found every level terminal — a delegation that never finishes (the
+	// depth-two result-loss defect) silently fell through to the containment
+	// assertions below and still reported PASS. Delegation must actually
+	// WORK, not merely stay contained.
+	for _, child := range []testutil.TreeNode{h.tree.A, h.tree.B, h.tree.C} {
+		record, err := h.lifecycle.Load(child.SessionID)
+		if err != nil || !record.Terminal() {
+			t.Fatalf("%s did not reach a terminal lifecycle state within the deadline (record=%+v, err=%v) — "+
+				"a three-level delegation must complete end to end, not merely stay contained",
+				child.Name, record, err)
+		}
+	}
 	for h.recorder.BoundaryInvocationCount(steer.BoundaryFinalReply) < 3 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -260,14 +333,59 @@ func TestE2E_ThreeLevelDelegation_NoLeak(t *testing.T) {
 		case outbound := <-h.msgBus.OutboundChan():
 			h.recorder.Record(steer.BoundaryFinalReply, outbound.SessionID, "human", "leak")
 		default:
-			goto drained
+			goto textDrained
 		}
 	}
-drained:
+textDrained:
+	// Gap 2 (ADR-091 fix-lane 7): the leak suite drained the TEXT channel
+	// but never the MEDIA channel — "the end-to-end suite could not catch a
+	// media leak even if it tried". e2eBoundaryProbe now returns Media on
+	// every call (see its Execute), so this drain has something real to
+	// catch if BoundaryMedia's containment ever regresses.
+	for {
+		select {
+		case outboundMedia := <-h.msgBus.OutboundMediaChan():
+			h.recorder.Record(steer.BoundaryMedia, outboundMedia.SessionID, "human", "media-leak")
+		default:
+			goto mediaDrained
+		}
+	}
+mediaDrained:
 	h.recorder.AssertBoundaryInvoked(steer.BoundarySyncToolText)
 	h.recorder.AssertBoundaryInvoked(steer.BoundaryFinalReply)
+	h.recorder.AssertBoundaryInvoked(steer.BoundaryMedia)
 	h.recorder.AssertReceived(h.tree.C.SessionID, "tool_error")
 	h.recorder.AssertNothingTo("human")
+
+	// Gap 4 (ADR-091 fix-lane 7): NoLeak's headline claim was containment
+	// only — nothing asserted that the chain's result actually reaches the
+	// root. Read the root's real message inbox (the production upward-
+	// delivery destination, steer_completion.go::completeSteeredTurn's
+	// cascade via completeWaitingAncestors) rather than re-deriving content
+	// from the tree fixture.
+	rootMessages, _, _, err := h.inbox.Drain(h.tree.Root.SessionID, "", "", 256)
+	if err != nil {
+		t.Fatalf("drain root inbox: %v", err)
+	}
+	if len(rootMessages) == 0 {
+		t.Fatal("the root received NOTHING from its three-level delegation chain even though every " +
+			"level went terminal")
+	}
+	// "The root got a message" alone is not enough: A's OWN completion
+	// always delivers upward regardless of whether it ever heard from B/C —
+	// lane 1's depth-two result-loss finding is precisely that a steered
+	// ancestor's stale pre-delegation answer can propagate upward via
+	// completeWaitingAncestors's fallback WITHOUT the ancestor ever being
+	// genuinely re-entered to process its child's completion. A naive,
+	// never-re-entered chain makes exactly 2 scripted Chat calls per level
+	// (the tool call, then its own finalize) — 6 total for three levels.
+	// This asserts at least one extra call happened, i.e. at least one
+	// level was actually woken and re-run, not just fallen back on.
+	if calls := h.boundaryProvider.chatCalls.Load(); calls <= 6 {
+		t.Fatalf("provider Chat() was called %d times — want > 6 (2 per level x 3 levels is the "+
+			"never-re-entered baseline); no ancestor was genuinely re-entered by its child's "+
+			"completion, which is exactly lane 1's depth-two result-loss defect", calls)
+	}
 }
 
 type recordingFailureT struct {
@@ -300,6 +418,88 @@ func TestE2E_ThreeLevelDelegation_ZeroToolControlFails(t *testing.T) {
 	defer failureT.mu.Unlock()
 	if len(failureT.failures) != 1 || !strings.Contains(failureT.failures[0], "no outbound control received") {
 		t.Fatalf("zero-tool control failures = %v, want the connected recorder assertion to fail", failureT.failures)
+	}
+}
+
+// alwaysUserAudienceResolver is an injected TEST STUB (never production
+// code) that answers AudienceUser for every session, regardless of its real
+// class. It exists solely to prove Gap 3: that AssertNothingTo("human") is
+// backed by a REAL production decision point (audienceFor's
+// finalReplyAudience == steer.AudienceUser gate, loop.go) and would
+// genuinely detect a leak if that gate were ever broken — not merely a
+// probe tool that manually calls recorder.Record on itself.
+type alwaysUserAudienceResolver struct{}
+
+func (alwaysUserAudienceResolver) Audience(context.Context, string) (steer.Audience, steer.Class, error) {
+	return steer.AudienceUser, steer.ClassOrdinaryRoot, nil
+}
+
+// TestE2E_ThreeLevelDelegation_LeakIsDetected is Gap 3 (ADR-091 fix-lane 7):
+// TestE2E_ThreeLevelDelegation_NoLeak's AssertNothingTo("human") scans a
+// ledger that, before this test, nothing had ever proven would actually
+// catch a leak — the existing control (TestE2E_ThreeLevelDelegation_
+// ZeroToolControlFails) only proves the probe tool RAN. This test wires the
+// REAL audience-resolution call site (audienceFor, loop.go's finalReplyAudience
+// gate) to an injected stub that answers AudienceUser for every session —
+// simulating exactly the regression "a steered child's final reply is
+// treated as reaching the user" — and proves the SAME harness, drain and
+// assertion used by NoLeak now correctly DETECTS the leak and FAILS.
+// Without this, nobody knows the leak suite's safety claim has teeth.
+func TestE2E_ThreeLevelDelegation_LeakIsDetected(t *testing.T) {
+	failureT := &recordingFailureT{}
+	recorder := testutil.RecordingOutbound(failureT)
+	h := newE2EHarnessCustom(t, &e2eBoundaryProvider{}, recorder, true, alwaysUserAudienceResolver{})
+
+	deadline := time.Now().Add(10 * time.Second)
+	for h.probe.calls.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	for time.Now().Before(deadline) {
+		allTerminal := true
+		for _, child := range []testutil.TreeNode{h.tree.A, h.tree.B, h.tree.C} {
+			record, err := h.lifecycle.Load(child.SessionID)
+			if err != nil || !record.Terminal() {
+				allTerminal = false
+				break
+			}
+		}
+		if allTerminal {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for h.recorder.BoundaryInvocationCount(steer.BoundaryFinalReply) < 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	// With every session's audience stubbed to AudienceUser, the REAL
+	// production gate at loop.go's finalReplyAudience == steer.AudienceUser
+	// now actually publishes each steered child's final reply to the
+	// outbound bus — the same bus NoLeak drains and records under "human".
+	for {
+		select {
+		case outbound := <-h.msgBus.OutboundChan():
+			recorder.Record(steer.BoundaryFinalReply, outbound.SessionID, "human", "leak")
+		default:
+			goto drained
+		}
+	}
+drained:
+	recorder.AssertNothingTo("human")
+
+	failureT.mu.Lock()
+	defer failureT.mu.Unlock()
+	if len(failureT.failures) == 0 {
+		t.Fatal("AssertNothingTo(\"human\") did not fail against a stubbed AudienceUser resolver — " +
+			"the leak suite's safety claim has NO teeth: it would never catch a real leak either")
+	}
+	found := false
+	for _, failure := range failureT.failures {
+		if strings.Contains(failure, "forbidden address") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("AssertNothingTo(\"human\") failed for an unexpected reason: %v", failureT.failures)
 	}
 }
 
