@@ -160,7 +160,7 @@ function useCountdown(expiresAt: number): { remainingMs: number; progressPct: nu
   }
 }
 
-// ── ADR-092 D7/D8 Auto pre-flight escalations ──────────────────────────────
+// ── ADR-092 D7/D8 Auto pre-flight escalations, and the D3 rule-ask prompt ──
 // A tool call that hits an Auto-mode pre-flight escalation (D7 filesystem,
 // D8 network) carries the reason in its own args, not in a separate wire
 // field — pkg/tools/shell_permission_mode.go's requestPreflightApproval
@@ -168,13 +168,22 @@ function useCountdown(expiresAt: number): { remainingMs: number; progressPct: nu
 // "network_preflight") and args.note (a human-readable sentence already
 // built server-side). Without this, the card looked exactly like an
 // ordinary "ask"-policy bash approval, with no hint that Auto had already
-// tried and failed to clear the call itself. The D3 "rule_ask" kind (an
-// ordinary ask-rule prompt, not an escalation) carries adr092_kind with NO
-// note field — describeEscalation only fires once both are present.
+// tried and failed to clear the call itself.
+//
+// The D3 "rule_ask" kind is a DIFFERENT thing — an ordinary operator
+// command-rule ask, not an Auto escalation (nothing tried and failed to
+// clear the call; an operator rule simply requires a human look at this
+// command). pkg/agent/loop_policy.go::ruleAskRequestArgs sets adr092_kind
+// "rule_ask" together with a note naming the matched rule (e.g. `matches an
+// operator rule that requires approval (binary="rm" arg_prefix="rm -rf")`)
+// whenever the call matched a genuine ask rule — so rule_ask DOES carry a
+// note, same as the escalation kinds, and describeEscalation shows it
+// through the same banner with its own, non-escalation headline below.
 const ESCALATION_HEADLINES: Record<string, string> = {
   fs_preflight: 'This command wants to reach outside the workspace.',
   fs_preflight_blind: "This command's filesystem reach could not be classified from its text alone.",
   network_preflight: 'This command wants network access.',
+  rule_ask: 'An operator command rule requires approval for this command.',
 }
 
 function describeEscalation(args: Record<string, unknown>): { headline: string; detail: string } | null {

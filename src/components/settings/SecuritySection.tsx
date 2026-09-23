@@ -193,7 +193,7 @@ function AutoApproveControl() {
       .gate((token) => saveAsync({ next, token }), {
         title: next ? 'Turn Auto-approve on?' : 'Turn Auto-approve off?',
         body: next
-          ? 'With Auto-approve on, agents run tools set to "ask" without prompting — except changes to settings, agents, channels, providers, skills and MCP servers, deletions, installs, email, browser scripts and uploads, publishing a web preview, and connected-server tools whose server has not labelled them read-only or not destructive, which still ask. File reads and writes run only inside the workspace and its mounts — for example, saving to notes/a.md inside your workspace runs with no prompt, but a path outside it (or outside a connected mount) still asks. Needs an active kernel sandbox (none on Windows).'
+          ? 'With Auto-approve on, agents run tools set to "ask" without prompting — except a fixed list that always asks: asking for a mounted folder; installing a skill, setting up an environment, or publishing a web preview; email; deleting a task, workspace, or agent; browser scripts and uploads; changing settings or running diagnostics; changing or testing a provider or channel; adding or removing a connected (MCP) server; creating or changing an agent or workspace; creating, changing, or removing a skill; and connected-server tools whose server has not labelled them read-only or not destructive. File reads and writes run only inside the workspace and its mounts — for example, saving to notes/a.md inside your workspace runs with no prompt, but a path outside it (or outside a connected mount) still asks. Needs an active kernel sandbox (none on Windows).'
           : 'Every agent tool set to "ask" prompts every time, with no auto-approval.',
         confirmLabel: next ? 'Turn Auto-approve on' : 'Turn Auto-approve off',
       })
@@ -231,12 +231,15 @@ function AutoApproveControl() {
         <div>
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Auto-approve</p>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-            For any tool set to &ldquo;ask&rdquo;, skip the prompt &mdash; except a short list that still asks:
-            sending email, changes to settings, agents, channels, providers, skills or MCP servers, deletions,
-            installs, and browser scripts or uploads. Files stay confined to the workspace and its mounts &mdash;
-            for example, saving to notes/a.md inside your workspace runs with no prompt, but a path outside it
-            still asks. Connected-server (MCP) tools ask unless their server marks them safe. Needs an active
-            kernel sandbox (none on Windows).
+            For any tool set to &ldquo;ask&rdquo;, skip the prompt &mdash; except a fixed list that always asks:
+            asking for a mounted folder; installing a skill, setting up an environment, or publishing a web
+            preview; email; deleting a task, workspace, or agent; browser scripts or uploads; changing settings
+            or running diagnostics; changing or testing a provider or channel; adding or removing a connected
+            (MCP) server; creating or changing an agent or workspace; and creating, changing, or removing a
+            skill. Files stay confined to the workspace and its mounts &mdash; for example, saving to
+            notes/a.md inside your workspace runs with no prompt, but a path outside it still asks.
+            Connected-server (MCP) tools ask unless their server marks them safe. Needs an active kernel
+            sandbox (none on Windows).
           </p>
         </div>
         <Switch

@@ -43,9 +43,9 @@ Auto-approve can be set in three places. On a new installation it is **on** glob
 
 On the Security screen, the switch carries this description:
 
-> For any tool set to “ask”, skip the prompt — except a short list that still asks: sending email, changes to settings, agents, channels, providers, skills or MCP servers, deletions, installs, and browser scripts or uploads. Files stay confined to the workspace and its mounts — for example, saving to notes/a.md inside your workspace runs with no prompt, but a path outside it still asks. Connected-server (MCP) tools ask unless their server marks them safe. Needs an active kernel sandbox (none on Windows).
+> For any tool set to “ask”, skip the prompt — except a fixed list that always asks: asking for a mounted folder; installing a skill, setting up an environment, or publishing a web preview; email; deleting a task, workspace, or agent; browser scripts or uploads; changing settings or running diagnostics; changing or testing a provider or channel; adding or removing a connected (MCP) server; creating or changing an agent or workspace; and creating, changing, or removing a skill. Files stay confined to the workspace and its mounts — for example, saving to notes/a.md inside your workspace runs with no prompt, but a path outside it still asks. Connected-server (MCP) tools ask unless their server marks them safe. Needs an active kernel sandbox (none on Windows).
 
-That is a summary. The full list of tools that still ask is under "What Auto-approve runs and what still asks" below; it also includes asking for a mounted folder, running diagnostics and provider or channel tests, and publishing a web preview.
+That is a summary. The full list of tools that still ask is under "What Auto-approve runs and what still asks" below.
 
 The chat switch is the one place that can turn Auto-approve **on** when the agent or the global default has it off, because you are present in that conversation. It has one limit: when the chat's agent hands work to another agent (a delegate), and that other agent has **Never auto-approve** ticked, the delegate's own switch wins. Your chat switch covers the agent you are talking to, not a delegate that was set to always ask.
 

@@ -1,14 +1,21 @@
 // ToolApprovalModal.escalation.test.tsx — ADR-092 D7/D8 Auto pre-flight
-// escalation explanation (code-review finding, item 3).
+// escalation explanation (code-review finding, item 3), plus the D3
+// "rule_ask" operator-rule prompt.
 //
 // pkg/tools/shell_permission_mode.go's requestPreflightApproval sets
 // args.adr092_kind ("fs_preflight" | "fs_preflight_blind" |
 // "network_preflight") and args.note on the tool_approval_required frame
 // when Auto mode itself already tried and failed to clear the call. Before
 // this fix the card looked exactly like an ordinary ask-policy bash
-// approval, with nothing telling the human WHY it escalated. The D3
-// "rule_ask" kind (an ordinary ask-rule prompt, not an Auto escalation)
-// carries adr092_kind with no `note` field — must NOT show the banner.
+// approval, with nothing telling the human WHY it escalated.
+//
+// The D3 "rule_ask" kind is a different thing — an ordinary operator
+// command-rule ask, not an Auto escalation. pkg/agent/loop_policy.go's
+// ruleAskRequestArgs sets adr092_kind "rule_ask" together with a `note`
+// naming the matched rule whenever the call matched a genuine ask rule, so
+// rule_ask DOES carry a note (a build that queues rule_ask with no note at
+// all — an older wire shape, or a rule match that named no rule — still
+// shows no banner; describeEscalation requires both fields).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
@@ -100,7 +107,7 @@ describe('ToolApprovalModal — Auto pre-flight escalation explanation', () => {
     expect(banner).toHaveTextContent(/could not be classified/i)
   })
 
-  it('shows no escalation banner for an ordinary ask-rule prompt (rule_ask carries no note)', () => {
+  it('shows no rule banner for a rule_ask card with no note (describeEscalation requires both fields)', () => {
     queueApproval({
       command: 'git status',
       adr092_kind: 'rule_ask',
@@ -108,6 +115,20 @@ describe('ToolApprovalModal — Auto pre-flight escalation explanation', () => {
     render(<ToolApprovalModal />)
 
     expect(screen.queryByTestId('auto-escalation-explanation')).not.toBeInTheDocument()
+  })
+
+  it('explains a D3 rule_ask prompt as an operator rule, not a sandbox escalation', () => {
+    queueApproval({
+      command: 'rm -rf /tmp/build',
+      adr092_kind: 'rule_ask',
+      note: 'matches an operator rule that requires approval (binary="rm" arg_prefix="rm -rf")',
+    })
+    render(<ToolApprovalModal />)
+
+    const banner = screen.getByTestId('auto-escalation-explanation')
+    expect(banner).toHaveTextContent(/operator command rule requires approval/i)
+    expect(banner).toHaveTextContent('matches an operator rule that requires approval (binary="rm" arg_prefix="rm -rf")')
+    expect(banner).not.toHaveTextContent(/needs more access than the sandbox/i)
   })
 
   it('shows no escalation banner for an ordinary bash approval with no adr092_kind at all', () => {

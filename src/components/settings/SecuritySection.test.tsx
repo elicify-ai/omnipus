@@ -364,10 +364,28 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     expect(screen.queryByText(/currently applies to shell commands/i)).not.toBeInTheDocument()
     // The fixed ask-list (a representative sample) and the workspace-path
     // rule's concrete example must both be present.
-    expect(screen.getByText(/sending email/i)).toBeInTheDocument()
-    expect(screen.getByText(/mcp servers/i)).toBeInTheDocument()
+    expect(screen.getByText(/email/i)).toBeInTheDocument()
+    expect(screen.getByText(/connected \(MCP\) server/i)).toBeInTheDocument()
     expect(screen.getByText(/notes\/a\.md/i)).toBeInTheDocument()
     expect(screen.getByText(/none on windows/i)).toBeInTheDocument()
+  })
+
+  // AutoApproveClassTable (pkg/tools/auto_approve.go) lists 28 tools that
+  // always ask under Auto-approve. Four of those groups were missing from
+  // this summary entirely: request_mount, run_doctor, test_provider/
+  // test_channel, and serve_web. Oracle is the backend table, not the old
+  // copy — this fails against the pre-fix wording, which never mentioned
+  // a mounted folder, diagnostics, provider/channel tests, or a web preview.
+  it('names every always-ask group from AutoApproveClassTable, including the four the old summary omitted', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    renderSection()
+
+    await screen.findByTestId('auto-approve-global-switch')
+
+    expect(screen.getByText(/mounted folder/i)).toBeInTheDocument()
+    expect(screen.getByText(/running diagnostics/i)).toBeInTheDocument()
+    expect(screen.getByText(/testing a provider or channel/i)).toBeInTheDocument()
+    expect(screen.getByText(/publishing a web preview/i)).toBeInTheDocument()
   })
 
   it('the turn-on confirmation dialog states the full ask-list and the kernel-sandbox requirement', async () => {
@@ -381,8 +399,24 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
 
     const dialog = await screen.findByRole('alertdialog')
     expect(dialog).not.toHaveTextContent(/currently applies to shell commands/i)
-    expect(dialog).toHaveTextContent(/deletions, installs, email/i)
+    expect(dialog).toHaveTextContent(/deleting a task, workspace, or agent/i)
     expect(dialog).toHaveTextContent(/needs an active kernel sandbox/i)
+  })
+
+  it('the turn-on confirmation dialog also names the four groups the old copy omitted', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    renderSection()
+    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+
+    const toggle = await screen.findByTestId('auto-approve-global-switch')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent(/mounted folder/i)
+    expect(dialog).toHaveTextContent(/running diagnostics/i)
+    expect(dialog).toHaveTextContent(/testing a provider or channel/i)
+    expect(dialog).toHaveTextContent(/publishing a web preview/i)
   })
 
   it('a real save failure surfaces exactly one toast, from the mutation onError — the outer step-up catch never adds a second one', async () => {
