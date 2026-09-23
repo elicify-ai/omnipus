@@ -437,7 +437,7 @@ func TestApprovalRegistry_SaturationDefault64(t *testing.T) {
 	// Cleanup: drain all 64 pending entries so timers don't fire after test.
 	for _, e := range entries {
 		go func(e *approvalEntry) {
-			reg.resolve(e.ApprovalID, ApprovalActionCancel)
+			reg.resolve(e.ApprovalID, ApprovalActionCancel, false)
 			<-e.resultCh
 		}(e)
 	}
@@ -473,7 +473,7 @@ func TestApprovalRegistry_BatchShortCircuit_MixedPolicy(t *testing.T) {
 
 	// Deny the first (user action).
 	go func() { <-e1.resultCh }()
-	ok, gone := reg.resolve(e1.ApprovalID, ApprovalActionDeny)
+	ok, gone := reg.resolve(e1.ApprovalID, ApprovalActionDeny, false)
 	require.True(t, ok, "deny e1 must succeed")
 	require.False(t, gone)
 
@@ -532,7 +532,7 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 		e, accepted := reg.requestApproval("tc-ap", "read_file", map[string]any{}, "a", "s", "t")
 		require.True(t, accepted)
 		go func() { <-e.resultCh }()
-		ok, gone := reg.resolve(e.ApprovalID, ApprovalActionApprove)
+		ok, gone := reg.resolve(e.ApprovalID, ApprovalActionApprove, false)
 		require.True(t, ok)
 		require.False(t, gone)
 		require.Equal(t, ApprovalStateApproved, reg.get(e.ApprovalID).state)
@@ -543,7 +543,7 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 		e, accepted := reg.requestApproval("tc-du", "read_file", map[string]any{}, "a", "s", "t")
 		require.True(t, accepted)
 		go func() { <-e.resultCh }()
-		ok, gone := reg.resolve(e.ApprovalID, ApprovalActionDeny)
+		ok, gone := reg.resolve(e.ApprovalID, ApprovalActionDeny, false)
 		require.True(t, ok)
 		require.False(t, gone)
 		require.Equal(t, ApprovalStateDeniedUser, reg.get(e.ApprovalID).state)
@@ -554,7 +554,7 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 		e, accepted := reg.requestApproval("tc-dc", "exec", map[string]any{}, "a", "s", "t")
 		require.True(t, accepted)
 		go func() { <-e.resultCh }()
-		ok, gone := reg.resolve(e.ApprovalID, ApprovalActionCancel)
+		ok, gone := reg.resolve(e.ApprovalID, ApprovalActionCancel, false)
 		require.True(t, ok)
 		require.False(t, gone)
 		require.Equal(t, ApprovalStateDeniedCancel, reg.get(e.ApprovalID).state)
@@ -619,7 +619,7 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 			t.Fatal("saturated entry must have pre-delivered outcome")
 		}
 		// Cleanup.
-		go func() { reg.resolve(e1.ApprovalID, ApprovalActionCancel); <-e1.resultCh }()
+		go func() { reg.resolve(e1.ApprovalID, ApprovalActionCancel, false); <-e1.resultCh }()
 	})
 
 	t.Run("pending→denied_batch_short_circuit", func(t *testing.T) {
@@ -647,11 +647,11 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 
 		// Approve it to put it in a terminal state.
 		go func() { <-e.resultCh }()
-		ok, _ := reg.resolve(e.ApprovalID, ApprovalActionApprove)
+		ok, _ := reg.resolve(e.ApprovalID, ApprovalActionApprove, false)
 		require.True(t, ok)
 
 		// Any subsequent resolve must return gone=true (HTTP 410 semantics).
-		_, gone := reg.resolve(e.ApprovalID, ApprovalActionDeny)
+		_, gone := reg.resolve(e.ApprovalID, ApprovalActionDeny, false)
 		assert.True(t, gone, "resolve on terminal entry must return gone=true (HTTP 410 semantics)")
 	})
 }
@@ -739,7 +739,7 @@ func TestWS_SessionState_SeesAllPendingApprovals(t *testing.T) {
 	)
 	require.True(t, accepted)
 	t.Cleanup(func() {
-		go func() { reg.resolve(pendingEntry.ApprovalID, ApprovalActionCancel) }()
+		go func() { reg.resolve(pendingEntry.ApprovalID, ApprovalActionCancel, false) }()
 	})
 
 	handler, _, _ := newTestWSHandler(t)
@@ -794,7 +794,7 @@ func TestWS_ToolApprovalRequired_ExpiresInMs(t *testing.T) {
 	)
 	require.True(t, accepted)
 	t.Cleanup(func() {
-		go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel) }()
+		go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel, false) }()
 	})
 
 	handler, _, _ := newTestWSHandler(t)
@@ -864,7 +864,7 @@ func TestWS_ToolApprovalRequired_NilArgsBecomesEmptyObject(t *testing.T) {
 	)
 	require.True(t, accepted)
 	t.Cleanup(func() {
-		go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel) }()
+		go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel, false) }()
 	})
 
 	handler, _, _ := newTestWSHandler(t)
@@ -972,7 +972,7 @@ func TestREST_HandleToolApprovals_UnknownAction(t *testing.T) {
 		"agent-u", "sess-u", "turn-u",
 	)
 	require.True(t, accepted)
-	t.Cleanup(func() { go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel) }() })
+	t.Cleanup(func() { go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel, false) }() })
 
 	body := bytes.NewBufferString(`{"action":"teleport"}`)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/tool-approvals/"+entry.ApprovalID, body)

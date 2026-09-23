@@ -357,16 +357,24 @@ func (al *AgentLoop) loadToolApprover() PolicyApprover {
 // -v") on this SAME classic ask-policy path. tools.BashPrefixGrantCheck
 // does the resolve-and-verify (D3's own look-alike defence) so this
 // function never needs its own copy of that logic.
+// recordGrant (third return, review finding #5) is true only when this call
+// reached a FRESH human "allow" decision (not "allow_once", and not an
+// already-existing grant this function's own IsAllowed/BashPrefixGrantCheck
+// short-circuits above already satisfied — there is nothing NEW to record
+// in either of those branches, so both return recordGrant=false). The
+// classic ask-policy caller (loop_run_turn_tools.go) does not consume this
+// value; the ADR-092 D7/D8 pre-flight escalation callers
+// (ShellPermissionGate.RequestShellApproval, below) do.
 func (al *AgentLoop) CheckGrantOrRequestApproval(
 	ctx context.Context,
 	sessionID, agentID, toolName, toolCallID, turnID string,
 	args map[string]any,
-) (approved bool, denialReason string) {
+) (approved bool, denialReason string, recordGrant bool) {
 	if al.ApprovalGrants().IsAllowed(sessionID, agentID, toolName, args) {
-		return true, ""
+		return true, "", false
 	}
 	if toolName == "bash" && tools.BashPrefixGrantCheck(al.ApprovalGrants(), sessionID, agentID, toolName, args) {
-		return true, ""
+		return true, "", false
 	}
 	approver := al.loadToolApprover()
 	return approver.RequestApproval(ctx, PolicyApprovalReq{
@@ -608,9 +616,9 @@ func (g *ShellPermissionGate) RequestShellApproval(
 	ctx context.Context,
 	sessionID, agentID, toolName, toolCallID, turnID string,
 	args map[string]any,
-) (bool, string) {
+) (bool, string, bool) {
 	if g == nil || g.Loop == nil {
-		return false, "shell permission gate not wired"
+		return false, "shell permission gate not wired", false
 	}
 	return g.Loop.CheckGrantOrRequestApproval(ctx, sessionID, agentID, toolName, toolCallID, turnID, args)
 }

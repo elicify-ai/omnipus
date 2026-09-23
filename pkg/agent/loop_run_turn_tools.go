@@ -955,7 +955,15 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 			// rendered nothing at all and the turn looked hung for no
 			// visible reason.
 			recordAskPendingToolCall(ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs)
-			approved, denialReason = ex.rx.rr.rq.ri.rf.rt.al.CheckGrantOrRequestApproval(
+			// The third return (recordGrant, review finding #5) is consumed
+			// only by pkg/tools' D7/D8 pre-flight escalation call sites,
+			// reached through a different path (ShellPermissionGate.
+			// RequestShellApproval) — this classic ask-policy branch already
+			// records "Always Allow" grants via the separate, decoupled
+			// rest_tool_registry.go::approvalGrantRecorder mechanism, driven
+			// directly by the wire action, so it has no use for the value
+			// here.
+			approved, denialReason, _ = ex.rx.rr.rq.ri.rf.rt.al.CheckGrantOrRequestApproval(
 				ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID, ex.rx.rr.rq.ri.rf.rt.ts.agentID, ex.toolName, tc.ID, ex.rx.rr.rq.ri.rf.rt.ts.turnID, ex.toolArgs,
 			)
 		}

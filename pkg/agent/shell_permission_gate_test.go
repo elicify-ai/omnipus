@@ -131,7 +131,7 @@ func TestShellPermissionGate_RequestShellApproval_ReachesCheckGrantOrRequestAppr
 	al.approvalGrants = grants
 
 	gate := &ShellPermissionGate{Loop: al}
-	approved, reason := gate.RequestShellApproval(
+	approved, reason, _ := gate.RequestShellApproval(
 		context.Background(), "sess-1", "agent-1", "bash", "call-1", "turn-1",
 		map[string]any{"command": "true"})
 	assert.True(t, approved)
@@ -140,7 +140,7 @@ func TestShellPermissionGate_RequestShellApproval_ReachesCheckGrantOrRequestAppr
 
 func TestShellPermissionGate_RequestShellApproval_NilReceiverFailsClosed(t *testing.T) {
 	var gate *ShellPermissionGate
-	approved, reason := gate.RequestShellApproval(context.Background(), "s", "a", "bash", "c", "t", nil)
+	approved, reason, _ := gate.RequestShellApproval(context.Background(), "s", "a", "bash", "c", "t", nil)
 	assert.False(t, approved)
 	assert.NotEmpty(t, reason)
 }
@@ -163,7 +163,7 @@ func TestCheckGrantOrRequestApproval_BashPrefixGrantSuppressesPrompt(t *testing.
 	require.True(t, grants.RecordPrefixGrant("sess-1", "agent-1", "bash", security.ShellPrefixGrant{Binary: resolvedTrue}))
 	al.approvalGrants = grants
 
-	approved, reason := al.CheckGrantOrRequestApproval(
+	approved, reason, _ := al.CheckGrantOrRequestApproval(
 		context.Background(), "sess-1", "agent-1", "bash", "call-1", "turn-1",
 		map[string]any{"command": "true"})
 	assert.True(t, approved, "a D4 prefix grant must suppress the classic ask-policy dialog for a bash call")
@@ -181,7 +181,7 @@ func TestCheckGrantOrRequestApproval_BashPrefixGrantDoesNotApplyToOtherTools(t *
 	// No PolicyApprover wired -> nopPolicyApprover denies with
 	// "no_approver_configured", proving this reaches the interactive
 	// fallback rather than being spuriously approved by the bash-only check.
-	approved, reason := al.CheckGrantOrRequestApproval(
+	approved, reason, _ := al.CheckGrantOrRequestApproval(
 		context.Background(), "sess-1", "agent-1", "some_other_tool", "call-1", "turn-1",
 		map[string]any{"command": "true"})
 	assert.False(t, approved, "the bash prefix-grant extension must never apply to a non-bash tool")

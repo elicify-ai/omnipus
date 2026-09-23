@@ -40,23 +40,30 @@ func (f fakeShellModeResolver) ResolveShellMode(context.Context, string, string)
 // can assert exactly how many times (if any) the interactive dialog would
 // have fired, and returns a fixed, configurable decision.
 type fakeShellApprovalRequester struct {
-	mu      sync.Mutex
-	approve bool
-	calls   int
-	lastArg map[string]any
+	mu sync.Mutex
+	// approve is what the human decided: approved at all, or not.
+	// recordGrant (review finding #5) is a SEPARATE axis: "Allow" (true)
+	// vs "Allow once" (false) — permTestFixture defaults it to approve's
+	// own value so every pre-existing test (which never distinguished the
+	// two) keeps its old behaviour; a finding #5-specific test overrides it
+	// directly to simulate "Allow once".
+	approve     bool
+	recordGrant bool
+	calls       int
+	lastArg     map[string]any
 }
 
 func (f *fakeShellApprovalRequester) RequestShellApproval(
 	_ context.Context, _, _, _, _, _ string, args map[string]any,
-) (bool, string) {
+) (bool, string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
 	f.lastArg = args
 	if f.approve {
-		return true, ""
+		return true, "", f.recordGrant
 	}
-	return false, "denied by test fixture"
+	return false, "denied by test fixture", false
 }
 
 func (f *fakeShellApprovalRequester) callCount() int {
@@ -84,7 +91,7 @@ func permTestFixture(t *testing.T, mode ShellMode, approve bool) (tool *ExecTool
 	tool, err = NewExecTool(workDir, true)
 	require.NoError(t, err)
 	tool.shellMode = fakeShellModeResolver{mode: mode}
-	requester = &fakeShellApprovalRequester{approve: approve}
+	requester = &fakeShellApprovalRequester{approve: approve, recordGrant: approve}
 	tool.approvalRequester = requester
 	tool.approvalGrants = security.NewApprovalGrantStore()
 

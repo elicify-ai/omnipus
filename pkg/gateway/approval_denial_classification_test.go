@@ -159,7 +159,7 @@ func TestApprovalDenialReasons_User_RealRegistry(t *testing.T) {
 	)
 	require.True(t, accepted)
 
-	ok, gone := reg.resolve(entry.ApprovalID, ApprovalActionDeny)
+	ok, gone := reg.resolve(entry.ApprovalID, ApprovalActionDeny, false)
 	require.True(t, ok)
 	require.False(t, gone)
 
@@ -182,7 +182,7 @@ func TestApprovalDenialReasons_Cancel_RealRegistry(t *testing.T) {
 	)
 	require.True(t, accepted)
 
-	ok, gone := reg.resolve(entry.ApprovalID, ApprovalActionCancel)
+	ok, gone := reg.resolve(entry.ApprovalID, ApprovalActionCancel, false)
 	require.True(t, ok)
 	require.False(t, gone)
 

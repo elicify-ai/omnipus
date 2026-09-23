@@ -49,9 +49,9 @@ type recordingPolicyApprover struct{ requests atomic.Int32 }
 
 func (r *recordingPolicyApprover) RequestApproval(
 	_ context.Context, _ PolicyApprovalReq,
-) (bool, string) {
+) (bool, string, bool) {
 	r.requests.Add(1)
-	return false, "denied by the test approver"
+	return false, "denied by the test approver", false
 }
 
 func (r *recordingPolicyApprover) calls() int32 { return r.requests.Load() }

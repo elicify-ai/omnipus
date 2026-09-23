@@ -75,9 +75,9 @@ func TestApprovalRegistry_ResolutionListener_EveryTerminalPath(t *testing.T) {
 		act       func(reg *approvalRegistryV2, e *approvalEntry)
 		wantState ApprovalState
 	}{
-		{"approve", 0, func(reg *approvalRegistryV2, e *approvalEntry) { reg.resolve(e.ApprovalID, ApprovalActionApprove) }, ApprovalStateApproved},
-		{"deny", 0, func(reg *approvalRegistryV2, e *approvalEntry) { reg.resolve(e.ApprovalID, ApprovalActionDeny) }, ApprovalStateDeniedUser},
-		{"cancel action", 0, func(reg *approvalRegistryV2, e *approvalEntry) { reg.resolve(e.ApprovalID, ApprovalActionCancel) }, ApprovalStateDeniedCancel},
+		{"approve", 0, func(reg *approvalRegistryV2, e *approvalEntry) { reg.resolve(e.ApprovalID, ApprovalActionApprove, false) }, ApprovalStateApproved},
+		{"deny", 0, func(reg *approvalRegistryV2, e *approvalEntry) { reg.resolve(e.ApprovalID, ApprovalActionDeny, false) }, ApprovalStateDeniedUser},
+		{"cancel action", 0, func(reg *approvalRegistryV2, e *approvalEntry) { reg.resolve(e.ApprovalID, ApprovalActionCancel, false) }, ApprovalStateDeniedCancel},
 		{"batch short-circuit", 0, func(reg *approvalRegistryV2, e *approvalEntry) { reg.cancelBatchShortCircuit(e.ApprovalID) }, ApprovalStateDeniedBatchShortCircuit},
 		{"session stop", 0, func(reg *approvalRegistryV2, _ *approvalEntry) {
 			reg.cancelAllPendingForSessions([]string{sessionID}, denialReasonSessionCanceled)
@@ -113,7 +113,7 @@ func TestApprovalRegistry_ResolutionListener_EveryTerminalPath(t *testing.T) {
 			assert.Equal(t, []apprResRecord{{ApprovalID: e.ApprovalID, State: tc.wantState}}, rec.snapshot())
 
 			// A late action on the already-terminal approval must not notify again.
-			reg.resolve(e.ApprovalID, ApprovalActionDeny)
+			reg.resolve(e.ApprovalID, ApprovalActionDeny, false)
 			time.Sleep(20 * time.Millisecond)
 			assert.Len(t, rec.snapshot(), 1, "%s: a late action re-notified", tc.name)
 		})
@@ -135,7 +135,7 @@ func TestApprovalRegistry_ResolutionListener_SaturatedNeverNotifies(t *testing.T
 	require.False(t, accepted, "second request must hit the cap")
 	assert.Empty(t, rec.snapshot())
 
-	reg.resolve(first.ApprovalID, ApprovalActionDeny)
+	reg.resolve(first.ApprovalID, ApprovalActionDeny, false)
 	apprResAwaitOutcome(t, first)
 	assert.Equal(t, []apprResRecord{{ApprovalID: first.ApprovalID, State: ApprovalStateDeniedUser}}, rec.snapshot())
 }
@@ -229,8 +229,8 @@ func TestWS_ToolApprovalFrames_CarryWorkspaceID(t *testing.T) {
 	noWS, ok := reg.requestApproval("tc-nows", "write_file", nil, "mia", loose.ID, "turn-nows")
 	require.True(t, ok)
 	t.Cleanup(func() {
-		reg.resolve(inWS.ApprovalID, ApprovalActionCancel)
-		reg.resolve(noWS.ApprovalID, ApprovalActionCancel)
+		reg.resolve(inWS.ApprovalID, ApprovalActionCancel, false)
+		reg.resolve(noWS.ApprovalID, ApprovalActionCancel, false)
 	})
 
 	tabs := apprResAttachConns(t, handler, 1)

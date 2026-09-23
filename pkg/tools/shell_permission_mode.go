@@ -125,8 +125,18 @@ type ShellModeResolver interface {
 // which fit CheckGrantOrRequestApproval's own exact-fingerprint check), and
 // calls this interface only once that check has missed, purely to reach the
 // interactive dialog machinery pkg/tools has no other way to invoke.
+//
+// recordGrant (review finding #5, MEDIUM, 2026-09-23 security fix lane) is
+// true only when approved is true AND the human's wire action was literally
+// "allow" (D4's three-button dialog), never "allow_once". The D7/D8
+// pre-flight escalation call sites (enforceFSPreflight/
+// enforceNetworkPreflight) gate their own RecordPathGrant/RecordNetworkGrant
+// calls on this value — before it existed, both wire actions resolved
+// through the identical approved==true outcome and these call sites
+// recorded a persistent session grant on ANY approval, "Allow once"
+// included.
 type ShellApprovalRequester interface {
-	RequestShellApproval(ctx context.Context, sessionID, agentID, toolName, toolCallID, turnID string, args map[string]any) (approved bool, denialReason string)
+	RequestShellApproval(ctx context.Context, sessionID, agentID, toolName, toolCallID, turnID string, args map[string]any) (approved bool, denialReason string, recordGrant bool)
 }
 
 // shellPermissionResult is enforceShellPermissionMode's output: the mode
@@ -300,7 +310,11 @@ func (t *ExecTool) requestRuleApproval(
 		"command":     command,
 		"adr092_kind": "rule_ask",
 	}
-	approved, reason := t.approvalRequester.RequestShellApproval(ctx, sessionID, agentID, t.Name(), toolCallID, "", args)
+	// The third return (recordGrant) is unused here: this branch never
+	// records a grant of its own regardless of what the human clicked (see
+	// the comment below) — the D7/D8 call sites below are the ones that
+	// consume it.
+	approved, reason, _ := t.approvalRequester.RequestShellApproval(ctx, sessionID, agentID, t.Name(), toolCallID, "", args)
 	// willRecordGrant=false: an approved D3 ask-rule verdict records no
 	// grant from THIS call site. RecordPrefixGrant does have a live caller
 	// (pkg/gateway/rest_tool_registry.go::approvalGrantRecorder, reached
@@ -352,13 +366,13 @@ const headlessShellDenyReason = "auto-denied: no operator attached to this headl
 // requestPreflightApproval is FR-039's third new CheckGrantOrRequestApproval
 // call site: a D7 or D8 pre-flight verdict needs more than the sandbox's
 // current grant already covers.
-func (t *ExecTool) requestPreflightApproval(ctx context.Context, sessionID, agentID, toolCallID, command, kind, note string) (bool, string) {
+func (t *ExecTool) requestPreflightApproval(ctx context.Context, sessionID, agentID, toolCallID, command, kind, note string) (approved bool, reason string, recordGrant bool) {
 	if ToolAutoDenyAsk(ctx) {
 		// Finding #7: see headlessShellDenyReason's doc comment.
-		return false, headlessShellDenyReason
+		return false, headlessShellDenyReason, false
 	}
 	if t.approvalRequester == nil {
-		return false, "no_approver_configured"
+		return false, "no_approver_configured", false
 	}
 	args := map[string]any{
 		"command":     command,
@@ -407,11 +421,14 @@ func (t *ExecTool) enforceFSPreflight(ctx context.Context, command, sessionID, a
 		t.emitPreflightEscalation(ctx, sessionID, agentID, command, audit.ShellPreflightFilesystem,
 			"the command could not be parsed for filesystem references (FR-020 blind spot)",
 			"unknown — classifier could not extract path/operation references")
-		approved, reason := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command,
+		approved, reason, _ := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command,
 			"fs_preflight_blind", "the command could not be parsed for filesystem references")
 		// willRecordGrant=false: a blind-spot approval is single-call only —
 		// no PathGrant is recorded (there is no resolved {path, access} to
-		// record one for), so the next call re-evaluates from scratch.
+		// record one for), so the next call re-evaluates from scratch. This
+		// is independent of the human's actual "allow"/"allow_once" choice
+		// (the third requestPreflightApproval return, discarded above) —
+		// there is nothing to persist either way here.
 		t.emitApprovalDecision(ctx, sessionID, agentID, command, "fs_preflight_blind", approved, reason, false)
 		if !approved {
 			return nil, ErrorResult(preflightDenialMessage("filesystem", reason))
@@ -441,21 +458,34 @@ func (t *ExecTool) enforceFSPreflight(ctx context.Context, command, sessionID, a
 		}
 		t.emitPreflightEscalation(ctx, sessionID, agentID, command, audit.ShellPreflightFilesystem,
 			verdict.PolicyRule, fmt.Sprintf("%s access to %s", accessLabel(op.Access), resolved))
-		approved, reason := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command, "fs_preflight",
+		approved, reason, recordGrant := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command, "fs_preflight",
 			fmt.Sprintf("%s needs %s access the sandbox does not currently grant: %s", resolved, accessLabel(op.Access), verdict.PolicyRule))
-		// willRecordGrant=true: an approved fs_preflight escalation always
-		// records a PathGrant immediately below (RecordPathGrant itself now
-		// emits the FR-032(c) shell.grant_recorded event — see
-		// pkg/security/approvalgrants.go).
-		t.emitApprovalDecision(ctx, sessionID, agentID, command, "fs_preflight", approved, reason, true)
+		// willRecordGrant now reflects the human's ACTUAL choice (review
+		// finding #5): "Allow once" (recordGrant=false) widens the policy
+		// for THIS call only — the PathGrant below is still applied to the
+		// in-flight `policy` value (so later {path,op} pairs in the SAME
+		// command see it), but is never persisted into approvalGrants, so
+		// the next command in the session re-prompts. "Allow"
+		// (recordGrant=true) persists it via RecordPathGrant, which itself
+		// emits the FR-032(c) shell.grant_recorded event.
+		t.emitApprovalDecision(ctx, sessionID, agentID, command, "fs_preflight", approved, reason, recordGrant)
 		if !approved {
 			return nil, ErrorResult(preflightDenialMessage("filesystem", reason))
 		}
 		grant := fspolicy.PathGrant{Path: resolved, Access: op.Access}
-		t.approvalGrants.RecordPathGrant(sessionID, agentID, grant)
+		if recordGrant {
+			t.approvalGrants.RecordPathGrant(sessionID, agentID, grant)
+		}
 		policy.PathGrants = append(policy.PathGrants, grant)
 	}
-	return t.approvalGrants.PathGrantsFor(sessionID, agentID), nil
+	// Return policy.PathGrants (persisted existing + everything approved
+	// THIS call, allow-once included), not a fresh store read: an
+	// "allow once" grant is never written into approvalGrants, so
+	// re-querying the store here would silently drop it from the set the
+	// caller renders into guardCommand/the kernel policy for THIS spawn —
+	// the exact command that was just approved would then still get
+	// blocked by its own containment check.
+	return policy.PathGrants, nil
 }
 
 // enforceNetworkPreflight is ADR-092 D8's Auto-mode orchestration: classify
@@ -472,16 +502,20 @@ func (t *ExecTool) enforceNetworkPreflight(ctx context.Context, command, session
 	}
 	t.emitPreflightEscalation(ctx, sessionID, agentID, command, audit.ShellPreflightNetwork,
 		verdict.PolicyRule, "outbound network access")
-	approved, reason := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command, "network_preflight",
+	approved, reason, recordGrant := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command, "network_preflight",
 		"this command needs outbound network access the sandbox does not currently grant")
-	// willRecordGrant=true: an approved network_preflight escalation always
-	// records the network grant immediately below (RecordNetworkGrant itself
-	// now emits the FR-032(c) shell.grant_recorded event).
-	t.emitApprovalDecision(ctx, sessionID, agentID, command, "network_preflight", approved, reason, true)
+	// willRecordGrant now reflects the human's actual choice (review
+	// finding #5): "Allow once" widens THIS command's network posture
+	// (the true return below) without persisting a session-wide grant;
+	// "Allow" persists it via RecordNetworkGrant, which itself emits the
+	// FR-032(c) shell.grant_recorded event.
+	t.emitApprovalDecision(ctx, sessionID, agentID, command, "network_preflight", approved, reason, recordGrant)
 	if !approved {
 		return false, ErrorResult(preflightDenialMessage("network", reason))
 	}
-	t.approvalGrants.RecordNetworkGrant(sessionID, agentID)
+	if recordGrant {
+		t.approvalGrants.RecordNetworkGrant(sessionID, agentID)
+	}
 	return true, nil
 }
 

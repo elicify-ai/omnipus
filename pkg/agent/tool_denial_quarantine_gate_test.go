@@ -50,11 +50,11 @@ type countingDenyApprover struct {
 	reason string
 }
 
-func (a *countingDenyApprover) RequestApproval(_ context.Context, _ PolicyApprovalReq) (bool, string) {
+func (a *countingDenyApprover) RequestApproval(_ context.Context, _ PolicyApprovalReq) (bool, string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.calls++
-	return false, a.reason
+	return false, a.reason, false
 }
 
 func (a *countingDenyApprover) callCount() int {

@@ -152,6 +152,23 @@ type approvalEntry struct {
 type ApprovalOutcome struct {
 	Approved bool
 	Reason   string // one of "approved","user","timeout","cancel","restart","saturated","batch_short_circuit","internal_error","session canceled"
+
+	// RecordGrant is true only when Approved is true AND the human's wire
+	// action was literally "allow" (not "allow_once") — review finding #5
+	// (MEDIUM, 2026-09-23 security fix lane). Zero-value false on every
+	// other outcome (deny/timeout/cancel/saturated/restart/etc.), which is
+	// always the correct default: none of those approve anything, let alone
+	// something worth persisting a session grant for. Threaded through
+	// RequestApproval -> CheckGrantOrRequestApproval ->
+	// ShellApprovalRequester.RequestShellApproval so pkg/tools' D7/D8
+	// pre-flight escalations (enforceFSPreflight/enforceNetworkPreflight)
+	// can tell "Allow once" (this call only) apart from "Allow" (persist a
+	// session-wide PathGrant/network grant) — before this field existed,
+	// BOTH wire actions resolved through the identical ApprovalActionApprove
+	// transition and RequestApproval's old (bool, string) return gave the
+	// D7/D8 call sites no way to see which one the human actually clicked,
+	// so they recorded a persistent grant unconditionally on any approval.
+	RecordGrant bool
 }
 
 // Denial-reason literals emitted by this file (ADR-058 spec §2.2, FR-058-04).
@@ -483,6 +500,16 @@ func (r *approvalRegistryV2) notifyTimedOut(e *approvalEntry) {
 // (FR-080). Any future variant that matched on session id would break the
 // round trip on the first delegated approval.
 //
+// recordGrant is finding #5's own addition: true only when the caller's
+// wire action was literally "allow" (as opposed to "allow_once"), and
+// meaningful only when action==ApprovalActionApprove — ignored for every
+// other action. Carried into the delivered ApprovalOutcome.RecordGrant so
+// the blocked caller (ultimately pkg/tools' D7/D8 pre-flight escalations)
+// can tell the two apart. HandleToolApprovals computes this BEFORE calling
+// resolve (rest_tool_registry.go's own recordGrant local), so it is already
+// known at the exact moment this function needs to embed it in the outcome
+// delivered on entry.resultCh — no second round-trip.
+//
 // Returns:
 //   - resolveOK=true  → the state transitioned; HTTP 200 expected.
 //   - resolveOK=false, gone=true  → entry is already terminal; HTTP 410 expected.
@@ -490,6 +517,7 @@ func (r *approvalRegistryV2) notifyTimedOut(e *approvalEntry) {
 func (r *approvalRegistryV2) resolve(
 	approvalID string,
 	action ApprovalAction,
+	recordGrant bool,
 ) (resolveOK bool, gone bool) {
 	r.mu.Lock()
 	e, ok := r.entries[approvalID]
@@ -507,7 +535,7 @@ func (r *approvalRegistryV2) resolve(
 	switch action {
 	case ApprovalActionApprove:
 		newState = ApprovalStateApproved
-		outcome = ApprovalOutcome{Approved: true, Reason: "approved"}
+		outcome = ApprovalOutcome{Approved: true, Reason: "approved", RecordGrant: recordGrant}
 	case ApprovalActionDeny:
 		newState = ApprovalStateDeniedUser
 		outcome = ApprovalOutcome{Approved: false, Reason: denialReasonUser}

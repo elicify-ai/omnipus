@@ -77,9 +77,9 @@ func TestShellPermissionWiring_ConfigReloadReachesCommandRules(t *testing.T) {
 
 type countingApprover struct{ calls atomic.Int32 }
 
-func (c *countingApprover) RequestApproval(_ context.Context, _ PolicyApprovalReq) (bool, string) {
+func (c *countingApprover) RequestApproval(_ context.Context, _ PolicyApprovalReq) (bool, string, bool) {
 	c.calls.Add(1)
-	return false, "user"
+	return false, "user", false
 }
 
 // TestShellPermissionWiring_AutoAskRuleReachesApprover is the behavioural

@@ -77,7 +77,7 @@ import (
 // contract.
 type neverCallApprover struct{ t *testing.T }
 
-func (n *neverCallApprover) RequestApproval(_ context.Context, req PolicyApprovalReq) (bool, string) {
+func (n *neverCallApprover) RequestApproval(_ context.Context, req PolicyApprovalReq) (bool, string, bool) {
 	n.t.Helper()
 	n.t.Fatalf(
 		"RequestApproval must not be called for a granted tool (tool=%q, session=%q, agent=%q) — the grant should have auto-approved it",
@@ -85,7 +85,7 @@ func (n *neverCallApprover) RequestApproval(_ context.Context, req PolicyApprova
 		req.SessionID,
 		req.AgentID,
 	)
-	return false, "unreachable"
+	return false, "unreachable", false
 }
 
 // scriptedApprover is a PolicyApprover that records every call it receives
@@ -98,11 +98,11 @@ type scriptedApprover struct {
 	reason string
 }
 
-func (s *scriptedApprover) RequestApproval(_ context.Context, _ PolicyApprovalReq) (bool, string) {
+func (s *scriptedApprover) RequestApproval(_ context.Context, _ PolicyApprovalReq) (bool, string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
-	return s.result, s.reason
+	return s.result, s.reason, false
 }
 
 func (s *scriptedApprover) callCount() int {
@@ -325,7 +325,7 @@ func TestApprovalGrant_FullChainSpawnInheritDeny(t *testing.T) {
 	// A neverCallApprover that fails the test if invoked proves the inherited
 	// grant auto-approves "bash" without ever re-prompting.
 	al.SetToolApprover(&neverCallApprover{t: t})
-	approved, denialReason := al.CheckGrantOrRequestApproval(
+	approved, denialReason, _ := al.CheckGrantOrRequestApproval(
 		context.Background(), childSessionID, "child-agent", "bash", "grant-chain-verify-1", "verify-turn-1", nil,
 	)
 	if !approved {
@@ -340,7 +340,7 @@ func TestApprovalGrant_FullChainSpawnInheritDeny(t *testing.T) {
 	// every tool, only the exact (session, agent, tool) it was recorded for.
 	scripted := &scriptedApprover{result: false, reason: "denied for test"}
 	al.SetToolApprover(scripted)
-	approved, denialReason = al.CheckGrantOrRequestApproval(
+	approved, denialReason, _ = al.CheckGrantOrRequestApproval(
 		context.Background(), childSessionID, "child-agent", "read_file", "grant-chain-verify-2", "verify-turn-1", nil,
 	)
 	if approved {
@@ -555,7 +555,7 @@ func TestApprovalGrant_TransitiveAcrossThreeLevels(t *testing.T) {
 	// two delegation hops away from the original grantor, without ever
 	// reaching the interactive approver.
 	al.SetToolApprover(&neverCallApprover{t: t})
-	approved, denialReason := al.CheckGrantOrRequestApproval(
+	approved, denialReason, _ := al.CheckGrantOrRequestApproval(
 		context.Background(),
 		grandchildSessionID,
 		"grandchild-agent",

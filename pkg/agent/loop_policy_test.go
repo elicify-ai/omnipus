@@ -84,7 +84,7 @@ func TestCheckGrantOrRequestApproval_UsesActingSessionKey(t *testing.T) {
 	require.True(t, grants.IsAllowed(childSessionID, agentID, toolName, nil),
 		"SETUP: InheritFrom must have copied the grant into the child's own key")
 
-	approved, reason := al.CheckGrantOrRequestApproval(
+	approved, reason, _ := al.CheckGrantOrRequestApproval(
 		context.Background(), childSessionID, agentID, toolName, "u9-tc-1", "u9-turn-1", nil)
 	assert.True(t, approved, "grant read keyed on the child's own (acting) session id must resolve the inherited grant")
 	assert.Empty(t, reason)
@@ -94,7 +94,7 @@ func TestCheckGrantOrRequestApproval_UsesActingSessionKey(t *testing.T) {
 	// instead of transcriptSessionID for this child — must NOT resolve. The
 	// root was never granted anything, directly or via inheritance, so any
 	// approved==true here could only mean the read crossed keys.
-	approvedWrongKey, reasonWrongKey := al.CheckGrantOrRequestApproval(
+	approvedWrongKey, reasonWrongKey, _ := al.CheckGrantOrRequestApproval(
 		context.Background(), rootSessionID, agentID, toolName, "u9-tc-2", "u9-turn-2", nil)
 	assert.False(t, approvedWrongKey, "reading under the root's (routing-shaped) session id must NOT find the child's inherited grant")
 	assert.Equal(t, nopApproverDenialReason, reasonWrongKey,
