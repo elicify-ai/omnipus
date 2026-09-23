@@ -10,6 +10,7 @@ import { act } from 'react'
 import { useChatStore } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
+import { emptySessionState } from './chat/session'
 import { useWorkspacesStore } from './workspacesStore'
 import type { WsConnection } from '@/lib/ws'
 
@@ -110,5 +111,91 @@ describe('chat store — session_mode_updated frame (ADR-092 ack)', () => {
 
   it('is null before any ack has arrived for a fresh session', () => {
     expect(useChatStore.getState().sessionsById[TEST_SESSION_ID]).toBeUndefined()
+  })
+})
+
+describe('chat store — session_state reconnect/reload snapshot carries the per-chat modifier (ADR-092 review finding D)', () => {
+  // A plain WS reconnect or page reload never re-arrives as a fresh
+  // session_mode_updated ack — only a LIVE session_mode_update send
+  // produces that frame. Before this fix, reloading a page (or a gateway
+  // restart clearing the server's in-memory modifier) silently dropped the
+  // chat's per-chat Auto-approve state from the UI even though the server
+  // still held it. SessionStateFrame.auto_approve_modifier is the field
+  // that actually survives a reload/reconnect.
+  function sessionStateFrame(overrides: { session_id?: string; auto_approve_modifier?: boolean | null } = {}) {
+    return {
+      type: 'session_state' as const,
+      user_id: 'user-1',
+      emitted_at: new Date().toISOString(),
+      pending_approvals: [],
+      session_id: TEST_SESSION_ID,
+      ...overrides,
+    }
+  }
+
+  it('a snapshot with auto_approve_modifier: true shows Auto on for that session', () => {
+    act(() => {
+      useChatStore.getState().handleFrame(sessionStateFrame({ auto_approve_modifier: true }))
+    })
+    expect(useChatStore.getState().sessionsById[TEST_SESSION_ID]?.autoApproveEffective).toBe(true)
+  })
+
+  it('a snapshot with auto_approve_modifier: null CLEARS a stale local true (e.g. after a gateway restart)', () => {
+    // Simulate a stale local value from before reload/restart — the modifier
+    // lived only in server memory and is gone now, so the snapshot reports
+    // null and the SPA must follow, not keep showing the old "on".
+    act(() => {
+      useChatStore.setState((s) => ({
+        sessionsById: {
+          ...s.sessionsById,
+          [TEST_SESSION_ID]: { ...emptySessionState(), ...(s.sessionsById[TEST_SESSION_ID] ?? {}), autoApproveEffective: true },
+        },
+      }))
+    })
+    expect(useChatStore.getState().sessionsById[TEST_SESSION_ID]?.autoApproveEffective).toBe(true)
+
+    act(() => {
+      useChatStore.getState().handleFrame(sessionStateFrame({ auto_approve_modifier: null }))
+    })
+    expect(useChatStore.getState().sessionsById[TEST_SESSION_ID]?.autoApproveEffective).toBeNull()
+  })
+
+  it('a snapshot with auto_approve_modifier absent also clears a stale local true', () => {
+    act(() => {
+      useChatStore.setState((s) => ({
+        sessionsById: {
+          ...s.sessionsById,
+          [TEST_SESSION_ID]: { ...emptySessionState(), ...(s.sessionsById[TEST_SESSION_ID] ?? {}), autoApproveEffective: true },
+        },
+      }))
+    })
+
+    act(() => {
+      useChatStore.getState().handleFrame(sessionStateFrame())
+    })
+    expect(useChatStore.getState().sessionsById[TEST_SESSION_ID]?.autoApproveEffective).toBeNull()
+  })
+
+  it('does not touch autoApproveEffective when the frame carries no session_id (the connection-open emit)', () => {
+    act(() => {
+      useChatStore.setState((s) => ({
+        sessionsById: {
+          ...s.sessionsById,
+          [TEST_SESSION_ID]: { ...emptySessionState(), ...(s.sessionsById[TEST_SESSION_ID] ?? {}), autoApproveEffective: true },
+        },
+      }))
+    })
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'session_state',
+        user_id: 'user-1',
+        emitted_at: new Date().toISOString(),
+        pending_approvals: [],
+      })
+    })
+    // The connection-open emit carries neither session_id nor a meaningful
+    // modifier — must not clobber whatever the active session already knew.
+    expect(useChatStore.getState().sessionsById[TEST_SESSION_ID]?.autoApproveEffective).toBe(true)
   })
 })
