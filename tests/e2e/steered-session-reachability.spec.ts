@@ -48,21 +48,59 @@ test('steered session is reachable in its own live view without leaking child ou
   const childRow = page.locator('[data-testid="activity-row"]').filter({ hasText: LABEL_A })
   await expect(childRow).toBeVisible({ timeout: 60_000 })
   await expect(childRow).toContainText(/queued|running|working/i)
-  const openControl = childRow.getByRole('button', { name: /open/i })
+  // data-testid="activity-row-open" — the exact hook ActivityPanel.test.tsx
+  // ("ActivityPanel — open control (ADR-091 FR-E-004)") already asserts for
+  // this control: rendered only when the row's AgentActivityItem carries a
+  // childSessionId, and its click handler calls useNavigate() with
+  // `{ to: '/sessions/$sessionId', params: { sessionId: childSessionId } }`
+  // — i.e. through the SAME /sessions/{id} deep-link route this file's
+  // parentURL uses below, not a bespoke path. Using the real testid here
+  // rather than a role/name guess (ActivityPanel.tsx is mid-rewrite and the
+  // visible label text is not yet settled).
+  const openControl = childRow.getByTestId('activity-row-open')
   await expect(openControl).toBeVisible()
   await openControl.click()
 
-  await expect(page).toHaveURL(/sessions\//, { timeout: 15_000 })
-  const childURL = page.url()
-  expect(childURL).not.toBe(parentURL)
-  const childSessionID = childURL.match(/sessions\/([^/?#]+)/)?.[1]
-  expect(childSessionID, 'the open control must navigate to the child session route').toBeTruthy()
+  // NOT a `toHaveURL(/sessions\//)` + URL-regex extraction here (that was
+  // this spec's original approach and it is wrong against the current
+  // router): SessionRoute (src/routes/_app/sessions.$sessionId.tsx) treats
+  // `/#/sessions/{id}` as a deep-link ENTRY point only — the instant it
+  // resolves the session's workspace_id it replaces the URL with
+  // `/#/workspaces/{workspaceId}/chat` via a client-side
+  // `navigate({ replace: true })`, and the workspace route never carries a
+  // session id in its path at all. Every worker session has a workspace_id
+  // here (ADR-091 D1/AC-1: a steered session's record carries the
+  // *creator's* workspace_id; AGENTS.md: "sub-agent sessions belong to the
+  // parent's workspace") — the parent (Jim) itself only exists inside a
+  // workspace to begin with (`/` redirects into the default workspace's
+  // Chat tab, src/routes/_app/index.tsx), so this redirect fires for real
+  // here, unlike open-in-chat.spec.ts's workspace-LESS session, which is
+  // the one case that legitimately keeps a `sessions/{id}` URL. Parent and
+  // child likely share the SAME workspace, so the post-Open URL can equal
+  // the pre-Open URL too — the URL is not a usable "did we navigate"
+  // signal at all here. The one reliable, navigation-target-agnostic
+  // signal for "which session is this chat surface bound to now" is
+  // ChatScreen's own data-active-session-id attribute, stamped identically
+  // whether the surface is mounted via the /sessions/{id} route or the
+  // /workspaces/{id}/chat route (both render the same <ChatScreen/> —
+  // WorkspaceChatTab.tsx). This is the same seam
+  // fixtures/session-setup.ts's openSessionByDeepLink relies on, and for
+  // the same documented reason (ChatScreen.tsx's own data-active-session-id
+  // comment: it can transiently hold the PREVIOUS session's id, or the
+  // '__pending' optimistic-send sentinel, during a route swap).
+  const boundSurface = page.locator('[data-active-session-id]').first()
+  await expect
+    .poll(
+      async () => {
+        const id = await boundSurface.getAttribute('data-active-session-id')
+        return id && id !== parentSessionID && id !== '__pending' ? id : null
+      },
+      { timeout: 15_000 },
+    )
+    .not.toBeNull()
+  const childSessionID = await boundSurface.getAttribute('data-active-session-id')
+  expect(childSessionID, 'the open control must bind the chat surface to the child session').toBeTruthy()
 
-  await expect(page.locator('[data-active-session-id]').first()).toHaveAttribute(
-    'data-active-session-id',
-    childSessionID!,
-    { timeout: 15_000 },
-  )
   await expect(page.getByText(CHILD_ONLY_SENTINEL, { exact: false })).toBeVisible({ timeout: 240_000 })
 
   const childInput = chatInput(page)
