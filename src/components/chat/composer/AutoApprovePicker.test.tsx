@@ -60,7 +60,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   act(() => {
     useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: 'sess_1', activeAgentType: 'core' })
-    useChatStore.setState({ autoApproveEffective: undefined, sessionsById: {} })
+    useChatStore.setState({ autoApproveEffective: undefined, sessionsById: {}, pendingAutoApproveChoice: null })
   })
   vi.mocked(api.fetchAgents).mockResolvedValue([AGENT_NO_OVERRIDE] as never)
   vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({ auto_approve_effective: false, kernel_sandbox_active: true }))
@@ -119,31 +119,85 @@ describe('AutoApprovePicker — sends the human-only per-chat toggle', () => {
     expect(spy).toHaveBeenCalledWith('sess_1', true)
   })
 
-  it('is disabled with no real session (no session_id to target yet)', async () => {
-    act(() => {
-      useSessionStore.setState({ activeSessionId: null })
-    })
-    renderPicker()
-    await waitFor(() => {
-      expect(screen.getByTestId('composer-auto-approve-toggle')).toBeDisabled()
-    })
-  })
-
-  it('is disabled while the session is the transient "__pending" placeholder', async () => {
-    act(() => {
-      useSessionStore.setState({ activeSessionId: '__pending' })
-    })
-    renderPicker()
-    await waitFor(() => {
-      expect(screen.getByTestId('composer-auto-approve-toggle')).toBeDisabled()
-    })
-  })
-
   it('is disabled when the disabled prop is set (matches AgentPicker/ModelPicker agentRemoved gating)', async () => {
     renderPicker({ disabled: true })
     await waitFor(() => {
       expect(screen.getByTestId('composer-auto-approve-toggle')).toBeDisabled()
     })
+  })
+
+  it('is disabled with no active agent — the only remaining disable condition', async () => {
+    act(() => {
+      useSessionStore.setState({ activeAgentId: null })
+    })
+    renderPicker()
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-auto-approve-toggle')).toBeDisabled()
+    })
+  })
+
+  // Founder ruling (2026-09-24): a flip in a running chat applies from the
+  // very next tool call, not merely the next message — so the switch must
+  // stay enabled AND still send immediately while a turn is streaming; the
+  // frame must never be queued or held back until the turn finishes.
+  it('is NOT disabled while a turn is streaming, and toggling still sends session_mode_update immediately', async () => {
+    const spy = vi.fn()
+    act(() => {
+      useChatStore.setState({ sendSessionModeUpdate: spy, isStreaming: true })
+    })
+    renderPicker()
+    const toggle = await screen.findByTestId('composer-auto-approve-toggle')
+    expect(toggle).not.toBeDisabled()
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+    expect(spy).toHaveBeenCalledWith('sess_1', true)
+  })
+})
+
+describe('AutoApprovePicker — usable in a brand-new chat with no real session yet (founder-reported UX fix)', () => {
+  it('is NOT disabled with no active session — a fresh chat before the first message', async () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: null })
+    })
+    renderPicker()
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-auto-approve-toggle')).not.toBeDisabled()
+    })
+  })
+
+  it('is NOT disabled while the session is the transient "__pending" placeholder', async () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: '__pending' })
+    })
+    renderPicker()
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-auto-approve-toggle')).not.toBeDisabled()
+    })
+  })
+
+  it('toggling with no real session records a PENDING choice instead of sending session_mode_update', async () => {
+    const spy = vi.fn()
+    act(() => {
+      useSessionStore.setState({ activeSessionId: null })
+      useChatStore.setState({ sendSessionModeUpdate: spy })
+    })
+    renderPicker()
+    const toggle = await screen.findByTestId('composer-auto-approve-toggle')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+    expect(spy).not.toHaveBeenCalled()
+    expect(useChatStore.getState().pendingAutoApproveChoice).toBe(true)
+  })
+
+  it('reflects the pending choice immediately — the switch flips without waiting for a server ack', async () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: null })
+    })
+    renderPicker()
+    const toggle = await screen.findByTestId('composer-auto-approve-toggle')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'))
   })
 })
 
@@ -154,9 +208,9 @@ describe('AutoApprovePicker — explains itself via the catalogued Tooltip, not 
     expect(document.querySelector('[title]')).toBeNull()
   })
 
-  it('the disabled reason is reachable by keyboard focus alone, with no pointer involved', async () => {
+  it('the explanation is reachable by keyboard focus alone, with no pointer involved, while genuinely disabled (no active agent)', async () => {
     act(() => {
-      useSessionStore.setState({ activeSessionId: null })
+      useSessionStore.setState({ activeAgentId: null })
     })
     renderPicker()
     await waitFor(() => {
@@ -169,10 +223,15 @@ describe('AutoApprovePicker — explains itself via the catalogued Tooltip, not 
     const trigger = screen.getByTestId('composer-auto-approve-tooltip-trigger')
     expect(trigger).toHaveAttribute('tabIndex', '0')
     fireEvent.focus(trigger)
-    expect(screen.getByRole('tooltip')).toHaveTextContent('Send a message first to enable per-chat Auto-approve')
+    // Design-system fix: the tooltip explains what the switch DOES, never
+    // why it happens to be disabled right now. This case has a real session
+    // ('sess_1', from beforeEach), so the running-chat wording applies.
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
+      'Auto-approve for this chat — applies from the next step',
+    )
   })
 
-  it('the enabled-state explanation is also reachable via the same Tooltip trigger', async () => {
+  it('the same explanation is reachable via the Tooltip trigger while enabled (running chat)', async () => {
     renderPicker()
     await waitFor(() => {
       expect(screen.getByTestId('composer-auto-approve-toggle')).not.toBeDisabled()
@@ -180,7 +239,36 @@ describe('AutoApprovePicker — explains itself via the catalogued Tooltip, not 
     const trigger = screen.getByTestId('composer-auto-approve-tooltip-trigger')
     fireEvent.focus(trigger)
     expect(screen.getByRole('tooltip')).toHaveTextContent(
-      'Auto-approve for this chat — turns on or off for this conversation only',
+      'Auto-approve for this chat — applies from the next step',
     )
+  })
+
+  // Founder ruling (2026-09-24): the wording differs by whether this chat
+  // has a real session yet — never a "disabled reason" message either way.
+  it('names "your first message" with no real session yet', async () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: null })
+    })
+    renderPicker()
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-auto-approve-toggle')).not.toBeDisabled()
+    })
+    const trigger = screen.getByTestId('composer-auto-approve-tooltip-trigger')
+    fireEvent.focus(trigger)
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
+      'Auto-approve for this chat — applies from your first message',
+    )
+  })
+
+  it('names "the next step" — not "the next message" — once the chat has a real session', async () => {
+    renderPicker() // beforeEach seeds a real session ('sess_1')
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-auto-approve-toggle')).not.toBeDisabled()
+    })
+    const trigger = screen.getByTestId('composer-auto-approve-tooltip-trigger')
+    fireEvent.focus(trigger)
+    const tooltip = screen.getByRole('tooltip')
+    expect(tooltip).toHaveTextContent('applies from the next step')
+    expect(tooltip).not.toHaveTextContent('next message')
   })
 })

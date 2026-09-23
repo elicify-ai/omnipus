@@ -918,6 +918,26 @@ export interface ChatStore {
    * acknowledged by a `session_mode_updated` frame — no rejection case.
    */
   sendSessionModeUpdate: (sessionId: string, autoApprove: boolean | null) => void
+  /**
+   * ADR-092 UX fix: a per-chat Auto-approve choice made in the composer
+   * BEFORE this chat has a real, server-known session (a brand-new chat —
+   * `session_mode_update` needs a session id the server already knows
+   * about, which does not exist until the first message is sent). Storing
+   * the choice here lets `AutoApprovePicker` stay usable and show the
+   * choice immediately instead of greying out.
+   *
+   * Consumed the moment `session_started` mints the real session id (see
+   * the frame slice's `session_started` case): sent as a real
+   * `session_mode_update` for that session, then cleared, so the very
+   * first turn already runs under the chosen mode. Also cleared by
+   * `startNewSession`/`attachToSession` (`src/store/session.ts`, via
+   * `registerChatClearPendingAutoApprove`) so a choice made and then
+   * abandoned (no message ever sent) does not leak onto a LATER, unrelated
+   * new chat.
+   */
+  pendingAutoApproveChoice: boolean | null
+  /** Sets or clears `pendingAutoApproveChoice`. See its doc comment. */
+  setPendingAutoApproveChoice: (choice: boolean | null) => void
 
   // C8: defensively clear in-flight/streaming state for every session bucket.
   // Called when the stream is terminated by something OTHER than a clean done

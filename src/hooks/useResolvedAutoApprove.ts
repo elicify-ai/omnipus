@@ -28,11 +28,15 @@ export interface ResolvedAutoApprove {
  * Resolution order (most specific wins): this session's own
  * `autoApproveEffective` (once a `session_mode_updated` ack has arrived, or
  * SessionStateFrame.auto_approve_modifier survived a reload/reconnect) →
- * otherwise the agent x global resolution — `SandboxStatus.auto_approve_effective`
- * (the gateway's global default), floored off if the active agent sets
+ * otherwise, with no real session yet, a `pendingAutoApproveChoice` the user
+ * already made in the composer for this not-yet-created chat (see
+ * `ChatStore.pendingAutoApproveChoice`'s doc comment — the UX fix that lets
+ * the composer toggle work before the first message) → otherwise the agent x
+ * global resolution — `SandboxStatus.auto_approve_effective` (the gateway's
+ * global default), floored off if the active agent sets
  * `auto_approve_disabled`. `SandboxStatus` carries no session/agent context
- * (per its own schema description), so folding those two narrower scopes in
- * is explicitly the SPA's job, done here once. `resolved` and
+ * (per its own schema description), so folding those narrower scopes in is
+ * explicitly the SPA's job, done here once. `resolved` and
  * `kernelSandboxActive` together answer "does Auto actually clear anything
  * right now" (SandboxStatus's own contract: Auto only takes effect with a
  * kernel sandbox present AND god_mode_active false) — `godModeActive` is a
@@ -42,6 +46,7 @@ export function useResolvedAutoApprove(): ResolvedAutoApprove {
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const sessionOverride = useChatStore((s) => s.autoApproveEffective)
+  const pendingChoice = useChatStore((s) => s.pendingAutoApproveChoice)
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const { data: sandboxStatus } = useQuery({ queryKey: ['sandbox-status'], queryFn: fetchSandboxStatus })
@@ -50,7 +55,12 @@ export function useResolvedAutoApprove(): ResolvedAutoApprove {
   const agentForcesOff = activeAgent?.auto_approve_disabled === true
   const globalEffective = sandboxStatus?.auto_approve_effective === true
   const inheritedResolved = agentForcesOff ? false : globalEffective
-  const resolved = sessionOverride !== null && sessionOverride !== undefined ? sessionOverride : inheritedResolved
+  const hasSessionOverride = sessionOverride !== null && sessionOverride !== undefined
+  const resolved = hasSessionOverride
+    ? sessionOverride
+    : pendingChoice !== null
+      ? pendingChoice
+      : inheritedResolved
 
   const hasRealSession = !!activeSessionId && activeSessionId !== '__pending'
 

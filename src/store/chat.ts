@@ -2,7 +2,7 @@
 
 import { syncChatForeground, useChatStore } from './chat/store'
 
-import { registerChatSetReplaying, registerChatResetForReplay } from '@/store/session'
+import { registerChatSetReplaying, registerChatResetForReplay, registerChatClearPendingAutoApprove } from '@/store/session'
 
 import { registerSyncChatForeground } from '@/store/session'
 
@@ -12,6 +12,10 @@ registerChatSetReplaying((value) => useChatStore.getState().setReplaying(value))
 registerChatResetForReplay((sessionId) => useChatStore.getState().resetSessionForReplay(sessionId))
 
 registerSyncChatForeground(syncChatForeground)
+
+// ADR-092 UX fix: see session.ts's registerChatClearPendingAutoApprove doc
+// comment for why this is not folded into setReplaying/resetForReplay.
+registerChatClearPendingAutoApprove(() => useChatStore.getState().setPendingAutoApproveChoice(null))
 
 // ── Split modules (2026-09-16) ──────────────────────────────────────────────────
 //

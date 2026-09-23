@@ -199,3 +199,189 @@ describe('chat store — session_state reconnect/reload snapshot carries the per
     expect(useChatStore.getState().sessionsById[TEST_SESSION_ID]?.autoApproveEffective).toBe(true)
   })
 })
+
+// ── ADR-092 UX fix: pendingAutoApproveChoice — the composer toggle works
+// before the first message ────────────────────────────────────────────────
+//
+// A brand-new chat has no server-known session yet, so the toggle can't
+// send session_mode_update directly (see AutoApprovePicker.tsx). Instead it
+// records ChatStore.pendingAutoApproveChoice, and the frame slice's
+// session_started case (src/store/chat/slices/frames.ts) flushes it as a
+// real session_mode_update the moment the server mints the real session id
+// — BEFORE session_started's bucket-migration logic runs, in effect
+// alongside the first turn's own dispatch.
+describe('chat store — pendingAutoApproveChoice flushed by session_started (ADR-092 UX fix)', () => {
+  function resetPendingChoiceScenario() {
+    act(() => {
+      useChatStore.getState().clearStreamingState()
+      useChatStore.setState({ sessionsById: {}, pendingAutoApproveChoice: null })
+      useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
+      useSessionStore.setState({ activeSessionId: null, activeAgentId: null, activeAgentType: null })
+      useWorkspacesStore.setState({ activeWorkspaceId: null })
+    })
+  }
+
+  it('sends session_mode_update for the newly-minted session id and clears the pending choice', () => {
+    resetPendingChoiceScenario()
+    const mockSend = vi.fn()
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
+        isConnected: true,
+      })
+      useChatStore.getState().setPendingAutoApproveChoice(true)
+    })
+
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_1' })
+    })
+
+    expect(mockSend).toHaveBeenCalledWith({
+      type: 'session_mode_update',
+      session_id: 'sess_new_1',
+      auto_approve: true,
+    })
+    expect(useChatStore.getState().pendingAutoApproveChoice).toBeNull()
+  })
+
+  it(
+    'founder-ruling proof (2026-09-24): flip Auto on in a brand-new chat, send the first message, and the ' +
+      'session_mode_update frame reaches the wire as the very next send after session_started — before ' +
+      'anything else the client does — proving the choice is in flight to the server ahead of the first ' +
+      'turn being able to decide any tool call',
+    () => {
+      resetPendingChoiceScenario()
+      const mockSend = vi.fn((_frame: unknown) => true)
+      act(() => {
+        useConnectionStore.setState({
+          connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
+          isConnected: true,
+        })
+        useSessionStore.setState({ activeAgentId: 'mia' })
+      })
+
+      // 1) User flips Auto on BEFORE typing anything — no session exists yet.
+      //    Per the founder's ruling, this must send NOTHING to the server.
+      act(() => {
+        useChatStore.getState().setPendingAutoApproveChoice(true)
+      })
+      expect(mockSend).not.toHaveBeenCalled()
+
+      // 2) User sends the first message. This goes out with no session_id —
+      //    the server will mint one and ack with session_started.
+      act(() => {
+        useChatStore.getState().sendMessage('hello')
+      })
+      expect(mockSend).toHaveBeenCalledTimes(1)
+      expect(mockSend.mock.calls[0][0]).toMatchObject({ type: 'message', content: 'hello' })
+
+      // 3) The server's session_started ack arrives. The pending choice must
+      //    be flushed as session_mode_update as the very next frame sent —
+      //    synchronously inside this same frame handler, not deferred — so
+      //    it is already in flight before the agent loop (a separate
+      //    goroutine, gated on an LLM round-trip before any tool call can be
+      //    decided — see AutoApprovePicker.tsx's doc comment) reaches its
+      //    first tool-call approval check.
+      act(() => {
+        useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_founder_proof' })
+      })
+
+      expect(mockSend).toHaveBeenCalledTimes(2)
+      expect(mockSend.mock.calls[1][0]).toEqual({
+        type: 'session_mode_update',
+        session_id: 'sess_new_founder_proof',
+        auto_approve: true,
+      })
+      expect(useChatStore.getState().pendingAutoApproveChoice).toBeNull()
+    },
+  )
+
+  it('flipping the switch and never sending a message sends nothing to the server at all', () => {
+    resetPendingChoiceScenario()
+    const mockSend = vi.fn(() => true)
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
+        isConnected: true,
+      })
+      useChatStore.getState().setPendingAutoApproveChoice(true)
+      useChatStore.getState().setPendingAutoApproveChoice(false)
+      useChatStore.getState().setPendingAutoApproveChoice(true)
+    })
+
+    expect(mockSend).not.toHaveBeenCalled()
+  })
+
+  it('carries a false choice the same way', () => {
+    resetPendingChoiceScenario()
+    const mockSend = vi.fn()
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
+        isConnected: true,
+      })
+      useChatStore.getState().setPendingAutoApproveChoice(false)
+    })
+
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_2' })
+    })
+
+    expect(mockSend).toHaveBeenCalledWith({
+      type: 'session_mode_update',
+      session_id: 'sess_new_2',
+      auto_approve: false,
+    })
+    expect(useChatStore.getState().pendingAutoApproveChoice).toBeNull()
+  })
+
+  it('sends nothing extra when there is no pending choice — an ordinary first message is unaffected', () => {
+    resetPendingChoiceScenario()
+    const mockSend = vi.fn()
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
+        isConnected: true,
+      })
+    })
+
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_3' })
+    })
+
+    expect(mockSend).not.toHaveBeenCalled()
+  })
+
+  it('startNewSession ("New chat") clears an abandoned pending choice so it never leaks onto the next chat', () => {
+    resetPendingChoiceScenario()
+    act(() => {
+      useChatStore.getState().setPendingAutoApproveChoice(true)
+    })
+    expect(useChatStore.getState().pendingAutoApproveChoice).toBe(true)
+
+    act(() => {
+      useSessionStore.getState().startNewSession()
+    })
+
+    expect(useChatStore.getState().pendingAutoApproveChoice).toBeNull()
+  })
+
+  it('attachToSession (picking an existing chat) clears an abandoned pending choice', () => {
+    resetPendingChoiceScenario()
+    const mockSend = vi.fn(() => true)
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
+        isConnected: true,
+      })
+      useChatStore.getState().setPendingAutoApproveChoice(true)
+    })
+    expect(useChatStore.getState().pendingAutoApproveChoice).toBe(true)
+
+    act(() => {
+      useSessionStore.getState().attachToSession('sess_existing_1', 'chat')
+    })
+
+    expect(useChatStore.getState().pendingAutoApproveChoice).toBeNull()
+  })
+})

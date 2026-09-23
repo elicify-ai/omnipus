@@ -39,13 +39,21 @@ Auto-approve can be set in three places. On a new installation it is **on** glob
 |---|---|---|
 | **Settings → Security → Auto-approve** | The default for every agent and chat. Changing it asks you to confirm and re-type your password. | You turn it off. Every tool set to Ask now prompts every time, in every chat. |
 | An agent's **Tools & Permissions** panel → **Never auto-approve for this agent** | Turns Auto-approve off for that one agent. It can only turn it off, never on. | A finance agent should always ask. You tick the box; its Ask tools always prompt. |
-| The **Auto** switch next to the message box in a chat | Turns Auto-approve on or off for that chat only. It is available once the chat has at least one message. | Auto-approve is off globally, but you are watching this chat closely. You switch it on here, and only this chat changes. |
+| The **Auto** switch next to the message box in a chat | Turns Auto-approve on or off for that chat. You can flip it before typing anything — a brand-new chat has no conversation yet, so the switch records your choice and applies it from your very first message, before any tool call in that first turn runs. In a chat that is already running, a flip applies from the agent's very next tool call, not just your next typed message — even mid-turn, while the agent is still working. A prompt that is already open when you flip the switch is not resolved for you; it has already asked, and stays open until you answer it. | Auto-approve is off globally, but you are watching this chat closely. You switch it on before typing your first message, and that first message already runs under it. In a chat that is already going, you switch it on mid-turn and the agent's next tool call already runs under it. |
 
 On the Security screen, the switch carries this description:
 
-> For any tool set to “ask”, skip the prompt — except a fixed list that always asks: asking for a mounted folder; installing a skill, setting up an environment, or publishing a web preview; email; deleting a task, workspace, or agent; browser scripts or uploads; changing settings or running diagnostics; changing or testing a provider or channel; adding or removing a connected (MCP) server; creating or changing an agent or workspace; and creating, changing, or removing a skill. Files stay confined to the workspace and its mounts — for example, saving to notes/a.md inside your workspace runs with no prompt, but a path outside it still asks. Connected-server (MCP) tools ask unless their server marks them safe. Needs an active kernel sandbox (none on Windows).
+> Tools set to “Ask” run without a prompt when it's safe: they stay inside your workspace and the sandbox.
 
-That is a summary. The full list of tools that still ask is under "What Auto-approve runs and what still asks" below.
+Below the switch, **Still asks every time** is a collapsed list — click it to expand. It groups the fixed list of tools that always ask, even with Auto-approve on:
+
+> Sending email · Deleting tasks, agents or workspaces · Installing skills, setting up an environment or publishing a web preview · Changing or testing settings, providers, channels, agents or skills · Running diagnostics · Adding or removing connected (MCP) servers, and MCP tools not marked safe · Browser scripts and uploads · Mounting a folder, or files outside your workspace
+
+And a small note underneath:
+
+> Needs the sandbox — not available on Windows.
+
+That is a summary. The full list of tools that still ask, one row per tool, is under "What Auto-approve runs and what still asks" below.
 
 The chat switch is the one place that can turn Auto-approve **on** when the agent or the global default has it off, because you are present in that conversation. It has one limit: when the chat's agent hands work to another agent (a delegate), and that other agent has **Never auto-approve** ticked, the delegate's own switch wins. Your chat switch covers the agent you are talking to, not a delegate that was set to always ask.
 

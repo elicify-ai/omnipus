@@ -6938,6 +6938,10 @@
       "lane": 6
     },
     {
+      "source": "src/components/settings/AutoApproveAskList.tsx",
+      "lane": 6
+    },
+    {
       "source": "src/components/settings/ChatSection.tsx",
       "lane": 6
     },

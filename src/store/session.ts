@@ -275,8 +275,33 @@ export function registerChatResetForReplay(fn: (sessionId: string) => void): voi
   _chatResetForReplay = fn
 }
 
+// ADR-092 UX fix: same cycle-break pattern as _chatSetReplaying above.
+// startNewSession/attachToSession below clear this so a per-chat
+// Auto-approve choice made in a chat that was then abandoned (no message
+// ever sent, so the choice was never consumed by session_started) does not
+// silently leak onto a LATER, unrelated chat. Deliberately NOT wired into
+// setActiveSession itself — sendMessage's own pending-session mint (session
+// id '__pending') and sendWorkspaceSetupKickoff both call setActiveSession
+// too, and clearing there would erase the very choice this fix exists to
+// carry through to session_started. attachToSession folds the clear into
+// resetChatBucketForReplay (its only caller) below, at no extra line cost
+// inside create()'s grandfathered body (scripts/budgets/functions.txt);
+// startNewSession calls clearPendingAutoApproveOnSessionChange directly.
+let _chatClearPendingAutoApprove: (() => void) | null = null
+
+/** Called once by chat.ts after it creates useChatStore. */
+export function registerChatClearPendingAutoApprove(fn: () => void): void {
+  _chatClearPendingAutoApprove = fn
+}
+
+/** startNewSession's call site — see the doc comment above. */
+function clearPendingAutoApproveOnSessionChange(): void {
+  _chatClearPendingAutoApprove?.()
+}
+
 export function resetChatBucketForReplay(sessionId: string): void {
   _chatResetForReplay?.(sessionId)
+  _chatClearPendingAutoApprove?.()
 }
 
 /**
@@ -500,7 +525,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   startNewSession: (agentId, agentType) => {
-    set((state) => {
+    clearPendingAutoApproveOnSessionChange(); set((state) => {
       // Precedence rule 3 — `agentId`/`agentType` are a hint here too, for
       // uniformity across every session-derived writer. A `/new` keeps the
       // user's pick either way (no caller passes an agent today), which is

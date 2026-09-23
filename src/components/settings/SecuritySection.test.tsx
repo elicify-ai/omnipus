@@ -349,46 +349,61 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     expect(mockAddToast).not.toHaveBeenCalled()
   })
 
-  // ADR-092 addendum §7/T17: Auto-approve now covers every tool resolved to
-  // "ask", not just shell commands. The old "Currently applies to shell
-  // commands; other safe tools are planned" wording must be gone, and the
-  // subtitle must name the fixed ask-list and the workspace-path rule
-  // instead. Written against the copy, not the implementation, so it fails
-  // if the old sentence comes back.
-  it('describes Auto-approve as covering every "ask" tool, not just shell commands', async () => {
+  // Founder feedback (2026-09-24): the old card put the full grouped list of
+  // 28 always-ask tools, the workspace path rule, an example and the
+  // Windows caveat into ONE long paragraph — "a huge blob of text, not well
+  // written". The redesign: one short summary sentence, always visible; the
+  // grouped ask-list collapsed by default behind "Still asks every time";
+  // a small muted platform caveat. Written against the copy, not the
+  // implementation, so it fails if the old paragraph comes back.
+  it('shows a short always-visible summary — not the old long paragraph', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
     renderSection()
 
     await screen.findByTestId('auto-approve-global-switch')
 
     expect(screen.queryByText(/currently applies to shell commands/i)).not.toBeInTheDocument()
-    // The fixed ask-list (a representative sample) and the workspace-path
-    // rule's concrete example must both be present.
-    expect(screen.getByText(/email/i)).toBeInTheDocument()
-    expect(screen.getByText(/connected \(MCP\) server/i)).toBeInTheDocument()
-    expect(screen.getByText(/notes\/a\.md/i)).toBeInTheDocument()
-    expect(screen.getByText(/none on windows/i)).toBeInTheDocument()
+    // The old paragraph's exhaustive inline wording must be gone from the
+    // always-visible summary — it now lives in the collapsed list instead.
+    expect(screen.queryByText(/asking for a mounted folder; installing a skill/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/tools set to .ask. run without a prompt when it.s safe/i)).toBeInTheDocument()
+    expect(screen.getByText(/they stay inside your workspace and the sandbox/i)).toBeInTheDocument()
+    expect(screen.getByText(/not available on windows/i)).toBeInTheDocument()
   })
 
-  // AutoApproveClassTable (pkg/tools/auto_approve.go) lists 28 tools that
-  // always ask under Auto-approve. Four of those groups were missing from
-  // this summary entirely: request_mount, run_doctor, test_provider/
-  // test_channel, and serve_web. Oracle is the backend table, not the old
-  // copy — this fails against the pre-fix wording, which never mentioned
-  // a mounted folder, diagnostics, provider/channel tests, or a web preview.
-  it('names every always-ask group from AutoApproveClassTable, including the four the old summary omitted', async () => {
+  it('the ask-list is collapsed by default and expands to show every group on click', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
     renderSection()
 
     await screen.findByTestId('auto-approve-global-switch')
 
-    expect(screen.getByText(/mounted folder/i)).toBeInTheDocument()
-    expect(screen.getByText(/running diagnostics/i)).toBeInTheDocument()
-    expect(screen.getByText(/testing a provider or channel/i)).toBeInTheDocument()
-    expect(screen.getByText(/publishing a web preview/i)).toBeInTheDocument()
+    // Collapsed: the trigger row is visible, but none of the group labels are.
+    const trigger = await screen.findByTestId('auto-approve-ask-list-trigger')
+    expect(trigger).toHaveTextContent(/still asks every time/i)
+    expect(screen.queryByTestId('auto-approve-ask-list-content')).not.toBeInTheDocument()
+    expect(screen.queryByText(/sending email/i)).not.toBeInTheDocument()
+
+    fireEvent.click(trigger)
+
+    const content = await screen.findByTestId('auto-approve-ask-list-content')
+    // Every one of the seven founder-approved groups must appear once expanded.
+    expect(within(content).getByText('Sending email')).toBeInTheDocument()
+    expect(within(content).getByText('Deleting tasks, agents or workspaces')).toBeInTheDocument()
+    expect(
+      within(content).getByText('Installing skills, setting up an environment or publishing a web preview'),
+    ).toBeInTheDocument()
+    expect(
+      within(content).getByText('Changing or testing settings, providers, channels, agents or skills'),
+    ).toBeInTheDocument()
+    expect(within(content).getByText('Running diagnostics')).toBeInTheDocument()
+    expect(
+      within(content).getByText('Adding or removing connected (MCP) servers, and MCP tools not marked safe'),
+    ).toBeInTheDocument()
+    expect(within(content).getByText('Browser scripts and uploads')).toBeInTheDocument()
+    expect(within(content).getByText('Mounting a folder, or files outside your workspace')).toBeInTheDocument()
   })
 
-  it('the turn-on confirmation dialog states the full ask-list and the kernel-sandbox requirement', async () => {
+  it('the turn-on confirmation dialog is short (2-3 sentences) and points at the card’s own collapsed list rather than restating it', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
     renderSection()
     await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
@@ -399,24 +414,12 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
 
     const dialog = await screen.findByRole('alertdialog')
     expect(dialog).not.toHaveTextContent(/currently applies to shell commands/i)
-    expect(dialog).toHaveTextContent(/deleting a task, workspace, or agent/i)
-    expect(dialog).toHaveTextContent(/needs an active kernel sandbox/i)
-  })
-
-  it('the turn-on confirmation dialog also names the four groups the old copy omitted', async () => {
-    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
-    renderSection()
-    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
-
-    const toggle = await screen.findByTestId('auto-approve-global-switch')
-    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
-    fireEvent.click(toggle)
-
-    const dialog = await screen.findByRole('alertdialog')
-    expect(dialog).toHaveTextContent(/mounted folder/i)
-    expect(dialog).toHaveTextContent(/running diagnostics/i)
-    expect(dialog).toHaveTextContent(/testing a provider or channel/i)
-    expect(dialog).toHaveTextContent(/publishing a web preview/i)
+    // The dialog must NOT restate the full 28-tool list inline — it points
+    // at the card's own disclosure instead.
+    expect(dialog).not.toHaveTextContent(/deleting a task, workspace, or agent/i)
+    expect(dialog).not.toHaveTextContent(/mounted folder/i)
+    expect(dialog).toHaveTextContent(/still asks every time/i)
+    expect(dialog).toHaveTextContent(/not available on windows/i)
   })
 
   it('a real save failure surfaces exactly one toast, from the mutation onError — the outer step-up catch never adds a second one', async () => {

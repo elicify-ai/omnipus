@@ -328,6 +328,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
     cancelStage: null,
     autoApproveEffective: null,
     lastReceivedEventTime: null,
+    // ADR-092 UX fix: no pending pre-session Auto-approve choice at store
+    // init. See ChatStore.pendingAutoApproveChoice's doc comment.
+    pendingAutoApproveChoice: null,
+    setPendingAutoApproveChoice: (choice) => set({ pendingAutoApproveChoice: choice }),
     // Phase 1 / FR-008/009/010: per-thread model override for the next
     // outgoing message. null means "no override" — the server uses the
     // agent's `model` config. The composer writes here on picker

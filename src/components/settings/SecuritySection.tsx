@@ -63,6 +63,7 @@ import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp } from './useStepUp'
+import { AutoApproveAskList } from './AutoApproveAskList'
 
 // ── Tool Access — Global Policies (US-B3) ──────────────────────────────────────
 // CATEGORY_LABELS, PolicyBadge, and groupByCategory are now imported from the
@@ -187,14 +188,24 @@ function AutoApproveControl() {
     },
   })
 
+  // Founder feedback (2026-09-24): the old copy put the full grouped
+  // ask-list, the workspace path rule, an example and the Windows caveat
+  // into one long paragraph here too — "a huge blob of text". The
+  // confirmation stays short (at most 2-3 plain sentences) and points at
+  // the SAME collapsed "Still asks every time" list the card itself shows,
+  // rather than restating all 28 tools inline. `ConfirmDialog`'s
+  // `description` renders inside an `AlertDialogDescription`, which Radix
+  // renders as a `<p>` — a list/disclosure element cannot legally nest
+  // inside a `<p>`, which is why this is a pointer to the list, not the
+  // list itself.
   function requestChange(next: boolean) {
     if (isSaving) return
     void stepUp
       .gate((token) => saveAsync({ next, token }), {
         title: next ? 'Turn Auto-approve on?' : 'Turn Auto-approve off?',
         body: next
-          ? 'With Auto-approve on, agents run tools set to "ask" without prompting — except a fixed list that always asks: asking for a mounted folder; installing a skill, setting up an environment, or publishing a web preview; email; deleting a task, workspace, or agent; browser scripts and uploads; changing settings or running diagnostics; changing or testing a provider or channel; adding or removing a connected (MCP) server; creating or changing an agent or workspace; creating, changing, or removing a skill; and connected-server tools whose server has not labelled them read-only or not destructive. File reads and writes run only inside the workspace and its mounts — for example, saving to notes/a.md inside your workspace runs with no prompt, but a path outside it (or outside a connected mount) still asks. Needs an active kernel sandbox (none on Windows).'
-          : 'Every agent tool set to "ask" prompts every time, with no auto-approval.',
+          ? 'Tools set to “ask” will run without a prompt when it’s safe — they stay inside your workspace and the sandbox. See “Still asks every time” on this card for the short list of things that always still ask. Needs the sandbox — not available on Windows.'
+          : 'Every tool set to “ask” will prompt every time again, with no auto-approval.',
         confirmLabel: next ? 'Turn Auto-approve on' : 'Turn Auto-approve off',
       })
       .catch((err: unknown) => {
@@ -225,21 +236,19 @@ function AutoApproveControl() {
 
   const enabled = sandboxConfig?.auto_approve === true
 
+  // Founder feedback (2026-09-24): "a huge blob of text, not well written".
+  // Redesign — one short summary sentence, a collapsed group list
+  // (AutoApproveAskList), and a small muted platform caveat, instead of one
+  // long paragraph carrying the summary, the full 28-tool list, the
+  // workspace path rule, an example, and the Windows caveat all at once.
   return (
-    <Card className="p-[var(--space-3)]">
+    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
       <div className="flex items-center justify-between gap-[var(--space-3)]">
         <div>
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Auto-approve</p>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-            For any tool set to &ldquo;ask&rdquo;, skip the prompt &mdash; except a fixed list that always asks:
-            asking for a mounted folder; installing a skill, setting up an environment, or publishing a web
-            preview; email; deleting a task, workspace, or agent; browser scripts or uploads; changing settings
-            or running diagnostics; changing or testing a provider or channel; adding or removing a connected
-            (MCP) server; creating or changing an agent or workspace; and creating, changing, or removing a
-            skill. Files stay confined to the workspace and its mounts &mdash; for example, saving to
-            notes/a.md inside your workspace runs with no prompt, but a path outside it still asks.
-            Connected-server (MCP) tools ask unless their server marks them safe. Needs an active kernel
-            sandbox (none on Windows).
+            Tools set to &ldquo;Ask&rdquo; run without a prompt when it&rsquo;s safe: they stay inside your
+            workspace and the sandbox.
           </p>
         </div>
         <Switch
@@ -250,6 +259,13 @@ function AutoApproveControl() {
           data-testid="auto-approve-global-switch"
         />
       </div>
+
+      <AutoApproveAskList />
+
+      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        Needs the sandbox &mdash; not available on Windows.
+      </p>
+
       {/* This control's OWN useStepUp() instance — its dialogs must be
           mounted here, not assumed to come from SecuritySection's separate
           credential-vault stepUp instance (each useStepUp() call owns
