@@ -230,7 +230,7 @@ func (s *Store) UnlockWithKey(key []byte) error {
 func (s *Store) installKeyLocked(key []byte) error {
 	k := make([]byte, keyLen)
 	copy(k, key)
-	if err := s.migrateLegacyLocked(k); err != nil {
+	if _, err := s.migrateLegacyLocked(k, k, nil); err != nil {
 		wipe(k)
 		return err
 	}
@@ -258,9 +258,45 @@ func (s *Store) UnlockWithPassphrase(passphrase string) error {
 	// there is one this wipe cannot touch.
 	defer wipe(derived)
 
+	// A pre-upgrade store is migrated under a FRESH salt, so the key the
+	// passphrase derives afterwards no longer opens pre-upgrade entries (see
+	// store_migrate.go, "Residual risk"). The second Argon2id run is paid only
+	// when the lock-free probe sees a legacy file.
+	// A probe error is not reported here: the key is installed and
+	// loadFileInternal reports an unreadable file on first use.
+	if sf, present, probeErr := s.readStoreVersionFile(); probeErr != nil || !present || sf.Version != legacyStoreVersion {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.installKeyLocked(derived)
+	}
+	freshSalt := make([]byte, saltLen)
+	if _, saltErr := io.ReadFull(rand.Reader, freshSalt); saltErr != nil {
+		return fmt.Errorf("credentials: generate migration salt: %w", saltErr)
+	}
+	freshKey := argon2.IDKey([]byte(passphrase), freshSalt, argonTime, argonMemory, argonThreads, keyLen)
+	defer wipe(freshKey)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.installKeyLocked(derived)
+	migrated, err := s.migrateLegacyLocked(derived, freshKey, freshSalt)
+	if err != nil {
+		return err
+	}
+	if migrated {
+		s.key = make([]byte, keyLen)
+		copy(s.key, freshKey)
+		return nil
+	}
+	// Another process migrated the store while this one waited for the lock,
+	// under ITS fresh salt, so neither key derived here is the right one.
+	// Derive again from the salt now on disk.
+	current, err := s.loadOrCreateSalt()
+	if err != nil {
+		return err
+	}
+	rederived := argon2.IDKey([]byte(passphrase), current, argonTime, argonMemory, argonThreads, keyLen)
+	defer wipe(rederived)
+	return s.installKeyLocked(rederived)
 }
 
 // DeriveSubkey derives a 32-byte subkey from the unlocked master key using

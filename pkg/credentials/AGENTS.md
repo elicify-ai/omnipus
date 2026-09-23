@@ -69,30 +69,38 @@ under one tag cannot be opened under another.
 ## Format versions and the one-time migration (`store_migrate.go`)
 
 `"version": 1` = pre-binding, nil-AAD entries; `"version": 2`
-(`storeVersion`) = name-bound. Unlock (`installKeyLocked` →
-`migrateLegacyLocked`) migrates a v1 file ONCE, before any other read:
-every entry opened with nil AAD (or `aadFor(name)` — a pre-release build
-bound names without bumping the version), re-sealed under its own name with
-the same key, whole file written in ONE `writeFileAtomicFn` call under the
-sidecar flock (version re-checked under the lock). Then
+(`storeVersion`) = name-bound. Unlock migrates a v1 file before any other
+read (`installKeyLocked` → `migrateLegacyLocked`; passphrase mode goes through
+`UnlockWithPassphrase`, which re-keys under a FRESH salt and, if another
+process won the race, re-derives from the salt now on disk). Every entry is
+opened with nil AAD (or `aadFor(name)`: pre-release v1 files from
+release/v0.1.1 dev installs, keep accepting them). Each is re-sealed under its
+own name, and the whole file is written in ONE `writeFileAtomicFn` call under
+the sidecar flock (version re-checked under the lock). Then
 `credentials.json.migrated` is written and `credentials.store_migrated` is
 logged (counts only). `openLegacyEntry` is the ONLY nil-AAD read in the
-package — keep it that way.
+package. **TODO(credential-migration-removal):** the whole migration must be
+deleted in a later release (see the header of `store_migrate.go`).
 
 - Any entry fails → nothing written, store stays LOCKED, `*MigrationError`
   names every failing entry and unwraps to `*EntryAuthError`s (→
-  `ErrWrongKey`), so gateway boot STOPS (fatal class, not degraded).
-- v1 file + `.migrated` record present → `ErrLegacyStoreAfterMigration`
-  (replay defence against a restored, swapped pre-upgrade copy).
+  `ErrWrongKey`), so gateway boot STOPS (fatal class, not degraded). Audit
+  records (`store_migration_refused`, and mode 0's `master_key_load` via
+  `keymgr.go::auditVerifyCategory`) carry counts/categories, never names.
+- v1 file + `.migrated` record present → `ErrLegacyStoreAfterMigration`.
 - `loadFileInternal` refuses every version but 2 (`ErrLegacyStoreFormat`,
-  `ErrUnsupportedStoreVersion`) — the safety net: no read path can open a v1
+  `ErrUnsupportedStoreVersion`): the safety net. No read path can open a v1
   file and no write path can stamp one as v2. Unreadable/corrupt files at
-  unlock are left to it (unlock does not report them).
-- Residual risk, unfixable: a swap made to a v1 file BEFORE its migration is
-  laundered into bound entries (nil-AAD ciphertexts carry no name). The
-  `.migrated` record is defence in depth only — whoever can write the data
-  dir can delete it. Pinned by
-  `TestMigrate_SwapInLegacyStoreIsLaunderedResidualRisk`.
+  unlock are left to it.
+- **Residual risk, real window = lifetime of the current secret** (master key
+  or passphrase), NOT one unlock: an attacker with data-dir write access and a
+  pre-upgrade copy can swap entries in it, delete `.migrated` (same dir), and
+  the next unlock re-migrates and launders the swap. The fresh salt only stops
+  mixing old entries with post-upgrade ones; changing the secret closes it
+  (`TestMigrate_WholeOldCopyRestoreIsResidualUntilSecretChanges`); removing
+  the migration closes it for everyone.
+- Windows: `WithFlock` is a no-op, so two processes can both migrate; each
+  writes a complete valid file, last write wins (no mix, no swap).
 
 ## Error classification decides fatal-vs-degrade
 

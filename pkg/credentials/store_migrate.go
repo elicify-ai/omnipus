@@ -31,16 +31,38 @@ package credentials
 //
 // # Residual risk (stated, not hidden)
 //
-// A nil-AAD ciphertext carries no name, so a swap made to the legacy file
-// BEFORE its one migration is indistinguishable from the genuine layout and is
-// re-sealed under the name it was moved to. Cryptography cannot detect it; the
-// migration makes that window exactly one unlock wide. The migration record
-// stops the obvious extension — restoring an old, swapped legacy copy after
-// the install migrated — but an attacker who can write the data directory can
-// delete the record too, so the record is defence in depth, not a guarantee.
-// An attacker who can write the data directory already has a stronger attack
-// (whole-file rollback of a name-bound store), which the binding never claimed
-// to stop.
+// A nil-AAD ciphertext carries no name, so a swap made to a legacy file is
+// indistinguishable from the genuine layout and is re-sealed under the name it
+// was moved to. Cryptography cannot detect it.
+//
+// The window is NOT one unlock. It lasts as long as the secret that opens the
+// pre-upgrade entries is unchanged — the master key in key mode, the
+// passphrase in passphrase mode. An attacker with write access to the data
+// directory who kept (or can still read) a pre-upgrade copy of
+// credentials.json can, at any later time, swap entries in that copy, delete
+// credentials.json.migrated (the record is in the same directory, so the same
+// attacker can delete it — it only stops accidental or naive replays), put the
+// copy back, and the next unlock migrates it again, carrying the swap into the
+// name-bound format.
+//
+// What narrows it:
+//   - Passphrase mode re-keys under a FRESH salt during the migration, so a
+//     crafted file cannot mix pre-upgrade entries with anything written after
+//     the upgrade: an attack must restore the old copy wholesale, rolling back
+//     every change made since.
+//   - Changing the secret closes it: after `omnipus credentials rotate` (or,
+//     for key-file / env-key installs, a master-key rotation) the pre-upgrade
+//     copies no longer open. The operator docs tell upgraded installs to do so.
+//   - Removing this file closes it for everyone (see the TODO below).
+//
+// TODO(credential-migration-removal): this migration and openLegacyEntry — the
+// only nil-AAD read in the package — must be DELETED in a later release, once
+// v0.1.0 installs have had a release cycle to upgrade. While it exists, a v1
+// file is a laundering path for as long as the secret is unchanged. Tracking
+// issue to be filed by the release orchestrator; reference it here when it
+// exists. Removing it means a v1 file is refused outright
+// (loadFileInternal already refuses it; migrateLegacyLocked is the only path
+// that accepts it).
 
 import (
 	"crypto/aes"
@@ -126,10 +148,15 @@ func (s *Store) migrationRecordPath() string {
 	return s.path + migrationRecordSuffix
 }
 
+// readStoreFileFn is os.ReadFile, held in a package variable (like
+// writeFileAtomicFn) so a test can observe WHEN a migrator reads the store
+// relative to the sidecar lock. Production code never reassigns it.
+var readStoreFileFn = os.ReadFile
+
 // readStoreVersionFile reads and parses the store file. present is false when
 // the file does not exist.
 func (s *Store) readStoreVersionFile() (sf *storeFile, present bool, err error) {
-	data, err := os.ReadFile(s.path)
+	data, err := readStoreFileFn(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, false, nil
 	}
@@ -143,9 +170,12 @@ func (s *Store) readStoreVersionFile() (sf *storeFile, present bool, err error) 
 	return &parsed, true, nil
 }
 
-// migrateLegacyLocked migrates a version-1 store to the current version under
-// key. It is a no-op when the file is absent or already current. Caller holds
-// s.mu for writing.
+// migrateLegacyLocked migrates a version-1 store: every entry is opened with
+// oldKey and re-sealed under its own name with newKey. newSalt, when non-nil,
+// replaces the file's salt (passphrase mode re-keys under a fresh salt; key
+// mode passes newKey == oldKey and a nil newSalt). It reports whether this
+// call performed the migration. It is a no-op when the file is absent or
+// already current. Caller holds s.mu for writing.
 //
 // The first read is lock-free, so the common case (a current store, or none
 // yet) takes no lock and creates no file. Only a legacy file takes the sidecar
@@ -158,21 +188,22 @@ func (s *Store) readStoreVersionFile() (sf *storeFile, present bool, err error) 
 // every operation with its established error. Safety never depends on this
 // function running — loadFileInternal refuses every version but the current
 // one, so a store this function skipped is refused, never read the legacy way.
-func (s *Store) migrateLegacyLocked(key []byte) error {
-	sf, present, err := s.readStoreVersionFile()
-	if err != nil || !present {
-		return nil //nolint:nilerr // reported by loadFileInternal on first use; see doc comment
+func (s *Store) migrateLegacyLocked(oldKey, newKey, newSalt []byte) (bool, error) {
+	sf, present, probeErr := s.readStoreVersionFile()
+	if probeErr != nil || !present {
+		return false, nil //nolint:nilerr // reported by loadFileInternal on first use; see doc comment
 	}
 	switch sf.Version {
 	case storeVersion:
-		return nil
+		return false, nil
 	case legacyStoreVersion:
 	default:
-		return fmt.Errorf("%w: %d", ErrUnsupportedStoreVersion, sf.Version)
+		return false, fmt.Errorf("%w: %d", ErrUnsupportedStoreVersion, sf.Version)
 	}
-	return fileutil.WithFlock(fileutil.SidecarLockPath(s.path), func() error {
-		sf, present, err := s.readStoreVersionFile()
-		if err != nil || !present {
+	migrated := false
+	lockErr := fileutil.WithFlock(fileutil.SidecarLockPath(s.path), func() error {
+		sf, present, readErr := s.readStoreVersionFile()
+		if readErr != nil || !present {
 			return nil //nolint:nilerr // as above: loadFileInternal reports it on first use
 		}
 		switch sf.Version {
@@ -192,7 +223,7 @@ func (s *Store) migrateLegacyLocked(key []byte) error {
 			return fmt.Errorf("credentials: cannot check migration record %s: %w", s.migrationRecordPath(), statErr)
 		}
 
-		migrated, failed, err := resealLegacyEntries(key, sf.Credentials)
+		resealed, failed, err := resealLegacyEntries(oldKey, newKey, sf.Credentials)
 		if err != nil {
 			return err
 		}
@@ -202,7 +233,10 @@ func (s *Store) migrateLegacyLocked(key []byte) error {
 		}
 
 		sf.Version = storeVersion
-		sf.Credentials = migrated
+		sf.Credentials = resealed
+		if newSalt != nil {
+			sf.Salt = base64.StdEncoding.EncodeToString(newSalt)
+		}
 		out, err := json.MarshalIndent(sf, "", "  ")
 		if err != nil {
 			return fmt.Errorf("credentials: marshal migrated store: %w", err)
@@ -216,27 +250,29 @@ func (s *Store) migrateLegacyLocked(key []byte) error {
 		// Recorded only after the store write landed, so a crash in between
 		// costs the replay defence for that one install, never the data.
 		record := fmt.Sprintf(`{"from_version":%d,"to_version":%d,"entries":%d,"migrated_at":%q}`+"\n",
-			legacyStoreVersion, storeVersion, len(migrated), time.Now().UTC().Format(time.RFC3339))
+			legacyStoreVersion, storeVersion, len(resealed), time.Now().UTC().Format(time.RFC3339))
 		if err := fileutil.WriteFileAtomic(s.migrationRecordPath(), []byte(record), 0o600); err != nil {
 			slog.Warn("credentials: store migrated, but the migration record could not be written",
 				"path", s.migrationRecordPath(), "error", err.Error(),
 				"consequence", "a restored pre-upgrade copy of credentials.json would be migrated again instead of refused")
 		}
-		emitMigrationAudit(true, "", len(migrated), 0)
+		emitMigrationAudit(true, "", len(resealed), 0)
+		migrated = true
 		return nil
 	})
+	return migrated, lockErr
 }
 
-// resealLegacyEntries opens every entry of a version-1 file and re-seals it
-// under its own name. It returns the re-sealed map, or the sorted names of
+// resealLegacyEntries opens every entry of a version-1 file with oldKey and
+// re-seals it under its own name with newKey. It returns the re-sealed map, or the sorted names of
 // every entry that did not open. It never returns a partial success.
 //
 // An entry opens if it authenticates with a nil AAD (written by the released
 // pre-binding binary) OR with aadFor(name) (written by a pre-release build that
 // bound the name but did not bump the version). A name-bound ciphertext opens
 // only under the name it was sealed for, so accepting it adds no swap surface.
-func resealLegacyEntries(key []byte, entries map[string]encEntry) (map[string]encEntry, []string, error) {
-	block, err := aes.NewCipher(key)
+func resealLegacyEntries(oldKey, newKey []byte, entries map[string]encEntry) (map[string]encEntry, []string, error) {
+	block, err := aes.NewCipher(oldKey)
 	if err != nil {
 		return nil, nil, fmt.Errorf("credentials: cipher init: %w", err)
 	}
@@ -272,7 +308,7 @@ func resealLegacyEntries(key []byte, entries map[string]encEntry) (map[string]en
 
 	out := make(map[string]encEntry, len(entries))
 	for _, name := range names {
-		sealed, err := encrypt(key, name, plains[name])
+		sealed, err := encrypt(newKey, name, plains[name])
 		if err != nil {
 			return nil, nil, fmt.Errorf("credentials: migrate encrypt %q: %w", name, err)
 		}

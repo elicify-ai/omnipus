@@ -117,6 +117,14 @@ The gateway refuses to start, and changes nothing, in three cases:
 
 To remove an entry by hand: stop the gateway, back up `credentials.json`, open it in a text editor, and delete the named entry (its name and its `nonce` and `ciphertext` lines) from the `credentials` section. Restart the gateway, then enter the value again in **Settings**, **Security**, **Credential Vault**, or with `omnipus credentials set <name> <value>`.
 
+### Going back to an older release, and coming back
+
+A release from before this change cannot read an upgraded vault. If you go back to one anyway, and re-enter credentials there so it writes an old-format vault, the next start of the newer release refuses with "already migrated it once". To recover, delete `credentials.json.migrated` next to the vault and start again. The vault is then upgraded a second time. Only do this when you know the old-format file came from you.
+
+### Windows: two processes upgrading at once
+
+On Windows, Omnipus has no lock between separate processes. If two Omnipus processes (for example the gateway and an `omnipus credentials` command) open the same old-format vault at the same moment, both may run the upgrade. Each writes a complete, valid vault, and the last one written wins. No value is mixed up or swapped. In passphrase mode, the process whose write was replaced holds a key for the overwritten file and fails to read credentials until it is restarted. Start the gateway alone for the first run after upgrading.
+
 After the upgrade there is deliberately no fallback that reads an old entry: it would let a value be moved between names again. If one entry fails while the others still work, that entry was edited on disk or copied from another entry. The gateway names the entry at fault in its log. Re-enter it the same way.
 
 ## The web app looks outdated after a source build

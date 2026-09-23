@@ -28,6 +28,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -149,8 +150,8 @@ func TestMigrate_LegacyStoreMigratesAndAllValuesReadable(t *testing.T) {
 }
 
 // TestMigrate_PassphraseUnlockMigrates covers unlock mode 5: the key is derived
-// from the legacy file's own salt, and that salt must be preserved so the same
-// passphrase keeps working after migration.
+// from the legacy file's own salt, the migration re-keys under a fresh salt,
+// and the same passphrase must keep working afterwards.
 func TestMigrate_PassphraseUnlockMigrates(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "credentials.json")
 	salt := make([]byte, saltLen)
@@ -165,8 +166,12 @@ func TestMigrate_PassphraseUnlockMigrates(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "value-a", got)
 
-	assert.Equal(t, base64.StdEncoding.EncodeToString(salt), aadTestReadFile(t, path).Salt,
-		"migration must keep the salt, or the passphrase would stop working")
+	// Changed by the security review of 5a1a48f45 (item 1b): this used to
+	// assert the salt is KEPT. The migration now re-keys under a fresh salt so
+	// pre-upgrade entries stop opening; what must hold is that the SAME
+	// passphrase keeps working, asserted just below.
+	assert.NotEqual(t, base64.StdEncoding.EncodeToString(salt), aadTestReadFile(t, path).Salt,
+		"a passphrase-mode migration re-keys under a fresh salt")
 
 	again := NewStore(path)
 	require.NoError(t, again.UnlockWithPassphrase("legacy-passphrase"))
@@ -271,10 +276,11 @@ func TestMigrate_DowngradedVersionFieldCannotLaunderASwap(t *testing.T) {
 
 // TestMigrate_SwapInLegacyStoreIsLaunderedResidualRisk documents, rather than
 // hides, the one thing migration cannot do: a nil-AAD ciphertext carries no
-// name, so a swap made to a LEGACY file before its first post-upgrade unlock
-// is indistinguishable from the genuine layout and is re-sealed under the
-// name it was moved to. This test pins that behaviour so the residual risk is
-// visible and cannot silently widen; the report and docs/security.md state it.
+// name, so a swap made to a LEGACY file is indistinguishable from the genuine
+// layout and is re-sealed under the name it was moved to. This test pins that
+// behaviour so the residual risk is visible; the report and docs/security.md
+// state it. The window is the lifetime of the current secret, not one unlock
+// — see TestMigrate_WholeOldCopyRestoreIsResidualUntilSecretChanges.
 func TestMigrate_SwapInLegacyStoreIsLaunderedResidualRisk(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "credentials.json")
 	key := aadTestKey(0x65)
@@ -291,8 +297,8 @@ func TestMigrate_SwapInLegacyStoreIsLaunderedResidualRisk(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "value-b", a, "RESIDUAL RISK: the swap made before migration is carried into the bound format")
 
-	// But it is laundered only ONCE, at the one migration. Any swap after it
-	// is rejected (see TestMigrate_SwapInMigratedStoreIsRejected).
+	// A swap made to the MIGRATED file is rejected (see also
+	// TestMigrate_SwapInMigratedStoreIsRejected).
 	sf = aadTestReadFile(t, path)
 	sf.Credentials["SECRET_A"], sf.Credentials["SECRET_B"] = sf.Credentials["SECRET_B"], sf.Credentials["SECRET_A"]
 	aadTestWriteFile(t, path, sf)
@@ -575,8 +581,9 @@ func TestMigrate_FreshStoreIsWrittenAtCurrentVersion(t *testing.T) {
 
 // TestMigrate_ConcurrentUnlocksMigrateOnce: two processes' worth of stores
 // unlocking the same legacy file at once must serialize on the sidecar lock —
-// both succeed, every value reads back, and the file is not re-sealed twice
-// into an inconsistent state. Run under -race.
+// both succeed and every value reads back. Run under -race. This test alone
+// does NOT prove the lock (it stays green with the lock replaced by a no-op);
+// TestMigrate_SecondMigratorWaitsForTheLock does.
 func TestMigrate_ConcurrentUnlocksMigrateOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "credentials.json")
 	key := aadTestKey(0x71)
@@ -640,6 +647,27 @@ func (h *captureHandler) find(msg string) (map[string]string, bool) {
 	return nil, false
 }
 
+// findWith returns the first record with message msg whose key attribute
+// equals val.
+func (h *captureHandler) findWith(msg, key, val string) (map[string]string, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.records {
+		if r.Message != msg {
+			continue
+		}
+		attrs := map[string]string{}
+		r.Attrs(func(a slog.Attr) bool {
+			attrs[a.Key] = a.Value.String()
+			return true
+		})
+		if attrs[key] == val {
+			return attrs, true
+		}
+	}
+	return nil, false
+}
+
 func (h *captureHandler) all() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -697,5 +725,289 @@ func TestMigrate_AuditRecordsCountOnly(t *testing.T) {
 	sort.Strings(names)
 	for _, name := range names {
 		assert.False(t, strings.Contains(logged, name), "audit records carry counts, not entry names (%s)", name)
+	}
+}
+
+// --- Review follow-ups (Opus security review of 5a1a48f45) -----------------
+
+// legacyPassphraseStore writes a v1 store keyed from passphrase + a fresh salt
+// and returns that salt.
+func legacyPassphraseStore(t *testing.T, path, passphrase string, values map[string]string) []byte {
+	t.Helper()
+	salt := make([]byte, saltLen)
+	_, err := io.ReadFull(rand.Reader, salt)
+	require.NoError(t, err)
+	key := argon2.IDKey([]byte(passphrase), salt, argonTime, argonMemory, argonThreads, keyLen)
+	writeLegacyStoreWithSalt(t, path, key, salt, values)
+	return salt
+}
+
+// TestMigrate_PassphraseMigrationUsesFreshSalt (review item 1b): in passphrase
+// mode the migration re-keys under a FRESH salt, so the post-migration key no
+// longer opens entries from a pre-migration copy. An attacker crafting a v1
+// file must then either keep the current salt — and the old entries fail — or
+// restore the old copy wholesale (see the residual-risk test below).
+func TestMigrate_PassphraseMigrationUsesFreshSalt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	const pass = "fresh-salt-passphrase"
+	oldSalt := legacyPassphraseStore(t, path, pass, map[string]string{"SECRET_A": "value-a", "SECRET_B": "value-b"})
+	oldCopy := aadTestReadFile(t, path) // attacker keeps this
+
+	store := NewStore(path)
+	require.NoError(t, store.UnlockWithPassphrase(pass))
+	for name, want := range map[string]string{"SECRET_A": "value-a", "SECRET_B": "value-b"} {
+		got, err := store.Get(name)
+		require.NoError(t, err)
+		assert.Equal(t, want, got)
+	}
+	migrated := aadTestReadFile(t, path)
+	assert.NotEqual(t, base64.StdEncoding.EncodeToString(oldSalt), migrated.Salt,
+		"a passphrase-mode migration must re-key under a fresh salt")
+
+	// The same passphrase still opens the migrated store.
+	again := NewStore(path)
+	require.NoError(t, again.UnlockWithPassphrase(pass))
+	got, err := again.Get("SECRET_B")
+	require.NoError(t, err)
+	assert.Equal(t, "value-b", got)
+
+	// Crafted v1 file: the old copy's (swapped) entries under the CURRENT salt,
+	// migration record deleted. The pre-migration entries no longer open.
+	require.NoError(t, os.Remove(path+".migrated"))
+	crafted := &storeFile{Version: onDiskLegacyVersion, Salt: migrated.Salt, Credentials: map[string]encEntry{
+		"SECRET_A": oldCopy.Credentials["SECRET_B"],
+		"SECRET_B": oldCopy.Credentials["SECRET_A"],
+	}}
+	aadTestWriteFile(t, path, crafted)
+	before := mustReadBytes(t, path)
+	err = NewStore(path).UnlockWithPassphrase(pass)
+	var migErr *MigrationError
+	require.ErrorAs(t, err, &migErr, "pre-migration entries must not open under the post-migration key")
+	assert.Equal(t, before, mustReadBytes(t, path))
+}
+
+// TestMigrate_WholeOldCopyRestoreIsResidualUntilSecretChanges pins the real
+// window (review item 1a): as long as the secret (master key or passphrase)
+// is unchanged, an attacker with write access who kept a pre-migration copy
+// can swap entries in it, delete the migration record, and have the next
+// unlock launder the swap. Changing the secret closes it; both are asserted.
+func TestMigrate_WholeOldCopyRestoreIsResidualUntilSecretChanges(t *testing.T) {
+	t.Run("passphrase", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "credentials.json")
+		const pass = "window-passphrase"
+		legacyPassphraseStore(t, path, pass, map[string]string{"SECRET_A": "value-a", "SECRET_B": "value-b"})
+		oldCopy := aadTestReadFile(t, path)
+		oldCopy.Credentials["SECRET_A"], oldCopy.Credentials["SECRET_B"] = oldCopy.Credentials["SECRET_B"], oldCopy.Credentials["SECRET_A"]
+
+		store := NewStore(path)
+		require.NoError(t, store.UnlockWithPassphrase(pass))
+
+		// Same passphrase: RESIDUAL RISK — the swapped old copy re-migrates.
+		require.NoError(t, os.Remove(path+".migrated"))
+		aadTestWriteFile(t, path, oldCopy)
+		relaundered := NewStore(path)
+		require.NoError(t, relaundered.UnlockWithPassphrase(pass),
+			"RESIDUAL RISK: an old copy with its own salt re-migrates while the passphrase is unchanged")
+		got, err := relaundered.Get("SECRET_A")
+		require.NoError(t, err)
+		assert.Equal(t, "value-b", got)
+
+		// After a passphrase change the same old copy no longer opens.
+		require.NoError(t, relaundered.RotateWithPassphrase("new-window-passphrase"))
+		require.NoError(t, os.Remove(path+".migrated"))
+		aadTestWriteFile(t, path, oldCopy)
+		err = NewStore(path).UnlockWithPassphrase("new-window-passphrase")
+		var migErr *MigrationError
+		require.ErrorAs(t, err, &migErr, "after a passphrase change the old copy must be refused")
+	})
+	t.Run("key", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "credentials.json")
+		key := aadTestKey(0x74)
+		writeLegacyStore(t, path, key, map[string]string{"SECRET_A": "value-a", "SECRET_B": "value-b"})
+		oldCopy := aadTestReadFile(t, path)
+		oldCopy.Credentials["SECRET_A"], oldCopy.Credentials["SECRET_B"] = oldCopy.Credentials["SECRET_B"], oldCopy.Credentials["SECRET_A"]
+
+		store := NewStore(path)
+		require.NoError(t, store.UnlockWithKey(key))
+
+		require.NoError(t, os.Remove(path+".migrated"))
+		aadTestWriteFile(t, path, oldCopy)
+		relaundered := NewStore(path)
+		require.NoError(t, relaundered.UnlockWithKey(key),
+			"RESIDUAL RISK: while the master key is unchanged an old copy re-migrates")
+
+		newKey := aadTestKey(0x75)
+		require.NoError(t, relaundered.Rotate(newKey))
+		require.NoError(t, os.Remove(path+".migrated"))
+		aadTestWriteFile(t, path, oldCopy)
+		err := NewStore(path).UnlockWithKey(newKey)
+		var migErr *MigrationError
+		require.ErrorAs(t, err, &migErr, "after a master-key rotation the old copy must be refused")
+	})
+}
+
+// TestMigrate_DeliveredKeyAuditCarriesNoEntryNames (review item 3): when the
+// consume-once delivered key cannot open the store, the
+// credentials.master_key_load audit record states the category and count, not
+// the entry names that the returned error carries for the operator.
+func TestMigrate_DeliveredKeyAuditCarriesNoEntryNames(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "current-store", true: "legacy-store"}[legacy], func(t *testing.T) {
+			home := t.TempDir()
+			storePath := filepath.Join(home, "credentials.json")
+			rightKey := aadTestKey(0x76)
+			names := map[string]string{"SENSITIVE_NAME_ALPHA": "v-alpha", "SENSITIVE_NAME_BETA": "v-beta"}
+			if legacy {
+				writeLegacyStore(t, storePath, rightKey, names)
+			} else {
+				seeded := NewStore(storePath)
+				require.NoError(t, seeded.UnlockWithKey(rightKey))
+				for n, v := range names {
+					require.NoError(t, seeded.Set(n, v))
+				}
+			}
+
+			deliveryDir := filepath.Join(home, "delivery")
+			require.NoError(t, os.MkdirAll(deliveryDir, 0o700))
+			delivered := filepath.Join(deliveryDir, "master-key")
+			require.NoError(t, os.WriteFile(delivered,
+				[]byte("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"), 0o600))
+			t.Setenv(EnvMasterKey, "")
+			t.Setenv(EnvKeyFile, "")
+			t.Setenv(EnvMasterKeySource, delivered)
+
+			h := &captureHandler{}
+			prev := slog.Default()
+			slog.SetDefault(slog.New(h))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			err := Unlock(NewStore(storePath))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "SENSITIVE_NAME_", "the operator-facing error still names the entry")
+
+			attrs, ok := h.findWith("credentials.master_key_load", "decision", "deny")
+			require.True(t, ok, "the refusal must be audited; got:\n%s", h.all())
+			assert.Equal(t, "master_key_wrong_key", attrs["policy_rule"])
+			assert.NotContains(t, attrs["detail"], "SENSITIVE_NAME_", "audit detail must not carry entry names")
+			assert.NotContains(t, h.all(), "SENSITIVE_NAME_", "no log record may carry entry names")
+			assert.NotContains(t, h.all(), "v-alpha")
+		})
+	}
+}
+
+// TestMigrate_SecondMigratorWaitsForTheLock (review item 2): the first
+// migrator is parked inside its store write while holding the sidecar lock.
+// The second may do its lock-free version probe, but must then neither read
+// the file under the lock nor write until the first finishes — and the store
+// must be written exactly once. Without the lock, the second migrator reads
+// the still-legacy file, re-seals it and writes a second time.
+func TestMigrate_SecondMigratorWaitsForTheLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	key := aadTestKey(0x77)
+	want := map[string]string{"A": "value-a", "B": "value-b"}
+	writeLegacyStore(t, path, key, want)
+
+	var mu sync.Mutex
+	reads, writes := 0, 0
+	entered := make(chan struct{})
+	release := make(chan struct{})
+
+	origRead, origWrite := readStoreFileFn, writeFileAtomicFn
+	readStoreFileFn = func(p string) ([]byte, error) {
+		mu.Lock()
+		reads++
+		mu.Unlock()
+		return origRead(p)
+	}
+	writeFileAtomicFn = func(p string, data []byte, perm os.FileMode) error {
+		mu.Lock()
+		writes++
+		n := writes
+		mu.Unlock()
+		if n == 1 {
+			close(entered)
+			<-release
+		}
+		return origWrite(p, data, perm)
+	}
+	t.Cleanup(func() { readStoreFileFn, writeFileAtomicFn = origRead, origWrite })
+
+	first, second := NewStore(path), NewStore(path)
+	errs := make(chan error, 2)
+	go func() { errs <- first.UnlockWithKey(key) }()
+	<-entered // first holds the lock, parked in its write; it has read twice
+
+	secondDone := make(chan struct{})
+	go func() {
+		errs <- second.UnlockWithKey(key)
+		close(secondDone)
+	}()
+
+	// Give the second migrator ample time to misbehave if the lock is absent.
+	select {
+	case <-secondDone:
+		t.Fatal("the second migrator finished while the first still held the lock")
+	case <-time.After(300 * time.Millisecond):
+	}
+	mu.Lock()
+	assert.Equal(t, 3, reads, "while the first migrator holds the lock, the second may only do its lock-free probe")
+	assert.Equal(t, 1, writes, "the second migrator must not write while the first holds the lock")
+	mu.Unlock()
+
+	close(release)
+	require.NoError(t, <-errs)
+	require.NoError(t, <-errs)
+	mu.Lock()
+	assert.Equal(t, 1, writes, "the store must be written exactly once")
+	mu.Unlock()
+	for _, s := range []*Store{first, second} {
+		for name, v := range want {
+			got, err := s.Get(name)
+			require.NoError(t, err)
+			assert.Equal(t, v, got)
+		}
+	}
+}
+
+// TestMigrate_PassphraseLoserOfConcurrentMigrationRederives: two passphrase
+// unlocks race on one legacy file. The winner re-keys under ITS fresh salt;
+// the loser waited on the lock with a key derived from the OLD salt and must
+// re-derive from the salt now on disk, or it would install a key that opens
+// nothing.
+func TestMigrate_PassphraseLoserOfConcurrentMigrationRederives(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "credentials.json")
+	const pass = "race-passphrase"
+	legacyPassphraseStore(t, path, pass, map[string]string{"A": "value-a"})
+
+	var once sync.Once
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	origWrite := writeFileAtomicFn
+	writeFileAtomicFn = func(p string, data []byte, perm os.FileMode) error {
+		parked := false
+		once.Do(func() { parked = true })
+		if parked {
+			close(entered)
+			<-release
+		}
+		return origWrite(p, data, perm)
+	}
+	t.Cleanup(func() { writeFileAtomicFn = origWrite })
+
+	winner, loser := NewStore(path), NewStore(path)
+	errs := make(chan error, 2)
+	go func() { errs <- winner.UnlockWithPassphrase(pass) }()
+	<-entered
+	go func() { errs <- loser.UnlockWithPassphrase(pass) }()
+	// Let the loser finish its two Argon2id derivations and block on the lock.
+	time.Sleep(1500 * time.Millisecond)
+	close(release)
+	require.NoError(t, <-errs)
+	require.NoError(t, <-errs)
+
+	for _, s := range []*Store{winner, loser} {
+		got, err := s.Get("A")
+		require.NoError(t, err, "both unlocks must hold the key for the salt now on disk")
+		assert.Equal(t, "value-a", got)
 	}
 }
