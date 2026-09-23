@@ -44,7 +44,7 @@ func captureApprovalFrameWithAPI(
 	reg := newApprovalRegistryV2(64, 300*time.Second)
 	entry, accepted := reg.requestApproval("tc-seg", toolName, args, "mia", "sess-seg", "turn-seg")
 	require.True(t, accepted)
-	t.Cleanup(func() { go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel) }() })
+	t.Cleanup(func() { go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel, false) }() })
 	go func() { <-entry.resultCh }()
 	handler.approvalRegV2 = reg
 	api := &restAPI{agentLoop: handler.agentLoop, approvalReg: reg}
