@@ -122,19 +122,26 @@ export function updateAgentTools(
  * FR-011, FR-082. Throws with status code prefix on non-2xx (e.g. "403: ...").
  *
  * action is the generated ToolApprovalActionRequest['action'] union — includes
- * "always" (approve this call AND record a session-scoped Always-Allow grant
- * via ApprovalGrantStore.Record; see pkg/gateway/rest_tool_registry.go).
- * On "always", grant_recorded is present: true if the standing grant stuck,
+ * "allow" (approve this call AND record a session-scoped grant via
+ * ApprovalGrantStore.Record; see pkg/gateway/rest_tool_registry.go).
+ * On "allow", grant_recorded is present: true if the standing grant stuck,
  * false if this call was approved once but the next identical call will ask
  * again.
+ *
+ * scope (ADR-092 D4/FR-024) — the generated ToolApprovalActionRequest['scope']
+ * union, "exact" | "prefix". Meaningful only when action is "allow"; the
+ * caller (ToolApprovalModal.tsx) omits it entirely for every other action so
+ * the wire body has no `scope` key at all, matching the contract's "ignored
+ * otherwise" note without relying on the server to ignore a stray value.
  */
 export function submitToolApproval(
   approvalId: string,
   action: ToolApprovalActionRequest['action'],
+  scope?: ToolApprovalActionRequest['scope'],
 ): Promise<ToolApprovalResponse> {
   return request<ToolApprovalResponse>(`/tool-approvals/${encodeURIComponent(approvalId)}`, {
     method: 'POST',
-    body: JSON.stringify({ action }),
+    body: JSON.stringify(scope ? { action, scope } : { action }),
   }, ToolApprovalResponseSchema as ZodType<ToolApprovalResponse>)
 }
 

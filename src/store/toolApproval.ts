@@ -22,6 +22,7 @@
 
 import { create } from 'zustand'
 import type { WsToolApprovalRequiredFrame, WsSessionStateFrame } from '@/lib/ws'
+import type { CommandSegmentInfo } from '@/lib/api/generated/asyncapi-types'
 
 export interface PendingToolApproval {
   approvalId: string
@@ -38,6 +39,17 @@ export interface PendingToolApproval {
    * that session belongs to no workspace — such an approval is in every scope.
    */
   workspaceId?: string
+  /**
+   * ADR-092 D4: per-segment breakdown of a chained shell command
+   * (`splitShellSegments`), present only on a live tool_approval_required
+   * frame for a command the D3 matcher could not fully resolve. Undefined —
+   * not an empty array — when the frame carried none (non-bash tool, an
+   * unchained command, or a backend build that does not populate it yet);
+   * ToolApprovalModal.tsx treats undefined/empty identically (no segment
+   * breakdown shown). A reconnect stub (see reconcileWithSessionState below)
+   * never has this — SessionStatePendingApproval carries no segments field.
+   */
+  segments?: CommandSegmentInfo[]
 }
 
 /**
@@ -112,6 +124,7 @@ export const useToolApprovalStore = create<ToolApprovalStore>((set) => ({
         updated[existing] = {
           ...updated[existing],
           expiresAt,
+          segments: frame.segments,
         }
         return { queue: updated }
       }
@@ -128,6 +141,7 @@ export const useToolApprovalStore = create<ToolApprovalStore>((set) => ({
             turnId: frame.turn_id,
             expiresAt,
             workspaceId: frame.workspace_id,
+            segments: frame.segments,
           },
         ],
       }
