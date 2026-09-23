@@ -3,6 +3,7 @@
 - **Spec status:** Draft for lead review (plan-spec output; not committed — lead commits)
 - **ADR implemented:** [ADR-092 — Shell permission modes](../architecture/ADR-092-shell-permission-modes.md) (revised 2026-09-23 after a two-pass grill returned BLOCK — see the ADR's Revision note)
 - **Evidence baseline:** `release/v0.1.1` @ `838d8092c` (read-only)
+- **Correction note (2026-09-23, docs lane L7):** FR-001, FR-023, FR-033, FR-043 and §6.1/§6.2 are corrected to match the built code (marked *[corrected 2026-09-23]*); §3.10 adds FR-051 to FR-062 for ADR-092 D9 (Auto for tools other than `bash`), with scenarios S54 to S64.
 - **Depends on:** ADR-036, ADR-063, ADR-077, ADR-090
 - **Repo rule honoured throughout:** greenfield — no migration, no shims. `file::symbol` citations, never line numbers.
 - **Revision note:** this pass resolves 14 confirmed blockers from two independent grills (`/tmp/squads/grill-spec-opus.md`, 9 findings + 5 confirmed second-pass; and the untracked `adr-092-shell-permission-modes-spec-review.md`, 49 findings) plus the highest-value MAJOR/minor findings from both. Where the two disagreed, the architect's own code re-verification (cited inline) is followed. The untracked review file is scratch, not a deliverable, and is deleted at the end of this pass.
@@ -13,7 +14,7 @@
 
 Testable requirements, BDD scenarios, test data, contract-first work, removal tasks, an 8-lane delivery plan, and acceptance criteria for ADR-092.
 
-**In scope:** three modes and their resolution (storage clarified — no new field at global/per-agent, D1); the filesystem pre-flight (D7) **and its data model** (`FSPolicy.PathGrants`, bash-scoped); the network pre-flight (D8, new); the unified rule format, decision order, and **grant-consultation reachability** (corrected — D3); resolve-and-verify binary binding (corrected from "rewrite argv0" — D3); the approval dialog redesign (`cancel` retained in the wire enum); God Mode; the platform predicate; audit events (routed via `emitAudit`, not `logDecision`); the status contract field (extends `SandboxStatus`, not a new schema); the global-mode write's password step-up; and the full removal inventory including four previously-missed live surfaces.
+**In scope:** three presented states and their resolution (*[corrected 2026-09-23]* storage: a separate Auto-approve switch at global, per-agent and per-chat scope, see FR-001); Auto for tools other than `bash` (D9, §3.10); the filesystem pre-flight (D7) **and its data model** (`FSPolicy.PathGrants`, bash-scoped); the network pre-flight (D8, new); the unified rule format, decision order, and **grant-consultation reachability** (corrected — D3); resolve-and-verify binary binding (corrected from "rewrite argv0" — D3); the approval dialog redesign (`cancel` retained in the wire enum); God Mode; the platform predicate; audit events (routed via `emitAudit`, not `logDecision`); the status contract field (extends `SandboxStatus`, not a new schema); the global-mode write's password step-up; and the full removal inventory including four previously-missed live surfaces.
 
 **Out of scope:** per-website network approvals; a grants management surface; network egress changes to tools other than `bash`'s own child (unchanged); Windows kernel sandbox (still none — D1's existing Auto→Ask fallback is the mitigation, not new coverage). Full list in §11.
 
@@ -38,9 +39,9 @@ Testable requirements, BDD scenarios, test data, contract-first work, removal ta
 | `PolicyAuditor.logDecision` (`policy/auditor.go`) | unexported, one caller, 4-string signature, `sessionID` fixed at construction | **Survives for D3's own retarget only**; the four NEW events (FR-046) route via `ExecTool.emitAudit`'s `audit.Entry.Details map[string]any` instead — `logDecision` has no field for mode/level/scope |
 | `ExecApprovalManager` et al. (`security/execapproval.go`) | dead manager behind issue #83 headline | **Deleted** (D5) |
 | `ApprovalGrantStore` (`security/approvalgrants.go`) | session-scoped exact-fingerprint store | **Survives, extended** — prefix, path-widening (`PathGrants`), and network-widening (`ConnectPortRules`) record kinds |
-| `ToolApprovalModal` / `ToolApprovalModal.resolution.test.tsx` | 4-button dialog; `cancel` and `deny` verified to behave **differently** on purpose (network-failure vs 404 dismissal) | **Redesigned** to `[Deny][Allow once][Allow]` + scope radio; `cancel` **stays in the wire enum**, no button (FR-023) |
+| `ToolApprovalModal` / `ToolApprovalModal.resolution.test.tsx` | 4-button dialog; `cancel` and `deny` verified to behave **differently** on purpose (network-failure vs 404 dismissal) | *[corrected 2026-09-23]* Buttons relabelled Approve Once / Deny / Always Allow / Cancel, scope radio added for `bash`; `cancel` stays in the wire enum and the Cancel button is still rendered (FR-023) |
 | `GodModeActiveBanner` (`settings/GodModeControl.tsx`) | already exists, already red, already has a fetch-failure-safe `isError` variant, rendered today at `GatewaySection.tsx:298` | **Relocated** to `AppShell` app-wide — a move, not a new build (FR-034) |
-| `SandboxStatus.yaml` | existing schema: `backend`, `available`, `kernel_level`, `policy_applied`, `abi_version` | **Extended** with `effective_mode` — the badge's reuse target, not a new schema (FR-033) |
+| `SandboxStatus.yaml` | existing schema: `backend`, `available`, `kernel_level`, `policy_applied`, `abi_version` | **Extended** with `auto_approve_effective`, `kernel_sandbox_active`, `god_mode_active` (*[corrected 2026-09-23]*, no `effective_mode`) — the badge's reuse target, not a new schema (FR-033) |
 | `applyShellPolicy` (`sysagent/tools/agent_apply_args.go`); `rest_agents_update.go`; `rest_agents_create.go`; `openclaw/openclaw_config.go`(+test) | four live surfaces referencing `AgentShellPolicy`/`ShellDenyPatterns` missed by the first removal pass | **Removal tasks added** (R-1a…R-1d, §7.1) |
 
 **Impact assessment** (grep-verified caller counts):
@@ -58,9 +59,9 @@ Testable requirements, BDD scenarios, test data, contract-first work, removal ta
 
 ### 3.1 Modes, storage, and authorization
 
-**FR-001 — Three modes, no new storage at two of three levels.** `ask`/`auto`/`god`. `auto` is the fresh-install default. **Global and per-agent mode are a presentation over the existing `bash` tool-policy value, not new state**: `ask` ↔ the value `"ask"`; `auto`/`god` both ↔ `"allow"`, distinguished by the existing `GodMode` flag (global-only). `config.ReconcileToolPolicyCeiling`/`resolveEffectivePolicyWith` need no change. An agent may still carry a stricter explicit per-agent `bash` override outside the three named modes (e.g. ADR-090's Jim, `bash: deny`); the UI shows it as its nearest named mode with a "custom override" indicator, never silently loosens it into a bucket.
+**FR-001 — Three presented states, Auto-approve as a separate switch** *[corrected 2026-09-23]*. The chat is presented as Ask, Auto or God Mode (plus "Auto → Ask" when Auto is on without a kernel sandbox); this is not a stored mode. `bash` keeps an ordinary tool policy, shipped `ask`. Auto-approve is a separate boolean at three scopes: `sandbox.auto_approve` (global, seeded `true`), `AgentConfig.AutoApproveDisabled` / wire `auto_approve_disabled` (per agent, off-only), and the session-keyed per-chat modifier (may turn Auto on or off for that chat). Resolved by `sessionmode.go::ResolveAutoApprove`: chat modifier if set, else the global default turned off by the agent's switch. A call is in Auto only when its tool resolved to `ask`, Auto-approve is on, God Mode is off and a kernel sandbox is enforcing. God Mode is the existing separate global flag. `config.ReconcileToolPolicyCeiling`/`resolveEffectivePolicyWith` unchanged.
 
-**FR-002 — Three-level, tighten-only merge.** Global → per-agent → per-chat (session-scoped modifier), each lower level tightening only.
+**FR-002 — Three-level merge.** Global → per-agent → per-chat. *[corrected 2026-09-23]* The per-agent level can only turn Auto off. The per-chat level may loosen for its own chat (a human is present), but is never copied onto a delegate whose own `auto_approve_disabled` is set.
 
 **FR-003 — Server-side loosening rejection, one validator, four writers.** The write handler re-reads the global default and rejects a loosening write with 4xx. **Per-agent config has four writers, all four must call the same tighten-only validator**, not just "the REST write handler": `rest_agents_update.go` (field merge), `rest_agents_create.go` (create-path decode), `pkg/sysagent/tools/agent_apply_args.go` (agent-callable), and the per-chat write path. The sysagent path is the one that matters most: an agent reaching a mode-write surface is bounded by this check, not by the tool being absent.
 
@@ -126,15 +127,44 @@ Testable requirements, BDD scenarios, test data, contract-first work, removal ta
 
 **FR-042 — Auto denies bash's outbound network by default.** For the bash tool's rendered per-turn policy under Auto (not other tools, not God Mode), `ConnectPortRules`/`BindPortRules` render **empty** instead of the boot-default `DefaultConnectPorts={53,80,443}`. On Linux, Landlock ABI≥4 installs `handledAccessNet` unconditionally (`sandbox_linux.go`, verified — not conditioned on the rule list being non-empty), so an empty list is a true kernel-enforced deny-all for that child's `connect(2)`. macOS: the Seatbelt profile renders `ConnectPortRules` identically (`seatbelt_profile.go`) — same mechanism. Windows: D1 already makes Auto behave as Ask there; FR-042 adds nothing and removes nothing on Windows.
 
-**FR-043 — Network-need classifier.** A pre-flight sibling to FR-038, reusing D3's resolved-binary step: flags a command via (a) a curated, operator-extendable set of network-capable binaries (`git`, `curl`, `wget`, `ssh`, `scp`, `rsync`, `npm`/`pnpm`/`yarn`, `pip`, `apt`/`yum`/`dnf`, `docker`, `gh`, cloud CLIs) or (b) a literal `http(s)://` token. A flagged command escalates before spawn, identically to FR-009's filesystem prompt.
+**FR-043 — Network-need classifier.** A pre-flight sibling to FR-038, reusing D3's resolved-binary step: flags a command via (a) a curated set of network-capable binaries (*[corrected 2026-09-23]* fixed in `preflight.go::networkCapableBinaries`, no operator extension built) (`git`, `curl`, `wget`, `ssh`, `scp`, `rsync`, `npm`/`pnpm`/`yarn`, `pip`, `apt`/`yum`/`dnf`, `docker`, `gh`, cloud CLIs) or (b) a literal `http(s)://` token. A flagged command escalates before spawn, identically to FR-009's filesystem prompt.
 
 **FR-044 — Network grant, widening, honest gap.** Approving widens the session's `ConnectPortRules` to `DefaultConnectPorts` — **port-level, not domain-level** (Landlock `NET_CONNECT_TCP` cannot filter by host; CIDR/host filtering for Omnipus's own HTTP clients remains the unchanged `SSRFChecker`/`ExecProxy`, which a bash-spawned binary can bypass by ignoring its proxy env vars — pre-existing, documented, not new here). New `network` grant kind in `ApprovalGrantStore`, same session/delegate/clear-on-close lifetime as `PathGrants`. **Honest gap, symmetric to FR-013:** a command the classifier misses but that opens a raw socket is denied by the kernel at `connect()` time (fails with a clear error), never silently allowed.
 
 **FR-049 — What D8 does not cover.** `shutdown`/`reboot`/`poweroff`, `kill`/`pkill`/`killall`, the fork bomb, `sudo`, `chmod`/`chown`, `eval`, `source *.sh` are not network operations; D8 is silent on them, same as D2. This is the accepted residual risk named once in the ADR, not re-litigated per category here.
 
+### 3.10 Auto-approve for tools other than `bash` (ADR-092 D9, founder-ruled 2026-09-23)
+
+<!-- verify-after-build: FR-051 to FR-062 describe the ratified design; re-check each against the merged lanes L1-L6. -->
+Source: [`adr-092-auto-for-other-tools-design.md`](adr-092-auto-for-other-tools-design.md) (revision 3) and the founder's `auto-approve-choices.json` (2026-09-23T14:20:18Z). Expected values in tests come from those two documents, never from the implementation.
+
+**FR-051 — One Auto predicate for every tool.** Auto is active for a call exactly when God Mode is off, `ResolveAutoApprove(cfg, agentID, chatModifier)` is true, and `sandbox.TurnPolicyBaseInstalled()` is true (J13). `bash` and every other tool read the same predicate (`autoApproveActive`, extracted from `ShellPermissionGate.liveMode`). No Auto on Windows, in God Mode, or without an enforcing kernel sandbox.
+
+**FR-052 — Rule for non-bash tools.** A non-bash call whose effective execution-time policy is `ask` runs with no prompt and no grant when Auto is active (FR-051) and the classifier verdict is Run: the tool is RUNS; or RUNS-IF and its arguments meet the condition; or an MCP tool meeting FR-056. Any classifier error counts as "asks". Auto never changes an `allow` or `deny` result.
+
+**FR-053 — Classification table.** One entry per catalog tool, transcribed from the founder file: 74 RUNS, 7 RUNS-IF (`read_file`, `list_directory`, `write_file`, `edit_file`, `append_file`, `send_file`, `browser_screenshot`), 28 ASKS, `bash` excluded (its own D1–D8 mechanism). The ASKS zero value is the lookup-miss default. The 28: `request_mount`, `install_skill`, `environment_setup`, `serve_web`, `send_email`, `reply`, `delete_task`, `browser_evaluate`, `browser_upload_file`, `set_config`, `run_doctor`, `configure_provider`, `test_provider`, `enable_channel`, `disable_channel`, `configure_channel`, `test_channel`, `add_mcp_server`, `remove_mcp_server`, `create_agent`, `update_agent`, `delete_agent`, `update_workspace`, `delete_workspace`, `delete_task_in_workspace`, `create_skill`, `edit_skill`, `remove_skill`.
+
+**FR-054 — Workspace path rule (J2).** A RUNS-IF path argument is inside only when the tool's own `ResolveTurnFSPolicy` (no grant overlay) and `ResolvePath`/`ResolvePathAllowingPatterns` resolve it outside the secret set and within `WorkDir` or an `AllowedRoots` mount (`fspolicy.CoversForGrant`), for reads and writes alike. A `bash` path grant (FR-036) never widens it. `send_file` applies the read rule to the file it sends; `browser_screenshot` applies the write rule to `filename`.
+
+**FR-055 — Pin and re-check.** The verdict is pinned on the call context (`WithAutoApproved`); each RUNS-IF file tool re-checks its resolved real path (`RecheckAutoPin`) and **refuses** — never re-prompts — when the path no longer passes FR-054. A mid-turn Auto toggle does not alter an already-decided call (as FR-006).
+
+**FR-056 — MCP tools (J15).** Under Auto an MCP tool on `ask` runs only when `Annotations != nil` and (`ReadOnlyHint` is true, or `DestructiveHint` is non-nil and false). Every other case asks, including no annotations and a nil `DestructiveHint`. No operator override. ADR-090 server/tool assignment still applies. No classification-table key may start with `mcp_`.
+
+**FR-057 — Unattended runs (J1).** The `AutoDenyAsk` block in `resolveAskPolicy` moves after the approval checks: a call Auto runs in a chat also runs unattended; anything needing a human (ASKS tool, failed RUNS-IF condition, unlabelled MCP tool, a `bash` escalation) is auto-denied with `autoDenyHeadlessReason` and its existing audit rows. This also makes `bash` under Auto run in scheduled runs.
+
+**FR-058 — Grants.** Order: Auto verdict, then grant store, then prompt. An Auto-run call records and reads no grant. Approve Once records nothing; Always Allow records the exact-arguments grant. The prefix-scope radio is `bash`-only. Delegation: grants and the per-chat modifier inherit, but the modifier is never copied onto a delegate whose own `auto_approve_disabled` is set; the shared predicate applies this to every tool.
+
+**FR-059 — Audit.** New event `tool.auto_approved` with details `{tool, agent_id, session_id, class, reason, paths}`, one per Auto-run call, via `audit.EmitEntry`. Prompted or denied calls emit no `tool.auto_approved`.
+
+**FR-060 — Per-tool verdict on the wire and in the UI (J14).** `ToolRegistryEntry.auto_approve: enum[runs, runs_if_args, asks]`, contract-first (Hard Constraint #8), filled from the classification table in `rest_tool_registry.go`; MCP entries report `runs` or `asks` from FR-056. A read-only marker appears only on rows set to Ask in `ToolsAndPermissions.tsx` and the global tool-policy table. The generated `docs/reference/built-in-tools.md` gains an "Under Auto" column from the same table.
+
+**FR-061 — One dialog for a `bash` ask rule.** With `bash` resolved to plain `ask` and a genuine operator `{action: ask}` rule match, the D3 verdict is settled inside the single upfront prompt (request carries `adr092_kind: "rule_ask"`); `enforceShellPermissionMode` skips `requestRuleApproval` when `withRuleAskSettled` is pinned. D3 `deny` and D7/D8 still apply. Headless: auto-denied once.
+
+**FR-062 — Drift guard.** `pkg/gateway/auto_approve_classification_test.go` against `buildCentralBuiltinRegistry`: every registry tool has an explicit entry; no stale keys (except `bash`); every global-ceiling key has an entry; every RUNS-IF tool implements `AutoApproveClassifier`; `AutoApproveClassOf("no_such_tool") == AutoAsks` and ASKS is the zero value; a golden copy of the 28-name ask-list equals the table's ASKS set; no `mcp_` keys. Each check carries a mutation self-check.
+
 ### 3.5 Approval dialog and suggested prefix
 
-**FR-023 — Three buttons; `cancel` stays in the wire enum (resolves R-a).** `[Deny][Allow once][Allow]` shown; the UI never renders a Cancel button and Escape/overlay/X all resolve to `deny`. **`ToolApprovalActionRequest.action`'s enum keeps `cancel`** as a client-issued (not button-issued) resolution value — `ToolApprovalModal.resolution.test.tsx` verifies `deny` (network failure, leaves the approval unresolved so a later snapshot can restore it) and `cancel` (lost-server 404, resolves it locally) behave *differently on purpose*; the headless CLI path (`pkg/app/internal/run/run.go`) drives the same enum and would also break if `cancel` were removed. Enum becomes `deny | allow_once | allow | cancel` (four values; three surfaced as buttons, `cancel` reserved for the stuck-approval recovery path).
+**FR-023 — Buttons; `cancel` stays in the wire enum (resolves R-a).** *[corrected 2026-09-23]* As built the dialog shows **Approve Once** (`allow_once`, no grant), **Deny** (`deny`), **Always Allow** (`allow`, session grant) and a rendered **Cancel** (`cancel`); the planned three-button layout without Cancel was not implemented. **`ToolApprovalActionRequest.action`'s enum keeps `cancel`** as a client-issued (not button-issued) resolution value — `ToolApprovalModal.resolution.test.tsx` verifies `deny` (network failure, leaves the approval unresolved so a later snapshot can restore it) and `cancel` (lost-server 404, resolves it locally) behave *differently on purpose*; the headless CLI path (`pkg/app/internal/run/run.go`) drives the same enum and would also break if `cancel` were removed. Enum becomes `deny | allow_once | allow | cancel` (four values; three surfaced as buttons, `cancel` reserved for the stuck-approval recovery path).
 
 **FR-024 — Scope choice, token-boundary matched.** Unchanged from first draft (exact default; prefix ignores `cwd`; token-boundary — `npm run test` does not match `npm run testfoo`).
 
@@ -159,7 +189,7 @@ Testable requirements, BDD scenarios, test data, contract-first work, removal ta
 
 **FR-046 — Routed via `emitAudit`, not `logDecision`.** `PolicyAuditor.logDecision` is unexported, single-caller, and its `(event, agentID, tool, command string, d Decision)` signature has no room for mode/level/scope/path. The four FR-032 events are written via `ExecTool.emitAudit`'s existing `audit.Entry.Details map[string]any` (already used for `cwd`/`god_mode` today) — new `Details` keys per event type, not a `logDecision` signature change. **Redaction posture:** unchanged and deliberate — `audit.Entry.Command` already logs the full command text; the new events add paths/prefixes/ports at the same fidelity, no new redaction requirement.
 
-**FR-033 — Contract-defined status field, extends `SandboxStatus` (resolves R-b/M-11).** The badge reads `effective_mode`, a **new field added to the existing `SandboxStatus` schema** (`backend`, `available`, `kernel_level`, `policy_applied`, `abi_version` already there) — not a second `kernel_sandbox_active` derivation alongside the existing `policy_applied`/`kernel_level`. On macOS, the predicate this field reflects reads Seatbelt's own active/enabled state (FR-007), not `policy_applied` verbatim.
+**FR-033 — Contract-defined status fields, extend `SandboxStatus` (resolves R-b/M-11).** *[corrected 2026-09-23]* There is no `effective_mode` field. `SandboxStatus` gained `auto_approve_effective` (the live global default only, not resolved per agent or chat), `kernel_sandbox_active` (`sandbox.TurnPolicyBaseInstalled()`; on macOS true when the Seatbelt boot profile is installed, not `policy_applied`) and `god_mode_active`. The badge folds these with the per-agent and per-chat layers client-side (`useResolvedAutoApprove`): God Mode, else Ask, else Auto, else Auto → Ask.
 
 **FR-034 — God Mode banner is a relocation, not a build (resolves M-12).** `GodModeActiveBanner` (`GodModeControl.tsx`) already exists, already red, already has a fetch-failure-safe `god-mode-status-unknown-banner` variant, and is already rendered at `GatewaySection.tsx:298`. This FR is: **move it to `AppShell`, app-wide**; preserve the fetch-failure `isError` state exactly (a naive move risks dropping it); correct its body text, which today says the "shell guard" is disabled — stale even before D6, doubly stale after (D6/FR-031 already corrects the Go comment; this FR extends that correction to this UI string).
 
@@ -258,6 +288,52 @@ Grouped by FR; each carries `Traces to:`. Scenarios unchanged from the first dra
 - **Given** the block list is gone, **When** `git push` runs in Auto with no network grant, **Then** it still prompts — because `git` is in the FR-043 classifier's known set, not because a `git push` regex survived.
 - *Traces to:* FR-043.
 
+### 4.10 Auto for tools other than `bash` (new, D9)
+
+<!-- verify-after-build -->
+**S54 — In-workspace file write runs, outside asks** *(Happy + Error Path)*
+- **Given** `write_file` on `ask`, Auto on, a kernel sandbox enforcing, **When** the agent writes `notes/a.md`, **Then** it runs with zero approver calls; **When** it writes a Desktop path, **Then** one prompt is shown.
+- *Traces to:* FR-052, FR-054. (Design T1.)
+
+**S55 — Read outside the workspace asks** *(Error Path)*
+- **Given** the same setup, **When** `read_file /etc/hosts` is called, **Then** it prompts, while `bash` `cat /etc/hosts` under Auto runs (accepted asymmetry).
+- *Traces to:* FR-054. (Design T2.)
+
+**S56 — Every ask-list tool still prompts** *(Error Path, table-driven over the 28 golden names)*
+- *Traces to:* FR-053. (Design T3.)
+
+**S57 — No Auto without a kernel sandbox, when Auto is off, or in God Mode** *(Alternate Path)*
+- **Given** `delegate`, `send_message`, `knowledge_edit` on `ask`, **When** Auto is off, or on with no enforcing kernel sandbox, or God Mode is on with an agent-level `ask`, **Then** each prompts.
+- *Traces to:* FR-051. (Design T5, T14.)
+
+**S58 — Scheduled run follows the same rule** *(Happy + Error Path)*
+- **Given** a headless run with Auto on, **Then** a RUNS tool executes, an ASKS tool is auto-denied with `autoDenyHeadlessReason`, and `bash` under Auto executes.
+- *Traces to:* FR-057. (Design T8.)
+
+**S59 — MCP annotations** *(Alternate Path)*
+- `readOnlyHint:true` runs; `destructiveHint:false` runs; `destructiveHint:true` asks; no annotations asks; annotations present with `destructiveHint` nil and `readOnlyHint` false asks.
+- *Traces to:* FR-056. (Design T9.)
+
+**S60 — Symlink swap after the verdict is refused** *(Error Path — mandatory adversarial case)*
+- **Given** the classifier approved `a.md`, **When** it is swapped to a symlink pointing outside before dispatch, **Then** the tool refuses and nothing is written.
+- *Traces to:* FR-055. (Design T6.)
+
+**S61 — A delegate's own off-switch wins** *(Error Path)*
+- **Given** a parent chat with Auto on and a delegate with `auto_approve_disabled`, **When** the delegate calls `write_file` inside its workspace, **Then** it prompts.
+- *Traces to:* FR-058. (Design T15.)
+
+**S62 — One dialog for a `bash` ask rule** *(Happy Path)*
+- **Given** `bash` on `ask`, mode Ask, a command matching an operator `ask` rule, **Then** the approver is called exactly once with `adr092_kind: "rule_ask"`.
+- *Traces to:* FR-061. (Design T18.)
+
+**S63 — Auto-run calls are audited and grant nothing** *(Happy Path)*
+- **Then** exactly one `tool.auto_approved` row with the right `class`, and `IsAllowed` stays false afterwards.
+- *Traces to:* FR-058, FR-059. (Design T11, T12.)
+
+**S64 — Registry carries the verdict** *(Happy Path)*
+- **Then** `GET /api/v1/tools` carries `auto_approve` for every entry, `make verify-contracts` is clean, and markers render only on rows set to Ask.
+- *Traces to:* FR-060. (Design T16, T17.)
+
 ---
 
 ## 5. Test data sets
@@ -326,7 +402,7 @@ Grouped by FR; each carries `Traces to:`. Scenarios unchanged from the first dra
 
 | Schema file | Change |
 |---|---|
-| `SandboxStatus.yaml` | **extended** with `effective_mode` (resolves R-b/M-11 — not a new schema) |
+| `SandboxStatus.yaml` | **extended** with `auto_approve_effective`, `kernel_sandbox_active`, `god_mode_active` (*[corrected 2026-09-23]* — no `effective_mode`; not a new schema) |
 | `ToolApprovalActionRequest.yaml` | `action` enum becomes `deny \| allow_once \| allow \| cancel` (four values — **`cancel` retained**, resolves R-a); add `scope` (`exact`\|`prefix`) when `action == allow` |
 | `ToolApprovalResponse.yaml` | echo the new enum + `scope` |
 | **`contracts/asyncapi.yaml`'s INLINE `ToolApprovalRequiredFrame` schema (line ~3385)** | **primary edit target (resolves M-9)** — verified: `openapi.yaml` never `$ref`s the standalone `ToolApprovalRequiredFrame.yaml`; `asyncapi.yaml` carries its own inline copy, which is what `scripts/gen-contracts.sh` actually turns into the SPA's Zod types. Add the per-segment command list (resolved binary, args, classification) and `suggested_prefix`/no-prefix-flag here. Keep the standalone file in sync or delete it as a duplicate — a lane task asserts the generated TS type actually gained the fields, not just that the standalone YAML changed |
@@ -335,9 +411,9 @@ Grouped by FR; each carries `Traces to:`. Scenarios unchanged from the first dra
 
 ### 6.2 Endpoints/frames — decided, not left open
 
-1. **Mode-status read:** extend the existing `GET /api/v1/security/sandbox-status` response with `effective_mode` (§6.1) — no new endpoint.
+1. **Mode-status read:** extend the existing `GET /api/v1/security/sandbox-status` response with the three fields in §6.1 — no new endpoint.
 2. **Per-chat modifier write:** a session-scoped WS frame (declared in `asyncapi.yaml`), never written into `config.json` (FR-004).
-3. **Global mode write:** the existing `PUT` sandbox-config endpoint (`rest_sandbox_config.go`), gaining a `mode` field alongside its existing body — inherits `requireReAuth` for free (FR-045).
+3. **Global mode write:** the existing `PUT` sandbox-config endpoint (`rest_sandbox_config.go`), gaining an `auto_approve` field (*[corrected 2026-09-23]*, not `mode`) — inherits `requireReAuth` for free (FR-045).
 
 **Config-only, no wire schema:** `command_rules` (FR-018).
 
@@ -480,5 +556,14 @@ Critical path: **L0 → {L1,L2,L3} → L4 → L5 → L7**. The genuine parallel 
 | FR-045 | S44 | E2E |
 | FR-048 | S45 | Integration |
 | FR-049 | (accepted-risk statement, no test) | — |
+| FR-051 | S57 | Unit |
+| FR-052, FR-054 | S54, S55 | Unit + integration |
+| FR-053, FR-062 | S56, drift-guard mutation checks | Unit |
+| FR-055 | S60 | Unit |
+| FR-056 | S59 | Unit |
+| FR-057 | S58 | Integration |
+| FR-058, FR-059 | S61, S63 | Unit |
+| FR-060 | S64 | Unit + E2E |
+| FR-061 | S62 | Unit |
 
 Every FR appears above; FR-015 (corrected) and FR-018/FR-022/FR-028/FR-030/FR-031/FR-035 all now carry at least one scenario or acceptance-check reference, closing the first draft's matrix gap.
