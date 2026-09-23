@@ -83,7 +83,7 @@ func TestSeq_NumberingIsMonotonicAndGapFreePerSession(t *testing.T) {
 
 	var aSeqs, bSeqs []int64
 	for i := 0; i < 5; i++ {
-		a, b := "", ""
+		var a, b string
 		if i%2 == 0 {
 			a, b = sessionA, sessionB
 		} else {
