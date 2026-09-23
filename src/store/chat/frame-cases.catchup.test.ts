@@ -5,9 +5,10 @@
 // it exists, derive orders from the design and mark them provisional" rule —
 // PROVISIONAL, see SQUAD-REPORT-BEC.md.
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
+import { useConnectionStore } from '@/store/connection'
 import { emptySessionState } from './session'
 import type { ChatMessage } from './types'
 import type { WsReceiveFrame } from '@/lib/ws'
@@ -21,6 +22,7 @@ beforeEach(() => {
     messages: [],
     messagesById: {},
   } as never)
+  useConnectionStore.setState({ connection: null } as never)
 })
 
 function bucket() {
@@ -217,5 +219,55 @@ describe('applySeqGate wiring (§6.2) — a frame TYPE with no id-based dedup of
     expect(assistantMsgs).toHaveLength(1)
     // Applied once, not twice — 'hi', never 'hihi'.
     expect(assistantMsgs[0].content).toBe('hi')
+  })
+})
+
+describe('applySeqGate gap recovery (§6.2 "gap" row) — the re-attach SIDE EFFECT', () => {
+  // D8: gateFrameBySeq's own 'gap' decision is unit-tested directly in
+  // cursor.test.ts (C1e); this drives the REAL handleFrame end-to-end and
+  // asserts the actual connection.send call the gap triggers — the piece
+  // cursor.test.ts cannot exercise (it has no connection to send through).
+  it('D8: a genuine sequence gap re-sends attach_session{since_seq, boot_id} from the bucket\'s existing cursor, and does NOT apply the gap frame', () => {
+    const sent: unknown[] = []
+    useConnectionStore.setState({
+      connection: { send: (frame: unknown) => { sent.push(frame); return true } },
+    } as never)
+
+    // Establish a cursor at seq 5.
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
+    } as WsReceiveFrame)
+    expect(bucket().cursor).toEqual({ bootId: 'boot-gap', seq: 5 })
+
+    // A frame arrives at seq 9 — a genuine gap (expected 6).
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq: 9,
+    } as WsReceiveFrame)
+
+    // The cursor is untouched by the gap frame (still at 5) — proving it
+    // was never applied, only the re-attach fired.
+    expect(bucket().cursor).toEqual({ bootId: 'boot-gap', seq: 5 })
+    expect(bucket().messagesById.m2).toBeUndefined()
+
+    expect(sent).toEqual([{
+      type: 'attach_session',
+      session_id: SID,
+      since_seq: 5,
+      boot_id: 'boot-gap',
+    }])
+  })
+
+  it('D8b: no gap (seq === cursor.seq + 1) never sends attach_session', () => {
+    const send = vi.fn().mockReturnValue(true)
+    useConnectionStore.setState({ connection: { send } } as never)
+
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 1, boot_id: 'boot-ok',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'b', turn_id: 't1', message_id: 'm1', seq: 2,
+    } as WsReceiveFrame)
+
+    expect(send).not.toHaveBeenCalled()
   })
 })
