@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -448,9 +447,12 @@ func TestAutoApprove_T6_PinRecheckRefusesSwappedPath(t *testing.T) {
 	})
 	t.Run("write_file", func(t *testing.T) {
 		f := newAutoFixture(t)
-		// An operator allow pattern that matches both a.md and its swapped
-		// target, so the tool's own resolution would admit the outside write.
-		tool := NewWriteFileTool(f.work, true, []*regexp.Regexp{regexp.MustCompile(`\.md$`)})
+		// Writes have two layers: ResolvePath's own write confinement already
+		// refuses a leaf that now resolves outside the work folder and every
+		// mount, and the pin re-check sits behind it. The read_file case
+		// above is the one only the pin catches; this case locks the
+		// spec's "nothing is written" outcome for writes.
+		tool := NewWriteFileTool(f.work, true)
 		a := filepath.Join(f.work, "a.md")
 		mustWrite(t, a, "inside")
 		target := filepath.Join(f.outside, "target.md")
@@ -462,11 +464,9 @@ func TestAutoApprove_T6_PinRecheckRefusesSwappedPath(t *testing.T) {
 
 		pinned := WithAutoApproved(f.ctx, AutoPinForVerdict("write_file", v))
 		res := tool.Execute(pinned, map[string]any{"path": "a.md", "content": "PWNED", "overwrite": true})
-		if !res.IsError {
-			t.Fatalf("pinned write through a swapped symlink must be refused: %s", res.ForLLM)
-		}
-		if !errors.Is(res.Err, ErrAutoPinMoved) {
-			t.Errorf("refusal must come from the pin re-check, got err %v", res.Err)
+		if !res.IsError || !errors.Is(res.Err, ErrOutsideScope) {
+			t.Fatalf("pinned write through a swapped symlink must be refused as outside scope, got IsError=%v err=%v: %s",
+				res.IsError, res.Err, res.ForLLM)
 		}
 		if got := mustRead(t, target); got != "untouched" {
 			t.Fatalf("outside target was written: %q", got)
