@@ -12468,7 +12468,13 @@ type Agent struct {
 
 	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007). Capped at 2 entries. Hidden for subagent_3p.
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
-	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
+	FallbackModels *[]struct {
+		// Model Model slug for this fallback. May be a bare slug ("claude-sonnet-4.6") when `provider` is set, or a "provider/model" string when the slug routes through a passthrough provider.
+		Model string `json:"model"`
+
+		// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
+		Provider *string `json:"provider,omitempty"`
+	} `json:"fallback_models,omitempty"`
 
 	// Icon Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
 	Icon *string `json:"icon,omitempty"`
@@ -12631,7 +12637,13 @@ type AgentCreateRequestMain struct {
 
 	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
-	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
+	FallbackModels *[]struct {
+		// Model Model slug for this fallback. May be a bare slug ("claude-sonnet-4.6") when `provider` is set, or a "provider/model" string when the slug routes through a passthrough provider.
+		Model string `json:"model"`
+
+		// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
+		Provider *string `json:"provider,omitempty"`
+	} `json:"fallback_models,omitempty"`
 
 	// Icon Phosphor icon name for the agent avatar.
 	Icon *string `json:"icon,omitempty"`
@@ -12727,7 +12739,13 @@ type AgentCreateRequestSubagent struct {
 
 	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
-	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
+	FallbackModels *[]struct {
+		// Model Model slug for this fallback. May be a bare slug ("claude-sonnet-4.6") when `provider` is set, or a "provider/model" string when the slug routes through a passthrough provider.
+		Model string `json:"model"`
+
+		// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
+		Provider *string `json:"provider,omitempty"`
+	} `json:"fallback_models,omitempty"`
 
 	// Icon Phosphor icon name for the agent avatar.
 	Icon *string `json:"icon,omitempty"`
@@ -13207,7 +13225,13 @@ type AgentUpdateRequest struct {
 
 	// FallbackModels Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries. Rejected 400 on subagent_3p agents (CLI handles its own retries).
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
-	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
+	FallbackModels *[]struct {
+		// Model Model slug for this fallback. May be a bare slug ("claude-sonnet-4.6") when `provider` is set, or a "provider/model" string when the slug routes through a passthrough provider.
+		Model string `json:"model"`
+
+		// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
+		Provider *string `json:"provider,omitempty"`
+	} `json:"fallback_models,omitempty"`
 
 	// Icon Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
 	Icon *string `json:"icon,omitempty"`
@@ -13711,7 +13735,43 @@ type CatalogProvider struct {
 	Locality CatalogProviderLocality `json:"locality"`
 
 	// Models The provider's models. May be empty (e.g. an unknown-provider row or a local endpoint listed live).
-	Models []CatalogModel `json:"models"`
+	Models []struct {
+		// ContextWindow Context window in tokens; 0 = unknown.
+		ContextWindow int `json:"context_window"`
+
+		// Disputed True when the two upstream registries disagreed on a numeric field beyond the tolerance and the last-known-good value was published (ADR-067 US-2.AC2). Informational.
+		Disputed *bool `json:"disputed,omitempty"`
+
+		// Id Bare model id as the provider's API expects it (e.g. "glm-5.2", "z-ai/glm-5.2" on OpenRouter).
+		Id string `json:"id"`
+
+		// InferenceProfiles Issue #800 (Bedrock region contract): the cross-region inference profile groups in which a cross-region inference profile exists for this base model. Region-variant ids (e.g. models.dev's `eu.anthropic.claude-sonnet-4-6`) are folded into this field on the base model, never listed as a separate model. Runtime model-id resolution prefixes the bare id with `<group>.` only when the selected region's group is non-empty AND present in this list; a `global` profile is never auto-selected. Absent or empty means only on-demand (regional, unprefixed) access exists.
+		InferenceProfiles *[]CatalogProviderModelsInferenceProfiles `json:"inference_profiles,omitempty"`
+
+		// InputModalities Input modalities the model accepts. MUST include "text".
+		InputModalities []CatalogProviderModelsInputModalities `json:"input_modalities"`
+
+		// MaxOutputTokens Maximum output tokens; 0 = unknown.
+		MaxOutputTokens int `json:"max_output_tokens"`
+
+		// Name Display name (Unicode preserved).
+		Name string `json:"name"`
+
+		// ReleaseDate Release date as YYYY-MM-DD. Optional; undated models sort last in the picker.
+		ReleaseDate *string `json:"release_date,omitempty"`
+
+		// Status "retired" rows are carried forward when the model vanishes upstream (ADR-067 §8b); they are not offered for new selection.
+		Status CatalogProviderModelsStatus `json:"status"`
+
+		// ToolCall Whether the model supports tool calling.
+		ToolCall bool `json:"tool_call"`
+
+		// WindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
+		WindowSource *CatalogProviderModelsWindowSource `json:"window_source,omitempty"`
+
+		// WindowUnknown ADR-066 projection (X-08): true iff the provider has locality "local" and the live limits query failed or reported no context length. The SPA renders "No context length" with a link to Settings → Models → Model overrides. Never a Provider.status value.
+		WindowUnknown *bool `json:"window_unknown,omitempty"`
+	} `json:"models"`
 
 	// Name Display name (Unicode preserved).
 	Name string `json:"name"`
@@ -13723,7 +13783,11 @@ type CatalogProvider struct {
 	Protocol *CatalogProviderProtocol `json:"protocol,omitempty"`
 
 	// Protocols Optional secondary protocols a provider offers (e.g. Z.ai's Anthropic endpoint). When present MUST include the primary with the same api; entries unique. A config may select one via ProviderUpdateRequest.protocol.
-	Protocols *[]CatalogProtocol `json:"protocols,omitempty"`
+	Protocols *[]struct {
+		// Api Absolute https base URL for this protocol (FR-033 URL rule; local rows may use http).
+		Api      string                           `json:"api"`
+		Protocol CatalogProviderProtocolsProtocol `json:"protocol"`
+	} `json:"protocols,omitempty"`
 
 	// Region Deployment region when the provider has a regional split (e.g. "intl", "china", "us").
 	Region *string `json:"region,omitempty"`
@@ -13738,7 +13802,13 @@ type CatalogProvider struct {
 	} `json:"regions,omitempty"`
 
 	// ResizeLimits Image resize limits applied by the media pipeline before an attachment is sent to a provider (ADR-067 [A-10]). The document carries one default and an optional per-provider value.
-	ResizeLimits *CatalogResizeLimits `json:"resize_limits,omitempty"`
+	ResizeLimits *struct {
+		// LongEdgePx Longest image edge in pixels after resize.
+		LongEdgePx int `json:"long_edge_px"`
+
+		// MaxBytes Maximum encoded image size in bytes.
+		MaxBytes int `json:"max_bytes"`
+	} `json:"resize_limits,omitempty"`
 
 	// Tier Picker tier (ADR-067 FR-018, data not code). The popular set is rendered as pinned tiles in catalog order; "unsupported" rows are visible but disabled with unsupported_reason.
 	Tier CatalogProviderTier `json:"tier"`
@@ -14165,18 +14235,36 @@ type ContextSettings struct {
 	McpResultCap int `json:"mcp_result_cap"`
 
 	// ModelOverrides Per-(provider, model) context-window overrides (D2 rung 2). Empty array when none.
-	ModelOverrides []ContextModelOverride `json:"model_overrides"`
+	ModelOverrides []struct {
+		// ContextWindow Context window in tokens. 400 when below 1.
+		ContextWindow int `json:"context_window"`
+
+		// Model Bare catalog model id (no provider prefix).
+		Model string `json:"model"`
+
+		// Provider Catalog provider id or operator-named custom row id.
+		Provider string `json:"provider"`
+	} `json:"model_overrides"`
 }
 
 // ContextSettingsUpdate Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the limit): any cap > 150,000 or < 1; absolute_trigger_chars < 1; ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
 type ContextSettingsUpdate struct {
-	AbsoluteTriggerChars *int                    `json:"absolute_trigger_chars,omitempty"`
-	BuiltinFailureCap    *int                    `json:"builtin_failure_cap,omitempty"`
-	BuiltinSuccessCap    *int                    `json:"builtin_success_cap,omitempty"`
-	DefaultContextWindow *int                    `json:"default_context_window,omitempty"`
-	IngestBoundBytes     *int                    `json:"ingest_bound_bytes,omitempty"`
-	McpResultCap         *int                    `json:"mcp_result_cap,omitempty"`
-	ModelOverrides       *[]ContextModelOverride `json:"model_overrides,omitempty"`
+	AbsoluteTriggerChars *int `json:"absolute_trigger_chars,omitempty"`
+	BuiltinFailureCap    *int `json:"builtin_failure_cap,omitempty"`
+	BuiltinSuccessCap    *int `json:"builtin_success_cap,omitempty"`
+	DefaultContextWindow *int `json:"default_context_window,omitempty"`
+	IngestBoundBytes     *int `json:"ingest_bound_bytes,omitempty"`
+	McpResultCap         *int `json:"mcp_result_cap,omitempty"`
+	ModelOverrides       *[]struct {
+		// ContextWindow Context window in tokens. 400 when below 1.
+		ContextWindow int `json:"context_window"`
+
+		// Model Bare catalog model id (no provider prefix).
+		Model string `json:"model"`
+
+		// Provider Catalog provider id or operator-named custom row id.
+		Provider string `json:"provider"`
+	} `json:"model_overrides,omitempty"`
 }
 
 // ContextWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
@@ -15450,8 +15538,17 @@ type EntitlementResponse struct {
 	Cached bool `json:"cached"`
 
 	// CheckedAt When the live listing call was made (the cached result keeps the original time).
-	CheckedAt time.Time          `json:"checked_at"`
-	Models    []EntitlementModel `json:"models"`
+	CheckedAt time.Time `json:"checked_at"`
+	Models    []struct {
+		// Entitled True iff the live listing made with this provider's key returned the model.
+		Entitled bool `json:"entitled"`
+
+		// Id Bare model id as the provider reports it.
+		Id string `json:"id"`
+
+		// Limits "known" when the model is in the served catalog (window/output/modality limits available); "unknown" when the provider returned a model the catalog lacks.
+		Limits EntitlementResponseModelsLimits `json:"limits"`
+	} `json:"models"`
 }
 
 // EntitlementResponseModelsLimits "known" when the model is in the served catalog (window/output/modality limits available); "unknown" when the provider returned a model the catalog lacks.
@@ -16979,7 +17076,44 @@ type KnowledgeGraphResponse struct {
 	CollectionId string `json:"collection_id"`
 
 	// Edges Every edge in this graph. Empty for "orphans". Always an array, never null.
-	Edges []KnowledgeGraphEdge `json:"edges"`
+	Edges []struct {
+		// Alias Display alias, for an aliased wikilink such as [[note|alias]].
+		Alias *string `json:"alias,omitempty"`
+
+		// Ambiguous True when more than one file matched and the tie-break decided it. The alternatives are listed in candidates.
+		Ambiguous bool `json:"ambiguous"`
+
+		// Block Block anchor with the leading "#^" removed, for a link to an anchored block such as [[note#^abc123]] (ADR-083 EMB-036). Its own property, separate from "heading" — a block reference never populates "heading", and "heading_found" is meaningless when this field is set. Present only for a block link.
+		Block *string `json:"block,omitempty"`
+
+		// Candidates Every path that matched, in tie-break order, when ambiguous is true. Present only then.
+		Candidates *[]string `json:"candidates,omitempty"`
+
+		// Embed True when the link is a transclusion (![[note]]) rather than a plain link.
+		Embed *bool `json:"embed,omitempty"`
+
+		// FromPath Collection-relative path of the note containing the link.
+		FromPath string `json:"from_path"`
+
+		// Heading Heading fragment, for a heading link such as [[note#Section]].
+		Heading *string `json:"heading,omitempty"`
+
+		// HeadingFound Whether the text in "heading" matched an actual heading in the resolved target (ADR-083 EMB-035/EMB-039). Meaningful ONLY when the target is a markdown file AND "heading" is non-empty — the graph builder records headings for markdown files alone, so this MUST be set FALSE BY CONSTRUCTION for a ".base" target (heading is then a view label, not a heading) and for a link carrying "block" instead of "heading". A reader MUST NOT render a "no such heading" refusal from this flag in either of those two cases.
+		// This field is REQUIRED (see the top-level "required" list above) and is ALWAYS present — the handler that emits it (pkg/gateway/rest_knowledge.go::knowledgeEdge) always sets it, and the SPA test fixtures that once constructed a KnowledgeGraphEdge literal without it (Test 110's Go pairing, Test 122's reader pairing) have been migrated to include it (EMB-039).
+		HeadingFound bool `json:"heading_found"`
+
+		// LinkText The link target exactly as written in the source note.
+		LinkText *string `json:"link_text,omitempty"`
+
+		// Resolution Which rule in the FR-040 ladder produced to_path. "unresolved" means no target matched, or the target lay outside the collection root — in which case the target was NOT read (FR-043).
+		Resolution KnowledgeGraphResponseEdgesResolution `json:"resolution"`
+
+		// ToPath Collection-relative path of the resolved target, or the normalised link text when resolution is "unresolved".
+		ToPath string `json:"to_path"`
+
+		// UnresolvedReason Why resolution is "unresolved" (ADR-083 EMB-006's containment case, US-4). "no_match" is an ordinary broken link — nothing in the collection carries that path or name, and an operator can fix it. "outside_root" is a link that tried to leave the collection root entirely, reported on its own terms rather than lumped in with "no_match" so the reader's refusal text can distinguish "this note does not exist" from "this note is outside what I can show you". Present only when resolution is "unresolved"; absent when it resolved.
+		UnresolvedReason *KnowledgeGraphResponseEdgesUnresolvedReason `json:"unresolved_reason,omitempty"`
+	} `json:"edges"`
 
 	// HopLimitApplied Maximum hops walked from source_path (FR-054). Present for "neighbourhood".
 	HopLimitApplied *int `json:"hop_limit_applied,omitempty"`
@@ -16991,10 +17125,28 @@ type KnowledgeGraphResponse struct {
 	NodeLimitApplied *int `json:"node_limit_applied,omitempty"`
 
 	// Nodes Every node referenced by this graph, including non-existent link targets (exists=false). Always an array, never null.
-	Nodes []KnowledgeGraphNode `json:"nodes"`
+	Nodes []struct {
+		// Exists False for the target of an unresolved link. The client MUST mark such a node visibly and MUST NOT navigate on click (FR-065).
+		Exists bool `json:"exists"`
+
+		// Path Collection-relative path, forward-slash separated. For a node that does not exist, this is the link text as written, normalised — it is NOT a path the caller may read.
+		Path string `json:"path"`
+
+		// Title Display title. Absent for a node that does not exist.
+		Title *string `json:"title,omitempty"`
+	} `json:"nodes"`
 
 	// Skipped Paths the walk did not follow, with reasons. Always an array, never null — an empty array is a positive statement that nothing was skipped.
-	Skipped []KnowledgeGraphSkip `json:"skipped"`
+	Skipped []struct {
+		// Detail Human-readable explanation, safe to display.
+		Detail *string `json:"detail,omitempty"`
+
+		// Path Collection-relative path that was skipped.
+		Path string `json:"path"`
+
+		// Reason "symlink" — a symbolic link, skipped and reported rather than followed (FR-044); this is also how a symlink loop terminates (E-8). "outside_root" — the resolved target lay outside the collection root and was not read (FR-043). "unreadable" — permissions or I/O error; an evicted or unreadable file fails loudly and is never indexed as empty (FR-111). "not_addressable" — the name cannot be represented on this platform. "node_limit" / "hop_limit" — the neighbourhood bound was reached (FR-054).
+		Reason KnowledgeGraphResponseSkippedReason `json:"reason"`
+	} `json:"skipped"`
 
 	// SourcePath The note the query was about. Required in practice for links, backlinks and neighbourhood; absent for unresolved and orphans, which are collection-wide.
 	SourcePath *string `json:"source_path,omitempty"`
@@ -17062,7 +17214,22 @@ type KnowledgeOutline struct {
 	FrontmatterMalformed *bool `json:"frontmatter_malformed,omitempty"`
 
 	// Headings Headings in document order. Always an array, never null; empty for a file with no headings.
-	Headings []KnowledgeOutlineHeading `json:"headings"`
+	Headings []struct {
+		// ByteOffset Absolute byte offset of the heading within the whole file, for jump-to-heading without re-parsing.
+		ByteOffset *int64 `json:"byte_offset,omitempty"`
+
+		// Level Heading level, 1 for "#" through 6 for "######".
+		Level int `json:"level"`
+
+		// Line 1-based line number of the heading in the source file.
+		Line *int `json:"line,omitempty"`
+
+		// Slug URL fragment identifying this heading, used to make a heading addressable and to resolve a heading link ([[note#Section]]). Unique within one outline — a repeated heading text gets a numeric suffix.
+		Slug string `json:"slug"`
+
+		// Text Heading text with markdown inline formatting removed. May be empty for a heading marker with no text.
+		Text string `json:"text"`
+	} `json:"headings"`
 
 	// IsKnowledgeBase True when this file sits inside a detected knowledge base, so the client may additionally offer search and backlinks. False means the outline is all that is available for this file — not an error.
 	IsKnowledgeBase bool `json:"is_knowledge_base"`
@@ -17726,7 +17893,13 @@ type MemorySettings struct {
 	MemoryRetrosDays *int `json:"memory_retros_days,omitempty"`
 
 	// RecapFallbackModels Ordered fallback chain for the recap model, tried in order when the primary recap model fails — same shape and behaviour as an agent's fallback_models. Maps to agents.defaults.recap_fallback_models.
-	RecapFallbackModels *[]FallbackModel `json:"recap_fallback_models,omitempty"`
+	RecapFallbackModels *[]struct {
+		// Model Model slug for this fallback. May be a bare slug ("claude-sonnet-4.6") when `provider` is set, or a "provider/model" string when the slug routes through a passthrough provider.
+		Model string `json:"model"`
+
+		// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
+		Provider *string `json:"provider,omitempty"`
+	} `json:"recap_fallback_models,omitempty"`
 
 	// RecapModel Model slug used for session recap / summarization. A fast, cheap model is recommended. Empty → falls back to agents.defaults.model_name (the overall default model), then to the session's own agent model. Maps to agents.defaults.recap_model.
 	RecapModel *string `json:"recap_model,omitempty"`
@@ -17969,7 +18142,7 @@ type Message struct {
 		// Result Return value from the tool. Shape is tool-specific.
 		Result *map[string]interface{} `json:"result,omitempty"`
 
-		// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+		// Status Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 		Status MessageToolCallsStatus `json:"status"`
 
 		// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -18103,7 +18276,7 @@ type MessageSystemSubtype string
 // MessageToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
 type MessageToolCallsContentState string
 
-// MessageToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+// MessageToolCallsStatus Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type MessageToolCallsStatus string
 
 // MessageTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
@@ -19587,7 +19760,14 @@ type Provider struct {
 	Custom *bool `json:"custom,omitempty"`
 
 	// Dependents Every reference that would stop resolving if this provider were removed (ADR-068 FR-012) — advisory; the server recomputes it under the config lock on DELETE. Always present (empty array when none).
-	Dependents []ProviderDependent `json:"dependents"`
+	Dependents []struct {
+		// Id Agent id, or a settings key for non-agent dependents (e.g. "agents.defaults.default_model").
+		Id string `json:"id"`
+
+		// Name Display name of the dependent.
+		Name string                 `json:"name"`
+		Role ProviderDependentsRole `json:"role"`
+	} `json:"dependents"`
 
 	// DisplayName Branded display name for UI presentation (e.g. "OpenRouter", "Anthropic"). Falls back to name when absent.
 	DisplayName *string `json:"display_name,omitempty"`
@@ -19662,18 +19842,31 @@ type ProviderValidationOutcome string
 // ProviderDeleteRequest Optional body for DELETE /api/v1/providers/{id} (ADR-068 FR-010/FR-011). new_default is required (409 otherwise) when the provider backs the default model; it must name a different provider that is connected or signed_in (400 otherwise). The server recomputes dependents and backs_default under the config lock — the response is authoritative.
 type ProviderDeleteRequest struct {
 	// NewDefault Body for PUT /api/v1/providers/default-model (ADR-068 FR-018): exactly the (provider, model) pair. The provider must be configured and connected or signed_in (400 naming the field otherwise); the model must be in the served catalog for that provider, except rows with custom: true or locality: local, where any non-empty model is accepted with no live call. Persisted as agents.defaults.default_model under the config lock; takes effect on the next turn after a reload.
-	NewDefault *DefaultModelUpdateRequest `json:"new_default,omitempty"`
+	NewDefault *struct {
+		Model    string `json:"model"`
+		Provider string `json:"provider"`
+	} `json:"new_default,omitempty"`
 }
 
 // ProviderDeleteResponse Response of DELETE /api/v1/providers/{id} (ADR-068 FR-010). deleted is true on success (HTTP 200); on a failed step the server responds 500 with deleted false and a retryable state. dependents lists every reference that was cleared (agent primaries cleared, fallback entries removed) — nothing is re-pointed silently. There is no Undo: the stored key is gone.
 type ProviderDeleteResponse struct {
 	// DefaultChanged True when new_default was applied before the removal.
-	DefaultChanged bool                `json:"default_changed"`
-	Deleted        bool                `json:"deleted"`
-	Dependents     []ProviderDependent `json:"dependents"`
+	DefaultChanged bool `json:"default_changed"`
+	Deleted        bool `json:"deleted"`
+	Dependents     []struct {
+		// Id Agent id, or a settings key for non-agent dependents (e.g. "agents.defaults.default_model").
+		Id string `json:"id"`
+
+		// Name Display name of the dependent.
+		Name string                               `json:"name"`
+		Role ProviderDeleteResponseDependentsRole `json:"role"`
+	} `json:"dependents"`
 
 	// NewDefault Body for PUT /api/v1/providers/default-model (ADR-068 FR-018): exactly the (provider, model) pair. The provider must be configured and connected or signed_in (400 naming the field otherwise); the model must be in the served catalog for that provider, except rows with custom: true or locality: local, where any non-empty model is accepted with no live call. Persisted as agents.defaults.default_model under the config lock; takes effect on the next turn after a reload.
-	NewDefault *DefaultModelUpdateRequest `json:"new_default,omitempty"`
+	NewDefault *struct {
+		Model    string `json:"model"`
+		Provider string `json:"provider"`
+	} `json:"new_default,omitempty"`
 }
 
 // ProviderDeleteResponseDependentsRole defines model for ProviderDeleteResponse.Dependents.Role.
@@ -19734,8 +19927,123 @@ type ProviderValidation struct {
 // ProvidersCatalog The full registry-fed providers catalog (ADR-067 schema 2.0.0) as served by GET /api/v1/providers/catalog — providers with nested models, tier, protocol(s), unsupported reason and resize limits — plus the gateway's serving envelope: served_from (embedded snapshot or pulled release) and stale (updated_at older than 14 days). The same document feeds the media pipeline, the agent loop's window rung and the validation probe; the SPA consumes only this generated type and re-validates with If-None-Match (strong quoted ETag = SHA-256 of the served bytes) on Settings open and every 15 minutes. The handler's catalog is read-only for windows — any per-model override lives in ContextSettings.model_overrides, never here.
 type ProvidersCatalog struct {
 	// DefaultResizeLimits Image resize limits applied by the media pipeline before an attachment is sent to a provider (ADR-067 [A-10]). The document carries one default and an optional per-provider value.
-	DefaultResizeLimits CatalogResizeLimits `json:"default_resize_limits"`
-	Providers           []CatalogProvider   `json:"providers"`
+	DefaultResizeLimits struct {
+		// LongEdgePx Longest image edge in pixels after resize.
+		LongEdgePx int `json:"long_edge_px"`
+
+		// MaxBytes Maximum encoded image size in bytes.
+		MaxBytes int `json:"max_bytes"`
+	} `json:"default_resize_limits"`
+	Providers []struct {
+		// Aliases Search-only strings for the picker's filter (ADR-067 FR-030). Never consulted by resolution, the factory or config validation — an alias is not an accepted provider id.
+		Aliases []string `json:"aliases"`
+
+		// Api Primary base URL. Absolute https with a non-empty host, no userinfo / query / fragment, no loopback, link-local, private or metadata IP literal (FR-033) — except rows with locality "local". Empty only when tier is "unsupported".
+		Api string `json:"api"`
+
+		// AuthMethods Auth methods the provider offers (ADR-068 FR-004); the UI renders a sign-in control only when sign_in is present.
+		AuthMethods []ProvidersCatalogProvidersAuthMethods `json:"auth_methods"`
+
+		// CliKind Required iff protocol is "cli" — selects the subprocess driver (ADR-067 X-14), never chosen by id.
+		CliKind *ProvidersCatalogProvidersCliKind `json:"cli_kind,omitempty"`
+
+		// Company Grouping key for the picker (ADR-067 X-10): one tile/row per company, its plan × region variants being the providers that share it. Comes from overrides/ via the models.dev name family; defaults to name.
+		Company string `json:"company"`
+
+		// Env Opaque environment-variable hint for picker help text only; never consumed by the factory (F-20).
+		Env *[]string `json:"env,omitempty"`
+
+		// Id Canonical provider id (models.dev id, e.g. "zai", "moonshotai-cn", or a local-file id such as "ollama").
+		Id string `json:"id"`
+
+		// Locality Derived on load by the gateway (FR-039); the only local/cloud classification ADR-066/ADR-068 consume.
+		Locality ProvidersCatalogProvidersLocality `json:"locality"`
+
+		// Models The provider's models. May be empty (e.g. an unknown-provider row or a local endpoint listed live).
+		Models []struct {
+			// ContextWindow Context window in tokens; 0 = unknown.
+			ContextWindow int `json:"context_window"`
+
+			// Disputed True when the two upstream registries disagreed on a numeric field beyond the tolerance and the last-known-good value was published (ADR-067 US-2.AC2). Informational.
+			Disputed *bool `json:"disputed,omitempty"`
+
+			// Id Bare model id as the provider's API expects it (e.g. "glm-5.2", "z-ai/glm-5.2" on OpenRouter).
+			Id string `json:"id"`
+
+			// InferenceProfiles Issue #800 (Bedrock region contract): the cross-region inference profile groups in which a cross-region inference profile exists for this base model. Region-variant ids (e.g. models.dev's `eu.anthropic.claude-sonnet-4-6`) are folded into this field on the base model, never listed as a separate model. Runtime model-id resolution prefixes the bare id with `<group>.` only when the selected region's group is non-empty AND present in this list; a `global` profile is never auto-selected. Absent or empty means only on-demand (regional, unprefixed) access exists.
+			InferenceProfiles *[]ProvidersCatalogProvidersModelsInferenceProfiles `json:"inference_profiles,omitempty"`
+
+			// InputModalities Input modalities the model accepts. MUST include "text".
+			InputModalities []ProvidersCatalogProvidersModelsInputModalities `json:"input_modalities"`
+
+			// MaxOutputTokens Maximum output tokens; 0 = unknown.
+			MaxOutputTokens int `json:"max_output_tokens"`
+
+			// Name Display name (Unicode preserved).
+			Name string `json:"name"`
+
+			// ReleaseDate Release date as YYYY-MM-DD. Optional; undated models sort last in the picker.
+			ReleaseDate *string `json:"release_date,omitempty"`
+
+			// Status "retired" rows are carried forward when the model vanishes upstream (ADR-067 §8b); they are not offered for new selection.
+			Status ProvidersCatalogProvidersModelsStatus `json:"status"`
+
+			// ToolCall Whether the model supports tool calling.
+			ToolCall bool `json:"tool_call"`
+
+			// WindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
+			WindowSource *ProvidersCatalogProvidersModelsWindowSource `json:"window_source,omitempty"`
+
+			// WindowUnknown ADR-066 projection (X-08): true iff the provider has locality "local" and the live limits query failed or reported no context length. The SPA renders "No context length" with a link to Settings → Models → Model overrides. Never a Provider.status value.
+			WindowUnknown *bool `json:"window_unknown,omitempty"`
+		} `json:"models"`
+
+		// Name Display name (Unicode preserved).
+		Name string `json:"name"`
+
+		// Plan Billing plan label when the provider has plan variants (e.g. "coding-plan").
+		Plan *string `json:"plan,omitempty"`
+
+		// Protocol Primary wire protocol the factory dispatches on (ADR-067 D11). Absent only when tier is "unsupported" (F-19).
+		Protocol *ProvidersCatalogProvidersProtocol `json:"protocol,omitempty"`
+
+		// Protocols Optional secondary protocols a provider offers (e.g. Z.ai's Anthropic endpoint). When present MUST include the primary with the same api; entries unique. A config may select one via ProviderUpdateRequest.protocol.
+		Protocols *[]struct {
+			// Api Absolute https base URL for this protocol (FR-033 URL rule; local rows may use http).
+			Api      string                                     `json:"api"`
+			Protocol ProvidersCatalogProvidersProtocolsProtocol `json:"protocol"`
+		} `json:"protocols,omitempty"`
+
+		// Region Deployment region when the provider has a regional split (e.g. "intl", "china", "us").
+		Region *string `json:"region,omitempty"`
+
+		// Regions Issue #800 (Bedrock region contract): the regions offered in this provider's own region picker, each with its cross-region inference profile group. Distinct from `region` above (a company's plan x region VARIANT split, a different provider id per region) — this field lists the regions ONE provider row itself can be pointed at, e.g. Bedrock's AWS regions. Absent or empty on a provider with no such picker.
+		Regions *[]struct {
+			// Group The cross-region inference profile group this region belongs to, or "" when the region offers on-demand access only (no cross-region profile).
+			Group ProvidersCatalogProvidersRegionsGroup `json:"group"`
+
+			// Id The region identifier as the provider's API expects it (e.g. an AWS region code).
+			Id string `json:"id"`
+		} `json:"regions,omitempty"`
+
+		// ResizeLimits Image resize limits applied by the media pipeline before an attachment is sent to a provider (ADR-067 [A-10]). The document carries one default and an optional per-provider value.
+		ResizeLimits *struct {
+			// LongEdgePx Longest image edge in pixels after resize.
+			LongEdgePx int `json:"long_edge_px"`
+
+			// MaxBytes Maximum encoded image size in bytes.
+			MaxBytes int `json:"max_bytes"`
+		} `json:"resize_limits,omitempty"`
+
+		// Tier Picker tier (ADR-067 FR-018, data not code). The popular set is rendered as pinned tiles in catalog order; "unsupported" rows are visible but disabled with unsupported_reason.
+		Tier ProvidersCatalogProvidersTier `json:"tier"`
+
+		// TokenSource Optional token source for sign-in HTTP rows (e.g. "codex-auth-json" for openai-chatgpt, X-41).
+		TokenSource *string `json:"token_source,omitempty"`
+
+		// UnsupportedReason Required when tier is "unsupported". "cloud-iam" = needs request signing (Bedrock, Vertex, watsonx, SAP AI Core); "deployment-url" = needs a per-deployment URL (Azure); "withdrawn" = vanished upstream. Never shown raw — the SPA maps it to copy.
+		UnsupportedReason *ProvidersCatalogProvidersUnsupportedReason `json:"unsupported_reason,omitempty"`
+	} `json:"providers"`
 
 	// SchemaVersion Document schema version. Only "2.0.0" is accepted on load (FR-001).
 	SchemaVersion ProvidersCatalogSchemaVersion `json:"schema_version"`
@@ -21352,7 +21660,7 @@ type SessionDetail struct {
 			// Result Return value from the tool. Shape is tool-specific.
 			Result *map[string]interface{} `json:"result,omitempty"`
 
-			// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+			// Status Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 			Status SessionDetailMessagesToolCallsStatus `json:"status"`
 
 			// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -21595,7 +21903,7 @@ type SessionDetailMessagesSystemSubtype string
 // SessionDetailMessagesToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
 type SessionDetailMessagesToolCallsContentState string
 
-// SessionDetailMessagesToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+// SessionDetailMessagesToolCallsStatus Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type SessionDetailMessagesToolCallsStatus string
 
 // SessionDetailMessagesTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
@@ -21995,7 +22303,7 @@ type SessionMessageProgress struct {
 	// CreatedAt RFC3339 timestamp this message was created.
 	CreatedAt time.Time `json:"created_at"`
 
-	// Depth Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/subturn.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
+	// Depth Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
 	Depth int `json:"depth"`
 
 	// Direction M8 — the unused `human` value is dropped. `progress` is always child -> parent.
@@ -23807,7 +24115,7 @@ type ToolCall struct {
 	// Result Return value from the tool. Shape is tool-specific.
 	Result *map[string]interface{} `json:"result,omitempty"`
 
-	// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+	// Status Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 	Status ToolCallStatus `json:"status"`
 
 	// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -23817,7 +24125,7 @@ type ToolCall struct {
 // ToolCallContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
 type ToolCallContentState string
 
-// ToolCallStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+// ToolCallStatus Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type ToolCallStatus string
 
 // ToolPolicy A policy value governing whether a tool call is allowed, requires approval, or is denied.
@@ -25114,8 +25422,23 @@ type Workspace struct {
 	IsDefault *bool `json:"is_default,omitempty"`
 
 	// MemberConfigs Per-member (agentId → config) heartbeat settings for this workspace. Absent when no member has a config (empty map). Keys are agent IDs.
-	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
-	Message       *string                           `json:"message,omitempty"`
+	MemberConfigs *map[string]struct {
+		// Heartbeat Heartbeat settings for this (workspace, agent) pair.
+		Heartbeat *struct {
+			// Body Per-(workspace, agent) HEARTBEAT.md content (16 KB cap). Operators re-enter this per workspace — existing agent-level HEARTBEAT.md bodies are NOT migrated (F-07).
+			Body *string `json:"body,omitempty"`
+
+			// Enabled Whether the heartbeat is active for this member in this workspace.
+			Enabled *bool `json:"enabled,omitempty"`
+
+			// IntervalMinutes Interval in minutes between heartbeat passes. Minimum 5.
+			IntervalMinutes *int `json:"interval_minutes,omitempty"`
+
+			// SessionId Eager standing session id created when the heartbeat is enabled (FR-010). Stamped with workspace_id + agent + type="heartbeat". Stored here so the cron job can continue the pre-created session rather than starting a fresh one. Set server-side at enable time; read-only from the client's perspective.
+			SessionId *string `json:"session_id,omitempty"`
+		} `json:"heartbeat,omitempty"`
+	} `json:"member_configs,omitempty"`
+	Message *string `json:"message,omitempty"`
 
 	// Mounts Named write-grants on real local folders (FR-5, ADR-063 D4). Absent when no mount exists (empty array is also acceptable on the wire). Created and removed via the dedicated mounts lifecycle, not via this record's own create/update requests.
 	Mounts *[]struct {
@@ -25197,9 +25520,21 @@ type WorkspaceDelegation struct {
 	DefaultDepth int `json:"default_depth"`
 
 	// Edges The directed delegation edges. May be empty (no delegation configured). Deduplicated by (from_agent, to_agent) at write time — last writer wins.
-	Edges      []WorkspaceDelegationEdge `json:"edges"`
-	ErrorStage *string                   `json:"error_stage,omitempty"`
-	Message    *string                   `json:"message,omitempty"`
+	Edges []struct {
+		// Depth Maximum delegation chain depth for this edge (number of hops). 0 = no onward delegation past this hop. Bounded by the global subturn depth ceiling. Absent means the workspace/global default applies.
+		Depth *int `json:"depth,omitempty"`
+
+		// FromAgent Agent ID of the delegating agent (the source node). Must be a member of the workspace team (present in core_team or referenced by another edge).
+		FromAgent string `json:"from_agent"`
+
+		// Modes Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. "direct" = Direct Delegation — the delegate tool dispatches to the target agent, either synchronously (await) or as a background spawn. Which of the two happens is a runtime parameter of the delegate tool call itself, not a trust distinction the edge gates separately — an edge that allows "direct" allows both call patterns. "task" = Task Delegation — task_create-style delegation (a persistent task assigned to another agent).
+		Modes *[]WorkspaceDelegationEdgesModes `json:"modes,omitempty"`
+
+		// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. Self-edges (from_agent == to_agent) are rejected.
+		ToAgent string `json:"to_agent"`
+	} `json:"edges"`
+	ErrorStage *string `json:"error_stage,omitempty"`
+	Message    *string `json:"message,omitempty"`
 
 	// PersistenceStatus Whether all, some, or none of the requested resource components were saved.
 	PersistenceStatus *WorkspaceDelegationPersistenceStatus `json:"persistence_status,omitempty"`
@@ -25244,7 +25579,19 @@ type WorkspaceDelegationEdgeModes string
 // WorkspaceDelegationUpdateRequest Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to an eligible member of the candidate team. Only explicit Jim and General Purpose self-edges are permitted, bounded by the global and edge depth. Revision covers both membership and the authoritative graph.
 type WorkspaceDelegationUpdateRequest struct {
 	// Edges The complete set of delegation edges for this workspace. An empty array clears all delegation. Deduplicated by (from_agent, to_agent) at write time.
-	Edges []WorkspaceDelegationEdge `json:"edges"`
+	Edges []struct {
+		// Depth Maximum delegation chain depth for this edge (number of hops). 0 = no onward delegation past this hop. Bounded by the global subturn depth ceiling. Absent means the workspace/global default applies.
+		Depth *int `json:"depth,omitempty"`
+
+		// FromAgent Agent ID of the delegating agent (the source node). Must be a member of the workspace team (present in core_team or referenced by another edge).
+		FromAgent string `json:"from_agent"`
+
+		// Modes Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. "direct" = Direct Delegation — the delegate tool dispatches to the target agent, either synchronously (await) or as a background spawn. Which of the two happens is a runtime parameter of the delegate tool call itself, not a trust distinction the edge gates separately — an edge that allows "direct" allows both call patterns. "task" = Task Delegation — task_create-style delegation (a persistent task assigned to another agent).
+		Modes *[]WorkspaceDelegationUpdateRequestEdgesModes `json:"modes,omitempty"`
+
+		// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. Self-edges (from_agent == to_agent) are rejected.
+		ToAgent string `json:"to_agent"`
+	} `json:"edges"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
@@ -25274,7 +25621,19 @@ type WorkspaceInstructionsResponse struct {
 // WorkspaceMemberConfig Per-member config inside a workspace (keyed by agentId).
 type WorkspaceMemberConfig struct {
 	// Heartbeat Heartbeat settings for this (workspace, agent) pair.
-	Heartbeat *WorkspaceMemberHeartbeat `json:"heartbeat,omitempty"`
+	Heartbeat *struct {
+		// Body Per-(workspace, agent) HEARTBEAT.md content (16 KB cap). Operators re-enter this per workspace — existing agent-level HEARTBEAT.md bodies are NOT migrated (F-07).
+		Body *string `json:"body,omitempty"`
+
+		// Enabled Whether the heartbeat is active for this member in this workspace.
+		Enabled *bool `json:"enabled,omitempty"`
+
+		// IntervalMinutes Interval in minutes between heartbeat passes. Minimum 5.
+		IntervalMinutes *int `json:"interval_minutes,omitempty"`
+
+		// SessionId Eager standing session id created when the heartbeat is enabled (FR-010). Stamped with workspace_id + agent + type="heartbeat". Stored here so the cron job can continue the pre-created session rather than starting a fresh one. Set server-side at enable time; read-only from the client's perspective.
+		SessionId *string `json:"session_id,omitempty"`
+	} `json:"heartbeat,omitempty"`
 }
 
 // WorkspaceMemberHeartbeat Heartbeat settings for this (workspace, agent) pair.
@@ -25350,10 +25709,25 @@ type WorkspaceUpdateRequest struct {
 	Description *string `json:"description,omitempty"`
 
 	// MemberConfigs Per-member (agentId → config) heartbeat settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. session_id is server-managed (set at heartbeat-enable time) and ignored on input.
-	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
-	Name          *string                           `json:"name,omitempty"`
-	PinOrder      *int                              `json:"pin_order,omitempty"`
-	Pinned        *bool                             `json:"pinned,omitempty"`
+	MemberConfigs *map[string]struct {
+		// Heartbeat Heartbeat settings for this (workspace, agent) pair.
+		Heartbeat *struct {
+			// Body Per-(workspace, agent) HEARTBEAT.md content (16 KB cap). Operators re-enter this per workspace — existing agent-level HEARTBEAT.md bodies are NOT migrated (F-07).
+			Body *string `json:"body,omitempty"`
+
+			// Enabled Whether the heartbeat is active for this member in this workspace.
+			Enabled *bool `json:"enabled,omitempty"`
+
+			// IntervalMinutes Interval in minutes between heartbeat passes. Minimum 5.
+			IntervalMinutes *int `json:"interval_minutes,omitempty"`
+
+			// SessionId Eager standing session id created when the heartbeat is enabled (FR-010). Stamped with workspace_id + agent + type="heartbeat". Stored here so the cron job can continue the pre-created session rather than starting a fresh one. Set server-side at enable time; read-only from the client's perspective.
+			SessionId *string `json:"session_id,omitempty"`
+		} `json:"heartbeat,omitempty"`
+	} `json:"member_configs,omitempty"`
+	Name     *string `json:"name,omitempty"`
+	PinOrder *int    `json:"pin_order,omitempty"`
+	Pinned   *bool   `json:"pinned,omitempty"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
