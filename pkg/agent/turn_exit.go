@@ -239,15 +239,18 @@ func (ts *turnState) Finish(isHardAbort bool) {
 	// use non-blocking select+default (loop.go) or select+Finished() (subturn.go)
 	// so they never block waiting for a close. The channel is garbage-collected
 	// once all references drop after the turn is finished.
+	//
+	// The steered-turn admission slot is NOT released here. Every holder of
+	// one releases it explicitly, at the site that claimed it — the delegate
+	// front in steer_launcher.go::dispatchSteeredSessionWithReservation's
+	// dispatch goroutine, the task front through the callback handed to
+	// task_executor.go::dispatchLaunchedTask. Finish has no reliable
+	// back-reference to release through (ts.al is unset for every steered
+	// turn), so a drain here reads as the release mechanism while freeing
+	// nothing.
 	ts.closeOnce.Do(func() {
 		if ch != nil {
 			close(ch)
-		}
-		// Release the exact generation's steered-turn reservation once. A
-		// repeated late Finish from an older generation must never free a
-		// revived generation's slot or promote the queue twice.
-		if ts.al != nil {
-			ts.al.drainSteerQueue(ts.sessionKey, ts.generation)
 		}
 	})
 

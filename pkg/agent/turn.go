@@ -363,7 +363,16 @@ type turnState struct {
 	// budget instead. Never cleared once set.
 	goalNarrowEscaped bool
 
-	// Back-reference to the owning AgentLoop (set for SubTurns only, used for hard abort cascade)
+	// Back-reference to the owning AgentLoop, used by Finish's hard-abort
+	// cascade over childTurnIDs. Set on exactly ONE path today — the task
+	// executor's external-CLI turn
+	// (task_executor_run.go::processTaskDirectExternalCLI); the
+	// sub-turn path that used to set it is deleted (ADR-091), and a steered
+	// session's turn (steer_reconstruct.go::reconstructSteeredTurn) is a
+	// standalone turn with no child turns and leaves it nil. Nothing may
+	// depend on this field being set: it is nil for every steered turn, which
+	// is why the admission slot is released at the dispatch site rather than
+	// through here (see turn_exit.go::Finish).
 	al *AgentLoop
 
 	// Last streamer used during this turn. Finalized once at turn end
