@@ -110,7 +110,13 @@ func TestOrphanWatchdog_RealEndRacingTheWatchdog_NeverSynthesizesInterrupted(t *
 		func(context.Context, string) *tools.DelegationDenial { return nil },
 	)
 	al.RegisterTool(delegateTool)
-	t.Cleanup(delegateTool.WaitForAsyncTasks)
+	// Bounded, and the gate is always released first on a failure path (LIFO
+	// cleanup) — see the identical note in orphan_watchdog_liveness_test.go.
+	releaseGate := sync.OnceFunc(func() { close(unblock) })
+	t.Cleanup(func() {
+		waitBounded(t, 15*time.Second, "async delegate drain (WaitForAsyncTasks)", delegateTool.WaitForAsyncTasks)
+	})
+	t.Cleanup(releaseGate)
 
 	for _, agentID := range al.GetRegistry().ListAgentIDs() {
 		ag, ok := al.GetRegistry().GetAgent(agentID)
@@ -162,7 +168,7 @@ func TestOrphanWatchdog_RealEndRacingTheWatchdog_NeverSynthesizesInterrupted(t *
 	}, 5*time.Second, 5*time.Millisecond,
 		"the orphan watchdog never re-checked the parked delegate — it was not armed, so this test proves nothing")
 
-	close(unblock)
+	releaseGate()
 
 	var frames [][]byte
 	deadline := time.After(15 * time.Second)
@@ -178,9 +184,9 @@ func TestOrphanWatchdog_RealEndRacingTheWatchdog_NeverSynthesizesInterrupted(t *
 	// Let the delegate finish its own cleanup and the forwarder stop, then
 	// collect anything sent after the first end frame too: a synthetic
 	// interrupted end arriving just AFTER the real one is the same defect.
-	delegateTool.WaitForAsyncTasks()
+	waitBounded(t, 15*time.Second, "async delegate drain (WaitForAsyncTasks)", delegateTool.WaitForAsyncTasks)
 	al.UnsubscribeEvents(sub.ID)
-	<-fwdDone
+	waitBounded(t, 5*time.Second, "event forwarder exit", func() { <-fwdDone })
 	frames = append(frames, drainAllFrames(ch)...)
 
 	var endStatuses []string

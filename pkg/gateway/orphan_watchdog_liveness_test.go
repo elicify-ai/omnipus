@@ -252,7 +252,18 @@ func TestOrphanWatchdog_GenuinelyActiveDelegate_NeverSynthesizesInterrupted(t *t
 	// (after delegateTool is fully wired, before TempDir()-dependent test
 	// logic runs) so LIFO cleanup ordering runs this BEFORE al.Close() and
 	// well before the TempDir() cleanup registered at this test's very start.
-	t.Cleanup(delegateTool.WaitForAsyncTasks)
+	//
+	// Bounded (#823 Lane A): an unbounded WaitForAsyncTasks here hung the
+	// WHOLE test binary whenever an assertion below failed early, because the
+	// delegate stays parked in orphan_gate_tool until `unblock` is closed and
+	// nothing closed it on the failure path. releaseGate (registered after,
+	// so it runs FIRST under LIFO cleanup) always frees the delegate, and
+	// waitBounded turns any remaining stall into a loud test failure.
+	releaseGate := sync.OnceFunc(func() { close(unblock) })
+	t.Cleanup(func() {
+		waitBounded(t, 15*time.Second, "async delegate drain (WaitForAsyncTasks)", delegateTool.WaitForAsyncTasks)
+	})
+	t.Cleanup(releaseGate)
 
 	for _, agentID := range al.GetRegistry().ListAgentIDs() {
 		ag, ok := al.GetRegistry().GetAgent(agentID)
@@ -317,7 +328,7 @@ func TestOrphanWatchdog_GenuinelyActiveDelegate_NeverSynthesizesInterrupted(t *t
 
 	// Release the gate — the delegate proceeds to its real, synthesized
 	// final answer and genuinely finishes.
-	close(unblock)
+	releaseGate()
 
 	var sawRealCompletion bool
 	deadline := time.After(15 * time.Second)
@@ -339,7 +350,7 @@ func TestOrphanWatchdog_GenuinelyActiveDelegate_NeverSynthesizesInterrupted(t *t
 	}
 
 	al.UnsubscribeEvents(sub.ID)
-	<-fwdDone
+	waitBounded(t, 5*time.Second, "event forwarder exit", func() { <-fwdDone })
 }
 
 // TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeiling
@@ -396,11 +407,15 @@ func TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeilin
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, provider)
 
-	// Deliberately never closed for the lifetime of this test — models a
-	// permanently, not just transiently, wedged tool call/sub-turn.
+	// Deliberately never closed while the assertions run — models a
+	// permanently, not just transiently, wedged tool call/sub-turn. The
+	// cleanup below still releases it on an early-failure path so a failed
+	// assertion can never leave the delegate parked forever (#823 Lane A).
 	unblock := make(chan struct{})
 	gate := &orphanGateTool{unblock: unblock, entered: make(chan struct{})}
 	al.RegisterTool(gate)
+	releaseGate := sync.OnceFunc(func() { close(unblock) })
+	t.Cleanup(releaseGate)
 
 	delegateTool := tools.NewDelegateTool(cfg.Agents.Defaults.DefaultModel.Model, cfg.Agents.Defaults.MaxTokens, 0)
 	delegateTool.SetSpawner(agent.NewSubTurnSpawner(al))
@@ -496,7 +511,7 @@ func TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeilin
 		"exceeding the reschedule ceiling must be logged distinctly from a normal orphaned-span synthesis")
 
 	al.UnsubscribeEvents(sub.ID)
-	<-fwdDone
+	waitBounded(t, 5*time.Second, "event forwarder exit", func() { <-fwdDone })
 
 	// The watchdog's force-fire above is a synthetic websocket frame only —
 	// it never cancels the real sub-turn, so the gated goroutine parked in
@@ -507,7 +522,7 @@ func TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeilin
 	// the process-wide slog default and can race a LATER test's captured-log
 	// buffer read (this raced TestHandleOnboardingProbeProvider_EmptyModelsWarns
 	// under -race). Release the gate and wait for real exit before returning.
-	close(unblock)
+	releaseGate()
 	asyncDone := make(chan struct{})
 	go func() {
 		defer close(asyncDone)
@@ -518,6 +533,25 @@ func TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeilin
 	case <-time.After(15 * time.Second):
 		t.Fatal("BLOCKED: gated delegate goroutine did not finish within 15s of releasing the gate " +
 			"past the reschedule ceiling — the permanently-stuck delegate was never actually reaped")
+	}
+}
+
+// waitBounded runs fn on its own goroutine and fails the test loudly if fn
+// has not returned within d. The orphan-watchdog suite drives real delegate
+// goroutines parked on a gate and real forwarder goroutines; an unbounded
+// wait on either used to hang the entire test binary (not just fail the one
+// test) the moment an earlier assertion stopped holding (#823 Lane A).
+func waitBounded(t *testing.T, d time.Duration, what string, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Errorf("BLOCKED: %s did not finish within %s", what, d)
 	}
 }
 
