@@ -3454,6 +3454,7 @@ export const ToolRegistryEntry = z
     category: z.string(),
     source: z.enum(["builtin", "mcp"]),
     server_id: z.string().optional(),
+    auto_approve: z.enum(["runs", "runs_if_args", "asks"]).optional(),
   })
   .passthrough();
 export const ToolApprovalActionRequest = z.object({
