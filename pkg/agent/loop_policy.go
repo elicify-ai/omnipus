@@ -398,12 +398,24 @@ func ResolveEffectiveShellMode(global ShellMode, agentOverride, chatModifier *Sh
 // write side, TestCheckGrantOrRequestApproval_UsesActingSessionKey below for
 // this one). ClearSession (session teardown, U17b) uses the same key for the
 // same reason: it is the acting session's own bucket, not a shared one.
+// ADR-091 D4/FR-024 extension: for the "bash" tool specifically, this
+// consultation ALSO checks the prefix-scope grant kind
+// (ApprovalGrantStore.IsPrefixAllowed) alongside the classic exact-
+// fingerprint IsAllowed check above — closing the gap where a human's
+// earlier "Allow" with scope=prefix (e.g. "npm run test") never suppressed
+// the dialog for a later, textually-different invocation ("npm run test
+// -v") on this SAME classic ask-policy path. tools.BashPrefixGrantCheck
+// does the resolve-and-verify (D3's own look-alike defence) so this
+// function never needs its own copy of that logic.
 func (al *AgentLoop) CheckGrantOrRequestApproval(
 	ctx context.Context,
 	sessionID, agentID, toolName, toolCallID, turnID string,
 	args map[string]any,
 ) (approved bool, denialReason string) {
 	if al.ApprovalGrants().IsAllowed(sessionID, agentID, toolName, args) {
+		return true, ""
+	}
+	if toolName == "bash" && tools.BashPrefixGrantCheck(al.ApprovalGrants(), sessionID, agentID, toolName, args) {
 		return true, ""
 	}
 	approver := al.loadToolApprover()
@@ -533,4 +545,86 @@ func (al *AgentLoop) emitScheduledAutoDenyAudit(
 			},
 		)
 	}
+}
+
+// ShellPermissionGate implements tools.ShellModeResolver and
+// tools.ShellApprovalRequester — the ADR-091 D1/FR-039 adapter connecting
+// pkg/tools' bash-tool enforcement (mode resolution, and the D3 ask-rule /
+// D7 / D8 escalation call sites) to the AgentLoop primitives that already
+// exist for exactly this purpose, without pkg/tools importing pkg/agent
+// (see shell_permission_mode.go's own package-boundary comment for why that
+// import would cycle).
+//
+// Constructed once at wire time (pkg/agent/loop_wire.go, lane L5) and
+// injected via ExecToolDeps.ShellMode / ExecToolDeps.ApprovalRequester —
+// both fields on the SAME *ShellPermissionGate value, since one adapter
+// implements both interfaces. ModeStore is a *SessionModeStore
+// (sessionmode.go); a nil ModeStore is valid (no per-chat modifier layer
+// wired yet) and simply means the per-chat modifier never applies — the
+// global/per-agent layers still resolve normally.
+type ShellPermissionGate struct {
+	Loop      *AgentLoop
+	ModeStore *SessionModeStore
+}
+
+// ResolveShellMode implements tools.ShellModeResolver: the three-level
+// tighten-only mode merge (global -> per-agent -> per-chat) ADR-091 D1/FR-002
+// describes, built entirely from ResolveEffectiveShellMode and the two
+// presentation-layer readers (GlobalShellMode, AgentShellModeOverride) lane
+// L2 already built — this function adds no new merge logic of its own, it
+// only supplies the LIVE values (FR-002's own doc comment: "Lane L4's bash
+// exec gate calls this with the LIVE values").
+//
+// A nil receiver or a nil Loop fails CLOSED to ShellModeAsk — the same
+// fail-safe direction every other resolver in this package takes on a
+// missing dependency, never fail-open to a looser mode.
+func (g *ShellPermissionGate) ResolveShellMode(ctx context.Context, agentID, sessionID string) tools.ShellMode {
+	if g == nil || g.Loop == nil {
+		return tools.ShellModeAsk
+	}
+	cfg := g.Loop.GetConfig()
+	global := GlobalShellMode(cfg)
+
+	var agentPtr, chatPtr *ShellMode
+	if m, ok := AgentShellModeOverride(cfg, agentID); ok {
+		agentPtr = &m
+	}
+	if g.ModeStore != nil {
+		if m, ok := g.ModeStore.Get(sessionID); ok {
+			chatPtr = &m
+		}
+	}
+
+	eff := ResolveEffectiveShellMode(global, agentPtr, chatPtr)
+	return tools.ShellMode(eff)
+}
+
+// RequestShellApproval implements tools.ShellApprovalRequester — the two
+// NEW ADR-091 FR-039 call sites (D3 ask-rule verdict, D7/D8 pre-flight
+// escalation) reach AgentLoop.CheckGrantOrRequestApproval through here, the
+// SAME consultation function the classic "ask" tool-policy path
+// (resolveAskPolicy) already used, fixing the B-1 reachability defect: an
+// "allow" ceiling (which is exactly what Auto mode presents as, D1/FR-001)
+// never touched the grant store at all before this adapter existed.
+//
+// pkg/tools' own D7/D8/D3-prefix grant checks (ApprovalGrantStore.
+// PathGrantsFor/HasNetworkGrant/IsPrefixAllowed, consulted directly against
+// ExecToolDeps.ApprovalGrants before this is ever called) already handle
+// the NEW grant kinds this ADR adds; CheckGrantOrRequestApproval's own
+// exact-fingerprint IsAllowed check is harmless-but-redundant for those
+// synthetic escalation args (it will simply miss), and this function adds
+// nothing beyond forwarding to it — the interactive dialog machinery is
+// what pkg/tools has no other way to reach.
+//
+// A nil receiver or a nil Loop fails CLOSED (approved=false) rather than
+// panicking or silently auto-approving.
+func (g *ShellPermissionGate) RequestShellApproval(
+	ctx context.Context,
+	sessionID, agentID, toolName, toolCallID, turnID string,
+	args map[string]any,
+) (bool, string) {
+	if g == nil || g.Loop == nil {
+		return false, "shell permission gate not wired"
+	}
+	return g.Loop.CheckGrantOrRequestApproval(ctx, sessionID, agentID, toolName, toolCallID, turnID, args)
 }

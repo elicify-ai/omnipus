@@ -261,8 +261,8 @@ var substitutionHostileHosts = func() map[string]bool {
 // whether the command substitutions in a command are safe. Returns a non-empty
 // block message when the command must be refused, "" when it may proceed.
 //
-// Callers must treat this exactly like applyDenyPatterns — unconditional, not
-// disableable by policy or operator config.
+// This check is unconditional and not disableable by policy or operator
+// config.
 func substitutionGuard(command string) string {
 	lower := lowerASCII(command)
 	subs := extractCommandSubstitutions(lower)
@@ -787,4 +787,20 @@ func init() {
 					"(see shell_subst_guard.go)", host))
 		}
 	}
+}
+
+// lowerASCII returns a copy of s with ASCII uppercase letters lowercased.
+// Avoids importing strings just for ToLower at call sites that already import
+// this package. Unicode-aware lowercasing is not needed here — shell commands
+// are ASCII.
+func lowerASCII(s string) string {
+	b := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b[i] = c
+	}
+	return string(b)
 }
