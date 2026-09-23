@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -148,20 +149,29 @@ func TestGoalDelegation_DeadChildReportsUpwardAndLandsTerminal(t *testing.T) {
 }
 
 // TestGoalDelegation_DeadChildUnblocksTheWaitingParent is the consequence the
-// user actually feels: a parent that has produced its own answer and is only
-// waiting on a goal-bearing worker completes once that worker dies, instead
-// of hanging until the gateway restarts.
+// user actually feels: a parent that is only waiting on a goal-bearing
+// worker completes once that worker dies, instead of hanging until the
+// gateway restarts.
+//
+// Updated for ADR-091 fix lane 1, Finding A (the release blocker): this test
+// used to pin the DELETED completeWaitingAncestors shortcut — it seeded a
+// stale pre-existing transcript entry on waitingParent ("parent result") and
+// asserted that dying child's completion synchronously, inline, copied that
+// stale text up to the root, with no wake ever consumed. That shortcut is
+// exactly the bug landing order I-5 calls out ("the parent's handback is
+// written by the last such child's completion wake RE-ENTERING the
+// parent") — completeWaitingAncestors read the parent's OWN last answer
+// instead of ever re-entering it. The user-facing guarantee this test
+// protects (a parent with no other work left is not stuck waiting on a dead
+// worker forever) still holds — through the real mechanism: Deliver's wake
+// reaches waitingParent, and processSteeredSystemWake (Finding B) re-enters
+// it for a genuine turn that reaches its own real completion.
 func TestGoalDelegation_DeadChildUnblocksTheWaitingParent(t *testing.T) {
-	al, cleanup := newSteerAL(t)
+	al, cleanup := newSteerALWithProvider(t, &depthEchoProvider{})
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	rootID := newTestSteeringSession(t, al, "ws-1")
 	waitingParent := launchRunningChild(t, al, rootID, "call-waiting-parent")
-	if err := al.GetSessionStore().AppendTranscriptStrict(waitingParent.SessionID, session.TranscriptEntry{
-		ID: "parent-answer", Role: "assistant", Content: "parent result", Timestamp: time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("AppendTranscriptStrict(parent answer): %v", err)
-	}
 	child := launchGoalBearingChild(t, al, waitingParent.SessionID, "call-goal-child")
 
 	ts, err := al.reconstructSteeredTurn(child, nil)
@@ -171,12 +181,34 @@ func TestGoalDelegation_DeadChildUnblocksTheWaitingParent(t *testing.T) {
 	result := turnResult{}
 	al.finishSteeredGoalTurn(ts, child, &result, errors.New("downstream provider failure"))
 
+	// waitingParent must NOT be silently completed by any shortcut — it
+	// stays running until the wake below genuinely re-enters it (proves
+	// completeWaitingAncestors is really gone, not just unreachable here by
+	// coincidence).
+	before, loadErr := al.GetSessionLifecycleStore().Load(waitingParent.SessionID)
+	if loadErr != nil {
+		t.Fatalf("Load(waitingParent) before its wake: %v", loadErr)
+	}
+	if before.State != session.LifecycleRunning {
+		t.Fatalf("waitingParent state before its own wake ran = %q, want running (nothing may complete it early)", before.State)
+	}
+
+	var wake bus.InboundMessage
+	select {
+	case wake = <-al.bus.InboundChan():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the dead child's report never woke waitingParent — Finding A's ReportingTarget fix did not take effect")
+	}
+	if _, err := al.processSystemMessage(context.Background(), wake); err != nil {
+		t.Fatalf("processSystemMessage(wake waitingParent): %v", err)
+	}
+
 	parent, loadErr := al.GetSessionLifecycleStore().Load(waitingParent.SessionID)
 	if loadErr != nil {
 		t.Fatalf("Load(waiting parent): %v", loadErr)
 	}
 	if parent.State != session.LifecycleCompleted {
-		t.Fatalf("waiting parent state = %q, want completed — its only worker is dead and it has an answer", parent.State)
+		t.Fatalf("waiting parent state = %q, want completed — its only worker is dead and it was genuinely re-entered", parent.State)
 	}
 	msgs, _, _, drainErr := al.GetMessageInboxStore().Drain(rootID, waitingParent.SessionID, "", 10)
 	if drainErr != nil {
@@ -189,7 +221,10 @@ func TestGoalDelegation_DeadChildUnblocksTheWaitingParent(t *testing.T) {
 	if hErr != nil {
 		t.Fatalf("AsSessionMessageHandback: %v", hErr)
 	}
-	if handback.ResultSoFar != "parent result" {
-		t.Errorf("result_so_far = %q, want %q", handback.ResultSoFar, "parent result")
+	// depthEchoProvider makes waitingParent's real final answer exactly the
+	// wake content it was re-entered with, which reports the dead child's
+	// own real failure — never a value this test invented.
+	if !strings.Contains(handback.ResultSoFar, "failed:") {
+		t.Errorf("result_so_far = %q, want it to reflect the real re-entry's report about the dead worker", handback.ResultSoFar)
 	}
 }

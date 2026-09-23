@@ -4,17 +4,72 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
+
+// depthEchoProvider returns the last "user" role message content verbatim as
+// its final answer. Used by TestCompletion_LastChildCompletesWaitingParent
+// (the finding-A/B exit proof) so a re-entered turn's real output is
+// traceably derived from what it was actually asked — never a value the
+// test invents — proving the chain carries the CHILD's real result, not a
+// stale value read off the parent's own prior transcript.
+type depthEchoProvider struct{}
+
+func (p *depthEchoProvider) Chat(_ context.Context, messages []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+	var last string
+	for _, m := range messages {
+		if m.Role == "user" {
+			last = m.Content
+		}
+	}
+	return &providers.LLMResponse{Content: last}, nil
+}
+
+func (p *depthEchoProvider) GetDefaultModel() string { return "depth-echo-test" }
+
+// newSteerALWithProvider is newSteerAL, plus injecting a caller-chosen
+// provider for testDefaultAgentID instead of the default mockProvider —
+// needed to drive a REAL re-entered turn (steer_launcher.go::
+// steeredTurnRunContext / loop_inbound.go::processSteeredSystemWake)
+// through al.runTurn and observe its actual output.
+func newSteerALWithProvider(t *testing.T, provider providers.LLMProvider) (*AgentLoop, func()) {
+	t.Helper()
+	tmpDir := filepath.Join(t.TempDir(), "home")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:              tmpDir,
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+			List: []config.AgentConfig{{ID: testDefaultAgentID, Home: tmpDir}},
+		},
+	}
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
+	home := al.GetConfig().Agents.Defaults.Home
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
+	al.SetSessionMessagingStores(inbox, lifecycle)
+	return al, func() {}
+}
 
 type steeredInputCaptureProvider struct {
 	once     sync.Once
@@ -239,14 +294,39 @@ func TestCompletion_IterationLimit_NonFatal_DoesNotWakeParent(t *testing.T) {
 	}
 }
 
+// TestCompletion_LastChildCompletesWaitingParent is ADR-091 fix lane 1's
+// finding-A/B exit proof: a REAL two-hop delegation (root -> waitingParent
+// -> lastChild) where the grandchild's result must reach the grandparent
+// (root) — not a stale value read off the parent's own prior answer — and
+// every non-parked, non-root session lands terminal.
+//
+// Finding A (CRITICAL, the release blocker): lastChild's own
+// SteeredBy.ReportingTarget used to be EMPTY whenever its steering session
+// (waitingParent) had no real external Channel/PeerID of its own — true for
+// every steered session, since a steered session's own identity is minted
+// with no channel and is never given a PeerID at all
+// (steer_launcher.go::reportingTargetFor's doc comment). async_notifier.go's
+// WakeParentAlways refused that empty destination outright, so
+// waitingParent was never re-entered, and the now-DELETED
+// completeWaitingAncestors shortcut silently substituted waitingParent's
+// OWN stale last answer instead of the real one. This test seeds exactly
+// that stale text (staleText, below) to prove it is never read again.
+//
+// Finding B (CRITICAL, latent): once A is fixed, the wake that reaches
+// waitingParent must itself run a real turn AND complete on that same exit
+// path — loop_inbound.go::processSteeredSystemWake used to return after
+// running the woken turn without ever calling completeSteeredTurn/
+// finishSteeredGoalTurn, leaving a successfully re-entered session `running`
+// forever.
 func TestCompletion_LastChildCompletesWaitingParent(t *testing.T) {
-	al, cleanup := newSteerAL(t)
+	al, cleanup := newSteerALWithProvider(t, &depthEchoProvider{})
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	rootID := newTestSteeringSession(t, al, "ws-1")
 	waitingParent := launchRunningChild(t, al, rootID, "call-parent")
+	const staleText = "STALE PARENT TEXT MUST NOT REACH ROOT"
 	if err := al.GetSessionStore().AppendTranscriptStrict(waitingParent.SessionID, session.TranscriptEntry{
-		ID: "parent-answer", Role: "assistant", Content: "parent result", Timestamp: time.Now().UTC(),
+		ID: "parent-answer", Role: "assistant", Content: staleText, Timestamp: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("AppendTranscriptStrict(parent answer): %v", err)
 	}
@@ -268,15 +348,58 @@ func TestCompletion_LastChildCompletesWaitingParent(t *testing.T) {
 		t.Fatalf("Append(question): %v", err)
 	}
 
-	al.completeSteeredTurn(context.Background(), lastChild, turnResult{finalContent: "child result"}, nil)
+	// The grandchild completes for real — this is where Finding A's fix is
+	// exercised: lastChild's ReportingTarget (stamped at launch under
+	// waitingParent, which has no real external address of its own) must
+	// still let the wake below actually reach waitingParent.
+	if err := al.completeSteeredTurn(context.Background(), lastChild, turnResult{finalContent: "child result"}, nil); err != nil {
+		t.Fatalf("completeSteeredTurn(lastChild): %v", err)
+	}
 
+	gotChild, err := al.GetSessionLifecycleStore().Load(lastChild.SessionID)
+	if err != nil {
+		t.Fatalf("Load(lastChild): %v", err)
+	}
+	if gotChild.State != session.LifecycleCompleted {
+		t.Fatalf("lastChild state = %q, want completed", gotChild.State)
+	}
+
+	// waitingParent must NOT be silently completed by any shortcut — it
+	// stays `running` until it is genuinely re-entered by the wake below
+	// (proves completeWaitingAncestors is really gone, not just unreachable
+	// on this path by coincidence).
+	gotParentBefore, err := al.GetSessionLifecycleStore().Load(waitingParent.SessionID)
+	if err != nil {
+		t.Fatalf("Load(waitingParent) before its wake: %v", err)
+	}
+	if gotParentBefore.State != session.LifecycleRunning {
+		t.Fatalf("waitingParent state before its own wake ran = %q, want running (nothing may complete it early)", gotParentBefore.State)
+	}
+
+	// Drive waitingParent's real re-entry: read the wake lastChild's
+	// completion enqueued on the bus and feed it through the SAME
+	// processSystemMessage entry point production uses (this test's
+	// AgentLoop never started Run's own InboundChan consumer loop).
+	var wake bus.InboundMessage
+	select {
+	case wake = <-al.bus.InboundChan():
+	case <-time.After(5 * time.Second):
+		t.Fatal("lastChild's completion never woke waitingParent — Finding A's ReportingTarget fix did not take effect")
+	}
+	if _, err := al.processSystemMessage(context.Background(), wake); err != nil {
+		t.Fatalf("processSystemMessage(wake waitingParent): %v", err)
+	}
+
+	// Finding B: waitingParent's own turn must have completed on this exit
+	// path too — not left `running` forever after a successful re-entry.
 	got, err := al.GetSessionLifecycleStore().Load(waitingParent.SessionID)
 	if err != nil {
 		t.Fatalf("Load(waiting parent): %v", err)
 	}
 	if got.State != session.LifecycleCompleted {
-		t.Fatalf("waiting parent state = %q, want completed", got.State)
+		t.Fatalf("waiting parent state after its wake ran = %q, want completed", got.State)
 	}
+
 	msgs, _, _, err := al.GetMessageInboxStore().Drain(rootID, waitingParent.SessionID, "", 10)
 	if err != nil {
 		t.Fatalf("Drain(root): %v", err)
@@ -288,11 +411,31 @@ func TestCompletion_LastChildCompletesWaitingParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handback: %v", err)
 	}
-	if handback.ResultSoFar != "parent result" {
-		t.Errorf("result_so_far = %q, want parent result", handback.ResultSoFar)
+	// depthEchoProvider makes waitingParent's real final answer exactly the
+	// wake content it was re-entered with, which carries the GRANDCHILD's
+	// real result — never the stale text seeded above.
+	if !strings.Contains(handback.ResultSoFar, "child result") {
+		t.Fatalf("root's result_so_far = %q, want it to contain the grandchild's real result %q", handback.ResultSoFar, "child result")
+	}
+	if strings.Contains(handback.ResultSoFar, staleText) {
+		t.Fatalf("root's result_so_far = %q leaked waitingParent's OWN stale pre-existing answer instead of a real re-entry", handback.ResultSoFar)
 	}
 	if len(handback.OpenQuestions) != 1 || handback.OpenQuestions[0] != "Which region?" {
 		t.Errorf("open_questions = %#v, want [Which region?]", handback.OpenQuestions)
+	}
+
+	// Nothing is left running: the grandchild and its parent both landed
+	// terminal (the parked sibling is a legitimate, separate exemption —
+	// its own coverage is TestCompletion_LastChildCompletesWaitingParent's
+	// OpenQuestions assertion above, not a terminal-state one).
+	for _, id := range []string{lastChild.SessionID, waitingParent.SessionID} {
+		rec, err := al.GetSessionLifecycleStore().Load(id)
+		if err != nil {
+			t.Fatalf("Load(%s): %v", id, err)
+		}
+		if !rec.Terminal() {
+			t.Errorf("session %s state = %q, want terminal (nothing may be left running)", id, rec.State)
+		}
 	}
 }
 
@@ -523,6 +666,19 @@ func TestFinishSteeredGoalTurn_BareClaimFollowUpRoutesThroughAsyncNotifier(t *te
 	}
 	if got.Content == "" {
 		t.Fatal("Content is empty; expected the bare-claim teaching steer text")
+	}
+	// Finding F (ADR-091 fix lane 1, MEDIUM): a follow-up published with no
+	// steer_message_id/steer_generation metadata falls through
+	// processSystemMessage's routing check (msg.AsyncTranscriptSessionID != ""
+	// && inboundMetadata(msg, "steer_message_id") != "") into the legacy,
+	// hand-built-SendResponse tail instead of processSteeredSystemWake —
+	// bypassing reconstruction (I-3), the Stop reservation, admission and
+	// generation-aware cancel for every re-injected goal follow-up.
+	if got.Metadata == nil || fmt.Sprint(got.Metadata["steer_message_id"]) == "" {
+		t.Fatalf("Metadata[steer_message_id] is unset (%#v) — this follow-up would fall through to the legacy tail instead of routing through processSteeredSystemWake", got.Metadata)
+	}
+	if gotGen := fmt.Sprint(got.Metadata["steer_generation"]); gotGen != fmt.Sprint(rec.Generation) {
+		t.Fatalf("Metadata[steer_generation] = %q, want %q (the CURRENT generation of the session this follow-up continues)", gotGen, fmt.Sprint(rec.Generation))
 	}
 }
 
