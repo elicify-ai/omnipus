@@ -99,15 +99,18 @@ const (
 	ShellModeGod ShellMode = "god"
 )
 
-// ShellModeResolver resolves the ADR-092 D1 three-level, tighten-only mode
-// merge (global -> per-agent -> per-chat) governing one bash call. Injected
-// via ExecToolDeps.ShellMode, exactly like ExecPolicyAuditor is injected for
-// the (now-retired) exec allowlist — a dependency edge pkg/agent satisfies,
-// never a direct import. Implemented by pkg/agent's ShellPermissionGate
-// (loop_policy.go), which composes agent.GlobalShellMode /
-// agent.AgentShellModeOverride / agent.SessionModeStore.Get through
-// agent.ResolveEffectiveShellMode — the mode-resolution CONTRACT that
-// function's own doc comment describes lane L4 as calling.
+// ShellModeResolver resolves the ADR-092 D1 effective mode (God/Ask/Auto)
+// governing one bash call. Injected via ExecToolDeps.ShellMode — a
+// dependency edge pkg/agent satisfies, never a direct import (see the
+// package boundary note above). Implemented by pkg/agent's
+// ShellPermissionGate (loop_policy.go), whose liveMode resolves: God Mode
+// active -> God; bash's own tool policy not resolving to "ask" -> Ask;
+// "ask" + Auto-approve (cfg.Sandbox.AutoApprove, the agent's
+// AutoApproveDisabled, and the chat's SessionModeStore modifier) off, or on
+// but no kernel sandbox installed, -> Ask; "ask" + Auto-approve on + a
+// kernel sandbox installed -> Auto. Auto is a switch that only matters once
+// bash's tool policy has already resolved to "ask" — it is not a third mode
+// selected independently of Ask/God.
 type ShellModeResolver interface {
 	ResolveShellMode(ctx context.Context, agentID, sessionID string) ShellMode
 }

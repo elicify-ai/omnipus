@@ -89,10 +89,16 @@ type ExecToolDeps struct {
 	AuditFailClosed bool
 
 	// ShellMode resolves the ADR-092 D1 effective mode (Ask/Auto/God)
-	// governing each call. Wired by pkg/agent (ShellPermissionGate,
-	// loop_policy.go) to agent.GlobalShellMode / agent.
-	// AgentShellModeOverride / agent.SessionModeStore through agent.
-	// ResolveEffectiveShellMode.
+	// governing each call. Wired by pkg/agent to ShellPermissionGate
+	// (loop_policy.go), whose liveMode resolves: God Mode active -> God;
+	// bash's tool policy resolving to anything but "ask" -> Ask (an "allow"
+	// tool policy runs without the Auto machinery, a "deny" never reaches
+	// execution); "ask" with Auto-approve off, or Auto-approve on but no
+	// active kernel sandbox, -> Ask; "ask" + Auto-approve on + a kernel
+	// sandbox installed -> Auto. Auto is therefore not an independent
+	// third mode an operator picks directly — it is a narrower behavior
+	// that only ever applies when bash's own tool policy has already
+	// resolved to "ask".
 	ShellMode ShellModeResolver
 
 	// ApprovalRequester is the interactive escalation fallback for the D3
