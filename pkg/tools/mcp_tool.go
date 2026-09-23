@@ -35,6 +35,44 @@ type MCPTool struct {
 
 var _ Tool = (*MCPTool)(nil)
 
+// --- ADR-092 D9 auto-approve stand-in types ---------------------------
+//
+// docs/internal/specs/adr-092-auto-for-other-tools-design.md §5.1 puts
+// AutoVerdict, PinnedPath and AutoApproveClassifier in a new
+// pkg/tools/auto_approve.go, owned by lane L1 (origin/auto/l1-classifier).
+// That lane had not pushed when MCPTool and browser.ScreenshotTool (lane
+// L2) needed these exact shapes to implement AutoApproveClassifier, so they
+// are defined here for now, matching §5.1 field-for-field. Once
+// origin/auto/l1-classifier merges and defines the real types in
+// auto_approve.go, this block becomes a duplicate declaration and must be
+// deleted — the merge conflict is the signal.
+type AutoVerdict struct {
+	Run    bool
+	Class  string // "runs" | "runs_if_args" | "mcp_not_destructive" (for audit)
+	Reason string
+	Paths  []PinnedPath // RUNS-IF file tools only
+}
+
+// PinnedPath is the resolved, real (symlink-free) filesystem path an
+// AutoRunsIfArgs or MCP classifier verified against the §2 J2 workspace
+// rule, plus the access it was verified for.
+type PinnedPath struct {
+	Real   string
+	Access uint64
+}
+
+// AutoAccessWrite is the Access bit a RUNS-IF file classifier sets on a
+// PinnedPath it resolved for a write. Stand-in pending L1's real encoding.
+const AutoAccessWrite uint64 = 1 << 0
+
+// AutoApproveClassifier is implemented by every AutoRunsIfArgs tool and by
+// MCPTool (§5.1). AutoApproveVerdict must not itself refuse a call — an
+// error or an unresolvable argument is reported as Run: false so the caller
+// falls back to the ordinary ask flow, never as a hard failure.
+type AutoApproveClassifier interface {
+	AutoApproveVerdict(ctx context.Context, args map[string]any) AutoVerdict
+}
+
 // NewMCPTool creates a new MCP tool wrapper
 func NewMCPTool(manager MCPManager, serverName string, tool *mcp.Tool) *MCPTool {
 	return &MCPTool{
@@ -153,6 +191,51 @@ func (t *MCPTool) Scope() ToolScope { return ScopeGeneral }
 func (t *MCPTool) Category() ToolCategory { return CategoryMCP }
 
 func (t *MCPTool) MCPSource() (string, string) { return t.serverName, t.tool.Name }
+
+var _ AutoApproveClassifier = (*MCPTool)(nil)
+
+// AutoApproveVerdict implements ADR-092 D9 §4: under Auto, an MCP tool on
+// Ask runs only when its server marked it read-only (ReadOnlyHint: true) or
+// explicitly not destructive (DestructiveHint: false). Every other shape —
+// no annotations at all, annotations present with DestructiveHint nil and
+// ReadOnlyHint false, or DestructiveHint true — asks. This follows the MCP
+// specification's own default: DestructiveHint defaults to true when it is
+// absent, and the hint is meaningful only when ReadOnlyHint is false, so an
+// unlabelled tool is treated as destructive and must ask (founder decision
+// 2026-09-23, "following the MCP specification").
+//
+// args is intentionally unused: the verdict depends only on the server's
+// own tool annotations (t.tool.Annotations), never on this call's
+// arguments — an MCP tool has no J2 workspace-path condition of its own.
+func (t *MCPTool) AutoApproveVerdict(_ context.Context, _ map[string]any) AutoVerdict {
+	ann := t.tool.Annotations
+	if ann == nil {
+		return AutoVerdict{
+			Run:    false,
+			Class:  "asks",
+			Reason: fmt.Sprintf("mcp tool %s has no annotations; the MCP specification treats an unlabelled tool as destructive", t.Name()),
+		}
+	}
+	if ann.ReadOnlyHint {
+		return AutoVerdict{
+			Run:    true,
+			Class:  "mcp_not_destructive",
+			Reason: fmt.Sprintf("server %s marked %s read-only (readOnlyHint=true)", t.serverName, t.tool.Name),
+		}
+	}
+	if ann.DestructiveHint != nil && !*ann.DestructiveHint {
+		return AutoVerdict{
+			Run:    true,
+			Class:  "mcp_not_destructive",
+			Reason: fmt.Sprintf("server %s marked %s explicitly not destructive (destructiveHint=false)", t.serverName, t.tool.Name),
+		}
+	}
+	return AutoVerdict{
+		Run:    false,
+		Class:  "asks",
+		Reason: fmt.Sprintf("mcp tool %s is not marked read-only and is not explicitly non-destructive", t.Name()),
+	}
+}
 
 // Parameters returns the tool parameters schema
 func (t *MCPTool) Parameters() map[string]any {

@@ -711,6 +711,85 @@ func (t *ScreenshotTool) Parameters() map[string]any {
 	}
 }
 
+var _ tools.AutoApproveClassifier = (*ScreenshotTool)(nil)
+
+// screenshotFilename generates the JPEG's fixed, timestamp-based relative
+// filename. browser_screenshot exposes no filename argument (see
+// Parameters above — the schema takes no properties at all), so this is the
+// ONLY value ever handed to ResolvePath for a write: nothing a caller
+// supplies can steer the destination.
+func screenshotFilename() string {
+	return fmt.Sprintf("omnipus-screenshot-%d.jpg", time.Now().UnixMilli())
+}
+
+// resolveScreenshotDestination resolves one screenshot write's destination
+// through the same chokepoint every write in this tool uses (ADR-046
+// FR-003/FR-009/FR-034): ResolveTurnFSPolicy, then ResolvePath(FSOpWrite).
+// It is the single source of truth for both AutoApproveVerdict below (a
+// classify-time preview that closes the handle without writing) and
+// Execute (the real write) — sharing it is what makes Execute's own call
+// double as ADR-092 D9 §5.3's "re-check at write time that refuses if it
+// moved outside": it re-resolves with WHATEVER the workspace's mounts and
+// the agent's home look like right now, not the state AutoApproveVerdict
+// saw earlier in the turn. If the destination no longer resolves at all —
+// the agent's home was removed, a mount was pulled, agentHome was swapped
+// for a symlink into nothing — this second, independent resolution fails
+// and nothing is read or written, even though the first one succeeded.
+func (t *ScreenshotTool) resolveScreenshotDestination(ctx context.Context, filename string) (*tools.PathHandle, error) {
+	policy, err := tools.ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
+	if err != nil {
+		return nil, fmt.Errorf("resolve filesystem policy: %w", err)
+	}
+	handle, err := tools.ResolvePath(ctx, policy, t.Name(), "", tools.FSOpWrite, filename)
+	if err != nil {
+		return nil, err
+	}
+	return handle, nil
+}
+
+// AutoApproveVerdict implements ADR-092 D9 §3.5: browser_screenshot's
+// founder verdict is RUNS-IF, gated on the J2 workspace-path rule applied
+// to the JPEG's write destination — the same ResolvePath(FSOpWrite) chain
+// Execute uses (§5.1's AutoWorkspacePath contract), via
+// resolveScreenshotDestination above. The handle is closed unwritten: this
+// call previews whether the write WOULD be permitted, it never performs it.
+//
+// args is unused: this tool takes no arguments a caller could steer the
+// destination with (Parameters above has no properties), so the verdict
+// depends only on the turn's own filesystem policy.
+func (t *ScreenshotTool) AutoApproveVerdict(ctx context.Context, _ map[string]any) tools.AutoVerdict {
+	handle, err := t.resolveScreenshotDestination(ctx, screenshotFilename())
+	if err != nil {
+		return tools.AutoVerdict{
+			Run:    false,
+			Class:  "asks",
+			Reason: fmt.Sprintf("browser_screenshot: destination does not resolve inside the workspace or a mount: %s", err),
+		}
+	}
+	real, rpErr := handle.RealPath()
+	closeErr := handle.Close()
+	if rpErr != nil {
+		return tools.AutoVerdict{
+			Run:    false,
+			Class:  "asks",
+			Reason: fmt.Sprintf("browser_screenshot: cannot resolve destination real path: %s", rpErr),
+		}
+	}
+	if closeErr != nil {
+		return tools.AutoVerdict{
+			Run:    false,
+			Class:  "asks",
+			Reason: fmt.Sprintf("browser_screenshot: cannot release destination handle: %s", closeErr),
+		}
+	}
+	return tools.AutoVerdict{
+		Run:    true,
+		Class:  "runs_if_args",
+		Reason: "screenshot destination resolves inside the workspace or a mount",
+		Paths:  []tools.PinnedPath{{Real: real, Access: tools.AutoAccessWrite}},
+	}
+}
+
 // waitForPageSettle polls document.readyState until it reports "complete"
 // (up to 30 tries, 100ms apart), then sleeps 500ms more for client-side JS
 // frameworks to finish painting. Best-effort readyState poll: any error
@@ -800,13 +879,11 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 	// in the turn's effective working directory (the per-turn Workspace
 	// re-root when present, else the agent's own home's work/ dir) rather
 	// than a process-wide shared temp directory no per-agent/per-turn
-	// confinement ever covered.
-	filename := fmt.Sprintf("omnipus-screenshot-%d.jpg", time.Now().UnixMilli())
-	policy, err := tools.ResolveTurnFSPolicy(ctx, t.agentHome, t.restrict)
-	if err != nil {
-		return tools.ErrorResult(fmt.Sprintf("browser_screenshot: failed to resolve filesystem policy: %s", err))
-	}
-	handle, err := tools.ResolvePath(ctx, policy, "browser_screenshot", "", tools.FSOpWrite, filename)
+	// confinement ever covered. resolveScreenshotDestination is the same
+	// resolution AutoApproveVerdict previewed above (ADR-092 D9 §5.3): a
+	// fresh, independent call here re-checks against the CURRENT state of
+	// the world and refuses if the destination no longer resolves.
+	handle, err := t.resolveScreenshotDestination(ctx, screenshotFilename())
 	if err != nil {
 		return tools.PermissionDeniedResult("browser_screenshot", err, err.Error())
 	}
