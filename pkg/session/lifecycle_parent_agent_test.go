@@ -58,9 +58,9 @@ func TestLifecycleRecord_ParentAgentIDRoundTrip(t *testing.T) {
 	t.Run("populated parent survives persist and reload", func(t *testing.T) {
 		s := newTestLifecycleStore(t)
 		if err := s.Persist(&LifecycleRecord{
-			SessionID: "sess-parented", State: LifecycleQueued,
+			SessionID: "sess-parented", Generation: 1, State: LifecycleQueued,
 			OwnerScopeKind: OwnerScopeHuman,
-			ParentAgentID:  "mia", SteeredBy: &SteeredBy{SteeringSessionID: "transcript-1"},
+			ParentAgentID:  "mia", SteeredBy: &SteeredBy{SteeringSessionID: "transcript-1", RootSessionID: "transcript-1"},
 			WorkspaceID: "ws-1", AgentID: "ray",
 		}); err != nil {
 			t.Fatalf("persist: %v", err)
@@ -98,9 +98,9 @@ func TestLifecycleRecord_ParentAgentIDRoundTrip(t *testing.T) {
 		// at the delegate mint site (FR-015). What the store MUST do is make
 		// the emptiness visible on disk rather than eliding the key.
 		if err := s.Persist(&LifecycleRecord{
-			SessionID: "sess-orphan", State: LifecycleQueued,
+			SessionID: "sess-orphan", Generation: 1, State: LifecycleQueued,
 			OwnerScopeKind: OwnerScopeHuman,
-			ParentAgentID:  "", SteeredBy: &SteeredBy{SteeringSessionID: "transcript-1"},
+			ParentAgentID:  "", SteeredBy: &SteeredBy{SteeringSessionID: "transcript-1", RootSessionID: "transcript-1"},
 			WorkspaceID: "ws-1", AgentID: "ray",
 		}); err != nil {
 			t.Fatalf("persist: %v", err)
@@ -129,26 +129,26 @@ func seedParentTestRecords(t *testing.T, s *LifecycleStore) {
 		// Started by mia. The only record a "subagents mia started" query
 		// may return.
 		{
-			SessionID: "mine", State: LifecycleRunning,
+			SessionID: "mine", Generation: 1, State: LifecycleRunning,
 			OwnerScopeKind: OwnerScopeHuman,
-			ParentAgentID:  "mia", SteeredBy: &SteeredBy{SteeringSessionID: "shared-transcript"},
+			ParentAgentID:  "mia", SteeredBy: &SteeredBy{SteeringSessionID: "shared-transcript", RootSessionID: "shared-transcript"},
 			WorkspaceID: "ws-1", AgentID: "ray",
 		},
 		// A SIBLING: started by jim, but sharing mia's SteeringSessionID and
 		// carrying the same empty OwnerScopeID a top-level delegation has.
 		// Inferring parentage from either field would wrongly return this.
 		{
-			SessionID: "sibling", State: LifecycleRunning,
+			SessionID: "sibling", Generation: 1, State: LifecycleRunning,
 			OwnerScopeKind: OwnerScopeHuman,
-			ParentAgentID:  "jim", SteeredBy: &SteeredBy{SteeringSessionID: "shared-transcript"},
+			ParentAgentID:  "jim", SteeredBy: &SteeredBy{SteeringSessionID: "shared-transcript", RootSessionID: "shared-transcript"},
 			WorkspaceID: "ws-1", AgentID: "ava",
 		},
 		// A session mia RUNS (she is the child/target) but did not start.
 		// Inferring parentage from AgentID would wrongly return this.
 		{
-			SessionID: "mia-is-the-child", State: LifecycleRunning,
+			SessionID: "mia-is-the-child", Generation: 1, State: LifecycleRunning,
 			OwnerScopeKind: OwnerScopeHuman,
-			ParentAgentID:  "jim", SteeredBy: &SteeredBy{SteeringSessionID: "shared-transcript"},
+			ParentAgentID:  "jim", SteeredBy: &SteeredBy{SteeringSessionID: "shared-transcript", RootSessionID: "shared-transcript"},
 			WorkspaceID: "ws-1", AgentID: "mia",
 		},
 	}
@@ -222,9 +222,9 @@ func TestLifecycleFilter_UnsetParentAgentIDUnchangedBehaviour(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	seedParentTestRecords(t, s)
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: "no-parent", State: LifecycleRunning,
+		SessionID: "no-parent", Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman,
-		ParentAgentID:  "", SteeredBy: &SteeredBy{SteeringSessionID: "shared-transcript"},
+		ParentAgentID:  "", SteeredBy: &SteeredBy{SteeringSessionID: "shared-transcript", RootSessionID: "shared-transcript"},
 		WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("seed no-parent: %v", err)

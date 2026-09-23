@@ -43,7 +43,7 @@ func TestLifecycleFilter_SteeringSessionID_DirectChildrenOnly(t *testing.T) {
 
 	// A itself: a top-level chat, no parent.
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: chatA, State: LifecycleRunning,
+		SessionID: chatA, Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman,
 		WorkspaceID:    "ws-1", AgentID: "mia",
 	}); err != nil {
@@ -52,9 +52,9 @@ func TestLifecycleFilter_SteeringSessionID_DirectChildrenOnly(t *testing.T) {
 	// B and C: direct children of A.
 	for _, id := range []string{childB, childC} {
 		if err := s.Persist(&LifecycleRecord{
-			SessionID: id, State: LifecycleRunning,
+			SessionID: id, Generation: 1, State: LifecycleRunning,
 			OwnerScopeKind: OwnerScopeParentSession, OwnerScopeID: chatA,
-			ParentAgentID: "mia", SteeredBy: &SteeredBy{SteeringSessionID: chatA},
+			ParentAgentID: "mia", SteeredBy: &SteeredBy{SteeringSessionID: chatA, RootSessionID: chatA},
 			WorkspaceID: "ws-1", AgentID: "ray",
 		}); err != nil {
 			t.Fatalf("persist %q: %v", id, err)
@@ -63,9 +63,9 @@ func TestLifecycleFilter_SteeringSessionID_DirectChildrenOnly(t *testing.T) {
 	// D: a GRANDCHILD — B's own child, SteeringSessionID = B (its DIRECT
 	// parent), never A.
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: grandD, State: LifecycleRunning,
+		SessionID: grandD, Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeParentSession, OwnerScopeID: childB,
-		ParentAgentID: "ray", SteeredBy: &SteeredBy{SteeringSessionID: childB},
+		ParentAgentID: "ray", SteeredBy: &SteeredBy{SteeringSessionID: childB, RootSessionID: chatA},
 		WorkspaceID: "ws-1", AgentID: "ava",
 	}); err != nil {
 		t.Fatalf("persist grandD: %v", err)
@@ -119,16 +119,16 @@ func TestLifecycleFilter_SteeringSessionID_ComposesWithOtherFilterFields(t *test
 	const doneChild = "child-compose-10b-done"
 
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: runningChild, State: LifecycleRunning,
+		SessionID: runningChild, Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeParentSession, OwnerScopeID: parent,
-		SteeredBy: &SteeredBy{SteeringSessionID: parent}, WorkspaceID: "ws-1", AgentID: "ray",
+		SteeredBy: &SteeredBy{SteeringSessionID: parent, RootSessionID: parent}, WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("persist runningChild: %v", err)
 	}
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: doneChild, State: LifecycleCompleted,
+		SessionID: doneChild, Generation: 1, State: LifecycleCompleted,
 		OwnerScopeKind: OwnerScopeParentSession, OwnerScopeID: parent,
-		SteeredBy: &SteeredBy{SteeringSessionID: parent}, WorkspaceID: "ws-1", AgentID: "ava",
+		SteeredBy: &SteeredBy{SteeringSessionID: parent, RootSessionID: parent}, WorkspaceID: "ws-1", AgentID: "ava",
 	}); err != nil {
 		t.Fatalf("persist doneChild: %v", err)
 	}
