@@ -2,24 +2,24 @@
  * catchup-scenarios.spec.ts — BE-DESIGN.md §8.3, scenarios a–i (the squad
  * brief's "real-browser scenarios (orchestrator)" table).
  *
- * STATUS: scripted, not yet runnable. Every scenario below drives the REAL
- * embedded binary and asserts the design's common pass criteria (§8.3): the
- * final answer is complete and matches the transcript after a hard reload;
- * exactly one bubble per turn; no duplicated text; tool cards are not stuck
- * on "cancelled"/"running"; the user message sits directly above its answer;
- * no red or orange banner; the phase-1 states appear as specified.
+ * STATUS (pass 2): un-skipped. Lane A's gateway hub
+ * (`pkg/gateway/ws_session_hub.go`, `squad/be-lane-a-gateway`) and Lane B's
+ * agent/session identity plumbing (`pkg/agent/eventbus.go`'s SetSyncTap,
+ * per-message id — `cc41be0a5`/`34786eb16`/`61ab119fa`/`8e17b8687`) are both
+ * present on this branch's rebased base as of pass 2 (2026-09-24). Every
+ * scenario below drives the REAL embedded binary and asserts the design's
+ * common pass criteria (§8.3): the final answer is complete and matches the
+ * transcript after a hard reload; exactly one bubble per turn; no duplicated
+ * text; tool cards are not stuck on "cancelled"/"running"; the user message
+ * sits directly above its answer; no red or orange banner; the phase-1
+ * states appear as specified.
  *
- * These scenarios exercise the gateway's per-session event log (Lane A,
- * `pkg/gateway/ws_session_hub.go`) and the `seq`-carrying agent/session
- * identity plumbing (Lane B, `pkg/agent/eventbus.go`'s SetSyncTap and the
- * per-message id work) — NEITHER had landed on this branch's base
- * (`origin/feat/823-seq-redo`) as of Squad BE-C's work (2026-09-23), so
- * every scenario is `test.describe.skip()`ed with this file's own reason.
- * The orchestrator un-skips this describe block (delete the `.skip`) once
- * Lane A's and Lane B's branches are merged in — the scenarios themselves
- * need no further changes to become runnable; they were written and
- * reviewed against the design, only blocked on the gateway/agent-loop code
- * they depend on not existing yet on this branch.
+ * Per the squad brief's item 6: verified with `npx playwright test --list`
+ * only — the harness itself was NOT run (it needs a real provider key and
+ * the operator's data folder, neither available in this environment). One
+ * scenario, `h` (gateway restart), stays individually `test.skip`-ed — it
+ * needs a human to restart the actual binary mid-test, which this spec file
+ * has no process control to do unattended; see that test's own comment.
  */
 
 import { expect, type Page } from '@playwright/test'
@@ -58,10 +58,7 @@ function assertNoDuplicateOrGapText(before: string, after: string) {
   expect(norm(after).startsWith(norm(before).slice(0, 60))).toBeTruthy()
 }
 
-// PROVENANCE: this whole file is blocked on Lane A (gateway hub) and Lane B
-// (agent/session identity plumbing) landing on this branch — see the file
-// header. Un-skip once both are merged.
-test.describe.skip('BE-DESIGN.md §8.3 real-browser catch-up scenarios (blocked on Lane A + Lane B)', () => {
+test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
   })
@@ -169,13 +166,17 @@ test.describe.skip('BE-DESIGN.md §8.3 real-browser catch-up scenarios (blocked 
     await expect(input).toBeVisible({ timeout: 15_000 })
     await waitForConnected(page)
     await startNewChat(page)
-    // Founder decision Q6: real wait, using the test-only idle-eviction
-    // shortcut config knob (off by default, not user-facing) rather than a
-    // real 31-minute sleep where a shorter test-only timeout is configured
-    // for this environment. The exact env var / config key is Lane A's
-    // surface (BE-DESIGN.md §3.2's idle eviction) — wired here once it
-    // lands; a literal 31-minute `waitForTimeout` is the fallback if no
-    // shortcut exists.
+    // Founder decision Q6: real wait. Lane A's test-only idle-eviction
+    // shortcut (`b588bbb04`) is `OMNIPUS_TEST_ONLY_HUB_IDLE_EVICT_SECONDS`
+    // — an env var read once at gateway startup
+    // (`newHubRegistry`/`hubIdleEvictAfterEnvOverrideVar`,
+    // pkg/gateway/ws_session_hub.go), never a config file or REST call, so
+    // it must be set on the gateway PROCESS before this spec runs (the
+    // orchestrator's job, not this file's — a Playwright test cannot set an
+    // env var retroactively on an already-running binary). When set (e.g.
+    // to 5-10s for this scenario), the wait below only needs to exceed that
+    // shortened window, not the real 31 minutes; left at the real 31
+    // minutes here as the safe default when the knob is NOT set.
     await page.waitForTimeout(31 * 60_000)
     await input.fill('are you still there?')
     await input.press('Enter')
@@ -185,13 +186,18 @@ test.describe.skip('BE-DESIGN.md §8.3 real-browser catch-up scenarios (blocked 
     expect((await assistantMessages(page).first().innerText()).trim().length).toBeGreaterThan(0)
   })
 
-  test('h: gateway restart with tab open — snapshot boot_mismatch, "couldn\'t be finished · Generate again"', async ({ page }) => {
+  // Skipped (not un-skipped like the rest of this file, pass 2 item 6):
+  // restarting the actual embedded binary process mid-test is an
+  // orchestrator-level, human-in-the-loop operation this spec file has no
+  // process control to perform unattended — `npx playwright test --list`
+  // still registers it (proving it's syntactically valid and reachable),
+  // but running the suite normally would hang waiting for a restart that
+  // never happens. The orchestrator removes `.skip` when running this ONE
+  // scenario manually, restarting the gateway at the marked point.
+  test.skip('h: gateway restart with tab open — snapshot boot_mismatch, "couldn\'t be finished · Generate again"', async ({ page }) => {
     test.setTimeout(420_000)
     await startLongTurn(page)
-    // Restarting the actual embedded binary process is an orchestrator-level
-    // operation (this spec file has no process control over the gateway
-    // under test) — left as the one manual step the orchestrator performs
-    // when running this scenario for real.
+    // >>> ORCHESTRATOR: restart the gateway binary here, then resume. <<<
     await expect(page.getByRole('button', { name: /Generate again/i })).toBeVisible({ timeout: 60_000 })
     await expect(assistantConnectionStatus(page)).toContainText('couldn\'t be finished')
   })
