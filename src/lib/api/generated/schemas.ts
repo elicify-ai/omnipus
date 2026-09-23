@@ -3593,6 +3593,7 @@ export const SandboxStatus = z
     bind_ports_count: z.number().int().gte(0),
     kernel_sandbox_active: z.boolean().optional(),
     auto_approve_effective: z.boolean().optional(),
+    god_mode_active: z.boolean().optional(),
   })
   .passthrough();
 export const AuditEntry: z.ZodType<AuditEntry> = z
