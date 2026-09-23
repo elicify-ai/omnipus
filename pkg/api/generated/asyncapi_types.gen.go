@@ -20,8 +20,10 @@ type AgentSwitchedFrame struct {
 	Message *string `json:"message,omitempty"`
 	// ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit (FR-089) — see this frame's description.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Type               string  `json:"type"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/AgentSwitchedFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
 }
 
 // AskUserAnswerFrame — Client → server (askuserquestion-tool-spec v3 §3). The card's submission: either a full answer set (every question answered exactly once — server-validated by askuser.Registry.Submit, first-valid-wins) or cancel:true (the Cancel affordance — selections discarded, submission-free cancelled resume). Canonical copy — keep in sync by hand with components/schemas/AskUserAnswerFrame.yaml.
@@ -80,12 +82,14 @@ type AskUserQuestionFrame struct {
 	Type string              `json:"type"`
 }
 
-// AttachSessionFrame — Client → server request to attach to an existing session. When `since` is provided, the server skips replay frames whose timestamp <= `since`, sending only frames the SPA has not yet seen. Omitting `since` requests a full replay (legacy behaviour).
+// AttachSessionFrame — Client → server request to attach to a session and catch it up to the present. #823 catch-up redesign: since_seq/boot_id replace the retired timestamp cursor (`since`, removed). Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
 type AttachSessionFrame struct {
-	SessionId string `json:"session_id"`
-	// ISO 8601 timestamp of the most recent frame the SPA has already processed. Server replays only frames with timestamp > this value. Used to keep reconnect replay traffic O(missed window) instead of O(full session history).
-	Since *string `json:"since,omitempty"`
-	Type  string  `json:"type"`
+	// #823 review finding 7. The gateway boot ID the SPA last saw for this session. A mismatch forces a snapshot (reason boot_mismatch) regardless of since_seq.
+	BootId    *string `json:"boot_id,omitempty"`
+	SessionId string  `json:"session_id"`
+	// #823 catch-up redesign. Highest per-session sequence number the SPA has already applied for this session. Omit for a first load or an unknown cursor — the server then answers with a snapshot.
+	SinceSeq *int64 `json:"since_seq,omitempty"`
+	Type     string `json:"type"`
 }
 
 // AuthFrame — Client → server authentication frame.
@@ -417,9 +421,23 @@ type CancelFrame struct {
 type CancelStageFrame struct {
 	// ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit (FR-089) — see this frame's description.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Stage              string  `json:"stage"`
-	Type               string  `json:"type"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/CancelStageFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	Stage     string `json:"stage"`
+	Type      string `json:"type"`
+}
+
+// CatchUpCompleteFrame — Server → client. #823 catch-up redesign. Terminal frame of an attach_session response, sent once, after every frame the catch-up needed (incremental journal tail, or full snapshot replay plus projection) has been enqueued. Frames published live during the attach are held and flushed only after this frame. Keep in sync by hand with contracts/components/schemas/CatchUpCompleteFrame.yaml.
+type CatchUpCompleteFrame struct {
+	// The gateway process that answered this attach.
+	BootId *string `json:"boot_id,omitempty"`
+	// Which catch-up path produced this response.
+	Mode string `json:"mode"`
+	// The session's high-water sequence number this attach was answered at.
+	Seq       int64  `json:"seq"`
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
 }
 
 // DelegationFailure — Structured tool-result payload emitted in the `result` field of a tool_call_result frame (status="error") when a delegation tool (spawn / subagent / task_create) is denied by the delegation policy (trust set / mode / depth). The SPA matches on the fixed error="delegation_denied" discriminator, but (policy 2026-07-16) only renders a distinct delegation-failure block in verbose chat or an ActivityPanel step context — the default thread presentation is the calling agent's own narration of the denial, not a dedicated SPA-rendered block. The frame's top-level `error` field carries the same `reason`.
@@ -455,11 +473,17 @@ type DevicePairingResponseFrame struct {
 
 // DoneFrame — Server → client turn complete. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
 type DoneFrame struct {
+	// #823 catch-up redesign. The id of the turn's last assistant message.
+	MessageId *string `json:"message_id,omitempty"`
 	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (a) (FR-089): the child turn's own session id when this frame crosses the wire from a delegated child.
-	ProducingSessionId *string    `json:"producing_session_id,omitempty"`
-	SessionId          string     `json:"session_id"`
-	Stats              *DoneStats `json:"stats,omitempty"`
-	Type               string     `json:"type"`
+	ProducingSessionId *string `json:"producing_session_id,omitempty"`
+	// Per-session sequence number of this frame (#823 catch-up redesign), published only after the turn's transcript entry is durably persisted. Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/DoneFrame.yaml.
+	Seq       *int64     `json:"seq,omitempty"`
+	SessionId string     `json:"session_id"`
+	Stats     *DoneStats `json:"stats,omitempty"`
+	// #823 catch-up redesign. The turn this done frame closes. Idempotent — an unknown turn_id is a no-op apart from clearing the streaming indicator.
+	TurnId *string `json:"turn_id,omitempty"`
+	Type   string  `json:"type"`
 }
 
 // DoneStats — Per-turn statistics in a done frame. additionalProperties are allowed for replay extras (frames_emitted, orphan_count, etc.).
@@ -471,7 +495,8 @@ type DoneStats struct {
 	OrphanCount              *float64 `json:"orphan_count,omitempty"`
 	ReplayError              *bool    `json:"replay_error,omitempty"`
 	Tokens                   *float64 `json:"tokens,omitempty"`
-	TokensDropped            *float64 `json:"tokens_dropped,omitempty"`
+	// Deprecated (#823 catch-up redesign, Q5): the gateway never drops frames under backpressure now (WS close 4008 + reconnect instead). Never set.
+	TokensDropped *float64 `json:"tokens_dropped,omitempty"`
 	// ADR-087 D2 (finding #10). Mirrors Message.truncation_reason for the live done frame, so a turn cut off while the user is still watching renders the notice immediately instead of only after reload/reattach via replay. Only present when true. Absent on a normal turn.
 	Truncated            *bool    `json:"truncated,omitempty"`
 	TruncatedResultCount *float64 `json:"truncated_result_count,omitempty"`
@@ -485,6 +510,8 @@ type ErrorFrame struct {
 	// Human-readable error description.
 	Message string        `json:"message"`
 	Payload *ErrorPayload `json:"payload,omitempty"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Only meaningful when session_id is set — a global error has no session to sequence. Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ErrorFrame.yaml.
+	Seq *int64 `json:"seq,omitempty"`
 	// Session this error relates to. Optional: global errors (auth, connection) are not tied to a specific session.
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
@@ -512,8 +539,10 @@ type GoalOutcomeFrame struct {
 	// Stable id for THIS ending, minted once by the writer and stamped verbatim onto both the persisted transcript entry's `id` and every frame for it (live and replay), e.g. `goal-outcome-<goal_id>-<terminal unix nanos>` — goal_id alone is not unique per ending (a task-owned goal can be re-run and end again). The SPA inserts at most one line per id.
 	MessageId string                  `json:"message_id"`
 	Outcome   GoalOutcomeFrameOutcome `json:"outcome"`
-	SessionId string                  `json:"session_id"`
-	Type      string                  `json:"type"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/GoalOutcomeFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
 }
 
 // GoalOutcomeFrameOutcome — Hand-synced WS copy of contracts/components/schemas/GoalOutcome.yaml (the REST/transcript carrier — see it for every field's meaning). Named differently because pkg/api/generated holds the OpenAPI and AsyncAPI Go types in one package and cannot declare `GoalOutcome` twice. Any field edit MUST be mirrored in GoalOutcome.yaml.
@@ -590,7 +619,9 @@ type GoalStatusFrame struct {
 	// ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit (FR-089) — see this frame's description.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
 	// Adjudications consumed so far (ADR-053 R§8.9 — one round = one adjudication, claim-triggered OR idle-settled).
-	Round     int    `json:"round"`
+	Round int `json:"round"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/GoalStatusFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
 	// ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk (originally 8 states, superseding the earlier 4-value active/paused_judge_unavailable/brake_fired/cleared set — no back-compat at the time; `cleared` re-added as a 9th value by the UAT S3 fix so a user-initiated `/goal clear` no longer collapses into `failed`). Four values ADDED by the joint ADR-084/ADR-085/ADR-086 delivery (C-39); a fifth, `judge_refused_god_mode` (JUDGE-FR-057a), was REMOVED on 2026-09-20 by issue #761 — nothing can emit it, do not re-add. `judge_cas_loss` (JUDGE-FR-083, reason string stays `cas_loss`), `blocked` (JUDGE-FR-093, not terminal), `claim_overturned` (JUDGE-FR-102, not terminal), `expired` (ADR-086 GOAL-FR-028, terminal). See components/schemas/GoalStatusFrame.yaml for the full per-state crosswalk description.
 	State string `json:"state"`
@@ -622,6 +653,8 @@ type JudgeVerdictFrame struct {
 	PlanId *string `json:"plan_id,omitempty"`
 	Round  int     `json:"round"`
 	Scope  string  `json:"scope"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/JudgeVerdictFrame.yaml.
+	Seq *int64 `json:"seq,omitempty"`
 	// OPTIONAL chat-thread session this verdict's round belongs to — present for `scope: task` (the task's run session) and `scope: goal` (the `/goal` session itself), absent for `scope: plan` (a plan round has no single owning chat session). A `judge_verdict` frame without it stays a GLOBAL, panel-only push exactly as before this field existed; when present the SPA also inserts the verdict as a thread message, de-duplicated against the persisted transcript entry's own id so a live push, a replay and a cold REST load converge on one card. Keep in sync by hand with components/schemas/JudgeVerdictFrame.yaml.
 	SessionId *string `json:"session_id,omitempty"`
 	TaskId    *string `json:"task_id,omitempty"`
@@ -687,7 +720,9 @@ type LoopStatusFrame struct {
 	// ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit (FR-089) — see this frame's description.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
 	Run                int     `json:"run"`
-	SessionId          string  `json:"session_id"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/LoopStatusFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
 	// Current state of this loop. Runtime vocabulary owned by the loop engine (ADR-049 Part B); kept a plain string in this contract wave rather than a closed enum (unlike GoalStatusFrame.state) so naming it does not require a breaking change once Part B's implementation lands.
 	State string `json:"state"`
 	Type  string `json:"type"`
@@ -703,8 +738,10 @@ type MediaFrame struct {
 	Parts []MediaPart `json:"parts"`
 	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (a) (FR-089): the child turn's own session id when this frame crosses the wire from a delegated child.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Type               string  `json:"type"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/MediaFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
 }
 
 // MediaPart — One media attachment.
@@ -733,9 +770,11 @@ type MessageFrame struct {
 // MessageStatusFrame — Server → client delivery status for one user message. Session-scoped. received follows durable transcript persistence; working follows successful turn admission; failed means processing stopped before admission. Emitted only when the client supplied client_message_id.
 type MessageStatusFrame struct {
 	ClientMessageId string `json:"client_message_id"`
-	SessionId       string `json:"session_id"`
-	State           string `json:"state"`
-	Type            string `json:"type"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/MessageStatusFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	State     string `json:"state"`
+	Type      string `json:"type"`
 }
 
 // NotificationFrame — Server → client. A notification raised for the recipient user (e.g. a scheduled run failed). Delivered only to that user's connections; the SPA adds it to the header notification center (#264).
@@ -795,9 +834,11 @@ type RateLimitFrame struct {
 	Resource          string  `json:"resource"`
 	RetryAfterSeconds float64 `json:"retry_after_seconds"`
 	Scope             string  `json:"scope"`
-	SessionId         string  `json:"session_id"`
-	Tool              *string `json:"tool,omitempty"`
-	Type              string  `json:"type"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/RateLimitFrame.yaml.
+	Seq       *int64  `json:"seq,omitempty"`
+	SessionId string  `json:"session_id"`
+	Tool      *string `json:"tool,omitempty"`
+	Type      string  `json:"type"`
 }
 
 // ReplayErrorFrame — Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). Emitted by the replay path when the server encounters a TranscriptEntry with Type=system AND Status="error" — produced by appendErrorTranscript for rate-limit denials (kind=rate_limit) and provider LLM call failures (kind=error). The SPA uses this frame's `kind` discriminant to render the rate-limit-denial component or the generic error component instead of falling back to the default "assistant" bubble render path. Without this typed frame, replay treats the entry as a normal assistant message (the previous bug — empty Role falls back to "assistant" via ReplayMessageFrame.Role, so the SPA renders rate-limit text as a regular assistant message).
@@ -826,8 +867,10 @@ type ReplayErrorPayload struct {
 // ReplayMessageFrame — Server → client replayed transcript entry. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the gateway replay path, not by a turn, so producing_session_id is absent (FR-013).
 type ReplayMessageFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
-	Content string  `json:"content"`
-	Id      *string `json:"id,omitempty"`
+	// #823 catch-up redesign §4.7. Present on a replayed user entry persisted with a client-supplied id. Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
+	ClientMessageId *string `json:"client_message_id,omitempty"`
+	Content         string  `json:"content"`
+	Id              *string `json:"id,omitempty"`
 	// Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy entries written before per-turn model recording landed.
 	Model *string `json:"model,omitempty"`
 	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type — emitted by the gateway replay path, not by a turn.
@@ -872,13 +915,29 @@ type SessionCloseFrame struct {
 	Type      string `json:"type"`
 }
 
+// SessionSnapshotFrame — Server → client. #823 catch-up redesign. Answers attach_session when since_seq can no longer be served incrementally. The client must replace its history for this session: followed by session_state, a full unsequenced replay, then exactly one catch_up_complete frame whose seq matches this frame's seq. Keep in sync by hand with contracts/components/schemas/SessionSnapshotFrame.yaml.
+type SessionSnapshotFrame struct {
+	// The gateway process that produced this snapshot.
+	BootId *string `json:"boot_id,omitempty"`
+	// Why a snapshot was sent instead of an incremental catch-up. boot_mismatch is checked first and always wins over the other three reasons.
+	Reason *string `json:"reason,omitempty"`
+	// The session's high-water sequence number at snapshot time. Mirrored on the terminal catch_up_complete frame.
+	Seq       int64  `json:"seq"`
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
+}
+
 // SessionStartedFrame — Server → client new session minted. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output — so producing_session_id is absent (FR-013).
 type SessionStartedFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
+	// #823 review finding 7. The gateway process that minted this session.
+	BootId *string `json:"boot_id,omitempty"`
 	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Type               string  `json:"type"`
+	// #823 catch-up redesign. The sequence number the newly minted session's hub starts from. Keep in sync by hand with contracts/components/schemas/SessionStartedFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
 }
 
 // SessionStateActiveTurn — ADR-082 D4 — the in-flight foreground turn of the session a connection has just bound to. Keep in sync by hand with components/schemas/SessionStateActiveTurn.yaml.
@@ -892,7 +951,9 @@ type SessionStateActiveTurn struct {
 type SessionStateFrame struct {
 	// ADR-082 D4 — present only when the attached session has a foreground turn in flight at emit time. Absent when idle. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
 	ActiveTurn *SessionStateActiveTurn `json:"active_turn,omitempty"`
-	EmittedAt  string                  `json:"emitted_at"`
+	// #823 review finding 7. Stable identifier for this gateway process, minted once at startup. Keep in sync by hand with contracts/components/schemas/SessionStateFrame.yaml.
+	BootId    *string `json:"boot_id,omitempty"`
+	EmittedAt string  `json:"emitted_at"`
 	// Always array, never null. Capped at 1000.
 	PendingApprovals []SessionStatePendingApproval `json:"pending_approvals"`
 	// askuserquestion-tool-spec v3 US-6 S1/FR-9 — snapshot of every PENDING AskUserQuestion card (global registry cap 64) so a reconnecting SPA re-hydrates its card + composer lock. Optional (older gateways omit it); absent/empty means no pending sets.
@@ -924,10 +985,12 @@ type SubagentEndFrame struct {
 	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type — producing == routing by construction (FR-017).
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
 	Reason             *string `json:"reason,omitempty"`
-	SessionId          string  `json:"session_id"`
-	SpanId             string  `json:"span_id"`
-	Status             string  `json:"status"`
-	Type               string  `json:"type"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/SubagentEndFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	SpanId    string `json:"span_id"`
+	Status    string `json:"status"`
+	Type      string `json:"type"`
 }
 
 // SubagentMessageFrame — Server → client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A flat, UI-facing PROJECTION of the underlying SessionMessage riding between subagent_start/subagent_end — see components/schemas/SubagentMessageFrame.yaml for the full shape- decision rationale (why this is not a full embedded SessionMessage oneOf). Canonical copy — keep in sync by hand.
@@ -951,10 +1014,12 @@ type SubagentStartFrame struct {
 	ParentCallId string  `json:"parent_call_id"`
 	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type — producing == routing by construction (FR-017).
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	SpanId             string  `json:"span_id"`
-	TaskLabel          string  `json:"task_label"`
-	Type               string  `json:"type"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/SubagentStartFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	SpanId    string `json:"span_id"`
+	TaskLabel string `json:"task_label"`
+	Type      string `json:"type"`
 }
 
 // SubagentStateFrame — Server → client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A flat projection of SessionLifecycleRecord.state riding between subagent_start/subagent_end, plus an optional steering- receipt. Canonical copy — keep in sync by hand.
@@ -1004,10 +1069,18 @@ type TaskStatusChangedFrame struct {
 type TokenFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	Content string  `json:"content"`
+	// #823 catch-up redesign. Identifies the specific assistant message (bubble) this token belongs to, stable across reconnect/catch-up.
+	MessageId *string `json:"message_id,omitempty"`
 	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (a) (FR-089): the child turn's own session id when this frame crosses the wire from a delegated child.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Type               string  `json:"type"`
+	// Set only on a catch-up token: REPLACES the open bubble's content for this session instead of appending, making catch-up idempotent.
+	Replace *bool `json:"replace,omitempty"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy (e.g. a projection token inside a snapshot). Keep in sync by hand with contracts/components/schemas/TokenFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	// #823 catch-up redesign. Correlates this token with the turn/bubble it belongs to. Absent on the connection-scoped Send fallback.
+	TurnId *string `json:"turn_id,omitempty"`
+	Type   string  `json:"type"`
 }
 
 // ToolApprovalRequiredFrame — Server → client tool approval needed (FR-011, FR-082). CRITICAL: args MUST be object (never null). Backend coerces nil → {}. SPA calls Object.keys(args) — null crashes at render time (Ava-chat bug). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
@@ -1068,7 +1141,9 @@ type ToolCallResultFrame struct {
 	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (a) (FR-089): the child turn's own session id when this frame crosses the wire from a delegated child.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
 	// Tool return value. Any JSON type or null (null is the contract for error frames). Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes. Real oneOf (round-2 hardening, ADR-060 finding F1). The previous revision switched this to `anyOf` reasoning that branch 1's permissive `type: [object, array, ...]` already matched every object, so a genuine oneOf would double-match every $ref sentinel/family member against its own union. That diagnosis was correct but `anyOf` was the wrong fix: under `anyOf` nothing is ever rejected, including a malformed PermissionDenied missing `permanent` — the seven $refs below became unreachable as constraints, which nullifies ADR-060 §7 item 2's own rationale for admitting new members ("when the union is ever made executable, a member missing from it would be the silent-drop failure ADR-058 §7 item 4 warned about" — an anyOf over a universal branch can never be made executable). Fixed here with a real `oneOf`: the single permissive branch is split into (a) an unconditional non-object catch-all (array/string/number/boolean/null — the JSON Schema `required` keyword is inapplicable to non-object instances, so no exclusion is needed there) and (b) an object catch-all that excludes every reserved discriminator key the nine $refs below use (seven at ADR-060 time; ADR-066 T066-01 added ToolArgumentRefusal and ToolResultRecallMark) — `_truncated`, `_marshal_error`, `_ref`, `error` — via `not: {anyOf: [{required: [...]}, ...]}`. With that split, exactly one branch matches a plain scalar/array/object and exactly one matches a valid named shape; a payload carrying a reserved key but failing its own $ref (e.g. PermissionDenied missing `permanent`) matches none and is correctly rejected, rather than silently passing through branch (b). ADR-034's external-file-$ref constraint does not block this — these are internal `#/components/schemas/...` refs (D4). Verified by compiling this exact file with santhosh-tekuri/jsonschema/v6: pkg/api/generated/contract_test.go wraps one fixture per family member in a real ToolCallResultFrame and validates it end-to-end; pkg/gateway/structured_failure_discriminator_coverage_test.go validates each producer's output standalone and asserts a malformed member is rejected. F13 follow-up hardening: the object catch-all's `error` exclusion below now keys on `error` being a STRING, not merely present — see that branch's own description for why (settleAskToolCallTranscript / spawnSubTurn persist a boolean `error` flag on an ordinary object, which is not an attempt at any of the four `error`-keyed $refs and must still match the catch-all). Regression fixture: pkg/api/generated/tool_call_result_error_key_contract_test.go. Still documentary in the generated artifacts (ADR-060 D6): the asyncapi->Go converter (scripts/gen-asyncapi-go) and the TS/Zod generator both key off "is this schema a oneOf/anyOf with no top-level type", which is unchanged by this edit — TS still emits `result: z.unknown()`, Go still emits `Result any`. So this is a spec-correctness fix (the union now actually constrains what a conformant producer may emit) with no generated-code behavior change; the hand-written detectors (isPermissionDenied and friends) remain the real enforcement at the SPA read boundary.
-	Result    any    `json:"result"`
+	Result any `json:"result"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ToolCallResultFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
 	Status    string `json:"status"`
 	Tool      string `json:"tool"`
@@ -1084,9 +1159,11 @@ type ToolCallStartFrame struct {
 	ParentCallId *string        `json:"parent_call_id,omitempty"`
 	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (a) (FR-089): the child turn's own session id when this frame crosses the wire from a delegated child.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Tool               string  `json:"tool"`
-	Type               string  `json:"type"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ToolCallStartFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	Tool      string `json:"tool"`
+	Type      string `json:"type"`
 }
 
 // ToolResultProjectionFrame — Server → client (ADR-066 D5): a tool result already delivered to this session was capped or emptied in place in the model's window. The archive keeps the full content; the SPA updates its rendering of the matching tool call (recall mark shown only under Verbose chat) and, on reload, learns the same state from ToolCall.content_state on the transcript. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep in sync by hand with components/schemas/ToolResultProjectionFrame.yaml.
@@ -1099,7 +1176,9 @@ type ToolResultProjectionFrame struct {
 	Mark *string `json:"mark,omitempty"`
 	// ADR-057 FR-012/FR-013 — present iff the projection was produced by a delegated child session different from session_id.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ToolResultProjectionFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
 	// The projected tool call. Provider-generated ids are not unique across an archive — pair with archive_line.
 	ToolCallId string `json:"tool_call_id"`
 	Type       string `json:"type"`
@@ -1138,6 +1217,25 @@ type TruncatedResult struct {
 	Truncated         bool   `json:"_truncated"`
 	OriginalSizeBytes int    `json:"original_size_bytes"`
 	Preview           string `json:"preview"`
+}
+
+// UserMessageFrame — Server → client. #823 catch-up redesign, founder decision Q1 (YES). Echoes a persisted user message to every tab bound to the session, not only the sender's. Keep in sync by hand with contracts/components/schemas/UserMessageFrame.yaml.
+type UserMessageFrame struct {
+	AgentId     *string `json:"agent_id,omitempty"`
+	Attachments []struct {
+		MimeType string `json:"mime_type"`
+		Path     string `json:"path"`
+		Size     int64  `json:"size"`
+		Type     string `json:"type"`
+	} `json:"attachments,omitempty"`
+	ClientMessageId *string `json:"client_message_id,omitempty"`
+	Content         string  `json:"content"`
+	Id              string  `json:"id"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	Timestamp string `json:"timestamp"`
+	Type      string `json:"type"`
 }
 
 // WhatsAppPairingFrame — Server → client WhatsApp native/QR pairing update (QR code + live status) so the SPA can pair in-browser without the gateway terminal (#283).
@@ -1228,4 +1326,7 @@ const (
 	WsFrameTypeBrowserHandoverNotice    WsFrameType = "browser_handover_notice"
 	WsFrameTypeGoalOutcome              WsFrameType = "goal_outcome"
 	WsFrameTypeLibraryChanged           WsFrameType = "library_changed"
+	WsFrameTypeSessionSnapshot          WsFrameType = "session_snapshot"
+	WsFrameTypeCatchUpComplete          WsFrameType = "catch_up_complete"
+	WsFrameTypeUserMessage              WsFrameType = "user_message"
 )

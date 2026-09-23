@@ -15799,6 +15799,9 @@ type Message struct {
 	// CanceledByUser Username of the actor who triggered the cancel — present only on type="turn_canceled" entries (FR-15).
 	CanceledByUser *string `json:"canceled_by_user,omitempty"`
 
+	// ClientMessageId #823 catch-up redesign. Present on a user entry that was persisted with a client-supplied correlation id (mirrors MessageFrame.client_message_id / ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent bubble against this REST-loaded entry by id instead of by content+timestamp matching. Absent on entries written before this field existed and on non-user entries.
+	ClientMessageId *string `json:"client_message_id,omitempty"`
+
 	// Content Raw markdown/text content of the message.
 	Content *string `json:"content,omitempty"`
 
@@ -19039,6 +19042,9 @@ type SessionDetail struct {
 
 		// CanceledByUser Username of the actor who triggered the cancel — present only on type="turn_canceled" entries (FR-15).
 		CanceledByUser *string `json:"canceled_by_user,omitempty"`
+
+		// ClientMessageId #823 catch-up redesign. Present on a user entry that was persisted with a client-supplied correlation id (mirrors MessageFrame.client_message_id / ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent bubble against this REST-loaded entry by id instead of by content+timestamp matching. Absent on entries written before this field existed and on non-user entries.
+		ClientMessageId *string `json:"client_message_id,omitempty"`
 
 		// Content Raw markdown/text content of the message.
 		Content *string `json:"content,omitempty"`

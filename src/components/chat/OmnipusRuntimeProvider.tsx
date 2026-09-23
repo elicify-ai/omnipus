@@ -157,16 +157,20 @@ export function reattachActiveSession(
   // The gateway will replay the entire transcript. Mark the session as replaying
   // symmetrically here (same as in attachToSession).
   useChatStore.setState({ isReplaying: true });
-  // Pass the since-cursor so the gateway only replays frames the SPA hasn't seen.
-  const since =
-    useChatStore.getState().sessionsById[activeSessionId]?.lastReceivedEventTime ?? undefined;
+  // SQUAD BE-0 compile shim (#823 catch-up redesign, contracts Step 0):
+  // AttachSessionFrame.since (the legacy timestamp cursor) was removed from the
+  // wire contract in favor of since_seq/boot_id. Rewiring this reattach path to
+  // send the new cursor fields is Lane C's work (src/components/chat/
+  // OmnipusRuntimeProvider.tsx); omitting `since` here just falls back to the
+  // pre-existing "no cursor" full-replay path, same as an undefined `since` did
+  // before.
   // Reset the bucket ONLY on the success path, where the gateway's replay is in
   // flight and will repopulate it from scratch (preventing duplicate
   // "Browse to … / Browse to …" bubbles). If send() fails, the reattach never
   // happens and no replay will rebuild the transcript, so wiping the bucket
   // would leave the user a blank chat behind the "please reload" error. Preserve
   // the existing transcript instead.
-  const sent = conn.send({ type: "attach_session", session_id: activeSessionId, since });
+  const sent = conn.send({ type: "attach_session", session_id: activeSessionId });
   if (!sent) {
     // send() returned false — socket closed between onopen and here. Preserve
     // local state (do not wipe bucket) and surface an error. Clear the replaying

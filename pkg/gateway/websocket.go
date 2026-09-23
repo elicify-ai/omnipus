@@ -1295,7 +1295,13 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			"requested_session_id", f.SessionId,
 		)
 		if f.SessionId != "" {
-			wh.h.handleAttachSession(wh.ctx, wh.chatID, f.SessionId, f.Since, wh.wc)
+			// SQUAD BE-0 compile shim (#823 catch-up redesign, contracts Step 0):
+			// AttachSessionFrame.Since (the legacy timestamp cursor) was removed from
+			// the wire contract in favor of SinceSeq/BootId. handleAttachSession's own
+			// since_seq/boot_id rewiring is Lane A's work (websocket_replay.go); passing
+			// nil here just forces the pre-existing "no cursor" full-replay path until
+			// Lane A lands, same as an omitted `since` did before.
+			wh.h.handleAttachSession(wh.ctx, wh.chatID, f.SessionId, nil, wh.wc)
 		} else {
 			slog.Warn("ws: attach_session with empty session_id", "chat_id", wh.chatID)
 		}

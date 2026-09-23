@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message"]);
 
 export const AuthFrame = z
   .object({
@@ -60,7 +60,8 @@ export const AttachSessionFrame = z
   .object({
     type: z.literal("attach_session"),
     session_id: z.string().min(1).max(128),
-    since: z.string().optional(),
+    since_seq: z.number().int().min(1).optional(),
+    boot_id: z.string().optional(),
   })
   .strict();
 
@@ -78,6 +79,8 @@ export const SessionStartedFrame = z
     session_id: z.string().min(1),
     agent_id: z.string().optional(),
     producing_session_id: z.string().min(1).optional(),
+    seq: z.number().int().min(1).optional(),
+    boot_id: z.string().optional(),
   })
   .strict();
 
@@ -87,6 +90,7 @@ export const MessageStatusFrame = z
     session_id: z.string().min(1).max(128),
     client_message_id: z.string().min(1).max(128),
     state: z.enum(["received", "working", "failed"]),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -97,6 +101,10 @@ export const TokenFrame = z
     content: z.string().max(65536),
     agent_id: z.string().optional(),
     producing_session_id: z.string().min(1).optional(),
+    turn_id: z.string().optional(),
+    message_id: z.string().optional(),
+    replace: z.boolean().optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -123,6 +131,9 @@ export const DoneFrame = z
     session_id: z.string().min(1),
     stats: DoneStats.optional(),
     producing_session_id: z.string().min(1).optional(),
+    turn_id: z.string().optional(),
+    message_id: z.string().optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -153,6 +164,7 @@ export const ErrorFrame = z
       llm_error: LLMError,
     })
     .strict().optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -166,6 +178,7 @@ export const ToolCallStartFrame = z
     parent_call_id: z.string().optional(),
     agent_id: z.string().optional(),
     producing_session_id: z.string().min(1).optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -264,6 +277,7 @@ export const ToolCallResultFrame = z
     parent_call_id: z.string().optional(),
     agent_id: z.string().optional(),
     producing_session_id: z.string().min(1).optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -276,6 +290,7 @@ export const SubagentStartFrame = z
     task_label: z.string().max(100),
     agent_id: z.string().optional(),
     producing_session_id: z.string().min(1).optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -292,6 +307,7 @@ export const SubagentEndFrame = z
     parent_call_id: z.string().optional(),
     message: z.string().optional(),
     producing_session_id: z.string().min(1).optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -362,6 +378,7 @@ export const ReplayMessageFrame = z
     producing_session_id: z.string().min(1).optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
+    client_message_id: z.string().optional(),
   })
   .strict();
 
@@ -391,6 +408,7 @@ export const ToolResultProjectionFrame = z
     content_state: z.enum(["capped", "emptied"]),
     mark: z.string().max(2048).optional(),
     producing_session_id: z.string().min(1).optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -404,6 +422,7 @@ export const RateLimitFrame = z
     retry_after_seconds: z.number().min(0),
     agent_id: z.string().optional(),
     tool: z.string().max(128).optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -432,6 +451,7 @@ export const MediaFrame = z
     session_id: z.string().min(1),
     parts: z.array(MediaPart).min(1).max(32),
     producing_session_id: z.string().min(1).optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -442,6 +462,7 @@ export const AgentSwitchedFrame = z
     agent_id: z.string().optional(),
     message: z.string().optional(),
     producing_session_id: z.string().min(1).optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -558,6 +579,7 @@ export const SessionStateFrame = z
     pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
     session_id: z.string().optional(),
     active_turn: SessionStateActiveTurn.optional(),
+    boot_id: z.string().optional(),
     emitted_at: z.string(),
   })
   .strict();
@@ -592,6 +614,7 @@ export const CancelStageFrame = z
     session_id: z.string().min(1),
     stage: z.enum(["graceful", "hard", "detached"]),
     producing_session_id: z.string().min(1).optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -951,6 +974,7 @@ export const GoalStatusFrame = z
       clause_count: z.number().int().min(1).optional(),
     })
     .strict()).optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -964,6 +988,7 @@ export const LoopStatusFrame = z
     next_delay: z.number().int().optional(),
     state: z.string(),
     producing_session_id: z.string().min(1).optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -1010,6 +1035,7 @@ export const JudgeVerdictFrame = z
     judged_at: z.string(),
     judge_agent_id: z.string(),
     session_id: z.string().optional(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -1041,6 +1067,7 @@ export const GoalOutcomeFrame = z
     session_id: z.string().min(1),
     message_id: z.string().min(1),
     outcome: GoalOutcomeFrameOutcome,
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -1119,6 +1146,47 @@ export const BrowserInputControlAckFrame = z
   })
   .strict();
 
+export const SessionSnapshotFrame = z
+  .object({
+    type: z.literal("session_snapshot"),
+    session_id: z.string().min(1).max(128),
+    seq: z.number().int().min(1),
+    boot_id: z.string().optional(),
+    reason: z.enum(["cursor_ahead", "retention_exceeded", "unknown_position", "boot_mismatch"]).optional(),
+  })
+  .strict();
+
+export const CatchUpCompleteFrame = z
+  .object({
+    type: z.literal("catch_up_complete"),
+    session_id: z.string().min(1).max(128),
+    seq: z.number().int().min(1),
+    boot_id: z.string().optional(),
+    mode: z.enum(["incremental", "snapshot"]),
+  })
+  .strict();
+
+export const UserMessageFrame = z
+  .object({
+    type: z.literal("user_message"),
+    session_id: z.string().min(1).max(128),
+    id: z.string().min(1),
+    client_message_id: z.string().min(1).max(128).optional(),
+    content: z.string().max(5242880),
+    attachments: z.array(z
+    .object({
+      type: z.enum(["image", "audio", "video", "file"]),
+      path: z.string(),
+      size: z.number().int(),
+      mime_type: z.string(),
+    })
+    .strict()).optional(),
+    timestamp: z.string(),
+    agent_id: z.string().optional(),
+    seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
@@ -1190,6 +1258,9 @@ export const WsFrame = z.discriminatedUnion("type", [
   BrowserInputAnswerFrame,
   BrowserInputStateFrame,
   BrowserInputControlAckFrame,
+  SessionSnapshotFrame,
+  CatchUpCompleteFrame,
+  UserMessageFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

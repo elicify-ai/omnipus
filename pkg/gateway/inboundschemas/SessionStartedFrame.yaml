@@ -20,3 +20,17 @@ properties:
   agent_id:
     type: string
     description: The agent that will handle this session.
+  seq:
+    type: integer
+    format: int64
+    minimum: 1
+    description: >-
+      #823 catch-up redesign. The sequence number the newly minted session's per-session
+      hub starts from (its first published frame). Lets the SPA seed the session's cursor
+      at mint time instead of waiting for the first sequenced frame after it.
+  boot_id:
+    type: string
+    description: >-
+      #823 review finding 7. The gateway process that minted this session, stored
+      alongside the seeded cursor so a later attach_session can detect a restart the same
+      way it would for any other session — see AttachSessionFrame.boot_id.
