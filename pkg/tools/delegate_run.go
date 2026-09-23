@@ -398,7 +398,7 @@ const (
 // action="run". Absent/nil/explicit 0 all resolve to 0 (time.Duration zero
 // value), meaning "no override — use the spawner's own default
 // (defaultSubTurnTimeout)", matching the schema's documented "0 = default
-// (5 min)". A nonzero value is bounds-checked against
+// (30 min)". A nonzero value is bounds-checked against
 // [minDelegateTimeoutSeconds, maxDelegateTimeoutSeconds] and REJECTED —
 // never silently clamped or ignored — when out of range, mirroring
 // shell.go's resolveTimeoutSeconds.

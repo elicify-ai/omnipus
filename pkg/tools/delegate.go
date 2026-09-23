@@ -626,7 +626,7 @@ func (t *DelegateTool) Description() string {
 		"and whether it is running or queued (with its place in line). You get a message when the " +
 		"child finishes, asks a question, or hits a problem. Check on it with delegate status, " +
 		"redirect it with delegate steer, stop it with delegate cancel. A delegation is " +
-		"force-cancelled after timeout_seconds (default 300s / 5 min) if it has not finished by then. " +
+		"force-cancelled after timeout_seconds (default 1800s / 30 min) if it has not finished by then. " +
 		"action=\"status\" checks on a previously-delegated session by its session_id — the only way " +
 		"to address a child; use list_jobs to see everything you have outstanding. " +
 		"action=\"inbox\" drains messages the child has pushed back to you (progress/" +
@@ -767,7 +767,7 @@ func (t *DelegateTool) Parameters() map[string]any {
 			},
 			"timeout_seconds": map[string]any{
 				"type":        "integer",
-				"description": "Optional (action=\"run\" only): max seconds before this delegation is force-cancelled. 0 = default (5 min).",
+				"description": "Optional (action=\"run\" only): max seconds before this delegation is force-cancelled. 0 = default (30 min).",
 			},
 			"critical": map[string]any{
 				"type":        "boolean",
