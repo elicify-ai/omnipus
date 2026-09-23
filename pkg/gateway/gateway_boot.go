@@ -950,28 +950,21 @@ func (stg *setupAndStartServicesState) setupPlans() (*services, bool, error) {
 }
 
 // ============================================================================
-// ADR-091 — pkg/steer wiring (landing order §3 row A: "pkg/gateway/
-// gateway_boot.go (wiring every pkg/steer implementation; the boot hook
-// body is D's) | A wires, D owns the hook body | one file, two named
-// sections"). This is WP-A's named section; WP-D's boot-hook body lands
-// separately (its own section, landing order §3 "boot_sweep.go ... the
-// boot-hook body in gateway_boot.go").
+// ADR-091 — pkg/steer wiring: this file wires every pkg/steer
+// implementation; the boot-hook body itself lives in boot_sweep.go
+// (SteerBootRecovery.Run), invoked from the BootHook closure below.
 // ============================================================================
 
 // wireSteerDeps builds every ADR-091 pkg/steer implementation from the
 // pkg/agent side (I-2 SessionLauncher, I-5 AudienceResolver/
 // UpwardDeliverer, I-6 Canceller, I-8 RecordClassifier) and stores the
-// bundle on stg.runningServices.SteerDeps, where later lanes (WP-B, WP-C,
-// WP-D) read it off the running *services to inject into their own
-// boundaries — they do not re-wire pkg/agent themselves.
+// bundle on stg.runningServices.SteerDeps, where other gateway boundaries
+// read it off the running *services to inject into their own code — they
+// do not re-wire pkg/agent themselves.
 //
-// Phase 2 update: I-8's Classifier and I-2's Launcher (steer_launcher.go)
-// are both real now. Canceller/Deliverer (steer_cancel.go/
-// steer_audience.go — owned by WP-B/WP-D from CP-0 onward) remain compiled
-// stubs, replaced by their owners' real bodies in the SAME files at
-// CP-2/CP-3 — no alias period, no second path — so this wiring section
-// does not change shape as later checkpoints land, only what each field
-// points at.
+// All four implementations are real: I-8's Classifier and I-2's Launcher
+// (steer_launcher.go), I-6's Canceller (steer_cancel.go) and I-5's
+// AudienceResolver/UpwardDeliverer (steer_audience.go).
 func (stg *setupAndStartServicesState) wireSteerDeps() {
 	sessionStore := stg.agentLoop.GetSessionStore()
 	classifier := agent.NewSteerRecordClassifier(stg.lifecycleStore, sessionStore)
