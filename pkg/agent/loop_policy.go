@@ -295,6 +295,57 @@ func (al *AgentLoop) loadToolApprover() PolicyApprover {
 	return a
 }
 
+// ResolveEffectiveShellMode resolves the ADR-091 D1 three-level, tighten-only
+// mode merge — global -> per-agent -> per-chat modifier — into the single
+// named ShellMode (Ask/Auto/God) in force for one turn's bash calls. This is
+// the mode-resolution CONTRACT other lanes build against:
+//
+//   - Lane L5's mode-write handlers (global PUT via rest_sandbox_config.go,
+//     per-agent/per-chat writes) call this with the CANDIDATE value spliced
+//     into the appropriate slot and compare the result to the candidate: if
+//     they differ, the candidate would have loosened the effective mode and
+//     the write MUST be rejected with 4xx (FR-003) before ever reaching
+//     config.json or SessionModeStore.Set.
+//   - Lane L4's bash exec gate calls this with the LIVE values (global from
+//     GlobalShellMode(cfg), agent from AgentShellModeOverride(cfg, agentID),
+//     chat from SessionModeStore.Get(sessionID)) to learn which mode governs
+//     the command about to run, then translates the result into the D3/D7/D8
+//     enforcement decisions those lanes own.
+//
+// global is REQUIRED (always a valid ShellMode — GlobalShellMode never
+// returns the zero value). agentOverride and chatModifier are nil when that
+// layer has no explicit value (agent rides the ceiling / no chat modifier
+// set) — nil at a layer means "defer to the layer above," never "loosen to
+// the loosest possible mode."
+//
+// Tighten-only is structural, not merely checked: every layer's
+// contribution is folded in via tighterShellMode (sessionmode.go), so a
+// looser agentOverride or chatModifier — whether from a bypassed write-time
+// check, a hand-edited config.json, or a stale SessionModeStore entry —
+// NEVER widens the result past what the layer above it already resolved to.
+// This is the resolution-time backstop under FR-003's write-time 4xx, not a
+// substitute for it: S43/S44 (the write-time rejection tests) are lane L5's
+// job; the tests in loop_policy_mode_test.go prove THIS function refuses to
+// honor a loosening value even when one somehow reaches it.
+//
+// God Mode interaction: ShellModeGod can only ever come from global (D1 —
+// AgentShellModeOverride and SessionModeStore never produce it). Once global
+// is ShellModeGod, tighterShellMode(ShellModeGod, x) == x for any x != "" —
+// i.e. an agent or chat override still tightens God Mode down to Ask/Auto
+// exactly as it would tighten Auto, with no special-casing required; the
+// ordinary merge already gives God Mode zero special treatment beyond being
+// the loosest rank.
+func ResolveEffectiveShellMode(global ShellMode, agentOverride, chatModifier *ShellMode) ShellMode {
+	eff := global
+	if agentOverride != nil {
+		eff = tighterShellMode(eff, *agentOverride)
+	}
+	if chatModifier != nil {
+		eff = tighterShellMode(eff, *chatModifier)
+	}
+	return eff
+}
+
 // CheckGrantOrRequestApproval is the SOLE consultation point for tool-approval
 // grants on the "ask" policy path (ADR-036 §3.4). It first checks the
 // session-scoped "Always Allow" grant store (al.ApprovalGrants()); only when
