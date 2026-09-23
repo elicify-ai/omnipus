@@ -554,3 +554,28 @@ func TestHubRegistry_Lookup(t *testing.T) {
 		t.Fatalf("lookup returned %v, want the same instance %v", got, created)
 	}
 }
+
+// TestHub_PublishBytes_MatchesJournal exercises publishBytes, the variant
+// used by the transitional wiring in websocket_streamer.go (Update/Finalize
+// resolve their own delivery targets outside hub.conns while the full
+// attach/bind cutover is still in progress): the bytes it returns must be
+// byte-identical to what actually landed in the journal at that seq.
+func TestHub_PublishBytes_MatchesJournal(t *testing.T) {
+	reg := newHubRegistry("boot-1")
+	hub := reg.getOrCreate("sess-publishbytes")
+
+	seq, out := hub.publishBytes(tokenFrame(t, 0))
+	if seq != 1 {
+		t.Fatalf("seq = %d, want 1", seq)
+	}
+	hub.mu.Lock()
+	journaled := hub.journal[0].bytes
+	hub.mu.Unlock()
+	if string(out) != string(journaled) {
+		t.Fatalf("publishBytes returned %s, journal has %s", out, journaled)
+	}
+	gotSeq, ok := decodeSeq(t, out)
+	if !ok || gotSeq != 1 {
+		t.Fatalf("decoded seq = %d ok=%v, want 1", gotSeq, ok)
+	}
+}

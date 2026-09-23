@@ -290,6 +290,19 @@ func (h *sessionHub) drain() {
 // to every currently-bound connection. No network I/O happens here — enqueue
 // only appends to the connection's own queue (BE-DESIGN.md §2, §2.1).
 func (h *sessionHub) publish(frame []byte) uint64 {
+	seq, _ := h.publishBytes(frame)
+	return seq
+}
+
+// publishBytes is publish's full implementation, additionally returning the
+// exact seq-stamped bytes that were journaled and (for any currently-bound
+// hubConn) delivered. A caller that still resolves its OWN delivery targets
+// outside the hub's conns set (the #823 integration's transitional state —
+// see websocket_streamer.go's Update/Finalize) needs these exact bytes so
+// what it delivers is byte-identical to what the journal retains, preserving
+// H3's multi-tab-byte-identity guarantee even before every producer's
+// delivery path has been cut over to hub-tracked bindings.
+func (h *sessionHub) publishBytes(frame []byte) (uint64, []byte) {
 	h.mu.Lock()
 	h.head++
 	seq := h.head
@@ -324,7 +337,7 @@ func (h *sessionHub) publish(frame []byte) uint64 {
 			onOverflow(c)
 		}
 	}
-	return seq
+	return seq, out
 }
 
 // appendJournalLocked appends entry (seq, bytes) to the journal and applies
