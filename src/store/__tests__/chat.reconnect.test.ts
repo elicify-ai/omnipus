@@ -114,6 +114,17 @@ function catchUpOrLiveToken(content: string): TokenFrame {
   return { type: 'token', session_id: SID, content, agent_id: AGENT_ID }
 }
 
+// The one real wire shape the gateway sends for "here is content the client
+// missed" (pkg/gateway/websocket_replay.go::sendCatchUp, always sets
+// Replace: true — contracts/components/schemas/TokenFrame.yaml). Distinct
+// from catchUpOrLiveToken, which — despite its name — represents an ordinary
+// LIVE token landing in an already-opened placeholder (no accumulated text
+// existed yet at bind time, so the gateway sends nothing through sendCatchUp
+// and the first live token opens/fills the bubble directly).
+function replayCatchUpToken(content: string): TokenFrame {
+  return { type: 'token', session_id: SID, content, agent_id: AGENT_ID, replace: true }
+}
+
 // The TURN's own completion `done` — carries real token/cost stats.
 function turnDone(): DoneFrame {
   return { type: 'done', session_id: SID, stats: { tokens: 42, cost: 0.005 } }
@@ -407,6 +418,15 @@ describe('chat.reconnect — turn finished during replay (real done races ahead 
 // SPA first; replay's catch-up token arrives later with no second terminal
 // frame. The store must treat that late catch-up as the already-finished
 // answer, not reopen a permanently running bubble.
+//
+// SQUAD-BRIEF-AY finding 11: this scenario's catch-up token is corrected here
+// to carry `replace: true` — the actual wire shape the gateway sends for it
+// (pkg/gateway/websocket_replay.go::sendCatchUp is the only source of this
+// content, and it always sets Replace). The store no longer decides
+// "already-finished" from a stored per-bucket flag (see frames.ts's
+// isTerminalCatchUpToken doc comment for why that went stale); it reads the
+// frame's own `replace` marker instead, so the test frame must carry the
+// same marker production sends. The asserted outcome is unchanged.
 describe('chat.reconnect — turn finishes before catch-up reaches the SPA (#822)', () => {
   it('renders a late catch-up token as one finished assistant message after the real done already landed', () => {
     beginAttach()
@@ -415,7 +435,7 @@ describe('chat.reconnect — turn finishes before catch-up reaches the SPA (#822
       useChatStore.getState().handleFrame(turnDone())
       useChatStore.getState().handleFrame(replayMessage(0))
       useChatStore.getState().handleFrame(replayTerminatorDone(1))
-      useChatStore.getState().handleFrame(catchUpOrLiveToken('final answer completed while offline'))
+      useChatStore.getState().handleFrame(replayCatchUpToken('final answer completed while offline'))
     })
 
     const msgs = assistantMessages()
@@ -425,6 +445,51 @@ describe('chat.reconnect — turn finishes before catch-up reaches the SPA (#822
     expect(msgs[0].isStreaming).toBe(false)
     expect(bucket()?.isStreaming).toBe(false)
     expect(useChatStore.getState().isStreaming).toBe(false)
+  })
+
+  // Review finding 11 (SQUAD-BRIEF-AY): the flag the store used to decide
+  // "this token is a stale catch-up snapshot, not live content"
+  // (terminalCatchUpPending) was cleared only by the NEXT token — never by a
+  // later, completely unrelated turn starting. An already-attached tab never
+  // gets a fresh session_state for a turn it didn't just reconnect for (the
+  // gateway emits session_state only on a new WS connection/attach — see
+  // pkg/gateway/websocket.go's single emitSessionState call site), so a
+  // second, unprompted turn's first token can arrive with the stale flag
+  // still set from the FIRST turn's finish. The buggy outcome: the first
+  // token of the new turn is wrongly rendered as already-finished (closing
+  // its bubble as 'done' on arrival), and the second token then finds that
+  // bubble closed and opens a brand-new one — splitting one live answer into
+  // two bubbles.
+  it('a later, unrelated turn is not corrupted by a stale terminal-catch-up flag left over from a prior, contentless turn (finding 11)', () => {
+    beginAttach()
+    act(() => {
+      useChatStore.getState().handleFrame(sessionStateWithActiveTurn())
+      // This turn finishes with NO token ever having arrived for it (e.g. a
+      // tool-only turn, or a turn that finished with empty content) — the
+      // flag this done sets is therefore never consumed by any token of
+      // ITS OWN turn.
+      useChatStore.getState().handleFrame(turnDone())
+      useChatStore.getState().handleFrame(replayTerminatorDone(0))
+    })
+    expect(assistantMessages()).toHaveLength(0)
+
+    // A brand-new turn's tokens arrive directly — no session_state
+    // re-announcement, because this tab was already attached (not
+    // reconnecting) when the new turn started; the gateway only emits
+    // session_state on a fresh WS connection/attach.
+    act(() => {
+      useChatStore.getState().handleFrame(catchUpOrLiveToken('brand new '))
+      useChatStore.getState().handleFrame(catchUpOrLiveToken('answer'))
+    })
+
+    const msgs = assistantMessages()
+    // Exactly ONE bubble for the new turn — not the first token wrongly
+    // closed as already-finished ('done') and a second, duplicate-splitting
+    // bubble opened for the rest.
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].content).toBe('brand new answer')
+    expect(msgs[0].isStreaming).toBe(true)
+    expect(msgs[0].status).toBe('streaming')
   })
 })
 

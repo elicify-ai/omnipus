@@ -44,6 +44,58 @@ async function waitTurnDone(page: Page) {
   await expect(stopButton(page)).toBeHidden({ timeout: 240_000 })
 }
 
+/** The id of the session currently attached in this tab, via the
+ * window.__omnipus_test_hooks exposure (src/store/session.ts) — the
+ * established pattern for reaching SPA-internal state from Playwright (see
+ * src/lib/ws.ts / src/lib/api.ts's own counters). Root '/' redirects into a
+ * workspace's Chat TAB (workspaces.$workspaceId.chat has no sessionId route
+ * param), so there is no URL to read a specific session's id back from. */
+async function getActiveSessionId(page: Page): Promise<string> {
+  const id = await page.evaluate(() => {
+    const w = window as unknown as { __omnipus_test_hooks?: Record<string, unknown> }
+    const fn = w.__omnipus_test_hooks?.getActiveSessionId as (() => string | null) | undefined
+    return fn ? fn() : null
+  })
+  if (!id) throw new Error('getActiveSessionId: window.__omnipus_test_hooks.getActiveSessionId returned no id')
+  return id
+}
+
+/**
+ * Switches to a specific session via the sidebar's session search — an
+ * ATTACH (useSelectSession.ts), never a reload.
+ *
+ * SQUAD-BRIEF-AY: this test used to call `page.goto(urlA)` to "return" to
+ * session A. That reloads the whole SPA, which wipes its in-memory
+ * per-session sequence cursors (`src/store/chat/slices/sequence.ts`'s
+ * `lastAppliedSeq`) — exactly the state #823 phase 2 exists to preserve
+ * across a reconnect, so the reload silently discarded the thing this very
+ * test is meant to exercise. It was also targeting the wrong URL to begin
+ * with: root `/` redirects into the DEFAULT WORKSPACE's Chat tab
+ * (`workspaces.$workspaceId.chat` has no `sessionId` route param — only the
+ * separate `/sessions/$sessionId` "Unfiled" route does), so `urlA` and
+ * `urlB` were the exact same URL; `page.goto(urlA)` reloaded onto whichever
+ * session the cold-load happened to resume, not deterministically session A.
+ *
+ * A real user does not reload to switch conversations — they pick one from
+ * the sidebar. This drives that same path: open the sidebar, open session
+ * search (mirrors retention.spec.ts's proven "Search sessions" flow), click
+ * the target session's row. Rows are matched by id
+ * (`#search-result-<sessionId>`, SearchModal.tsx), not title text — S-11
+ * sends the IDENTICAL long prompt to both sessions, so their
+ * server-generated titles cannot be trusted to differ.
+ */
+async function switchToSessionViaSidebar(page: Page, sessionId: string) {
+  const searchSessionsBtn = page.getByRole('button', { name: 'Search sessions' })
+  if (!(await searchSessionsBtn.isVisible())) {
+    await page.getByRole('button', { name: 'Toggle navigation sidebar' }).click()
+  }
+  await expect(searchSessionsBtn).toBeVisible({ timeout: 5_000 })
+  await searchSessionsBtn.click()
+  const row = page.locator(`#search-result-${sessionId}`)
+  await expect(row).toBeVisible({ timeout: 10_000 })
+  await row.locator('button').first().click()
+}
+
 /**
  * Asserts one session converged on exactly one finished answer that kept at
  * least as much text as was visible before the outage.
@@ -219,7 +271,7 @@ test.describe('reconnect mid-turn (ADR-082)', () => {
 
     // Session A: started, then left running in the background.
     const beforeA = await startLongTurn(page)
-    const urlA = page.url()
+    const sessionAId = await getActiveSessionId(page)
 
     // Session B: a second conversation with its own long turn, so the outage
     // window genuinely has activity in two different sessions at once.
@@ -244,10 +296,11 @@ test.describe('reconnect mid-turn (ADR-082)', () => {
     await waitTurnDone(page)
     await expectOneFinishedAnswer(page, beforeB, 'B')
 
-    // A was NOT open in the UI during the outage. Opening it now must still
+    // A was NOT open in the UI during the outage. Switching to it now (via
+    // the sidebar, not a reload — see switchToSessionViaSidebar) must still
     // catch up — either incrementally from A's own cursor or via a snapshot,
     // and either way with nothing dropped and nothing left running.
-    await page.goto(urlA)
+    await switchToSessionViaSidebar(page, sessionAId)
     await waitForConnected(page)
     await waitTurnDone(page)
     await expectOneFinishedAnswer(page, beforeA, 'A')
