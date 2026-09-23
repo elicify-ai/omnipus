@@ -9002,6 +9002,28 @@ export interface components {
             skipped_reason?: string;
         };
         /**
+         * CommandRule
+         * @description One ADR-092 D3 operator shell command rule (sandbox.command_rules in config.json). Every rule names a program (`binary`) and, optionally, the leading argument words it applies to (`arg_prefix`). Rules are evaluated for every bash call in every mode, including God Mode. When several rules match the same command part, the strictest wins regardless of how specific each rule is: deny beats ask beats allow. A chained command (`a && b`, `a | b`, `a; b`) is split into its parts and each part must clear on its own. `binary` is matched against the program the command actually resolves to on the child's PATH (resolve-and-verify, ADR-092 FR-040), never against raw command text, so a look-alike executable earlier on PATH does not satisfy an allow rule for the real one. On Windows the rule matches the whole command exactly (FR-041): no chained-part splitting, and `arg_prefix` must equal the full argument text. Rules bind to a command's leading program only; they do not see through interpreters (`sh -c '...'`, `xargs`, `find -exec`).
+         */
+        CommandRule: {
+            /**
+             * @description allow — run the matched command without a prompt, even when bash's tool policy is "ask". ask — always show the approval dialog for the matched command, even when bash's tool policy is "allow". deny — refuse the matched command outright, in every mode including God Mode.
+             * @example deny
+             * @enum {string}
+             */
+            action: "allow" | "ask" | "deny";
+            /**
+             * @description The program the rule applies to: a bare command name (`git`, resolved on PATH) or an absolute path (`/usr/bin/git`). Must not contain whitespace or shell metacharacters.
+             * @example git
+             */
+            binary: string;
+            /**
+             * @description Optional leading argument words, matched whole-word: `run test` matches `npm run test -v` but not `npm run testfoo`. Omitted or empty means the rule applies to every invocation of `binary`.
+             * @example push
+             */
+            arg_prefix?: string;
+        };
+        /**
          * SandboxConfig
          * @description Sandbox configuration returned by GET /api/v1/security/sandbox-config and as part of PUT /api/v1/security/sandbox-config responses.
          */
@@ -9080,6 +9102,8 @@ export interface components {
              * @example true
              */
             auto_approve?: boolean;
+            /** @description ADR-092 D3 operator shell command rules (sandbox.command_rules), in stored order. Always present on GET — an empty array means no operator rules are configured, and bash then follows its tool policy and the Auto-approve setting unmodified. Evaluated for every bash call in every mode, God Mode included; deny beats ask beats allow. See CommandRule for the matching semantics. */
+            command_rules?: components["schemas"]["CommandRule"][];
             /** @description Present in PUT responses. True when the change requires a gateway restart to take effect (mode, allowed_paths). */
             requires_restart?: boolean;
             /** @description Present in PUT responses. Always true on success. */
@@ -10540,7 +10564,7 @@ export interface components {
              */
             ref?: string;
         };
-        /** @description Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and auto_approve are hot-reloaded. This endpoint is the routing target for ADR-092's global Auto-approve default write (auto_approve below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use. No new auth mechanism; the requirement is routing the write through this handler rather than a bespoke endpoint that bypasses it. */
+        /** @description Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal, auto_approve and command_rules are hot-reloaded. This endpoint is the routing target for ADR-092's global Auto-approve default write (auto_approve below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use. No new auth mechanism; the requirement is routing the write through this handler rather than a bespoke endpoint that bypasses it. */
         SandboxConfigUpdate: {
             /**
              * @description Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
@@ -10595,6 +10619,8 @@ export interface components {
              * @example true
              */
             auto_approve?: boolean;
+            /** @description Replace the whole ADR-092 D3 operator command rule list (sandbox.command_rules). The list is written as sent — this is a full replacement, not a merge; send an empty array to remove every rule. One invalid rule rejects the whole request with 400 and nothing is saved. Takes effect immediately for new bash calls, no restart required. Like every field on this endpoint, the write needs the password step-up (requireReAuth), so an agent cannot add, remove or loosen a rule on its own. */
+            command_rules?: components["schemas"]["CommandRule"][];
             /**
              * @description ADR-068 §6. Turns the IN-PROCESS bash workspace path guard on or off. Distinct from `mode`, which is the kernel sandbox — the two are separate boundaries and setting one has no effect on the other (UAT defect 002 was operators expecting otherwise). When true, a WRITE outside the agent's working directory needs an approved workspace mount; reads outside it are allowed either way. Restart-gated: it resolves into AgentDefaults.RestrictToWorkspace at boot. Ignored at runtime while OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE is set, which outranks it — see workspace_path_guard_env_override on the GET response.
              * @example false
@@ -23419,6 +23445,7 @@ export type ChannelIdentity = components["schemas"]["ChannelIdentity"];
 export type ChannelEntry = components["schemas"]["ChannelEntry"];
 export type RetentionConfig = components["schemas"]["RetentionConfig"];
 export type RetentionSweepResult = components["schemas"]["RetentionSweepResult"];
+export type CommandRule = components["schemas"]["CommandRule"];
 export type SandboxConfig = components["schemas"]["SandboxConfig"];
 export type SandboxStatus = components["schemas"]["SandboxStatus"];
 export type AuditEntry = components["schemas"]["AuditEntry"];
