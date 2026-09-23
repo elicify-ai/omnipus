@@ -16,8 +16,10 @@ import (
 // Binding rule (lane 4, ADR-091 fix round): every row that asserts "zero matches" MUST first prove its
 // own search mechanism is alive by asserting a stated positive lower bound over the SAME scope/flags —
 // see `sentinel` below. Without that, a typo'd pattern, a wrong --include glob, or a wrong regex dialect
-// passes silently and the row proves nothing. Only "One runner caller" (which asserts exactly 1, not 0)
-// is exempt — its own positive count is already the proof.
+// passes silently and the row proves nothing. Rows that instead assert a positive count ("One runner
+// caller"; "allow_blocking_question refused by name, not accepted anywhere") are exempt — their own
+// exact-count assertion already proves the mechanism, and for the latter `expectedSoleFile` additionally
+// pins WHERE the surviving occurrence must live, which a raw count alone cannot do.
 func TestADR091_ResidualAudit(t *testing.T) {
 	// Determine repo root by starting from this test's directory and walking up
 	repoRoot := findRepoRoot(t)
@@ -40,6 +42,11 @@ func TestADR091_ResidualAudit(t *testing.T) {
 		// deleted/renamed directory makes the check pass by accident, proving nothing (mirrors the
 		// "Address not borrowed" bug where a --include glob matched zero files).
 		mustDirExist string
+		// expectedSoleFile: for a row whose `expected` is exactly 1 (not 0), the ONE occurrence must
+		// live in this file — not just "somewhere in scope". Pins the surviving occurrence to the
+		// legitimate site instead of merely counting it, so the row fails just as loudly if the
+		// literal moves (or is duplicated) to any other file as it does if it vanishes entirely.
+		expectedSoleFile string
 	}{
 		{
 			name:          "Ring gone",
@@ -49,23 +56,38 @@ func TestADR091_ResidualAudit(t *testing.T) {
 			sentinelLabel: "pkg/**/*.go (excl _test.go) contains real package declarations",
 		},
 		{
-			// Finding 3: production code at pkg/tools/delegate_run.go rejects the removed arg by
-			// building the literal at runtime — `"allow_" + "blocking_question"` — specifically so a
-			// plain-string grep for `allow_blocking_question` cannot see it. The rejection behaviour
-			// is correct (the arg IS refused); the evasion of the audit is not. We do not own
-			// delegate_run.go (not in this lane's file list) so we cannot rewrite the concatenation
-			// back to a literal ourselves — see the report's "Requests to other owners". What we DO
-			// own is the check, so it now also bans the split-string construction itself: a
-			// production file spelling the banned literal out of two half-strings is exactly as
-			// wrong as spelling it whole, and the guard should say so instead of being blind to it.
 			name: "Wait-inline gone",
 			cmd: buildGrep(repoRoot, []string{"pkg/", "contracts/", "src/"},
-				[]string{"executeSync", "DelegationModeAwait", "allow_blocking_question", "\"allow_\" + \"blocking_question\""},
+				[]string{"executeSync", "DelegationModeAwait"},
 				[]string{"*.go", "*.yaml", "*.ts", "*.tsx"}, []string{"*_test.go", "*.test.*"}),
 			expected: 0,
 			sentinel: buildGrep(repoRoot, []string{"pkg/", "contracts/", "src/"}, []string{"^package ", "openapi", "^import "}, []string{"*.go", "*.yaml", "*.ts", "*.tsx"}, []string{"*_test.go", "*.test.*"}),
 			sentinelLabel: "pkg/, contracts/ and src/ combined (with these includes/excludes) contain " +
 				"known-present content",
+		},
+		{
+			// Finding 3 (refined per coordinator review, second pass): `allow_blocking_question`
+			// does NOT belong on a "zero occurrences" row. ADR-091 deleted the argument, but the
+			// tool STILL has to name it in order to refuse it — pkg/tools/delegate_run.go's
+			// rejection loop must contain the literal to return "invalid_argument: allow_blocking_
+			// question" for a caller that still sends it. A "zero occurrences" row is unsatisfiable
+			// by construction: fixing production code to stop evading the check (see delegate_run.go
+			// history — it used to build the literal via `"allow_" + "blocking_question"` specifically
+			// so a plain-string grep could not see it) would make the row permanently red, and the
+			// next person to touch it "fixes" the row instead of the code. That is how the original
+			// evasion happened.
+			//
+			// So this is a POSITIVE, PINNED assertion instead: exactly one occurrence in pkg/tools/
+			// (production code), and it must be in delegate_run.go — the file that actually refuses
+			// the argument, not any file that might silently accept it. This is strictly stronger
+			// than a zero-check: it fails if the rejection is deleted (count drops to 0) AND fails if
+			// a second acceptance site appears anywhere in pkg/tools/ (count rises to 2, or the sole
+			// hit moves out of delegate_run.go). Same shape as "One runner caller" below, the one
+			// original row that already proved its own mechanism this way.
+			name:             "allow_blocking_question refused by name, not accepted anywhere",
+			cmd:              buildGrep(repoRoot, []string{"pkg/tools/"}, []string{"allow_blocking_question"}, []string{"*.go"}, []string{"*_test.go"}),
+			expected:         1,
+			expectedSoleFile: "pkg/tools/delegate_run.go",
 		},
 		{
 			name:          "Prompt clean",
@@ -210,6 +232,31 @@ func TestADR091_ResidualAudit(t *testing.T) {
 			count, out := runGrepCmd(t, tt.cmd)
 			if count != tt.expected {
 				t.Errorf("Expected %d matches, got %d\nGrep output:\n%s", tt.expected, count, out)
+				return
+			}
+
+			if tt.expectedSoleFile != "" {
+				wantPath := filepath.Join(repoRoot, tt.expectedSoleFile)
+				for _, line := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
+					if line == "" {
+						continue
+					}
+					// grep -n output is "path:lineno:content"; the path is everything before the
+					// first ":lineno:" — split on the first colon only, since content may itself
+					// contain colons.
+					filePath := line
+					if idx := strings.Index(line, ":"); idx >= 0 {
+						filePath = line[:idx]
+					}
+					if filePath != wantPath {
+						t.Errorf(
+							"the sole occurrence must be in %s, but found one in %s — either the "+
+								"rejection moved (fine, update expectedSoleFile) or a SECOND, "+
+								"unreviewed site now references this banned literal (not fine):\n%s",
+							tt.expectedSoleFile, filePath, out,
+						)
+					}
+				}
 			}
 		})
 	}
