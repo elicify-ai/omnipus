@@ -191,11 +191,7 @@
       "enabled": false
     },
     "exec": {
-      "custom_allow_patterns": null,
-      "custom_deny_patterns": null,
-      "enable_deny_patterns": false,
-      "enabled": false,
-      "timeout_seconds": 0
+      "enabled": false
     },
     "filter_min_length": 0,
     "filter_sensitive_data": false,
