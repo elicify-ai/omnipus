@@ -422,7 +422,7 @@ type CancelStageFrame struct {
 	Type               string  `json:"type"`
 }
 
-// CommandSegmentInfo — ADR-092 D3/D4/D7/D8. One chained-command segment (split via splitShellSegments/shellCommandHead) awaiting an approval decision, listed inside ToolApprovalRequiredFrame.segments. Only unmatched segments appear here — a segment already covered by an existing D3 rule or session grant is resolved server-side without a prompt (D4: "a later partial match prompts only the unmatched segment(s)").
+// CommandSegmentInfo — ADR-092 D3/D4. One segment of the bash command awaiting approval, split with the same splitter and program resolution the bash tool itself uses (splitShellSegments / shellCommandHeadDetailed, through the tool's own D3 evaluator), listed inside ToolApprovalRequiredFrame.segments. Every segment of the command is listed, in order, because one decision approves or denies the whole call; the server records no per-segment grant for a chained command. On Windows the whole command is one segment (FR-041).
 type CommandSegmentInfo struct {
 	// Argument tokens following the resolved binary, as split.
 	Args []string `json:"args,omitempty"`
@@ -434,13 +434,13 @@ type CommandSegmentInfo struct {
 	NetworkRequired *bool `json:"network_required,omitempty"`
 	// The filesystem path FR-038's classifier extracted for this segment. Present iff classification is read/write/read_write.
 	Path *string `json:"path,omitempty"`
-	// False on Windows (FR-041: exact-command match only, no prefix option, no chained-segment splitting) or when FR-026's algorithm found no stop token narrower than the full command. The dialog omits the "prefix" scope radio for this segment when false.
+	// True exactly when choosing Allow with scope "prefix" would record a prefix grant. The server derives this with the same function it records the grant with (tools.BashPrefixGrantFor), so the dialog never offers a scope the server would downgrade to exact. That requires a single-segment command whose program resolves, whose suggested prefix is narrower than the bare program, and which does not start with a wrapper (sudo, env, timeout, xargs, sh -c). Always false for every segment of a chained command (a && b, a | b: the grant is recorded as exact for the whole chain) and on Windows (FR-041). The dialog omits the "prefix" scope option when false. Always present.
 	PrefixAvailable *bool `json:"prefix_available,omitempty"`
 	// Absolute path the segment's leading token resolved to against the child's effective PATH/env (D3 resolve-and-verify, FR-040). Absent when the head could not be resolved to a literal executable — a normalised head (shellCommandHeadDetailed's third return), a quote-blind over-split, a redirection-only segment, or brace expansion (FR-020/FR-040 blind spots). Such a segment always routes to ask and offers no D3 rule match, only this dialog.
 	ResolvedBinary *string `json:"resolved_binary,omitempty"`
 	// Zero-based position of this segment among the full chained command's segments (splitShellSegments order).
 	SegmentIndex int `json:"segment_index"`
-	// FR-026's suggested-prefix algorithm output for this segment, shown next to the "prefix" scope radio when the user picks Allow. Absent when prefix_available is false.
+	// The command prefix a scope="prefix" grant would cover: the program as written plus the leading argument words the grant matches (FR-026). Example: "npm run test" covers "npm run test --watch" but not "npm run testfoo". The recorded grant matches the program by its resolved path (resolved_binary), not by this text. Present iff prefix_available is true.
 	SuggestedPrefix *string `json:"suggested_prefix,omitempty"`
 }
 
@@ -1059,7 +1059,7 @@ type ToolApprovalRequiredFrame struct {
 	ExpiresInMs int            `json:"expires_in_ms"`
 	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (a) (FR-089): the child turn's own session id when this frame crosses the wire from a delegated child.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	// ADR-092 D3/D4/D7/D8 per-segment breakdown — present only when tool_name is "bash" and the approval was raised by the D3 rule matcher or a D7/D8 pre-flight escalation, not for an ordinary non-shell tool approval. A single, unchained bash command still populates this with exactly one entry so the SPA has one rendering path. Absent for non-bash tool approvals.
+	// ADR-092 D3/D4 per-segment breakdown of a bash approval. Present on every tool_approval_required whose tool_name is "bash" and whose args carry a non-empty command string, built with the bash tool's own segment splitter and program resolution. A single, unchained command still has exactly one entry so the SPA has one rendering path. Absent for every other tool. Offer the "prefix" scope only when a segment's prefix_available is true.
 	Segments   []CommandSegmentInfo `json:"segments,omitempty"`
 	SessionId  string               `json:"session_id"`
 	ToolCallId string               `json:"tool_call_id"`

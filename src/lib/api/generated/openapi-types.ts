@@ -11905,7 +11905,7 @@ export interface components {
              */
             action: "deny" | "allow_once" | "allow" | "cancel";
             /**
-             * @description Echoes the request's `scope` (ADR-092 D4/FR-024). Present only when action is "allow" AND the resolved approval was a D3/D4 command grant — omitted for a D7/D8 path-widening or network-widening grant, and omitted when action is not "allow".
+             * @description The scope actually RECORDED (ADR-092 D4/FR-024), which is not always the requested one: a "prefix" request is recorded as "exact" whenever no safe prefix exists (chained command, bare program, wrapper, unresolvable program, Windows, or any tool other than bash). The SPA must show this value, not its own request. Present only when action is "allow" and the grant was recorded (grant_recorded true); omitted otherwise.
              * @example exact
              * @enum {string}
              */
@@ -12725,7 +12725,7 @@ export interface components {
             /**
              * @description Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
              *     Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — approving one of those records the path-widening or network-widening grant the frame described, not an exact/prefix command grant; `scope` is ignored for those approvals.
-             *     When the pending approval covers a chained command (multiple unmatched segments in ToolApprovalRequiredFrame.segments), this one scope choice applies uniformly to every currently-unmatched segment resolved by this action (ADR-092 D4: "one rule per segment" is a server-side recording detail, not a per-segment client choice).
+             *     When the pending approval covers a chained command (more than one entry in ToolApprovalRequiredFrame.segments), "prefix" is not available: the server records an exact grant for the whole chain and reports scope "exact" in ToolApprovalResponse. The server never records a prefix grant it did not offer (see CommandSegmentInfo.prefix_available).
              * @example exact
              * @enum {string}
              */
