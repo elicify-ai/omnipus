@@ -930,7 +930,9 @@ type SessionStateActiveTurn struct {
 type SessionStateFrame struct {
 	// ADR-082 D4 — present only when the attached session has a foreground turn in flight at emit time. Absent when idle. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
 	ActiveTurn *SessionStateActiveTurn `json:"active_turn,omitempty"`
-	EmittedAt  string                  `json:"emitted_at"`
+	// ADR-092 — this session's own per-chat Auto-approve modifier (the value last set by session_mode_update and still held by the server), so a reloading or reconnecting SPA re-learns it instead of losing it. Only meaningful when session_id is present (the connection-open emit carries neither). true — Auto-approve forced ON for this chat; false — forced OFF for this chat; null or absent — no per-chat modifier is set, the chat follows the agent x global resolution (SandboxStatus.auto_approve_effective floored by the agent's auto_approve_disabled). Same value space as SessionModeUpdateFrame.auto_approve. The modifier lives in server memory only: after a gateway restart it is gone and this field reads null/absent, so the UI follows the server. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
+	AutoApproveModifier *bool  `json:"auto_approve_modifier,omitempty"`
+	EmittedAt           string `json:"emitted_at"`
 	// Always array, never null. Capped at 1000.
 	PendingApprovals []SessionStatePendingApproval `json:"pending_approvals"`
 	// askuserquestion-tool-spec v3 US-6 S1/FR-9 — snapshot of every PENDING AskUserQuestion card (global registry cap 64) so a reconnecting SPA re-hydrates its card + composer lock. Optional (older gateways omit it); absent/empty means no pending sets.
