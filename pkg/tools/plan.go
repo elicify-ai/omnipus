@@ -190,7 +190,7 @@ func (t *PlanCreateTool) Description() string {
 		"requires rationale: the planning discipline behind the decomposition (e.g. which " +
 		"write-set/stream split was chosen and which member is the join). Names an owner_agent_id — " +
 		"the real, addressable agent woken at the plan's decision points; a System Agent or worker is " +
-		"rejected. Optionally takes goal (plain-prose objective the plan judge weighs alongside the " +
+		"rejected. Optionally takes objective (plain-prose, weighed by the plan judge alongside the " +
 		"Definition of Done) and workspace_id (accepts workspace as an alias) which defaults to the " +
 		"current turn's bound workspace, then the default workspace. Call execute_plan once the " +
 		"plan's member tasks are attached to start autonomous execution with no further human " +
@@ -206,7 +206,7 @@ func (t *PlanCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Short title for the plan (1-200 characters)",
 			},
-			"goal": map[string]any{
+			"objective": map[string]any{
 				"type":        "string",
 				"description": "Plain-prose objective, used by the plan judge alongside the Definition of Done",
 			},
@@ -317,6 +317,12 @@ func (t *PlanCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	if title == "" {
 		return ErrorResult("title is required")
 	}
+	if _, sentOldName := args["goal"]; sentOldName {
+		return ErrorResult(
+			"create_plan failed: `goal` was renamed to `objective` — resend the plain-prose objective " +
+				"under `objective`, not `goal`",
+		)
+	}
 	ownerAgentID, _ := args["owner_agent_id"].(string)
 	if ownerAgentID == "" {
 		return ErrorResult("owner_agent_id is required")
@@ -381,8 +387,8 @@ func (t *PlanCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		DoD:           dod,
 		Rationale:     rationale,
 	}
-	if goal, ok := args["goal"].(string); ok {
-		p.Goal = goal
+	if objective, ok := args["objective"].(string); ok {
+		p.Objective = objective
 	}
 
 	// FR-012d: record the plan's CHAT ORIGIN — the conversation this plan was

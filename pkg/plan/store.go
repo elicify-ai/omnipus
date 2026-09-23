@@ -245,7 +245,7 @@ func (s *Store) Create(p *Plan) error {
 // Patch is a partial update applied by Update. Only non-nil fields are written.
 type Patch struct {
 	Title        *string
-	Goal         *string
+	Objective    *string
 	Description  *string
 	OwnerAgentID *string
 	DoD          *[]task.AcceptanceCriterion
@@ -389,11 +389,11 @@ func (su *storeUpdateLocked) loadAndApplyFields() (*Plan, bool, error) {
 		}
 		su.p.Title = trimmedTitle
 	}
-	if su.patch.Goal != nil {
-		if len([]rune(*su.patch.Goal)) > maxPlanGoalRunes {
-			return nil, true, verr("goal must be %d characters or fewer", maxPlanGoalRunes)
+	if su.patch.Objective != nil {
+		if len([]rune(*su.patch.Objective)) > maxPlanObjectiveRunes {
+			return nil, true, verr("objective must be %d characters or fewer", maxPlanObjectiveRunes)
 		}
-		su.p.Goal = *su.patch.Goal
+		su.p.Objective = *su.patch.Objective
 	}
 	if su.patch.Description != nil {
 		if len([]rune(*su.patch.Description)) > maxPlanDescriptionRunes {

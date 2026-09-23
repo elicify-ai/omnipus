@@ -562,14 +562,14 @@ func validatePlanBounds(b *PlanBounds) error {
 	return nil
 }
 
-// maxPlanTitleRunes / maxPlanGoalRunes / maxPlanDescriptionRunes bound
-// Plan.Title / Plan.Goal / Plan.Description (spec Part A §A).
+// maxPlanTitleRunes / maxPlanObjectiveRunes / maxPlanDescriptionRunes bound
+// Plan.Title / Plan.Objective / Plan.Description (spec Part A §A).
 // maxPlanHandoverRunes bounds Plan.HandoverText (Wave 2-B).
 // maxPlanRationaleRunes bounds Plan.Rationale (ADR-053 §Contract Surface,
 // mirrors PlanCreateRequest.yaml/Plan.yaml's `rationale: maxLength: 4000`).
 const (
 	maxPlanTitleRunes       = 200
-	maxPlanGoalRunes        = 2000
+	maxPlanObjectiveRunes   = 2000
 	maxPlanDescriptionRunes = 2000
 	maxPlanHandoverRunes    = 8000
 	maxPlanRationaleRunes   = 4000
@@ -583,7 +583,7 @@ type Plan struct { //nolint:revive // exported name matches package purpose
 	ID          string `json:"id"`
 	WorkspaceID string `json:"workspace_id"`
 	Title       string `json:"title"`
-	Goal        string `json:"goal,omitempty"`
+	Objective   string `json:"objective,omitempty"`
 	Description string `json:"description,omitempty"`
 	State       State  `json:"state"`
 	// OwnerAgentID is the agent woken at plan decision points (ADR D4);
@@ -761,8 +761,8 @@ func (p *Plan) normalize() error {
 	if len([]rune(p.Title)) > maxPlanTitleRunes {
 		return verr("title must be %d characters or fewer", maxPlanTitleRunes)
 	}
-	if len([]rune(p.Goal)) > maxPlanGoalRunes {
-		return verr("goal must be %d characters or fewer", maxPlanGoalRunes)
+	if len([]rune(p.Objective)) > maxPlanObjectiveRunes {
+		return verr("objective must be %d characters or fewer", maxPlanObjectiveRunes)
 	}
 	if len([]rune(p.Description)) > maxPlanDescriptionRunes {
 		return verr("description must be %d characters or fewer", maxPlanDescriptionRunes)

@@ -13545,7 +13545,7 @@ export interface components {
              * @description Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
              * @example Ship the v1.0 release with all P0 issues closed and CI green.
              */
-            goal?: string;
+            objective?: string;
             /**
              * @description Optional free-form description.
              * @example Coordinates the v1.0 release train across backend and SPA.
@@ -13624,7 +13624,7 @@ export interface components {
              * @example jim
              */
             owner_agent_id: string;
-            /** @description Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `goal`, ADR D5). */
+            /** @description Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `objective`, ADR D5). */
             dod?: components["schemas"]["AcceptanceCriterion"][];
             /**
              * @description ADR-053 §Contract Surface — persisted planning rationale (see `PlanCreateRequest.rationale`). Plan-lint and the owner-loop correction flow read this alongside member `write_set`/`stream`/ `is_join`.
@@ -13740,7 +13740,7 @@ export interface components {
              * @description Plain-prose objective (used by the plan judge when `dod` is empty).
              * @example Ship the v1.0 release with all P0 issues closed and CI green.
              */
-            goal?: string;
+            objective?: string;
             /**
              * @description Optional free-form description.
              * @example Coordinates the v1.0 release train across backend and SPA.
@@ -13751,7 +13751,7 @@ export interface components {
              * @example jim
              */
             owner_agent_id: string;
-            /** @description Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `goal`). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
+            /** @description Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `objective`). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
             dod?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
              * @description ADR-053 §Contract Surface — persisted planning rationale (the "why" behind the plan's decomposition, e.g. the write-set/stream split chosen and the join points authored). Plan-lint and the owner-loop correction flow read this alongside `write_set`/`stream`/`is_join` on member tasks. Optional — absent for simple plans with no parallel-stream reasoning to record.
@@ -13790,7 +13790,7 @@ export interface components {
              * @description New plain-prose objective.
              * @example Ship the v1.0 release with all P0 issues closed and CI green.
              */
-            goal?: string;
+            objective?: string;
             /**
              * @description New free-form description.
              * @example Coordinates the v1.0 release train across backend and SPA.

@@ -724,12 +724,12 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 
 	criteria := p.DoD
 	if len(criteria) == 0 {
-		if soft := SoftTierCriterion(p.Title, p.Description, p.Goal); soft != nil {
+		if soft := SoftTierCriterion(p.Title, p.Description, p.Objective); soft != nil {
 			criteria = []task.AcceptanceCriterion{*soft}
 		}
 	}
 	if len(criteria) == 0 {
-		// SD-A7 soft tier: title/description/goal all empty too — nothing to
+		// SD-A7 soft tier: title/description/objective all empty too — nothing to
 		// judge at all. Trust completion directly rather than looping
 		// forever. Still routed through applyJudgeRoundOutcome's own
 		// fresh State==running re-check (FR-014) — a Stop can land during the
@@ -1099,7 +1099,7 @@ func (pe *PlanEngine) synthesizeAndComplete(p *plan.Plan, newRounds int) {
 }
 
 // completePlan handles the SD-A7 soft-tier-empty case (no DoD, no
-// title/description/goal text worth judging at all): nothing to adjudicate,
+// title/description/objective text worth judging at all): nothing to adjudicate,
 // so the plan is trusted complete directly. (A task with nothing to judge
 // fails its run instead — task_run_loop.go::adjudicateRunClaim.) Caller must hold planDecisionMu (applyJudgeRoundOutcome's
 // own re-checked lock, or FR-041/idle-expiry's — every call site already
@@ -1657,8 +1657,8 @@ func truncateForClaim(s string) string {
 func buildPlanJudgeExtraContext(p *plan.Plan) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Plan: %s\n", p.Title)
-	if p.Goal != "" {
-		fmt.Fprintf(&sb, "\nGoal: %s\n", p.Goal)
+	if p.Objective != "" {
+		fmt.Fprintf(&sb, "\nObjective: %s\n", p.Objective)
 	}
 	if p.Description != "" {
 		fmt.Fprintf(&sb, "\nDescription: %s\n", p.Description)

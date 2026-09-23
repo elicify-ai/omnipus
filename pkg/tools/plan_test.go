@@ -31,7 +31,7 @@ func allowOwner(string) error { return nil }
 // --- create_plan ---
 
 // TestPlanCreateTool_Happy proves create_plan persists a draft plan carrying
-// the given goal/DoD/owner (ADR-052 FR-001, US-1 Acceptance 1).
+// the given objective/DoD/owner (ADR-052 FR-001, US-1 Acceptance 1).
 func TestPlanCreateTool_Happy(t *testing.T) {
 	t.Parallel()
 	planStore, _ := newPlanAndTaskStores(t)
@@ -43,7 +43,7 @@ func TestPlanCreateTool_Happy(t *testing.T) {
 
 	res := tool.Execute(ctx, map[string]any{
 		"title":          "Ship v1.0",
-		"goal":           "Ship the v1.0 release",
+		"objective":      "Ship the v1.0 release",
 		"owner_agent_id": "jim",
 		"dod":            validCriteriaArg(),
 		"rationale":      "Single serial member, no parallel decomposition needed for v1.0.",
@@ -70,11 +70,41 @@ func TestPlanCreateTool_Happy(t *testing.T) {
 	if got.Title != "Ship v1.0" || got.OwnerAgentID != "jim" || got.WorkspaceID != "ws-1" {
 		t.Errorf("unexpected plan fields: %+v", got)
 	}
+	if got.Objective != "Ship the v1.0 release" {
+		t.Errorf("objective = %q, want %q", got.Objective, "Ship the v1.0 release")
+	}
 	if len(got.DoD) != 1 {
 		t.Fatalf("expected 1 DoD criterion, got %d", len(got.DoD))
 	}
 	if got.CreatedBy != "jim" {
 		t.Errorf("created_by = %q, want jim", got.CreatedBy)
+	}
+}
+
+// TestPlanCreateTool_OldGoalArgRejected proves the goal -> objective rename is
+// breaking: a caller still sending the old `goal` argument gets a clear error
+// naming the new field, never a silent drop.
+func TestPlanCreateTool_OldGoalArgRejected(t *testing.T) {
+	t.Parallel()
+	planStore, _ := newPlanAndTaskStores(t)
+	tool := NewPlanCreateTool(planStore)
+	tool.SetOwnerValidator(allowOwner)
+
+	ctx := WithAgentID(context.Background(), "jim")
+	ctx = WithWorkspaceID(ctx, "ws-1")
+
+	res := tool.Execute(ctx, map[string]any{
+		"title":          "Ship v1.0",
+		"goal":           "Ship the v1.0 release",
+		"owner_agent_id": "jim",
+		"dod":            validCriteriaArg(),
+		"rationale":      "Single serial member, no parallel decomposition needed for v1.0.",
+	})
+	if !res.IsError {
+		t.Fatal("expected error when the old `goal` argument is sent instead of `objective`")
+	}
+	if !strings.Contains(res.ForLLM, "objective") {
+		t.Errorf("error must name the new `objective` field, got: %s", res.ForLLM)
 	}
 }
 

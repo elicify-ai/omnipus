@@ -2122,7 +2122,7 @@ type Plan = {
   id: string;
   workspace_id: string;
   title: string;
-  goal?: string | undefined;
+  objective?: string | undefined;
   description?: string | undefined;
   state: "draft" | "approved" | "running" | "done" | "failed";
   plan_phase?:
@@ -2184,7 +2184,7 @@ type Plan = {
 type PlanCreateRequest = {
   workspace_id: string;
   title: string;
-  goal?: string | undefined;
+  objective?: string | undefined;
   description?: string | undefined;
   owner_agent_id: string;
   dod?: Array<AcceptanceCriterionInput> | undefined;
@@ -2200,7 +2200,7 @@ type PlanCreateRequest = {
 };
 type PlanUpdateRequest = Partial<{
   title: string;
-  goal: string;
+  objective: string;
   description: string;
   state: "draft" | "approved" | "running" | "done" | "failed";
   owner_agent_id: string;
@@ -5576,7 +5576,7 @@ export const Plan: z.ZodType<Plan> = z.object({
   id: z.string(),
   workspace_id: z.string(),
   title: z.string().min(1).max(200),
-  goal: z.string().max(2000).optional(),
+  objective: z.string().max(2000).optional(),
   description: z.string().max(2000).optional(),
   state: z.enum(["draft", "approved", "running", "done", "failed"]),
   plan_phase: z
@@ -5645,7 +5645,7 @@ export const PlanListResponse: z.ZodType<PlanListResponse> = z.object({
 export const PlanCreateRequest: z.ZodType<PlanCreateRequest> = z.object({
   workspace_id: z.string(),
   title: z.string().min(1).max(200),
-  goal: z.string().max(2000).optional(),
+  objective: z.string().max(2000).optional(),
   description: z.string().max(2000).optional(),
   owner_agent_id: z.string().min(1),
   dod: z.array(AcceptanceCriterionInput).optional(),
@@ -5663,7 +5663,7 @@ export const PlanCreateRequest: z.ZodType<PlanCreateRequest> = z.object({
 export const PlanUpdateRequest: z.ZodType<PlanUpdateRequest> = z
   .object({
     title: z.string().min(1).max(200),
-    goal: z.string().max(2000),
+    objective: z.string().max(2000),
     description: z.string().max(2000),
     state: z.enum(["draft", "approved", "running", "done", "failed"]),
     owner_agent_id: z.string().min(1),

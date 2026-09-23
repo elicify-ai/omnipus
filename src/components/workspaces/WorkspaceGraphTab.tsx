@@ -53,7 +53,7 @@ interface WorkspaceGraphTabProps {
    * (the combined Tasks screen's PlansFilterBand) already exposes plan
    * selection, so the two controls don't duplicate each other. Defaults to
    * false so standalone use of this tab is unaffected. The plan info strip
-   * (state/goal/progress) still renders regardless. */
+   * (state/objective/progress) still renders regardless. */
   hidePlanSelector?: boolean
 }
 
@@ -299,12 +299,12 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
                   {chip.label}
                 </span>
               )}
-              {activePlan.goal && (
+              {activePlan.objective && (
                 <p
                   className="flex-1 min-w-0 truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
-                  title={activePlan.goal}
+                  title={activePlan.objective}
                 >
-                  {activePlan.goal}
+                  {activePlan.objective}
                 </p>
               )}
               {/* Selected plan's completion — the share of its tasks that are

@@ -23,8 +23,8 @@ import { friendlyConflictError, request } from './http'
 // ── Plans (ADR-049 D1/FR-1 — replaces Milestones; ADR-052 Wave 2 — agent plan
 // authoring & execution) ──────────────────────────────────────────────────
 //
-// A Plan is a first-class entity that groups an executable task DAG under a
-// goal, Definition of Done, owner agent, and 5-value state machine
+// A Plan is a first-class entity that groups an executable task DAG under an
+// objective, Definition of Done, owner agent, and 5-value state machine
 // (draft/approved/running/done/failed). Tasks join a plan via `Task.plan_id`
 // (same-workspace FK). Membership + `progress` are computed read-time by the
 // backend — never stored on the Plan record (mirrors the removed Milestone's
@@ -39,7 +39,7 @@ import { friendlyConflictError, request } from './http'
 //                                           workspace-nested. `workspace_id`
 //                                           is ALSO required in the body and
 //                                           validated to match the path.)
-//   PUT    /plans/{id}           → Plan   (partial update — title/goal/
+//   PUT    /plans/{id}           → Plan   (partial update — title/objective/
 //                                           description/owner/dod/bounds
 //                                           ONLY. ADR-052 G2/FR-007: the SPA
 //                                           MUST NEVER send `state` here —
@@ -99,7 +99,7 @@ export function createPlan(body: PlanCreateRequest): Promise<Plan> {
 }
 
 /**
- * Partial plan update — title/goal/description/owner_agent_id/dod/bounds
+ * Partial plan update — title/objective/description/owner_agent_id/dod/bounds
  * ONLY. ADR-052 §6.3/FR-007 (G2 fix): the SPA must NEVER send `state` in this
  * body — PUT is not, and must never become, a state-transition entry point
  * (the backend endpoint that previously accepted `state` here bypassed both
