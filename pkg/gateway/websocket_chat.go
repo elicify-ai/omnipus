@@ -4,6 +4,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -303,6 +304,12 @@ func (hcm *wsHandlerHandleChatMessage) queueWorkingStatus() {
 func (hcm *wsHandlerHandleChatMessage) removeQueuedWorkingStatus() bool {
 	hcm.h.mu.Lock()
 	defer hcm.h.mu.Unlock()
+	return hcm.removeQueuedWorkingStatusLocked()
+}
+
+// removeQueuedWorkingStatusLocked is removeQueuedWorkingStatus with h.mu
+// already held.
+func (hcm *wsHandlerHandleChatMessage) removeQueuedWorkingStatusLocked() bool {
 	queue := hcm.h.pendingMessageStatuses[hcm.sessionID]
 	for index, pending := range queue {
 		if pending.clientMessageID != hcm.clientMessageID {
@@ -328,8 +335,32 @@ func (hcm *wsHandlerHandleChatMessage) markWorkingIfTurnAlreadyActive() {
 	if _, _, _, active := hcm.h.agentLoop.ActiveForegroundTurnInfo(hcm.sessionID); !active {
 		return
 	}
-	if hcm.removeQueuedWorkingStatus() {
-		hcm.sendMessageStatus("working")
+	data, err := json.Marshal(generated.MessageStatusFrame{
+		Type:            string(generated.WsFrameTypeMessageStatus),
+		SessionId:       hcm.sessionID,
+		ClientMessageId: hcm.clientMessageID,
+		State:           "working",
+	})
+	if err != nil {
+		slog.Error("ws: marshal message_status failed", "session_id", hcm.sessionID, "error", err)
+		return
+	}
+	// Take the pending entry AND publish the tick under h.mu — the same lock
+	// GetStreamer takes the entry under — so the tick is always numbered
+	// before the turn's first token: either GetStreamer already sent it, or
+	// GetStreamer waits for this publish. Removing here and publishing after
+	// the unlock let a token overtake the tick (#823 fixture recorder found it).
+	h := hcm.h
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !hcm.removeQueuedWorkingStatusLocked() {
+		return
+	}
+	if h.hubs != nil && hcm.sessionID != "" {
+		h.hubs.getOrCreate(hcm.sessionID).publishBytes(data)
+	}
+	if hcm.wc != nil && (hcm.wc.boundHub == nil || hcm.wc.boundHub.id != hcm.sessionID) {
+		sendRawFrameBytes(hcm.wc, string(generated.WsFrameTypeMessageStatus), data)
 	}
 }
 
