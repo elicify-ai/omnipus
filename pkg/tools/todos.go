@@ -41,13 +41,13 @@ func (t *SetTodosTool) Scope() ToolScope       { return ScopeCore }
 func (t *SetTodosTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *SetTodosTool) Description() string {
-	return "Set your working scratchpad: a flat checklist of steps for the goal you're currently focused on. " +
+	return "Set your working scratchpad: a flat checklist of steps for the outcome you're currently focused on. " +
 		"Pass the FULL list every call (replace-semantics — no item IDs). " +
 		"Use this for the throwaway checklist of what you're doing this turn; " +
 		"use create_task + dependencies for a durable multi-wave plan. " +
 		"Your checklist is shown on the board and re-shown to you each turn. " +
-		"You have ONE active checklist at a time: calling this with a different `goal` closes the " +
-		"previous checklist card as done and starts a fresh one, so reuse the exact same `goal` string " +
+		"You have ONE active checklist at a time: calling this with a different `outcome` closes the " +
+		"previous checklist card as done and starts a fresh one, so reuse the exact same `outcome` string " +
 		"for every update to the same unit of work."
 }
 
@@ -55,7 +55,7 @@ func (t *SetTodosTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"goal": map[string]any{
+			"outcome": map[string]any{
 				"type":        "string",
 				"description": "The title of the unit of work these todos serve",
 			},
@@ -79,7 +79,7 @@ func (t *SetTodosTool) Parameters() map[string]any {
 				"description": "Full todo list (replace-semantics). Empty array clears the list.",
 			},
 		},
-		"required": []string{"goal", "todos"},
+		"required": []string{"outcome", "todos"},
 	}
 }
 
@@ -88,9 +88,9 @@ func (t *SetTodosTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("set_todos: no task store configured")
 	}
 
-	goal, _ := args["goal"].(string)
-	if goal == "" {
-		return ErrorResult("goal is required")
+	goal, ok := args["outcome"].(string)
+	if !ok || goal == "" {
+		return ErrorResult("outcome is required")
 	}
 
 	agentID := ToolAgentID(ctx)
@@ -313,7 +313,7 @@ func parseTodosArg(raw []any) ([]task.Todo, error) {
 // response. The task_id is intentionally omitted (facade).
 func renderChecklist(goal string, todos []task.Todo) string {
 	var sb strings.Builder
-	sb.WriteString("Goal: ")
+	sb.WriteString("Outcome: ")
 	sb.WriteString(goal)
 	sb.WriteByte('\n')
 	for _, td := range todos {

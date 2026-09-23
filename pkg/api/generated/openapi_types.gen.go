@@ -18564,7 +18564,7 @@ type Plan struct {
 	// Description Optional free-form description.
 	Description *string `json:"description,omitempty"`
 
-	// Dod Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `goal`, ADR D5).
+	// Dod Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `objective`, ADR D5).
 	Dod *[]struct {
 		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
 		Author struct {
@@ -18624,9 +18624,6 @@ type Plan struct {
 	// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 	FailedReason *PlanFailedReason `json:"failed_reason,omitempty"`
 
-	// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
-	Goal *string `json:"goal,omitempty"`
-
 	// Id Unique plan identifier (ULID).
 	Id string `json:"id"`
 
@@ -18638,6 +18635,9 @@ type Plan struct {
 
 	// LastUnmetTerminalSignature ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_supervision`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_supervision`.
 	LastUnmetTerminalSignature *string `json:"last_unmet_terminal_signature,omitempty"`
+
+	// Objective Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
+	Objective *string `json:"objective,omitempty"`
 
 	// Owner Username of the user who created this plan. Set server-side at creation; read-only.
 	Owner *string `json:"owner,omitempty"`
@@ -18762,7 +18762,7 @@ type PlanCreateRequest struct {
 	// Description Optional free-form description.
 	Description *string `json:"description,omitempty"`
 
-	// Dod Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `goal`). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload.
+	// Dod Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `objective`). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload.
 	Dod *[]struct {
 		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
 		Author struct {
@@ -18819,8 +18819,8 @@ type PlanCreateRequest struct {
 		Text string `json:"text"`
 	} `json:"dod,omitempty"`
 
-	// Goal Plain-prose objective (used by the plan judge when `dod` is empty).
-	Goal *string `json:"goal,omitempty"`
+	// Objective Plain-prose objective (used by the plan judge when `dod` is empty).
+	Objective *string `json:"objective,omitempty"`
 
 	// OwnerAgentId Agent responsible for this plan.
 	OwnerAgentId string `json:"owner_agent_id"`
@@ -18890,7 +18890,7 @@ type PlanListResponse struct {
 		// Description Optional free-form description.
 		Description *string `json:"description,omitempty"`
 
-		// Dod Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `goal`, ADR D5).
+		// Dod Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `objective`, ADR D5).
 		Dod *[]struct {
 			// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
 			Author struct {
@@ -18950,9 +18950,6 @@ type PlanListResponse struct {
 		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 		FailedReason *PlanListResponsePlansFailedReason `json:"failed_reason,omitempty"`
 
-		// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
-		Goal *string `json:"goal,omitempty"`
-
 		// Id Unique plan identifier (ULID).
 		Id string `json:"id"`
 
@@ -18964,6 +18961,9 @@ type PlanListResponse struct {
 
 		// LastUnmetTerminalSignature ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_supervision`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_supervision`.
 		LastUnmetTerminalSignature *string `json:"last_unmet_terminal_signature,omitempty"`
+
+		// Objective Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
+		Objective *string `json:"objective,omitempty"`
 
 		// Owner Username of the user who created this plan. Set server-side at creation; read-only.
 		Owner *string `json:"owner,omitempty"`
@@ -19102,7 +19102,7 @@ type PlanRestartResponse struct {
 		// Description Optional free-form description.
 		Description *string `json:"description,omitempty"`
 
-		// Dod Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `goal`, ADR D5).
+		// Dod Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `objective`, ADR D5).
 		Dod *[]struct {
 			// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
 			Author struct {
@@ -19162,9 +19162,6 @@ type PlanRestartResponse struct {
 		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 		FailedReason *PlanRestartResponsePlanFailedReason `json:"failed_reason,omitempty"`
 
-		// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
-		Goal *string `json:"goal,omitempty"`
-
 		// Id Unique plan identifier (ULID).
 		Id string `json:"id"`
 
@@ -19176,6 +19173,9 @@ type PlanRestartResponse struct {
 
 		// LastUnmetTerminalSignature ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_supervision`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_supervision`.
 		LastUnmetTerminalSignature *string `json:"last_unmet_terminal_signature,omitempty"`
+
+		// Objective Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
+		Objective *string `json:"objective,omitempty"`
 
 		// Owner Username of the user who created this plan. Set server-side at creation; read-only.
 		Owner *string `json:"owner,omitempty"`
@@ -19347,8 +19347,8 @@ type PlanUpdateRequest struct {
 		Text string `json:"text"`
 	} `json:"dod,omitempty"`
 
-	// Goal New plain-prose objective.
-	Goal *string `json:"goal,omitempty"`
+	// Objective New plain-prose objective.
+	Objective *string `json:"objective,omitempty"`
 
 	// OwnerAgentId Reassign plan ownership to this agent.
 	OwnerAgentId *string `json:"owner_agent_id,omitempty"`

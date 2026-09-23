@@ -60,9 +60,12 @@ func (c *countingPassthroughTool) Execute(ctx context.Context, args map[string]a
 	return res
 }
 
-// uatRun4SetTodosArgs is the exact argument object run 4 repeated 64 times
-// in a row (transcript session_01M2FBEJ5DA37MF63PFRCJJV4N, rows 48-111).
-const uatRun4SetTodosArgs = `{"goal":"Improve the renewable energy report goal record and re-issue the registration",` +
+// uatRun4SetTodosArgs is the argument object run 4 repeated 64 times in a row
+// (transcript session_01M2FBEJ5DA37MF63PFRCJJV4N, rows 48-111), with the
+// transcript's original `goal` key replaced by `outcome` (the set_todos
+// rename): the shape is otherwise unchanged, and this test cares about the
+// iteration-cap behavior, not the field name.
+const uatRun4SetTodosArgs = `{"outcome":"Improve the renewable energy report goal record and re-issue the registration",` +
 	`"todos":[{"status":"in_progress","text":"Register the improved goal record via set_goal (mode: register)"},` +
 	`{"status":"pending","text":"Continue goal work: improved criteria"}]}`
 

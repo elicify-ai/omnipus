@@ -165,8 +165,8 @@ func (a *restAPI) toWirePlan(p plan.Plan, lister plan.TaskLister) gen.Plan {
 		CreatedAt:    parseTimeOrNow(p.CreatedAt),
 		UpdatedAt:    parseTimeOrNow(p.UpdatedAt),
 	}
-	if p.Goal != "" {
-		out.Goal = ptr(p.Goal)
+	if p.Objective != "" {
+		out.Objective = ptr(p.Objective)
 	}
 	if p.Description != "" {
 		out.Description = ptr(p.Description)
@@ -732,8 +732,8 @@ func (a *restAPI) handleWorkspacePlanCreate(w http.ResponseWriter, r *http.Reque
 		CreatedByKind: plan.CreatedByKindUser,
 		OwnerAgentID:  req.OwnerAgentId,
 	}
-	if req.Goal != nil {
-		p.Goal = *req.Goal
+	if req.Objective != nil {
+		p.Objective = *req.Objective
 	}
 	if req.Description != nil {
 		p.Description = *req.Description
@@ -944,8 +944,8 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 		// the same behavior; no handler-level trim needed here.
 		patch.Title = req.Title
 	}
-	if req.Goal != nil {
-		patch.Goal = req.Goal
+	if req.Objective != nil {
+		patch.Objective = req.Objective
 	}
 	if req.Description != nil {
 		patch.Description = req.Description

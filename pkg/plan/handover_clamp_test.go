@@ -336,7 +336,7 @@ func TestClampHandoverText_LeavesShortTextByteIdentical(t *testing.T) {
 }
 
 // TestOtherBoundedFieldsStillReject pins the deliberate asymmetry: only
-// HandoverText clamps. Title/Goal/Description/Rationale are authored at an
+// HandoverText clamps. Title/Objective/Description/Rationale are authored at an
 // interactive boundary where the caller CAN shorten the text, so a rejection
 // is real feedback and must stay. This test is what stops the clamp being
 // generalised into "pkg/plan no longer validates lengths".
@@ -356,9 +356,9 @@ func TestOtherBoundedFieldsStillReject(t *testing.T) {
 	if _, err := s.Update(p.ID, Patch{Title: &tooLongTitle}); err == nil {
 		t.Error("an over-long title must still be REJECTED, not clamped")
 	}
-	tooLongGoal := strings.Repeat("g", maxPlanGoalRunes+1)
-	if _, err := s.Update(p.ID, Patch{Goal: &tooLongGoal}); err == nil {
-		t.Error("an over-long goal must still be REJECTED, not clamped")
+	tooLongObjective := strings.Repeat("g", maxPlanObjectiveRunes+1)
+	if _, err := s.Update(p.ID, Patch{Objective: &tooLongObjective}); err == nil {
+		t.Error("an over-long objective must still be REJECTED, not clamped")
 	}
 	tooLongDesc := strings.Repeat("d", maxPlanDescriptionRunes+1)
 	if _, err := s.Update(p.ID, Patch{Description: &tooLongDesc}); err == nil {
