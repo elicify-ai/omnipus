@@ -245,16 +245,16 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 }
 
 // StartSubagentSpawnPersister subscribes to the EXISTING
-// EventKindSubTurnSpawn/EventKindSubTurnEnd broadcast (pkg/agent/subturn.go,
-// WP-A) and persists each ONCE as a subagent_start/subagent_end transcript
-// entry (ADR-091 D7/I-4) — deliberately a connection-INDEPENDENT
-// subscriber, never inside pkg/gateway/websocket_forward.go's
-// per-connection onSubTurnSpawn/onSubTurnEnd (which would persist once per
-// connected viewer). Live delivery is unaffected: those existing
-// per-connection forwarders keep emitting the live frame exactly as they
-// do today; this subscriber only adds the durable half. Started once at
-// boot (see this lane's final report, "Requests to other owners", for the
-// one gateway_boot.go line this needs).
+// EventKindSubTurnSpawn/EventKindSubTurnEnd broadcast (emitted by this same
+// file's persistSubagentEntry callers) and persists each ONCE as a
+// subagent_start/subagent_end transcript entry (ADR-091 D7/I-4) —
+// deliberately a connection-INDEPENDENT subscriber, never inside
+// pkg/gateway/websocket_forward.go's per-connection onSubTurnSpawn/
+// onSubTurnEnd (which would persist once per connected viewer). Live
+// delivery is unaffected: those existing per-connection forwarders keep
+// emitting the live frame exactly as they do today; this subscriber only
+// adds the durable half. Started once at boot by
+// gateway_boot.go::wireSteerDeps.
 func (al *AgentLoop) StartSubagentSpawnPersister(ctx context.Context) context.CancelFunc {
 	subCtx, cancel := context.WithCancel(ctx)
 	sub := al.SubscribeEvents(64)

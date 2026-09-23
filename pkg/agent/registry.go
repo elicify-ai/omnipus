@@ -221,10 +221,10 @@ func (r *AgentRegistry) IsWorker(agentID string) bool {
 // Returns false for an unknown/empty agentID or a nil executor; a
 // ResolveDispatch error is also reported false.
 //
-// NOTE: this does NOT mirror spawnSubTurn — an unresolved target actually
-// dispatches with the parent's own executor (spawnSubTurn falls back to
-// baseAgent, subturn.go ~L537-565), and a ResolveDispatch error there FAILS
-// the delegation outright (subturn.go ~L1173-1179) rather than defaulting to
+// NOTE: this does NOT mirror the pre-ADR-091 native delegation path
+// (subturn.go, since deleted) — an unresolved target there dispatched with
+// the parent's own executor (falling back to baseAgent), and a
+// ResolveDispatch error FAILED the delegation outright rather than defaulting to
 // native. So a parent configured as external-CLI delegating to an
 // unknown/empty target is misclassified native here. Accepted for W2's scope
 // (Is3P only gates whether to attempt a native transcript snapshot; the

@@ -529,7 +529,7 @@ type SubTurnSpawnPayload struct {
 	//
 	// FROZEN CONTRACT (ADR-057 Rule 7, this field owned by U23 — do not
 	// "tidy" it to the child): sourced from the PARENT's turnState — today
-	// parentTS.transcriptSessionID at pkg/agent/subturn.go:1183 (U7); once
+	// parentTS.transcriptSessionID (U7, in the pre-ADR-091 subturn.go, since deleted); once
 	// U3's turn.go role split (W4) lands, that becomes
 	// parentTS.routingSessionID, still parent-scoped. subagent_start is
 	// class (b) per the W5 audit (FR-089, BDD-98): emitted by the PARENT
@@ -559,7 +559,7 @@ type SubTurnEndPayload struct {
 	// SessionID is the ROUTING session id (ADR-057 FR-011/FR-017), NOT this
 	// child turn's own transcript session — sourced from the PARENT's
 	// turnState, today parentTS.transcriptSessionID at
-	// pkg/agent/subturn.go:1424 (U7). See SubTurnSpawnPayload.SessionID's
+	// the pre-ADR-091 subturn.go (U7, since deleted). See SubTurnSpawnPayload.SessionID's
 	// doc comment for the full frozen-contract rationale (ADR-057 Rule 7,
 	// owned by U23), which applies identically here: subagent_end is class
 	// (b) (FR-089, BDD-98), so producing_session_id would always equal this

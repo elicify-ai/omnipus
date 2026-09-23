@@ -520,7 +520,8 @@ func (te *TaskExecutor) runTaskFromInProgress(
 // FIX 5 (7-reviewer gate, visibility): this turnState IS now registered in
 // al.activeTurnStates for the run's duration (register/defer-clear below,
 // mirroring native runTurn's registerActiveTurn/clearActiveTurn pair and
-// spawnSubTurn's childTS registration, subturn.go:880-881) — ts.depth is read
+// the pre-ADR-091 subturn.go's own childTS registration (since deleted) —
+// ts.depth is read
 // by cancel.go's activeTurnStates.Range-based readers now that the turn is
 // reachable there (it previously was not: an unregistered turnState made
 // ts.depth dead for every purpose except this function's own local seeding).
@@ -563,9 +564,9 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// attribution + RunOptions.Model) — a read/write race with SwitchModel.
 	// snapshotForExternalDispatch takes a single RLock and copies the whole
 	// mutex-protected quad together into a private AgentInstance value
-	// nothing else can mutate, mirroring spawnSubTurn's execSource-snapshot
-	// pattern (subturn.go ~603-662, which the native delegation path already
-	// relies on for the identical reason). Every field below (opts,
+	// nothing else can mutate, mirroring the same execSource-snapshot
+	// pattern the pre-ADR-091 native delegation path (subturn.go, since
+	// deleted) relied on for the identical reason. Every field below (opts,
 	// newTurnState, composeDelegateInput) reads from this snapshot, never
 	// liveAgent directly.
 	agent := liveAgent.snapshotForExternalDispatch()
@@ -587,7 +588,7 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	}
 	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, sessionKey))
 	ts.depth = delegationDepth
-	ts.al = al // FIX 5: back-ref for hard-abort cascade (mirrors subturn.go:831)
+	ts.al = al // FIX 5: back-ref for hard-abort cascade (mirrors the pre-ADR-091 subturn.go, since deleted)
 
 	// FIX 5: register for the run's duration — see this function's doc
 	// comment for the full reachability analysis.
@@ -666,13 +667,13 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// rtCfg.defaultTimeout to the DRIVER as RunOptions.TimeoutSeconds, a hint
 	// each real driver applies itself (driver_claude.go/driver_codex.go/
 	// driver_opencode.go all do `context.WithTimeout(runCtx,
-	// TimeoutSeconds*time.Second)` internally). spawnSubTurn's native
-	// delegation path already has its OWN Go-level safety-net timeout
-	// (subturn.go ~458-473: `context.WithTimeout(context.Background(),
+	// TimeoutSeconds*time.Second)` internally). The pre-ADR-091 native
+	// delegation path (subturn.go, since deleted) already had its OWN
+	// Go-level safety-net timeout (`context.WithTimeout(context.Background(),
 	// timeout)`) precisely so a driver that never honors/emits an end event
 	// cannot hang the dispatch forever; this task-mode dispatch had no
 	// equivalent — a stuck external CLI would tie up a dispatch-semaphore
-	// slot indefinitely with nothing to notice. Unlike spawnSubTurn's
+	// slot indefinitely with nothing to notice. Unlike that path's
 	// Background()-rooted child (deliberately independent so a Critical
 	// sub-turn survives its parent's graceful finish), this derives the
 	// deadline FROM the incoming ctx — consistent with the native task path,

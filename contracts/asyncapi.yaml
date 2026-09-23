@@ -2649,7 +2649,7 @@ components:
 
             F13 follow-up hardening: the object catch-all''s `error` exclusion below now keys on `error` being a
             STRING, not merely present — see that branch''s own description for why (settleAskToolCallTranscript /
-            spawnSubTurn persist a boolean `error` flag on an ordinary object, which is not an attempt at any of the
+            buildSyncDelegateResult persist a boolean `error` flag on an ordinary object, which is not an attempt at any of the
             four `error`-keyed $refs and must still match the catch-all). Regression fixture:
             pkg/api/generated/tool_call_result_error_key_contract_test.go.
 
@@ -2693,7 +2693,7 @@ components:
               const-string discriminator every one of the six `error`-keyed $refs below actually uses
               (DelegationFailure, FileExistsRefusal, PermissionDenied, ToolAssemblyDuplicate) — not merely on
               `error` being present. `error` is not a reserved key in practice: pkg/agent/approval_transcript.go''s
-              settleAskToolCallTranscript and pkg/agent/subturn.go''s spawnSubTurn both persist plain
+              settleAskToolCallTranscript and pkg/agent/delegate_result.go''s buildSyncDelegateResult both persist plain
               map[string]any results carrying a BOOLEAN `"error": true` flag (alongside `text`/`reason`/`permanent`),
               which is a legitimate ordinary object, not an attempted use of any of the six typed discriminator
               shapes. Excluding on bare presence of `error` made every such object match NO branch of this oneOf
@@ -2732,7 +2732,7 @@ components:
         Server → client subagent span opened (FR-H-004). Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
         ADR-057 W5 audit (FR-089) — emitted by the PARENT about the child
-        (pkg/agent/subturn.go); FR-017 pins its SessionID to the routing key.
+        (pkg/agent/steer_frames.go); FR-017 pins its SessionID to the routing key.
       type: object
       required:
       - type
@@ -2778,7 +2778,7 @@ components:
         the six allowed values — the SPA drops frames with invalid status (W4-6).
         Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b)
         per the ADR-057 W5 audit (FR-089) — emitted by the PARENT about the
-        child (pkg/agent/subturn.go); FR-017 pins its SessionID to the
+        child (pkg/agent/steer_frames.go); FR-017 pins its SessionID to the
         routing key. Kept in sync by hand
         with components/schemas/SubagentEndFrame.yaml for the full shape —
         see that file for the per-value description (including "parked",
