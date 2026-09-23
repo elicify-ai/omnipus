@@ -1264,7 +1264,7 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 		}
 		wh.h.handleChatMessageWithClientID(
 			wh.ctx, wh.chatID, sessionID, f.Content, agentID, f.Media,
-			modelName, workspaceID, setupKickoff, clientMessageID, wh.wc,
+			modelName, workspaceID, setupKickoff, clientMessageID, f.AutoApprove, wh.wc,
 		)
 	case string(generated.WsFrameTypeCancel):
 		var f generated.CancelFrame

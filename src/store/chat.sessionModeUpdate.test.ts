@@ -200,17 +200,23 @@ describe('chat store — session_state reconnect/reload snapshot carries the per
   })
 })
 
-// ── ADR-092 UX fix: pendingAutoApproveChoice — the composer toggle works
-// before the first message ────────────────────────────────────────────────
+// ── ADR-092 founder ruling (2026-09-24): pendingAutoApproveChoice rides the
+// FIRST MESSAGE itself ──────────────────────────────────────────────────────
 //
 // A brand-new chat has no server-known session yet, so the toggle can't
-// send session_mode_update directly (see AutoApprovePicker.tsx). Instead it
-// records ChatStore.pendingAutoApproveChoice, and the frame slice's
-// session_started case (src/store/chat/slices/frames.ts) flushes it as a
-// real session_mode_update the moment the server mints the real session id
-// — BEFORE session_started's bucket-migration logic runs, in effect
-// alongside the first turn's own dispatch.
-describe('chat store — pendingAutoApproveChoice flushed by session_started (ADR-092 UX fix)', () => {
+// send session_mode_update directly (see AutoApprovePicker.tsx). It records
+// ChatStore.pendingAutoApproveChoice instead. That choice is no longer
+// flushed as a SEPARATE session_mode_update after the session_started ack —
+// a round trip that could race the agent loop's own first LLM call and let
+// the new chat's first tool call be decided under the wrong mode.
+// `sendMessage`'s no-active-session branch
+// (src/store/chat/slices/outbound-lifecycle.ts) now sends it as
+// `auto_approve` ON the very message frame that mints the session, so the
+// server has already recorded it before that message is even admitted.
+// `session_started` (src/store/chat/slices/frames.ts) then only reflects the
+// same value locally into the new session's bucket and clears the pending
+// field — no WS send at all.
+describe('chat store — pendingAutoApproveChoice rides the first message frame (ADR-092)', () => {
   function resetPendingChoiceScenario() {
     act(() => {
       useChatStore.getState().clearStreamingState()
@@ -221,9 +227,9 @@ describe('chat store — pendingAutoApproveChoice flushed by session_started (AD
     })
   }
 
-  it('sends session_mode_update for the newly-minted session id and clears the pending choice', () => {
+  it('sends the pending choice as auto_approve on the first message frame, then session_started reflects it locally and clears the pending field', () => {
     resetPendingChoiceScenario()
-    const mockSend = vi.fn()
+    const mockSend = vi.fn(() => true)
     act(() => {
       useConnectionStore.setState({
         connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
@@ -233,22 +239,30 @@ describe('chat store — pendingAutoApproveChoice flushed by session_started (AD
     })
 
     act(() => {
+      useChatStore.getState().sendMessage('hello')
+    })
+    expect(mockSend).toHaveBeenCalledTimes(1)
+    expect(mockSend.mock.calls[0][0]).toMatchObject({ type: 'message', content: 'hello', auto_approve: true })
+    // The choice is still pending — not cleared merely by sending — so the
+    // switch keeps showing it while the ack is in flight.
+    expect(useChatStore.getState().pendingAutoApproveChoice).toBe(true)
+
+    act(() => {
       useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_1' })
     })
 
-    expect(mockSend).toHaveBeenCalledWith({
-      type: 'session_mode_update',
-      session_id: 'sess_new_1',
-      auto_approve: true,
-    })
+    // No second frame goes out — session_started never triggers a
+    // session_mode_update send any more.
+    expect(mockSend).toHaveBeenCalledTimes(1)
     expect(useChatStore.getState().pendingAutoApproveChoice).toBeNull()
+    expect(useChatStore.getState().sessionsById['sess_new_1']?.autoApproveEffective).toBe(true)
+    expect(useChatStore.getState().autoApproveEffective).toBe(true)
   })
 
   it(
-    'founder-ruling proof (2026-09-24): flip Auto on in a brand-new chat, send the first message, and the ' +
-      'session_mode_update frame reaches the wire as the very next send after session_started — before ' +
-      'anything else the client does — proving the choice is in flight to the server ahead of the first ' +
-      'turn being able to decide any tool call',
+    'founder-ruling proof (2026-09-24): flip Auto on in a brand-new chat and send the first message — ' +
+      'auto_approve travels on that SAME, single frame, so there is no second send for a race to land ' +
+      'behind the agent loop dispatching the turn',
     () => {
       resetPendingChoiceScenario()
       const mockSend = vi.fn((_frame: unknown) => true)
@@ -267,31 +281,24 @@ describe('chat store — pendingAutoApproveChoice flushed by session_started (AD
       })
       expect(mockSend).not.toHaveBeenCalled()
 
-      // 2) User sends the first message. This goes out with no session_id —
-      //    the server will mint one and ack with session_started.
+      // 2) User sends the first message. auto_approve is carried on this
+      //    exact frame — the one and only frame this turn's mint sends —
+      //    so the server has the choice before it can even admit the
+      //    message, let alone dispatch the turn to the agent loop.
       act(() => {
         useChatStore.getState().sendMessage('hello')
       })
       expect(mockSend).toHaveBeenCalledTimes(1)
-      expect(mockSend.mock.calls[0][0]).toMatchObject({ type: 'message', content: 'hello' })
+      expect(mockSend.mock.calls[0][0]).toEqual(
+        expect.objectContaining({ type: 'message', content: 'hello', auto_approve: true }),
+      )
 
-      // 3) The server's session_started ack arrives. The pending choice must
-      //    be flushed as session_mode_update as the very next frame sent —
-      //    synchronously inside this same frame handler, not deferred — so
-      //    it is already in flight before the agent loop (a separate
-      //    goroutine, gated on an LLM round-trip before any tool call can be
-      //    decided — see AutoApprovePicker.tsx's doc comment) reaches its
-      //    first tool-call approval check.
+      // 3) The server's session_started ack arrives. Nothing further is
+      //    sent — the choice was already in the server's hands on frame 1.
       act(() => {
         useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_founder_proof' })
       })
-
-      expect(mockSend).toHaveBeenCalledTimes(2)
-      expect(mockSend.mock.calls[1][0]).toEqual({
-        type: 'session_mode_update',
-        session_id: 'sess_new_founder_proof',
-        auto_approve: true,
-      })
+      expect(mockSend).toHaveBeenCalledTimes(1)
       expect(useChatStore.getState().pendingAutoApproveChoice).toBeNull()
     },
   )
@@ -312,9 +319,9 @@ describe('chat store — pendingAutoApproveChoice flushed by session_started (AD
     expect(mockSend).not.toHaveBeenCalled()
   })
 
-  it('carries a false choice the same way', () => {
+  it('carries a false choice the same way, on the first message frame', () => {
     resetPendingChoiceScenario()
-    const mockSend = vi.fn()
+    const mockSend = vi.fn(() => true)
     act(() => {
       useConnectionStore.setState({
         connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
@@ -324,20 +331,23 @@ describe('chat store — pendingAutoApproveChoice flushed by session_started (AD
     })
 
     act(() => {
+      useChatStore.getState().sendMessage('hello')
+    })
+    expect(mockSend).toHaveBeenCalledTimes(1)
+    expect(mockSend.mock.calls[0][0]).toMatchObject({ type: 'message', auto_approve: false })
+
+    act(() => {
       useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_2' })
     })
 
-    expect(mockSend).toHaveBeenCalledWith({
-      type: 'session_mode_update',
-      session_id: 'sess_new_2',
-      auto_approve: false,
-    })
+    expect(mockSend).toHaveBeenCalledTimes(1)
     expect(useChatStore.getState().pendingAutoApproveChoice).toBeNull()
+    expect(useChatStore.getState().sessionsById['sess_new_2']?.autoApproveEffective).toBe(false)
   })
 
-  it('sends nothing extra when there is no pending choice — an ordinary first message is unaffected', () => {
+  it('omits auto_approve from the first message frame, and sends nothing extra on session_started, when there is no pending choice', () => {
     resetPendingChoiceScenario()
-    const mockSend = vi.fn()
+    const mockSend = vi.fn(() => true)
     act(() => {
       useConnectionStore.setState({
         connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
@@ -346,10 +356,17 @@ describe('chat store — pendingAutoApproveChoice flushed by session_started (AD
     })
 
     act(() => {
+      useChatStore.getState().sendMessage('hello')
+    })
+    expect(mockSend).toHaveBeenCalledTimes(1)
+    expect(mockSend.mock.calls[0][0]).not.toHaveProperty('auto_approve')
+
+    act(() => {
       useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'sess_new_3' })
     })
 
-    expect(mockSend).not.toHaveBeenCalled()
+    expect(mockSend).toHaveBeenCalledTimes(1)
+    expect(useChatStore.getState().sessionsById['sess_new_3']?.autoApproveEffective).toBeNull()
   })
 
   it('startNewSession ("New chat") clears an abandoned pending choice so it never leaks onto the next chat', () => {

@@ -54,7 +54,7 @@ func TestHandleChatMessage_AcknowledgesPersistenceBeforeTurnStart(t *testing.T) 
 
 	handler.handleChatMessageWithClientID(
 		context.Background(), "chat-message-status", "", "hello", "", nil,
-		"", "", false, "client-message-1", wc,
+		"", "", false, "client-message-1", nil, wc,
 	)
 
 	frames := readMessageStatusFrames(t, wc, 1)
@@ -77,7 +77,7 @@ func TestHandleChatMessage_PublishFailureMarksClientMessageFailed(t *testing.T) 
 
 	handler.handleChatMessageWithClientID(
 		context.Background(), "chat-message-status-failed", "", "hello", "", nil,
-		"", "", false, "client-message-failed", wc,
+		"", "", false, "client-message-failed", nil, wc,
 	)
 
 	frames := readMessageStatusFrames(t, wc, 2)

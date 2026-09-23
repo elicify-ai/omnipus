@@ -741,6 +741,8 @@ type MediaPart struct {
 // MessageFrame — Client → server user chat message. Omit session_id to start a new session; include to continue an existing one. content must always be present as a key, but MAY be an empty string when media is also present and non-empty — an attachment-only send legitimately has no caption (UAT Issue 5). The anyOf below enforces the actual invariant: content has at least 1 character, OR media has at least 1 entry — a message with neither is still rejected.
 type MessageFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
+	// ADR-092 per-chat Auto-approve choice for the chat this message mints — meaningful only when session_id is absent (this frame is minting a new session); ignored when session_id is present, since an existing session's mode is changed exclusively via session_mode_update. Same value space and null semantics as SessionModeUpdateFrame.auto_approve: true loosens Auto-approve on for this one new chat (may loosen past the resolved agent x global default, because a human is present), false tightens it off, null/absent leaves it unset (the chat follows whatever the agent x global default resolves to). Carrying the choice on the minting message itself — instead of a follow-up session_mode_update sent after the session_started ack — is what lets the choice gate the new chat's very first ask-policy tool call: a post-ack send can race the agent loop's own first LLM round trip.
+	AutoApprove *bool `json:"auto_approve,omitempty"`
 	// Client-generated correlation id echoed by MessageStatusFrame. Optional for compatibility with older clients.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 	Content         string  `json:"content"`

@@ -563,6 +563,19 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         // has since picked a different one" (see runtime.agentIdAtLastMintSend).
         runtime.agentIdAtLastMintSend = activeAgentId ?? null
 
+        // ADR-092 founder ruling (2026-09-24): a per-chat Auto-approve choice
+        // made in the composer before this chat had a session
+        // (`AutoApprovePicker`'s `pendingAutoApproveChoice`) rides along on
+        // THIS message — the one that mints the session — as `auto_approve`,
+        // instead of a separate `session_mode_update` sent after the
+        // `session_started` ack. The server records the choice in
+        // SessionModeStore before dispatching the turn to the agent loop
+        // (websocket_chat.go's recordSessionAndTranscript), so it is already
+        // in force for the first ask-policy tool call this turn can produce
+        // — a post-ack send could otherwise race that turn's own first LLM
+        // round trip. Omitted (not sent as an explicit null) when the user
+        // never touched the toggle for this chat.
+        const autoApproveChoice = get().pendingAutoApproveChoice
         const payload2 = {
           type: 'message' as const,
           content,
@@ -570,6 +583,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
           ...metadataFrame,
+          ...(autoApproveChoice !== null ? { auto_approve: autoApproveChoice } : {}),
         }
         get()._validateOutboundFrame(payload2, pendingSid)
         const sent = connection.send(payload2)

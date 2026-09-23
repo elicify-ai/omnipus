@@ -73,16 +73,28 @@ const (
 
 // wsHandlerHandleChatMessage carries the shared state of handleChatMessage across its stages.
 type wsHandlerHandleChatMessage struct {
-	h                   *WSHandler
-	chatID              string
-	frameSessionID      string
-	content             string
-	agentID             string
-	mediaRefs           []string
-	modelName           string
-	workspaceID         string
-	setupKickoff        bool
-	clientMessageID     string
+	h               *WSHandler
+	ctx             context.Context
+	chatID          string
+	frameSessionID  string
+	content         string
+	agentID         string
+	mediaRefs       []string
+	modelName       string
+	workspaceID     string
+	setupKickoff    bool
+	clientMessageID string
+	// autoApprove is MessageFrame.auto_approve (ADR-092, contracts/asyncapi.yaml):
+	// the per-chat Auto-approve choice for the chat THIS message mints, carried
+	// on the minting message itself so it is recorded before the turn is
+	// dispatched to the agent loop — see recordSessionAndTranscript's mint
+	// branch. nil means "no choice sent" (frame omitted it, or sent explicit
+	// null — both collapse to the same Go zero value for an optional pointer
+	// field, and both mean the same thing here: leave the chat's per-chat
+	// modifier unset). Meaningless — and never read — once frameSessionID is
+	// non-empty: an existing session's mode changes exclusively via
+	// session_mode_update.
+	autoApprove         *bool
 	wc                  *wsConn
 	targetAgentID       string
 	sessionID           string
@@ -182,12 +194,16 @@ func (h *WSHandler) handleChatMessage(
 	setupKickoff bool,
 	wc *wsConn,
 ) {
-	h.handleChatMessageWithClientID(ctx, chatID, frameSessionID, content, agentID, mediaRefs, modelName, workspaceID, setupKickoff, "", wc)
+	h.handleChatMessageWithClientID(ctx, chatID, frameSessionID, content, agentID, mediaRefs, modelName, workspaceID, setupKickoff, "", nil, wc)
 }
 
 // handleChatMessageWithClientID is the acknowledgement-aware message intake.
 // The compatibility wrapper above keeps older callers and clients unchanged;
 // a client_message_id opts a newer client into received/working/failed frames.
+// autoApprove is MessageFrame.auto_approve (ADR-092) — see
+// wsHandlerHandleChatMessage.autoApprove's doc comment; nil for every caller
+// that does not carry the field (the compatibility wrapper above, and every
+// non-message-frame path).
 func (h *WSHandler) handleChatMessageWithClientID(
 	ctx context.Context,
 	chatID string,
@@ -199,9 +215,10 @@ func (h *WSHandler) handleChatMessageWithClientID(
 	workspaceID string,
 	setupKickoff bool,
 	clientMessageID string,
+	autoApprove *bool,
 	wc *wsConn,
 ) {
-	hcm := &wsHandlerHandleChatMessage{h: h, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, clientMessageID: clientMessageID, wc: wc}
+	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, clientMessageID: clientMessageID, autoApprove: autoApprove, wc: wc}
 	defer func() {
 		if !hcm.admitted {
 			hcm.sendMessageStatus("failed")
@@ -739,6 +756,22 @@ func (hcm *wsHandlerHandleChatMessage) recordSessionAndTranscript() bool {
 					return true
 				}
 				slog.Warn("ws: could not set session title/owner", "session_id", meta.ID, "error", err)
+			}
+			// ADR-092 founder ruling (2026-09-24): a per-chat Auto-approve
+			// choice carried on THIS minting message must already be in
+			// SessionModeStore before the turn reaches the agent loop, or the
+			// new chat's first ask-policy tool call can be decided under the
+			// wrong mode — the LLM round trip that produces that first tool
+			// call runs on a separate goroutine (PublishInbound below), so
+			// "soon after" is not good enough. Writing it here — strictly
+			// before buildInboundMessage/PublishInbound further down in
+			// handleChatMessageWithClientID — closes that race outright,
+			// unlike the SPA's superseded post-session_started
+			// session_mode_update send it replaces. Shares the exact
+			// set-and-audit path handleSessionModeUpdateFrame uses for a
+			// live chat's toggle, so the two can never diverge.
+			if hcm.autoApprove != nil {
+				hcm.h.applySessionModeChoice(hcm.ctx, hcm.targetAgentID, meta.ID, hcm.autoApprove, "message")
 			}
 			// Ack the new session_id so the SPA can associate all subsequent frames.
 			startedFrame := generated.SessionStartedFrame{

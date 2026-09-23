@@ -91,6 +91,7 @@ export interface MessageFrame {
   session_id?: string;
   agent_id?: string;
   media?: Array<string>;
+  auto_approve?: boolean | null;
   metadata?: {
     model_name?: string;
     workspace_id?: string;

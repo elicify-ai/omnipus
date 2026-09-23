@@ -329,20 +329,24 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           useSessionStore
             .getState()
             .setActiveSession(newSid, userReselected ? currentAgentId : (frame.agent_id ?? currentAgentId))
-          // ADR-092 UX fix: the moment the real session id exists, flush any
-          // per-chat Auto-approve choice the user made in the composer while
-          // this was still a brand-new, session-less chat (AutoApprovePicker
-          // could not send `session_mode_update` earlier — there was no
-          // session id for the server to attach it to). Sent as an ordinary
-          // `session_mode_update` for newSid, exactly like a post-session
-          // toggle, so the server acks with `session_mode_updated` the same
-          // way and this session's `autoApproveEffective` resolves correctly
-          // for the turn that is about to stream. Cleared unconditionally
-          // once flushed so it is never resent for a later session.
+          // ADR-092 founder ruling (2026-09-24): a per-chat Auto-approve
+          // choice made in the composer while this was still a brand-new,
+          // session-less chat is now carried AS PART OF the very message
+          // that minted this session (`sendMessage`'s no-active-session
+          // branch sends it as `auto_approve` on the MessageFrame) — the
+          // server records it in SessionModeStore before the turn is even
+          // dispatched to the agent loop (websocket_chat.go's
+          // recordSessionAndTranscript), so by the time this ack arrives the
+          // choice has ALREADY taken effect server-side. A follow-up
+          // `session_mode_update` round trip here (the previous approach)
+          // is no longer needed and — being sent only after this ack —
+          // could race the agent loop's own first LLM round trip, letting
+          // the new chat's first tool call be decided under the wrong mode.
+          // Captured and cleared here, unconditionally, so it is never
+          // reused for a later, unrelated new chat's picker default.
           const pendingChoice = get().pendingAutoApproveChoice
           if (pendingChoice !== null) {
             set({ pendingAutoApproveChoice: null })
-            get().sendSessionModeUpdate(newSid, pendingChoice)
           }
           // Bucket is lazily created by first withBucket call; ensure it exists now
           // so the foreground syncs immediately.
@@ -376,6 +380,17 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             delete sessionsById['__pending']
             return { sessionsById, ...bucketToForeground(baseBucket) }
           })
+          // Reflect the captured choice into this session's OWN bucket
+          // (never a global field — see the pendingChoice capture above) so
+          // `useResolvedAutoApprove` shows it via `autoApproveEffective`
+          // exactly as a `session_mode_updated` ack would have, without
+          // waiting on one: `SessionModeStore.Get` returns the modifier
+          // verbatim once set (`ResolveAutoApprove`,
+          // pkg/agent/sessionmode.go), so this mirrors the value the server
+          // already recorded for newSid — not a guess.
+          if (pendingChoice !== null) {
+            withBucket(newSid, () => ({ autoApproveEffective: pendingChoice }))
+          }
           // Invalidate sessions list so the session lists (SearchModal, sidebar
           // accordion) re-fetch and show the new session.
           queryClient.invalidateQueries({ queryKey: ['sessions'] })

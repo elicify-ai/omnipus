@@ -25,28 +25,30 @@ import { cn } from '@/lib/utils'
  * until the first message is sent. Rather than disabling the switch until
  * then (which left the founder unable to even try Auto-approve in a fresh
  * chat), a toggle flipped here records a PENDING choice
- * (`ChatStore.pendingAutoApproveChoice`) that: (1) is reflected immediately
- * via `useResolvedAutoApprove` — flipping the switch never runs anything by
- * itself, it only records the choice — and (2) is flushed as a real
- * `session_mode_update` the moment the session is minted — see the
- * `session_started` case in `src/store/chat/slices/frames.ts`, which sends
- * it as the very next frame after the ack, before doing anything else.
+ * (`ChatStore.pendingAutoApproveChoice`) that is reflected immediately via
+ * `useResolvedAutoApprove` — flipping the switch never runs anything by
+ * itself, it only records the choice.
  *
- * Founder ruling (2026-09-24): this must reach the server before the first
- * turn's first tool call is decided, not merely "soon after". Confirmed
- * against the backend (`pkg/gateway/websocket_chat.go::handleChatMessage`,
- * `pkg/agent/auto_approve_gate.go`, `pkg/gateway/ws_session_mode.go`):
- * `session_started` is sent back to the client the instant the session is
- * minted, while the turn itself is only handed to the agent-loop goroutine
- * via a buffered channel (`pkg/bus/bus.go::PublishInbound`) — the LLM call
- * that has to complete before any tool call exists to approve happens on
- * that separate goroutine. The auto-approve gate reads the per-session mode
- * fresh at each tool-call dispatch (`SessionModeStore.Get`), not a value
- * snapshotted at turn start, and `session_mode_update`'s handler writes into
- * that same live store on the WS read loop, processing the client's very
- * next frame after `session_started`. So sending immediately on the ack —
- * this component's whole approach — reliably beats the LLM round-trip that
- * gates the first tool call, without any backend change.
+ * Founder ruling (2026-09-24): the choice must take effect at the chat's
+ * first activity — every tool call of the first turn, including the very
+ * first one — not merely "soon after". A round trip that waits for the
+ * server's `session_started` ack and only THEN sends `session_mode_update`
+ * cannot guarantee that: the turn is dispatched to the agent loop
+ * (`pkg/bus/bus.go::PublishInbound`) on a separate goroutine the instant the
+ * message is admitted, so a slow client or a fast first LLM call can let the
+ * first tool call be decided before that follow-up frame ever arrives. Fixed
+ * by carrying the choice ON the minting message itself:
+ * `sendMessage`'s no-active-session branch
+ * (`src/store/chat/slices/outbound-lifecycle.ts`) sends
+ * `pendingAutoApproveChoice` as `MessageFrame.auto_approve` on the very frame
+ * that mints the session, and the server writes it into `SessionModeStore`
+ * (`pkg/gateway/websocket_chat.go::recordSessionAndTranscript`) BEFORE that
+ * same handler publishes the turn to the bus — so the mode is already live
+ * before the agent loop's goroutine can even start. `frames.ts`'s
+ * `session_started` case then reflects the same value straight into this
+ * session's bucket (no WS round trip needed — the server already has it) and
+ * clears `pendingAutoApproveChoice` so it is never reused for a later,
+ * unrelated new chat.
  *
  * In a chat that ALREADY has a real session, flipping applies from the very
  * next tool call, not merely "the next message" — a running turn can flip

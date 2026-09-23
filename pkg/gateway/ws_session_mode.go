@@ -5,6 +5,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 
@@ -47,6 +48,32 @@ func (wh *wsHandlerReadLoop) handleSessionCloseFrame(data []byte) wsHandlerReadL
 	return wsHandlerReadLoopNext
 }
 
+// applySessionModeChoice sets sessionID's ADR-092 per-chat Auto-approve
+// modifier — or clears it when autoApprove is nil — and audits the mode
+// change. Shared by handleSessionModeUpdateFrame below (a live chat's
+// explicit toggle) and websocket_chat.go's recordSessionAndTranscript (a
+// choice carried on the MessageFrame that mints a brand-new session), so the
+// two write-and-audit exactly the same way and can never diverge. agentID is
+// caller-resolved: the two sites obtain it differently (an AgentForSession
+// lookup for an existing session vs. the already-resolved mint-time target
+// agent for a new one). Returns the chat's newly resolved Auto-approve value
+// (SessionAutoApprove) for the caller to report or reason about.
+func (h *WSHandler) applySessionModeChoice(ctx context.Context, agentID, sessionID string, autoApprove *bool, source string) bool {
+	al := h.agentLoop
+	modes := al.SessionModes()
+	newMode := "cleared"
+	if autoApprove == nil {
+		modes.ClearSession(sessionID)
+	} else {
+		modes.Set(sessionID, *autoApprove)
+		newMode = shellModeName(*autoApprove)
+	}
+	effective := al.SessionAutoApprove(agentID, sessionID)
+	audit.EmitShellModeChange(ctx, al.AuditLogger(), audit.DecisionAllow,
+		newMode, "chat", audit.ShellModeActorOperator, agentID, sessionID, source)
+	return effective
+}
+
 // handleSessionModeUpdateFrame applies ADR-092's per-chat Auto-approve
 // modifier (SessionModeUpdateFrame): auto_approve true/false sets it, null
 // clears it so the chat follows the agent and global defaults again. This is
@@ -66,9 +93,9 @@ func (wh *wsHandlerReadLoop) handleSessionModeUpdateFrame(data []byte) wsHandler
 	if err := validation.EntityID(f.SessionId); err != nil {
 		return wh.wsSessionError("invalid session_id")
 	}
-	// The generated struct flattens the nullable auto_approve to a plain
-	// bool, which cannot tell null (clear) from false (off). Read the raw
-	// value to keep the three states the contract defines.
+	// The generated struct flattens the nullable, REQUIRED auto_approve to a
+	// plain bool, which cannot tell null (clear) from false (off). Read the
+	// raw value to keep the three states the contract defines.
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return wh.wsSessionError("malformed session_mode_update frame")
@@ -97,19 +124,11 @@ func (wh *wsHandlerReadLoop) handleSessionModeUpdateFrame(data []byte) wsHandler
 	}
 	agentID := inst.ID
 
-	modes := al.SessionModes()
-	newMode := "cleared"
-	if string(value) == "null" {
-		modes.ClearSession(f.SessionId)
-	} else {
-		modes.Set(f.SessionId, f.AutoApprove)
-		newMode = shellModeName(f.AutoApprove)
+	var autoApprove *bool
+	if string(value) != "null" {
+		autoApprove = &f.AutoApprove
 	}
-
-	effective := al.SessionAutoApprove(agentID, f.SessionId)
-
-	audit.EmitShellModeChange(wh.ctx, al.AuditLogger(), audit.DecisionAllow,
-		newMode, "chat", audit.ShellModeActorOperator, agentID, f.SessionId, "session_mode_update")
+	effective := wh.h.applySessionModeChoice(wh.ctx, agentID, f.SessionId, autoApprove, "session_mode_update")
 
 	sendConnGenFrame(wh.wc, string(generated.WsFrameTypeSessionModeUpdated), generated.SessionModeUpdatedFrame{
 		Type:                 string(generated.WsFrameTypeSessionModeUpdated),

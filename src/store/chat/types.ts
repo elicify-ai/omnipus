@@ -926,10 +926,14 @@ export interface ChatStore {
    * the choice here lets `AutoApprovePicker` stay usable and show the
    * choice immediately instead of greying out.
    *
-   * Consumed the moment `session_started` mints the real session id (see
-   * the frame slice's `session_started` case): sent as a real
-   * `session_mode_update` for that session, then cleared, so the very
-   * first turn already runs under the chosen mode. Also cleared by
+   * Consumed by `sendMessage`'s no-active-session branch
+   * (`src/store/chat/slices/outbound-lifecycle.ts`): sent as
+   * `MessageFrame.auto_approve` on the very message that mints the session,
+   * so the server records it (`SessionModeStore`) before the turn is
+   * dispatched to the agent loop — the very first turn already runs under
+   * the chosen mode, with no follow-up round trip needed. `session_started`
+   * (the frame slice's own case) then reflects the same value into the new
+   * session's bucket and clears this field. Also cleared by
    * `startNewSession`/`attachToSession` (`src/store/session.ts`, via
    * `registerChatClearPendingAutoApprove`) so a choice made and then
    * abandoned (no message ever sent) does not leak onto a LATER, unrelated
