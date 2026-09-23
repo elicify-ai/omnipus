@@ -73,7 +73,12 @@ expect "ShellDenyPatterns field reintroduced" 1
 fresh_tree
 mkdir -p "$TMP/tree/pkg/sysagent/tools"
 printf 'package systools\n\nvar blockedConfigKeys = []string{"sandbox.shell_deny_patterns"}\n' > "$TMP/tree/pkg/sysagent/tools/config.go"
-expect "shell_deny_patterns named in the blocked-config-keys list (allowed, retirement enforcement)" 0
+expect "dotted sandbox.shell_deny_patterns key path (not the bare wire key) passes" 0
+
+fresh_tree
+mkdir -p "$TMP/tree/pkg/sysagent/tools"
+printf 'package systools\n\nvar k = map[string]bool{"shell_deny_patterns": true}\n' > "$TMP/tree/pkg/sysagent/tools/config.go"
+expect "bare \"shell_deny_patterns\" in sysagent/tools/config.go (whole-file exclusion removed)" 1
 
 # --- 5. per-agent ShellPolicy surface -----------------------------------------
 fresh_tree
@@ -83,16 +88,47 @@ expect "AgentShellPolicy type reintroduced outside pkg/config/config.go" 1
 fresh_tree
 mkdir -p "$TMP/tree/pkg/config"
 printf 'package config\n\ntype AgentShellPolicy struct {\n\tEnableDenyPatterns bool\n}\n' > "$TMP/tree/pkg/config/config.go"
-expect "AgentShellPolicy in pkg/config/config.go (known tracked gap, excluded)" 0
+expect "AgentShellPolicy in pkg/config/config.go (temporary-gap exclusion removed)" 1
 
 fresh_tree
 printf 'package gateway\n\nfunc f(body []byte) bool { return bytes.Contains(body, []byte(`"shell_policy"`)) }\n' > "$TMP/tree/pkg/fixture.go"
 expect "\"shell_policy\" wire key reintroduced outside the retirement-enforcement sites" 1
 
+# The three retirement-enforcement LINES are excluded, and nothing else in
+# their files is.
 fresh_tree
 mkdir -p "$TMP/tree/pkg/gateway"
-printf 'package gateway\n\nfunc f(body []byte) bool { return bytes.Contains(body, []byte(`"shell_policy"`)) }\n' > "$TMP/tree/pkg/gateway/rest_agents_update.go"
-expect "\"shell_policy\" in rest_agents_update.go (allowed, the retirement 400 handler)" 0
+cat > "$TMP/tree/pkg/gateway/rest_agents_update.go" <<'EOF'
+package gateway
+
+func f(uf updateFields) bool {
+	if bytes.Contains(uf.rawBody, []byte(`"shell_policy"`)) {
+		jsonErr(uf.w, http.StatusBadRequest,
+			`shell_policy is retired — use Auto-approve instead (ADR-092)`)
+		return true
+	}
+	return false
+}
+EOF
+cat > "$TMP/tree/pkg/gateway/agent_field_rules.go" <<'EOF'
+package gateway
+
+var subagent3pForbiddenUpdateFields = []string{
+	"tools_cfg",
+	"shell_policy",
+}
+EOF
+expect "the stale-client 400 sniff + message lines and the forbidden-field entry (allowed, line-level)" 0
+
+fresh_tree
+mkdir -p "$TMP/tree/pkg/gateway"
+printf 'package gateway\n\nfunc g(req Req) { _ = req.ShellPolicy }\n' > "$TMP/tree/pkg/gateway/rest_agents_update.go"
+expect "req.ShellPolicy re-added elsewhere in rest_agents_update.go (no whole-file exclusion)" 1
+
+fresh_tree
+mkdir -p "$TMP/tree/pkg/gateway"
+printf 'package gateway\n\nvar k = map[string]bool{"shell_policy": true}\n' > "$TMP/tree/pkg/gateway/agent_field_rules.go"
+expect "\"shell_policy\" used as a live key in agent_field_rules.go (only the bare list entry is excluded)" 1
 
 # --- 6. exec allowlist ---------------------------------------------------------
 fresh_tree
@@ -122,6 +158,34 @@ fresh_tree
 mkdir -p "$TMP/tree/contracts/components/schemas"
 printf 'title: AgentShellPolicy\n' > "$TMP/tree/contracts/components/schemas/AgentShellPolicy.yaml"
 expect "AgentShellPolicy.yaml schema file reintroduced" 1
+
+# --- 9. unenforced approval keys, exec-allowlist route and key -------------------
+fresh_tree
+printf 'package x\n\nvar a = map[string]bool{"enable_deny_patterns": true}\n' > "$TMP/tree/pkg/fixture.go"
+expect "enable_deny_patterns reintroduced" 1
+
+fresh_tree
+printf 'export const k = { exec_approval: "never" }\n' > "$TMP/tree/src/fixture.ts"
+expect "exec_approval settings key reintroduced" 1
+
+fresh_tree
+printf 'package x\n\nconst t = "exec_approval_request"\nconst u = "exec_approval_expired"\n' > "$TMP/tree/pkg/fixture.go"
+expect "exec_approval_request / exec_approval_expired WS frame names (different surface, allowed)" 0
+
+fresh_tree
+mkdir -p "$TMP/tree/contracts"
+printf 'paths:\n  /security/exec-allowlist:\n    get: {}\n' > "$TMP/tree/contracts/openapi.yaml"
+expect "/security/exec-allowlist route reintroduced" 1
+
+fresh_tree
+printf 'package x\n\nvar b = map[string][]string{"allowed_binaries": nil}\n' > "$TMP/tree/pkg/fixture.go"
+expect "lower-case allowed_binaries key reintroduced" 1
+
+fresh_tree
+mkdir -p "$TMP/tree/pkg/gateway" "$TMP/tree/pkg/sysagent/tools"
+printf 'package gateway\n\nfunc T() {\n\tbody := `{"shell_policy":{"enable_deny_patterns":true}}`\n\t_ = body\n}\n' > "$TMP/tree/pkg/gateway/rest_agents_update_test.go"
+printf 'package systools\n\nvar cases = []c{\n\t{"widen the exec allow-list", "tools.exec.allowed_binaries", nil},\n}\n' > "$TMP/tree/pkg/sysagent/tools/config_privilege_test.go"
+expect "the two test lines proving a retired key is refused (allowed, line-level)" 0
 
 if [ "$FAIL" -ne 0 ]; then
   echo "selfcheck: check-no-shell-deny-patterns.sh does not behave — see above" >&2

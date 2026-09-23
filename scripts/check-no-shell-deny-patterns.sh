@@ -3,9 +3,11 @@
 #
 # Regression guard for ADR-092: the hardcoded shell command-text block list,
 # the per-binary exec allowlist, the dead "always allow" exec-approval
-# manager, and the per-agent ShellPolicy config surface are all DELETED —
-# replaced by the three-mode selector (Ask/Auto/God Mode), the D3
-# resolved-binary rule engine, and D7/D8's kernel-backed pre-flight checks.
+# manager, the per-agent ShellPolicy config surface, and the unenforced
+# exec_approval / enable_deny_patterns settings keys are all DELETED —
+# replaced by the Auto-approve setting (global, per-agent off-switch,
+# per-chat toggle), the D3 resolved-binary command-rule engine, and D7/D8's
+# kernel-backed pre-flight checks.
 # This script fails the build if any of them comes back.
 #
 # WHY A SCRIPT AND NOT JUST A NOTE
@@ -40,8 +42,14 @@
 #      exec.LookPath/filepath.Abs/symlink resolution (issue #83's live
 #      "Additional" claim); D3's resolved-binary rule engine replaces it.
 #   4. Per-agent ShellPolicy surface: `config.AgentShellPolicy` (type deleted
-#      whole — both its fields go), the `shell_policy` wire key on
-#      AgentCreateRequest/AgentUpdateRequest.
+#      whole — both its fields go, including `enable_deny_patterns`), the
+#      `shell_policy` wire key on AgentCreateRequest/AgentUpdateRequest.
+#   5. Unenforced approval settings keys (removal item 4): the
+#      `exec_approval` / `enable_deny_patterns` settings keys the old
+#      SecuritySection wrote and nothing read, the `/security/exec-allowlist`
+#      REST route, and the `allowed_binaries` config/wire key of the exec
+#      allowlist (item 3's lower-case JSON spelling, which the Go-identifier
+#      rule for `AllowedBinaries` cannot see).
 #
 # WHAT IS ALLOWED
 #
@@ -56,33 +64,32 @@
 #   denies independently"). Only shell.go's block-list-producing definition
 #   is banned; a same-named, differently-scoped function under pkg/fspolicy/
 #   is not.
-# - The user-facing HTTP error string "shell_policy is retired" in
-#   pkg/gateway/rest_agents_update.go (ADR-092's intended stale-client 400,
-#   removal item 1's "Stale-client PUT gets a hard 400" requirement) and its
-#   test (pkg/gateway/rest_agents_update_test.go), the subagent_3p
-#   forbidden-field list (pkg/gateway/agent_field_rules.go) that names
-#   "shell_policy" specifically so it is REJECTED, and the SPA test
-#   asserting shell_policy is absent from a create payload
-#   (src/components/agents/CreateAgentModal.test.tsx) — all retirement
-#   ENFORCEMENT, not the retired mechanism. Generated code
-#   (pkg/api/generated/, src/lib/api/generated/) and contracts/**/*.yaml +
-#   pkg/gateway/inboundschemas/*.yaml carry only OpenAPI description prose
-#   about the removal, not a live schema — excluded from the text scan; the
-#   file-existence checks below still catch a resurrected schema file.
-# - KNOWN, TRACKED, TEMPORARY GAP — not a false positive, an incomplete
-#   deletion this guard does not own: as of this commit, `pkg/config/
-#   config.go`'s `AgentShellPolicy` type is still present as orphaned dead
-#   code (zero live callers). It lives in a package owned by the WIRE lane
-#   (pkg/config), not this lane; deleting it is out of scope here (reported
-#   separately). It is excluded from this scan's affected rule so the guard
-#   reflects what it actually verified rather than blocking on someone
-#   else's in-flight deletion. REMOVE this exclusion the moment WIRE lands
-#   the deletion — leaving it in place afterward would silently narrow the
-#   guard.
-#   (The matching gap for `pkg/policy/evaluator.go`'s `ExecPolicy.
-#   AllowedBinaries` and its use in `pkg/tools/bash_test.go` was closed by
-#   the CLEANUP lane's deletion of the exec-allowlist machinery — rule 5
-#   below no longer excludes either path.)
+# - Retirement ENFORCEMENT, excluded LINE BY LINE (never a whole file, so a
+#   retired field re-added anywhere else in the same file still fails):
+#     * pkg/gateway/rest_agents_update.go — the stale-client 400 (ADR-092
+#       removal item 1, "Stale-client PUT gets a hard 400"): exactly the
+#       raw-body sniff line `bytes.Contains(uf.rawBody, []byte(`"shell_policy"`))`
+#       and the line carrying the "shell_policy is retired" error message.
+#     * pkg/gateway/agent_field_rules.go — exactly the bare `"shell_policy",`
+#       entry of the subagent_3p forbidden-field list, which names the key so
+#       it is REJECTED.
+#     * pkg/gateway/rest_agents_update_test.go — exactly the test body line
+#       that sends a retired `{"shell_policy":{"enable_deny_patterns":...}}`
+#       to prove the 400 (the rest of that file is still excluded from the
+#       ShellPolicy rule because its test names carry the word).
+#     * pkg/sysagent/tools/config_privilege_test.go — exactly the line proving
+#       `set_config` refuses `tools.exec.allowed_binaries`.
+#     * src/components/agents/CreateAgentModal.test.tsx — the SPA test
+#       asserting shell_policy is ABSENT from a create payload.
+# - Generated code (pkg/api/generated/, src/lib/api/generated/) and
+#   contracts/**/*.yaml + pkg/gateway/inboundschemas/*.yaml carry only
+#   OpenAPI description prose about the removal, not a live schema — excluded
+#   from the ShellPolicy text scan; the file-existence checks below still
+#   catch a resurrected schema file.
+# - Live WebSocket frame names that merely START with `exec_approval_`
+#   (exec_approval_request / exec_approval_expired) are a different surface
+#   and are not matched: the `exec_approval` rule requires the key to end
+#   there.
 #
 # Exit: 0 clean, 1 offenders found, 2 the check itself could not run.
 
@@ -113,19 +120,24 @@ RULES=(
   #    name (see "WHAT IS ALLOWED" above).
   'buildSecretGuardPatterns\(::pkg cmd src::pkg/fspolicy/'
   # 3. Config/wire field for the block list.
-  'ShellDenyPatterns|validateShellDenyPatterns\(|"shell_deny_patterns"::pkg cmd src contracts::pkg/sysagent/tools/config\.go|pkg/sysagent/tools/config_privilege_test\.go'
+  'ShellDenyPatterns|validateShellDenyPatterns\(|"shell_deny_patterns"::pkg cmd src contracts::$^'
   # 4. Per-agent ShellPolicy config surface — AgentShellPolicy type/bare
-  #    ShellPolicy identifier/"shell_policy" wire key. Excludes the
-  #    retirement-enforcement sites (400 handler + its test + the
-  #    subagent_3p forbidden-field list + the SPA absence test), generated
-  #    code, and the KNOWN TEMPORARY GAP in pkg/config/config.go (see header).
-  'AgentShellPolicy|ShellPolicy|"shell_policy"::pkg cmd src::pkg/config/config\.go|pkg/gateway/rest_agents_update\.go|pkg/gateway/rest_agents_update_test\.go|pkg/gateway/agent_field_rules\.go|pkg/api/generated/|src/lib/api/generated/|src/components/agents/CreateAgentModal\.test\.tsx'
+  #    ShellPolicy identifier/"shell_policy" wire key. Excludes generated
+  #    code, the test files named in the header, and exactly three
+  #    retirement-enforcement LINES (see "WHAT IS ALLOWED").
+  'AgentShellPolicy|ShellPolicy|"shell_policy"::pkg cmd src::^pkg/gateway/rest_agents_update\.go:[0-9]+:[[:space:]]*if bytes\.Contains\(uf\.rawBody, \[\]byte\(`"shell_policy"`\)\) \{$|^pkg/gateway/rest_agents_update\.go:[0-9]+:[[:space:]]*`shell_policy is retired |^pkg/gateway/agent_field_rules\.go:[0-9]+:[[:space:]]*"shell_policy",$|^pkg/gateway/rest_agents_update_test\.go:|^pkg/api/generated/|^src/lib/api/generated/|^src/components/agents/CreateAgentModal\.test\.tsx:'
   # 5. Exec allowlist — HandleExecAllowlist/sanitiseAllowlist/AllowedBinaries
   #    are all fully retired (the CLEANUP lane deleted pkg/policy/evaluator.go,
   #    pkg/policy/auditor.go, and their uses in pkg/tools/bash_test.go).
   'HandleExecAllowlist|sanitiseAllowlist\(|AllowedBinaries::pkg cmd src::$^'
   # 6. Dead exec-approval manager — fully retired.
   'ExecApprovalManager::pkg cmd src::$^'
+  # 7. Unenforced approval settings keys and the exec-allowlist route/key
+  #    (header item 5). `exec_approval` must END the key, so the live
+  #    exec_approval_request / exec_approval_expired WS frame names never
+  #    match. Excludes exactly two test LINES that name a retired key to
+  #    prove it is refused.
+  'enable_deny_patterns|exec_approval([^_[:alnum:]]|$)|/security/exec-allowlist|allowed_binaries::pkg cmd src contracts::^pkg/gateway/rest_agents_update_test\.go:[0-9]+:[[:space:]]*body := `\{"shell_policy":\{"enable_deny_patterns"|^pkg/sysagent/tools/config_privilege_test\.go:[0-9]+:.*"tools\.exec\.allowed_binaries"'
 )
 
 HITS=""
@@ -180,10 +192,11 @@ if [ -n "$OFFENDERS" ] || [ -n "$FILE_HITS" ]; then
   fi
   echo "" >&2
   echo "The hardcoded shell command-text block list, the per-binary exec allowlist," >&2
-  echo "the dead exec-approval manager, and the per-agent ShellPolicy config surface" >&2
-  echo "were deleted deliberately (ADR-092 D2/D3/D5, removal inventory). The three-mode" >&2
-  echo "selector (Ask/Auto/God Mode) plus the D3 resolved-binary rule engine and D7/D8's" >&2
-  echo "kernel-backed pre-flight checks replace all of it." >&2
+  echo "the dead exec-approval manager, the per-agent ShellPolicy config surface, and the" >&2
+  echo "unenforced exec_approval / enable_deny_patterns keys were deleted deliberately" >&2
+  echo "(ADR-092 D2/D3/D5, removal inventory). The Auto-approve setting plus the D3" >&2
+  echo "resolved-binary command rules and D7/D8's kernel-backed pre-flight checks" >&2
+  echo "replace all of it." >&2
   echo "" >&2
   echo "If you hit this after a merge or rebase from an older branch: that branch" >&2
   echo "predates the removal and git re-added the code as an ordinary addition." >&2
@@ -195,5 +208,5 @@ if [ -n "$OFFENDERS" ] || [ -n "$FILE_HITS" ]; then
   exit 1
 fi
 
-echo "check-no-shell-deny-patterns: OK (shell block list, exec allowlist, exec-approval manager, and per-agent ShellPolicy absent per ADR-092)"
+echo "check-no-shell-deny-patterns: OK (shell block list, exec allowlist, exec-approval manager, per-agent ShellPolicy, and the unenforced approval keys absent per ADR-092)"
 exit 0

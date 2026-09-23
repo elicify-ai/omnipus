@@ -61,7 +61,7 @@ Workspace settings are not a tab: select the workspace's name at the left of the
 
 ## The chat area
 
-The chat is a conversation with the workspace's agents. Replies stream in; each tool an agent uses appears as a card you can expand or collapse ([tools](tools.md) explains what agents can do). When an agent wants to do something sensitive, a dialog asks you to allow, deny, or always allow it — [security](security.md) covers the rules behind it. Each active [goal](goals.md) shows as its own small pill under the message box.
+The chat is a conversation with the workspace's agents. Replies stream in; each tool an agent uses appears as a card you can expand or collapse ([tools](tools.md) explains what agents can do). When an agent wants to do something sensitive, an approval dialog asks you to approve it once, deny it, or always allow it — [security](security.md) covers the rules behind it. Each active [goal](goals.md) shows as its own small pill under the message box.
 
 Two buttons at the top of the chat open side panels: **Open browser** shows the agent's [live browser](browser.md), and **Open library** opens this workspace's files. When an agent builds something reviewable, like a small site, the chat links to it ([previews](previews.md)).
 
