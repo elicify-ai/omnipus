@@ -261,8 +261,6 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 // this test observes can only come from cap enforcement.
 func TestEvictStaleTasksLocked_CapEnforced_IndependentOfTTL(t *testing.T) {
 	tool, _ := u14PermissiveTool(t)
-	lc := session.NewLifecycleStore(t.TempDir())
-	tool.SetLifecycleStore(lc)
 
 	fakeNow := time.Now()
 	tool.SetClock(func() time.Time { return fakeNow })
@@ -270,26 +268,39 @@ func TestEvictStaleTasksLocked_CapEnforced_IndependentOfTTL(t *testing.T) {
 	const capN = 3
 	tool.SetTaskRetentionPolicy(capN, time.Hour) // TTL far larger than this test's simulated span
 
+	// Seed t.tasks/t.sessionIndex directly rather than via Execute(action:
+	// "run", ...): ADR-091's launcher migration (delegate_run.go::
+	// launchAndDispatch) moved dispatch entirely onto
+	// steer.SessionLauncher.Launch/Dispatch, which never writes t.tasks/
+	// t.sessionIndex — that legacy task_id-keyed bookkeeping has no live
+	// production writer left. This test is a white-box unit test of
+	// evictStaleTasksLocked itself (called directly below, same as every
+	// other test in this file that exercises it — see e.g.
+	// TestListTaskCopies_DoesNotMutateStoredLastStatusRead's identical
+	// tool.tasks[...] = &DelegateTaskState{...} seeding), so it seeds the
+	// map the same way its siblings do instead of relying on a dispatch
+	// path that no longer populates it.
 	const n = 5 // n > capN
-	for i := 0; i < n; i++ {
-		ctx := WithAgentID(WithTranscriptSessionID(context.Background(), fmt.Sprintf("fix6-cap-parent-%d", i)), "fix6-agent")
-		if r := tool.Execute(ctx, map[string]any{"task": "old", "async": false}); r.IsError {
-			t.Fatalf("dispatch %d failed: %s", i, r.ForLLM)
-		}
-	}
-
+	var taskIDs []string
 	tool.mu.Lock()
-	var sessionIDs []string
-	for sid, taskID := range tool.sessionIndex {
-		if st, ok := tool.tasks[taskID]; ok && st.Task == "old" {
-			sessionIDs = append(sessionIDs, sid)
+	for i := 0; i < n; i++ {
+		taskID := fmt.Sprintf("fix6-cap-task-%d", i)
+		sessionID := fmt.Sprintf("fix6-cap-session-%d", i)
+		tool.tasks[taskID] = &DelegateTaskState{
+			// Status must be terminal: evictStaleTasksLocked's own doc
+			// comment (isTerminalDelegateStatus) says a "running" task is
+			// NEVER evicted by either the TTL sweep or the cap pass,
+			// regardless of age — cap enforcement is scoped to
+			// completed/failed/canceled tasks only.
+			ID: taskID, Task: "old", Status: "completed",
+			Created: fakeNow.UnixMilli(), LastStatusRead: fakeNow.UnixMilli(),
+			DelegateSessionID: sessionID,
 		}
+		tool.sessionIndex[sessionID] = taskID
+		taskIDs = append(taskIDs, taskID)
 	}
 	beforeCount := len(tool.tasks)
 	tool.mu.Unlock()
-	if len(sessionIDs) == 0 {
-		t.Fatal("precondition: expected at least one 'old' task to still be registered")
-	}
 	// Positive lower bound (Rule 4): registration alone (no TTL elapsed at
 	// all — every task's LastStatusRead is still fresh) must already have
 	// pushed the map past the cap, or the bounded assertion below would
@@ -299,15 +310,17 @@ func TestEvictStaleTasksLocked_CapEnforced_IndependentOfTTL(t *testing.T) {
 			"(TTL never elapsed), got %d — the fixture does not exercise the cap at all", capN, beforeCount)
 	}
 
-	// Actively poll ONE surviving task, giving it a strictly later
-	// LastStatusRead than every other task — proves cap eviction removes
+	// Actively poll ONE surviving task via getTaskCopy — the legacy
+	// task_id single-task read path that still stamps LastStatusRead (see
+	// getTaskCopy's own doc comment) — giving it a strictly later
+	// LastStatusRead than every other task. Proves cap eviction removes
 	// the LEAST-recently-read tasks first, the same "actively polled
 	// survives" invariant BDD-52 already established for TTL-driven
 	// eviction, now also holding for cap-driven eviction.
-	survivorSID := sessionIDs[0]
+	survivorID := taskIDs[0]
 	fakeNow = fakeNow.Add(time.Minute)
-	if r := tool.Execute(context.Background(), map[string]any{"action": "status", "session_id": survivorSID}); r.IsError {
-		t.Fatalf("status poll for survivor failed: %s", r.ForLLM)
+	if _, ok := tool.getTaskCopy(survivorID); !ok {
+		t.Fatalf("status poll for survivor failed: task %s not found", survivorID)
 	}
 
 	// Run the exact same eviction pass every registration triggers
@@ -328,10 +341,8 @@ func TestEvictStaleTasksLocked_CapEnforced_IndependentOfTTL(t *testing.T) {
 		t.Errorf("FR-087: expected len(t.sessionIndex) <= %d after eviction, got %d", capN, gotIndex)
 	}
 
-	statusResult := tool.Execute(context.Background(), map[string]any{"action": "status", "session_id": survivorSID})
-	if statusResult.IsError {
-		t.Errorf("expected the actively-polled task to survive cap eviction (least-recently-read evicted "+
-			"first), got error: %s", statusResult.ForLLM)
+	if _, ok := tool.getTaskCopy(survivorID); !ok {
+		t.Errorf("expected the actively-polled task to survive cap eviction (least-recently-read evicted first)")
 	}
 }
 
@@ -435,7 +446,7 @@ func TestVerifyCallerOwnsSession_LogsIOErrorDistinctFromNotFound(t *testing.T) {
 			t.Fatal("expected ownership denial when the ancestor chain hits a genuine I/O error — the walk " +
 				"MUST stay fail-closed, not just diagnosable")
 		}
-		if !strings.Contains(err.Error(), "not owned by the calling session") {
+		if !strings.Contains(err.Error(), "not steered by the calling principal") {
 			t.Errorf("expected the standard fail-closed denial message, got: %v", err)
 		}
 		logs := getLogs()
