@@ -44,6 +44,33 @@ async function waitTurnDone(page: Page) {
   await expect(stopButton(page)).toBeHidden({ timeout: 240_000 })
 }
 
+/**
+ * Asserts one session converged on exactly one finished answer that kept at
+ * least as much text as was visible before the outage.
+ *
+ * `toHaveCount(1)` is the load-bearing assertion for catch-up: the classic
+ * duplicate-bubble failure (a re-delivered frame opening a second message)
+ * shows up here and nowhere else. The status check carries the other half of
+ * #823 phase 2 — a message must never be left stuck in a running state after
+ * catch-up.
+ */
+async function expectOneFinishedAnswer(page: Page, before: string, label: string) {
+  await expect(assistantMessages(page), `session ${label} must end with exactly one answer`).toHaveCount(1, {
+    timeout: 60_000,
+  })
+  const row = assistantMessages(page).first()
+  await expect(row, `session ${label} must not be left in a running state`).not.toHaveAttribute(
+    'data-status',
+    'running',
+    { timeout: 30_000 },
+  )
+  const after = (await row.innerText()).trim()
+  expect(
+    after.length,
+    `session ${label} must not lose text across the outage (before ${before.length}, after ${after.length})`,
+  ).toBeGreaterThanOrEqual(before.length)
+}
+
 test.describe('reconnect mid-turn (ADR-082)', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
@@ -179,5 +206,50 @@ test.describe('reconnect mid-turn (ADR-082)', () => {
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     const after = (await assistantMessages(page).first().innerText()).trim()
     expect(after.length).toBeGreaterThanOrEqual(before.length)
+  })
+
+  // #823 phase 2, the case the founder called out explicitly: an outage must be
+  // recoverable for EVERY session the user has, not only the one on screen, and
+  // each session must resume from ITS OWN position. Two turns therefore run
+  // concurrently across the outage: the one visible when the network drops (B),
+  // and one left behind in another conversation (A). A client that kept a single
+  // global cursor instead of one per session would get one of them wrong.
+  test('S-11 offline blip with activity in TWO sessions: each catches up on its own', async ({ page, context }) => {
+    test.setTimeout(600_000)
+
+    // Session A: started, then left running in the background.
+    const beforeA = await startLongTurn(page)
+    const urlA = page.url()
+
+    // Session B: a second conversation with its own long turn, so the outage
+    // window genuinely has activity in two different sessions at once.
+    const beforeB = await startLongTurn(page)
+
+    // A REAL outage — same mechanism as S-10 and for the same reason: the
+    // redials must keep failing for longer than the quiet window, so both turns
+    // keep running server-side while the browser is away.
+    await page.routeWebSocket(/\/api\/v1\/chat\/ws/, (ws) => ws.close())
+    await context.setOffline(true)
+    await page.evaluate(() => window.dispatchEvent(new Event('offline')))
+    await expect(page.getByTestId('assistant-connection-status')).toContainText('is still working on this', {
+      timeout: 20_000,
+    })
+
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+    await context.setOffline(false)
+    await page.evaluate(() => window.dispatchEvent(new Event('online')))
+    await expect(page.getByTestId('connection-status-line')).toHaveText('Up to date', { timeout: 30_000 })
+
+    // B is the session on screen: it must catch up from its own cursor.
+    await waitTurnDone(page)
+    await expectOneFinishedAnswer(page, beforeB, 'B')
+
+    // A was NOT open in the UI during the outage. Opening it now must still
+    // catch up — either incrementally from A's own cursor or via a snapshot,
+    // and either way with nothing dropped and nothing left running.
+    await page.goto(urlA)
+    await waitForConnected(page)
+    await waitTurnDone(page)
+    await expectOneFinishedAnswer(page, beforeA, 'A')
   })
 })

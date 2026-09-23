@@ -340,22 +340,15 @@ func frameSessionID(frame any) (string, bool) {
 // no session (see withFrameSeq) fall through to the ordinary unnumbered send,
 // so callers can route every frame through here without special-casing.
 func (h *WSHandler) emitSessionFrame(wc *wsConn, frameType string, frame any) {
-	sessionID, ok := frameSessionID(frame)
-	if !ok || h == nil {
+	sessionID, ok := h.numberableSession(frame)
+	if !ok {
 		sendConnGenFrame(wc, frameType, frame)
 		return
 	}
 
 	h.mu.Lock()
 	seq := h.assignSeqLocked(sessionID)
-	numbered, numberedOK := withFrameSeq(frame, seq)
-	if !numberedOK {
-		// frameSessionID recognised it but withFrameSeq did not: keep the
-		// counters in step only for frames we actually stamp.
-		h.mu.Unlock()
-		sendConnGenFrame(wc, frameType, frame)
-		return
-	}
+	numbered, _ := withFrameSeq(frame, seq)
 	data, err := json.Marshal(numbered)
 	if err != nil {
 		h.mu.Unlock()
@@ -368,6 +361,25 @@ func (h *WSHandler) emitSessionFrame(wc *wsConn, frameType string, frame any) {
 	sendRawFrameBytes(wc, frameType, data)
 }
 
+// numberableSession reports which session a frame belongs to and whether the
+// frame participates in numbering, or ok=false when it must go out unnumbered.
+//
+// It probes withFrameSeq rather than trusting frameSessionID alone, so the two
+// type switches cannot disagree in the one way that would be invisible and
+// harmful: a frame recognised by frameSessionID but not stamped by withFrameSeq
+// would consume a number it never carries, leaving a HOLE in the sequence — and
+// a hole is exactly what a client reads as a lost frame. One probe costs a value
+// copy and removes the failure mode entirely.
+func (h *WSHandler) numberableSession(frame any) (string, bool) {
+	if h == nil {
+		return "", false
+	}
+	if _, ok := withFrameSeq(frame, 0); !ok {
+		return "", false
+	}
+	return frameSessionID(frame)
+}
+
 // numberSessionFrame assigns and stamps a seq without sending, for fan-out
 // paths that build one frame and deliver it to several connections. It returns
 // the stamped frame and the assigned seq; every recipient must be sent the
@@ -375,17 +387,14 @@ func (h *WSHandler) emitSessionFrame(wc *wsConn, frameType string, frame any) {
 //
 // ok=false means the frame is not session-scoped — deliver it unnumbered.
 func (h *WSHandler) numberSessionFrame(frameType string, frame any) (any, uint64, []byte, bool) {
-	sessionID, ok := frameSessionID(frame)
-	if !ok || h == nil {
+	sessionID, ok := h.numberableSession(frame)
+	if !ok {
 		return frame, 0, nil, false
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	seq := h.assignSeqLocked(sessionID)
-	numbered, numberedOK := withFrameSeq(frame, seq)
-	if !numberedOK {
-		return frame, 0, nil, false
-	}
+	numbered, _ := withFrameSeq(frame, seq)
 	data, err := json.Marshal(numbered)
 	if err != nil {
 		slog.Error("ws: marshal session frame failed", "type", frameType, "session_id", sessionID, "error", err)
