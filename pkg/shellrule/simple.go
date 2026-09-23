@@ -33,7 +33,7 @@ import "strings"
 // simpleSegmentMetachars are the shell constructs that disqualify a segment
 // from ever being judged "simple": command substitution (`$(...)`),
 // parameter/legacy substitution and process substitution all contain at
-// least one of `(` or `` ` ``; redirection uses `<`/`>`; a subshell or
+// least one of `(` or “ ` “; redirection uses `<`/`>`; a subshell or
 // brace-group uses `(`/`)`. A segment containing ANY of these bytes is
 // judged conservatively as "not simple" regardless of what its resolved
 // head turns out to be — the same fail-closed direction every other

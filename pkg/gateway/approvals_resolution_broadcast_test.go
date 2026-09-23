@@ -75,9 +75,13 @@ func TestApprovalRegistry_ResolutionListener_EveryTerminalPath(t *testing.T) {
 		act       func(reg *approvalRegistryV2, e *approvalEntry)
 		wantState ApprovalState
 	}{
-		{"approve", 0, func(reg *approvalRegistryV2, e *approvalEntry) { reg.resolve(e.ApprovalID, ApprovalActionApprove, false) }, ApprovalStateApproved},
+		{"approve", 0, func(reg *approvalRegistryV2, e *approvalEntry) {
+			reg.resolve(e.ApprovalID, ApprovalActionApprove, false)
+		}, ApprovalStateApproved},
 		{"deny", 0, func(reg *approvalRegistryV2, e *approvalEntry) { reg.resolve(e.ApprovalID, ApprovalActionDeny, false) }, ApprovalStateDeniedUser},
-		{"cancel action", 0, func(reg *approvalRegistryV2, e *approvalEntry) { reg.resolve(e.ApprovalID, ApprovalActionCancel, false) }, ApprovalStateDeniedCancel},
+		{"cancel action", 0, func(reg *approvalRegistryV2, e *approvalEntry) {
+			reg.resolve(e.ApprovalID, ApprovalActionCancel, false)
+		}, ApprovalStateDeniedCancel},
 		{"batch short-circuit", 0, func(reg *approvalRegistryV2, e *approvalEntry) { reg.cancelBatchShortCircuit(e.ApprovalID) }, ApprovalStateDeniedBatchShortCircuit},
 		{"session stop", 0, func(reg *approvalRegistryV2, _ *approvalEntry) {
 			reg.cancelAllPendingForSessions([]string{sessionID}, denialReasonSessionCanceled)
