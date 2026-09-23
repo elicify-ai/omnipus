@@ -190,8 +190,6 @@ func newE2EHarnessWithProvider(
 		}
 	}
 	canceller := agent.NewSteerCanceller(lifecycle, al.SteerGenerationCancel)
-	cancelPersister := al.StartSubagentSpawnPersister(context.Background())
-	t.Cleanup(cancelPersister)
 	deps := steer.Deps{
 		Canceller: canceller, Deliverer: deliverer, Classifier: classifier,
 		LifecycleStore: lifecycle, SessionStore: sessions,

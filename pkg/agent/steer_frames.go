@@ -14,9 +14,9 @@
 // "persist first, then emit with the same id" pattern (GoalOutcomePayload's
 // own doc comment).
 //
-// The launcher emits and persists start/end directly. The legacy event
-// subscriber remains only until the retired in-chat executor is physically
-// deleted; it ignores launcher-authored events to avoid duplicate entries.
+// The launcher emits and persists start/end directly (deliverSubagentStart,
+// deliverSubagentEnd, below) — the only production emitters of
+// EventKindSubTurnSpawn/EventKindSubTurnEnd.
 package agent
 
 import (
@@ -86,7 +86,7 @@ func (al *AgentLoop) deliverSubagentStart(parentSessionID string, childRec *sess
 		return
 	}
 	al.emitEvent(EventKindSubTurnSpawn,
-		EventMeta{Source: "steer", TracePath: "steer.launch", SessionKey: parentSessionID},
+		EventMeta{TracePath: "steer.launch", SessionKey: parentSessionID},
 		SubTurnSpawnPayload{
 			AgentID:           childRec.AgentID,
 			Label:             childRec.SessionID,
@@ -134,7 +134,7 @@ func (al *AgentLoop) deliverSubagentEnd(parentSessionID string, childRec *sessio
 		return
 	}
 	al.emitEvent(EventKindSubTurnEnd,
-		EventMeta{Source: "steer", TracePath: "steer.complete", SessionKey: parentSessionID},
+		EventMeta{TracePath: "steer.complete", SessionKey: parentSessionID},
 		SubTurnEndPayload{
 			AgentID:           childRec.AgentID,
 			Status:            status,
@@ -194,7 +194,7 @@ func (al *AgentLoop) deliverSubagentMessage(parentSessionID string, childRec *se
 	}
 	al.emitEvent(
 		EventKindSubagentMessage,
-		EventMeta{Source: "steer", TracePath: "subagent.message", SessionKey: parentSessionID},
+		EventMeta{TracePath: "subagent.message", SessionKey: parentSessionID},
 		SubagentMessagePayload{SessionID: parentSessionID, MessageID: id, Frame: frame},
 	)
 }
@@ -239,111 +239,9 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 	}
 	al.emitEvent(
 		EventKindSubagentState,
-		EventMeta{Source: "steer", TracePath: "subagent.state", SessionKey: parentSessionID},
+		EventMeta{TracePath: "subagent.state", SessionKey: parentSessionID},
 		SubagentStatePayload{SessionID: parentSessionID, MessageID: id, Frame: frame},
 	)
-}
-
-// StartSubagentSpawnPersister subscribes to the EXISTING
-// EventKindSubTurnSpawn/EventKindSubTurnEnd broadcast (pkg/agent/subturn.go,
-// WP-A) and persists each ONCE as a subagent_start/subagent_end transcript
-// entry (ADR-091 D7/I-4) — deliberately a connection-INDEPENDENT
-// subscriber, never inside pkg/gateway/websocket_forward.go's
-// per-connection onSubTurnSpawn/onSubTurnEnd (which would persist once per
-// connected viewer). Live delivery is unaffected: those existing
-// per-connection forwarders keep emitting the live frame exactly as they
-// do today; this subscriber only adds the durable half. Started once at
-// boot (see this lane's final report, "Requests to other owners", for the
-// one gateway_boot.go line this needs).
-func (al *AgentLoop) StartSubagentSpawnPersister(ctx context.Context) context.CancelFunc {
-	subCtx, cancel := context.WithCancel(ctx)
-	sub := al.SubscribeEvents(64)
-	go func() {
-		defer al.UnsubscribeEvents(sub.ID)
-		for {
-			select {
-			case <-subCtx.Done():
-				return
-			case evt, ok := <-sub.C:
-				if !ok {
-					return
-				}
-				al.persistSubTurnSpawnOrEnd(evt)
-			}
-		}
-	}()
-	return cancel
-}
-
-// persistSubTurnSpawnOrEnd is StartSubagentSpawnPersister's per-event
-// handler, individually recovered so one malformed event never kills the
-// subscriber for the whole process (mirrors runSessionMessageConsumer's
-// discipline, session_messaging_wire.go).
-func (al *AgentLoop) persistSubTurnSpawnOrEnd(evt Event) {
-	defer func() {
-		if r := recover(); r != nil {
-			logger.ErrorCF("agent", "steer: subagent spawn/end persister: panic; recovered",
-				map[string]any{"panic": fmt.Sprintf("%v", r)})
-		}
-	}()
-	// Launcher-authored events are already persisted synchronously before
-	// emission. This subscriber serves only the legacy executor.
-	if evt.Meta.Source == "steer" {
-		return
-	}
-	switch p := evt.Payload.(type) {
-	case SubTurnSpawnPayload:
-		if p.SessionID == "" || p.ParentSpawnCallID == "" {
-			return
-		}
-		id := string(p.ParentSpawnCallID) + ":start"
-		frame := generated.SubagentStartFrame{
-			Type:         string(generated.WsFrameTypeSubagentStart),
-			SessionId:    p.SessionID,
-			SpanId:       p.SpanID,
-			ParentCallId: string(p.ParentSpawnCallID),
-			TaskLabel:    p.TaskLabel,
-		}
-		if p.AgentID != "" {
-			aid := p.AgentID
-			frame.AgentId = &aid
-		}
-		if err := al.persistSubagentEntry(p.SessionID, id, session.SystemSubtypeSubagentStart, func(e *session.TranscriptEntry) {
-			e.SubagentStart = &frame
-		}); err != nil {
-			logger.WarnCF("agent", "steer: persist subagent_start failed",
-				map[string]any{"session_id": p.SessionID, "error": err.Error()})
-		}
-	case SubTurnEndPayload:
-		if p.SessionID == "" || p.ParentSpawnCallID == "" {
-			return
-		}
-		id := string(p.ParentSpawnCallID) + ":end"
-		frame := generated.SubagentEndFrame{
-			Type:      string(generated.WsFrameTypeSubagentEnd),
-			SessionId: p.SessionID,
-			SpanId:    p.SpanID,
-			Status:    string(p.Status),
-		}
-		if p.AgentID != "" {
-			aid := p.AgentID
-			frame.AgentId = &aid
-		}
-		if p.ParentSpawnCallID != "" {
-			pc := string(p.ParentSpawnCallID)
-			frame.ParentCallId = &pc
-		}
-		if p.Reason != "" {
-			reason := p.Reason
-			frame.Reason = &reason
-		}
-		if err := al.persistSubagentEntry(p.SessionID, id, session.SystemSubtypeSubagentEnd, func(e *session.TranscriptEntry) {
-			e.SubagentEnd = &frame
-		}); err != nil {
-			logger.WarnCF("agent", "steer: persist subagent_end failed",
-				map[string]any{"session_id": p.SessionID, "error": err.Error()})
-		}
-	}
 }
 
 // deliverGoalVerdictUpward covers ADR-091 FR-B-017 (I-5, AS-12): when the

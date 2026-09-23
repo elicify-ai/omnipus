@@ -82,10 +82,6 @@ func TestWireSteerDeps_InstallsEveryProductionDependency(t *testing.T) {
 		t.Fatal("production TaskExecutor is nil")
 	}
 	assertPointerFieldNonNil(t, stg.tExecutor, "launcher")
-	if stg.runningServices.steerSpawnPersisterCancel == nil {
-		t.Fatal("StartSubagentSpawnPersister was not started")
-	}
-	t.Cleanup(stg.runningServices.steerSpawnPersisterCancel)
 	if got := gatewaySteerCanceller(al); got != stg.runningServices.SteerDeps.Canceller {
 		t.Fatal("gateway Stop surfaces did not receive the composition-root Canceller")
 	}

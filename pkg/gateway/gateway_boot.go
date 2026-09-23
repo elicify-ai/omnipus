@@ -1017,7 +1017,6 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 	if stg.tExecutor != nil {
 		stg.tExecutor.SetSessionLauncher(launcher)
 	}
-	stg.runningServices.steerSpawnPersisterCancel = stg.agentLoop.StartSubagentSpawnPersister(stg.ctx)
 	setGatewaySteerCanceller(stg.agentLoop, canceller)
 	// The agent's own Stop — delegate(action="cancel"), wired in
 	// pkg/agent/session_messaging_wire.go — cascades through the SAME
