@@ -41,6 +41,27 @@ export interface SeqFrameLike {
   boot_id?: string
 }
 
+/**
+ * Frame types that MINT the cursor directly from their own seq/boot_id
+ * (`cursorFromTerminalFrame`, below) rather than being gated against it —
+ * `session_snapshot`, `catch_up_complete`, and `session_started` (§3.4).
+ * These are NOT "the next number after the cursor": `catch_up_complete{seq:
+ * W}` in particular typically carries the SAME seq as the last regular
+ * frame the connection already applied (W is the head at bind time, §4.1),
+ * which `gateFrameBySeq`'s ordinary `seq <= cursor.seq` rule would
+ * misclassify as an already-applied duplicate and silently DROP — never
+ * reaching the handler that is supposed to clear `awaitingCatchUp`/
+ * `isReplaying`. `applySeqGate` (slices/frames.ts) checks this set FIRST
+ * and skips the gate entirely for these three types, exactly like an
+ * unsequenced frame, letting their own case handler
+ * (slices/catchup-frames.ts) mint the cursor unconditionally.
+ */
+export const CURSOR_MINTING_FRAME_TYPES: ReadonlySet<string> = new Set([
+  'session_snapshot',
+  'catch_up_complete',
+  'session_started',
+])
+
 export type CursorGateDecision =
   | { kind: 'drop' }
   | { kind: 'apply'; cursor: SessionCursor | null }

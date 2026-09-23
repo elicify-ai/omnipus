@@ -67,6 +67,31 @@ describe('session_snapshot (§6.2/§4.6)', () => {
 })
 
 describe('catch_up_complete (§4.1/§6.2)', () => {
+  // D2b: regression found while building the F2 fixture — catch_up_complete
+  // typically carries the SAME seq as the last regular frame the connection
+  // already applied (W is the head at bind time, §4.1), which the ordinary
+  // applySeqGate rule (seq <= cursor.seq -> drop) would misclassify as an
+  // already-applied duplicate and silently swallow, so awaitingCatchUp/
+  // isReplaying would NEVER clear. Proves catch_up_complete (and
+  // session_snapshot/session_started, cursor.ts's CURSOR_MINTING_FRAME_TYPES)
+  // are exempted from the ordinary gate.
+  it('D2b: is NOT dropped by the seq gate when its own seq equals the cursor already established by a prior frame', () => {
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'x', turn_id: 't1', message_id: 'm1', seq: 18,
+    } as WsReceiveFrame)
+    expect(bucket().cursor).toEqual({ bootId: '', seq: 18 })
+
+    useChatStore.getState().handleFrame({
+      type: 'catch_up_complete', session_id: SID, seq: 18, boot_id: 'boot-X', mode: 'incremental',
+    } as WsReceiveFrame)
+
+    // If this were dropped by the seq gate, awaitingCatchUp would stay at
+    // its emptySessionState() default (false) and cursor.bootId would still
+    // be '' — assert both actually changed.
+    expect(bucket().cursor).toEqual({ bootId: 'boot-X', seq: 18 })
+    expect(bucket().isReplaying).toBe(false)
+  })
+
   it('D2: sets the cursor, clears isReplaying and awaitingCatchUp', () => {
     useChatStore.setState({
       sessionsById: {

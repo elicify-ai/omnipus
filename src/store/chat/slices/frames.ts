@@ -28,7 +28,7 @@ import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpen
 import { bufferForSpan, hasOpenSpanFast, markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
 import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, pendingCancelAckSids, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
-import { gateFrameBySeq, type SeqFrameLike } from '../cursor'
+import { gateFrameBySeq, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
 import { ORPHAN_BUFFER_TTL_MS, orphanTimers, pendingByParentCallId } from '../types'
 import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
 import { handleReplayAndStatusFrame } from './replay-and-status-frames'
@@ -123,8 +123,9 @@ function applySeqGate(
   get: FrameContext['get'],
   withBucket: FrameContext['withBucket'],
 ): 'apply' | 'drop-or-gap' {
-  const f = frame as SeqFrameLike
+  const f = frame as SeqFrameLike & { type?: string }
   if (f.seq === undefined || f.seq === null || !targetSid) return 'apply'
+  if (f.type && CURSOR_MINTING_FRAME_TYPES.has(f.type)) return 'apply'
   const bucket = get().sessionsById[targetSid]
   const decision = gateFrameBySeq(bucket?.cursor ?? null, f)
   if (decision.kind === 'apply') {
