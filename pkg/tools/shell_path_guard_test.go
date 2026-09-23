@@ -58,21 +58,6 @@ package tools
 //
 //	ls /usr/local/bin/node /opt/homebrew/bin/node   (was "absolute path outside workspace")
 //	cat /etc/passwd                                 (was "read of a system file")
-//
-// ADR-091 D2 REMOVED TWO CASES. "sudo stays denied" (`sudo -n true`) and
-// "rm -rf stays denied" (`rm -rf /`) were pinned as "dangerous pattern
-// detected" — i.e. caught by the now-deleted defaultDenyPatterns regex
-// list, not by this file's own path-containment scan at all. Neither
-// command names an absolute-path CANDIDATE this scan's regex can even
-// extract (`sudo -n true` has no path reference; a bare trailing `/` with
-// nothing after it does not match absolutePathPattern's `/[^...]+`, which
-// requires at least one more character). D2's own text names both
-// categories — process-signal-adjacent commands (`sudo`) and an
-// in-workspace-shaped destructive command (`rm -rf`) — as accepted residual
-// risk, "the same accepted trade Claude Code and Codex ship." See
-// TestBashSafetyGuard_AcceptedD2ResidualRisk (shell_guard_test.go) for the
-// regression that documents this explicitly rather than silently dropping
-// the old assertion.
 //	cat ~/.ssh/id_rsa                               (was "home-directory tilde expansion")
 //	cat $HOME/.ssh/id_rsa                           (was "HOME variable expansion")
 //	cat /etc/passwd:evil                            (was "stray colon suffix …")
@@ -83,6 +68,17 @@ package tools
 // untouched, and that matters: the `../` traversal case, the two
 // command-position cases and the attached-flag cases are the tripwires that
 // prove ADR-068 opened reads and nothing else.
+//
+// Neither `sudo -n true` nor `rm -rf /` names an absolute-path CANDIDATE
+// this file's own scan can extract (`sudo -n true` has no path reference; a
+// bare trailing `/` with nothing after it does not match
+// absolutePathPattern's `/[^...]+`, which requires at least one more
+// character), so this scan never protected either shape. ADR-091 D2 names
+// both — process-signal-adjacent commands (`sudo`) and an in-workspace-
+// shaped destructive command (`rm -rf`) — as accepted residual risk, "the
+// same accepted trade Claude Code and Codex ship." See
+// TestBashSafetyGuard_AcceptedD2ResidualRisk (shell_guard_test.go) for the
+// regression that documents this explicitly.
 
 import (
 	"context"

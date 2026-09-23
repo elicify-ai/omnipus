@@ -245,15 +245,11 @@ func TestBashSubstitutionGuard_DangerousSubstitutionsBlocked(t *testing.T) {
 
 		// --- Pre-existing baseline rules that must survive the change.
 		//
-		// ADR-091 D2 removed four cases that used to live here —
-		// legacy_brace_expansion_var (`echo ${PATH}`, the blanket `${}`
-		// regex), legacy_fork_bomb, legacy_curl_pipe_sh, and legacy_rm_rf —
-		// because all four were caught by defaultDenyPatterns, the regex
-		// block list D2 deletes outright, not by substitutionGuard itself.
-		// See TestBash_DenyPatternBaseline (bash_test.go) for the test that
-		// now documents D2's accepted residual risk for those categories
-		// explicitly, and shell_guard_test.go's
-		// TestBashSafetyGuard_AcceptedD2ResidualRisk.
+		// See TestBash_DenyPatternBaseline (bash_test.go) and
+		// shell_guard_test.go's TestBashSafetyGuard_AcceptedD2ResidualRisk
+		// for ADR-091 D2's accepted residual risk outside substitutionGuard's
+		// own scope (a fork bomb, curl-pipe-to-shell, and a bare `${...}`
+		// parameter expansion are not this guard's concern).
 		{"legacy_backtick_dangerous_find", "echo `find . -name '*.go'`",
 			"legacy substitutions still block dangerous inner commands"},
 		{"legacy_master_key", "echo $(cat master.key)", "secrets-subtree guard (S2: dangerous inner command, not filename-specific)"},

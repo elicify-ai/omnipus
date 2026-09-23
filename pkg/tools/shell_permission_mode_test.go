@@ -376,3 +376,20 @@ func TestResolveShellMode_AutoWithNoKernelSandboxFallsBackToAsk(t *testing.T) {
 	got := tool.resolveShellMode(context.Background())
 	assert.Equal(t, ShellModeAsk, got, "FR-008: Auto with no active kernel sandbox behaves like Ask")
 }
+
+// D-65: every guard refusal names what tripped it, not a bare "blocked".
+// shellRuleDenialMessage carries that obligation for an ADR-091 D3 deny
+// verdict — it must name the matched rule's binary and arg_prefix, not just
+// report that something was denied.
+func TestShellRuleDenialMessage_NamesTheMatchedRule(t *testing.T) {
+	resolvedTrue, err := shellrule.ResolveBinary("true", os.Getenv("PATH"))
+	require.NoError(t, err)
+	rules := []shellrule.Rule{{Action: shellrule.ActionDeny, Binary: resolvedTrue, ArgPrefix: "extra"}}
+
+	verdict := shellrule.EvaluateCommand("true extra args", rules, shellRuleOptions())
+	require.Equal(t, shellrule.ActionDeny, verdict.Action, "setup: the rule must actually match")
+
+	msg := shellRuleDenialMessage(verdict)
+	assert.Contains(t, msg, resolvedTrue, "the message must name the matched rule's binary")
+	assert.Contains(t, msg, "extra", "the message must name the matched rule's arg_prefix")
+}

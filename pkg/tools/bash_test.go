@@ -233,24 +233,21 @@ func TestBash_CwdRejectsAbsolutePathEvenWhenAllowlisted(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestBash_DenyPatternBaseline — the 5-row dataset from the BDD Scenario
-// Outline, verified against an agent with no restrictions at all (restrict
-// =false) to prove the baseline is unconditional (FR-B4), not dependent on
-// restrictToWorkspace.
-// TestBash_DenyPatternBaseline used to assert defaultDenyPatterns (a
-// hardcoded regex block list) refused five hand-picked dangerous commands
-// unconditionally. ADR-091 D2 deletes that list outright — no policy
-// verdict or operator configuration ever disabled it, and now nothing
-// replaces it for the categories that were never filesystem- or
-// network-shaped (rm -rf, curl-pipe-to-shell, the fork bomb — D2's own text
-// names these as accepted residual risk, the same trade Claude Code and
-// Codex ship). What DOES survive — the secret-set carve-out inside
-// guardCommand's path-containment scan — is real filesystem-anchored
-// protection, not text matching, and is asserted below with an ACTUAL
-// $OMNIPUS_HOME-relative reference (a bare `cat master.key` in an unrelated
-// temp workspace was never a real secret access to begin with; it is an
-// ordinary same-named file, and the old test's "must block" assertion for
-// it was itself the over-broad behaviour ADR-091 replaces with
-// path-identity-based protection — see checkPathSegment/IsCarveOut).
+// TestBash_DenyPatternBaseline asserts the secret-set carve-out inside
+// guardCommand's path-containment scan (checkPathSegment/IsCarveOut): real
+// filesystem-anchored protection, not text matching, verified with an
+// ACTUAL $OMNIPUS_HOME-relative reference (restrict=true, so the
+// path-containment scan runs at all — see guardCommand's own early return
+// on restrictToWorkspace).
+//
+// It also asserts ADR-091 D2's accepted residual risk explicitly: rm -rf and
+// the fork bomb are not blocked by any text guard (they touch nothing
+// outside the workspace, and the kernel sandbox — not exercised by this
+// no-sandbox unit test — is the real boundary there); curl-pipe-to-shell is
+// a network operation D8's kernel-level deny-by-default covers under Auto
+// mode specifically (also not exercised here — this test wires no ADR-091
+// ShellMode/ApprovalRequester deps, so mode resolution fails closed to Ask,
+// which never reaches D8 for an already-"allow"-ceiling unit-test call).
 func TestBash_DenyPatternBaseline(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("test uses POSIX shell constructs")
@@ -263,16 +260,6 @@ func TestBash_DenyPatternBaseline(t *testing.T) {
 	assert.True(t, result.IsError, "a real $OMNIPUS_HOME/master.key reference must still be rejected, got ForLLM=%q", result.ForLLM)
 	assert.Contains(t, result.ForLLM, "blocked")
 
-	// ADR-091 D2's accepted residual risk, asserted explicitly rather than
-	// left as a silently-dropped old assertion: none of these are blocked by
-	// any text guard anymore. rm -rf and the fork bomb touch nothing outside
-	// the workspace (the kernel sandbox is the real boundary there, not
-	// exercised by this no-sandbox unit test); curl-pipe-to-shell is a
-	// network operation D8's kernel-level deny-by-default covers under Auto
-	// mode specifically (also not exercised here — this test wires no
-	// ADR-091 ShellMode/ApprovalRequester deps, so mode resolution fails
-	// closed to Ask, which never reaches D8 for an already-"allow"-ceiling
-	// unit-test call).
 	accepted := []string{
 		"rm -rf build",
 		":(){ :|:& };:",

@@ -255,11 +255,8 @@ func TestGuardCommand_RefusalNamesWhatWasRefused(t *testing.T) {
 	}
 }
 
-// D-65 ("deny-pattern refusals that name the offending token") pinned
-// applyDenyPatterns/denyPatternMessage, both deleted by ADR-091 D2 along
-// with the regex block list they formatted a message for. The same
-// obligation — every refusal names what tripped it, not a bare "blocked" —
-// now falls on shellRuleDenialMessage (shell_permission_mode.go, ADR-091
-// D3's replacement mechanism), which names the matched operator rule's
-// binary and arg_prefix; see TestShellRuleDenialMessage_NamesTheMatchedRule
-// in shell_permission_mode_test.go for its own regression coverage.
+// D-65 requires every refusal to name what tripped it, not a bare "blocked".
+// shellRuleDenialMessage (shell_permission_mode.go) carries that obligation
+// for an ADR-091 D3 operator-rule denial, naming the matched rule's binary
+// and arg_prefix; see TestShellRuleDenialMessage_NamesTheMatchedRule in
+// shell_permission_mode_test.go for its own regression coverage.
