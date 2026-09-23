@@ -19,6 +19,7 @@
         "tests/e2e/handoff.spec.ts",
         "tests/e2e/cancel-cross-channel.spec.ts",
         "tests/e2e/reconnect-mid-turn.spec.ts",
+        "tests/e2e/quiet-disconnect-banner.spec.ts",
         "tests/e2e/delegation-hidden.spec.ts",
         "tests/e2e/recap-continuity.spec.ts"
       ]

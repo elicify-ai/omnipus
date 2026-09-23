@@ -23,47 +23,11 @@ properties:
     minLength: 1
     maxLength: 128
     description: Session ID to attach to and replay.
-  since_seq:
-    type: integer
-    format: int64
-    minimum: 0
-    description: >
-      Highest per-session sequence number the SPA has already applied for this
-      session. The server sends only frames with a strictly greater seq
-      ("from since_seq + 1"), so re-attaching is idempotent and O(missed
-      window) instead of O(full session history). Works for every session the
-      client knows about, including ones that were not open in the UI during
-      the outage — the client keeps one cursor per session.
-
-      Omit (or send 0) for a first load or whenever the session's cursor is not
-      known: the server then performs a full replay, which rebuilds the
-      session's state from scratch. When the requested position can no longer
-      be served from the gateway's retained window, the server answers with a
-      session_snapshot frame instead of individual events, and the client
-      replaces its state rather than merging.
-
-      Prefer since_seq over since; `since` is the older timestamp cursor and is
-      only used when since_seq is absent.
   since:
     type: string
     format: date-time
     description: >
-      Deprecated timestamp cursor, superseded by since_seq. ISO 8601 timestamp
-      of the most recent frame the SPA has already processed. Server replays
-      only frames with timestamp > this value. Kept for older clients; new
-      clients must send since_seq. Omitting both performs a full replay.
-  boot_id:
-    type: string
-    description: >
-      #823 review finding 7 — the gateway boot ID the SPA last saw for this
-      session (from a prior session_state frame's own boot_id), sent back so
-      the server can tell a genuinely-servable since_seq apart from one that
-      only LOOKS servable because a restarted gateway's counter has not yet
-      caught back up past it. Omit when unknown (a first load, or an older
-      SPA build that predates this field): the server then falls back to
-      since_seq alone, same as before this field existed. When present and it
-      does not match the server's current boot_id, the server answers with a
-      session_snapshot (reason boot_mismatch) regardless of what since_seq
-      says — a numeric position from a previous gateway process carries no
-      meaning against the current one's counter. Keep in sync by hand with
-      contracts/asyncapi.yaml's inline AttachSessionFrame.
+      ISO 8601 timestamp of the most recent frame the SPA has already
+      processed. Server replays only frames with timestamp > this value.
+      Omit (or leave empty) for sessions that may contain legacy entries
+      without timestamps — otherwise those entries will be silently dropped.

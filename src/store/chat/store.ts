@@ -3,14 +3,12 @@
 import { create } from 'zustand'
 import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
-import { resetChatBucketForReplay, useSessionStore } from '@/store/session'
+import { useSessionStore } from '@/store/session'
 import type { Message } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import { clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from './messages'
 import { EMPTY_BUCKET, FALLBACK_SID, RATE_LIMIT_CLEAR_MS, rateLimitClearTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from './runtime-state'
-import { applyMessageArray, emptySessionState, omitKeys, replayStartPatch } from './session'
-import { discardBufferedFramesForSession } from './routing'
-import { readAppliedSeq } from './slices/sequence'
+import { applyMessageArray, emptySessionState, omitKeys } from './session'
 import { orphanTimers, pendingByParentCallId } from './types'
 import type { ChatMessage, ChatStore, OutboundQueueItem, RateLimitEventData, SessionChatState, SubagentSpanRunning, SubagentSpanTerminal } from './types'
 import { createOutboundResponseSlice } from './slices/outbound-responses'
@@ -43,42 +41,6 @@ function drainQueuedMessage(get: () => ChatStore, next: OutboundQueueItem): void
 // over a stale server echo, so the ack only adopts frame.agent_id while the
 // selection is still the one the mint was sent under. null means "no mint in
 // flight" (the ordinary case, where adopting the server's answer is correct).
-
-/**
- * #823 phase 2: prepare a session's bucket for the replay/catch-up an attach
- * just asked for.
- *
- * With a sequence position in hand, the gateway re-delivers only the frames
- * after it, so the transcript on screen is the prefix of the correct final
- * state and is KEPT — wiping it would blank the chat until the catch-up landed,
- * and lose it entirely if the catch-up never arrived. Without one, the whole
- * history is about to be re-sent, so the established wipe is exactly right (and
- * delegating to it keeps one implementation of the wipe's orphan-buffer and
- * replay-window bookkeeping).
- *
- * Either way the replay window is armed, so the composer stays disabled until
- * the catch-up's terminating `done` arrives.
- *
- * Module scope on purpose: the store's `create` argument is grandfathered in
- * scripts/budgets/functions.txt and may only shrink.
- */
-function prepareSessionForReplayImpl(
-  sessionId: string,
-  get: () => ChatStore,
-  withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void,
-): void {
-  if (readAppliedSeq(get().sessionsById[sessionId]) === null) {
-    resetChatBucketForReplay(sessionId)
-    return
-  }
-  sawReplayMessageThisTurn[sessionId] = false
-  replayingStartedAt[sessionId] = Date.now()
-  if (replayingClearTimers[sessionId]) {
-    clearTimeout(replayingClearTimers[sessionId])
-    delete replayingClearTimers[sessionId]
-  }
-  withBucket(sessionId, (b) => replayStartPatch(b))
-}
 
 export const useChatStore = create<ChatStore>((set, get) => {
   // ── Internal helpers that mutate a named session bucket ─────────────────────
@@ -945,10 +907,19 @@ export const useChatStore = create<ChatStore>((set, get) => {
     resetSessionForReplay: (sessionId) => {
       // Clear all transient state so the upcoming replay rebuilds from
       // scratch. This is the targeted reset for WS reconnect: without it,
-      // replay frames append duplicate bubbles to the existing bucket. Buffered
-      // orphan frames belong to the state being discarded — see
-      // discardBufferedFramesForSession.
-      discardBufferedFramesForSession(sessionId)
+      // replay frames append duplicate bubbles to the existing bucket.
+      const prefix = `${sessionId}:`
+      for (const key of Object.keys(orphanTimers)) {
+        if (key.startsWith(prefix)) {
+          clearTimeout(orphanTimers[key])
+          delete orphanTimers[key]
+        }
+      }
+      for (const key of Object.keys(pendingByParentCallId)) {
+        if (key.startsWith(prefix)) {
+          delete pendingByParentCallId[key]
+        }
+      }
       sawReplayMessageThisTurn[sessionId] = false
       replayingStartedAt[sessionId] = Date.now()
       // Re-attach refreshes the replay window — cancel any stale
@@ -963,11 +934,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
         isReplaying: true,
       }))
     },
-
-    // #823 phase 2 — see prepareSessionForReplayImpl.
-    prepareSessionForReplay: (sessionId) => prepareSessionForReplayImpl(sessionId, get, withBucket),
-
-    getLastAppliedSeq: (sessionId) => readAppliedSeq(get().sessionsById[sessionId]),
 
     // ── Outbound queue actions ────────────────────────────────────────────────
 

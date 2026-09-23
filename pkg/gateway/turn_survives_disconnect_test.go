@@ -592,7 +592,7 @@ func TestFix_CR4_F2_LiveStreamersClearedOnAbandonedPath(t *testing.T) {
 	handler.mu.Lock()
 	handler.sessions[chatID] = wc
 	handler.mu.Unlock()
-	handler.handleAttachSession(context.Background(), chatID, meta.ID, nil, nil, nil, wc)
+	handler.handleAttachSession(context.Background(), chatID, meta.ID, nil, wc)
 
 	deadline := time.After(2 * time.Second)
 	for {

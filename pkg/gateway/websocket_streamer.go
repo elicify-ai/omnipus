@@ -612,18 +612,9 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	if producerAgentID != "" {
 		frame.AgentId = &producerAgentID
 	}
-	// #823 phase 2: number the token ONCE for the whole fan-out below, so every
-	// attached tab sees the same sequence number for this token. Frames emitted
-	// while no connection is bound never reach here (zero targets returns
-	// above), so the counter only advances for tokens a client could observe —
-	// which is what keeps the numbers a client sees gap-free.
-	_, _, data, numberedOK := s.h.numberSessionFrame(string(generated.WsFrameTypeToken), frame)
-	if !numberedOK {
-		var err error
-		data, err = json.Marshal(frame)
-		if err != nil {
-			return fmt.Errorf("ws: marshal token frame: %w", err)
-		}
+	data, err := json.Marshal(frame)
+	if err != nil {
+		return fmt.Errorf("ws: marshal token frame: %w", err)
 	}
 	// ADR-082 D2/FR-004/FR-005: deliver to EVERY connection currently bound
 	// to this session, resolved above. Route each through sendRawFrameBytes
@@ -638,11 +629,7 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	// marshalled (checked above).
 	for _, conn := range targets {
 		before := conn.droppedTokens.Load()
-		// numbered=numberedOK: token frames go through numberSessionFrame
-		// above when a session id is present. frameType "token" is never
-		// critical, so this does not change bypassDivertWhileReplaying's
-		// outcome here — passed accurately for documentation.
-		sendRawFrameBytes(conn, string(generated.WsFrameTypeToken), data, numberedOK)
+		sendRawFrameBytes(conn, string(generated.WsFrameTypeToken), data)
 		if conn.droppedTokens.Load() > before {
 			slog.Warn("ws: token backpressure", "session_id", s.sessionID, "chat_id", s.chatID, "agent_id", producerAgentID)
 		}
@@ -807,36 +794,6 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 	wsf.s.statsMu.Unlock()
 }
 
-// baseDoneStats builds the turn-level DoneStats common to every copy of this
-// turn's terminal frame (the canonical retained copy and every per-connection
-// live copy) — everything except TokensDropped, which is per-connection (see
-// sendDone).
-func (wsf *wsStreamerFinalize) baseDoneStats() *generated.DoneStats {
-	stats := &generated.DoneStats{
-		Tokens:     &wsf.tokensF,
-		Cost:       &wsf.costF,
-		DurationMs: &wsf.durF,
-	}
-	if wsf.turnFailed {
-		tf := wsf.turnFailed
-		stats.TurnFailed = &tf
-	}
-	// ADR-087 D2 (finding #10): mirror the truncation annotation onto the
-	// LIVE done frame too, not just the persisted transcript entry (above)
-	// and replay's ReplayMessageFrame (replay.go) — a turn cut off while the
-	// user is still watching should render the "(cut off at the output
-	// limit)" notice immediately, without waiting for a reload/reattach
-	// round-trip through replay. Populated from the SAME truncationReason
-	// this Finalize call stamped on the transcript entry.
-	if wsf.truncationReason != "" {
-		truncatedCopy := true
-		stats.Truncated = &truncatedCopy
-		reasonCopy := wsf.truncationReason
-		stats.TruncationReason = &reasonCopy
-	}
-	return stats
-}
-
 // sendDone sends per-connection completion frames for a visible stream.
 func (wsf *wsStreamerFinalize) sendDone() {
 	// A-I4 round 4 / Finding A: a shadow stream (a delegated child sub-turn
@@ -864,57 +821,34 @@ func (wsf *wsStreamerFinalize) sendDone() {
 			h.flushPendingMessageStatusesAsWorking(wsf.s.sessionID)
 		}
 
-		// #823 review finding 1: assign this turn's terminal sequence number
-		// and store its retained (canonical) frame in ONE locked step,
-		// UNCONDITIONALLY — not gated on wsf.targets being non-empty and not
-		// deferred into the per-connection loop below.
-		//
-		// The previous version only stored a copy of the done frame inside
-		// the per-connection loop (the first one marshalled successfully),
-		// so a turn that finished with ZERO connections attached — the
-		// common ~60s dead-connection window after a real network cut, see
-		// wsPongWait — spent a sequence number that nothing was ever
-		// retained for. A later reconnect's incremental catch-up then served
-		// the preceding token frames as if complete: no end-of-turn frame,
-		// no final text, and catchUpFrames had no way to know a number past
-		// its retained window had ever been spent, so it happily served a
-		// range that silently fell short of the head. That is the #822
-		// symptom coming back (review finding 1).
-		//
-		// Storing a canonical copy here, under the SAME lock as the number
-		// assignment, closes the gap: every number sendDone hands out is
-		// always backed by a retained frame, regardless of how many
-		// connections are attached at the instant the turn ends. The
-		// canonical copy omits TokensDropped (a per-connection fact with no
-		// meaning for a connection that catches up later) — see
-		// baseDoneStats.
-		var doneSeq int64
-		seqAssigned := false
-		if wsf.s.h != nil && wsf.s.sessionID != "" {
-			wsf.s.h.mu.Lock()
-			doneSeq = int64(wsf.s.h.assignSeqLocked(wsf.s.sessionID))
-			seqCopy := doneSeq
-			canonicalFrame := generated.DoneFrame{
-				Type:      string(generated.WsFrameTypeDone),
-				SessionId: wsf.s.sessionID,
-				Stats:     wsf.baseDoneStats(),
-				Seq:       &seqCopy,
-			}
-			if data, mErr := json.Marshal(canonicalFrame); mErr == nil {
-				wsf.s.h.recordSeqFrameLocked(wsf.s.sessionID, string(generated.WsFrameTypeDone), uint64(doneSeq), data)
-			} else {
-				slog.Error("ws: marshal canonical done frame failed", "session_id", wsf.s.sessionID, "error", mErr)
-			}
-			wsf.s.h.mu.Unlock()
-			seqAssigned = true
-		}
 		// ADR-082 D2/FR-014: send one done frame PER bound connection, each
 		// carrying that connection's own TokensDropped — a drop on one
 		// connection's send buffer must never be reported (or withheld) on
-		// another connection's done frame. These are LIVE deliveries only;
-		// the retained/catch-up copy is the canonical one stored above.
+		// another connection's done frame.
 		for _, conn := range wsf.targets {
-			connStats := wsf.baseDoneStats()
+			connStats := &generated.DoneStats{
+				Tokens:     &wsf.tokensF,
+				Cost:       &wsf.costF,
+				DurationMs: &wsf.durF,
+			}
+			if wsf.turnFailed {
+				tf := wsf.turnFailed
+				connStats.TurnFailed = &tf
+			}
+			// ADR-087 D2 (finding #10): mirror the truncation annotation onto
+			// the LIVE done frame too, not just the persisted transcript
+			// entry (above) and replay's ReplayMessageFrame (replay.go) — a
+			// turn cut off while the user is still watching should render
+			// the "(cut off at the output limit)" notice immediately,
+			// without waiting for a reload/reattach round-trip through
+			// replay. Populated from the SAME truncationReason this Finalize
+			// call stamped on the transcript entry.
+			if wsf.truncationReason != "" {
+				truncatedCopy := true
+				connStats.Truncated = &truncatedCopy
+				reasonCopy := wsf.truncationReason
+				connStats.TruncationReason = &reasonCopy
+			}
 			// ADR-082 review F10: Swap(0), not Load — droppedTokens is a
 			// per-CONNECTION counter that outlives any single turn, so a bare
 			// Load would keep re-reporting turn 1's drops on every later
@@ -930,16 +864,12 @@ func (wsf *wsStreamerFinalize) sendDone() {
 				SessionId: wsf.s.sessionID,
 				Stats:     connStats,
 			}
-			if seqAssigned {
-				seqCopy := doneSeq
-				doneFrame.Seq = &seqCopy
-			}
 			data, mErr := json.Marshal(doneFrame)
 			if mErr != nil {
 				slog.Error("ws: marshal done frame failed", "session_id", wsf.s.sessionID, "error", mErr)
 				continue
 			}
-			sendRawFrameBytes(conn, string(generated.WsFrameTypeDone), data, seqAssigned)
+			sendRawFrameBytes(conn, string(generated.WsFrameTypeDone), data)
 		}
 		// Only mark as streamed if we actually sent content. If the LLM failed
 		// before producing any tokens, let the outbound Send path deliver the

@@ -128,14 +128,8 @@ describe('C8 — clearStreamingState resolves a stuck stream', () => {
     })
     const bucket = useChatStore.getState().sessionsById[SID]
     const msg = bucket.messagesById['a1']
-    // SQUAD-BRIEF-AY finding 4: the baked entry now also carries
-    // cancelledByDisconnect — an SPA-internal bookkeeping marker (never sent
-    // over the wire) distinguishing "cancelled only because the connection
-    // dropped" from a real/explicit cancellation, so a reconnect catch-up
-    // that reopens this exact bubble (frames.ts's 'token' case) can restore
-    // it to 'running' instead of leaving it stuck 'cancelled' forever.
     expect(msg.tool_calls).toEqual([
-      { id: 'tc1', tool: 'exec', params: {}, result: undefined, status: 'cancelled', duration_ms: undefined, error: undefined, cancelledByDisconnect: true },
+      { id: 'tc1', tool: 'exec', params: {}, result: undefined, status: 'cancelled', duration_ms: undefined, error: undefined },
     ])
     // The live bucket state must be cleared too, so it doesn't leak into the
     // next turn (mirrors the `done` frame handler's baking contract).

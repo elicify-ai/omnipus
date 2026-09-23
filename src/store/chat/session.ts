@@ -4,7 +4,6 @@ import { useUiStore } from '@/store/ui'
 import type { ToolCall } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import { MAX_MESSAGES_PER_SESSION } from './messages'
-import { readAppliedSeq } from './slices/sequence'
 import { evictSpanIndexEntries } from './types'
 import type { ChatMessage, PositionedToolCall, SessionChatState } from './types'
 
@@ -27,9 +26,6 @@ export function emptySessionState(): SessionChatState {
     lastUserMessageAt: null,
     cancelStage: null,
     lastReceivedEventTime: null,
-    // #823 phase 2: a fresh bucket has no sequence position, so an attach for
-    // this session omits `since_seq` and the gateway does a full replay.
-    lastAppliedSeq: null,
     spanByParentCallId: {},
     spanBySpanId: {},
     mergedReplayMessageIds: {},
@@ -41,26 +37,6 @@ export function emptySessionState(): SessionChatState {
     activeTurnAgentId: null,
     activeTurnBubbleOpened: false,
   }
-}
-
-/**
- * The bucket patch an attach's replay/catch-up window starts from (#823 phase 2).
- *
- * With a sequence position in hand, the gateway re-delivers only the frames
- * after it, so the transcript already on screen is the prefix of the correct
- * final state and is KEPT — wiping it would blank the chat until the catch-up
- * landed, and lose it entirely if the catch-up never arrived. Without one, the
- * whole history is about to be re-sent, so the wipe is what prevents every
- * bubble being duplicated.
- *
- * Either way `isReplaying` is armed, so the composer stays disabled until the
- * catch-up's terminating `done` arrives.
- */
-export function replayStartPatch(bucket: SessionChatState | undefined): Partial<SessionChatState> {
-  if (readAppliedSeq(bucket) !== null) {
-    return { isReplaying: true }
-  }
-  return { ...emptySessionState(), isReplaying: true }
 }
 
 /**
@@ -132,10 +108,6 @@ export function stampToolCallOffset(
     duration_ms: tc.duration_ms,
     error: tc.error,
     ...(textOffset !== undefined ? { textOffset } : {}),
-    // Finding 4 (SQUAD-BRIEF-AY): pass the disconnect-only-cancellation
-    // marker through baking so a reopened bubble (frames.ts's 'token' case)
-    // can still find and restore it after clearStreamingState bakes it here.
-    ...(tc.cancelledByDisconnect ? { cancelledByDisconnect: true } : {}),
   }
 }
 

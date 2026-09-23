@@ -257,19 +257,6 @@ export interface ToolCall { // not-wire-format: SPA-internal tool call shape. Us
   status: 'running' | 'success' | 'error' | 'cancelled'
   duration_ms?: number
   error?: string
-  /**
-   * Finding 4 (SQUAD-BRIEF-AY) — true when this call's `status` was flipped
-   * from 'running' to 'cancelled' by clearStreamingState() (a hard WS
-   * disconnect) specifically, never by an explicit user cancel or a real
-   * server-reported cancellation. Debugging/bookkeeping only, SPA-internal.
-   * The one thing it drives: when the assistant bubble owning this call is
-   * reopened by a reconnect catch-up token (frames.ts's 'token' case), a
-   * call still carrying this flag is restored to 'running' and moved back
-   * into the live tool-call tracking instead of staying stuck 'cancelled' —
-   * the disconnect, not the tool, is what stopped it, and the turn (and
-   * therefore the tool call) may still be genuinely in flight server-side.
-   */
-  cancelledByDisconnect?: boolean
 }
 
 // ── Tool Results ──────────────────────────────────────────────────────────────

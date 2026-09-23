@@ -1,69 +1,3 @@
-/**
- * #823 phase 2: append or replace the open bubble's text from a token frame.
- *
- * A catch-up token (`replace: true`) REPLACES the bubble's text instead of
- * appending. The gateway cannot know how much of the in-flight turn this client
- * already applied before the drop, so appending could only duplicate; replacing
- * is idempotent by construction — applying the same catch-up token twice leaves
- * the same text. A closed bubble needs no special case here: the boundary rule
- * in the token case has already abandoned any finished bubble and opened a
- * fresh placeholder, so a late catch-up token cannot rewrite an answer the user
- * has already read.
- *
- * Module scope on purpose: the token case sits inside handleFrame, which is
- * grandfathered in scripts/budgets/functions.txt and may only shrink.
- */
-function applyTokenContent(msg: ChatMessage, frame: { content: string; replace?: boolean }): void {
-  if (frame.replace === true) {
-    msg.content = frame.content
-    msg.pendingTextBoundary = false
-    return
-  }
-  msg.content = msg.content + frame.content
-}
-
-/**
- * #823 phase 2: position an inbound frame before it is dispatched. Returns false
- * when the frame is CONSUMED — already applied (dropped by the sequence gate) or
- * a session_snapshot that replaced a session's state — and true when the caller
- * should dispatch it normally.
- *
- * Folds three steps that must happen in this order, and that all four dispatch
- * paths depend on:
- *
- *  1. the legacy timestamp cursor (`since`) still advances — it is the only
- *     cursor a session with no sequence position has, and is still sent as the
- *     `since` fallback;
- *  2. the per-session sequence gate — a frame at or below this session's cursor
- *     was already applied, and the gateway re-delivers retained frames
- *     byte-exact, so dropping it is what makes catch-up idempotent;
- *  3. `session_snapshot` replaces that session's state instead of merging —
- *     handled BEFORE dispatch because the 'done' and 'replay_message' cases both
- *     assume the local bucket is meaningful, and the gateway sends a snapshot
- *     precisely when it is not.
- *
- * Module scope on purpose: handleFrame is grandfathered in
- * scripts/budgets/functions.txt and may only shrink.
- */
-function applyFramePosition(
-  frame: unknown,
-  targetSid: string | null,
-  withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void,
-  get: () => ChatStore,
-  syncForeground: () => void,
-): boolean {
-  advanceReceivedEventTime(frame, targetSid, withBucket)
-  if (!gateFrameBySequence(frame, targetSid, () => get().sessionsById, withBucket)) return false
-  if (isSessionSnapshotFrame(frame)) {
-    if (targetSid) {
-      withBucket(targetSid, (bucket) => applySessionSnapshot(bucket, frame as SessionSnapshotFrame))
-      syncForeground()
-    }
-    return false
-  }
-  return true
-}
-
 // frames.ts: inbound websocket frame routing and reduction
 
 
@@ -95,10 +29,8 @@ import { bufferForSpan, hasOpenSpanFast, markTurnFinished, scheduleLibraryChange
 import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, pendingCancelAckSids, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
 import { ORPHAN_BUFFER_TTL_MS, orphanTimers, pendingByParentCallId } from '../types'
-import type { ChatMessage, ChatStore, PositionedToolCall, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
+import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
 import { handleReplayAndStatusFrame } from './replay-and-status-frames'
-import type { SessionSnapshotFrame } from '@/lib/api/generated/asyncapi-types'
-import { applySessionSnapshot, gateFrameBySequence, isSessionSnapshotFrame } from './sequence'
 
 
 
@@ -202,39 +134,15 @@ function appendUnmatchedToolError(
   }) as Partial<SessionChatState>
 }
 
-// Issue #822 / review finding 11 (SQUAD-BRIEF-AY): a real done can arrive at
-// the reconnect bind boundary before its catch-up token — that catch-up token
-// is the completed snapshot, not a new live stream, and must render as
-// already-finished the instant it lands.
-//
-// This is decided from a bucket-level `terminalCatchUpPending` flag set on
-// the turn's own `done` (see needsTerminalCatchUp) and cleared by the next
-// token. On its own that flag can go stale: when the turn that set it
-// produced NO token at all (a tool-only or empty-content turn), nothing ever
-// consumes it — so a completely unrelated LATER turn's first token (an
-// already-attached tab never gets a fresh `session_state` for a turn it
-// didn't just reconnect for — the gateway emits `session_state` only on a
-// new WS connection/attach, see pkg/gateway/websocket.go's single
-// `emitSessionState` call site) could arrive while the stale flag was still
-// true and get wrongly rendered as already-finished, with its second token
-// then opening a brand-new bubble — splitting one live answer into two.
-//
-// The fix (finding 11) additionally requires the frame's own `replace`
-// marker — set ONLY on a catch-up token (contracts/components/schemas/
-// TokenFrame.yaml); the gateway's one source for this content
-// (pkg/gateway/websocket_replay.go::sendCatchUp) always sets it. An ordinary
-// live token for a brand-new turn never carries `replace`, so it can never be
-// misclassified as terminal no matter how stale the bucket flag is — the
-// flag alone is no longer sufficient, closing the staleness gap while still
-// requiring the flag (so an ordinary `replace: true` redelivery with no
-// bucket-level "this turn already finished with nothing shown" context — see
-// the '#823 phase 2 — token.replace' tests — is correctly NOT terminal).
-function isTerminalCatchUpToken(bucket: SessionChatState, frame: { replace?: boolean }): boolean {
-  return frame.replace === true && bucket.terminalCatchUpPending === true && !bucket.isStreaming
+// Issue #822: a real done can arrive at the reconnect bind boundary before
+// its catch-up token. That next token is the completed snapshot, not a new
+// live stream. New turns are already streaming before their first token.
+function isTerminalCatchUpToken(bucket: SessionChatState): boolean {
+  return bucket.terminalCatchUpPending === true && !bucket.isStreaming
 }
 
-function applyTokenStreamingState(bucket: SessionChatState, message: ChatMessage, frame: { replace?: boolean }): void {
-  const isStreaming = !isTerminalCatchUpToken(bucket, frame)
+function applyTokenStreamingState(bucket: SessionChatState, message: ChatMessage): void {
+  const isStreaming = !isTerminalCatchUpToken(bucket)
   message.isStreaming = isStreaming
   message.status = isStreaming ? 'streaming' : 'done'
   bucket.isStreaming = isStreaming
@@ -243,68 +151,6 @@ function applyTokenStreamingState(bucket: SessionChatState, message: ChatMessage
 
 function needsTerminalCatchUp(bucket: SessionChatState, wasReplaying: boolean): boolean {
   return wasReplaying && !!bucket.activeTurnId && !bucket.activeTurnBubbleOpened
-}
-
-/**
- * Finding 4 (SQUAD-BRIEF-AY, REVIEW-OPUS-823): a bubble `clearStreamingState()`
- * closed on a hard disconnect (`closedByDisconnect`) is NOT a genuinely
- * finished segment — the turn it belongs to was never told to stop
- * server-side, so a reconnect's catch-up token (`replace: true`, carrying the
- * FULL round's accumulated text) is the REST of this SAME answer, not a new
- * one. The 'token' case's own closed-bubble boundary check would otherwise
- * mint a second bubble whose replace text repeats what this one already
- * shows (the two-bubble, duplicated-text defect). A genuinely done bubble
- * (real `done` frame, no disconnect involved) is untouched by this — see the
- * 'REAL done' guard test in chat.seq-catchup.test.ts.
- *
- * When it reopens `lastMsgId`, this also restores any tool calls cancelled
- * ONLY because of the disconnect back to live tracking (running) instead of
- * leaving them stuck 'cancelled' forever — a real tool_call_result for the
- * same call_id can now resolve them normally. A call that finished for real
- * (success/error) or was genuinely cancelled by the user is left exactly as
- * baked.
- *
- * Returns true when `lastMsgId` was reopened — the caller must then skip its
- * own closed-bubble "abandon, open a new bubble" check for this frame.
- *
- * Module scope on purpose: handleFrame is grandfathered in
- * scripts/budgets/functions.txt and may only shrink.
- */
-function reopenDisconnectedBubbleIfNeeded(
-  draft: SessionChatState,
-  lastMsgId: string | null,
-  frame: { replace?: boolean },
-): boolean {
-  if (frame.replace !== true || !lastMsgId) return false
-  const reopened = draft.messagesById[lastMsgId]
-  if (reopened?.closedByDisconnect !== true) return false
-  reopened.closedByDisconnect = false
-  const bakedCalls = (reopened.tool_calls ?? []) as PositionedToolCall[]
-  const keptCalls: PositionedToolCall[] = []
-  for (const tc of bakedCalls) {
-    if (tc.cancelledByDisconnect) {
-      const callId = tc.id
-      draft.toolCalls[callId] = {
-        id: callId,
-        call_id: callId,
-        tool: tc.tool,
-        params: tc.params,
-        result: tc.result,
-        duration_ms: tc.duration_ms,
-        error: tc.error,
-        status: 'running',
-      }
-      draft.toolCallOrder.push(callId)
-      draft.toolCallOwnerMessageId = draft.toolCallOwnerMessageId ?? {}
-      draft.toolCallOwnerMessageId[callId] = lastMsgId
-    } else {
-      keptCalls.push(tc)
-    }
-  }
-  if (keptCalls.length !== bakedCalls.length) {
-    reopened.tool_calls = keptCalls
-  }
-  return true
 }
 
 interface FrameContext {
@@ -384,11 +230,10 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       // HIGH-2: reset unknown-frame counter on every known-good frame.
       runtime.unknownFrameCount = 0
 
-      // I1/#823 phase 2: position the frame before dispatch — the legacy
-      // timestamp cursor, the per-session sequence gate, and the snapshot
-      // replacement. Module-scope so handleFrame stays inside its grandfathered
-      // line budget; see slices/sequence.ts for the rules and exemptions.
-      if (!applyFramePosition(frame, targetSid, withBucket, get, syncForeground)) return
+      // I1: advance the reconnect `since` cursor — see advanceReceivedEventTime's
+      // own doc comment above (moved there so this addition doesn't grow
+      // handleFrame past its grandfathered line budget).
+      advanceReceivedEventTime(frame, targetSid, withBucket)
 
       if (handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid, withBucket, armRateLimitClear })) {
         syncForeground()
@@ -624,24 +469,16 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   !lastMsg.tool_calls?.length &&
                   !lastMsg.media?.length &&
                   !lastMsg.spans?.length
-                // Finding 4 (SQUAD-BRIEF-AY): reopen/retarget a bubble a hard
-                // disconnect closed instead of abandoning it — see
-                // reopenDisconnectedBubbleIfNeeded's doc comment (module
-                // scope; handleFrame is grandfathered in
-                // scripts/budgets/functions.txt and may only shrink).
-                const reopensDisconnectedBubble = reopenDisconnectedBubbleIfNeeded(draft, lastMsgId, frame)
                 // Only reuse the last assistant bubble if it is still
                 // streaming (or, per the empty-terminal case just above, if
-                // it finalized holding nothing at all), or if it is the
-                // disconnect-interrupted bubble a catch-up token is now
-                // reopening (finding 4, just above). A closed bubble that
-                // DID hold something (status=done, real content/tool
+                // it finalized holding nothing at all). A closed bubble
+                // that DID hold something (status=done, real content/tool
                 // calls/media/spans already shown) means the prior LLM call
                 // has finalized and any new tokens are part of a *new*
                 // turn-segment — typically a follow-up call after a tool
                 // returned. Stuffing them back into that closed bubble is
                 // what produced the "text-then-image-at-bottom" ordering.
-                if (lastMsgId && !draft.messagesById[lastMsgId].isStreaming && !lastMsgIsEmptyTerminal && !reopensDisconnectedBubble) {
+                if (lastMsgId && !draft.messagesById[lastMsgId].isStreaming && !lastMsgIsEmptyTerminal) {
                   abandonedMsgId = lastMsgId
                   lastMsgId = null
                 }
@@ -751,8 +588,8 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   if (msg.content) msg.content += '\n\n'
                   msg.pendingTextBoundary = false
                 }
-                applyTokenContent(msg, frame)
-                applyTokenStreamingState(draft, msg, frame)
+                msg.content = msg.content + frame.content
+                applyTokenStreamingState(draft, msg)
                 // ADR-082 review S1/CR1: a token proves the announced turn's
                 // bubble now exists, regardless of which frame order got us
                 // here (fixed-contract session_state-first, an older
@@ -1015,12 +852,6 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   m.isStreaming = false
                   m.status =
                     m.status === 'interrupted' || m.status === 'error' ? m.status : 'done'
-                  // Finding 4: a REAL done reaching this exact message is the
-                  // authoritative "this turn actually finished" signal — clear
-                  // any leftover closedByDisconnect so a later, unrelated
-                  // catch-up token can never mistake this now-genuinely-closed
-                  // bubble for one still needing to be reopened.
-                  m.closedByDisconnect = false
                   // Clear the tool-call text-boundary marker on finalize. If the
                   // turn's last event was a tool call with no trailing narration
                   // token before `done`, pendingTextBoundary would otherwise be

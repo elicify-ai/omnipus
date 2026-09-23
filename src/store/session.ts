@@ -279,75 +279,6 @@ export function resetChatBucketForReplay(sessionId: string): void {
   _chatResetForReplay?.(sessionId)
 }
 
-// #823 phase 2. The attach sites live in this module, but the state they need
-// (the session's applied-frame cursor, and the wipe-or-keep decision that
-// depends on it) lives in the chat store — and importing the chat store here
-// would be a cycle, since the barrel imports this module. Registered callbacks
-// are the established way across that line (see registerChatResetForReplay
-// above), so these follow the same shape.
-let _chatPrepareForReplay: ((sessionId: string) => void) | null = null
-
-/** Called once by chat.ts after it creates useChatStore. */
-export function registerChatPrepareForReplay(fn: (sessionId: string) => void): void {
-  _chatPrepareForReplay = fn
-}
-
-/** Arms a session's catch-up window, wiping its transcript only if it has no cursor. */
-export function prepareChatBucketForReplay(sessionId: string): void {
-  if (_chatPrepareForReplay) {
-    _chatPrepareForReplay(sessionId)
-    return
-  }
-  // The chat store registers its callback when it is imported. If it has not
-  // been, fall back to the unconditional wipe — the pre-#823-phase-2 behaviour
-  // — rather than doing nothing. A silent no-op here would leave the session in
-  // an undefined state: neither wiped for a full replay nor armed for a
-  // catch-up, which is strictly worse than the behaviour it replaced.
-  resetChatBucketForReplay(sessionId)
-}
-
-let _chatLastAppliedSeq: ((sessionId: string) => number | null) | null = null
-
-/** Called once by chat.ts after it creates useChatStore. */
-export function registerChatLastAppliedSeq(fn: (sessionId: string) => number | null): void {
-  _chatLastAppliedSeq = fn
-}
-
-/**
- * The session's applied-frame cursor, or null when the SPA has no position for
- * it. Null is the safe answer: an attach then omits `since_seq` and the gateway
- * performs a full replay.
- */
-export function chatLastAppliedSeq(sessionId: string): number | null {
-  return _chatLastAppliedSeq?.(sessionId) ?? null
-}
-
-/**
- * #823 phase 2: the attach_session frame for a session.
- *
- * `since_seq` is read from THAT session's own bucket — never from the foreground
- * mirror — because an attach may target a session that is not the active one yet
- * (attachToSession writes activeSessionId only after the frame goes out). It is
- * omitted when the SPA holds no position (> 0) for the session, which is what
- * makes a first load ask for a full replay. The gateway treats 0 as "no cursor"
- * too, so 0 is omitted rather than sent.
- *
- * Module scope on purpose: the session store's `create` argument is
- * grandfathered in scripts/budgets/functions.txt and may only shrink.
- */
-function buildAttachSessionFrame(sessionId: string): {
-  type: 'attach_session'
-  session_id: string
-  since_seq?: number
-} {
-  const appliedSeq = chatLastAppliedSeq(sessionId)
-  return {
-    type: 'attach_session',
-    session_id: sessionId,
-    ...(appliedSeq !== null && appliedSeq > 0 ? { since_seq: appliedSeq } : {}),
-  }
-}
-
 /**
  * Rule 3 of the AGENT PRECEDENCE RULE (see `SessionStore.agentSelectionSource`):
  * may a session-derived agent hint be adopted right now?
@@ -489,17 +420,18 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const { connection } = useConnectionStore.getState()
 
     if (connection) {
-      const sent = connection.send(buildAttachSessionFrame(sessionId))
+      const sent = connection.send({ type: 'attach_session', session_id: sessionId })
       if (!sent) {
         useConnectionStore.getState().setConnectionError(
           'Could not attach to session — connection dropped. Please reconnect and try again.'
         )
         return false
       }
-      // Only touch the chat bucket once the attach frame is confirmed sent —
+      // Only wipe the chat bucket once the attach frame is confirmed sent —
       // resetting first (as before) would permanently lose the bucket's
-      // contents if send() failed. #823 phase 2: conditional on the cursor.
-      prepareChatBucketForReplay(sessionId)
+      // contents if send() failed (e.g. during a reconnect window), since
+      // there was no rollback for the pre-reset state.
+      resetChatBucketForReplay(sessionId)
       set((state) => ({
         activeSessionId: sessionId,
         attachedSessionType: type,
@@ -887,21 +819,4 @@ async function resolveRememberedSessionFromServer(
       return { resolvingSessionForWorkspace: next }
     })
   }
-}
-
-// Expose the active session id on window.__omnipus_test_hooks in DEV/test
-// builds and in production-with-webdriver — mirrors the established pattern
-// (src/lib/ws.ts, src/lib/api.ts, src/lib/calendar/useOccurrences.ts).
-// SQUAD-BRIEF-AY: tests/e2e/reconnect-mid-turn.spec.ts's S-11 needs to
-// capture the id of a session it started so it can navigate back to that
-// EXACT session later via the sidebar/search (an attach, not a reload —
-// page.goto() was the finding-4/S-11 bug: it clears the SPA's in-memory
-// per-session sequence cursors) even though root '/' redirects into a
-// workspace's Chat TAB, not a per-session URL (workspaces.$workspaceId.chat
-// has no sessionId route param — only /sessions/$sessionId does, the
-// "Unfiled" case), so there is no URL to read the id back from.
-if ((import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver)) && typeof window !== 'undefined') {
-  const w = window as unknown as { __omnipus_test_hooks?: Record<string, unknown> }
-  w.__omnipus_test_hooks ??= {}
-  w.__omnipus_test_hooks.getActiveSessionId = () => useSessionStore.getState().activeSessionId
 }

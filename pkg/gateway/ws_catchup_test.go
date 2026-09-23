@@ -91,7 +91,7 @@ func TestAttach_CatchUpSnapshotOrdering(t *testing.T) {
 			handler.mu.Lock()
 			handler.sessions[chatID] = wc
 			handler.mu.Unlock()
-			handler.handleAttachSession(context.Background(), chatID, meta.ID, nil, nil, nil, wc)
+			handler.handleAttachSession(context.Background(), chatID, meta.ID, nil, wc)
 			// Signal "bound" only AFTER handleAttachSession returns — the
 			// caller (main goroutine) waits on this before calling Finalize,
 			// so the done frame Finalize sends is guaranteed to reach every
@@ -215,7 +215,7 @@ func TestFix_CR5_F1_NoCatchUpForAlreadyPersistedRoundText(t *testing.T) {
 	handler.mu.Lock()
 	handler.sessions["chat-cr5-attach1"] = wcDuringTools
 	handler.mu.Unlock()
-	handler.handleAttachSession(context.Background(), "chat-cr5-attach1", meta.ID, nil, nil, nil, wcDuringTools)
+	handler.handleAttachSession(context.Background(), "chat-cr5-attach1", meta.ID, nil, wcDuringTools)
 
 	var sawReplayText bool
 	deadline := time.After(2 * time.Second)
@@ -258,7 +258,7 @@ collectTools:
 	handler.mu.Lock()
 	handler.sessions["chat-cr5-attach2"] = wcDuringRound2
 	handler.mu.Unlock()
-	handler.handleAttachSession(context.Background(), "chat-cr5-attach2", meta.ID, nil, nil, nil, wcDuringRound2)
+	handler.handleAttachSession(context.Background(), "chat-cr5-attach2", meta.ID, nil, wcDuringRound2)
 
 	// round2 is never Finalize()d in this test (it is still "streaming" at
 	// the moment attach2 binds), so the ONLY "done" frame in this stream is
@@ -334,7 +334,7 @@ func TestFix_CR6_DoneDivertedWhileConnectionIsReplaying(t *testing.T) {
 	attachDone := make(chan struct{})
 	go func() {
 		defer close(attachDone)
-		handler.handleAttachSession(context.Background(), chatID, meta.ID, nil, nil, nil, wc)
+		handler.handleAttachSession(context.Background(), chatID, meta.ID, nil, wc)
 	}()
 
 	// Let handleAttachSession bind + arm the divert + block on the seeded
@@ -417,7 +417,7 @@ func TestFix_CR10_ReplayErrorStillEmitsSessionStateAndDrainsDivert(t *testing.T)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	handler.handleAttachSession(ctx, chatID, meta.ID, nil, nil, nil, wc)
+	handler.handleAttachSession(ctx, chatID, meta.ID, nil, wc)
 
 	var sawSessionState, sawError, sawReplayErrorDone bool
 	deadline := time.After(2 * time.Second)
