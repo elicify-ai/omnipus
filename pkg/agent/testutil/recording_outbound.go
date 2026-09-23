@@ -59,44 +59,9 @@ func (r *OutboundRecorder) Record(boundary steer.Boundary, sessionID, address, k
 	})
 }
 
-// PublishOutbound wraps the text bus sink shared by text-producing boundaries.
-func (r *OutboundRecorder) PublishOutbound(boundary steer.Boundary, sessionID, address, kind string) {
-	r.Record(boundary, sessionID, address, kind)
-}
-
-// PublishOutboundMedia wraps the outbound-media bus sink.
-func (r *OutboundRecorder) PublishOutboundMedia(sessionID, address, kind string) {
-	r.Record(steer.BoundaryMedia, sessionID, address, kind)
-}
-
-// SendMedia wraps the direct channel media sink.
-func (r *OutboundRecorder) SendMedia(sessionID, address, kind string) {
-	r.Record(steer.BoundaryMedia, sessionID, address, kind)
-}
-
-// WriteExternalStream wraps an external-channel stream adapter's Write/Finalize sink.
-func (r *OutboundRecorder) WriteExternalStream(sessionID, address, kind string) {
-	r.Record(steer.BoundaryExternalChannelStreaming, sessionID, address, kind)
-}
-
-// SendWebSocket wraps the webchat WebSocket send sink.
-func (r *OutboundRecorder) SendWebSocket(sessionID, address, kind string) {
-	r.Record(steer.BoundaryWebchatStreaming, sessionID, address, kind)
-}
-
 // SendMessage wraps the message tool's outbound sink.
 func (r *OutboundRecorder) SendMessage(sessionID, address, kind string) {
 	r.Record(steer.BoundaryAgentRequestedMessage, sessionID, address, kind)
-}
-
-// NotifyTaskResult wraps task result notification.
-func (r *OutboundRecorder) NotifyTaskResult(sessionID, address, kind string) {
-	r.Record(steer.BoundaryTaskResultNotification, sessionID, address, kind)
-}
-
-// BroadcastQuestionCard wraps question-card broadcast.
-func (r *OutboundRecorder) BroadcastQuestionCard(sessionID, address, kind string) {
-	r.Record(steer.BoundaryQuestionCard, sessionID, address, kind)
 }
 
 // Deliveries returns an independent snapshot of recorded sink calls.
