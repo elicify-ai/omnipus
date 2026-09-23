@@ -14086,6 +14086,7 @@ export const AttachSessionFrame = z
     session_id: z.string().min(1).max(128),
     since_seq: z.number().int().min(0).optional(),
     since: z.string().optional(),
+    boot_id: z.string().optional(),
   })
   .strict();
 
@@ -14593,7 +14594,7 @@ export const SessionSnapshotFrame = z
     type: z.literal("session_snapshot"),
     session_id: z.string().min(1).max(128),
     seq: z.number().int().min(0),
-    reason: z.enum(["cursor_ahead", "retention_exceeded", "unknown_position"]).optional(),
+    reason: z.enum(["cursor_ahead", "retention_exceeded", "unknown_position", "boot_mismatch"]).optional(),
   })
   .strict();
 
@@ -14605,6 +14606,7 @@ export const SessionStateFrame = z
     pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
     session_id: z.string().optional(),
     active_turn: SessionStateActiveTurn.optional(),
+    boot_id: z.string().optional(),
     emitted_at: z.string(),
   })
   .strict();

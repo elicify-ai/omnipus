@@ -33,7 +33,8 @@ func sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
 	}
 	// Route through sendRawFrameBytes to respect replay-divert logic and the
 	// replayMu serialization that prevents the TOCTOU race (code-reviewer Finding #2).
-	sendRawFrameBytes(wc, string(generated.WsFrameTypeCancelStage), data)
+	// Not numbered: cancel_stage bypasses the session sequence-number system.
+	sendRawFrameBytes(wc, string(generated.WsFrameTypeCancelStage), data, false)
 	// sendRawFrameBytes logs at Warn on drop; suppress the duplicate debug log that
 	// existed in the old inline implementation.
 }

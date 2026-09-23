@@ -354,17 +354,40 @@ func (f *eventForwardState) matchesChatID(evtChatID string) bool {
 // evtSessionID is threaded end-to-end on every relevant event payload
 // (SubTurnSpawnPayload, SubTurnEndPayload, ToolExec*Payload,
 // TurnEndPayload). session_id survives a reload; chatID does not.
+//
+// #832 review finding 10: when evtSessionID is present, CURRENT attachment
+// is the ONLY thing consulted — matchesChatID's raw "evtChatID == f.chatID"
+// rule is NOT tried first. Before this fix, that raw rule matched
+// unconditionally on the connection's fixed ORIGINATING chatID, regardless
+// of which session the connection is attached to right now: a tab that
+// starts a turn in session A and then switches (via attach_session) to
+// session B keeps matching A's own background tool-call/subagent frames
+// forever, because evtChatID (stamped once at turn-dispatch time) never
+// changes even though the tab is no longer looking at A. Those frames
+// still get delivered to this connection and therefore still get NUMBERED
+// against session A's counter (emitSessionFrame numbers by the frame's OWN
+// session, not by what this connection currently shows) — silently
+// advancing this connection's per-session cursor for A past content it was
+// never actually shown live. When the tab switches back to A, its
+// remembered cursor is already past those frames, so the incremental
+// catch-up starts AFTER them and A's reconstructed text stays incomplete —
+// with no error, no snapshot, nothing to signal the gap. Gating on CURRENT
+// attachment instead closes this: the legitimate case matchesChatID's
+// second rule (the taskChatIDs alias) exists for — a background delegate's
+// completion event reaching a POST-RELOAD connection reattached to the
+// SAME session via a stale chatID — still matches here too, because that
+// reattach is exactly what set h.sessionIDs[f.chatID] to the right session
+// in the first place (see the "Root cause this closes" paragraph above).
+// evtSessionID == "" (a connection-scoped or pre-session event) is the only
+// case that still falls through to matchesChatID's raw identity check.
 func (f *eventForwardState) matchesEvent(evtChatID, evtSessionID string) bool {
-	if f.matchesChatID(evtChatID) {
-		return true
+	if evtSessionID != "" {
+		f.h.mu.Lock()
+		currentSessionID := f.h.sessionIDs[f.chatID]
+		f.h.mu.Unlock()
+		return currentSessionID != "" && evtSessionID == currentSessionID
 	}
-	if evtSessionID == "" {
-		return false
-	}
-	f.h.mu.Lock()
-	currentSessionID := f.h.sessionIDs[f.chatID]
-	f.h.mu.Unlock()
-	return currentSessionID != "" && evtSessionID == currentSessionID
+	return f.matchesChatID(evtChatID)
 }
 
 // sessionIDForChat looks up the active session_id for a given chatID so every
