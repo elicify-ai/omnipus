@@ -20,34 +20,29 @@ import (
 // caller"; "allow_blocking_question refused by name, not accepted anywhere") are exempt — their own
 // exact-count assertion already proves the mechanism, and for the latter `expectedSoleFile` additionally
 // pins WHERE the surviving occurrence must live, which a raw count alone cannot do.
-func TestADR091_ResidualAudit(t *testing.T) {
-	// Determine repo root by starting from this test's directory and walking up
-	repoRoot := findRepoRoot(t)
+// adr091AuditRow is one row of the residual audit table. The table lives in
+// adr091AuditRows rather than inline in the test so TestADR091_ResidualAudit
+// stays inside the repo's 240-line function budget (make lint-budgets).
+type adr091AuditRow struct {
+	name          string
+	cmd           *exec.Cmd
+	expected      int
+	sentinel      *exec.Cmd // nil = row is exempt (see binding rule above)
+	sentinelLabel string
+	// mustDirExist: for existence-style checks (FR-047), the positive lower bound isn't a grep
+	// match, it's "the directory that would have held the file still exists" — otherwise a
+	// deleted/renamed directory makes the check pass by accident, proving nothing (mirrors the
+	// "Address not borrowed" bug where a --include glob matched zero files).
+	mustDirExist string
+	// expectedSoleFile: for a row whose `expected` is exactly 1 (not 0), the ONE occurrence must
+	// live in this file — not just "somewhere in scope". Pins the surviving occurrence to the
+	// legitimate site instead of merely counting it, so the row fails just as loudly if the
+	// literal moves (or is duplicated) to any other file as it does if it vanishes entirely.
+	expectedSoleFile string
+}
 
-	// Reusable sentinel: "does grep, with this exact scope (dirs/includes/excludes), find ANY real
-	// Go source at all?" Every non-test .go file under the scanned tree starts with a package clause,
-	// so this is always >=1 when the scope actually resolves to real files.
-	pkgGoSentinel := func(dirs []string) *exec.Cmd {
-		return buildGrep(repoRoot, dirs, []string{"^package "}, []string{"*.go"}, []string{"*_test.go"})
-	}
-
-	tests := []struct {
-		name          string
-		cmd           *exec.Cmd
-		expected      int
-		sentinel      *exec.Cmd // nil = row is exempt (see binding rule above)
-		sentinelLabel string
-		// mustDirExist: for existence-style checks (FR-047), the positive lower bound isn't a grep
-		// match, it's "the directory that would have held the file still exists" — otherwise a
-		// deleted/renamed directory makes the check pass by accident, proving nothing (mirrors the
-		// "Address not borrowed" bug where a --include glob matched zero files).
-		mustDirExist string
-		// expectedSoleFile: for a row whose `expected` is exactly 1 (not 0), the ONE occurrence must
-		// live in this file — not just "somewhere in scope". Pins the surviving occurrence to the
-		// legitimate site instead of merely counting it, so the row fails just as loudly if the
-		// literal moves (or is duplicated) to any other file as it does if it vanishes entirely.
-		expectedSoleFile string
-	}{
+func adr091AuditRows(repoRoot string, pkgGoSentinel func([]string) *exec.Cmd) []adr091AuditRow {
+	return []adr091AuditRow{
 		{
 			name:          "Ring gone",
 			cmd:           buildGrep(repoRoot, []string{"pkg/"}, []string{"newEphemeralSession", "maxEphemeralHistorySize", "ephemeralSessionStore"}, []string{"*.go"}, []string{"*_test.go"}),
@@ -216,6 +211,20 @@ func TestADR091_ResidualAudit(t *testing.T) {
 			sentinelLabel: "pkg/agent/loop_inbound.go exists and has real content",
 		},
 	}
+}
+
+func TestADR091_ResidualAudit(t *testing.T) {
+	// Determine repo root by starting from this test's directory and walking up
+	repoRoot := findRepoRoot(t)
+
+	// Reusable sentinel: "does grep, with this exact scope (dirs/includes/excludes), find ANY real
+	// Go source at all?" Every non-test .go file under the scanned tree starts with a package clause,
+	// so this is always >=1 when the scope actually resolves to real files.
+	pkgGoSentinel := func(dirs []string) *exec.Cmd {
+		return buildGrep(repoRoot, dirs, []string{"^package "}, []string{"*.go"}, []string{"*_test.go"})
+	}
+
+	tests := adr091AuditRows(repoRoot, pkgGoSentinel)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
