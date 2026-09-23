@@ -297,6 +297,13 @@ func (h *WSHandler) emitSessionState(wc *wsConn, sessionID string) {
 		}
 	}
 
+	// #823 phase 2: session_state is deliberately NOT sequence-numbered. It is
+	// emitted here, from the attach's bind step, but delivered as the attach's
+	// FIRST frame (ADR-082 review CR1/S1) — ahead of catch-up frames that were
+	// emitted earlier and therefore hold LOWER numbers. Numbering it would put a
+	// higher number in front of lower ones, and a client that ignores frames at
+	// or below its cursor would drop the catch-up frames that follow. See
+	// withFrameSeq's doc comment.
 	raw, err := json.Marshal(frame)
 	if err != nil {
 		slog.Error("ws: marshal session_state", "error", err)

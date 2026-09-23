@@ -28,3 +28,25 @@ properties:
       Agent that produced this token. Identifies the origin agent for
       background/delegated sub-turns, where the client's active-agent
       session state would otherwise guess incorrectly.
+  replace:
+    type: boolean
+    description: >
+      Set only on a catch-up token: the frame's content REPLACES the open
+      assistant bubble's content for this session instead of appending to it.
+      The gateway emits it right after a reconnect when the in-flight turn's
+      accumulated text may already be partly present on the client (the client
+      applied some of that turn's tokens before the drop). Replacing rather
+      than appending is what makes catch-up idempotent: applying the same
+      catch-up token twice leaves the same text. Absent or false on ordinary
+      streaming tokens, which append.
+
+  seq:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >-
+      Per-session sequence number of this frame. Strictly increasing and gap-free within
+      the session, assigned by the gateway as the frame is emitted. The client stores the
+      highest seq it has applied per session and sends it back as since_seq on
+      attach_session; frames at or below that cursor are ignored, which makes re-delivery
+      idempotent. 0 means the session has no numbered event yet.

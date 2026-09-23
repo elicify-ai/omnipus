@@ -7,7 +7,7 @@ import { useOmnipusRuntime } from "@/lib/omnipus-runtime";
 import { useChatStore } from "@/store/chat";
 import { useConnectionStore } from "@/store/connection";
 import { startMemoryObserver, addMemoryObserver } from "@/lib/memory-observer";
-import { useSessionStore, resetChatBucketForReplay } from "@/store/session";
+import { useSessionStore } from "@/store/session";
 import { WsConnection } from "@/lib/ws";
 import { queryClient } from "@/lib/queryClient";
 import type { Session, SessionDetail } from "@/lib/api";
@@ -160,13 +160,25 @@ export function reattachActiveSession(
   // Pass the since-cursor so the gateway only replays frames the SPA hasn't seen.
   const since =
     useChatStore.getState().sessionsById[activeSessionId]?.lastReceivedEventTime ?? undefined;
+  // #823 phase 2: the sequence cursor supersedes the timestamp one. Read from
+  // THIS session's bucket (never the foreground mirror) because a reattach can
+  // target a session that is not the active one; omit it when the SPA holds no
+  // position (a first load), which makes the gateway do a full replay. `since`
+  // still rides along as a fallback for legacy sessions that have no sequence
+  // position, and the gateway ignores it whenever since_seq is present.
+  const appliedSeq = useChatStore.getState().getLastAppliedSeq(activeSessionId);
   // Reset the bucket ONLY on the success path, where the gateway's replay is in
   // flight and will repopulate it from scratch (preventing duplicate
   // "Browse to … / Browse to …" bubbles). If send() fails, the reattach never
   // happens and no replay will rebuild the transcript, so wiping the bucket
   // would leave the user a blank chat behind the "please reload" error. Preserve
   // the existing transcript instead.
-  const sent = conn.send({ type: "attach_session", session_id: activeSessionId, since });
+  const sent = conn.send({
+    type: "attach_session",
+    session_id: activeSessionId,
+    ...(since ? { since } : {}),
+    ...(appliedSeq !== null && appliedSeq > 0 ? { since_seq: appliedSeq } : {}),
+  });
   if (!sent) {
     // send() returned false — socket closed between onopen and here. Preserve
     // local state (do not wipe bucket) and surface an error. Clear the replaying
@@ -176,7 +188,11 @@ export function reattachActiveSession(
     setConnectionError('Failed to reattach session — please reload');
     return false;
   }
-  resetChatBucketForReplay(activeSessionId);
+  // #823 phase 2: arm the catch-up window, wiping the transcript only when the
+  // session has no sequence position to resume from. With a cursor the gateway
+  // re-delivers only the frames after it, so the messages already on screen are
+  // the prefix of the correct final state and are kept.
+  useChatStore.getState().prepareSessionForReplay(activeSessionId);
   return true;
 }
 

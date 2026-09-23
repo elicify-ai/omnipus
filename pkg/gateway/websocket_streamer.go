@@ -612,9 +612,18 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	if producerAgentID != "" {
 		frame.AgentId = &producerAgentID
 	}
-	data, err := json.Marshal(frame)
-	if err != nil {
-		return fmt.Errorf("ws: marshal token frame: %w", err)
+	// #823 phase 2: number the token ONCE for the whole fan-out below, so every
+	// attached tab sees the same sequence number for this token. Frames emitted
+	// while no connection is bound never reach here (zero targets returns
+	// above), so the counter only advances for tokens a client could observe —
+	// which is what keeps the numbers a client sees gap-free.
+	_, _, data, numberedOK := s.h.numberSessionFrame(string(generated.WsFrameTypeToken), frame)
+	if !numberedOK {
+		var err error
+		data, err = json.Marshal(frame)
+		if err != nil {
+			return fmt.Errorf("ws: marshal token frame: %w", err)
+		}
 	}
 	// ADR-082 D2/FR-004/FR-005: deliver to EVERY connection currently bound
 	// to this session, resolved above. Route each through sendRawFrameBytes
@@ -806,6 +815,20 @@ func (wsf *wsStreamerFinalize) sendDone() {
 	// visibility — only the live-facing signals (done frame, fan-out,
 	// markStreamed) are gated.
 	if !wsf.shadow {
+		// #823 phase 2: assign ONE sequence number for this turn's terminal
+		// frame BEFORE the per-connection loop, so every attached tab records
+		// the same position for the same turn end. The per-connection frames
+		// differ only in that connection's own dropped-token delta, so the
+		// first marshalled copy is the one retained for catch-up re-delivery.
+		var doneSeq int64
+		seqAssigned := false
+		if wsf.s.h != nil {
+			wsf.s.h.mu.Lock()
+			doneSeq = int64(wsf.s.h.assignSeqLocked(wsf.s.sessionID))
+			wsf.s.h.mu.Unlock()
+			seqAssigned = true
+		}
+		journaled := false
 		// ADR-082 D2/FR-014: send one done frame PER bound connection, each
 		// carrying that connection's own TokensDropped — a drop on one
 		// connection's send buffer must never be reported (or withheld) on
@@ -849,10 +872,20 @@ func (wsf *wsStreamerFinalize) sendDone() {
 				SessionId: wsf.s.sessionID,
 				Stats:     connStats,
 			}
+			if seqAssigned {
+				seqCopy := doneSeq
+				doneFrame.Seq = &seqCopy
+			}
 			data, mErr := json.Marshal(doneFrame)
 			if mErr != nil {
 				slog.Error("ws: marshal done frame failed", "session_id", wsf.s.sessionID, "error", mErr)
 				continue
+			}
+			if seqAssigned && !journaled {
+				wsf.s.h.mu.Lock()
+				wsf.s.h.recordSeqFrameLocked(wsf.s.sessionID, string(generated.WsFrameTypeDone), uint64(doneSeq), data)
+				wsf.s.h.mu.Unlock()
+				journaled = true
 			}
 			sendRawFrameBytes(conn, string(generated.WsFrameTypeDone), data)
 		}

@@ -97,6 +97,8 @@ channels:
         $ref: '#/components/messages/ToolApprovalResolvedFrame'
       SessionStateFrame:
         $ref: '#/components/messages/SessionStateFrame'
+      SessionSnapshotFrame:
+        $ref: '#/components/messages/SessionSnapshotFrame'
       SystemOverloadFrame:
         $ref: '#/components/messages/SystemOverloadFrame'
       ReplayWarningFrame:
@@ -531,6 +533,18 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/SessionStateFrame'
+  receiveSessionSnapshot:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'Full-state replacement notice. The gateway sends this in answer to attach_session when the requested since_seq
+      can no longer be served (retention exceeded, position unknown, or cursor ahead), and on a first load. The SPA replaces
+      its state for the session instead of merging, then consumes the full replay that follows, terminated by a done frame
+      carrying the same seq.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/SessionSnapshotFrame'
   receiveSystemOverload:
     action: receive
     channel:
@@ -1136,6 +1150,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SessionStateFrame'
+    SessionSnapshotFrame:
+      name: SessionSnapshotFrame
+      title: session_snapshot
+      summary: Full-state replacement notice — the client must rebuild this session rather than merge (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SessionSnapshotFrame'
     AskUserQuestionFrame:
       name: AskUserQuestionFrame
       title: ask_user_question
@@ -1440,6 +1461,7 @@ components:
       - tool_approval_required
       - tool_approval_resolved
       - session_state
+      - session_snapshot
       - system_overload
       - replay_warning
       - cancel_stage
@@ -1641,9 +1663,11 @@ components:
           const: pong
     AttachSessionFrame:
       title: AttachSessionFrame
-      description: 'Client → server request to attach to an existing session. When `since` is provided, the server skips replay
-        frames whose timestamp <= `since`, sending only frames the SPA has not yet seen. Omitting `since` requests a full
-        replay (legacy behaviour).
+      description: 'Client → server request to attach to an existing session. When `since_seq` is provided, the server sends
+        only frames whose per-session sequence number is greater than it, serving them from its retained window of already-emitted
+        frames. When the requested position can no longer be served, the server answers with a session_snapshot frame instead
+        of individual events. Omitting `since_seq` (or sending 0) requests a full replay, which rebuilds the session state
+        from scratch.
 
         '
       type: object
@@ -1659,12 +1683,22 @@ components:
           type: string
           minLength: 1
           maxLength: 128
+        since_seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 'Highest per-session sequence number the SPA has already applied for this session. The server sends
+            only frames with a strictly greater seq ("from since_seq + 1"), so re-attaching is idempotent and O(missed window)
+            instead of O(full session history). The client keeps one cursor per session it knows about, so this works for
+            sessions that were not open in the UI during an outage. Omit (or send 0) for a first load or when the cursor
+            is not known: the server then performs a full replay.
+
+            '
         since:
           type: string
           format: date-time
-          description: 'ISO 8601 timestamp of the most recent frame the SPA has already processed. Server replays only frames
-            with timestamp > this value. Used to keep reconnect replay traffic O(missed window) instead of O(full session
-            history).
+          description: 'Deprecated timestamp cursor, superseded by since_seq. ISO 8601 timestamp of the most recent frame
+            the SPA has already processed. Used only when since_seq is absent. Omitting both performs a full replay.
 
             '
     DevicePairingResponseFrame:
@@ -1747,6 +1781,17 @@ components:
           - received
           - working
           - failed
+
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     TokenFrame:
       title: TokenFrame
       description: >
@@ -1779,6 +1824,28 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (a) (FR-089): the child turn's own session id when this
             frame crosses the wire from a delegated child.
+        replace:
+          type: boolean
+          description: >
+            Set only on a catch-up token: the frame's content REPLACES the open
+            assistant bubble's content for this session instead of appending to
+            it. The gateway emits it right after a reconnect when the in-flight
+            turn's accumulated text may already be partly present on the client
+            (the client applied some of that turn's tokens before the drop).
+            Replacing rather than appending is what makes catch-up idempotent:
+            applying the same catch-up token twice leaves the same text. Absent
+            or false on ordinary streaming tokens, which append.
+
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     DoneStats:
       title: DoneStats
       description: 'Per-turn statistics in a done frame. additionalProperties are allowed for replay extras (frames_emitted,
@@ -1860,6 +1927,17 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (a) (FR-089): the child turn's own session id when this
             frame crosses the wire from a delegated child.
+
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     LLMError:
       title: LLMError
       description: Translated provider/LLM error safe for the live WebSocket boundary.
@@ -2222,6 +2300,17 @@ components:
           properties:
             llm_error:
               $ref: '#/components/schemas/LLMError'
+
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     ToolCallStartFrame:
       title: ToolCallStartFrame
       description: >
@@ -2267,6 +2356,17 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (a) (FR-089): the child turn's own session id when this
             frame crosses the wire from a delegated child.
+
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     TruncatedResult:
       title: TruncatedResult
       description: Sentinel for tool results exceeding 1 MiB (FR-I-011).
@@ -2761,6 +2861,17 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (a) (FR-089): the child turn's own session id when this
             frame crosses the wire from a delegated child.
+
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     SubagentStartFrame:
       title: SubagentStartFrame
       description: >
@@ -2803,6 +2914,17 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (b) (FR-089): absent for this frame type — producing ==
             routing by construction (FR-017).
+
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     SubagentEndFrame:
       title: SubagentEndFrame
       description: >
@@ -2866,6 +2988,17 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (b) (FR-089): absent for this frame type — producing ==
             routing by construction (FR-017).
+
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     SubagentMessageFrame:
       title: SubagentMessageFrame
       description: >
@@ -3215,6 +3348,17 @@ components:
           properties:
             llm_error:
               $ref: '#/components/schemas/LLMErrorReplay'
+
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     ToolResultProjectionFrame:
       title: ToolResultProjectionFrame
       description: >
@@ -3264,6 +3408,17 @@ components:
           type: string
           minLength: 1
           description: ADR-057 FR-012/FR-013 — present iff the projection was produced by a delegated child session different from session_id.
+
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     RateLimitFrame:
       title: RateLimitFrame
       description: >
@@ -3412,6 +3567,17 @@ components:
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (a) (FR-089): the child turn's own session id when this
             frame crosses the wire from a delegated child.
+
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     AgentSwitchedFrame:
       title: AgentSwitchedFrame
       description: >
@@ -3710,6 +3876,17 @@ components:
           const: ask_user_question
         card:
           $ref: '#/components/schemas/AskUserQuestionCard'
+
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     AskUserAnswerFrame:
       title: AskUserAnswerFrame
       description: >
@@ -3818,6 +3995,55 @@ components:
         started_at:
           type: string
           format: date-time
+    SessionSnapshotFrame:
+      title: SessionSnapshotFrame
+      description: 'Server → client. Answers attach_session when the position the client asked for (since_seq) can no longer
+        be served as individual events. The client MUST replace its state for this session rather than merging: the gateway
+        follows this frame with a full replay of the session (replay_message, tool_call_start, tool_call_result, subagent_start,
+        subagent_end, media), terminated by a done frame whose seq is this frame''s seq. Sending a snapshot is always safe
+        — it costs more bytes than an incremental catch-up but never drops an event, which is why the gateway prefers it
+        over guessing whenever it cannot prove the requested range is intact. Sent for a first load as well (no cursor at
+        all), where it is the ordinary full-replay path.
+
+        '
+      type: object
+      required:
+      - type
+      - session_id
+      - seq
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: session_snapshot
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Session the client must rebuild state for.
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 'The session''s current high-water sequence number. Once the full-state replay that follows this frame
+            has been applied, the client''s cursor for this session is exactly this value, and subsequent live frames continue
+            from seq + 1.
+
+            '
+        reason:
+          type: string
+          enum:
+          - cursor_ahead
+          - retention_exceeded
+          - unknown_position
+          description: 'Why a snapshot was sent instead of an incremental catch-up. cursor_ahead — the client''s since_seq
+            is greater than any sequence number the gateway has emitted for this session (for example after a gateway restart,
+            whose counter restarts); the client''s position cannot be trusted. retention_exceeded — the gateway retains only
+            the most recent sequence numbers for this session, so the range just after since_seq is already gone and serving
+            it would leave a hole. unknown_position — the gateway has no emitted-frame record for this session at all, so
+            it cannot confirm that since_seq + 1 exists.
+
+            '
     SessionStateFrame:
       title: SessionStateFrame
       description: 'Server → client reconnect approval snapshot (FR-052, FR-073, FR-081). pending_approvals MUST be an array
@@ -3959,6 +4185,17 @@ components:
           description: >
             ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
             (FR-089) — see this frame's description.
+
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     SessionCloseAckFrame:
       title: SessionCloseAckFrame
       description: >
@@ -5412,6 +5649,16 @@ components:
                   JUDGE-FR-006b. Keep in sync by hand with
                   components/schemas/AcceptanceCriterion.yaml.
 
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     LoopStatusFrame:
       title: LoopStatusFrame
       description: >
@@ -5671,6 +5918,16 @@ components:
             card. Keep in sync by hand with
             components/schemas/JudgeVerdictFrame.yaml.
 
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     BrowserHandoverNoticeFrame:
       title: BrowserHandoverNoticeFrame
       description: >
@@ -5800,6 +6057,16 @@ components:
         outcome:
           $ref: '#/components/schemas/GoalOutcomeFrameOutcome'
 
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            Per-session sequence number of this frame. Strictly increasing and gap-free within
+            the session, assigned by the gateway as the frame is emitted. The client stores the
+            highest seq it has applied per session and sends it back as since_seq on
+            attach_session; frames at or below that cursor are ignored, which makes re-delivery
+            idempotent. 0 means the session has no numbered event yet.
     KnowledgeIndexProgressFrame:
       title: KnowledgeIndexProgressFrame
       description: >

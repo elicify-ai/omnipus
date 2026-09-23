@@ -316,8 +316,45 @@ export interface SessionChatState {
   /**
    * ISO timestamp of the most recent server frame the SPA has applied.
    * Used as the `since` cursor in attach_session to avoid replaying already-seen frames.
+   *
+   * #823 phase 2: superseded by `lastAppliedSeq` below where a position exists.
+   * The timestamp cannot express a position — two entries written in the same
+   * millisecond, or an entry persisted with an earlier timestamp than the last
+   * live frame, are both unrepresentable, and each one silently lost a message
+   * (the #822 / S-10 class). It is still sent alongside `since_seq` because it
+   * remains the ONLY cursor a first load has, and the gateway falls back to it
+   * when no sequence position is offered.
    */
   lastReceivedEventTime: string | null
+  /**
+   * #823 phase 2: the highest per-session sequence number this SPA has APPLIED
+   * for this session, or null when it has no position at all (a first load).
+   *
+   * The gateway numbers every conversation frame it emits, strictly increasing
+   * and gap-free per session. Two rules hang off this number:
+   *
+   *   1. a frame whose `seq` is <= this value has already been applied and is
+   *      IGNORED — the gateway re-delivers retained frames byte-exact on
+   *      catch-up, so applying one twice would duplicate it; and
+   *   2. it is sent back as `attach_session.since_seq`, so the gateway
+   *      re-delivers exactly the frames that were missed.
+   *
+   * SCOPE: per session, and read from `sessionsById[sessionId]` — never from
+   * the foreground mirror, because an attach can target a session that is not
+   * the active one.
+   *
+   * Reset to the snapshot's own seq by a `session_snapshot` frame, which is the
+   * one frame exempt from rule 1: it always applies, even when its seq is below
+   * this value (`cursor_ahead` — the gateway restarted and is BEHIND us; the
+   * client's higher position is the stale one).
+   *
+   * Optional for the same fixture-compat reason as `toolCallOwnerMessageId`
+   * above: several existing test fixtures construct a SessionChatState-shaped
+   * bucket by hand, pre-dating this field. Every read site falls back to null
+   * ("no position", which yields the safe full replay) and both write sites
+   * (`emptySessionState` and the sequence gate) set it explicitly.
+   */
+  lastAppliedSeq?: number | null
   /**
    * O(1) index from parent_call_id → { messageId, spanIdx } for the currently-running subagent span.
    * Written by subagent_start, cleared by subagent_end.
@@ -713,6 +750,29 @@ export interface ChatStore {
   // replay frames rebuild from scratch. Used on WS reconnect to prevent
   // duplicate bubbles when the gateway re-replays the transcript.
   resetSessionForReplay: (sessionId: string) => void
+
+  /**
+   * #823 phase 2: prepare `sessionId`'s bucket for the replay/catch-up the
+   * attach frame just asked for. Unlike `resetSessionForReplay` (an
+   * unconditional wipe, still the right thing when the whole transcript is
+   * about to be re-sent), this KEEPS the transcript when the session holds a
+   * sequence position (`lastAppliedSeq`) — the gateway then re-delivers only
+   * the frames after that position, so the messages already on screen are the
+   * prefix of the correct final state. Either way it arms the replay window
+   * (`isReplaying`), so the composer stays disabled until the catch-up's
+   * terminating `done` arrives. See `replayStartPatch`.
+   */
+  prepareSessionForReplay: (sessionId: string) => void
+
+  /**
+   * #823 phase 2: the session's applied-frame cursor, read from
+   * `sessionsById[sessionId]` — never from the foreground mirror, because an
+   * attach (and therefore the `since_seq` it sends) may target a session that
+   * is not the active one. Returns null when the SPA holds no position for
+   * that session, which is what makes an attach omit `since_seq` and take a
+   * full replay.
+   */
+  getLastAppliedSeq: (sessionId: string) => number | null
 
   // ── Outbound queue (Fix 3) ────────────────────────────────────────────────────
   // Messages typed while the WS is disconnected are buffered here (max 5).
