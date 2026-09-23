@@ -672,6 +672,15 @@ func defaultToolPoliciesGrep() map[string]string {
 	}
 }
 
+// DefaultToolPolicyCeiling is the exported accessor for defaultToolPolicyCeiling,
+// so a test outside this package (e.g. the ADR-092 D9 drift guard,
+// pkg/gateway/auto_approve_classification_test.go §6 check 3) can assert that
+// every key in the global policy ceiling has an explicit Auto-approve
+// classification entry, without duplicating the seeded family maps.
+func DefaultToolPolicyCeiling() map[string]string {
+	return defaultToolPolicyCeiling()
+}
+
 // defaultToolPolicyCeiling assembles the seeded global tool-policy ceiling from its
 // per-family maps. Keys never overlap (the original single literal would not have
 // compiled with a duplicate key), so order only affects nothing.

@@ -13,6 +13,7 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sort"
@@ -49,6 +50,47 @@ func toolCategoryFromTool(t tools.Tool) string {
 		return name[:idx]
 	}
 	return "general"
+}
+
+// toolRegistryAutoApprove computes the ADR-092 D9 auto_approve verdict for
+// one registry entry (§7/J14).
+//
+// Builtin tools: read straight from the static §3 classifier table
+// (tools.AutoApproveClassOf) — this is a per-tool display value, not a
+// per-call verdict, so a RUNS-IF-ARGS tool like read_file always reports
+// "runs_if_args" here regardless of any particular call's arguments.
+// AutoShellMode (bash, and only bash) returns nil: the field is simply
+// absent, matching the contract's "never appears with this field set" note.
+//
+// MCP tools: delegate to tools.ClassifyAutoApprove, the same per-call entry
+// point the agent loop uses (§5.1). Every MCP tool name carries the
+// "mcp_<server>_<tool>" prefix (MCPTool.Name), so ClassifyAutoApprove routes
+// it to the tool's own AutoApproveClassifier (annotation-based, args-
+// independent per §4) with built-in panic recovery; a tool that does not
+// implement the classifier — or whose server sent no read-only/not-
+// destructive annotation — asks, the safe MCP default (§4).
+func toolRegistryAutoApprove(ctx context.Context, t tools.Tool, name, source string) *gen.ToolRegistryEntryAutoApprove {
+	if source == string(toolSourceMCP) {
+		verdict := tools.ClassifyAutoApprove(ctx, name, t, nil)
+		v := gen.ToolRegistryEntryAutoApproveAsks
+		if verdict.Run {
+			v = gen.ToolRegistryEntryAutoApproveRuns
+		}
+		return &v
+	}
+	switch tools.AutoApproveClassOf(name) {
+	case tools.AutoRuns:
+		v := gen.ToolRegistryEntryAutoApproveRuns
+		return &v
+	case tools.AutoRunsIfArgs:
+		v := gen.ToolRegistryEntryAutoApproveRunsIfArgs
+		return &v
+	case tools.AutoAsks:
+		v := gen.ToolRegistryEntryAutoApproveAsks
+		return &v
+	default: // tools.AutoShellMode (bash) — no entry on the wire.
+		return nil
+	}
 }
 
 // HandleBuiltinToolsDeprecated handles GET /api/v1/tools/builtin — returns HTTP 404.
@@ -91,6 +133,9 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 			Scope:       gen.ToolRegistryEntryScope(t.Scope()),
 			Category:    toolCategoryFromTool(t),
 			Source:      gen.ToolRegistryEntrySource(source),
+			// ADR-092 D9/J14: the tool's Auto-approve verdict. nil for bash
+			// (its own D3/D7/D8 mechanism — never a table entry that maps here).
+			AutoApprove: toolRegistryAutoApprove(r.Context(), t, name, source),
 		}
 		// G11: populate ServerId for MCP tools so the SPA can group by server
 		// unambiguously without parsing the tool name (which is lossy when a server

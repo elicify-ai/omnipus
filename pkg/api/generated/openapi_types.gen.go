@@ -9827,6 +9827,27 @@ func (e ToolPolicyChangesSet) Valid() bool {
 	}
 }
 
+// Defines values for ToolRegistryEntryAutoApprove.
+const (
+	ToolRegistryEntryAutoApproveAsks       ToolRegistryEntryAutoApprove = "asks"
+	ToolRegistryEntryAutoApproveRuns       ToolRegistryEntryAutoApprove = "runs"
+	ToolRegistryEntryAutoApproveRunsIfArgs ToolRegistryEntryAutoApprove = "runs_if_args"
+)
+
+// Valid indicates whether the value is a known member of the ToolRegistryEntryAutoApprove enum.
+func (e ToolRegistryEntryAutoApprove) Valid() bool {
+	switch e {
+	case ToolRegistryEntryAutoApproveAsks:
+		return true
+	case ToolRegistryEntryAutoApproveRuns:
+		return true
+	case ToolRegistryEntryAutoApproveRunsIfArgs:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ToolRegistryEntryScope.
 const (
 	ToolRegistryEntryScopeCore    ToolRegistryEntryScope = "core"
@@ -21519,6 +21540,9 @@ type ToolPolicyChangesSet string
 
 // ToolRegistryEntry A single entry in the central tool registry snapshot returned by GET /api/v1/tools (FR-027).
 type ToolRegistryEntry struct {
+	// AutoApprove ADR-092 D9: this tool's verdict when Auto-approve is active and the tool's effective policy is "ask". "runs" = always runs with no prompt. "runs_if_args" = runs only when this call's arguments meet the tool's own condition (e.g. a file path resolves inside the workspace or a mount); otherwise it asks. "asks" = always asks under Auto, and is auto-denied in an unattended run. For source="builtin" this is read from the static classifier table (tools.AutoApproveClassOf); "bash" is excluded (its own per-command mechanism, D3/D7/D8) and never appears with this field set. For source="mcp" this reflects the server's tool annotations: "runs" when the server marks the tool read-only or explicitly not destructive, "asks" otherwise (including tools with no annotations at all).
+	AutoApprove *ToolRegistryEntryAutoApprove `json:"auto_approve,omitempty"`
+
 	// Category Tool domain category (e.g. "filesystem", "shell", "web", "browser", "communication", "delegation", "memory", "tasks", "skills", "tool_discovery", "agents", "workspaces", "channels", "providers", "platform", "mcp"). Legacy values "core" and "system" may appear for un-recategorized tools.
 	Category string `json:"category"`
 
@@ -21537,6 +21561,9 @@ type ToolRegistryEntry struct {
 	// Source Origin of the tool registration. "builtin" = compiled-in Go tool; "mcp" = MCP server tool.
 	Source ToolRegistryEntrySource `json:"source"`
 }
+
+// ToolRegistryEntryAutoApprove ADR-092 D9: this tool's verdict when Auto-approve is active and the tool's effective policy is "ask". "runs" = always runs with no prompt. "runs_if_args" = runs only when this call's arguments meet the tool's own condition (e.g. a file path resolves inside the workspace or a mount); otherwise it asks. "asks" = always asks under Auto, and is auto-denied in an unattended run. For source="builtin" this is read from the static classifier table (tools.AutoApproveClassOf); "bash" is excluded (its own per-command mechanism, D3/D7/D8) and never appears with this field set. For source="mcp" this reflects the server's tool annotations: "runs" when the server marks the tool read-only or explicitly not destructive, "asks" otherwise (including tools with no annotations at all).
+type ToolRegistryEntryAutoApprove string
 
 // ToolRegistryEntryScope Tool visibility scope.
 type ToolRegistryEntryScope string
