@@ -202,7 +202,8 @@ func TestFinalize_PersistsAnswerUnderItsLiveMessageID(t *testing.T) {
 
 	st, ok := h.GetStreamer(context.Background(), "webchat", "chat-final", sid)
 	require.True(t, ok)
-	ws := st.(*wsStreamer)
+	ws, ok := st.(*wsStreamer)
+	require.True(t, ok)
 	ws.SetTurnID("turn-final")
 	ws.SetMessageID("msg-final-1")
 	require.NoError(t, ws.Update(context.Background(), "the final answer"))

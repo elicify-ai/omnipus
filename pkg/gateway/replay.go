@@ -1621,7 +1621,9 @@ func computeReplayStats(entries []session.TranscriptEntry) replayStats {
 }
 
 // wsEmitFunc returns an emit function that marshals any generated frame type
-// and writes it to a wsConn's sendCh, respecting context cancellation.
+// and queues it on wc for an attach's catch-up: it bypasses hold mode (the
+// catch-up goes ahead of the held live frames) and is flow-controlled by the
+// socket (directWait), respecting context cancellation.
 func wsEmitFunc(ctx context.Context, wc *wsConn) func(any) error {
 	return func(f any) error {
 		if ctx.Err() != nil {
@@ -1631,11 +1633,6 @@ func wsEmitFunc(ctx context.Context, wc *wsConn) func(any) error {
 		if err != nil {
 			return err
 		}
-		select {
-		case wc.sendCh <- data:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		return wc.directWait(ctx, data)
 	}
 }

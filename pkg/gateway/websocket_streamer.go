@@ -87,81 +87,15 @@ func (h *WSHandler) GetStreamer(_ context.Context, channel, chatID, sessionID st
 		h: h,
 	}
 
-	// ADR-082 D3/D4: register this round's streamer as sid's in-flight
-	// streamer — read by handleAttachSession's catch-up snapshot and by
-	// session_state's active_turn announcement. See liveStreamers' own doc
-	// comment for the per-round overwrite semantics.
-	h.mu.Lock()
-	if h.liveStreamers == nil {
-		h.liveStreamers = make(map[string]*wsStreamer)
-	}
-	h.liveStreamers[sid] = streamer
-	h.mu.Unlock()
+	// #823: no per-streamer registry any more — what a catch-up needs of
+	// the in-flight round (its text so far) is kept by the session hub's
+	// active-turn projection, updated by the very publish that numbers each
+	// token (ws_hub_projection.go).
 	if pending, ok := h.takePendingMessageStatus(sid); ok {
 		sendPendingMessageWorking(h, sid, pending)
 	}
 
 	return streamer, true
-}
-
-// resolveSessionConnsLocked returns every live *wsConn currently bound to
-// sessionID — resolved via h.sessionIDs (chatID → sessionID) and h.sessions
-// (chatID → connection) — plus originChatID's own connection (if it has one
-// live in h.sessions) even when its session mapping is empty or has not
-// caught up yet. Caller must already hold h.mu. Pass "" for originChatID
-// when there is no meaningful origin connection to fall back to (every
-// wsStreamer.Update/Finalize call site: streaming delivery is purely
-// session-scoped per ADR-082 D2, with no origin-chatID special case).
-//
-// ADR-082 D2: this is the SINGLE per-frame resolution point for webchat
-// delivery, replacing both the old single-target s.conn direct-send and the
-// separate fanOutToSessionPeers pass. A connection that (re)binds to a
-// session between two frames sees every frame sent after its bind; a
-// connection that unbinds/closes stops receiving frames from the very next
-// call. No special-casing of "the originating connection" versus a
-// later-attached peer — both are just entries in h.sessionIDs pointing at
-// sessionID.
-//
-// [ADR-082 review CR7] Unifies what used to be TWO independent resolvers:
-// this function (session-only) and webchatChannel.collectSessionConnsLocked
-// (origin-chatID-first, then session). webchatChannel.Send and SendMedia
-// need the origin-chatID fallback — a message/media send can legitimately
-// fire before msg.SessionID's h.sessionIDs mapping exists yet (e.g. the very
-// first outbound message of a brand-new session) — so having two near-
-// identical implementations risked exactly the kind of drift CR7 found:
-// SendMedia's copy never gained the "zero connections is not a failure"
-// semantics Send's copy got under ADR-082 D6. One implementation now serves
-// both call shapes.
-func (h *WSHandler) resolveSessionConnsLocked(originChatID, sessionID string) []*wsConn {
-	var conns []*wsConn
-	var seen map[*wsConn]struct{}
-	if originChatID != "" {
-		if conn, ok := h.sessions[originChatID]; ok {
-			conns = append(conns, conn)
-			seen = map[*wsConn]struct{}{conn: {}}
-		}
-	}
-	if sessionID == "" {
-		return conns
-	}
-	for chatID, sid := range h.sessionIDs {
-		if sid != sessionID {
-			continue
-		}
-		conn, ok := h.sessions[chatID]
-		if !ok {
-			continue
-		}
-		if _, dup := seen[conn]; dup {
-			continue
-		}
-		conns = append(conns, conn)
-		if seen == nil {
-			seen = make(map[*wsConn]struct{}, 2)
-		}
-		seen[conn] = struct{}{}
-	}
-	return conns
 }
 
 // wsTranscriptWriteFailures counts how many times wsStreamer.Finalize's
@@ -208,21 +142,6 @@ func (s *wsStreamer) wsHandler() *WSHandler {
 		return s.channel.wsHandler
 	}
 	return nil
-}
-
-// wsHandlerHubs returns this streamer's *hubRegistry (#823 catch-up
-// redesign) via wsHandler(), or nil when no *WSHandler is wired (a bare
-// test fixture — see wsHandler's own doc comment for why that degrade is
-// intentional). A *WSHandler built through the real newWSHandler
-// constructor always has a non-nil hubs field, but a test-constructed
-// WSHandler literal (common in this package's older tests) may not, so this
-// also tolerates a nil hubs field defensively.
-func (s *wsStreamer) wsHandlerHubs() *hubRegistry {
-	h := s.wsHandler()
-	if h == nil {
-		return nil
-	}
-	return h.hubs
 }
 
 // streamOwnerClaim is the value stored in WSHandler.streamOwners: which turn
@@ -416,15 +335,10 @@ func (s *wsStreamer) SuppressTranscriptWrite() {
 // inline-retry guard uses this to avoid re-streaming a full response onto a
 // partially-streamed bubble after a mid-stream transport drop (which would
 // visibly duplicate text in the SPA, since the dropped attempt sent no `done`
-// frame). ADR-082: accumulated moved from statsMu to the WSHandler's own mu
-// (see the field's doc comment) — guarded here the same way, so the read
-// stays race-free across goroutines.
+// frame). Guarded by statsMu like every other Update/Finalize field.
 func (s *wsStreamer) StreamedContentLen() int {
-	if h := s.wsHandler(); h != nil {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		return s.accumulated.Len()
-	}
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
 	return s.accumulated.Len()
 }
 
@@ -570,7 +484,7 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 			s.isShadowStream = true
 		} else if s.turnID != "" && s.sessionID != "" && s.channel != nil && s.channel.wsHandler != nil {
 			// ADR-082 review F6: keyed by sessionID, not s.chatID — delivery
-			// itself is resolved purely by session (resolveSessionConnsLocked),
+			// itself is resolved purely by session (the session hub, #823),
 			// so ownership must be too, or two turns with different ORIGIN
 			// chatIDs (e.g. a keeper/background turn's internal chatID and the
 			// user's live webchat chatID) that both deliver into the SAME
@@ -583,51 +497,19 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	shadow := s.isShadowStream
 	s.statsMu.Unlock()
 
-	// ADR-082 D2/D3: accumulate this delta and resolve the CURRENT set of
-	// connections bound to s.sessionID in ONE critical section, guarded by
-	// the WSHandler's own mu — the SAME lock handleAttachSession's catch-up
-	// bind+snapshot uses (WSHandler.snapshotLiveStreamerLocked). That shared
-	// lock is what gives "no duplicate, no gap" catch-up ordering: a
-	// connection binding concurrently with this Update either (a) completes
-	// its bind before this critical section — excluded from targets here,
-	// its own catch-up snapshot (taken atomically with its bind) captures
-	// everything accumulated up to and NOT including this delta, so the
-	// live divert buffer picks up this delta right after — or (b) completes
-	// its bind after — included in targets here (delivered this delta live,
-	// diverted into its replayDivertCh since it's still mid-replay), and its
-	// catch-up snapshot (taken after its bind, hence after this critical
-	// section too) already includes this delta, so the divert-buffered copy
-	// of THIS SAME delta must never also be double-counted... it isn't,
-	// because a connection only starts diverting into replayDivertCh once
-	// wc.isReplayingLive flips true, which happens strictly AFTER its bind —
-	// so case (b) never actually produces a divert-buffered copy of a delta
-	// that predates the bind. Accumulate happens BEFORE the shadow check
-	// only conceptually (both branches below run unconditionally under this
-	// same lock) — a shadow (non-owning) stream's content must still be
-	// fully captured for its own Finalize/transcript write even though it
-	// withholds live frames (see the shadow gate above).
-	//
-	// A bare test fixture with no channel/wsHandler wired (wsHandler()
-	// returns nil) accumulates lock-free — no binding exists to resolve.
-	var targets []*wsConn
-	if h := s.wsHandler(); h != nil {
-		h.mu.Lock()
-		s.accumulated.WriteString(content)
-		if s.sessionID != "" {
-			targets = h.resolveSessionConnsLocked("", s.sessionID)
-		}
-		h.mu.Unlock()
-	} else {
-		s.accumulated.WriteString(content)
-	}
+	// Accumulate this delta for Finalize's transcript write — a shadow
+	// (non-owning) stream's content must still be fully captured even though
+	// it withholds live frames (see the shadow gate above).
+	s.statsMu.Lock()
+	s.accumulated.WriteString(content)
+	s.statsMu.Unlock()
 
 	if shadow {
 		// A DIFFERENT, still-live turn already owns live TokenFrame delivery
-		// to this chatID. This stream's content is fully captured in
-		// s.accumulated above and will be persisted correctly by Finalize —
-		// withholding the live frame here is what prevents two concurrent
-		// delegate streams from interleaving their deltas into one garbled
-		// message, live or on a client that caches/replays the live view.
+		// to this session. This stream's content is fully captured above and
+		// will be persisted correctly by Finalize — withholding the live frame
+		// (and never numbering it, BE-DESIGN.md §7) is what prevents two
+		// concurrent streams from interleaving their deltas into one message.
 		return nil
 	}
 
@@ -644,13 +526,10 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 		frame.AgentId = &producerAgentID
 	}
 	// #823 catch-up redesign (BE-DESIGN.md §6.3): stamp turn_id/message_id
-	// so a client can append this token to the right bubble by id rather
-	// than "whatever bubble is currently open" — required for catch-up to
-	// ever resume the correct bubble after a gap. Absent (nil) rather than
-	// "" when unset, matching TokenFrame's own omitempty *string shape —
-	// unset happens for a caller that never went through the agent loop's
-	// SetTurnID/SetMessageID stamps (a bare test fixture, or the
-	// webchatChannel.Send fallback path, which has no turn at all).
+	// so a client appends this token to the right bubble by id rather than
+	// "whatever bubble is currently open" — required for catch-up to resume
+	// the correct bubble after a gap. Absent when unset (a bare test
+	// fixture, or a caller that never went through the agent loop's stamps).
 	if turnID != "" {
 		frame.TurnId = &turnID
 	}
@@ -661,43 +540,21 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	if err != nil {
 		return fmt.Errorf("ws: marshal token frame: %w", err)
 	}
-	// #823 catch-up redesign (BE-DESIGN.md §1.1/§1.2): every token is
-	// numbered through the session's hub BEFORE delivery, independent of
-	// which connections happen to be bound right now — this is what lets a
-	// reconnecting tab's catch-up read the journal and get every token that
-	// was published while it was away, not just the ones a live connection
-	// happened to be attached for. publishBytes both journals the
-	// seq-stamped frame (for a FUTURE attach/catch-up read) and hands back
-	// the EXACT bytes it journaled, which are what gets delivered below —
-	// byte-identical to what the journal holds (H3's multi-tab guarantee),
-	// even though delivery here still resolves its OWN targets via
-	// resolveSessionConnsLocked rather than the hub's own conns set (the
-	// real attach/bind cutover — BE-DESIGN.md §4 — is not wired yet; see
-	// ws_session_hub.go's file header).
-	var out []byte
-	if hr := s.wsHandlerHubs(); hr != nil && s.sessionID != "" {
-		hub := hr.getOrCreate(s.sessionID)
-		_, out = hub.publishBytes(data)
-	} else {
-		out = data
-	}
-	// ADR-082 D2/FR-004/FR-005: deliver to EVERY connection currently bound
-	// to this session, resolved above. Route each through sendRawFrameBytes
-	// so token frames respect the replay-divert logic (a client reconnecting
-	// mid-turn buffers live frames in its own replayDivertCh until its
-	// attach_session replay finishes) and the existing backoff/backpressure
-	// protocol. A drop or backpressure on one connection is that
-	// connection's own problem — see DoneStats.TokensDropped, computed per
-	// connection in Finalize — and never prevents delivery to any other
-	// connection in this loop, and never causes this whole call to return an
-	// error: Update returns nil unless the frame itself could not be
-	// marshalled (checked above).
-	for _, conn := range targets {
-		before := conn.droppedTokens.Load()
-		sendRawFrameBytes(conn, string(generated.WsFrameTypeToken), out)
-		if conn.droppedTokens.Load() > before {
-			slog.Warn("ws: token backpressure", "session_id", s.sessionID, "chat_id", s.chatID, "agent_id", producerAgentID)
-		}
+	// #823 (BE-DESIGN.md §1.1/§1.2): every token is published ONCE through
+	// the session's hub — numbered, journaled, added to the active-turn
+	// projection, and appended to the ordered queue of every connection
+	// bound to the session, whether zero, one or many tabs are attached. No
+	// connection's slowness can block this call (the queues never block)
+	// and none can lose a token (they never drop; a too-far-behind tab is
+	// closed with 4008 and catches up).
+	if h := s.wsHandler(); h != nil && s.sessionID != "" {
+		h.hubPublishMetaAlsoTo(s.sessionID, string(generated.WsFrameTypeToken), hubFrameMeta{
+			kind:      hubKindToken,
+			turnID:    turnID,
+			messageID: messageID,
+			agentID:   producerAgentID,
+			content:   content,
+		}, data, nil)
 	}
 	return nil
 }
@@ -724,15 +581,8 @@ type wsStreamerFinalize struct {
 	messageID                  string
 	parentSpawnCallID          string
 	shadow                     bool
-	targets                    []*wsConn
-	// seq is the #823 catch-up-redesign session-hub sequence number for
-	// this turn's done frame, assigned by finalizeAndNumber (called from
-	// Finalize AFTER persistTranscript — BE-DESIGN.md §4.3's required
-	// order: persist before publish). nil when no hub is wired (a bare
-	// test fixture) or the stream is shadowed (a shadow stream's done is
-	// withheld entirely — see sendDone — so it is never numbered either,
-	// matching Update's "shadow streams submit nothing" rule).
-	seq *int64
+	// accumulated is the streamer's own text, read once under statsMu.
+	accumulated string
 }
 
 func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
@@ -750,112 +600,90 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	// never called). See ReleaseStreamOwnership for the other release
 	// points (Cancel, and finalizeStreamer's B4 abandoned-turn path, which
 	// deliberately skips the rest of this method).
-	// ReleaseStreamOwnership also unregisters this streamer from
-	// h.liveStreamers[s.sessionID] when it is still the currently-registered
-	// one (ADR-082 review CR4/F2) — see that method's doc comment. Finalize
-	// used to do this deletion itself, inline, right here; it is now shared
-	// with every other release path (Cancel, and finalizeStreamer's B4
-	// abandoned-turn early return, pkg/agent/turn.go) so an abandoned turn
-	// cannot leave a phantom liveStreamers entry (and therefore a phantom
-	// catch-up token with no done frame ever following it) for a session
-	// that no longer has any turn actually in flight.
-	wsf.s.ReleaseStreamOwnership()
+	wsf.s.releaseOwnershipClaim()
 
-	// ADR-082 D2/D3: resolve the CURRENT set of connections bound to this
-	// session, under the SAME h.mu critical section Update uses, for the
-	// same "no duplicate, no gap" ordering reason (see Update's doc comment).
-
-	if h := wsf.s.wsHandler(); h != nil && wsf.s.sessionID != "" {
-		h.mu.Lock()
-		wsf.targets = h.resolveSessionConnsLocked("", wsf.s.sessionID)
-		h.mu.Unlock()
-	}
-
-	// #823 catch-up redesign, BE-DESIGN.md §4.3 — REQUIRED order change:
-	// persist THEN publish "done", not the reverse (the pre-#823 order,
-	// still in force one commit ago: sendDone() then persistTranscript()).
-	// This gives the invariant "done(T) has seq ≤ W ⇒ T's final transcript
-	// entry is in any transcript read taken after the bind" — the
-	// foundation a future real attach/catch-up read (BE-DESIGN.md §4.2)
-	// needs to safely stop replaying a turn's projection once it sees the
-	// turn's own done. persistTranscript is best-effort by design (a failed
-	// write must never suppress the done frame the client is waiting on —
-	// see wsTranscriptWriteFailures' doc comment) so its error is captured
-	// and returned AFTER sendDone still runs, not used to skip it.
+	// #823 catch-up redesign, BE-DESIGN.md §4.3 — REQUIRED order: persist
+	// THEN publish "done". This gives the invariant "done(T) has seq <= W ⇒
+	// T's final transcript entry is in any transcript read taken after the
+	// bind", which is what lets the hub's active-turn projection forget the
+	// turn at done without leaving a hole in a later snapshot.
+	// persistTranscript is best-effort by design (a failed write must never
+	// suppress the done frame the client is waiting on — see
+	// wsTranscriptWriteFailures' doc comment), so its error is returned
+	// AFTER the done still went out, never used to skip it.
 	persistErr := wsf.persistTranscript()
-	wsf.numberDone()
-	wsf.sendDone()
+	wsf.publishDone()
 	return persistErr
 }
 
-// numberDone assigns this turn's done frame a session-hub sequence number
-// (#823 catch-up redesign) by submitting a CANONICAL frame — turn-level
-// stats only, no per-connection TokensDropped — to the hub for journaling.
-// sendDone then stamps the same wsf.seq onto every per-connection DoneFrame
-// it actually delivers, so every viewer of this turn sees the identical
-// seq for its own done, even though each connection's frame still carries
-// its OWN TokensDropped delta (a known, documented transitional
-// compromise: BE-DESIGN.md §5 states done frames become fully
-// byte-identical across connections once TokensDropped is deleted for
-// real under founder decision Q5's disconnect-not-drop model — the
-// per-connection outbound queue/4008-close rewrite that removal depends
-// on is not part of this pass; see the report's honest-gaps section).
-// A shadow stream's done is withheld entirely (sendDone's own gate), so it
-// is intentionally never numbered here either — mirrors Update's "shadow
-// streams submit nothing" rule (BE-DESIGN.md §1.2).
-func (wsf *wsStreamerFinalize) numberDone() {
+// publishDone publishes this turn's single done frame through the session
+// hub (numbered, journaled, delivered byte-identically to every bound tab —
+// BE-DESIGN.md §5: done no longer varies per connection now that nothing is
+// ever dropped, so DoneStats.TokensDropped is never set). A shadow stream (a
+// delegated child, or a non-owning concurrent turn) publishes nothing: its
+// text was never shown live, and a done would close the OWNING turn's bubble.
+func (wsf *wsStreamerFinalize) publishDone() {
 	if wsf.shadow {
 		return
 	}
-	hr := wsf.s.wsHandlerHubs()
-	if hr == nil || wsf.s.sessionID == "" {
-		return
-	}
-	canonical := generated.DoneFrame{
-		Type:      string(generated.WsFrameTypeDone),
-		SessionId: wsf.s.sessionID,
-		Stats: &generated.DoneStats{
+	h := wsf.s.wsHandler()
+	if h != nil && wsf.s.sessionID != "" {
+		// Review finding 12: "treat a done as implying working" + "clear or
+		// expire pending entries at turn end" — flush BEFORE the done itself,
+		// so any client-message tick never consumed by a GetStreamer call
+		// still reaches "working", and cannot survive to be popped by a
+		// LATER, unrelated turn on this session.
+		h.flushPendingMessageStatusesAsWorking(wsf.s.sessionID)
+
+		stats := &generated.DoneStats{
 			Tokens:     &wsf.tokensF,
 			Cost:       &wsf.costF,
 			DurationMs: &wsf.durF,
-		},
+		}
+		if wsf.turnFailed {
+			tf := wsf.turnFailed
+			stats.TurnFailed = &tf
+		}
+		// ADR-087 D2 (finding #10): mirror the truncation annotation onto the
+		// live done frame too, so a turn cut off while the user is watching
+		// renders the "(cut off at the output limit)" notice immediately.
+		if wsf.truncationReason != "" {
+			truncatedCopy := true
+			stats.Truncated = &truncatedCopy
+			reasonCopy := wsf.truncationReason
+			stats.TruncationReason = &reasonCopy
+		}
+		frame := generated.DoneFrame{
+			Type:      string(generated.WsFrameTypeDone),
+			SessionId: wsf.s.sessionID,
+			Stats:     stats,
+		}
+		if wsf.turnID != "" {
+			turnID := wsf.turnID
+			frame.TurnId = &turnID
+		}
+		if wsf.messageID != "" {
+			messageID := wsf.messageID
+			frame.MessageId = &messageID
+		}
+		data, err := json.Marshal(frame)
+		if err != nil {
+			slog.Error("ws: marshal done frame failed", "session_id", wsf.s.sessionID, "error", err)
+		} else {
+			h.hubPublishMetaAlsoTo(wsf.s.sessionID, string(generated.WsFrameTypeDone),
+				hubFrameMeta{kind: hubKindDone, turnID: wsf.turnID}, data, nil)
+		}
 	}
-	if wsf.turnID != "" {
-		turnID := wsf.turnID
-		canonical.TurnId = &turnID
+	// Only mark as streamed if we actually sent content. If the LLM failed
+	// before producing any tokens, let the outbound Send path deliver the
+	// error message — otherwise the user sees a stuck "thinking" spinner.
+	if wsf.s.channel != nil && wsf.accumulated != "" {
+		wsf.s.channel.markStreamed(wsf.s.chatID)
 	}
-	if wsf.messageID != "" {
-		messageID := wsf.messageID
-		canonical.MessageId = &messageID
-	}
-	if wsf.turnFailed {
-		tf := wsf.turnFailed
-		canonical.Stats.TurnFailed = &tf
-	}
-	if wsf.truncationReason != "" {
-		truncatedCopy := true
-		canonical.Stats.Truncated = &truncatedCopy
-		reasonCopy := wsf.truncationReason
-		canonical.Stats.TruncationReason = &reasonCopy
-	}
-	data, err := json.Marshal(canonical)
-	if err != nil {
-		slog.Error("ws: marshal canonical done frame for hub numbering failed", "session_id", wsf.s.sessionID, "error", err)
-		return
-	}
-	hub := hr.getOrCreate(wsf.s.sessionID)
-	seq, _ := hub.publishBytes(data)
-	seqI64 := int64(seq)
-	wsf.seq = &seqI64
 }
 
 // prepareFinalize snapshots turn statistics and resolves whether this streamer is shadowed.
 func (wsf *wsStreamerFinalize) prepareFinalize() {
-	// ADR-082 D2/FR-014: TokensDropped is no longer computed here as a single
-	// turn-level value — a drop is a property of ONE connection's send
-	// buffer, not the turn. Each connection gets its own generated.DoneStats
-	// (sharing the turn-level fields below) built in the per-connection send
-	// loop further down.
 	// Include turn-level token/cost/duration if the agent loop pushed them via
 	// SetTurnStats before this call (issue #12). Zero values are still emitted
 	// so the client can reset the session counters for turns with no LLM usage.
@@ -940,108 +768,8 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 		wsf.s.shadowResolved = true
 	}
 	wsf.shadow = wsf.s.isShadowStream
+	wsf.accumulated = wsf.s.accumulated.String()
 	wsf.s.statsMu.Unlock()
-}
-
-// sendDone sends per-connection completion frames for a visible stream.
-func (wsf *wsStreamerFinalize) sendDone() {
-	// A-I4 round 4 / Finding A: a shadow stream (a delegated child sub-turn
-	// that never owned — and, per the rule above, can never win — this
-	// chatID's live-stream slot) must not send its own "done" either. Its
-	// content was never shown live in the first place (Update() withheld
-	// every token); sending "done" anyway prematurely finalizes whatever
-	// bubble the OWNING (parent) turn currently has open. The transcript
-	// write below stays unconditional — persistence must not depend on live
-	// visibility — only the live-facing signals (done frame, fan-out,
-	// markStreamed) are gated.
-	if !wsf.shadow {
-		// Review finding 12: "treat a done as implying working" + "clear or
-		// expire pending entries at turn end". Flush BEFORE the done frame
-		// itself goes out, so any client-message tick that never got
-		// consumed by a mid-turn GetStreamer call (a round that opened no
-		// streamer, e.g. a non-streaming reply) still reaches "working"
-		// rather than staying stuck on "Received" — and, either way, the
-		// entry cannot survive to be popped by a LATER, unrelated turn on
-		// this same session (see flushPendingMessageStatusesAsWorking's doc
-		// comment). Not run for a shadow (delegated-child) stream: that
-		// turn's own completion is not the completion the user's own
-		// message is waiting on.
-		if h := wsf.s.wsHandler(); h != nil && wsf.s.sessionID != "" {
-			h.flushPendingMessageStatusesAsWorking(wsf.s.sessionID)
-		}
-
-		// ADR-082 D2/FR-014: send one done frame PER bound connection, each
-		// carrying that connection's own TokensDropped — a drop on one
-		// connection's send buffer must never be reported (or withheld) on
-		// another connection's done frame.
-		for _, conn := range wsf.targets {
-			connStats := &generated.DoneStats{
-				Tokens:     &wsf.tokensF,
-				Cost:       &wsf.costF,
-				DurationMs: &wsf.durF,
-			}
-			if wsf.turnFailed {
-				tf := wsf.turnFailed
-				connStats.TurnFailed = &tf
-			}
-			// ADR-087 D2 (finding #10): mirror the truncation annotation onto
-			// the LIVE done frame too, not just the persisted transcript
-			// entry (above) and replay's ReplayMessageFrame (replay.go) — a
-			// turn cut off while the user is still watching should render
-			// the "(cut off at the output limit)" notice immediately,
-			// without waiting for a reload/reattach round-trip through
-			// replay. Populated from the SAME truncationReason this Finalize
-			// call stamped on the transcript entry.
-			if wsf.truncationReason != "" {
-				truncatedCopy := true
-				connStats.Truncated = &truncatedCopy
-				reasonCopy := wsf.truncationReason
-				connStats.TruncationReason = &reasonCopy
-			}
-			// ADR-082 review F10: Swap(0), not Load — droppedTokens is a
-			// per-CONNECTION counter that outlives any single turn, so a bare
-			// Load would keep re-reporting turn 1's drops on every later
-			// turn's done frame forever. Atomically reading-and-resetting here
-			// makes this the per-turn DELTA: only drops that happened since
-			// the last done frame this connection received are reported.
-			if dropped := conn.droppedTokens.Swap(0); dropped > 0 {
-				droppedF := float64(dropped)
-				connStats.TokensDropped = &droppedF
-			}
-			doneFrame := generated.DoneFrame{
-				Type:      string(generated.WsFrameTypeDone),
-				SessionId: wsf.s.sessionID,
-				Stats:     connStats,
-				// #823 catch-up redesign: the SAME seq/turn_id/message_id
-				// on every connection's own done frame — numberDone
-				// assigned this once, from ONE hub.publishBytes call, so
-				// every viewer's done for this turn carries an identical
-				// seq even though Stats itself still varies per connection
-				// (see numberDone's doc comment for why).
-				Seq: wsf.seq,
-			}
-			if wsf.turnID != "" {
-				turnID := wsf.turnID
-				doneFrame.TurnId = &turnID
-			}
-			if wsf.messageID != "" {
-				messageID := wsf.messageID
-				doneFrame.MessageId = &messageID
-			}
-			data, mErr := json.Marshal(doneFrame)
-			if mErr != nil {
-				slog.Error("ws: marshal done frame failed", "session_id", wsf.s.sessionID, "error", mErr)
-				continue
-			}
-			sendRawFrameBytes(conn, string(generated.WsFrameTypeDone), data)
-		}
-		// Only mark as streamed if we actually sent content. If the LLM failed
-		// before producing any tokens, let the outbound Send path deliver the
-		// error message — otherwise the user sees a stuck "thinking" spinner.
-		if wsf.s.channel != nil && wsf.s.accumulated.Len() > 0 {
-			wsf.s.channel.markStreamed(wsf.s.chatID)
-		}
-	}
 }
 
 // persistTranscript records the completed assistant response when the round was not already persisted.
@@ -1055,7 +783,7 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 	// sent the done frame, fan-out, and markStreamed above — only the append is
 	// suppressed.
 	if wsf.s.agentStore != nil && wsf.s.sessionID != "" && !wsf.transcriptAlreadyPersisted {
-		content := wsf.s.accumulated.String()
+		content := wsf.accumulated
 		if wsf.hasContinuation {
 			// ADR-087 D6.1/§2.8: this streamer is per PROVIDER CALL, not per
 			// turn — its own `accumulated` buffer (and finalContent, which
@@ -1178,20 +906,6 @@ func (s *wsStreamer) Cancel(_ context.Context) {
 // releaseStreamOwnershipClaim only deletes an entry that still matches this
 // exact turnID.
 //
-// [ADR-082 review CR4/F2] Also unregisters this streamer from
-// WSHandler.liveStreamers[s.sessionID] when it is still the CURRENTLY
-// registered entry for that session — the same guarded delete Finalize used
-// to perform inline, now shared by every release path. Without this here,
-// only Finalize ever cleared liveStreamers: turnState.finalizeStreamer's B4
-// abandoned-turn early return (pkg/agent/turn.go) deliberately skips the rest
-// of Finalize and calls ONLY this method (via the streamOwnershipReleaser
-// optional interface), so an abandoned turn's streamer stayed registered in
-// liveStreamers forever — every later attach_session on that session then
-// got a phantom catch-up token (hasCatchUp=true, stale accumulated text)
-// with no done frame ever following it, since the turn that would have sent
-// one is dead. Cancel (defensive symmetry, no production call site today)
-// gets the same fix for free.
-//
 // This is the single implementation shared by Finalize, Cancel, and — via
 // the streamOwnershipReleaser optional interface pkg/agent's finalizeStreamer
 // type-asserts for — the B4 abandoned-turn early return (pkg/agent/turn.go).
@@ -1205,6 +919,27 @@ func (s *wsStreamer) Cancel(_ context.Context) {
 // pkg/agent can reach it through bus.Streamer's optional-interface pattern
 // without either package importing the other's concrete type.
 func (s *wsStreamer) ReleaseStreamOwnership() {
+	s.releaseOwnershipClaim()
+	// [ADR-082 review CR4/F2, re-expressed for #823] This exported path is
+	// the B4 abandoned-turn early return (and the defensive Cancel): the
+	// turn will never send a done and never persist this round's text, so
+	// the session hub must forget the text too — otherwise every later
+	// snapshot would show a phantom message that never finishes. Finalize
+	// does NOT come through here (it releases the claim only, then persists
+	// and publishes done, which clears the projection in order).
+	s.statsMu.Lock()
+	turnID := s.turnID
+	s.statsMu.Unlock()
+	if h := s.wsHandler(); h != nil && h.hubs != nil && s.sessionID != "" {
+		if hub := h.hubs.lookup(s.sessionID); hub != nil {
+			hub.forgetTurnText(turnID)
+		}
+	}
+}
+
+// releaseOwnershipClaim releases this streamer's live-stream ownership claim
+// for its sessionID, if held (safe to call repeatedly or when never held).
+func (s *wsStreamer) releaseOwnershipClaim() {
 	s.statsMu.Lock()
 	turnID := s.turnID
 	s.statsMu.Unlock()
@@ -1214,10 +949,5 @@ func (s *wsStreamer) ReleaseStreamOwnership() {
 	}
 	if s.sessionID != "" {
 		releaseStreamOwnershipClaim(&h.streamOwners, s.sessionID, turnID)
-		h.mu.Lock()
-		if cur, ok := h.liveStreamers[s.sessionID]; ok && cur == s {
-			delete(h.liveStreamers, s.sessionID)
-		}
-		h.mu.Unlock()
 	}
 }

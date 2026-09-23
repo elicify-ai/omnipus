@@ -189,21 +189,6 @@ type WSHandler struct {
 	taskChatIDs map[string]string  // browser chatID → task chatID for live event forwarding
 	webchatCh   *webchatChannel    // reference to mark streaming complete
 
-	// liveStreamers tracks, per session id, the wsStreamer instance CURRENTLY
-	// streaming a foreground turn's live round (ADR-082 D2/D3). Registered by
-	// GetStreamer on every streaming round (a turn spanning several
-	// tool-calling rounds gets a fresh wsStreamer per round — see
-	// pkg/agent/loop.go's per-round GetStreamer call — so a later round's
-	// entry simply overwrites an earlier one for the same session; the
-	// catch-up snapshot below is therefore scoped to the CURRENTLY streaming
-	// round's own accumulated text, not the whole turn's cross-round
-	// narration — a documented, accepted scope limit, since a mid-turn
-	// tool-call boundary is outside this wave's test matrix), unregistered by
-	// Finalize once that round's/turn's done frame has been sent. Guarded by
-	// mu — see wsStreamer.Update's doc comment for why the bind
-	// (handleAttachSession) and the append+resolve (Update) must share this
-	// SAME critical section to get "no duplicate, no gap" catch-up ordering.
-	liveStreamers map[string]*wsStreamer
 	// pendingMessageStatuses holds persisted user messages until the agent
 	// actually opens a streamer for their turn. It backs the received→working
 	// distinction exposed to the SPA. Guarded by mu.
@@ -260,7 +245,7 @@ type WSHandler struct {
 	// [ADR-082 review F6] Originally keyed by chatID — the ORIGINATING
 	// connection's chatID a wsStreamer happened to be created with. Once
 	// ADR-082 D2 moved live delivery itself to be resolved purely by
-	// sessionID (resolveSessionConnsLocked), a chatID-keyed ownership claim
+	// sessionID (today: the session hub, #823), a chatID-keyed ownership claim
 	// stopped matching what it was supposed to gate: two turns with
 	// DIFFERENT origin chatIDs (e.g. a keeper/background turn's own internal
 	// chatID versus the user's live webchat chatID) that both deliver into
@@ -321,14 +306,11 @@ type WSHandler struct {
 	streamOwners sync.Map
 
 	// hubs is the #823 catch-up-redesign session hub registry
-	// (ws_session_hub.go): the single chokepoint conversation frames are
-	// meant to pass through exactly once, whether or not any tab is
-	// attached (BE-DESIGN.md §1). Initialized by newWSHandler with a fresh
-	// per-process boot id; never nil on a handler built through the normal
-	// constructor. INTEGRATION STATUS: wsStreamer.Update/Finalize use it for
-	// numbering and retention (getOrCreate + publishBytes); the real
-	// attach/bind algorithm (BE-DESIGN.md §4) is not wired yet — see
-	// ws_session_hub.go's file header for the full honest status.
+	// (ws_session_hub.go): the single chokepoint every session-scoped
+	// conversation frame passes through exactly once, whether or not any
+	// tab is attached (BE-DESIGN.md §1), and the only way such a frame
+	// reaches a connection (each bound connection's own queue). Initialized
+	// by newWSHandler with a fresh per-process boot id.
 	hubs *hubRegistry
 
 	upgrader websocket.Upgrader
@@ -336,35 +318,39 @@ type WSHandler struct {
 
 type wsConn struct {
 	conn           *websocket.Conn
-	sendCh         chan []byte
+	sendCh         chan []byte // writePump's hot window; see ws_conn_queue.go
 	doneCh         chan struct{}
 	closeOnce      sync.Once
-	droppedTokens  atomic.Int32
-	droppedFrames  atomic.Int32 // non-critical outbound frames dropped due to backpressure
 	inboundDropped atomic.Int32 // inbound items dropped: schema validation failures + invalid/oversized media refs
 	userID         string       // username resolved at auth time; used for session_state scoping (FR-073)
 
-	// Replay-mode divert (W1-1): during replay, live events arriving via
-	// sendConnGenFrame are redirected into replayDivertCh instead of sendCh so
-	// they don't interleave with replay frames. After replay finishes they are
-	// drained into sendCh in arrival order.
-	//
-	// Ordering invariant (see docs/internal/investigation/bug-5-replay-order.md,
-	// code-reviewer Finding #2, and architect Finding #4):
-	//   Writers must NOT snapshot isReplayingLive and then send to the snapshotted
-	//   channel as two separate operations — the drain can empty replayDivertCh and
-	//   disarm the flag between those two steps, orphaning the frame.
-	//
-	//   replayMu serializes the "read flag + select channel" decision in
-	//   sendRawFrameBytes against the "drain channel + disarm flag" sequence in
-	//   handleAttachSession.  Writers hold the read-lock (RLock) while choosing a
-	//   target channel and sending to it; the drain holds the write-lock (Lock) for
-	//   the entire drain+disarm sequence.  On the non-replay hot path
-	//   (isReplayingLive == false) sendRawFrameBytes performs one atomic load and
-	//   never touches replayMu, keeping the common case lock-free.
-	replayMu        sync.RWMutex
-	isReplayingLive atomic.Bool
-	replayDivertCh  chan []byte // capacity replayLiveBufferCap; allocated lazily by handleAttachSession
+	// Per-connection ordered outbound queue (#823 BE-DESIGN.md §2.1,
+	// ws_conn_queue.go). Guarded by qmu. q holds frames that did not fit in
+	// sendCh; held holds live frames published while an attach is being
+	// answered (hold mode). Never dropped: a connection more than
+	// connQueueByteCap behind is closed with 4008 instead.
+	qmu              sync.Mutex
+	q                [][]byte
+	qBytes           int
+	holding          bool
+	held             [][]byte
+	heldBytes        int
+	qClosed          bool
+	qDrained         chan struct{} // cap 1; lazily made by directWait, signalled by the queue mover
+	moverActive      bool          // a moveQueue goroutine is draining q into sendCh
+	catchUpCloseOnce sync.Once
+	// closeReq (cap 1) asks writePump to send the 4008 close frame; nil on a
+	// bare test fixture with no writePump.
+	closeReq chan struct{}
+	// closeCode records 4008 once the connection was closed for falling too
+	// far behind (diagnostics and tests).
+	closeCode atomic.Int32
+
+	// boundHub is the session hub this connection currently receives
+	// sequenced frames from (nil when bound to none). Guarded by
+	// WSHandler.mu; moved only by bindConnToSessionHub / the attach path /
+	// teardown (ws_hub_binding.go).
+	boundHub *sessionHub
 
 	// lastPongSentUnixNano debounces pong responses to client pings. The SPA's
 	// heartbeat fires every 30 s; allowing one pong per 100 ms per connection
@@ -423,10 +409,8 @@ func (h *WSHandler) subscribePairingInterest(wc *wsConn, channelID string, activ
 	}
 	// Re-emit the last-seen QR frame for this channel, if one is cached and the
 	// QR is still "live" (terminal states are deleted from the map by the
-	// eventForwarder).  Route through sendRawFrameBytes so the replay-divert
-	// invariant (isReplayingLive / replayDivertCh) is respected — a direct
-	// wc.sendCh write would bypass the divert and interleave with a replay
-	// stream (#368 + Wave 2 review).
+	// eventForwarder). Delivered through the connection's own ordered queue
+	// like every other frame (#823 ws_conn_queue.go).
 	if cached, ok := h.lastPairingState.Load(channelID); ok {
 		frameBytes, ok := cached.([]byte)
 		if ok && len(frameBytes) > 0 {
@@ -444,6 +428,22 @@ func (c *wsConn) wantsPairing(channelID string) bool {
 	defer c.pairingSubsMu.Unlock()
 	_, ok := c.pairingSubs[channelID]
 	return ok
+}
+
+// wsConnSendWindow is how many frames writePump's channel buffers; the rest
+// of a connection's backlog waits in its byte-capped queue
+// (ws_conn_queue.go), so how far behind a tab may fall is measured in bytes
+// (connQueueByteCap), not frames.
+const wsConnSendWindow = 16
+
+// newWSConn builds the connection state for an accepted socket.
+func newWSConn(conn *websocket.Conn) *wsConn {
+	return &wsConn{
+		conn:     conn,
+		sendCh:   make(chan []byte, wsConnSendWindow),
+		doneCh:   make(chan struct{}),
+		closeReq: make(chan struct{}, 1),
+	}
 }
 
 func (c *wsConn) close() {
@@ -502,7 +502,6 @@ func newWSHandler(
 		sessions:              make(map[string]*wsConn),
 		sessionIDs:            make(map[string]string),
 		taskChatIDs:           make(map[string]string),
-		liveStreamers:         make(map[string]*wsStreamer),
 		devicePairingRegistry: newDevicePairingRegistry(),
 		pairingStore:          pairing.NewPairingStore(),
 		hubs:                  newHubRegistry(newHubBootID()),
@@ -601,11 +600,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Create wsConn before auth so authenticateWS can set the role on it.
-	wc := &wsConn{
-		conn:   conn,
-		sendCh: make(chan []byte, 256),
-		doneCh: make(chan struct{}),
-	}
+	wc := newWSConn(conn)
 
 	if !h.authenticateWS(conn, wc, r) {
 		return
@@ -650,6 +645,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		delete(h.sessions, chatID)
 		delete(h.sessionIDs, chatID)
+		h.unbindConnHubLocked(wc)
 		h.mu.Unlock()
 		wc.close()
 
@@ -1317,13 +1313,10 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			"requested_session_id", f.SessionId,
 		)
 		if f.SessionId != "" {
-			// SQUAD BE-0 compile shim (#823 catch-up redesign, contracts Step 0):
-			// AttachSessionFrame.Since (the legacy timestamp cursor) was removed from
-			// the wire contract in favor of SinceSeq/BootId. handleAttachSession's own
-			// since_seq/boot_id rewiring is Lane A's work (websocket_replay.go); passing
-			// nil here just forces the pre-existing "no cursor" full-replay path until
-			// Lane A lands, same as an omitted `since` did before.
-			wh.h.handleAttachSession(wh.ctx, wh.chatID, f.SessionId, nil, wh.wc)
+			// #823: the client's cursor for this session ({since_seq, boot_id})
+			// decides incremental catch-up vs snapshot (BE-DESIGN.md §3.3/§4).
+			wh.h.handleAttachSession(wh.ctx, wh.chatID, f.SessionId,
+				&attachCursor{SinceSeq: f.SinceSeq, BootID: f.BootId}, wh.wc)
 		} else {
 			slog.Warn("ws: attach_session with empty session_id", "chat_id", wh.chatID)
 		}
@@ -1504,17 +1497,18 @@ func sendGenWSFrame(conn *websocket.Conn, frame any) {
 	}
 }
 
-// wsStreamer implements bus.Streamer, pushing token/done frames into a wsConn's send channel.
-// It also accumulates the full response to persist it to the session transcript on Finalize.
+// wsStreamer implements bus.Streamer: it publishes a round's token frames and
+// its turn's done frame through the session hub (#823), and accumulates the
+// full response to persist it to the session transcript on Finalize.
 type wsStreamer struct {
 	// chatID is the ORIGINATING connection's chatID — kept as an advisory
 	// "origin" label only (ADR-082 D2). It still keys the shadow-stream
 	// ownership claim (claimStreamOwnership/releaseStreamOwnershipClaim) and
 	// webchatChannel.markStreamed, but it is NO LONGER used to resolve which
 	// connection(s) receive this streamer's frames — see Update/Finalize,
-	// which resolve the CURRENT set of connections bound to sessionID (via
-	// WSHandler.resolveSessionConnsLocked) on every call instead of holding a
-	// single *wsConn captured at streamer-creation time. That single-target
+	// which publish through sessionID's hub (every connection bound to the
+	// session at that moment receives it) instead of holding a single
+	// *wsConn captured at streamer-creation time. That single-target
 	// design was ADR-082's E2/E4: a `conn` field pinned to a since-closed
 	// connection meant every later frame silently had nowhere live to go.
 	chatID     string
@@ -1581,16 +1575,10 @@ type wsStreamer struct {
 	// SEPARATE field from channel.wsHandler rather than derived from it.
 	// Always set by GetStreamer; nil for a bare test fixture.
 	h *WSHandler
-	// accumulated holds this streamer's own (per-round) response text.
-	// ADR-082 D2/D3: guarded by the WSHandler's own mu (via wsHandler(), NOT
-	// statsMu) whenever a *WSHandler is wired, because every write here
-	// (Update) must be atomic with resolving the CURRENT set of connections
-	// bound to sessionID, under the SAME lock handleAttachSession's catch-up
-	// bind+snapshot uses (WSHandler.snapshotLiveStreamerLocked) — that shared
-	// critical section is what gives "no duplicate, no gap" catch-up
-	// ordering. A bare test fixture with no channel/wsHandler wired accesses
-	// it lock-free (single-goroutine use only, matching every other
-	// wsHandler==nil degrade in this type).
+	// accumulated holds this streamer's own (per-round) response text, for
+	// Finalize's transcript write. Guarded by statsMu. (#823: it no longer
+	// feeds a catch-up snapshot — the session hub's active-turn projection
+	// does, from the published tokens themselves.)
 	accumulated strings.Builder
 
 	// producedModel is the model string that produced this streamed response.

@@ -14,16 +14,12 @@
 // exactly once through the session's hub, and delivers the identical
 // seq-stamped bytes to every connection currently resolved for that
 // session.
-//
-// INTEGRATION STATUS: delivery still resolves targets via the legacy
-// resolveSessionConnsLocked (h.sessionIDs/h.sessions), not the hub's own
-// conns set — the real attach/bind cutover (BE-DESIGN.md §4) is a separate
-// step. See ws_session_hub.go's file header for the full honest status.
 package gateway
 
 import (
 	"encoding/json"
 	"log/slog"
+	"strconv"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -85,43 +81,40 @@ func (h *WSHandler) hubResolveSessionIDForChat(chatID string) string {
 	return sid
 }
 
-// hubPublishAndDeliver numbers frame through sessionID's hub and delivers
-// the resulting seq-stamped bytes to every connection currently bound to
-// that session (BE-DESIGN.md §1.1/§1.2) — one publish regardless of how
-// many tabs are attached. A no-op when sessionID is empty (nothing to
-// number against) or the registry is unset (a bare test fixture).
+// hubPublishAndDeliver numbers frame through sessionID's hub, which appends
+// the seq-stamped bytes to the ordered queue of every connection bound to
+// that session (BE-DESIGN.md §1.1/§1.2) — one publish regardless of how many
+// tabs are attached, and the only way a session-scoped frame reaches a
+// connection. A no-op when sessionID is empty (nothing to number against)
+// or the registry is unset (a bare test fixture).
 func (h *WSHandler) hubPublishAndDeliver(sessionID, frameType string, frame []byte) {
-	h.hubPublishAndDeliverAlsoTo(sessionID, frameType, frame, nil)
+	h.hubPublishMetaAlsoTo(sessionID, frameType, hubFrameMeta{}, frame, nil)
 }
 
 // hubPublishAndDeliverAlsoTo is hubPublishAndDeliver plus BE-DESIGN.md
-// §1.4's alsoUnsequencedTo=conn rule: when alsoTo is non-nil and is NOT one
-// of the session's delivery targets, it additionally receives the frame
-// WITHOUT a seq. This is for the one connection that must see a frame even
-// while it is not (yet, or any more) bound to the frame's session — the tab
-// that sent a message or pressed Stop. An unsequenced frame never moves a
-// client's cursor (§6.2), so the extra copy can never create a gap or a
-// duplicate position.
+// §1.4's alsoUnsequencedTo=conn rule: when alsoTo is non-nil and is NOT
+// bound to sessionID, it additionally receives the frame WITHOUT a seq.
+// This is for the one connection that must see a frame even while it is not
+// (yet, or any more) bound to the frame's session — the tab that sent a
+// message or pressed Stop. An unsequenced frame never moves a client's
+// cursor (§6.2), so the extra copy can never create a gap or a duplicate
+// position.
 func (h *WSHandler) hubPublishAndDeliverAlsoTo(sessionID, frameType string, frame []byte, alsoTo *wsConn) {
+	h.hubPublishMetaAlsoTo(sessionID, frameType, hubFrameMeta{}, frame, alsoTo)
+}
+
+// hubPublishMetaAlsoTo is the one publish entry point every producer in
+// this package goes through; meta tells the hub how the frame affects the
+// active-turn projection (ws_hub_projection.go).
+func (h *WSHandler) hubPublishMetaAlsoTo(sessionID, frameType string, meta hubFrameMeta, frame []byte, alsoTo *wsConn) {
 	if sessionID == "" || h.hubs == nil {
 		if alsoTo != nil {
 			sendRawFrameBytes(alsoTo, frameType, frame)
 		}
 		return
 	}
-	hub := h.hubs.getOrCreate(sessionID)
-	_, out := hub.publishBytes(frame)
-	h.mu.Lock()
-	targets := h.resolveSessionConnsLocked("", sessionID)
-	h.mu.Unlock()
-	alsoToIsTarget := false
-	for _, conn := range targets {
-		if conn == alsoTo {
-			alsoToIsTarget = true
-		}
-		sendRawFrameBytes(conn, frameType, out)
-	}
-	if alsoTo != nil && !alsoToIsTarget {
+	h.hubs.getOrCreate(sessionID).publishMeta(meta, frame)
+	if alsoTo != nil && !h.connBoundToSession(alsoTo, sessionID) {
 		sendRawFrameBytes(alsoTo, frameType, frame)
 	}
 }
@@ -139,40 +132,38 @@ func (h *WSHandler) hubPublishFrame(sessionID, frameType string, frame any, also
 	h.hubPublishAndDeliverAlsoTo(sessionID, frameType, data, alsoTo)
 }
 
+// hubPublishFrameMeta marshals a generated frame and publishes it through
+// sessionID's hub with its projection meta.
+func (h *WSHandler) hubPublishFrameMeta(sessionID, frameType string, meta hubFrameMeta, frame any) {
+	data, err := json.Marshal(frame)
+	if err != nil {
+		slog.Error("ws: marshal frame for hub failed", "type", frameType, "session_id", sessionID, "error", err)
+		return
+	}
+	h.hubPublishMetaAlsoTo(sessionID, frameType, meta, data, nil)
+}
+
 // hubBroadcastWithSequencedCopy implements BE-DESIGN.md §1.4's
 // alsoUnsequencedTo=broadcastOthers rule for goal/loop status, goal outcome,
-// and judge verdict frames: today's forwarder sends these to EVERY
-// connection unconditionally (no session gating at all). The design keeps
-// that "every tab sees it" behavior but adds real sequencing for the tabs
-// actually on the frame's own session — sequenced (numbered, journaled) for
-// connections resolved to sessionID, and the identical bytes WITHOUT a seq
-// for every other connection, matching the SPA's own apply rule (§6.2: "no
-// seq -> apply as today, cursor untouched").
+// and judge verdict frames: every tab sees them, as before, but only the
+// tabs bound to the frame's own session get the numbered, journaled copy;
+// every other connection gets the identical bytes WITHOUT a seq (§6.2: "no
+// seq -> apply as state, cursor untouched"), so a tab on another session
+// never moves this session's cursor and still receives the numbered
+// original through catch-up when it attaches later.
 func (h *WSHandler) hubBroadcastWithSequencedCopy(sessionID, frameType string, frame []byte) {
-	h.mu.Lock()
-	var targets []*wsConn
-	seen := make(map[*wsConn]struct{})
-	if sessionID != "" {
-		targets = h.resolveSessionConnsLocked("", sessionID)
-		for _, c := range targets {
-			seen[c] = struct{}{}
-		}
+	if sessionID != "" && h.hubs != nil {
+		h.hubs.getOrCreate(sessionID).publishBytes(frame)
 	}
+	h.mu.Lock()
 	others := make([]*wsConn, 0, len(h.sessions))
 	for _, wc := range h.sessions {
-		if _, ok := seen[wc]; !ok {
-			others = append(others, wc)
+		if sessionID != "" && wc.boundHub != nil && wc.boundHub.id == sessionID {
+			continue
 		}
+		others = append(others, wc)
 	}
 	h.mu.Unlock()
-
-	if sessionID != "" && h.hubs != nil {
-		hub := h.hubs.getOrCreate(sessionID)
-		_, out := hub.publishBytes(frame)
-		for _, conn := range targets {
-			sendRawFrameBytes(conn, frameType, out)
-		}
-	}
 	for _, conn := range others {
 		sendRawFrameBytes(conn, frameType, frame)
 	}
@@ -221,7 +212,8 @@ func (h *WSHandler) hubToolExecStart(evt agent.Event) {
 		slog.Error("ws: marshal tool_call_start for hub failed", "session_id", startSID, "error", err)
 		return
 	}
-	h.hubPublishAndDeliver(startSID, string(generated.WsFrameTypeToolCallStart), data)
+	h.hubPublishMetaAlsoTo(startSID, string(generated.WsFrameTypeToolCallStart),
+		hubFrameMeta{kind: hubKindToolStart, key: string(p.ToolCallID)}, data, nil)
 }
 
 func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
@@ -293,7 +285,8 @@ func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
 		slog.Error("ws: marshal tool_call_result for hub failed", "session_id", evtSID, "error", err)
 		return
 	}
-	h.hubPublishAndDeliver(evtSID, string(generated.WsFrameTypeToolCallResult), data)
+	h.hubPublishMetaAlsoTo(evtSID, string(generated.WsFrameTypeToolCallResult),
+		hubFrameMeta{kind: hubKindToolResult, key: string(p.ToolCallID)}, data, nil)
 
 	if p.Tool == "switch_agent" && status == "success" {
 		h.hubEmitAgentSwitched(evtSID, producingSIDForResult)
@@ -432,7 +425,11 @@ func (h *WSHandler) hubError(evt agent.Event) {
 		slog.Error("ws: marshal error frame for hub failed", "session_id", errSID, "error", err)
 		return
 	}
-	h.hubPublishAndDeliver(errSID, string(generated.WsFrameTypeError), data)
+	// A turn-level error stays in the active-turn projection until the
+	// turn's done, so a snapshot taken meanwhile still shows it.
+	h.hubPublishMetaAlsoTo(errSID, string(generated.WsFrameTypeError),
+		hubFrameMeta{kind: hubKindItem, key: "error:" + evt.Meta.TurnID + ":" + strconv.FormatInt(evt.Time.UnixNano(), 10)},
+		data, nil)
 }
 
 // ---------------------------------------------------------------------

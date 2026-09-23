@@ -41,28 +41,20 @@ func newHubBootID() string {
 // or not any browser tab is attached. Every bound connection then reads that
 // log through a monotonic, gap-free, byte-identical sequence.
 //
-// INTEGRATION STATUS (honest, see SQUAD-REPORT-BEA.md): this file implements
-// the hub itself — submit/drain/publish, the per-session journal with
-// retention, the global journal budget, the cursor-servability rule (§3.3),
-// counter monotonicity across idle eviction (§3.2), and per-connection
-// overflow handling (§2.1) — and is covered by hub-level tests (H1-H5, H8,
-// H9, H15 in ws_session_hub_test.go). It is NOT yet wired to the real
-// producers (wsStreamer, webchatChannel, the EventBus sync tap,
-// websocket_chat.go, websocket_cancel.go, ws_tool_approval.go,
-// ws_ask_user.go, knowledge_lifecycle.go) or to the real *wsConn/replay
-// machinery — that integration, and the legacy divert/backoff-drop code
-// deletion it enables, is the largest remaining gap and is called out in the
-// report rather than claimed done.
+// Producers (wsStreamer, webchatChannel, the EventBus sync tap, message
+// intake, cancel) publish here; publish numbers the frame, journals it,
+// updates the active-turn projection (ws_hub_projection.go) and appends the
+// bytes to every bound connection's own outbound queue (ws_conn_queue.go) —
+// all in one critical section, with no network I/O. Attach/reconnect reads
+// the journal (incremental) or the projection plus the transcript (snapshot)
+// under the same lock that binds the connection (websocket_replay.go).
 
-// hubConn is the minimal interface the session hub needs from a bound
-// connection to deliver sequenced frames. It exists so the hub can be built
-// and tested standalone; the real *wsConn is expected to implement it via a
-// small adapter once the integration pass lands (BE-DESIGN.md §2.1's
-// wc.enqueue). enqueue must never block: it appends to the connection's own
-// outbound queue and reports whether the queue is still within its byte
-// budget. Returning false means the connection is over budget and MUST be
-// closed with WS close code 4008 ("catch-up required") by the caller that
-// owns the socket — the hub itself never touches the network.
+// hubConn is what the session hub needs from a bound connection: a
+// non-blocking, never-dropping append to that connection's own ordered
+// outbound queue (BE-DESIGN.md §2.1). *wsConn implements it
+// (ws_conn_queue.go); hub-level tests use a fake. enqueue returning false
+// means the connection is gone or too far behind and has been (or is being)
+// closed with 4008 — the hub only unbinds it; it never touches the network.
 type hubConn interface {
 	enqueue(frame []byte) bool
 }
@@ -102,6 +94,12 @@ type sessionHub struct {
 	journalBytes int
 	conns        map[hubConn]struct{}
 	lastActive   time.Time
+	proj         activeTurnProjection
+	// evicted is set (under mu) when evictIdle removes this hub from the
+	// registry. A producer or binder still holding the stale pointer re-routes
+	// to the registry's current hub for the same session instead of writing
+	// into a hub nobody can reach any more.
+	evicted bool
 
 	// onOverflow, if set, is called (outside no lock is held during the
 	// call — see publish) for every connection whose enqueue returned false
@@ -145,8 +143,8 @@ type hubRegistry struct {
 	globalJournalBytes atomic.Int64
 
 	// idleEvictAfter is the idle duration before a hub with no bound
-	// connections, empty inbox and (once the projection lands) no open
-	// turn/span is eligible for eviction. FOUNDER DECISION Q6: a Go unit
+	// connections, an empty inbox and no unfinished turn/span in its
+	// projection is eligible for eviction. FOUNDER DECISION Q6: a Go unit
 	// test does not need to override this — evictIdle takes `now` as a
 	// parameter, so a test can simulate any elapsed time without a real
 	// wait AND without touching this field (see TestHub_H8_CounterNeverGoesBackwards).
@@ -191,11 +189,19 @@ func newHubRegistry(bootID string) *hubRegistry {
 			slog.Error("ws: invalid "+hubIdleEvictAfterEnvOverrideVar+", ignoring", "value", raw)
 		}
 	}
-	return &hubRegistry{
+	r := &hubRegistry{
 		m:              make(map[string]*sessionHub),
 		bootID:         bootID,
 		idleEvictAfter: idleEvictAfter,
 	}
+	// Start the process-wide counter at 1, not 0, so every hub's head — and
+	// therefore every seq a session_snapshot / catch_up_complete /
+	// session_started frame reports — is >= 1, as the contract requires
+	// (seq minimum: 1). The first frame any session ever publishes is seq 2.
+	// The §3.2 guarantee is unaffected: publishedTotal stays >= every head
+	// ever issued, because each hub's head is its base plus its own publishes.
+	r.publishedTotal.Store(1)
+	return r
 }
 
 // maybeSweepIdle runs evictIdle at most once per hubIdleSweepInterval,
@@ -261,12 +267,8 @@ func (r *hubRegistry) lookup(id string) *sessionHub {
 // (publishedTotal) is untouched by eviction, which is what keeps §3.2's
 // monotonicity guarantee intact across re-creation.
 //
-// NOTE (honest gap): the design also requires gating eviction on "no active
-// turn in its projection and no open span" (§3.2). The active-turn
-// projection (§4.4) is not implemented in this pass, so that extra gate is
-// not enforced here — only the bound-connection and empty-inbox gates are.
-// This is safe (it can only evict LESS eagerly, i.e. never mid-turn with a
-// tab attached) but is not yet the full rule; flagged in the report.
+// It is also gated on the hub's active-turn projection being empty (no
+// unfinished turn, no open delegate span — §3.2).
 func (r *hubRegistry) evictIdle(now time.Time) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -278,8 +280,13 @@ func (r *hubRegistry) evictIdle(now time.Time) []string {
 		h.inboxMu.Lock()
 		inboxEmpty := len(h.inbox) == 0 && !h.draining
 		h.inboxMu.Unlock()
-		eligible := bound == 0 && inboxEmpty && idleFor >= r.idleEvictAfter
+		// BE-DESIGN.md §3.2: never evict a hub whose turn or delegate span is
+		// still unfinished — its projection is what a later snapshot needs.
+		eligible := bound == 0 && inboxEmpty && idleFor >= r.idleEvictAfter && !h.proj.active()
 		journalBytes := h.journalBytes
+		if eligible {
+			h.evicted = true
+		}
 		h.mu.Unlock()
 		if eligible {
 			delete(r.m, id)
@@ -388,20 +395,29 @@ func (h *sessionHub) publish(frame []byte) uint64 {
 	return seq
 }
 
-// publishBytes is publish's full implementation, additionally returning the
-// exact seq-stamped bytes that were journaled and (for any currently-bound
-// hubConn) delivered. A caller that still resolves its OWN delivery targets
-// outside the hub's conns set (the #823 integration's transitional state —
-// see websocket_streamer.go's Update/Finalize) needs these exact bytes so
-// what it delivers is byte-identical to what the journal retains, preserving
-// H3's multi-tab-byte-identity guarantee even before every producer's
-// delivery path has been cut over to hub-tracked bindings.
+// publishBytes publishes a frame that does not affect the active-turn
+// projection and returns its seq and the exact seq-stamped bytes that were
+// journaled and delivered.
 func (h *sessionHub) publishBytes(frame []byte) (uint64, []byte) {
+	return h.publishMeta(hubFrameMeta{}, frame)
+}
+
+// publishMeta is the one publish implementation: under h.mu it numbers the
+// frame, journals it, updates the active-turn projection from meta, and
+// appends the seq-stamped bytes to every bound connection's own queue
+// (never blocking, never dropping — a connection too far behind is closed
+// with 4008 by its own queue and simply unbound here).
+func (h *sessionHub) publishMeta(meta hubFrameMeta, frame []byte) (uint64, []byte) {
 	h.mu.Lock()
+	if h.evicted && h.registry != nil {
+		h.mu.Unlock()
+		return h.registry.getOrCreate(h.id).publishMeta(meta, frame)
+	}
 	h.head++
 	seq := h.head
 	out := spliceSeq(frame, seq)
 	h.appendJournalLocked(seq, out)
+	h.proj.update(meta, frame, h.id)
 	h.lastActive = time.Now()
 
 	var overflowed []hubConn
@@ -425,11 +441,8 @@ func (h *sessionHub) publishBytes(frame []byte) (uint64, []byte) {
 		// and deadlock permanently. Found by TestHub_H15_GlobalBudgetDropsLRUJournal
 		// during development; see that test's history for the RED receipt.
 		h.registry.enforceGlobalBudget()
-		// BE-DESIGN.md §3.2: piggyback the idle-eviction sweep here too —
-		// every current production caller (wsStreamer.Update/Finalize) goes
-		// through publishBytes directly, not submit/drain, so this is the
-		// one chokepoint both paths share. Rate-limited to once/minute by
-		// maybeSweepIdle itself; the common-case cost is one atomic load.
+		// BE-DESIGN.md §3.2: piggyback the rate-limited idle-eviction sweep
+		// on the publish path every producer shares.
 		h.registry.maybeSweepIdle(time.Now())
 	}
 	if onOverflow != nil {
@@ -479,15 +492,19 @@ func (h *sessionHub) appendJournalLocked(seq uint64, out []byte) {
 }
 
 // attachResult is what bind returns: enough for the caller to build and
-// send session_state / the tail / catch_up_complete (BE-DESIGN.md §4.1
-// steps A4-A6). It intentionally mirrors the design's servability reasons
-// (§3.3) rather than a generic bool, since the reason rides the wire on the
-// snapshot frame.
+// send session_state / the tail or snapshot / catch_up_complete
+// (BE-DESIGN.md §4.1 steps A4-A6). It mirrors the design's servability
+// reasons (§3.3) rather than a bare bool, since the reason rides the wire on
+// the snapshot frame.
 type attachResult struct {
 	Servable bool
 	Reason   string // "" if servable; else boot_mismatch|retention_exceeded|cursor_ahead|unknown_position
 	Head     uint64
-	Tail     [][]byte // only populated if Servable
+	Tail     [][]byte           // only populated if Servable
+	Proj     []projSnapshotItem // only populated if not Servable
+	// evicted: the hub was evicted before the bind; nothing was bound and
+	// the caller must retry against the registry's live hub.
+	evicted bool
 }
 
 const (
@@ -497,19 +514,31 @@ const (
 	reasonUnknownPosition   = "unknown_position"
 )
 
-// bind is (*WSHandler).handleAttachSession's A2-A4 (BE-DESIGN.md §4.1): it
-// decides servability under the SAME critical section that binds the
-// connection and reads head, so there is no window in which a frame
-// published between the decision and the bind is missed (§4.2's "gaps"
-// argument). The caller is responsible for holding the connection in "hold"
-// mode until it has delivered session_state/tail/snapshot and
-// catch_up_complete — that hold-mode buffering lives on the real wsConn and
-// is NOT implemented in this pass (see file header).
+// holdable is implemented by a connection that can buffer live frames while
+// its attach is being answered (*wsConn — BE-DESIGN.md §4.1 A4 "hold mode").
+type holdable interface {
+	startHold()
+}
+
+// bind is handleAttachSession's A2-A4 (BE-DESIGN.md §4.1): it decides
+// servability, binds the connection, switches it into hold mode (live frames
+// published from now on queue behind the catch-up), and reads the head and
+// either the journal tail or the projection — all under the SAME critical
+// section every publish takes. That is what makes the catch-up gap-free and
+// duplicate-free (§4.2): every frame with seq <= Head is in the tail or
+// reflected in the snapshot, and every frame with seq > Head reaches the
+// connection's held queue.
 func (h *sessionHub) bind(c hubConn, sinceSeq *int64, bootID *string, registryBootID string) attachResult {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.evicted {
+		return attachResult{evicted: true}
+	}
 
 	h.conns[c] = struct{}{}
+	if hc, ok := c.(holdable); ok {
+		hc.startHold()
+	}
 	h.lastActive = time.Now()
 	res := attachResult{Head: h.head}
 
@@ -536,7 +565,40 @@ func (h *sessionHub) bind(c hubConn, sinceSeq *int64, bootID *string, registryBo
 		}
 		res.Tail = tail
 	}
+	if !res.Servable {
+		res.Proj = h.proj.snapshot()
+	}
 	return res
+}
+
+// bindLive binds c for live delivery only — no catch-up (a connection that
+// just minted this session, or sent a message on it without attaching
+// first). It returns the head at bind time: the connection's cursor, since
+// every later publish reaches it.
+func (h *sessionHub) bindLive(c hubConn) (head uint64, ok bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.evicted {
+		return 0, false
+	}
+	h.conns[c] = struct{}{}
+	h.lastActive = time.Now()
+	return h.head, true
+}
+
+// forgetTurnText removes an abandoned turn's streamed text from the
+// active-turn projection (see activeTurnProjection.forgetTurnText).
+func (h *sessionHub) forgetTurnText(turnID string) {
+	h.mu.Lock()
+	h.proj.forgetTurnText(turnID)
+	h.mu.Unlock()
+}
+
+// isEvicted reports whether evictIdle removed this hub from its registry.
+func (h *sessionHub) isEvicted() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.evicted
 }
 
 // unbind removes c from the hub's bound-connection set (BE-DESIGN.md §4.1

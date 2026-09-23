@@ -130,7 +130,8 @@ func (h *WSHandler) hubSubTurnSpawn(evt agent.Event) {
 	}
 
 	hub.spanMu.Lock()
-	h.hubPublishAndDeliver(sid, string(generated.WsFrameTypeSubagentStart), data)
+	h.hubPublishMetaAlsoTo(sid, string(generated.WsFrameTypeSubagentStart),
+		hubFrameMeta{kind: hubKindSpanStart, key: p.SpanID}, data, nil)
 	if hub.spans == nil {
 		hub.spans = make(map[string]*hubSpan)
 	}
@@ -202,7 +203,8 @@ func (h *WSHandler) hubSubTurnEnd(evt agent.Event) {
 	}
 	hub := h.hubs.getOrCreate(sid)
 	hub.spanMu.Lock()
-	h.hubPublishAndDeliver(sid, string(generated.WsFrameTypeSubagentEnd), data)
+	h.hubPublishMetaAlsoTo(sid, string(generated.WsFrameTypeSubagentEnd),
+		hubFrameMeta{kind: hubKindSpanEnd, key: p.SpanID}, data, nil)
 	if entry := hub.spans[string(p.ParentSpawnCallID)]; entry != nil {
 		closeHubSpan(entry)
 		delete(hub.spans, string(p.ParentSpawnCallID))
@@ -378,7 +380,8 @@ func (h *WSHandler) synthesizeOrphanEnd(hub *sessionHub, entry *hubSpan, reason 
 		slog.Error("ws: marshal synthetic subagent_end failed", "session_id", entry.sessionID, "error", err)
 		return
 	}
-	h.hubPublishAndDeliver(entry.sessionID, string(generated.WsFrameTypeSubagentEnd), data)
+	h.hubPublishMetaAlsoTo(entry.sessionID, string(generated.WsFrameTypeSubagentEnd),
+		hubFrameMeta{kind: hubKindSpanEnd, key: entry.spanID}, data, nil)
 	closeHubSpan(entry)
 	delete(hub.spans, entry.parentCallID)
 }

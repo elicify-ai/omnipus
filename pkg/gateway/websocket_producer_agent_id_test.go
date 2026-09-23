@@ -151,9 +151,8 @@ func TestWsStreamer_Finalize_AttributesTranscriptToProducerAgentID(t *testing.T)
 	t.Cleanup(func() { _ = store.DeleteSession(meta.ID) })
 
 	wc := &wsConn{
-		sendCh:         make(chan []byte, 256),
-		doneCh:         make(chan struct{}),
-		replayDivertCh: make(chan []byte, replayLiveBufferCap),
+		sendCh: make(chan []byte, 256),
+		doneCh: make(chan struct{}),
 	}
 	bindTestConnToSession(handler, "chat-producer-attr", meta.ID, wc)
 
@@ -210,9 +209,8 @@ func TestWsStreamer_Finalize_StampsTurnID(t *testing.T) {
 	t.Cleanup(func() { _ = store.DeleteSession(meta.ID) })
 
 	wc := &wsConn{
-		sendCh:         make(chan []byte, 256),
-		doneCh:         make(chan struct{}),
-		replayDivertCh: make(chan []byte, replayLiveBufferCap),
+		sendCh: make(chan []byte, 256),
+		doneCh: make(chan struct{}),
 	}
 	bindTestConnToSession(handler, "chat-turnid-emission", meta.ID, wc)
 	s := &wsStreamer{
@@ -286,9 +284,8 @@ func TestWsStreamer_Finalize_TurnIDEnablesMarkLastEntryTruncatedCorrelation(t *t
 	t.Cleanup(func() { _ = store.DeleteSession(meta.ID) })
 
 	wc := &wsConn{
-		sendCh:         make(chan []byte, 256),
-		doneCh:         make(chan struct{}),
-		replayDivertCh: make(chan []byte, replayLiveBufferCap),
+		sendCh: make(chan []byte, 256),
+		doneCh: make(chan struct{}),
 	}
 	bindTestConnToSession(handler, "chat-turnid-corr", meta.ID, wc)
 

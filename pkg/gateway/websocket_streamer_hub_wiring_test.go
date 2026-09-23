@@ -47,8 +47,11 @@ func TestWsStreamer_Update_SeqComesFromTheSessionHub(t *testing.T) {
 
 	hub := handler.hubs.lookup(sessionID)
 	require.NotNil(t, hub, "Update must have created the session's hub even with zero listeners")
-	if got := hub.snapshotHead(); got != 3 {
-		t.Fatalf("hub head = %d, want 3 (three tokens published with 0 conns)", got)
+	// A hub's numbering starts after its base (the process-wide counter,
+	// which starts at 1 so every reported seq is >= 1 — see newHubRegistry).
+	base := hub.base
+	if got := hub.snapshotHead(); got != base+3 {
+		t.Fatalf("hub head = %d, want base+3 = %d (three tokens published with 0 conns)", got, base+3)
 	}
 
 	// Now bind a connection and send a fourth token — it must be delivered
@@ -60,7 +63,7 @@ func TestWsStreamer_Update_SeqComesFromTheSessionHub(t *testing.T) {
 	frame := readTokenFrame(t, conn.sendCh)
 	assert.Equal(t, "d", frame.Content)
 	require.NotNil(t, frame.Seq, "TokenFrame.seq must be set once the hub is wired")
-	assert.Equal(t, int64(4), *frame.Seq)
+	assert.Equal(t, int64(base+4), *frame.Seq)
 }
 
 // TestWsStreamer_Update_StampsTurnIDAndMessageID proves SetTurnID/

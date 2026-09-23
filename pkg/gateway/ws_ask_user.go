@@ -135,8 +135,9 @@ func (h *WSHandler) broadcastAskUserCard(card generated.AskUserQuestionCard) {
 		return
 	}
 	// This caller reports one aggregate lifecycle outcome, so suppress the
-	// shared helper's per-connection warning. The per-connection counters are
-	// still incremented inside broadcastRaw.
+	// shared helper's per-connection warning. dropCount counts connections
+	// that were already closed or closing (#823: a live connection's queue
+	// never drops; it reconnects and re-hydrates from session_state).
 	fanoutCount, dropCount := h.broadcastRaw(raw, "")
 	attrs := []any{
 		"card_id", card.CardId,

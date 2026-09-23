@@ -74,22 +74,27 @@ func decodeSeq(t *testing.T, frame []byte) (seq int64, hasSeq bool) {
 // i64p is already declared in schedules_rest_test.go (identical shape) — reuse it.
 func hubStrp(v string) *string { return &v }
 
+// Every hub numbers from its base: the process-wide counter, which starts at
+// 1 (newHubRegistry) so that every seq a catch-up frame reports is >= 1 as
+// the contract requires. The tests below state positions relative to base.
+
 // ---------------------------------------------------------------------
 // H1: numbering does not depend on connections.
 // ---------------------------------------------------------------------
 func TestHub_H1_NumberingIndependentOfConnections(t *testing.T) {
 	reg := newHubRegistry("boot-1")
 	hub := reg.getOrCreate("sess-1")
+	base := hub.base
 
 	for i := 0; i < 50; i++ {
 		hub.publish(tokenFrame(t, i))
 	}
-	if got := hub.snapshotHead(); got != 50 {
-		t.Fatalf("head = %d, want 50", got)
+	if got := hub.snapshotHead(); got != base+50 {
+		t.Fatalf("head = %d, want base+50 = %d", got, base+50)
 	}
 
 	conn := newFakeHubConn("late")
-	res := hub.bind(conn, i64p(0), hubStrp("boot-1"), "boot-1")
+	res := hub.bind(conn, i64p(int64(base)), hubStrp("boot-1"), "boot-1")
 	if !res.Servable {
 		t.Fatalf("expected servable, got reason=%q", res.Reason)
 	}
@@ -98,8 +103,8 @@ func TestHub_H1_NumberingIndependentOfConnections(t *testing.T) {
 	}
 	for idx, b := range res.Tail {
 		seq, ok := decodeSeq(t, b)
-		if !ok || seq != int64(idx+1) {
-			t.Fatalf("tail[%d] seq=%d ok=%v, want %d", idx, seq, ok, idx+1)
+		if !ok || seq != int64(base)+int64(idx+1) {
+			t.Fatalf("tail[%d] seq=%d ok=%v, want %d", idx, seq, ok, int64(base)+int64(idx+1))
 		}
 	}
 }
@@ -163,7 +168,7 @@ func TestHub_H2_GapFreeUnderConcurrency(t *testing.T) {
 	close(stop)
 	attachWG.Wait()
 
-	if got, want := hub.snapshotHead(), uint64(producers*perProducer); got != want {
+	if got, want := hub.snapshotHead(), hub.base+uint64(producers*perProducer); got != want {
 		t.Fatalf("head = %d, want %d", got, want)
 	}
 
@@ -276,12 +281,13 @@ func TestHub_H4_IncrementalAttachWhilePublishing(t *testing.T) {
 func TestHub_H5_SnapshotDecisions(t *testing.T) {
 	reg := newHubRegistry("boot-1")
 	hub := reg.getOrCreate("sess-5")
+	b := int64(hub.base)
 	for i := 0; i < 5; i++ {
 		hub.publish(tokenFrame(t, i))
 	}
-	// Force retention: trim the journal down so lowSeq moves past 1.
+	// Force retention: trim the journal down so lowSeq moves past base+1.
 	hub.mu.Lock()
-	hub.journal = hub.journal[3:] // keep seq 4,5 only
+	hub.journal = hub.journal[3:] // keep base+4, base+5 only
 	hub.lowSeq = hub.journal[0].seq
 	hub.mu.Unlock()
 
@@ -292,12 +298,12 @@ func TestHub_H5_SnapshotDecisions(t *testing.T) {
 		servable bool
 		reason   string
 	}{
-		{"boot mismatch", i64p(5), hubStrp("other-boot"), false, reasonBootMismatch},
-		{"below retention", i64p(1), hubStrp("boot-1"), false, reasonRetentionExceeded},
-		{"above head", i64p(999), hubStrp("boot-1"), false, reasonCursorAhead},
+		{"boot mismatch", i64p(b + 5), hubStrp("other-boot"), false, reasonBootMismatch},
+		{"below retention", i64p(b + 1), hubStrp("boot-1"), false, reasonRetentionExceeded},
+		{"above head", i64p(b + 999), hubStrp("boot-1"), false, reasonCursorAhead},
 		{"no cursor", nil, hubStrp("boot-1"), false, reasonUnknownPosition},
-		{"equal to head, empty incremental", i64p(5), hubStrp("boot-1"), true, ""},
-		{"at retention floor", i64p(3), hubStrp("boot-1"), true, ""},
+		{"equal to head, empty incremental", i64p(b + 5), hubStrp("boot-1"), true, ""},
+		{"at retention floor", i64p(b + 3), hubStrp("boot-1"), true, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -517,8 +523,8 @@ func TestHub_H15_GlobalBudgetDropsLRUJournal(t *testing.T) {
 		t.Fatalf("old hub lowSeq=%d, want head+1=%d after journal drop", oldLowSeq, oldHead+1)
 	}
 	// The counter itself is untouched by the journal drop.
-	if oldHead != 100 {
-		t.Fatalf("old hub head=%d, want 100 (counter must survive a journal drop)", oldHead)
+	if oldHead != oldHub.base+100 {
+		t.Fatalf("old hub head=%d, want base+100=%d (counter must survive a journal drop)", oldHead, oldHub.base+100)
 	}
 }
 
@@ -566,8 +572,8 @@ func TestHub_PublishBytes_MatchesJournal(t *testing.T) {
 	hub := reg.getOrCreate("sess-publishbytes")
 
 	seq, out := hub.publishBytes(tokenFrame(t, 0))
-	if seq != 1 {
-		t.Fatalf("seq = %d, want 1", seq)
+	if seq != hub.base+1 {
+		t.Fatalf("seq = %d, want base+1 = %d", seq, hub.base+1)
 	}
 	hub.mu.Lock()
 	journaled := hub.journal[0].bytes
@@ -576,8 +582,8 @@ func TestHub_PublishBytes_MatchesJournal(t *testing.T) {
 		t.Fatalf("publishBytes returned %s, journal has %s", out, journaled)
 	}
 	gotSeq, ok := decodeSeq(t, out)
-	if !ok || gotSeq != 1 {
-		t.Fatalf("decoded seq = %d ok=%v, want 1", gotSeq, ok)
+	if !ok || gotSeq != int64(hub.base)+1 {
+		t.Fatalf("decoded seq = %d ok=%v, want %d", gotSeq, ok, int64(hub.base)+1)
 	}
 }
 
