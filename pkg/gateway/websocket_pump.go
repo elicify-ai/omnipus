@@ -251,7 +251,7 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte, numbered bool)
 	// error (pre-session validation failures, the connection-degraded
 	// backpressure warning) has no cursor position to protect, so it keeps
 	// bypassing.
-	bypassDivertWhileReplaying := isCritical && frameType != "done" && !(numbered && frameType == "error")
+	bypassDivertWhileReplaying := isCritical && frameType != "done" && (!numbered || frameType != "error")
 
 	// Fast path: not replaying (atomic check, no lock). This is the common case.
 	if !wc.isReplayingLive.Load() || bypassDivertWhileReplaying {

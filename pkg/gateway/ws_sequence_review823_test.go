@@ -1,9 +1,11 @@
 // ws_sequence_review823_test.go — regression coverage for REVIEW-OPUS-823's
-// findings 1, 5, 6, 7, 8 against pkg/gateway (squad AX's lane). Finding 9's
-// storage-order half is covered by TestSeq_DeadConnectionWindow's assertion
-// that the retained journal is contiguous to the head; its wire-delivery-order
-// half is a documented, un-closed gap — see ws_sequence.go's emitSessionFrame
-// doc comment and the squad report.
+// findings 1, 5, 6, 7, 8, 10 against pkg/gateway (squad AX's lane). Finding
+// 9's storage-order half is covered by TestSeq_DeadConnectionWindow's
+// assertion that the retained journal is contiguous to the head; its
+// wire-delivery-order half is a documented, un-closed gap — see
+// ws_sequence.go's emitSessionFrame doc comment and the squad report.
+// Finding 10 was handed off from squad AY's SPA-side investigation
+// (matchesChatID/matchesEvent, pkg/gateway/websocket_forward.go).
 
 package gateway
 
@@ -17,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -294,8 +297,12 @@ func TestSeq_ReconnectDuringConcurrentSecondTabActivity_NoFrameLost(t *testing.T
 	cursor := *decodeHead(t, pre[preTokens-1]).Seq
 
 	// A second producer keeps emitting for the SAME session concurrently with
-	// the reconnect below — tab1 stays "attached" (still in h.sessions), the
-	// scenario finding 6 describes.
+	// the reconnect below — tab1 stays "attached" (still in h.sessions) and
+	// keeps receiving everything live regardless of the bug, which is
+	// exactly why finding 6 is a silent loss and not a crash: the content
+	// is never lost from the GATEWAY's perspective (tab1 has it), only from
+	// the RECONNECTING tab's — so this test must check tab2's own observed
+	// stream in isolation, not "did the frame reach anyone".
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -310,28 +317,24 @@ func TestSeq_ReconnectDuringConcurrentSecondTabActivity_NoFrameLost(t *testing.T
 	handler.mu.Unlock()
 	handler.handleAttachSession(context.Background(), "chat-tab2", sid, nil, &cursor, nil, wc2)
 	<-done
+	drain1() // tab1 always sees everything live; not the claim under test — discard.
 
-	// Drain both connections' catch-up/live frames and confirm every
-	// sequence number the gateway ever assigned for this session between
-	// cursor+1 and its final head is accounted for exactly once across
-	// (tab2's catch-up ∪ tab2's own live frames received after attach ∪
-	// tab1's own live stream) — i.e. nothing vanished into the gap the
-	// review describes.
+	// tab2's OWN reconstructed stream (its catch-up list plus whatever it
+	// received live once bound) must cover cursor+1..head with no gap. A
+	// missing number here — present in the gateway's counter but never
+	// delivered to THIS reconnecting connection — is finding 6's silent
+	// loss: neither in the catch-up list computed before the bind, nor
+	// live (not yet a registered peer at the moment it was emitted).
 	seen := map[int64]bool{}
 	for _, raw := range drain2() {
 		if h := decodeHead(t, raw); h.Seq != nil {
 			seen[*h.Seq] = true
 		}
 	}
-	for _, raw := range drain1() {
-		if h := decodeHead(t, raw); h.Seq != nil {
-			seen[*h.Seq] = true
-		}
-	}
 	head := handler.sessionHighSeq(sid)
 	for want := cursor + 1; want <= int64(head); want++ {
-		assert.True(t, seen[want], "seq %d must have reached SOME connection (catch-up or live) — a missing "+
-			"number here is finding 6's silent loss", want)
+		assert.True(t, seen[want], "seq %d must have reached the RECONNECTING tab (catch-up or live) — a number "+
+			"present in the gateway's counter but missing here is finding 6's silent loss", want)
 	}
 }
 
@@ -525,4 +528,117 @@ func TestSeq_ByteCap_TrimsRetainedWindowIndependentOfFrameCount(t *testing.T) {
 	head := handler.sessionHighSeq(sid)
 	_, _, ok := handler.catchUpFrames(sid, head-1)
 	assert.True(t, ok, "the most recent position must remain servable after a byte-cap trim")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding 10 (handed off from squad AY): a tab that switches to a DIFFERENT
+// session must not keep receiving — and therefore must not keep NUMBERING —
+// its background turn's forwarder frames against the session it has since
+// left.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestEventForwarder_DoesNotDeliverBackgroundTurnFramesAfterTabSwitchesSession
+// reproduces REVIEW-OPUS-823 finding 10 end to end through the real
+// eventForwarder: a connection starts a turn in session A, then switches (via
+// attach_session) to session B while A's turn keeps running in the
+// background. A's own forwarder frames still carry this connection's
+// ORIGINATING chatID (stamped once at turn-dispatch time, never updated) —
+// under the pre-fix matchesChatID rule that was enough to match
+// unconditionally, regardless of which session the connection is CURRENTLY
+// attached to. This test asserts the frame does NOT reach the connection
+// while it is attached to B: delivering it would number it against A's
+// counter and silently advance this connection's cursor for A past content
+// it was never shown live.
+func TestEventForwarder_DoesNotDeliverBackgroundTurnFramesAfterTabSwitchesSession(t *testing.T) {
+	bus := agent.NewEventBus()
+	defer bus.Close()
+	h := makeMinimalHandler()
+
+	const chatID = "webchat:conn1"
+	const sessionA = "session-A"
+	const sessionB = "session-B"
+
+	// The tab starts a turn in session A — handleChatMessage's normal bind.
+	h.mu.Lock()
+	h.sessionIDs[chatID] = sessionA
+	h.mu.Unlock()
+
+	wc, ch := makeForwarderTestConn(64)
+	done := runForwarder(h, wc, chatID, bus)
+
+	// The SAME tab then switches (attach_session) to a DIFFERENT session B,
+	// while A's turn keeps running in the background — its own ChatID never
+	// changes.
+	h.mu.Lock()
+	h.sessionIDs[chatID] = sessionB
+	h.mu.Unlock()
+
+	// A's background turn produces a tool-call-start frame. evtChatID ==
+	// f.chatID (both "webchat:conn1"), which is exactly the condition the
+	// pre-fix matchesChatID rule matched on unconditionally.
+	bus.Emit(agent.Event{
+		Kind: agent.EventKindToolExecStart,
+		Payload: agent.ToolExecStartPayload{
+			ToolCallID: "call-A-1",
+			ChatID:     chatID,
+			SessionID:  sessionA,
+			Tool:       "web_search",
+			Arguments:  map[string]any{"q": "test"},
+		},
+	})
+
+	bus.Close()
+	<-done
+
+	assert.Empty(t, ch, "REVIEW-OPUS-823 finding 10: a background turn's frames for a session this "+
+		"connection has since switched AWAY from must not be delivered (and therefore not numbered) "+
+		"to this connection — doing so silently advances its cursor for the background session past "+
+		"content it was never shown live, truncating that session's catch-up when the tab switches back")
+}
+
+// TestEventForwarder_StillDeliversCurrentSessionFramesAfterSwitch is the
+// positive-case guard for the same fix: once the tab switches to B, B's OWN
+// forwarder frames (even carrying a DIFFERENT chatID, e.g. a delegate
+// dispatched under B) must still reach this connection via the session-based
+// match — the fix must not turn into "nothing reaches a connection that ever
+// switched sessions".
+func TestEventForwarder_StillDeliversCurrentSessionFramesAfterSwitch(t *testing.T) {
+	bus := agent.NewEventBus()
+	defer bus.Close()
+	h := makeMinimalHandler()
+
+	const chatID = "webchat:conn1"
+	const sessionA = "session-A"
+	const sessionB = "session-B"
+
+	h.mu.Lock()
+	h.sessionIDs[chatID] = sessionA
+	h.mu.Unlock()
+
+	wc, ch := makeForwarderTestConn(64)
+	done := runForwarder(h, wc, chatID, bus)
+
+	h.mu.Lock()
+	h.sessionIDs[chatID] = sessionB
+	h.mu.Unlock()
+
+	bus.Emit(agent.Event{
+		Kind: agent.EventKindToolExecStart,
+		Payload: agent.ToolExecStartPayload{
+			ToolCallID: "call-B-1",
+			ChatID:     "webchat:some-other-connection",
+			SessionID:  sessionB,
+			Tool:       "read_file",
+			Arguments:  map[string]any{"path": "/tmp/b.txt"},
+		},
+	})
+
+	bus.Close()
+	<-done
+
+	require.Len(t, ch, 1, "the currently-attached session's own frames must still reach this connection "+
+		"after a switch — the fix gates on current attachment, not on freezing delivery entirely")
+	frame := drainFrame(t, ch)
+	assert.Equal(t, "tool_call_start", frame.Type)
+	assert.Equal(t, "call-B-1", frame.CallID)
 }
