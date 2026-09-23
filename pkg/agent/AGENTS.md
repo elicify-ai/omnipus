@@ -6,12 +6,12 @@ The turn engine every workspace tab sits on. No screen owns it.
 
 This is the largest Go package in the repo. Never run it whole; scope to one
 symbol (`CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run
-'^TestSpawnSubTurn_TargetIdentity' ./pkg/agent/`). CI is the authority for
-full-suite results.
+'^TestLaunch_DefaultTimeoutIsThirtyMinutes' ./pkg/agent/`). CI is the
+authority for full-suite results.
 
 Cite `file::symbol` in notes and reviews, never `file:line` — `loop.go`,
-`turn.go` and `subturn.go` churn daily; every line number in older notes here
-was stale within weeks.
+`turn.go` and `steer_launcher.go` churn daily; every line number in older
+notes here was stale within weeks.
 
 ## Size ceiling
 
@@ -71,9 +71,12 @@ three-level delegation.
 - **Orphaned-foreground-turn watchdog** (ADR-082): a turn never depends on a UI
   connection; only explicit Stop/cancel (`RequestCancel`,
   `InterruptSessionHard`) ends a turn early. Guard:
-  `scripts/check-no-orphan-turn-watchdog.sh`. Two unrelated mechanisms that
-  also say "orphan" are KEPT: the subagent-span forwarder watchdog
-  (`websocket.go::startOrphanWatchdog`) and `SubTurnOrphan`.
+  `scripts/check-no-orphan-turn-watchdog.sh`. One unrelated mechanism that
+  also says "orphan" is KEPT: `SubTurnOrphan`. The subagent-span forwarder
+  watchdog (formerly `websocket.go::startOrphanWatchdog`) is a DIFFERENT
+  mechanism and this delivery (ADR-091) retired it too — see
+  `pkg/gateway/websocket_forward.go`'s header for why it was not re-aimed at
+  a new trigger instead.
 
 ## Context compaction
 
