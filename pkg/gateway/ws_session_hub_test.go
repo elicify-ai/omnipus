@@ -538,3 +538,19 @@ func TestSpliceSeq(t *testing.T) {
 		t.Fatalf("spliceSeq(empty) = %s, want %s", got, want)
 	}
 }
+
+// TestHubRegistry_Lookup exercises lookup, the read-only counterpart to
+// getOrCreate that a future integration pass needs (e.g. deciding whether a
+// session already has a hub before doing anything that would create one —
+// getOrCreate is not appropriate for a pure read like "does this session
+// have any live activity").
+func TestHubRegistry_Lookup(t *testing.T) {
+	reg := newHubRegistry("boot-1")
+	if got := reg.lookup("does-not-exist"); got != nil {
+		t.Fatalf("lookup on unknown id = %v, want nil", got)
+	}
+	created := reg.getOrCreate("sess-lookup")
+	if got := reg.lookup("sess-lookup"); got != created {
+		t.Fatalf("lookup returned %v, want the same instance %v", got, created)
+	}
+}

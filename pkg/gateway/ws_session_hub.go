@@ -140,8 +140,8 @@ func (r *hubRegistry) getOrCreate(id string) *sessionHub {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if h := r.m[id]; h != nil {
-		return h
+	if existing := r.m[id]; existing != nil {
+		return existing
 	}
 	start := r.publishedTotal.Load()
 	h = &sessionHub{
