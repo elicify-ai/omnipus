@@ -25,6 +25,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/elicify-ai/omnipus/pkg/config"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -473,5 +475,66 @@ func TestGetTools_CarriesAutoApproveForEveryEntry(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no non-bash builtin entries were checked — the fixture produced no usable entries")
+	}
+}
+
+// TestGetTools_MCPAutoApproveMapsFromAnnotations proves the coordinator's
+// L1/L2 integration note end to end: an MCP tool's wire auto_approve value
+// comes from tools.ClassifyAutoApprove's Run boolean, not from inspecting
+// AutoVerdict.Class — so AutoVerdictClassMCPNotDestructive (the Class an
+// annotated-safe MCP tool's verdict carries, per
+// pkg/tools/mcp_tool.go::MCPTool.AutoApproveVerdict) correctly surfaces as
+// "runs" on the wire, and an unannotated tool correctly surfaces as "asks".
+func TestGetTools_MCPAutoApproveMapsFromAnnotations(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	mcpReg := tools.NewMCPRegistry()
+	builtins := tools.NewBuiltinRegistry()
+	readOnlyTool := tools.NewMCPTool(nil, "uat", &mcp.Tool{
+		Name:        "safe_read",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
+	})
+	unannotatedTool := tools.NewMCPTool(nil, "uat", &mcp.Tool{
+		Name: "unlabelled_write",
+	})
+	collisions := mcpReg.RegisterServerTools("uat", []tools.Tool{readOnlyTool, unannotatedTool}, builtins)
+	if len(collisions) != 0 {
+		t.Fatalf("unexpected MCP registration collisions: %v", collisions)
+	}
+	api.mcpRegistry = mcpReg
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools", nil)
+	r = withAdminRole(r)
+	w := httptest.NewRecorder()
+	api.HandleToolsRegistry(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/tools = %d, want 200: %s", w.Code, w.Body)
+	}
+
+	var entries []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &entries); err != nil {
+		t.Fatalf("response did not unmarshal as a JSON array: %v", err)
+	}
+	byName := make(map[string]map[string]any, len(entries))
+	for _, e := range entries {
+		if name, ok := e["name"].(string); ok {
+			byName[name] = e
+		}
+	}
+
+	readOnlyEntry, ok := byName[readOnlyTool.Name()]
+	if !ok {
+		t.Fatalf("response is missing the read-only MCP tool %q", readOnlyTool.Name())
+	}
+	if got := readOnlyEntry["auto_approve"]; got != "runs" {
+		t.Errorf("read-only-annotated MCP tool auto_approve = %v, want \"runs\" (verdict.Class was %q, mapped via Run, not Class)", got, tools.AutoVerdictClassMCPNotDestructive)
+	}
+
+	unannotatedEntry, ok := byName[unannotatedTool.Name()]
+	if !ok {
+		t.Fatalf("response is missing the unannotated MCP tool %q", unannotatedTool.Name())
+	}
+	if got := unannotatedEntry["auto_approve"]; got != "asks" {
+		t.Errorf("unannotated MCP tool auto_approve = %v, want \"asks\"", got)
 	}
 }
