@@ -229,6 +229,53 @@ describe('useRunningActivity — 3rd-party agent span', () => {
   })
 })
 
+// Finding 3 (ADR-091 seven-reviewer gate, 2026-09): useRunningActivity.ts
+// builds each AgentActivityItem from a span, copying statusLine,
+// childSessionId and lastUpdateAt (see the item literal in the hook's
+// agentSpans loop) — but no test asserted they actually arrive on the item.
+// If any one of the three were dropped, every row would silently lose it
+// (childSessionId especially: the user's only route into a child session,
+// via the Open control) and every test in the repo would still pass,
+// because ActivityPanel.test.tsx hands the item in directly rather than
+// going through this hook.
+describe('useRunningActivity — span metadata hop (statusLine/childSessionId/lastUpdateAt)', () => {
+  it('carries statusLine, childSessionId and lastUpdateAt from the span onto the running AgentActivityItem verbatim', async () => {
+    const client = makeClient()
+    act(() => {
+      useChatStore.setState({
+        messages: [
+          makeAssistantMessage({
+            spans: [
+              makeSpan({
+                spanId: 'span_metadata',
+                status: 'running',
+                agentId: 'ray',
+                statusLine: 'reading 3 files',
+                childSessionId: 'child-session-xyz',
+                lastUpdateAt: '2026-09-23T10:15:00.000Z',
+              }),
+            ],
+          }),
+        ],
+      })
+    })
+
+    const { result } = renderHook(() => useRunningActivity(), { wrapper: makeWrapper(client) })
+
+    await waitFor(() => {
+      expect(result.current.running).toHaveLength(1)
+    })
+
+    const item = result.current.running[0]
+    expect(item.kind).toBe('agent')
+    if (item.kind !== 'agent') throw new Error('expected an agent item')
+    expect(item.statusLine).toBe('reading 3 files')
+    expect(item.childSessionId).toBe('child-session-xyz')
+    expect(item.lastUpdateAt).toBe('2026-09-23T10:15:00.000Z')
+    client.clear()
+  })
+})
+
 describe('useRunningActivity — background bash item', () => {
   // The exact bug scenario, now fixed: a dispatch call whose OWN status is
   // already 'success' (dispatching to the background is fast/synchronous)
