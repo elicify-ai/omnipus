@@ -159,12 +159,13 @@ function GlobalToolPoliciesSection() {
 // ── Auto-approve (ADR-092) — global default ───────────────────────────────────
 //
 // Auto-approve is a SEPARATE setting from tool policy (allow/deny/ask) — it
-// only has meaning for a tool currently resolved to "ask". Today that is
-// shell commands only; a later lane extends it to other safe tools. "safe"
-// is what never leaves the kernel sandbox, judged per call. With no active
-// kernel sandbox nothing can be positively cleared, so an "ask" tool always
-// prompts regardless of this setting (see the chat-header badge, which reads
-// "Auto → Ask" for exactly that case).
+// only has meaning for a tool currently resolved to "ask". It covers every
+// such tool, not just shell commands (ADR-092 addendum §2/§3) — "runs" is
+// what the classifier proves never leaves the workspace/sandbox for that
+// specific call; a short, fixed list always asks regardless (§7). With no
+// active kernel sandbox nothing can be positively cleared, so an "ask" tool
+// always prompts regardless of this setting (see the chat-header badge,
+// which reads "Auto → Ask" for exactly that case).
 //
 // Lives on the same SandboxConfig the Process Sandbox (Advanced) section
 // already manages, and goes through the same re-auth-gated
@@ -197,7 +198,7 @@ function AutoApproveControl() {
       .gate((token) => saveAsync({ next, token }), {
         title: next ? 'Turn Auto-approve on?' : 'Turn Auto-approve off?',
         body: next
-          ? 'Agents on "ask" stop prompting for a command the sandbox can confirm never leaves it. Everything else still asks.'
+          ? 'With Auto-approve on, agents run tools set to "ask" without prompting — except changes to settings, agents, channels, providers, skills and MCP servers, deletions, installs, email, browser scripts and uploads, publishing a web preview, and connected-server tools whose server has not labelled them read-only or not destructive, which still ask. File reads and writes run only inside the workspace and its mounts — for example, saving to notes/a.md inside your workspace runs with no prompt, but a path outside it (or outside a connected mount) still asks. Needs an active kernel sandbox (none on Windows).'
           : 'Every agent tool set to "ask" prompts every time, with no auto-approval.',
         confirmLabel: next ? 'Turn Auto-approve on' : 'Turn Auto-approve off',
       })
@@ -235,8 +236,12 @@ function AutoApproveControl() {
         <div>
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Auto-approve</p>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-            For any tool set to &ldquo;ask&rdquo;, skip the prompt for what never leaves the sandbox and still ask
-            for everything else. Currently applies to shell commands; other safe tools are planned.
+            For any tool set to &ldquo;ask&rdquo;, skip the prompt &mdash; except a short list that still asks:
+            sending email, changes to settings, agents, channels, providers, skills or MCP servers, deletions,
+            installs, and browser scripts or uploads. Files stay confined to the workspace and its mounts &mdash;
+            for example, saving to notes/a.md inside your workspace runs with no prompt, but a path outside it
+            still asks. Connected-server (MCP) tools ask unless their server marks them safe. Needs an active
+            kernel sandbox (none on Windows).
           </p>
         </div>
         <Switch
