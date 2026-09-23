@@ -28,9 +28,11 @@ import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpen
 import { bufferForSpan, hasOpenSpanFast, markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
 import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, pendingCancelAckSids, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
+import { gateFrameBySeq, type SeqFrameLike } from '../cursor'
 import { ORPHAN_BUFFER_TTL_MS, orphanTimers, pendingByParentCallId } from '../types'
 import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
 import { handleReplayAndStatusFrame } from './replay-and-status-frames'
+import { handleCatchUpFrame } from './catchup-frames'
 
 
 
@@ -97,6 +99,49 @@ function advanceReceivedEventTime(
       lastReceivedEventTime: advanceEventTime(b.lastReceivedEventTime, frameTimestamp),
     }))
   }
+}
+
+// #823 catch-up redesign (BE-DESIGN.md §6.2): the SPA-side apply-rule gate,
+// run once per frame ahead of the whole per-type switch below (kept out of
+// handleFrame's own body — see the comment on advanceReceivedEventTime just
+// above for why: handleFrame is already at its grandfathered line-budget
+// ceiling, scripts/budgets/functions.txt).
+//
+// Returns 'apply' when the frame should proceed to the normal reducers
+// (either it carries no `seq` at all — the overwhelming majority of frames
+// today, since Lane A's gateway hub had not shipped `seq` on any real
+// connection as of this write — or it is exactly the next expected number).
+// Returns 'drop-or-gap' when the frame must NOT reach the switch: either it
+// is a duplicate/already-applied (`kind: 'drop'`) or it is a genuine gap
+// (`kind: 'gap'`), in which case this function ALSO fires the re-attach the
+// design requires (§6.2's gap row: "send attach_session{S, cursor}") using
+// whatever cursor the bucket already has — the server's own §3.3 rule
+// decides whether that cursor is still servable.
+function applySeqGate(
+  frame: unknown,
+  targetSid: string | null,
+  get: FrameContext['get'],
+  withBucket: FrameContext['withBucket'],
+): 'apply' | 'drop-or-gap' {
+  const f = frame as SeqFrameLike
+  if (f.seq === undefined || f.seq === null || !targetSid) return 'apply'
+  const bucket = get().sessionsById[targetSid]
+  const decision = gateFrameBySeq(bucket?.cursor ?? null, f)
+  if (decision.kind === 'apply') {
+    withBucket(targetSid, () => ({ cursor: decision.cursor }))
+    return 'apply'
+  }
+  if (decision.kind === 'gap') {
+    console.warn('[chat] sequence gap — re-attaching', { sessionId: targetSid, have: decision.cursor.seq, got: f.seq })
+    logDiagnostic('chatSeqGapReattach', { sessionId: targetSid, have: decision.cursor.seq, got: f.seq })
+    useConnectionStore.getState().connection?.send({
+      type: 'attach_session',
+      session_id: targetSid,
+      since_seq: decision.cursor.seq,
+      boot_id: decision.cursor.bootId,
+    })
+  }
+  return 'drop-or-gap'
 }
 
 function appendUnmatchedToolError(
@@ -235,7 +280,21 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       // handleFrame past its grandfathered line budget).
       advanceReceivedEventTime(frame, targetSid, withBucket)
 
+      // #823 catch-up redesign (BE-DESIGN.md §6.2): the apply rule, gating
+      // every SEQUENCED session-scoped frame ahead of the switch below — see
+      // applySeqGate's own doc comment for why this belongs here rather than
+      // per-case.
+      if (applySeqGate(frame, targetSid, get, withBucket) === 'drop-or-gap') {
+        syncForeground()
+        return
+      }
+
       if (handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid, withBucket, armRateLimitClear })) {
+        syncForeground()
+        return
+      }
+
+      if (handleCatchUpFrame({ frame, targetSid, get, withBucket })) {
         syncForeground()
         return
       }

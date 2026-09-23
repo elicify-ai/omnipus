@@ -36,6 +36,10 @@ export function emptySessionState(): SessionChatState {
     activeTurnId: null,
     activeTurnAgentId: null,
     activeTurnBubbleOpened: false,
+    // #823 catch-up redesign (BE-DESIGN.md §6.1/§6.2) — see SessionCursor's
+    // and SessionChatState.cursor's doc comments.
+    cursor: null,
+    awaitingCatchUp: false,
   }
 }
 

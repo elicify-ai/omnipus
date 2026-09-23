@@ -10,6 +10,19 @@ import type {
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
 
+/**
+ * #823 catch-up redesign (BE-DESIGN.md §6.1) — the SPA's per-session
+ * position in the gateway's per-session event log (the "hub", Lane A's
+ * `pkg/gateway/ws_session_hub.go`). Paired boot id + sequence number, sent
+ * back as `attach_session{since_seq, boot_id}` on reconnect instead of a
+ * full-bucket wipe. See `cursor.ts::gateFrameBySeq` for the apply rule this
+ * type feeds.
+ */
+export interface SessionCursor {
+  bootId: string
+  seq: number
+}
+
 export interface MediaAttachment {
   type: 'image' | 'audio' | 'video' | 'file'
   url: string
@@ -496,6 +509,28 @@ export interface SessionChatState {
    * all clear it too).
    */
   activeTurnBubbleOpened?: boolean
+  /**
+   * #823 catch-up redesign (BE-DESIGN.md §6.1) — this bucket's position in
+   * the gateway hub's per-session event log, or `null`/unset when no
+   * sequenced frame has been applied yet (every frame before Lane A's hub
+   * lands, and every frame the design deliberately keeps unsequenced —
+   * §1.2's "Not sequenced" list). Advanced ONLY by `cursor.ts::gateFrameBySeq`
+   * (called from `handleFrame` before the per-frame switch) and by the
+   * terminal `session_started`/`catch_up_complete`/`session_snapshot` frames,
+   * which mint it directly from their own `seq`/`boot_id` fields. Read by the
+   * WS attach path (`src/store/session.ts`, `OmnipusRuntimeProvider.tsx`) to
+   * send `{since_seq, boot_id}` on reconnect instead of a full-bucket wipe.
+   */
+  cursor?: SessionCursor | null
+  /**
+   * #823 catch-up redesign (BE-DESIGN.md §4.6/§6.2) — true from the moment a
+   * `session_snapshot` frame wipes this bucket's history until the matching
+   * `catch_up_complete` lands. Gates `ConnectionStatus.tsx`'s "couldn't be
+   * finished" derivation (§6.5): an `unfinished` verdict must never render
+   * mid-catch-up, only once the server's own post-catch-up
+   * `session_state.active_turn` has actually been read for this attach.
+   */
+  awaitingCatchUp?: boolean
 }
 
 /**
