@@ -437,6 +437,42 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     expect(mockAddToast).not.toHaveBeenCalled()
   })
 
+  // ADR-092 addendum §7/T17: Auto-approve now covers every tool resolved to
+  // "ask", not just shell commands. The old "Currently applies to shell
+  // commands; other safe tools are planned" wording must be gone, and the
+  // subtitle must name the fixed ask-list and the workspace-path rule
+  // instead. Written against the copy, not the implementation, so it fails
+  // if the old sentence comes back.
+  it('describes Auto-approve as covering every "ask" tool, not just shell commands', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    renderSection()
+
+    await screen.findByTestId('auto-approve-global-switch')
+
+    expect(screen.queryByText(/currently applies to shell commands/i)).not.toBeInTheDocument()
+    // The fixed ask-list (a representative sample) and the workspace-path
+    // rule's concrete example must both be present.
+    expect(screen.getByText(/sending email/i)).toBeInTheDocument()
+    expect(screen.getByText(/mcp servers/i)).toBeInTheDocument()
+    expect(screen.getByText(/notes\/a\.md/i)).toBeInTheDocument()
+    expect(screen.getByText(/none on windows/i)).toBeInTheDocument()
+  })
+
+  it('the turn-on confirmation dialog states the full ask-list and the kernel-sandbox requirement', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    renderSection()
+    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+
+    const toggle = await screen.findByTestId('auto-approve-global-switch')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).not.toHaveTextContent(/currently applies to shell commands/i)
+    expect(dialog).toHaveTextContent(/deletions, installs, email/i)
+    expect(dialog).toHaveTextContent(/needs an active kernel sandbox/i)
+  })
+
   it('a real save failure surfaces exactly one toast, from the mutation onError — the outer step-up catch never adds a second one', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
     vi.mocked(updateSandboxConfig).mockRejectedValue(new Error('gateway unreachable'))

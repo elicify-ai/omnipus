@@ -96,7 +96,14 @@ describe('ChatModeBadge — three states', () => {
     // The tooltip primitive's actual production use case — reveal on focus.
     fireEvent.focus(trigger)
     await waitFor(() => {
-      expect(screen.getByRole('tooltip')).toHaveTextContent(/no active kernel sandbox/i)
+      const tooltip = screen.getByRole('tooltip')
+      expect(tooltip).toHaveTextContent(/no active kernel sandbox/i)
+      // ADR-092 addendum §7/T17: Auto covers every tool resolved to "ask",
+      // not just shell commands — the tooltip must say so in general terms,
+      // never name shell/bash specifically as the scope of what's affected.
+      expect(tooltip).toHaveTextContent(/every tool set to .ask./i)
+      expect(tooltip).not.toHaveTextContent(/shell/i)
+      expect(tooltip).not.toHaveTextContent(/\bbash\b/i)
     })
   })
 
