@@ -830,7 +830,17 @@ jobs:
       - run: npm run test:design-system:components
       - run: npm run build:storybook
       - run: npm run test:storybook
+      # Must target the static build made one step up, never the dev server:
+      # without STORYBOOK_STATIC_DIR the config fell back to the on-demand-
+      # compiling Storybook dev server, and this step overran the job's
+      # 45-minute ceiling on every release/v0.1.1 run (2026-09-22/23). The
+      # config now refuses that fallback under CI. timeout-minutes sits just
+      # above the config's 25-minute globalTimeout, so an overrun fails here
+      # with Playwright's own reason, not as a silent job cancel.
       - run: npm run test:design-system:browser
+        timeout-minutes: 27
+        env:
+          STORYBOOK_STATIC_DIR: dist/storybook
       # Appearance gate (issue #753): pixel screenshots of the static
       # Storybook build, diffed against tests/design-system/screenshot.spec.ts-snapshots/.
       # Must run after build:storybook, and must never fall back to the dev
@@ -843,6 +853,7 @@ jobs:
       # Blocking: pixel diff of every catalogued component story against the
       # committed darwin and linux baselines (maxDiffPixels: 50).
       - run: npm run test:design-system:screenshot
+        timeout-minutes: 27
         env:
           STORYBOOK_STATIC_DIR: dist/storybook
       - name: Upload appearance-gate diff evidence
