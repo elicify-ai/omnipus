@@ -294,16 +294,6 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 		newSessionID = uuid.NewString()
 	}
 
-	label := ""
-	t.mu.Lock()
-	if taskID, ok := t.sessionIndex[sessionID]; ok {
-		if st, ok := t.tasks[taskID]; ok {
-			label = st.Label
-			instructions = fmt.Sprintf("Original task: %s\n\n%s", st.Task, instructions)
-		}
-	}
-	t.mu.Unlock()
-
 	// The whole-struct copy is load-bearing for FR-034: ParentAgentID (and
 	// SteeringSessionID/OriginChannel/OriginChatID with it) MUST be carried
 	// forward onto every generation mint. It is deliberately CARRIED FORWARD
@@ -344,9 +334,14 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	if dispatch.State == steer.DispatchQueued {
 		message += fmt.Sprintf(", queue position %d", dispatch.QueuePosition)
 	}
-	if label != "" {
+	// rec.Title is the durable launch-time label (session.LifecycleRecord's
+	// own doc comment) — the session_id-addressed replacement for the
+	// pre-ADR-091 in-memory task-state label lookup this used to read
+	// (t.tasks/t.sessionIndex, deleted with the last writer that populated
+	// them; see delegate.go's package doc comment).
+	if rec.Title != "" {
 		message = fmt.Sprintf("Follow-up for %q dispatched for session %s at generation %d (state: %s)",
-			label, newSessionID, dispatch.Generation, dispatch.State)
+			rec.Title, newSessionID, dispatch.Generation, dispatch.State)
 	}
 	return NewToolResult(message)
 }

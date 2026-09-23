@@ -11,7 +11,7 @@ func TestDelegateTool_Metadata(t *testing.T) {
 	if got := tool.Name(); got != "delegate" {
 		t.Fatalf("Name() = %q, want delegate", got)
 	}
-	if got := tool.Description(); got == "" || !strings.Contains(got, "returns its session_id") {
+	if got := tool.Description(); got == "" || !strings.Contains(got, "returns at once with the child's session_id") {
 		t.Fatalf("Description() must explain immediate session launch, got %q", got)
 	}
 
@@ -20,12 +20,12 @@ func TestDelegateTool_Metadata(t *testing.T) {
 	if !ok {
 		t.Fatal("Parameters().properties is not an object")
 	}
-	for _, name := range []string{"task", "label", "agent_id", "action", "task_id", "session_id", "snapshot", "requested_skill", "timeout_seconds", "critical"} {
+	for _, name := range []string{"task", "label", "agent_id", "action", "session_id", "goal", "snapshot", "requested_skill", "timeout_seconds", "critical"} {
 		if _, found := props[name]; !found {
 			t.Errorf("Parameters() is missing %q", name)
 		}
 	}
-	for _, retired := range []string{"async", "allow_blocking_question"} {
+	for _, retired := range []string{"async", "allow_blocking_question", "task_id"} {
 		if _, found := props[retired]; found {
 			t.Errorf("Parameters() still publishes retired argument %q", retired)
 		}
@@ -54,11 +54,12 @@ func TestDelegateTool_ExecuteRejectsInvalidRunInput(t *testing.T) {
 	}
 }
 
-func TestDelegateTool_StatusRejectsNonStringTaskID(t *testing.T) {
+func TestDelegateTool_StatusRequiresSessionID(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
-	result := tool.Execute(context.Background(), map[string]any{"action": "status", "task_id": 42})
-	if result == nil || !result.IsError || !strings.Contains(result.ForLLM, "task_id must be a string") {
-		t.Fatalf("status result = %+v, want task_id type error", result)
+	result := tool.Execute(context.Background(), map[string]any{"action": "status"})
+	if result == nil || !result.IsError || !strings.Contains(result.ForLLM, "session_id is required") {
+		t.Fatalf("status result = %+v, want a session_id-required error — session_id is the only way to "+
+			"address a child post-ADR-091", result)
 	}
 }
 
@@ -72,7 +73,7 @@ func TestDelegateTool_KillSwitchGatesMessagingActionsOnly(t *testing.T) {
 		}
 	}
 
-	result := tool.Execute(context.Background(), map[string]any{"action": "status", "task_id": "missing"})
+	result := tool.Execute(context.Background(), map[string]any{"action": "status", "session_id": "missing"})
 	if result == nil || strings.Contains(result.ForLLM, "session-messaging plane is disabled") {
 		t.Fatalf("status must not be gated by the messaging kill switch: %+v", result)
 	}

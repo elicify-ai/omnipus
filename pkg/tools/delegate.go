@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,9 +24,19 @@ import (
 // child turn directly in a goroutine, entirely bypassing the legacy
 // SubagentManager.tasks map that `check_spawn_status` read from —
 // checking on a spawn-created task always reported "no subagents have been
-// spawned yet." DelegateTool's own `tasks` map is now the SINGLE state store
-// both the run path writes to and `action: "status"` reads from — no
-// second, disconnected data structure exists.
+// spawned yet." DelegateTool grew its own `tasks`/`sessionIndex` maps as the
+// FR-D2 fix's SINGLE state store, keyed by a task_id the tool itself minted.
+//
+// ADR-091 superseded that store: the launcher migration (delegate_run.go's
+// executeRun/launchAndDispatch) moved dispatch onto steer.SessionLauncher —
+// the one session-launch primitive every session type now shares — which
+// writes only the durable session.LifecycleRecord, never the legacy tasks
+// map. `action:"status"` (and every other parent-side action) now reads
+// that same durable record by session_id; the tasks/sessionIndex maps and
+// their task_id addressing were deleted with the last caller that wrote
+// them, closing the FR-D2 problem this comment used to describe a
+// different way (a second, disconnected store) permanently rather than
+// reopening it.
 
 // ContextSnapshot is the discretionary portion of the ADR-053 curated
 // context snapshot: parent-named artifact references, not contents, plus
@@ -35,89 +44,6 @@ import (
 type ContextSnapshot struct {
 	References []string
 	Notes      string
-}
-
-// DelegateTaskState is the single source of truth for a background
-// (async=true) delegated task's status — written by DelegateTool's own async
-// path and read by action:"status" (FR-D2). It replaces the legacy,
-// disconnected SubagentTask/SubagentManager.tasks pair.
-type DelegateTaskState struct {
-	ID            string
-	Task          string
-	Label         string
-	AgentID       string
-	OriginChannel string
-	OriginChatID  string
-	Status        string // running | completed | failed | canceled
-	Result        string
-	Created       int64
-
-	// SessionID (ADR-057 W21b — RE-POINTED, deliberately, not left as a
-	// silent byproduct of FR-007 landing elsewhere in this change set) is
-	// the DELEGATING PARENT's own transcript session id at task-creation
-	// time — captured from ToolTranscriptSessionID(ctx) inside the caller's
-	// own tool-execution context, i.e. the caller's OWN durable session id
-	// (pkg/agent/subturn.go's TranscriptSessionID: childID, post-FR-007),
-	// NOT the spawned child's. Retained for display/back-compat only
-	// (delegateFormatTask does not currently render it, and no other
-	// consumer in this package reads it). Pre-ADR-057, this field doubled
-	// as "the session a running native task's activity snapshot is read
-	// from", because a delegated child used to write its OWN narration into
-	// its PARENT's shared transcript — that assumption broke silently the
-	// moment FR-007 gave every child its own real session, and
-	// recentActivityLines has been re-pointed at DelegateSessionID instead
-	// (FR-043; see that field's own doc comment). Empty when no transcript
-	// session context was available at creation time (e.g. a direct
-	// programmatic Execute call, as in most of this file's tests).
-	SessionID string
-	// SpawnCallID is this delegate tool call's own ID — the value a spawned
-	// child sub-turn's transcript entries carry back as
-	// session.TranscriptEntry.ParentSpawnCallID (see that field's doc
-	// comment and pkg/agent/subturn.go's parentSpawnCallID). Captured at
-	// task-creation time from ToolCallID(ctx). Used to filter SessionID's
-	// transcript down to just this task's own activity.
-	SpawnCallID string
-	// Is3P is true when this task's target agent dispatches via an external
-	// CLI runner (subagent_3p: claude-code/codex/opencode — see
-	// runner.DispatchKindExternalCLI) rather than natively inside the
-	// Omnipus agent loop. Resolved ONCE at task-creation time via
-	// DelegateAgentRegistry.IsExternalCLI, so a registry/config change
-	// mid-flight cannot flip a task's own snapshot eligibility
-	// inconsistently. By design (operator-confirmed scope for W2),
-	// external-CLI dispatch is treated as batch/report-on-completion for
-	// action:"status" purposes even though runExternalCLISubTurn's own
-	// narration DOES land in the same ParentSpawnCallID-tagged transcript
-	// entries a native task's does (see recordExternalToolCall /
-	// pkg/agent/external_dispatch.go's appendIntermediateAssistantTranscript
-	// calls) — a running Is3P task's action:"status" never attempts a live
-	// transcript snapshot regardless, and instead renders a fixed
-	// no-live-progress note.
-	Is3P bool
-
-	// DelegateSessionID is the ADR-053 durable session_id (S2) this task's
-	// child was spawned under — distinct from SessionID above. status/
-	// inbox/steer/respond/cancel/follow_up/peek all address a child by THIS
-	// id, and (ADR-057 FR-043) so does recentActivityLines: post-FR-007 a
-	// delegated child writes its OWN transcript into its OWN session
-	// (DelegateSessionID), never into SessionID (the delegating PARENT's
-	// own transcript id at dispatch time — see SessionID's own doc comment
-	// above), so reading SessionID back for a running task's activity
-	// snapshot silently found nothing the moment FR-007 landed elsewhere in
-	// this change set. Fixed here; DelegateSessionID is the only correct
-	// key for that read.
-	DelegateSessionID string
-
-	// LastStatusRead is the UnixMilli timestamp of this task's most recent
-	// action:"status" read (ADR-057 FR-045/FR-087, BDD-52) — stamped by
-	// getTaskCopy/listTaskCopies on every read, and initialized to the
-	// task's own Created time at registration so a never-polled task still
-	// ages from a real timestamp rather than from the zero value (which
-	// would read as 1970 and make it immediately eligible for eviction).
-	// evictStaleTasksLocked uses this, not Created, to decide whether a
-	// terminal task has gone stale long enough to reclaim — a task still
-	// being actively polled must never be evicted out from under a caller
-	// mid-conversation.
-	LastStatusRead int64
 }
 
 // delegateSessionIDCtxKey is the context key carrying a child turn's own
@@ -295,18 +221,7 @@ type DelegateTool struct {
 	// SetOwnershipWalkMaxDepth and defaultOwnershipWalkMaxDepth.
 	ownershipWalkMaxDepth int
 
-	mu     sync.Mutex
-	tasks  map[string]*DelegateTaskState
-	nextID int
-	// sessionIndex maps a DelegateSessionID (ADR-053 durable id) back to its
-	// legacy taskID (t.tasks' key), so status/inbox/etc. can resolve either
-	// the legacy task_id or the new session_id to the same DelegateTaskState.
-	sessionIndex map[string]string
-	// taskRetentionCap/taskRetentionTTL bound t.tasks/t.sessionIndex
-	// (FR-045/FR-087, BDD-52) — see SetTaskRetentionPolicy,
-	// defaultDelegateTaskRetentionCap and defaultDelegateTaskTTL.
-	taskRetentionCap int
-	taskRetentionTTL time.Duration
+	mu sync.Mutex
 
 	// delegationDenyBackground applies the full delegation-policy gate
 	// (FR-6.2: trust set + mode("background") + depth) for async=true calls.
@@ -435,9 +350,6 @@ func NewDelegateTool(defaultModel string, maxTokens int, temperature float64) *D
 		defaultModel:     defaultModel,
 		maxTokens:        maxTokens,
 		temperature:      temperature,
-		tasks:            make(map[string]*DelegateTaskState),
-		sessionIndex:     make(map[string]string),
-		nextID:           1,
 		cancelGrace:      defaultCancelGrace,
 		now:              time.Now,
 		steerRateWindows: make(map[string][]time.Time),
@@ -688,124 +600,6 @@ func (t *DelegateTool) ownershipMaxDepth() int {
 	return defaultOwnershipWalkMaxDepth
 }
 
-// defaultDelegateTaskRetentionCap/defaultDelegateTaskTTL bound
-// t.tasks/t.sessionIndex (FR-045/FR-087, BDD-52) when
-// SetTaskRetentionPolicy is never called: an install that runs many
-// delegations over a long uptime must not grow these maps without bound.
-const (
-	defaultDelegateTaskRetentionCap = 1000
-	defaultDelegateTaskTTL          = time.Hour
-)
-
-// SetTaskRetentionPolicy overrides the retention bound (C, FR-087) and TTL
-// (T, FR-045) governing t.tasks/t.sessionIndex eviction. Zero/negative
-// values fall back to the defaults above.
-//
-// Parameter named retentionCap, not cap: the predeclared built-in `cap()`
-// must stay callable unshadowed inside this function's own body (and any
-// future edit to it) — golangci-lint's predeclared check flags a parameter
-// sharing that name.
-func (t *DelegateTool) SetTaskRetentionPolicy(retentionCap int, ttl time.Duration) {
-	if retentionCap > 0 {
-		t.taskRetentionCap = retentionCap
-	}
-	if ttl > 0 {
-		t.taskRetentionTTL = ttl
-	}
-}
-
-// taskCap returns the configured retention bound (C, FR-087) —
-// evictStaleTasksLocked's second pass enforces it.
-func (t *DelegateTool) taskCap() int {
-	if t.taskRetentionCap > 0 {
-		return t.taskRetentionCap
-	}
-	return defaultDelegateTaskRetentionCap
-}
-
-func (t *DelegateTool) taskTTL() time.Duration {
-	if t.taskRetentionTTL > 0 {
-		return t.taskRetentionTTL
-	}
-	return defaultDelegateTaskTTL
-}
-
-// isTerminalDelegateStatus reports whether status is one of the three
-// terminal DelegateTaskState.Status values eviction is scoped to
-// (FR-045/FR-087) — a "running" task is never evicted regardless of age.
-func isTerminalDelegateStatus(status string) bool {
-	switch status {
-	case "completed", "failed", "canceled":
-		return true
-	}
-	return false
-}
-
-// evictStaleTasksLocked removes terminal DelegateTaskState entries whose
-// last action:"status" read (getTaskCopy stamps LastStatusRead on a
-// targeted single-task read; a never-polled task ages from its own Created
-// time) is older than the configured TTL (FR-045), keeping
-// t.tasks/t.sessionIndex bounded (FR-087, BDD-52) without evicting a task
-// still within its TTL window (BDD-52's "But" clause, test #93) — which
-// would otherwise break a caller's next action:"status" poll for it.
-// Callers MUST already hold t.mu. Runs as part of the tool's own
-// bookkeeping (every new corrective-run registration) —
-// FR-045 requires no external caller/ticker, and this satisfies it without
-// adding a goroutine to manage.
-//
-// Second pass — FR-087's cap (C), previously dead code: a fleet of terminal
-// tasks that are all still individually within their own TTL window (e.g. a
-// caller polling every one of them faster than TTL elapses) would otherwise
-// grow t.tasks/t.sessionIndex without bound regardless of the configured
-// retention cap, since the TTL sweep above is the ONLY mechanism that ran
-// before this fix (taskCap had no other reference in the repo). When the
-// map is still over taskCap() after the TTL sweep, evict the
-// LEAST-RECENTLY-READ terminal tasks first until at/under cap — the same
-// "actively polled survives" ordering as the TTL sweep (a task with a
-// fresh LastStatusRead is evicted last, so an in-progress poll loop is
-// never starved out from under the caller). Running tasks are NEVER
-// evicted by either mechanism (isTerminalDelegateStatus), so the cap is a
-// best-effort bound when running tasks alone already exceed it.
-func (t *DelegateTool) evictStaleTasksLocked() {
-	cutoff := t.now().Add(-t.taskTTL())
-	for id, st := range t.tasks {
-		if !isTerminalDelegateStatus(st.Status) {
-			continue
-		}
-		if time.UnixMilli(st.LastStatusRead).After(cutoff) {
-			continue
-		}
-		delete(t.tasks, id)
-		if st.DelegateSessionID != "" {
-			delete(t.sessionIndex, st.DelegateSessionID)
-		}
-	}
-
-	limit := t.taskCap()
-	if len(t.tasks) <= limit {
-		return
-	}
-	type terminalAge struct {
-		id   string
-		read int64
-	}
-	terminal := make([]terminalAge, 0, len(t.tasks))
-	for id, st := range t.tasks {
-		if isTerminalDelegateStatus(st.Status) {
-			terminal = append(terminal, terminalAge{id: id, read: st.LastStatusRead})
-		}
-	}
-	sort.Slice(terminal, func(i, j int) bool { return terminal[i].read < terminal[j].read })
-	excess := len(t.tasks) - limit
-	for i := 0; i < excess && i < len(terminal); i++ {
-		id := terminal[i].id
-		if st, ok := t.tasks[id]; ok && st.DelegateSessionID != "" {
-			delete(t.sessionIndex, st.DelegateSessionID)
-		}
-		delete(t.tasks, id)
-	}
-}
-
 // SetDelegationDenyCheckerBackground installs the full delegation-policy gate
 // (FR-6.2: trust set + mode("background") + depth) applied when async=true.
 // Mirrors the pre-merge SpawnTool.SetDelegationDenyChecker exactly.
@@ -821,18 +615,27 @@ func (t *DelegateTool) Name() string {
 
 func (t *DelegateTool) Description() string {
 	return "Delegate a task to a subagent, and control/monitor it afterward. " +
+		"Choosing between these: delegate hands work to another agent now and returns immediately — " +
+		"use it when you need the result inside this conversation. create_task files work as a card " +
+		"on the board that runs on its own and is judged against its goal — use it for work that " +
+		"outlives this conversation or that someone should see. A plan is for long-running, complex " +
+		"implementations and higher-level planning: several tasks with an order and dependencies " +
+		"between them, and an agent working on one of those tasks can itself delegate further. If the " +
+		"work is a single lookup or one action you can do yourself, just do it — starting a child " +
+		"costs time and one of a limited number of concurrent slots. " +
 		"For a goal with two or more independent parts meant to run in parallel (for example several " +
 		"files or deliverables written by different agents), prefer a plan over several parallel run " +
 		"calls: load create_plan and execute_plan with ToolSearch (if your policy allows them). A plan's " +
 		"members declare write_sets that plan-lint checks for overlap before anything runs, and the whole " +
 		"plan is judged against one Definition of Done and can be stopped as a unit; parallel delegate " +
 		"calls get no overlap check. Delegate directly for a single self-contained piece of work. " +
-		"action=\"run\" (default) launches a session and returns its session_id and " +
-		"running or queued state immediately. A delegation is force-cancelled after " +
-		"timeout_seconds (default 300s / 5 min) if it has not finished by then. " +
-		"action=\"status\" checks on a previously-delegated task/session; with no " +
-		"task_id/session_id given, it lists all tasks currently visible to you instead — " +
-		"this is the tool's discovery affordance for what you have outstanding. " +
+		"action=\"run\" (default) launches a session. It returns at once with the child's session_id " +
+		"and whether it is running or queued (with its place in line). You get a message when the " +
+		"child finishes, asks a question, or hits a problem. Check on it with delegate status, " +
+		"redirect it with delegate steer, stop it with delegate cancel. A delegation is " +
+		"force-cancelled after timeout_seconds (default 300s / 5 min) if it has not finished by then. " +
+		"action=\"status\" checks on a previously-delegated session by its session_id — the only way " +
+		"to address a child; use list_jobs to see everything you have outstanding. " +
 		"action=\"inbox\" drains messages the child has pushed back to you (progress/" +
 		"checkpoint/artifact/blocker/question/handback); action=\"inbox_ack\" acknowledges " +
 		"them. action=\"steer\" injects an instruction at the child's next tool boundary " +
@@ -851,6 +654,48 @@ func (t *DelegateTool) Description() string {
 func (t *DelegateTool) Scope() ToolScope { return ScopeCore }
 
 func (t *DelegateTool) Category() ToolCategory { return CategoryDelegation }
+
+// delegateCriterionItemSchema is the per-item schema shared by the "goal"
+// parameter's criteria/dod arrays below — the exact object shape
+// parseDelegateCriterion (delegate_goal.go) accepts. It is a NARROWER subset
+// of create_task/create_plan's own criteria/dod item schema (task.go/plan.go):
+// delegate's goal only accepts kind "prose" or "check" — there is no
+// "behavior" kind here, unlike the task/plan tools' criteria/dod, so it is
+// not mirrored byte-for-byte, only shape-for-shape on the fields delegate's
+// own parser actually reads.
+func delegateCriterionItemSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"text": map[string]any{
+				"type":        "string",
+				"description": "The criterion statement (required).",
+			},
+			"kind": map[string]any{
+				"type": "string",
+				"enum": []string{"prose", "check"},
+				"description": "prose: a free-text statement judged when the child's work is checked. " +
+					"check: a shell command run to verify it. Optional — inferred from the payload (a " +
+					"check payload => check, otherwise prose); an explicit kind mismatching its payload " +
+					"is rejected.",
+			},
+			"check": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"command":            map[string]any{"type": "string", "description": "Shell command to run"},
+					"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
+				},
+				"description": "Required when kind is \"check\"; must be omitted for \"prose\".",
+			},
+			"judgment": map[string]any{
+				"type":        "string",
+				"enum":        []string{"boolean", "quantitative", "artifact"},
+				"description": "How this criterion is scored. Optional, defaults to boolean.",
+			},
+		},
+		"required": []string{"text"},
+	}
+}
 
 func (t *DelegateTool) Parameters() map[string]any {
 	return map[string]any{
@@ -879,16 +724,30 @@ func (t *DelegateTool) Parameters() map[string]any {
 					"instruction. \"respond\" answers an open question. \"cancel\" stops a child. " +
 					"\"follow_up\" warm-resumes a finished child. \"peek\" reads latest checkpoint/progress.",
 			},
-			"task_id": map[string]any{
-				"type": "string",
-				"description": "The task_id to check (e.g. \"delegate-1\"), used with action=\"status\". " +
-					"When omitted under action=\"status\", all visible tasks are listed instead. DEPRECATED " +
-					"alias for session_id — session_id wins when both are present.",
-			},
 			"session_id": map[string]any{
 				"type": "string",
-				"description": "The durable child session to target. Required for status/inbox/inbox_ack/" +
-					"steer/respond/cancel/follow_up/peek.",
+				"description": "The durable child session to target — the only way to address a " +
+					"child. Required for status/inbox/inbox_ack/steer/respond/cancel/follow_up/peek.",
+			},
+			"goal": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"criteria": map[string]any{
+						"type":        "array",
+						"items":       delegateCriterionItemSchema(),
+						"description": "Outcome-specific checks for this delegation.",
+					},
+					"dod": map[string]any{
+						"type":        "array",
+						"items":       delegateCriterionItemSchema(),
+						"description": "Generic standing quality gates for this delegation (same shape as criteria).",
+					},
+				},
+				"description": "Optional (action=\"run\" only): must be an object with a criteria and/or " +
+					"dod array — a plain string is not accepted — and at least one item across the two " +
+					"once the object is given. One sentence stating what 'done' means for this child, " +
+					"and how you would check it. Set one for multi-step work or work you must verify " +
+					"before relying on it; leave it off for a quick lookup or a single action.",
 			},
 			"snapshot": map[string]any{
 				"type": "object",

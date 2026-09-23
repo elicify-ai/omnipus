@@ -100,12 +100,15 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap int) stri
 
 		if activeBackground {
 			// delegate: agent_id is optional but we supply the concrete id so
-			// the agent can copy-paste the call. Background mode — async is
-			// the default, so no async=... suffix is needed here. Poll via
-			// session_id, not the deprecated task_id alias (finding 4).
+			// the agent can copy-paste the call. Background mode — there is
+			// no synchronous alternative to opt out of (ADR-091 D4 deleted
+			// the wait-inline parameters outright), so this always runs in
+			// the background, never "by default" as if a foreground path
+			// still existed. Poll via session_id, the only way to address a
+			// child post-ADR-091 (task_id was deleted, not just deprecated).
 			fmt.Fprintf(
 				&sb,
-				"\n- `delegate(agent_id=%q, task=\"…\")` — runs async by default; poll `delegate(action=\"status\", session_id=\"…\")` for the result.",
+				"\n- `delegate(agent_id=%q, task=\"…\")` — runs in the background; poll `delegate(action=\"status\", session_id=\"…\")` for the result.",
 				tgt.ID,
 			)
 		}

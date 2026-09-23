@@ -10,13 +10,22 @@
 //     counts were discarded after a log line. Fixed by returning
 //     (killed, failed) from killChildBackgroundShells and folding a real
 //     failure into the result message.
-//   - Defect 2 (MAJOR): taskCap() was dead code (zero references outside
-//     its own definition) — evictStaleTasksLocked enforced only TTL, so
+//   - Defect 2 (MAJOR, ADR-091: machinery deleted, tests below removed with
+//     it) — was: taskCap() was dead code (zero references outside its own
+//     definition) — evictStaleTasksLocked enforced only TTL, so
 //     SetTaskRetentionPolicy's cap argument had no effect at any value.
 //     Compounding: listTaskCopies mutated the STORED record's
 //     LastStatusRead on every bare list-all read, refreshing the eviction
 //     clock on every task in the map (not just the one(s) the caller
-//     cared about) and starving eviction indefinitely.
+//     cared about) and starving eviction indefinitely. ADR-091's launcher
+//     migration deleted the last writer of the in-memory task-state index
+//     (t.tasks/t.sessionIndex) this whole defect and its fix lived in —
+//     SetTaskRetentionPolicy, taskCap, taskTTL, evictStaleTasksLocked,
+//     getTaskCopy and listTaskCopies were deleted with it (see delegate.go's
+//     package doc comment); the two regression tests that pinned this fix
+//     (TestEvictStaleTasksLocked_CapEnforced_IndependentOfTTL,
+//     TestListTaskCopies_DoesNotMutateStoredLastStatusRead) went with them
+//     rather than being left to seed a map that no longer exists.
 //   - Defect 3 (MAJOR): verifyCallerOwnsSession collapsed every ancestor
 //     Load error into the same silent chain-end as the expected not-found
 //     case, so a genuine I/O error (corrupt/truncated record, disk-full
@@ -33,7 +42,6 @@ package tools
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -244,161 +252,6 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 			t.Errorf("must NOT add a kill-failure warning when there was nothing to kill, got: %s", result.ForLLM)
 		}
 	})
-}
-
-// ---------------------------------------------------------------------
-// Defect 2: taskCap must actually bound t.tasks/t.sessionIndex, and
-// listTaskCopies must not mutate stored state.
-// ---------------------------------------------------------------------
-
-// TestEvictStaleTasksLocked_CapEnforced_IndependentOfTTL isolates FR-087
-// (the retention cap) from FR-045 (the TTL) — the pre-existing
-// TestDelegateTaskMaps_BoundedAfterNCompletions (delegate_adr057_test.go)
-// ages every task past its TTL before asserting the bound, so it could
-// pass even with taskCap() completely unreferenced (as it, in fact, was —
-// golangci-lint flagged it `unused`). Here the TTL is set to an hour and
-// the whole test completes in a couple of simulated minutes, so ANY bound
-// this test observes can only come from cap enforcement.
-func TestEvictStaleTasksLocked_CapEnforced_IndependentOfTTL(t *testing.T) {
-	tool, _ := u14PermissiveTool(t)
-
-	fakeNow := time.Now()
-	tool.SetClock(func() time.Time { return fakeNow })
-
-	const capN = 3
-	tool.SetTaskRetentionPolicy(capN, time.Hour) // TTL far larger than this test's simulated span
-
-	// Seed t.tasks/t.sessionIndex directly rather than via Execute(action:
-	// "run", ...): ADR-091's launcher migration (delegate_run.go::
-	// launchAndDispatch) moved dispatch entirely onto
-	// steer.SessionLauncher.Launch/Dispatch, which never writes t.tasks/
-	// t.sessionIndex — that legacy task_id-keyed bookkeeping has no live
-	// production writer left. This test is a white-box unit test of
-	// evictStaleTasksLocked itself (called directly below, same as every
-	// other test in this file that exercises it — see e.g.
-	// TestListTaskCopies_DoesNotMutateStoredLastStatusRead's identical
-	// tool.tasks[...] = &DelegateTaskState{...} seeding), so it seeds the
-	// map the same way its siblings do instead of relying on a dispatch
-	// path that no longer populates it.
-	const n = 5 // n > capN
-	var taskIDs []string
-	tool.mu.Lock()
-	for i := 0; i < n; i++ {
-		taskID := fmt.Sprintf("fix6-cap-task-%d", i)
-		sessionID := fmt.Sprintf("fix6-cap-session-%d", i)
-		tool.tasks[taskID] = &DelegateTaskState{
-			// Status must be terminal: evictStaleTasksLocked's own doc
-			// comment (isTerminalDelegateStatus) says a "running" task is
-			// NEVER evicted by either the TTL sweep or the cap pass,
-			// regardless of age — cap enforcement is scoped to
-			// completed/failed/canceled tasks only.
-			ID: taskID, Task: "old", Status: "completed",
-			Created: fakeNow.UnixMilli(), LastStatusRead: fakeNow.UnixMilli(),
-			DelegateSessionID: sessionID,
-		}
-		tool.sessionIndex[sessionID] = taskID
-		taskIDs = append(taskIDs, taskID)
-	}
-	beforeCount := len(tool.tasks)
-	tool.mu.Unlock()
-	// Positive lower bound (Rule 4): registration alone (no TTL elapsed at
-	// all — every task's LastStatusRead is still fresh) must already have
-	// pushed the map past the cap, or the bounded assertion below would
-	// pass vacuously even with cap enforcement still dead code.
-	if beforeCount <= capN {
-		t.Fatalf("precondition: expected t.tasks to have grown past the cap (%d) via registration alone "+
-			"(TTL never elapsed), got %d — the fixture does not exercise the cap at all", capN, beforeCount)
-	}
-
-	// Actively poll ONE surviving task via getTaskCopy — the legacy
-	// task_id single-task read path that still stamps LastStatusRead (see
-	// getTaskCopy's own doc comment) — giving it a strictly later
-	// LastStatusRead than every other task. Proves cap eviction removes
-	// the LEAST-recently-read tasks first, the same "actively polled
-	// survives" invariant BDD-52 already established for TTL-driven
-	// eviction, now also holding for cap-driven eviction.
-	survivorID := taskIDs[0]
-	fakeNow = fakeNow.Add(time.Minute)
-	if _, ok := tool.getTaskCopy(survivorID); !ok {
-		t.Fatalf("status poll for survivor failed: task %s not found", survivorID)
-	}
-
-	// Run the exact same eviction pass every registration triggers
-	// (FR-045/FR-087's bookkeeping-driven trigger), directly — no new task
-	// is added here, so the resulting count is exactly what cap
-	// enforcement leaves behind.
-	tool.mu.Lock()
-	tool.evictStaleTasksLocked()
-	gotTasks := len(tool.tasks)
-	gotIndex := len(tool.sessionIndex)
-	tool.mu.Unlock()
-
-	if gotTasks > capN {
-		t.Errorf("FR-087: expected len(t.tasks) <= %d after eviction — none of these %d tasks had aged past "+
-			"the 1-hour TTL, so this bound can ONLY come from cap enforcement — got %d", capN, n, gotTasks)
-	}
-	if gotIndex > capN {
-		t.Errorf("FR-087: expected len(t.sessionIndex) <= %d after eviction, got %d", capN, gotIndex)
-	}
-
-	if _, ok := tool.getTaskCopy(survivorID); !ok {
-		t.Errorf("expected the actively-polled task to survive cap eviction (least-recently-read evicted first)")
-	}
-}
-
-// TestListTaskCopies_DoesNotMutateStoredLastStatusRead is a direct,
-// surgical reproduction of the second half of defect 2: a bare list-all
-// read (listTaskCopies, backing action:"status" with no task_id/
-// session_id) must not reset ANY task's own eviction clock — only a
-// targeted single-task read (getTaskCopy) legitimately does that.
-func TestListTaskCopies_DoesNotMutateStoredLastStatusRead(t *testing.T) {
-	tool, _ := u14PermissiveTool(t)
-	fakeNow := time.Now()
-	tool.SetClock(func() time.Time { return fakeNow })
-
-	const wantStamp = int64(123456789000)
-	tool.mu.Lock()
-	tool.tasks["fix6-probe"] = &DelegateTaskState{
-		ID: "fix6-probe", Status: "completed", Created: wantStamp, LastStatusRead: wantStamp,
-	}
-	tool.mu.Unlock()
-
-	// Advance the clock so a mutating listTaskCopies would produce an
-	// OBSERVABLY different stamp than wantStamp — a bug that happened to
-	// read "now" as the same instant would otherwise pass vacuously.
-	fakeNow = fakeNow.Add(time.Hour)
-
-	copies := tool.listTaskCopies()
-	if len(copies) != 1 {
-		t.Fatalf("expected exactly 1 task copy, got %d", len(copies))
-	}
-	if copies[0].LastStatusRead != wantStamp {
-		t.Errorf("returned copy's LastStatusRead changed from %d to %d — listTaskCopies must not fabricate "+
-			"a new stamp", wantStamp, copies[0].LastStatusRead)
-	}
-
-	tool.mu.Lock()
-	gotStored := tool.tasks["fix6-probe"].LastStatusRead
-	tool.mu.Unlock()
-	if gotStored != wantStamp {
-		t.Errorf("BLOCKER-adjacent (defect 2): listTaskCopies must NOT mutate the STORED task's "+
-			"LastStatusRead — a bare list-all action:\"status\" poll would otherwise refresh the eviction "+
-			"clock on EVERY task in the map, including other conversations', starving eviction indefinitely "+
-			"regardless of the configured retention policy. stored LastStatusRead changed from %d to %d",
-			wantStamp, gotStored)
-	}
-
-	// Positive control: a SECOND call, after another clock advance, must
-	// still leave the stored value untouched — proves this isn't a
-	// first-call-only coincidence.
-	fakeNow = fakeNow.Add(time.Hour)
-	_ = tool.listTaskCopies()
-	tool.mu.Lock()
-	gotStored2 := tool.tasks["fix6-probe"].LastStatusRead
-	tool.mu.Unlock()
-	if gotStored2 != wantStamp {
-		t.Errorf("second listTaskCopies call mutated stored LastStatusRead: got %d, want %d", gotStored2, wantStamp)
-	}
 }
 
 // ---------------------------------------------------------------------

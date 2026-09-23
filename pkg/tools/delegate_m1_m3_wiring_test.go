@@ -126,52 +126,24 @@ func TestDelegateInboxAck_AllUnknown_ZeroAcknowledged(t *testing.T) {
 	}
 }
 
-// TestDelegateTool_ResolvableLabels_ImplementsJobLabelResolver is the
-// RED/GREEN test for M3: DelegateTool.ResolvableLabels must resolve a
-// dispatch's caller-supplied label by delegate session id, mirroring
-// ResolvableSessionIDs' contract (batch lookup, single lock acquisition, a
-// miss is an omission from the map — never an error/panic/zero-value entry).
-func TestDelegateTool_ResolvableLabels_ImplementsJobLabelResolver(t *testing.T) {
+// TestDelegateTool_ResolvableLabels_AlwaysEmptyPostADR091 replaces the old
+// M3 RED/GREEN test, which proved ResolvableLabels resolved a dispatch's
+// caller-supplied label from the in-memory task-state index this tool used
+// to keep (t.tasks/t.sessionIndex, keyed by task_id). ADR-091's launcher
+// migration deleted that index outright — see delegate.go's package doc
+// comment and ResolvableLabels' own doc comment — and list_jobs never
+// actually wired a label resolver into its subagent-row read path even
+// before the deletion (collectSubagentRows takes no labelResolver
+// parameter), so this was already unreachable from production. The method
+// is kept only to satisfy tools.JobLabelResolver for pkg/agent's existing
+// wiring; this test pins its new, honest behavior: every id comes back
+// unresolved, with no map to seed.
+func TestDelegateTool_ResolvableLabels_AlwaysEmptyPostADR091(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
-	tool.mu.Lock()
-	tool.tasks["delegate-labeled"] = &DelegateTaskState{
-		ID:                "delegate-labeled",
-		Task:              "labeled dispatch",
-		Status:            "running",
-		Label:             "UAT_LABEL_TEST_PROBE",
-		DelegateSessionID: "ses-labeled",
-	}
-	tool.sessionIndex["ses-labeled"] = "delegate-labeled"
 
-	tool.tasks["delegate-unlabeled"] = &DelegateTaskState{
-		ID:                "delegate-unlabeled",
-		Task:              "unlabeled dispatch",
-		Status:            "running",
-		DelegateSessionID: "ses-unlabeled",
-		// Label intentionally empty — the ordinary "no label argument was
-		// given" case.
-	}
-	tool.sessionIndex["ses-unlabeled"] = "delegate-unlabeled"
-	tool.mu.Unlock()
+	got := tool.ResolvableLabels([]string{"ses-a", "ses-b"})
 
-	// A JobLabelResolver-shaped call, matching how list_jobs would invoke it:
-	// a single batch of session ids, including one this process has never
-	// heard of at all (e.g. it predates a restart — FR-011's exact
-	// "unresolvable" scenario for ResolvableSessionIDs).
-	got := tool.ResolvableLabels([]string{"ses-labeled", "ses-unlabeled", "ses-unknown-to-this-process"})
-
-	if got["ses-labeled"] != "UAT_LABEL_TEST_PROBE" {
-		t.Errorf("expected the custom label for ses-labeled, got %q", got["ses-labeled"])
-	}
-	if v, present := got["ses-unlabeled"]; present {
-		t.Errorf("a dispatch with no custom label must be OMITTED from the map (never an empty-string "+
-			"entry a caller might mistake for a real match), got %q", v)
-	}
-	if v, present := got["ses-unknown-to-this-process"]; present {
-		t.Errorf("a session id this process has no task for must be omitted, got %q", v)
-	}
-	// Positive lower bound on the whole map: exactly one entry, the labeled one.
-	if len(got) != 1 {
-		t.Errorf("expected exactly 1 resolvable label, got %d: %v", len(got), got)
+	if len(got) != 0 {
+		t.Errorf("expected no resolvable labels (the backing index was deleted with ADR-091), got %d: %v", len(got), got)
 	}
 }
