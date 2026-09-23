@@ -40,28 +40,14 @@ import (
 // per-connection eventForwarder path.
 func (h *WSHandler) hubSyncTap(evt agent.Event) {
 	switch evt.Kind {
-	// NOTE (honest gap, see SQUAD-REPORT-BEA.md): EventKindTurnStart,
-	// EventKindSubTurnSpawn, EventKindSubTurnEnd, EventKindTurnEnd are
-	// DELIBERATELY NOT routed through the hub yet. A first attempt wrote
-	// hub-side handlers (hubTurnStart/hubSubTurnSpawn/hubSubTurnEnd/
-	// hubTurnEnd, a per-session hubSpanRegistry, startHubOrphanWatchdog,
-	// synthesizeHubOrphanEnd) but they were deleted again in this same pass
-	// once golangci-lint's unused-code check confirmed nothing called them —
-	// keeping wired-nowhere code around is worse than a clean slate.
-	// websocket_forward_test.go's sibling orphan-watchdog suite
-	// (orphan_watchdog_*.go) drives the OLD per-connection eventForwarder
-	// with real, sub-millisecond timers and depends on an unblock-then-
-	// observe pattern that deadlocks the whole test binary if its
-	// precondition (the watchdog got armed) silently stops holding — exactly
-	// what cutting this over without migrating that suite in the same change
-	// would do. Cutting these four over needs that whole suite migrated
-	// together, verified deadlock-free, in one pass, with the hub-side
-	// handlers rewritten alongside it — not attempted under this session's
-	// time constraints. Until then subagent_start/end and the orphan
-	// watchdog remain on the OLD per-connection path (websocket_forward.go's
-	// onTurnStart/
-	// onSubTurnSpawn/onSubTurnEnd/onTurnEnd, unchanged, still in the
-	// eventForwarder switch).
+	case agent.EventKindTurnStart:
+		h.hubTurnStart(evt)
+	case agent.EventKindSubTurnSpawn:
+		h.hubSubTurnSpawn(evt)
+	case agent.EventKindSubTurnEnd:
+		h.hubSubTurnEnd(evt)
+	case agent.EventKindTurnEnd:
+		h.hubTurnEnd(evt)
 	case agent.EventKindToolExecStart:
 		h.hubToolExecStart(evt)
 	case agent.EventKindToolExecEnd:
@@ -549,8 +535,3 @@ func (h *WSHandler) hubLoopStatusChanged(evt agent.Event) {
 	}
 	h.hubBroadcastWithSequencedCopy(p.SessionID, string(generated.WsFrameTypeLoopStatus), data)
 }
-
-// ---------------------------------------------------------------------
-// subagent_start/end + the orphan watchdog, now per-hub (per session)
-// rather than per-connection (BE-DESIGN.md §7).
-// ---------------------------------------------------------------------

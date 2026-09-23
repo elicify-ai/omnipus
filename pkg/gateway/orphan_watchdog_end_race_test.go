@@ -135,11 +135,8 @@ func TestOrphanWatchdog_RealEndRacingTheWatchdog_NeverSynthesizesInterrupted(t *
 	const sessionKey = "test-session-orphan-watchdog-end-race"
 
 	h := makeMinimalHandlerWithAgentLoop(al)
-	sub := al.SubscribeEvents(64)
-	t.Cleanup(func() { al.UnsubscribeEvents(sub.ID) })
 	wc, ch := makeForwarderTestConn(256)
-	fwdDone := make(chan struct{})
-	go h.eventForwarder(wc, chatID, sub, fwdDone)
+	attachHubTestConn(t, h, al, chatID, wc)
 
 	parentDone := make(chan struct{})
 	var parentErr error
@@ -181,12 +178,13 @@ func TestOrphanWatchdog_RealEndRacingTheWatchdog_NeverSynthesizesInterrupted(t *
 			t.Fatal("BLOCKED: timed out waiting for the delegate's subagent_end after releasing the gate")
 		}
 	}
-	// Let the delegate finish its own cleanup and the forwarder stop, then
-	// collect anything sent after the first end frame too: a synthetic
-	// interrupted end arriving just AFTER the real one is the same defect.
+	// Let the delegate finish its own cleanup, then collect anything sent
+	// after the first end frame too: a synthetic interrupted end arriving
+	// just AFTER the real one is the same defect. The hub publishes span
+	// frames synchronously on the emitting goroutine and a resolved span can
+	// never be synthesized again (synthesizeOrphanEnd re-checks it under
+	// spanMu), so nothing can still be in flight once the delegate is done.
 	waitBounded(t, 15*time.Second, "async delegate drain (WaitForAsyncTasks)", delegateTool.WaitForAsyncTasks)
-	al.UnsubscribeEvents(sub.ID)
-	waitBounded(t, 5*time.Second, "event forwarder exit", func() { <-fwdDone })
 	frames = append(frames, drainAllFrames(ch)...)
 
 	var endStatuses []string

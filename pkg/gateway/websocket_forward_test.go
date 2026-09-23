@@ -32,8 +32,6 @@ import (
 // has attached to — even though its ChatID does not match this connection's
 // own chatID or taskChatIDs alias at all.
 func TestEventForwarder_SessionBasedFallback_ReachesReattachedConnection(t *testing.T) {
-	bus := agent.NewEventBus()
-	defer bus.Close()
 	h := makeMinimalHandler()
 
 	const newChatID = "webchat:new-connection-after-reload"
@@ -42,17 +40,16 @@ func TestEventForwarder_SessionBasedFallback_ReachesReattachedConnection(t *test
 
 	// Simulate handleAttachSession having reattached this (new) connection
 	// to the persisted session.
-	h.mu.Lock()
-	h.sessionIDs[newChatID] = durableSessionID
-	h.mu.Unlock()
-
+	// #823 Lane A: driven through h.hubSyncTap. This kind is produced by the
+	// session hub (sync tap), not the per-connection forwarder, so the old
+	// runForwarder+bus.Emit form of this test could no longer observe it.
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, newChatID, bus)
+	bindTestConnToSession(h, newChatID, durableSessionID, wc)
 
 	// A background delegate's real completion event, carrying the STALE
 	// pre-reload chatID (its turn was dispatched under the OLD connection)
 	// but the SAME durable session_id.
-	bus.Emit(agent.Event{
+	h.hubSyncTap(agent.Event{
 		Kind: agent.EventKindSubTurnEnd,
 		Payload: agent.SubTurnEndPayload{
 			AgentID:           "ray",
@@ -64,9 +61,6 @@ func TestEventForwarder_SessionBasedFallback_ReachesReattachedConnection(t *test
 			SessionID:         durableSessionID,
 		},
 	})
-
-	bus.Close()
-	<-done
 
 	require.Len(t, ch, 1,
 		"BUG REGRESSION: a live event whose ChatID names a stale, pre-reload connection must still "+
@@ -83,19 +77,16 @@ func TestEventForwarder_SessionBasedFallback_ReachesReattachedConnection(t *test
 // match) must NOT be forwarded — the session-based fallback must not turn
 // into a broadcast-to-everyone leak.
 func TestEventForwarder_SessionBasedFallback_DoesNotLeakAcrossDifferentSessions(t *testing.T) {
-	bus := agent.NewEventBus()
-	defer bus.Close()
 	h := makeMinimalHandler()
 
 	const thisConnChatID = "webchat:this-connection"
-	h.mu.Lock()
-	h.sessionIDs[thisConnChatID] = "session-A"
-	h.mu.Unlock()
-
+	// #823 Lane A: driven through h.hubSyncTap. This kind is produced by the
+	// session hub (sync tap), not the per-connection forwarder, so the old
+	// runForwarder+bus.Emit form of this test could no longer observe it.
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, thisConnChatID, bus)
+	bindTestConnToSession(h, thisConnChatID, "session-A", wc)
 
-	bus.Emit(agent.Event{
+	h.hubSyncTap(agent.Event{
 		Kind: agent.EventKindSubTurnEnd,
 		Payload: agent.SubTurnEndPayload{
 			AgentID:           "ray",
@@ -106,9 +97,6 @@ func TestEventForwarder_SessionBasedFallback_DoesNotLeakAcrossDifferentSessions(
 			SessionID:         "session-B", // a DIFFERENT session
 		},
 	})
-
-	bus.Close()
-	<-done
 
 	assert.Empty(t, ch,
 		"an event belonging to a different session must not be forwarded to this connection")
@@ -164,19 +152,16 @@ func TestEventForwarder_ErrorFrame_ReachesReattachedConnection(t *testing.T) {
 // TestEventForwarder_ErrorFrame_DoesNotLeakAcrossDifferentSessions is the
 // negative twin: SessionID matching is not a broadcast.
 func TestEventForwarder_ErrorFrame_DoesNotLeakAcrossDifferentSessions(t *testing.T) {
-	bus := agent.NewEventBus()
-	defer bus.Close()
 	h := makeMinimalHandler()
 
 	const thisConnChatID = "webchat:this-connection"
-	h.mu.Lock()
-	h.sessionIDs[thisConnChatID] = "session-A"
-	h.mu.Unlock()
-
+	// #823 Lane A: driven through h.hubSyncTap. This kind is produced by the
+	// session hub (sync tap), not the per-connection forwarder, so the old
+	// runForwarder+bus.Emit form of this test could no longer observe it.
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, thisConnChatID, bus)
+	bindTestConnToSession(h, thisConnChatID, "session-A", wc)
 
-	bus.Emit(agent.Event{
+	h.hubSyncTap(agent.Event{
 		Kind: agent.EventKindError,
 		Payload: agent.ErrorPayload{
 			Stage:     "workspace",
@@ -186,9 +171,6 @@ func TestEventForwarder_ErrorFrame_DoesNotLeakAcrossDifferentSessions(t *testing
 			SessionID: "session-B",
 		},
 	})
-
-	bus.Close()
-	<-done
 
 	assert.Empty(t, ch,
 		"a typed error belonging to a different session must not be forwarded to this connection")
@@ -239,19 +221,16 @@ func TestEventForwarder_RateLimitFrame_ReachesReattachedConnection(t *testing.T)
 // TestEventForwarder_RateLimitFrame_DoesNotLeakAcrossDifferentSessions is
 // the negative twin: SessionID matching is not a broadcast.
 func TestEventForwarder_RateLimitFrame_DoesNotLeakAcrossDifferentSessions(t *testing.T) {
-	bus := agent.NewEventBus()
-	defer bus.Close()
 	h := makeMinimalHandler()
 
 	const thisConnChatID = "webchat:this-connection"
-	h.mu.Lock()
-	h.sessionIDs[thisConnChatID] = "session-A"
-	h.mu.Unlock()
-
+	// #823 Lane A: driven through h.hubSyncTap. This kind is produced by the
+	// session hub (sync tap), not the per-connection forwarder, so the old
+	// runForwarder+bus.Emit form of this test could no longer observe it.
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, thisConnChatID, bus)
+	bindTestConnToSession(h, thisConnChatID, "session-A", wc)
 
-	bus.Emit(agent.Event{
+	h.hubSyncTap(agent.Event{
 		Kind: agent.EventKindRateLimit,
 		Payload: agent.RateLimitPayload{
 			Scope:      "agent",
@@ -261,9 +240,6 @@ func TestEventForwarder_RateLimitFrame_DoesNotLeakAcrossDifferentSessions(t *tes
 			SessionID:  "session-B",
 		},
 	})
-
-	bus.Close()
-	<-done
 
 	assert.Empty(t, ch,
 		"an internal rate-limit belonging to a different session must not be forwarded to this connection")

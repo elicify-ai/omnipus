@@ -49,6 +49,17 @@ func runForwarder(h *WSHandler, wc *wsConn, chatID string, bus *agent.EventBus) 
 	return doneCh
 }
 
+// attachHubTestBus is the #823 Lane A replacement for runForwarder in the
+// sub-agent span tests: span frames and the orphan watchdog now live in the
+// session hub, fed synchronously by the EventBus sync tap, not in a
+// per-connection eventForwarder. It installs h.hubSyncTap on bus and binds
+// wc under chatID to a session, the way a real connection's attach does, so
+// events carrying only the chat id resolve to that session's hub.
+func attachHubTestBus(h *WSHandler, bus *agent.EventBus, chatID string, wc *wsConn) {
+	bus.SetSyncTap(h.hubSyncTap)
+	bindTestConnToSession(h, chatID, "hub-test-session:"+chatID, wc)
+}
+
 // makeMinimalHandler builds a WSHandler with no real dependencies set.
 // eventForwarder only uses h.mu and h.taskChatIDs from the handler struct.
 //
@@ -77,7 +88,7 @@ func TestSpawn_SubTurnStart_EmitsSubagentStart(t *testing.T) {
 
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, "chat-1", bus)
+	attachHubTestBus(h, bus, "chat-1", wc)
 
 	// Emit a SubTurnSpawn event with the ChatID matching the connection.
 	bus.Emit(agent.Event{
@@ -93,7 +104,6 @@ func TestSpawn_SubTurnStart_EmitsSubagentStart(t *testing.T) {
 
 	// Close bus so the forwarder terminates.
 	bus.Close()
-	<-done
 
 	// Exactly one frame must have been sent.
 	require.Len(t, ch, 1, "exactly one frame must be emitted for SubTurnSpawn")
@@ -121,7 +131,7 @@ func TestSpawn_SubTurnEnd_EmitsSubagentEnd(t *testing.T) {
 			bus := agent.NewEventBus()
 			h := makeMinimalHandler()
 			wc, ch := makeForwarderTestConn(64)
-			done := runForwarder(h, wc, "chat-1", bus)
+			attachHubTestBus(h, bus, "chat-1", wc)
 
 			bus.Emit(agent.Event{
 				Kind: agent.EventKindSubTurnEnd,
@@ -136,7 +146,6 @@ func TestSpawn_SubTurnEnd_EmitsSubagentEnd(t *testing.T) {
 			})
 
 			bus.Close()
-			<-done
 
 			require.Len(t, ch, 1, "exactly one frame must be emitted for SubTurnEnd")
 			frame := drainFrame(t, ch)
@@ -225,7 +234,7 @@ func TestSpawn_OrphanSubTurn_EmitsInterruptedAfter5s(t *testing.T) {
 	bus := agent.NewEventBus()
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, "chat-1", bus)
+	attachHubTestBus(h, bus, "chat-1", wc)
 
 	// 1. A sub-turn starts: emit subagent_start.
 	bus.Emit(agent.Event{
@@ -263,7 +272,6 @@ func TestSpawn_OrphanSubTurn_EmitsInterruptedAfter5s(t *testing.T) {
 		"watchdog must emit subagent_end{interrupted} within 2s after parent turn ends")
 
 	bus.Close()
-	<-done
 
 	// Drain frames: first is subagent_start, second is synthesized subagent_end.
 	var frames []replayFrameDecoder
@@ -299,7 +307,7 @@ func TestSpawn_SubTurnEnd_AfterParentDone_CancelsWatchdog(t *testing.T) {
 	bus := agent.NewEventBus()
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, "chat-1", bus)
+	attachHubTestBus(h, bus, "chat-1", wc)
 
 	// 1. Sub-turn spawns.
 	bus.Emit(agent.Event{
@@ -340,7 +348,6 @@ func TestSpawn_SubTurnEnd_AfterParentDone_CancelsWatchdog(t *testing.T) {
 	// Wait past where the watchdog WOULD have fired (600ms > 500ms timer).
 	time.Sleep(600 * time.Millisecond)
 	bus.Close()
-	<-done
 
 	// Drain all frames.
 	var frames []replayFrameDecoder

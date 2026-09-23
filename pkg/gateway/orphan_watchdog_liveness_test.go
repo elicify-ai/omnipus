@@ -282,11 +282,8 @@ func TestOrphanWatchdog_GenuinelyActiveDelegate_NeverSynthesizesInterrupted(t *t
 	const sessionKey = "test-session-orphan-watchdog-liveness"
 
 	h := makeMinimalHandlerWithAgentLoop(al)
-	sub := al.SubscribeEvents(64)
-	t.Cleanup(func() { al.UnsubscribeEvents(sub.ID) })
 	wc, ch := makeForwarderTestConn(256)
-	fwdDone := make(chan struct{})
-	go h.eventForwarder(wc, chatID, sub, fwdDone)
+	attachHubTestConn(t, h, al, chatID, wc)
 
 	ctx := context.Background()
 	parentDone := make(chan struct{})
@@ -348,9 +345,6 @@ func TestOrphanWatchdog_GenuinelyActiveDelegate_NeverSynthesizesInterrupted(t *t
 			t.Fatal("BLOCKED: timed out waiting for the real subagent_end frame after releasing the gate")
 		}
 	}
-
-	al.UnsubscribeEvents(sub.ID)
-	waitBounded(t, 5*time.Second, "event forwarder exit", func() { <-fwdDone })
 }
 
 // TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeiling
@@ -452,11 +446,8 @@ func TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeilin
 	const sessionKey = "test-session-orphan-watchdog-ceiling"
 
 	h := makeMinimalHandlerWithAgentLoop(al)
-	sub := al.SubscribeEvents(64)
-	t.Cleanup(func() { al.UnsubscribeEvents(sub.ID) })
 	wc, ch := makeForwarderTestConn(256)
-	fwdDone := make(chan struct{})
-	go h.eventForwarder(wc, chatID, sub, fwdDone)
+	attachHubTestConn(t, h, al, chatID, wc)
 
 	ctx := context.Background()
 	parentDone := make(chan struct{})
@@ -510,9 +501,6 @@ func TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeilin
 	assert.Contains(t, logOutput, "span_orphan_ceiling_exceeded",
 		"exceeding the reschedule ceiling must be logged distinctly from a normal orphaned-span synthesis")
 
-	al.UnsubscribeEvents(sub.ID)
-	waitBounded(t, 5*time.Second, "event forwarder exit", func() { <-fwdDone })
-
 	// The watchdog's force-fire above is a synthetic websocket frame only —
 	// it never cancels the real sub-turn, so the gated goroutine parked in
 	// orphan_gate_tool is still running. A stale comment here used to claim
@@ -534,6 +522,48 @@ func TestOrphanWatchdog_PermanentlyStuckDelegate_ForceFiresInterruptedPastCeilin
 		t.Fatal("BLOCKED: gated delegate goroutine did not finish within 15s of releasing the gate " +
 			"past the reschedule ceiling — the permanently-stuck delegate was never actually reaped")
 	}
+}
+
+// attachHubTestConn is the #823 Lane A replacement for running a
+// per-connection eventForwarder for chatID: sub-agent span events and the
+// orphan watchdog now live in the session hub, fed by the EventBus sync tap.
+//
+// It installs h.hubSyncTap on al and binds wc to the ROUTING session of
+// chatID's turn — the session a real browser tab that started the turn is
+// bound to. ProcessDirectWithChannel mints that session id itself (e.g.
+// "session_01M…"), so it cannot be known up front: the wrapper binds wc the
+// first time an event for chatID names its routing session (the parent's
+// own delegate tool_exec_start, which always precedes the span's
+// subagent_start on the same goroutine), then hands every event to the real
+// hubSyncTap unchanged.
+func attachHubTestConn(t *testing.T, h *WSHandler, al *agent.AgentLoop, chatID string, wc *wsConn) {
+	t.Helper()
+	var bindOnce sync.Once
+	al.SetEventSyncTap(func(evt agent.Event) {
+		if sid, chat := eventRoutingSessionAndChat(evt); chat == chatID && sid != "" {
+			bindOnce.Do(func() { bindTestConnToSession(h, chatID, sid, wc) })
+		}
+		h.hubSyncTap(evt)
+	})
+	t.Cleanup(func() { al.SetEventSyncTap(nil) })
+}
+
+// eventRoutingSessionAndChat extracts (routing session id, chat id) from the
+// event kinds that carry both.
+func eventRoutingSessionAndChat(evt agent.Event) (sessionID, chatID string) {
+	switch p := evt.Payload.(type) {
+	case agent.ToolExecStartPayload:
+		return p.SessionID, p.ChatID
+	case agent.ToolExecEndPayload:
+		return p.SessionID, p.ChatID
+	case agent.SubTurnSpawnPayload:
+		return p.SessionID, p.ChatID
+	case agent.SubTurnEndPayload:
+		return p.SessionID, p.ChatID
+	case agent.TurnEndPayload:
+		return p.SessionID, p.ChatID
+	}
+	return "", ""
 }
 
 // waitBounded runs fn on its own goroutine and fails the test loudly if fn

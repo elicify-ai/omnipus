@@ -61,7 +61,7 @@ func TestOrphanWatchdog_SpawnAfterRootTurnEnd_StillArmsAndInterrupts(t *testing.
 	bus := agent.NewEventBus()
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, "chat-1", bus)
+	attachHubTestBus(h, bus, "chat-1", wc)
 
 	// 1. Root turn ends FIRST (the delegate's spawn event is still in flight
 	//    on its detached goroutine).
@@ -78,7 +78,6 @@ func TestOrphanWatchdog_SpawnAfterRootTurnEnd_StillArmsAndInterrupts(t *testing.
 			"armed by the orphan watchdog and force-resolved to subagent_end{interrupted}")
 
 	bus.Close()
-	<-done
 
 	var frames []replayFrameDecoder
 	for len(ch) > 0 {
@@ -107,7 +106,7 @@ func TestOrphanWatchdog_NewRootTurnStart_ResetsLatch(t *testing.T) {
 	bus := agent.NewEventBus()
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, "chat-1", bus)
+	attachHubTestBus(h, bus, "chat-1", wc)
 
 	// Previous root turn ended...
 	emitRootTurnEnd(bus, "chat-1")
@@ -128,7 +127,6 @@ func TestOrphanWatchdog_NewRootTurnStart_ResetsLatch(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	bus.Close()
-	<-done
 
 	require.Len(t, ch, 1,
 		"a span spawned under a LIVE root turn must produce only subagent_start — "+
@@ -149,7 +147,7 @@ func TestOrphanWatchdog_ChildTurnStart_DoesNotResetLatch(t *testing.T) {
 	bus := agent.NewEventBus()
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, "chat-1", bus)
+	attachHubTestBus(h, bus, "chat-1", wc)
 
 	// Root turn ended; delegate A's spawn lands late and starts running.
 	emitRootTurnEnd(bus, "chat-1")
@@ -174,7 +172,6 @@ func TestOrphanWatchdog_ChildTurnStart_DoesNotResetLatch(t *testing.T) {
 			"root-turn-ended latch — delegate B's late spawn was registered unarmed")
 
 	bus.Close()
-	<-done
 
 	interrupted := map[string]bool{}
 	for len(ch) > 0 {

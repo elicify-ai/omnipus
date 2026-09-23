@@ -113,6 +113,18 @@ type sessionHub struct {
 	inbox    []hubIntent
 	draining bool
 
+	// spanMu guards the per-session sub-agent span registry below (the
+	// hub-side replacement for the old per-connection eventForwardState
+	// openSpans/rootTurnEnded, BE-DESIGN.md §7: one orphan watchdog per span
+	// per SESSION, never one per tab). Lock order: spanMu → mu (a span
+	// frame is published while spanMu is held, so "is the span still open"
+	// and "publish its end" are one atomic decision). Never take spanMu
+	// while holding mu.
+	spanMu            sync.Mutex
+	spans             map[string]*hubSpan // keyed by parent spawn call id
+	rootTurnEnded     bool
+	rootTurnEndReason string
+
 	registry *hubRegistry
 }
 
