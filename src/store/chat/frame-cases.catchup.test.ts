@@ -175,6 +175,36 @@ describe('user_message (§1.2/§4.7, founder decision Q1)', () => {
   })
 })
 
+describe('token{replace:true} (§4.4 projection replay)', () => {
+  it('D7: replace:true OVERWRITES an existing bubble\'s content instead of appending', () => {
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'partial answer so far', turn_id: 't1', message_id: 'm1', seq: 1,
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: ' more', turn_id: 't1', message_id: 'm1', seq: 2,
+    } as WsReceiveFrame)
+    let b = bucket()
+    expect(b.messagesById.m1.content).toBe('partial answer so far more')
+
+    // A projection replay token (§4.4) with replace:true — the same
+    // message_id, but the frame's content is the FULL accumulated text,
+    // not a delta. Must overwrite, not append.
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'partial answer so far more', turn_id: 't1', message_id: 'm1', replace: true, seq: 3,
+    } as WsReceiveFrame)
+    b = bucket()
+    expect(b.messagesById.m1.content).toBe('partial answer so far more')
+
+    // A SECOND replace with different content proves it isn't coincidentally
+    // matching — a real append would have doubled it.
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'entirely different replayed text', turn_id: 't1', message_id: 'm1', replace: true, seq: 4,
+    } as WsReceiveFrame)
+    b = bucket()
+    expect(b.messagesById.m1.content).toBe('entirely different replayed text')
+  })
+})
+
 describe('applySeqGate wiring (§6.2) — a frame TYPE with no id-based dedup of its own', () => {
   it('D6: a duplicate-seq `token` frame is applied exactly once, proving the seq gate (not a per-case dedup) is what stops it', () => {
     const tokenFrame = (): WsReceiveFrame =>
