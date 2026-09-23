@@ -1,0 +1,27 @@
+{
+  "provisional": true,
+  "source": "BE-DESIGN.md §6.4 — \"Live turn T in session S, two rounds with one tool call, one tab\"",
+  "sessionId": "sess-f1",
+  "scenario": {
+    "description": "A single tab sends one message; the agent replies with narration, one tool call, then more narration, then done. No reconnect involved — this is the baseline live-path shape every other fixture's catch-up must reproduce byte-identically.",
+    "expected": {
+      "finalMessageCount": 2,
+      "userMessageContent": "what's 2+2?",
+      "assistantMessageContent": "let me check\n\nit's 4",
+      "assistantTurnId": "turn-f1",
+      "toolCallIds": ["call-f1-1"],
+      "isStreamingAfter": false,
+      "finalCursorSeq": 8
+    }
+  },
+  "frames": [
+    { "type": "user_message", "session_id": "sess-f1", "id": "u-f1-1", "client_message_id": "u-f1-1", "content": "what's 2+2?", "timestamp": "2026-09-23T00:00:00.000Z", "seq": 1 },
+    { "type": "message_status", "session_id": "sess-f1", "client_message_id": "u-f1-1", "state": "received", "seq": 2 },
+    { "type": "message_status", "session_id": "sess-f1", "client_message_id": "u-f1-1", "state": "working", "seq": 3 },
+    { "type": "token", "session_id": "sess-f1", "content": "let me check", "turn_id": "turn-f1", "message_id": "msg-f1-1", "agent_id": "mia", "seq": 4 },
+    { "type": "tool_call_start", "session_id": "sess-f1", "tool": "calculator", "call_id": "call-f1-1", "params": { "expr": "2+2" }, "agent_id": "mia", "seq": 5 },
+    { "type": "tool_call_result", "session_id": "sess-f1", "tool": "calculator", "call_id": "call-f1-1", "result": 4, "status": "success", "agent_id": "mia", "seq": 6 },
+    { "type": "token", "session_id": "sess-f1", "content": "it's 4", "turn_id": "turn-f1", "message_id": "msg-f1-1", "agent_id": "mia", "seq": 7 },
+    { "type": "done", "session_id": "sess-f1", "turn_id": "turn-f1", "message_id": "msg-f1-1", "stats": { "tokens": 12, "cost": 0.001 }, "seq": 8 }
+  ]
+}

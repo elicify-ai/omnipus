@@ -638,6 +638,14 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 if (frame.agent_id) {
                   msg.agentId = frame.agent_id
                 }
+                // #823 catch-up redesign (BE-DESIGN.md §6.3): TokenFrame now
+                // carries turn_id (Step 0's contract change) — stamp it the
+                // same way agentId is stamped above, additive-only (never
+                // overwrites an already-known value with a different one,
+                // same permissive rule as the agentId boundary check).
+                if (frame.turn_id && !msg.turnId) {
+                  msg.turnId = frame.turn_id
+                }
                 // Consume the seam marker: a tool call started on this bubble
                 // since the last token was appended, so this frame begins a
                 // new logical unit — insert a paragraph break instead of

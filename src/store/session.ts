@@ -447,27 +447,15 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const { connection } = useConnectionStore.getState()
 
     if (connection) {
-      // #823 catch-up redesign (BE-DESIGN.md §6.1) — send this bucket's own
-      // cursor (if any) so the gateway can answer with an incremental
-      // catch-up instead of a full replay. A first-ever attach (no cursor
-      // yet) sends the bare frame, unchanged from before.
-      const sent = connection.send({
-        type: 'attach_session',
-        session_id: sessionId,
-        ...attachSessionCursorFields(sessionId),
-      })
+      // #823 (§6.1): send the bucket's cursor for incremental catch-up; no
+      // longer wiped here — only session_snapshot wipes now (Q3).
+      const sent = connection.send({ type: 'attach_session', session_id: sessionId, ...attachSessionCursorFields(sessionId) })
       if (!sent) {
         useConnectionStore.getState().setConnectionError(
           'Could not attach to session — connection dropped. Please reconnect and try again.'
         )
         return false
       }
-      // #823 catch-up redesign (BE-DESIGN.md §6.1): the bucket is NO LONGER
-      // wiped here. Only an explicit `session_snapshot` frame wipes history
-      // now (src/store/chat/slices/catchup-frames.ts) — wiping on every
-      // attach would defeat the incremental catch-up this cursor exists to
-      // enable (see session.workspace.test.ts's rewritten test for the full
-      // provenance of this change, Q3).
       set((state) => ({
         activeSessionId: sessionId,
         attachedSessionType: type,
