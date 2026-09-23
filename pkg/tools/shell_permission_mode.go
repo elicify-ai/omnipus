@@ -231,7 +231,7 @@ func (t *ExecTool) EvaluateCommandRules(command string) shellrule.CommandVerdict
 	return t.evaluateCommandRules(command)
 }
 
-// verdictHasGenuineAskRuleMatch reports whether v carries at least one
+// VerdictHasGenuineAskRuleMatch reports whether v carries at least one
 // segment whose ActionAsk verdict came from an ACTUAL operator command_rule
 // match (seg.MatchedRule != nil) — as opposed to a blind segment, which
 // evaluateSegment also reports as ActionAsk (FR-020's fail-closed default
@@ -239,14 +239,37 @@ func (t *ExecTool) EvaluateCommandRules(command string) shellrule.CommandVerdict
 // zero command_rules are configured. Only a genuine match should trigger
 // finding #11's mode-wide ask-rule escalation; see that branch's own doc
 // comment for why conflating the two broke ordinary substitution-containing
-// commands under any mode besides Auto.
-func verdictHasGenuineAskRuleMatch(v shellrule.CommandVerdict) bool {
+// commands under any mode besides Auto. Exported for pkg/agent's upfront
+// prompt, which settles a genuine ask-rule match in its one dialog (§5.7).
+func VerdictHasGenuineAskRuleMatch(v shellrule.CommandVerdict) bool {
 	for _, seg := range v.Segments {
 		if seg.Action == shellrule.ActionAsk && seg.MatchedRule != nil {
 			return true
 		}
 	}
 	return false
+}
+
+// ruleAskSettledKey marks a bash call whose operator D3 ask rule was already
+// settled by the agent loop's one upfront approval (see WithRuleAskSettled).
+type ruleAskSettledKey struct{}
+
+// WithRuleAskSettled records, on one bash call's execution context, that a
+// human approved the agent loop's upfront prompt and that prompt carried
+// this call's D3 ask-rule context (ADR-092 D9 §5.7). enforceShellPermissionMode
+// then skips its own rule prompt, so one call shows one dialog. Only the
+// agent loop sets it, and only on the call it approved.
+func WithRuleAskSettled(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ruleAskSettledKey{}, true)
+}
+
+// RuleAskSettled reports whether ctx carries WithRuleAskSettled.
+func RuleAskSettled(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	settled, _ := ctx.Value(ruleAskSettledKey{}).(bool)
+	return settled
 }
 
 // shellRuleDenialMessage explains a D3 ActionDeny verdict — SEC-17-style
@@ -598,7 +621,7 @@ func (t *ExecTool) enforceShellPermissionMode(ctx context.Context, command strin
 	// for the one mode (God) where an ask rule is correctly a no-op (no
 	// approvals exist there at all — D1's own definition of God Mode).
 	//
-	// Gated on verdictHasGenuineAskRuleMatch, NOT verdict.Action==ActionAsk
+	// Gated on VerdictHasGenuineAskRuleMatch, NOT verdict.Action==ActionAsk
 	// alone: evaluateSegment reports ActionAsk for a BLIND segment (an
 	// unresolvable head — e.g. a `for i in $(seq 1 3)` loop's naive
 	// "i" head-scan failing PATH resolution) with EXACTLY the same Action
@@ -614,7 +637,12 @@ func (t *ExecTool) enforceShellPermissionMode(ctx context.Context, command strin
 	// posture inside enforceFSPreflight, and by the classic ask-policy gate
 	// for real Ask-mode calls) — this branch exists only for an operator's
 	// EXPLICIT {action: ask} rule.
-	if mode != ShellModeGod && verdictHasGenuineAskRuleMatch(verdict) {
+	//
+	// RuleAskSettled (§5.7): the agent loop's single upfront prompt already
+	// carried this rule's context and a human approved it, so asking again
+	// here would show a second dialog for the same call. A deny rule was
+	// refused above regardless, and D7/D8 below still run.
+	if mode != ShellModeGod && VerdictHasGenuineAskRuleMatch(verdict) && !RuleAskSettled(ctx) {
 		approved, reason := t.requestRuleApproval(ctx, sessionID, agentID, toolCallID, command, verdict)
 		if !approved {
 			return nil, ErrorResult(fmt.Sprintf(

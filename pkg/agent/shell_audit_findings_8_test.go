@@ -22,7 +22,7 @@ import (
 
 // TestEmitShellRuleSettledAudit_WritesApprovalDecision is the regression
 // test for review finding #8(c) (LOW, 2026-09-23 security fix lane): a
-// prompt an operator D3 ALLOW rule fully settled (bashRulesSettlePrompt)
+// prompt an operator D3 ALLOW rule fully settled (bashRuleVerdict.settlesPrompt)
 // left NO audit trail at all before this fix — indistinguishable in the
 // log from an ordinary unprompted "allow"-ceiling execution.
 func TestEmitShellRuleSettledAudit_WritesApprovalDecision(t *testing.T) {
@@ -74,7 +74,7 @@ func TestEmitShellClassicAskDecisionAudit_WritesApprovalDecision(t *testing.T) {
 	al.auditLogger = lg
 
 	ts := &turnState{agentID: testDefaultAgentID, transcriptSessionID: "sess-classic-ask"}
-	al.emitShellClassicAskDecisionAudit(ts, map[string]any{"command": "rm -rf /tmp/x"}, false, "user")
+	al.emitShellClassicAskDecisionAudit(ts, map[string]any{"command": "rm -rf /tmp/x"}, "classic_ask", false, "user")
 	require.NoError(t, lg.Close())
 
 	entries := readAuditEvents(t, dir+"/audit.jsonl")

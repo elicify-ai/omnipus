@@ -513,11 +513,10 @@ func (al *AgentLoop) emitScheduledAutoDenyAudit(
 //
 // One instance per AgentLoop, built in NewAgentLoop and injected into every
 // agent's bash tool by wireExecToolDepsOn as both ExecToolDeps.ShellMode and
-// ExecToolDeps.ApprovalRequester. ModeStore is the loop's own per-chat
-// Auto-approve store (AgentLoop.SessionModes()).
+// ExecToolDeps.ApprovalRequester. The per-chat Auto-approve modifier is read
+// from Loop.SessionModes() through Loop.autoApproveActive.
 type ShellPermissionGate struct {
-	Loop      *AgentLoop
-	ModeStore *SessionModeStore
+	Loop *AgentLoop
 }
 
 // shellModeKey carries the bash mode the agent loop settled on for one tool
@@ -552,7 +551,7 @@ func (g *ShellPermissionGate) ResolveShellMode(ctx context.Context, agentID, ses
 	if m, ok := pinnedShellMode(ctx); ok {
 		return m
 	}
-	return g.liveMode(agentID, sessionID)
+	return g.liveMode(agentID, sessionID, false)
 }
 
 // liveMode resolves which bash enforcement mode applies to agentID's call in
@@ -565,19 +564,16 @@ func (g *ShellPermissionGate) ResolveShellMode(ctx context.Context, agentID, ses
 //	                                            Auto never touches an allow
 //	                                            tool); "deny" never reaches
 //	                                            execution at all.
-//	"ask" + Auto-approve off                 -> Ask (the loop prompts first)
-//	"ask" + Auto-approve on + no kernel      -> Ask (FR-008: with nothing to
-//	  sandbox enforcing                         check a command against, Auto
-//	                                            behaves like Ask)
-//	"ask" + Auto-approve on + kernel sandbox -> Auto (no upfront prompt; the
+//	"ask" + Auto not active                  -> Ask (the loop prompts first)
+//	"ask" + Auto active                      -> Auto (no upfront prompt; the
 //	                                            tool's pre-flights ask only
 //	                                            for what the sandbox cannot
 //	                                            confine)
 //
-// Auto-approve is ResolveAutoApprove over cfg.Sandbox.AutoApprove, the
-// agent's AutoApproveDisabled, and the chat's SessionModeStore modifier.
-// Every missing dependency fails closed to Ask.
-func (g *ShellPermissionGate) liveMode(agentID, sessionID string) tools.ShellMode {
+// "Auto active" is AgentLoop.autoApproveActive — the one check every tool
+// shares (auto_approve_gate.go): Auto-approve resolved on and a kernel
+// sandbox enforcing (FR-008). Every missing dependency fails closed to Ask.
+func (g *ShellPermissionGate) liveMode(agentID, sessionID string, delegated bool) tools.ShellMode {
 	if g == nil || g.Loop == nil {
 		return tools.ShellModeAsk
 	}
@@ -591,14 +587,7 @@ func (g *ShellPermissionGate) liveMode(agentID, sessionID string) tools.ShellMod
 	if g.Loop.ResolveApprovalToolPolicy(agentID, "bash") != string(config.ToolPolicyAsk) {
 		return tools.ShellModeAsk
 	}
-	var chat *bool
-	if v, ok := g.ModeStore.Get(sessionID); ok {
-		chat = &v
-	}
-	if !ResolveAutoApprove(cfg, agentID, chat) {
-		return tools.ShellModeAsk
-	}
-	if !sandbox.TurnPolicyBaseInstalled() {
+	if !g.Loop.autoApproveActive(agentID, sessionID, delegated) {
 		return tools.ShellModeAsk
 	}
 	return tools.ShellModeAuto
@@ -631,7 +620,7 @@ func (al *AgentLoop) bashShellModeFor(ts *turnState, toolName string) tools.Shel
 	if toolName != "bash" || ts == nil {
 		return ""
 	}
-	return al.shellGate.liveMode(ts.agentID, ts.transcriptSessionID)
+	return al.shellGate.liveMode(ts.agentID, ts.transcriptSessionID, ts.isDelegated())
 }
 
 // bashCommandArg reads args["command"] as a string, "" when absent or not a
@@ -644,7 +633,7 @@ func bashCommandArg(args map[string]any) string {
 
 // emitShellRuleSettledAudit writes the FR-032(d)/review finding #8(c)
 // shell.approval_decision event for a prompt an operator D3 ALLOW rule
-// fully settled (bashRulesSettlePrompt) — before this fix, this decision
+// fully settled (bashRuleVerdict.settlesPrompt) — before this fix, this decision
 // point left no audit trail at all, indistinguishable in the log from an
 // ordinary unprompted "allow"-ceiling execution. No grant is recorded by
 // this call site (the D3 rule itself is the standing authorization, not a
@@ -662,12 +651,14 @@ func (al *AgentLoop) emitShellRuleSettledAudit(ts *turnState, args map[string]an
 
 // emitShellClassicAskDecisionAudit writes the FR-032(d)/review finding
 // #8(b) shell.approval_decision event for the classic (bash tool policy ==
-// "ask", non-Auto) human-in-the-loop decision path. Before this fix, only
+// "ask", non-Auto) human-in-the-loop decision path. kind is "classic_ask",
+// or "rule_ask" when that one prompt also settled an operator D3 ask rule
+// (§5.7). Before this fix, only
 // the NEW ADR-092 D3/D7/D8 call sites inside pkg/tools emitted this event —
 // the original, pre-ADR-092 "ask" consultation this branch drives (the same
 // CheckGrantOrRequestApproval call every other ask-policy tool uses) left
 // no audit trail of its own for bash specifically.
-func (al *AgentLoop) emitShellClassicAskDecisionAudit(ts *turnState, args map[string]any, approved bool, denialReason string) {
+func (al *AgentLoop) emitShellClassicAskDecisionAudit(ts *turnState, args map[string]any, kind string, approved bool, denialReason string) {
 	if ts == nil {
 		return
 	}
@@ -676,7 +667,7 @@ func (al *AgentLoop) emitShellClassicAskDecisionAudit(ts *turnState, args map[st
 		outcome = audit.ShellApprovalAllowOnce
 	}
 	audit.EmitShellApprovalDecision(context.Background(), al.auditLogger,
-		outcome, ts.agentID, ts.transcriptSessionID, "bash", bashCommandArg(args), "classic_ask", denialReason)
+		outcome, ts.agentID, ts.transcriptSessionID, "bash", bashCommandArg(args), kind, denialReason)
 }
 
 // inheritSessionPermissions copies a delegating parent's session-scoped
@@ -711,20 +702,42 @@ func (al *AgentLoop) inheritSessionPermissions(parentSessionID, parentAgentID, c
 // AutoApproveDisabled=true. A nil config or an agent absent from the list
 // reports false (not disabled).
 func (al *AgentLoop) agentAutoApproveDisabled(agentID string) bool {
-	cfg := al.GetConfig()
-	if cfg == nil {
-		return false
-	}
-	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].ID == agentID {
-			return cfg.Agents.List[i].AutoApproveDisabled
-		}
-	}
-	return false
+	return agentAutoApproveDisabledIn(al.GetConfig(), agentID)
 }
 
-// bashRulesSettlePrompt reports whether ADR-092 D3 operator command rules
-// already settle a bash call the "ask" policy would otherwise prompt for:
+// bashRuleVerdict is the ADR-092 D3 operator-rule verdict for one bash call,
+// evaluated once in resolveAskPolicy and read by both the prompt decision
+// and the one-dialog fix (§5.7). ok is false for any non-bash call, an empty
+// command, or an agent without a registered bash tool.
+type bashRuleVerdict struct {
+	verdict shellrule.CommandVerdict
+	ok      bool
+}
+
+// bashCommandRuleVerdict evaluates the call against the agent's own
+// registered bash tool (tools.ExecTool.EvaluateCommandRules), so this
+// decision and the tool's enforcement use one rule list and one evaluator.
+func bashCommandRuleVerdict(ts *turnState, toolName string, args map[string]any) bashRuleVerdict {
+	if toolName != "bash" || ts == nil || ts.agent == nil || ts.agent.Tools == nil {
+		return bashRuleVerdict{}
+	}
+	command, _ := args["command"].(string)
+	if command == "" {
+		return bashRuleVerdict{}
+	}
+	t, ok := ts.agent.Tools.Get("bash")
+	if !ok {
+		return bashRuleVerdict{}
+	}
+	exec, ok := t.(*tools.ExecTool)
+	if !ok {
+		return bashRuleVerdict{}
+	}
+	return bashRuleVerdict{verdict: exec.EvaluateCommandRules(command), ok: true}
+}
+
+// settlesPrompt reports whether the operator rules already settle a bash
+// call the "ask" policy would otherwise prompt for:
 //
 //   - every segment of the command matches an allow rule, with no deny or
 //     ask rule on any segment (deny > ask > allow still holds) — the
@@ -734,29 +747,40 @@ func (al *AgentLoop) agentAutoApproveDisabled(agentID string) bool {
 //     outright in every mode, so prompting a human first would only ask
 //     them to approve a command that cannot run.
 //
-// The evaluation is the agent's own registered bash tool's
-// (tools.ExecTool.EvaluateCommandRules), so this decision and the tool's
-// enforcement use one rule list and one evaluator. An allow verdict does
-// not bypass the D7/D8 pre-flights: under Auto the tool still escalates a
-// write outside the sandbox or a network need. Any other verdict (no rule,
-// a partial match, an ask rule, a blind spot) returns false and the normal
-// prompt runs.
-func bashRulesSettlePrompt(ts *turnState, toolName string, args map[string]any) bool {
-	if toolName != "bash" || ts == nil || ts.agent == nil || ts.agent.Tools == nil {
-		return false
+// An allow verdict does not bypass the D7/D8 pre-flights: under Auto the
+// tool still escalates a write outside the sandbox or a network need. Any
+// other verdict (no rule, a partial match, an ask rule, a blind spot)
+// returns false and the normal prompt runs.
+func (v bashRuleVerdict) settlesPrompt() bool {
+	return v.ok && (v.verdict.Action == shellrule.ActionDeny || v.verdict.FullyAllowed())
+}
+
+// needsRuleAsk reports whether the upfront prompt must also settle an
+// operator D3 {action: ask} rule (§5.7): the call is in Ask mode, no rule
+// denies it, and at least one segment matched a genuine ask rule. The bash
+// tool would otherwise prompt a second time for the same call.
+func (v bashRuleVerdict) needsRuleAsk(mode tools.ShellMode) bool {
+	return v.ok && mode == tools.ShellModeAsk &&
+		v.verdict.Action != shellrule.ActionDeny &&
+		tools.VerdictHasGenuineAskRuleMatch(v.verdict)
+}
+
+// ruleAskRequestArgs is the approval request for a call whose one upfront
+// prompt also settles a D3 ask rule: the call's own arguments plus the
+// adr092_kind "rule_ask" marker the bash tool's own rule prompt carries, and
+// a note naming the matched rule so the dialog explains why it is asking.
+func ruleAskRequestArgs(args map[string]any, verdict shellrule.CommandVerdict) map[string]any {
+	out := make(map[string]any, len(args)+2)
+	for k, v := range args {
+		out[k] = v
 	}
-	command, _ := args["command"].(string)
-	if command == "" {
-		return false
+	out["adr092_kind"] = "rule_ask"
+	for _, seg := range verdict.Segments {
+		if seg.Action == shellrule.ActionAsk && seg.MatchedRule != nil {
+			out["note"] = fmt.Sprintf("matches an operator rule that requires approval (binary=%q arg_prefix=%q)",
+				seg.MatchedRule.Binary, seg.MatchedRule.ArgPrefix)
+			break
+		}
 	}
-	t, ok := ts.agent.Tools.Get("bash")
-	if !ok {
-		return false
-	}
-	exec, ok := t.(*tools.ExecTool)
-	if !ok {
-		return false
-	}
-	verdict := exec.EvaluateCommandRules(command)
-	return verdict.Action == shellrule.ActionDeny || verdict.FullyAllowed()
+	return out
 }

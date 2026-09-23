@@ -98,7 +98,7 @@ func TestEnforceShellPermissionMode_HeadlessAutoDeniesFSPreflightEscalation(t *t
 // rule match. That broke pkg/tools/shell_subst_guard_test.go's own
 // TestBashSubstitutionGuard_BoundedLoopExecutes (a benign, substitution-
 // bearing command that must run with no approver wired at all). Fixed by
-// gating the escalation on verdictHasGenuineAskRuleMatch (seg.MatchedRule
+// gating the escalation on VerdictHasGenuineAskRuleMatch (seg.MatchedRule
 // != nil), not the bare Action value — this test pins that fix directly,
 // independent of the substitution guard's own test file.
 func TestEnforceShellPermissionMode_BlindSegmentWithNoRulesDoesNotPrompt(t *testing.T) {

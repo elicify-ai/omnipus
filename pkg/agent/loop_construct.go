@@ -385,7 +385,7 @@ func (nal *newAgentLoop) initializeRuntime() (*AgentLoop, error) {
 	// built over it. Constructed before wireExecToolDeps below, which
 	// injects the gate into every agent's bash tool.
 	nal.al.sessionModes = NewSessionModeStore()
-	nal.al.shellGate = &ShellPermissionGate{Loop: nal.al, ModeStore: nal.al.sessionModes}
+	nal.al.shellGate = &ShellPermissionGate{Loop: nal.al}
 
 	// Process-wide AsyncNotifier (async-notifier-spec.md): the reusable
 	// "wake the conversation when background work finishes" primitive,

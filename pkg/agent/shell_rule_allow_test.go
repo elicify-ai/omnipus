@@ -34,14 +34,14 @@ func TestBashRulesSettlePrompt_AllSegmentsAllowedSkipsPrompt(t *testing.T) {
 		{Action: shellrule.ActionAllow, Binary: "echo"},
 		{Action: shellrule.ActionAllow, Binary: "true"},
 	})
-	assert.True(t, bashRulesSettlePrompt(ts, "bash", bashArgs("echo hi && true")))
-	assert.False(t, bashRulesSettlePrompt(ts, "not_bash", bashArgs("echo hi")), "only bash consults D3")
+	assert.True(t, bashCommandRuleVerdict(ts, "bash", bashArgs("echo hi && true")).settlesPrompt())
+	assert.False(t, bashCommandRuleVerdict(ts, "not_bash", bashArgs("echo hi")).settlesPrompt(), "only bash consults D3")
 }
 
 func TestBashRulesSettlePrompt_UnmatchedSegmentStillPrompts(t *testing.T) {
 	_, ts := ruleTurnState(t, []shellrule.Rule{{Action: shellrule.ActionAllow, Binary: "echo"}})
-	assert.False(t, bashRulesSettlePrompt(ts, "bash", bashArgs("echo hi && true")))
-	assert.False(t, bashRulesSettlePrompt(ts, "bash", bashArgs("true")))
+	assert.False(t, bashCommandRuleVerdict(ts, "bash", bashArgs("echo hi && true")).settlesPrompt())
+	assert.False(t, bashCommandRuleVerdict(ts, "bash", bashArgs("true")).settlesPrompt())
 }
 
 func TestBashRulesSettlePrompt_AllowPlusDenyIsRefused(t *testing.T) {
@@ -49,7 +49,7 @@ func TestBashRulesSettlePrompt_AllowPlusDenyIsRefused(t *testing.T) {
 		{Action: shellrule.ActionAllow, Binary: "echo"},
 		{Action: shellrule.ActionDeny, Binary: "true"},
 	})
-	require.True(t, bashRulesSettlePrompt(ts, "bash", bashArgs("echo hi; true")),
+	require.True(t, bashCommandRuleVerdict(ts, "bash", bashArgs("echo hi; true")).settlesPrompt(),
 		"a deny segment settles the call without a prompt: the tool refuses it")
 
 	tool, ok := ts.agent.Tools.Get("bash")
@@ -78,7 +78,7 @@ func TestAllowRule_DoesNotSuppressFSPreflightUnderAuto(t *testing.T) {
 	approver := &countingApprover{}
 	al.SetToolApprover(approver)
 	cmd := "echo probe > /etc/omnipus-adr092-allow-probe"
-	require.True(t, bashRulesSettlePrompt(ts, "bash", bashArgs(cmd)))
+	require.True(t, bashCommandRuleVerdict(ts, "bash", bashArgs(cmd)).settlesPrompt())
 
 	tool, ok := ts.agent.Tools.Get("bash")
 	require.True(t, ok)
