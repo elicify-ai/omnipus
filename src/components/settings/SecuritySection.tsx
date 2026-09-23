@@ -37,7 +37,6 @@ import { Input } from '@/components/ui/input'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Switch } from '@/components/ui/switch'
-import { SmartSelect } from '@/components/ui/smart-select'
 import {
   Dialog,
   DialogContent,
@@ -160,11 +159,12 @@ function GlobalToolPoliciesSection() {
 // ── Auto-approve (ADR-092) — global default ───────────────────────────────────
 //
 // Auto-approve is a SEPARATE setting from tool policy (allow/deny/ask) — it
-// only has meaning for a tool currently resolved to "ask", for every such
-// tool (not only bash): "safe" is what never leaves the kernel sandbox,
-// judged per call. With no active kernel sandbox nothing can be positively
-// cleared, so an "ask" tool always prompts regardless of this setting (see
-// the chat-header badge, which reads "Auto → Ask" for exactly that case).
+// only has meaning for a tool currently resolved to "ask". Today that is
+// shell commands only; a later lane extends it to other safe tools. "safe"
+// is what never leaves the kernel sandbox, judged per call. With no active
+// kernel sandbox nothing can be positively cleared, so an "ask" tool always
+// prompts regardless of this setting (see the chat-header badge, which reads
+// "Auto → Ask" for exactly that case).
 //
 // Lives on the same SandboxConfig the Process Sandbox (Advanced) section
 // already manages, and goes through the same re-auth-gated
@@ -202,7 +202,9 @@ function AutoApproveControl() {
         confirmLabel: next ? 'Turn Auto-approve on' : 'Turn Auto-approve off',
       })
       .catch((err: unknown) => {
-        if (!isReAuthCancelled(err)) return
+        // A cancelled gate sent nothing — stay silent. A real failure already
+        // toasted once via saveAsync's own onError; do not toast twice.
+        if (isReAuthCancelled(err)) return
       })
   }
 
@@ -234,7 +236,7 @@ function AutoApproveControl() {
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Auto-approve</p>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             For any tool set to &ldquo;ask&rdquo;, skip the prompt for what never leaves the sandbox and still ask
-            for everything else. Applies to every tool, not just shell commands.
+            for everything else. Currently applies to shell commands; other safe tools are planned.
           </p>
         </div>
         <Switch
@@ -288,13 +290,11 @@ export function SecuritySection() {
   // US-B2: policyMode derives its badge from the PERSISTED value (config.security.policy_mode).
   // The local state is the draft; after save the query is invalidated so config refetches.
   const [policyMode, setPolicyMode] = useState<'allow' | 'deny'>('deny')
-  const [execApproval, setExecApproval] = useState<'auto' | 'ask' | 'deny'>('ask')
   // ADR-053 D12: dailyCostCap state retired alongside the SEC-26 USD cap.
   const [agentLlmCallsPerHour, setAgentLlmCallsPerHour] = useState('')
   const [agentToolCallsPerMin, setAgentToolCallsPerMin] = useState('')
   const [execTimeoutSecs, setExecTimeoutSecs] = useState('')
   const [maxBackgroundSecs, setMaxBackgroundSecs] = useState('')
-  const [enableDenyPatterns, setEnableDenyPatterns] = useState(false)
   // D3 / UAT spurious-PUT fix: reactive readiness flag, distinct from the
   // `!config` check useAutoSave's `disabled` option used to key off of.
   // `config` turns truthy in the SAME commit the hydration effect below is
@@ -325,24 +325,20 @@ export function SecuritySection() {
     if (!config) return
     if (isDirtyRef.current) return
     setPolicyMode(config.security.policy_mode)
-    setExecApproval(config.security.exec_approval)
     setAgentLlmCallsPerHour(config.security.rate_limits.max_agent_llm_calls_per_hour?.toString() ?? '')
     setAgentToolCallsPerMin(config.security.rate_limits.max_agent_tool_calls_per_minute?.toString() ?? '')
     setExecTimeoutSecs(config.security.exec_timeout_seconds?.toString() ?? '')
     setMaxBackgroundSecs(config.security.max_background_seconds?.toString() ?? '')
-    setEnableDenyPatterns(config.security.enable_deny_patterns ?? false)
     setSecurityHydrated(true)
   }, [config])
 
   const securityFormData = useMemo(() => ({
     policy_mode: policyMode,
-    exec_approval: execApproval,
     exec_timeout_seconds: execTimeoutSecs,
     max_background_seconds: maxBackgroundSecs,
-    enable_deny_patterns: enableDenyPatterns,
     agent_llm_calls_per_hour: agentLlmCallsPerHour,
     agent_tool_calls_per_min: agentToolCallsPerMin,
-  }), [policyMode, execApproval, execTimeoutSecs, maxBackgroundSecs, enableDenyPatterns, agentLlmCallsPerHour, agentToolCallsPerMin])
+  }), [policyMode, execTimeoutSecs, maxBackgroundSecs, agentLlmCallsPerHour, agentToolCallsPerMin])
 
   const { status: saveStatus, error: saveError } = useAutoSave(
     securityFormData,
@@ -350,10 +346,8 @@ export function SecuritySection() {
       await updateConfig({
         security: {
           policy_mode: policyMode,
-          exec_approval: execApproval,
           exec_timeout_seconds: execTimeoutSecs ? parseInt(execTimeoutSecs, 10) : undefined,
           max_background_seconds: maxBackgroundSecs ? parseInt(maxBackgroundSecs, 10) : undefined,
-          enable_deny_patterns: enableDenyPatterns,
           rate_limits: {
             ...config?.security.rate_limits,
             max_agent_llm_calls_per_hour: agentLlmCallsPerHour ? parseInt(agentLlmCallsPerHour, 10) : undefined,
@@ -528,28 +522,7 @@ export function SecuritySection() {
             meaningful for a tool resolved to "ask". */}
         <AutoApproveControl />
 
-        {/* 2. Exec approval */}
-        <Card className="p-[var(--space-3)]">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Shell command approval</p>
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">How shell commands are handled when an agent wants to run them</p>
-            </div>
-            <SmartSelect
-              value={execApproval}
-              onValueChange={(v) => { markDirty(); setExecApproval(v as typeof execApproval) }}
-              triggerClassName="w-[130px] h-8 text-xs"
-              ariaLabel="Shell command approval"
-              items={[
-                { value: 'auto', label: 'Auto-allow' },
-                { value: 'ask', label: 'Ask each time' },
-                { value: 'deny', label: 'Always deny' },
-              ]}
-            />
-          </div>
-        </Card>
-
-        {/* 3. Skill Trust (US-E4 / #340) — plain language, top-level */}
+        {/* 2. Skill Trust (US-E4 / #340) — plain language, top-level */}
         <SkillTrustSection />
       </section>
 
@@ -608,20 +581,6 @@ export function SecuritySection() {
                   onChange={(e) => { markDirty(); setMaxBackgroundSecs(e.target.value) }}
                   className="w-24 h-7 text-[length:var(--type-utility-xs-size)] font-mono"
                   placeholder="0"
-                />
-              </div>
-
-              <Separator />
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Enable deny patterns</p>
-                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Block commands matching configured deny patterns</p>
-                </div>
-                <Switch
-                  checked={enableDenyPatterns}
-                  onCheckedChange={(v) => { markDirty(); setEnableDenyPatterns(v) }}
-                  aria-label="Enable deny patterns"
                 />
               </div>
             </Card>

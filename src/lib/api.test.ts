@@ -1616,7 +1616,7 @@ describe('updateConfig: sends wire shape to backend', () => {
     // echoes back the full config after applying the change).
     const rawConfigResponse = {
       gateway: { host: '0.0.0.0', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      security: { policy_mode: 'deny' },
       storage: { retention: { session_days: 90 } },
     }
 
@@ -1643,7 +1643,7 @@ describe('updateConfig: sends wire shape to backend', () => {
   it('translates data.session_retention_days → storage.retention.session_days', async () => {
     const rawConfigResponse = {
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      security: { policy_mode: 'deny' },
       storage: { retention: { session_days: 30 } },
     }
 
@@ -1670,7 +1670,7 @@ describe('updateConfig: sends wire shape to backend', () => {
   it('does not include dev_mode_bypass in the PUT body (blocked server-side)', async () => {
     const rawConfigResponse = {
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      security: { policy_mode: 'deny' },
       storage: { retention: { session_days: 90 } },
     }
 
@@ -1893,7 +1893,7 @@ describe('rawToFrontendConfig: preserves agents.defaults.default_model', () => {
     // Traces to: hotfix/v0.1.1 — agents.defaults fields must survive rawToFrontendConfig
     const wireConfig = {
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      security: { policy_mode: 'deny' },
       storage: { retention: { session_days: 90 } },
       agents: {
         defaults: {
@@ -1919,7 +1919,7 @@ describe('rawToFrontendConfig: preserves agents.defaults.default_model', () => {
     // Traces to: hotfix/v0.1.1 — agents.defaults must survive the full fetchConfig→updateConfig round-trip
     const wireConfig = {
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      security: { policy_mode: 'deny' },
       storage: { retention: { session_days: 90 } },
       agents: {
         defaults: {
@@ -2128,7 +2128,7 @@ describe('validEnum / _configCoercionCount', () => {
     // Two different invalid enum values — counter should increment twice (once per field).
     const wireConfig = {
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'invalid_policy', exec_approval: 'invalid_exec' },
+      security: { policy_mode: 'invalid_policy', prompt_injection_level: 'invalid_level' },
     }
     fetchSpy.mockResolvedValueOnce(
       new Response(JSON.stringify(wireConfig), {
@@ -2214,7 +2214,7 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
     // production-telemetry coverage is preserved.)
     mockConfigResponse({
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask', exec_timeout_seconds: 'unlimited' },
+      security: { policy_mode: 'deny', exec_timeout_seconds: 'unlimited' },
     })
 
     // Force the production (non-DEV) branch of recordCoercion so logError
@@ -2245,7 +2245,7 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
   it('castNumber: gateway.port="8080" (string, wrong-typed) falls back to the default port, increments the counter, and calls logError in production', async () => {
     mockConfigResponse({
       gateway: { host: '127.0.0.1', port: '8080' },
-      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      security: { policy_mode: 'deny' },
     })
 
     vi.stubEnv('DEV', false)
@@ -2275,7 +2275,7 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
   it('castString: gateway.host=12345 (number, wrong-typed) falls back to the default bind address, increments the counter, and calls logError in production', async () => {
     mockConfigResponse({
       gateway: { host: 12345, port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      security: { policy_mode: 'deny' },
     })
 
     vi.stubEnv('DEV', false)
@@ -2306,7 +2306,6 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
       gateway: { host: '127.0.0.1', port: 8080 },
       security: {
         policy_mode: 'deny',
-        exec_approval: 'ask',
         rate_limits: { max_tokens_per_day: 'unlimited', max_cost_per_day: {} },
       },
     })
@@ -2333,7 +2332,7 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
     // from the retired daily_cost_cap to exec_timeout_seconds per ADR-053 D12.)
     mockConfigResponse({
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask', exec_timeout_seconds: 'unlimited' },
+      security: { policy_mode: 'deny', exec_timeout_seconds: 'unlimited' },
     })
 
     vi.stubEnv('DEV', true)
