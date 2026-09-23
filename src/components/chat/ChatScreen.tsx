@@ -233,7 +233,7 @@ export function UserMessage() {
             state={storeMessage.deliveryStatus}
             agentName={agentName}
             latest
-            onRetry={() => useChatStore.getState().sendMessage(storeMessage.content)}
+            onRetry={() => useChatStore.getState().resendMessage(storeMessage.id)}
           />
         )}
       </div>
@@ -1118,7 +1118,7 @@ export function VirtualUserMessageRow({
             state={message.deliveryStatus}
             agentName={agentName}
             latest={latest}
-            onRetry={() => useChatStore.getState().sendMessage(message.content)}
+            onRetry={() => useChatStore.getState().resendMessage(message.id)}
           />
         )}
       </div>

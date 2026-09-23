@@ -109,6 +109,17 @@ export type ChatMessage = Message & {
   /** SPA-only acknowledgement state for a user-authored message. */
   deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed'
   media?: MediaAttachment[]
+  /**
+   * Review finding 17 — the `media://` refs (opts.mediaRefs) this user
+   * message was originally SENT with. `media` above is display-only
+   * (filename/contentType/a resolved preview `url` — see sendMessage's own
+   * doc comment); it does not carry the wire ref an attachment needs to be
+   * re-attached to a resend. SPA-only, never serialized to the wire — kept
+   * alongside `media` purely so `resendMessage` (outbound-lifecycle.ts) can
+   * resend a failed message WITH its original attachments instead of
+   * silently dropping them.
+   */
+  mediaRefs?: string[]
   spans?: SubagentSpan[]
   /** Agent that produced this message (assistant messages only). */
   agentId?: string
@@ -810,6 +821,19 @@ export interface ChatStore {
   //   server honors it when present and falls back to the agent's `model`
   //   config when absent.
   sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; clientMessageId?: string; queuedAt?: string }) => void
+  /**
+   * Review finding 17 — "Try again" on a failed user message used to call
+   * `sendMessage(content)` with a brand-new id, which left the FAILED
+   * bubble in place and appended a SECOND, duplicate bubble — and, since
+   * only `content` (a plain string) was threaded through, silently dropped
+   * any attachments the original message carried. `resendMessage` instead
+   * looks the existing message up BY ID, resends its exact original content
+   * AND `mediaRefs` under the SAME client_message_id, and flips its
+   * deliveryStatus back to 'sending' IN PLACE — no second bubble, no
+   * dropped attachments. A no-op if messageId does not resolve to an
+   * existing, resend-eligible (role:'user') message.
+   */
+  resendMessage: (messageId: string) => void
   /** Validate an outbound MessageFrame against the generated Zod schema. Logs and dev-toasts on failure but never blocks the send. `sessionId` (the sending session, or the pending-bucket key when no session exists yet) is threaded through into the production telemetry record for operator correlation. */
   _validateOutboundFrame: (payload: unknown, sessionId?: string | null) => void
   /**

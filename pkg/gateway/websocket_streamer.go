@@ -98,7 +98,7 @@ func (h *WSHandler) GetStreamer(_ context.Context, channel, chatID, sessionID st
 	h.liveStreamers[sid] = streamer
 	h.mu.Unlock()
 	if pending, ok := h.takePendingMessageStatus(sid); ok {
-		sendPendingMessageWorking(sid, pending)
+		sendPendingMessageWorking(h, sid, pending)
 	}
 
 	return streamer, true
@@ -815,6 +815,21 @@ func (wsf *wsStreamerFinalize) sendDone() {
 	// visibility — only the live-facing signals (done frame, fan-out,
 	// markStreamed) are gated.
 	if !wsf.shadow {
+		// Review finding 12: "treat a done as implying working" + "clear or
+		// expire pending entries at turn end". Flush BEFORE the done frame
+		// itself goes out, so any client-message tick that never got
+		// consumed by a mid-turn GetStreamer call (a round that opened no
+		// streamer, e.g. a non-streaming reply) still reaches "working"
+		// rather than staying stuck on "Received" — and, either way, the
+		// entry cannot survive to be popped by a LATER, unrelated turn on
+		// this same session (see flushPendingMessageStatusesAsWorking's doc
+		// comment). Not run for a shadow (delegated-child) stream: that
+		// turn's own completion is not the completion the user's own
+		// message is waiting on.
+		if h := wsf.s.wsHandler(); h != nil && wsf.s.sessionID != "" {
+			h.flushPendingMessageStatusesAsWorking(wsf.s.sessionID)
+		}
+
 		// #823 phase 2: assign ONE sequence number for this turn's terminal
 		// frame BEFORE the per-connection loop, so every attached tab records
 		// the same position for the same turn end. The per-connection frames
