@@ -1,44 +1,92 @@
 // chat.catchup-fixtures.test.ts: BE-DESIGN.md §8.2 — feeds each catch-up
-// fixture (src/store/__fixtures__/catchup/F*.json) through the REAL
+// fixture (src/store/__fixtures__/catchup/F1..F8.json) through the REAL
 // useChatStore.handleFrame, in order, and asserts the final visible
-// transcript against the fixture's own `scenario.expected` block — which is
-// written from the SCENARIO DEFINITION (BE-DESIGN.md §6.4's worked
-// examples), never derived from the reducer's own output. This is the
-// oracle-independence rule §8.2 requires.
+// transcript against the fixture's own `expect` block — which is written
+// from the SCENARIO DEFINITION, not derived from the reducer's own output.
+// This is the oracle-independence rule §8.2 requires.
 //
-// PROVISIONAL (see src/store/__fixtures__/catchup/README.md): these three
-// fixtures are hand-derived from the design doc, not recorded by Lane A's
-// real gateway (pkg/gateway/catchup_fixtures_test.go, which had not landed
-// on this branch's base). When Lane A's fixtures land, only the JSON files
-// need replacing — this driver is written to be indifferent to their
-// provenance.
+// Fixture provenance: F1.json..F8.json are Lane A's REAL gateway-recorded
+// fixtures (pkg/gateway/catchup_fixtures_test.go, committed in Lane A's
+// `1889e1aa5`, SQUAD-REPORT-BEA.md's "Opus pass") — not hand-derived. Each
+// file's `tabs[]` holds every frame (both directions) one simulated
+// connection saw, in order, plus `note` events marking what the test did
+// between frames (drop, reload, chat switch). This driver only feeds the
+// `server→client` frames into handleFrame — the `client→server` frames
+// (attach_session, message) describe what the SPA itself sends, which the
+// dedicated session.attach-cursor.test.ts / ws.reattach.test.ts already
+// cover directly.
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useChatStore } from '../chat/store'
 import { useSessionStore } from '../session'
 import type { WsReceiveFrame } from '@/lib/ws'
-import f1 from '../__fixtures__/catchup/F1-live-turn.json'
-import f2 from '../__fixtures__/catchup/F2-reconnect-incremental.json'
-import f3 from '../__fixtures__/catchup/F3-reconnect-snapshot.json'
+import f1 from '../__fixtures__/catchup/F1.json'
+import f2 from '../__fixtures__/catchup/F2.json'
+import f3 from '../__fixtures__/catchup/F3.json'
+import f4 from '../__fixtures__/catchup/F4.json'
+import f5 from '../__fixtures__/catchup/F5.json'
+import f6 from '../__fixtures__/catchup/F6.json'
+import f7 from '../__fixtures__/catchup/F7.json'
+import f8 from '../__fixtures__/catchup/F8.json'
 
-interface CatchupFixture {
-  provisional: boolean
-  source: string
-  sessionId: string
-  scenario: { description: string; expected: Record<string, unknown> }
-  frames: unknown[]
+interface FixtureEvent {
+  dir: 'client→server' | 'server→client' | 'note'
+  frame?: Record<string, unknown>
+  note?: string
+}
+interface FixtureTab {
+  name: string
+  events: FixtureEvent[]
+}
+interface Fixture {
+  scenario: string
+  title: string
+  description: string
+  expect: Record<string, unknown>
+  tabs: FixtureTab[]
 }
 
-function driveFixture(fixture: CatchupFixture): void {
-  useSessionStore.setState({ activeSessionId: fixture.sessionId })
+/** Every server→client frame across ALL tabs, in file order — this is what
+ * ONE simulated browser tab receives across its whole lifetime, including
+ * any reconnect segments (fixtures split a reconnect into a second `tabs[]`
+ * entry, e.g. "A" then "A (reconnected)" — concatenating them in file order
+ * reproduces exactly what a real, persistent Zustand store would see across
+ * that reconnect, since reconnecting does not reset the store). */
+function allServerFrames(fixture: Fixture): WsReceiveFrame[] {
+  const frames: WsReceiveFrame[] = []
+  for (const tab of fixture.tabs) {
+    for (const event of tab.events) {
+      if (event.dir === 'server→client' && event.frame) {
+        frames.push(event.frame as unknown as WsReceiveFrame)
+      }
+    }
+  }
+  return frames
+}
+
+/** Drives ONE fresh store instance through every server→client frame in
+ * `frames`, in order. */
+function driveFrames(frames: WsReceiveFrame[]): void {
   useChatStore.setState({ sessionsById: {} } as never)
-  for (const frame of fixture.frames) {
-    useChatStore.getState().handleFrame(frame as WsReceiveFrame)
+  for (const frame of frames) {
+    useChatStore.getState().handleFrame(frame)
   }
 }
 
 function bucket(sessionId: string) {
   return useChatStore.getState().sessionsById[sessionId]
+}
+
+function assistantMessages(sessionId: string) {
+  const b = bucket(sessionId)
+  if (!b) return []
+  return b.messageOrder.map((id) => b.messagesById[id]).filter((m) => m.role === 'assistant')
+}
+
+function userMessages(sessionId: string) {
+  const b = bucket(sessionId)
+  if (!b) return []
+  return b.messageOrder.map((id) => b.messagesById[id]).filter((m) => m.role === 'user')
 }
 
 beforeEach(() => {
@@ -47,59 +95,136 @@ beforeEach(() => {
 })
 
 describe('F1 — live turn, one tab, no reconnect (baseline shape)', () => {
-  const fixture = f1 as CatchupFixture
-
   it('produces exactly the transcript the scenario defines', () => {
-    driveFixture(fixture)
-    const b = bucket(fixture.sessionId)
-    const msgs = b.messageOrder.map((id) => b.messagesById[id])
+    const fixture = f1 as Fixture
+    driveFrames(allServerFrames(fixture))
+    const SID = 'sess-1'
 
-    expect(msgs).toHaveLength(fixture.scenario.expected.finalMessageCount as number)
-    expect(msgs[0].role).toBe('user')
-    expect(msgs[0].content).toBe(fixture.scenario.expected.userMessageContent)
-    expect(msgs[1].role).toBe('assistant')
-    expect(msgs[1].content).toBe(fixture.scenario.expected.assistantMessageContent)
-    expect(msgs[1].turnId).toBe(fixture.scenario.expected.assistantTurnId)
-    expect((msgs[1].tool_calls ?? []).map((tc) => tc.id)).toEqual(fixture.scenario.expected.toolCallIds)
-    expect(b.isStreaming).toBe(fixture.scenario.expected.isStreamingAfter)
-    expect(b.cursor?.seq).toBe(fixture.scenario.expected.finalCursorSeq)
+    const users = userMessages(SID)
+    expect(users).toHaveLength(1)
+    expect(users[0].content).toBe(fixture.expect.user_message)
+
+    const asst = assistantMessages(SID)
+    expect(asst.map((m) => m.content)).toEqual(fixture.expect.assistant_messages)
+    // one_bubble_per_message: each message_id is exactly one bubble — the
+    // core Q3 guarantee this whole pass exists to deliver.
+    expect(asst[0].id).not.toBe(asst[1].id)
+    expect(asst.every((m) => m.status === 'done' && !m.isStreaming)).toBe(true)
+
+    const allCalls = asst.flatMap((m) => (m.tool_calls ?? []).map((tc) => tc.tool))
+    expect(allCalls).toEqual(fixture.expect.tool_calls)
+
+    expect(bucket(SID)?.isStreaming).toBe(false)
   })
 })
 
 describe('F2 — reconnect, incremental catch-up (cursor servable)', () => {
-  const fixture = f2 as CatchupFixture
+  it('the catch-up tail lands on the SAME bubble as the live continuation — no duplicate, one bubble', () => {
+    const fixture = f2 as Fixture
+    driveFrames(allServerFrames(fixture))
+    const SID = 'sess-1'
 
-  it('the catch-up tail lands on the SAME bubble as the live continuation — no duplicate', () => {
-    driveFixture(fixture)
-    const b = bucket(fixture.sessionId)
-    const msgs = b.messageOrder.map((id) => b.messagesById[id])
-
-    expect(msgs).toHaveLength(1)
-    expect(msgs[0].content).toBe(fixture.scenario.expected.assistantMessageContent)
-    expect(msgs[0].turnId).toBe(fixture.scenario.expected.assistantTurnId)
-    expect(b.isStreaming).toBe(fixture.scenario.expected.isStreamingAfter)
-    expect(b.isReplaying).toBe(fixture.scenario.expected.isReplayingAfter)
-    expect(b.awaitingCatchUp).toBe(fixture.scenario.expected.awaitingCatchUpAfter)
-    expect(b.cursor?.seq).toBe(fixture.scenario.expected.finalCursorSeq)
+    const asst = assistantMessages(SID)
+    expect(asst.map((m) => m.content)).toEqual(fixture.expect.assistant_messages)
+    expect(asst[0].status).toBe('done')
+    expect(bucket(SID)?.isStreaming).toBe(false)
   })
 })
 
-describe('F3 — reconnect, snapshot catch-up (cursor not servable)', () => {
-  const fixture = f3 as CatchupFixture
+describe('F3 — reload mid-message: snapshot with the active-turn projection', () => {
+  it('the in-flight answer survives the snapshot via the projection, with no duplication', () => {
+    const fixture = f3 as Fixture
+    driveFrames(allServerFrames(fixture))
+    const SID = 'sess-1'
 
-  it('the completed prior turn replays as history; the in-flight turn continues from the snapshot projection', () => {
-    driveFixture(fixture)
-    const b = bucket(fixture.sessionId)
-    const msgs = b.messageOrder.map((id) => b.messagesById[id])
+    const asst = assistantMessages(SID)
+    expect(asst.map((m) => m.content)).toEqual(fixture.expect.assistant_messages)
+    expect(asst[0].status).toBe('done')
+    expect(bucket(SID)?.isStreaming).toBe(false)
+    expect(bucket(SID)?.awaitingCatchUp).toBe(false)
+  })
+})
 
-    expect(msgs).toHaveLength(fixture.scenario.expected.finalMessageCount as number)
-    expect(msgs[0].role).toBe('user')
-    expect(msgs[0].content).toBe(fixture.scenario.expected.userMessageContent)
-    expect(msgs[1].content).toBe(fixture.scenario.expected.firstAssistantMessageContent)
-    expect(msgs[2].content).toBe(fixture.scenario.expected.secondAssistantMessageContent)
-    expect(msgs[2].turnId).toBe(fixture.scenario.expected.assistantTurnId)
-    expect(b.isStreaming).toBe(fixture.scenario.expected.isStreamingAfter)
-    expect(b.awaitingCatchUp).toBe(fixture.scenario.expected.awaitingCatchUpAfter)
-    expect(b.cursor?.seq).toBe(fixture.scenario.expected.finalCursorSeq)
+describe('F4 — snapshot where the answer is persisted between the bind and the transcript read', () => {
+  it('no duplicate text regardless of the persist/read race (§4.2 overlap rule)', () => {
+    const fixture = f4 as Fixture
+    driveFrames(allServerFrames(fixture))
+    const SID = 'sess-1'
+
+    const asst = assistantMessages(SID)
+    expect(asst.map((m) => m.content)).toEqual(fixture.expect.assistant_messages)
+    expect(bucket(SID)?.isStreaming).toBe(false)
+  })
+})
+
+describe('F5 — two tabs on one chat', () => {
+  it('both tabs converge on byte-identical messages from the SAME frame stream', () => {
+    const fixture = f5 as Fixture
+    const [tabA, tabB] = fixture.tabs
+    expect(tabA.name).toBe('A')
+    expect(tabB.name).toBe('B')
+    const SID = 'sess-1'
+
+    const framesFor = (tab: FixtureTab) =>
+      tab.events.filter((e) => e.dir === 'server→client' && e.frame).map((e) => e.frame as unknown as WsReceiveFrame)
+
+    driveFrames(framesFor(tabA))
+    const tabAContent = assistantMessages(SID).map((m) => m.content)
+    const tabACursor = bucket(SID)?.cursor
+
+    driveFrames(framesFor(tabB))
+    const tabBContent = assistantMessages(SID).map((m) => m.content)
+    const tabBCursor = bucket(SID)?.cursor
+
+    expect(tabAContent).toEqual(fixture.expect.assistant_messages)
+    expect(tabBContent).toEqual(tabAContent)
+    expect(tabBCursor).toEqual(tabACursor)
+  })
+})
+
+describe('F6 — switch to another chat while the answer finishes, then switch back', () => {
+  it('the original chat reassembles into ONE bubble across the switch-away, and the other chat is never touched by it', () => {
+    const fixture = f6 as Fixture
+    driveFrames(allServerFrames(fixture))
+    const SID_A = 'sess-1'
+    const SID_B = 'sess-2'
+
+    const asstA = assistantMessages(SID_A)
+    expect(asstA.map((m) => m.content)).toEqual(fixture.expect.assistant_messages)
+    expect(asstA).toHaveLength(1) // never split by the switch-away/back
+    expect(bucket(SID_A)?.isStreaming).toBe(false)
+
+    // The other chat's own snapshot/replay never touched session A's bucket.
+    const bB = bucket(SID_B)!
+    expect(bB.messageOrder.length).toBeGreaterThan(0)
+    expect(assistantMessages(SID_A).map((m) => m.content)).toEqual(fixture.expect.assistant_messages)
+  })
+})
+
+describe('F7 — gateway restart: the cursor\'s boot id no longer matches', () => {
+  it('boot_mismatch forces a snapshot; no turn is left announced as active', () => {
+    const fixture = f7 as Fixture
+    driveFrames(allServerFrames(fixture))
+    const SID = 'sess-1'
+
+    expect(bucket(SID)?.activeTurnId).toBeNull()
+    expect(bucket(SID)?.awaitingCatchUp).toBe(false)
+    const users = userMessages(SID)
+    expect(users.some((m) => m.content === fixture.expect.user_message)).toBe(true)
+  })
+})
+
+describe('F8 — message typed while offline', () => {
+  it('the offline message appears at the end, then its own answer, with no duplicate', () => {
+    const fixture = f8 as Fixture
+    driveFrames(allServerFrames(fixture))
+    const SID = 'sess-1'
+
+    const users = userMessages(SID)
+    expect(users.map((m) => m.content)).toEqual(fixture.expect.user_messages)
+
+    const asst = assistantMessages(SID)
+    expect(asst.map((m) => m.content)).toEqual(fixture.expect.assistant_messages)
+    expect(bucket(SID)?.isStreaming).toBe(false)
   })
 })

@@ -28,7 +28,7 @@ import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpen
 import { bufferForSpan, hasOpenSpanFast, markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
 import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, pendingCancelAckSids, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
-import { gateFrameBySeq, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
+import { gateFrameBySeq, cursorFromTerminalFrame, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
 import { ORPHAN_BUFFER_TTL_MS, orphanTimers, pendingByParentCallId } from '../types'
 import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
 import { handleReplayAndStatusFrame } from './replay-and-status-frames'
@@ -202,6 +202,13 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
   const existing = draft.messagesById[messageId]
   if (existing) {
     if (existing.status === 'interrupted' || existing.status === 'error') return
+    // §4.2/§6.3 overlap rule: a bubble already finalized (status 'done', not
+    // streaming) ignores any further token for its message_id outright —
+    // this is what makes a snapshot's persisted-between-bind-and-read race
+    // safe (F4's own scenario): the replayed history already shows the full
+    // text, and live tokens with seq > W for the SAME message_id that
+    // arrive afterward must never re-open or duplicate it.
+    if (existing.status === 'done' && !existing.isStreaming) return
     existing.content = frame.replace ? frame.content : (existing.content ?? '') + frame.content
     if (frame.agent_id) existing.agentId = frame.agent_id
     if (frame.turn_id && !existing.turnId) existing.turnId = frame.turn_id
@@ -454,14 +461,28 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               delete sessionsById['__pending']
               return { sessionsById }
             }
+            // #823 catch-up redesign pass 2 (BE-DESIGN.md §3.4/§6.1): mint
+            // the cursor from session_started's own seq/boot_id when
+            // present — this is the NEW session's very first cursor
+            // position, exempted from the ordinary seq gate
+            // (CURSOR_MINTING_FRAME_TYPES, cursor.ts) because
+            // session_started is special-routed (targetSid resolves to
+            // activeSid, never the newly-minted newSid — see this case's
+            // own targetSid comment above), so nothing else could ever
+            // write it.
+            const cursorPatch =
+              frame.seq !== undefined
+                ? { cursor: cursorFromTerminalFrame({ seq: frame.seq, boot_id: frame.boot_id }) }
+                : {}
             // Migrate pending bucket messages into the new bucket, or start fresh.
             const baseBucket: SessionChatState = pendingBucket
               ? {
                   ...pendingBucket,
                   isStreaming: true,
                   lastUserMessageAt: Date.now(),
+                  ...cursorPatch,
                 }
-              : { ...emptySessionState(), isStreaming: true }
+              : { ...emptySessionState(), isStreaming: true, ...cursorPatch }
             const sessionsById = { ...state.sessionsById, [newSid]: baseBucket }
             // Remove the temporary pending bucket.
             delete sessionsById['__pending']
