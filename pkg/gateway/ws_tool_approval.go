@@ -122,6 +122,7 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 	if ws := h.approvalWorkspaceID(entry.SessionID); ws != "" {
 		frame.WorkspaceId = &ws
 	}
+	frame.Segments = h.bashApprovalSegments(entry)
 	raw, err := json.Marshal(frame)
 	if err != nil {
 		slog.Error("ws: marshal tool_approval_required", "error", err)

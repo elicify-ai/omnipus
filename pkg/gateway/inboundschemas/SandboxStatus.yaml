@@ -104,46 +104,51 @@ properties:
   kernel_sandbox_active:
     type: boolean
     description: >
-      ADR-092's platform predicate — whether a kernel sandbox is actually
-      confining processes right now, the fact Auto-approve needs to decide
-      anything: Linux — Landlock applied in enforce mode (`mode: enforce`
-      above), not degraded. macOS — the Seatbelt backend's own
-      active/enabled state, read directly rather than derived from
-      `policy_applied` above, which reports the gateway's OWN confinement
-      and is documented false on macOS by design (Seatbelt confines
-      children only). Windows — always false, no kernel sandbox backend
-      exists. Distinct from `policy_applied`/`kernel_level` above (which
-      describe this process's own sandboxing posture, not specifically
-      whether Auto's pre-flight has anything to check a command against).
+      ADR-092's platform predicate: whether a kernel sandbox is confining the
+      processes agents spawn right now, the fact Auto-approve needs before it
+      can clear anything. This is the exact value the agent loop reads when it
+      decides Auto vs Ask for a shell call (sandbox.TurnPolicyBaseInstalled:
+      the gateway registers a per-turn kernel policy base only once a kernel
+      backend is enforcing for spawned children). Linux: true when Landlock
+      was applied in enforce mode and not degraded (false in permissive mode).
+      macOS: true when the Seatbelt boot profile was installed, so every
+      spawned child is wrapped (policy_applied above reports the gateway's OWN
+      confinement and is documented false on macOS by design). Windows,
+      sandbox mode off, and the app-level fallback backend: always false. God
+      Mode does not change this value, but under God Mode agents' children run
+      without the per-turn kernel policy; see god_mode_active. Always present
+      from this gateway.
     example: true
   auto_approve_effective:
     type: boolean
     description: >
-      This gateway's current GLOBAL default for Auto-approve (mirrors
-      SandboxConfig.auto_approve; reported here too so the chat-header
-      badge doesn't need a second round-trip to Settings). This is the
-      gateway-wide default, not a per-agent or per-chat resolution — this
-      endpoint carries neither an agent nor a session, so it cannot see a
-      per-agent `auto_approve_disabled` override or a chat's own
-      session_mode_update modifier. The SPA composes the actual
-      badge for one chat from three inputs: this field (the baseline),
-      the active agent's `auto_approve_disabled` (from GET /agents/{id}),
-      and the session's own resolved value once a
-      session_mode_updated frame arrives (asyncapi.yaml).
-
-      What the badge renders, keyed off this field and
-      kernel_sandbox_active together (before any per-agent/per-chat
-      override is folded in):
-        - auto_approve_effective=false → "Ask": every tool currently
-          resolved to "ask" always prompts, regardless of the kernel
-          sandbox. kernel_sandbox_active is irrelevant to this reading.
-        - auto_approve_effective=true, kernel_sandbox_active=true →
-          "Auto": an "ask" tool call the kernel sandbox can positively
-          confine auto-approves; anything it cannot still prompts.
-        - auto_approve_effective=true, kernel_sandbox_active=false →
-          "Auto → Ask" with a tooltip: Auto is configured on, but with no
-          kernel sandbox to check a command against, the pre-flight can
-          never positively clear anything, so every "ask" tool call
-          prompts exactly as if Auto were off — a real, user-visible
-          consequence of the platform/degradation state, not a bug.
+      The gateway-wide Auto-approve DEFAULT: exactly the live
+      SandboxConfig.auto_approve value, reported here so the chat-header badge
+      needs no second request. It is NOT combined with kernel_sandbox_active
+      and NOT resolved for any agent or chat (this endpoint has no agent or
+      session context). Auto actually takes effect for a call only when all of
+      these hold: the tool resolves to "ask"; the resolved Auto-approve for
+      that chat is on (this default, turned off by the agent's
+      auto_approve_disabled, then overridden either way by the chat's own
+      modifier — SessionModeUpdatedFrame /
+      SessionStateFrame.auto_approve_modifier); kernel_sandbox_active is true;
+      and god_mode_active is false. Badge reading, before the per-agent and
+      per-chat layers are folded in: god_mode_active=true shows "God Mode"
+      whatever the other two fields say; else auto_approve_effective=false
+      shows "Ask"; else kernel_sandbox_active=true shows "Auto"; else "Auto →
+      Ask" (Auto is on but with no kernel sandbox nothing can be positively
+      cleared, so every "ask" call prompts). Always present from this gateway.
     example: true
+  god_mode_active:
+    type: boolean
+    description: >
+      Whether the global God Mode override is ACTIVE in this process right
+      now — the same value as GodModeStatus.enabled (the persisted
+      sandbox.god_mode switch AND availability in this boot). When true
+      every agent's tool policy is floored at "allow": no approval prompts,
+      no per-turn kernel sandbox for spawned children, network egress open;
+      operator deny command rules, audit logging, the prompt-injection
+      guard and rate limiting stay on. The chat-header badge shows God Mode
+      whenever this is true, whatever auto_approve_effective and
+      kernel_sandbox_active say. Always present from this gateway.
+    example: false
