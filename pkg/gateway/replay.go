@@ -34,17 +34,18 @@ const replayResultPreviewBytes = 10 * 1024
 
 // streamReplayState carries the shared state of streamReplay across its stages.
 type streamReplayState struct {
-	sessionID            string
-	entries              []session.TranscriptEntry
-	toolStore            *toolResultStore
-	isSpanActive         func(parentSpawnCallID string) bool
-	terminalAsk          *askuser.PendingSet
-	terminalAskEmitted   bool
-	seenPaths            map[string]struct{}
-	spawnIDsWithChildren map[string]bool
-	spanRealAgentIDs     map[string]string
-	latestByID           map[string]tcAddr
-	lastSeenAgentID      string
+	sessionID                   string
+	entries                     []session.TranscriptEntry
+	toolStore                   *toolResultStore
+	terminalAsk                 *askuser.PendingSet
+	terminalAskEmitted          bool
+	seenPaths                   map[string]struct{}
+	spawnIDsWithChildren        map[string]bool
+	spanRealAgentIDs            map[string]string
+	persistedSubagentStartSpans map[string]bool
+	persistedSubagentEndSpans   map[string]bool
+	latestByID                  map[string]tcAddr
+	lastSeenAgentID             string
 	msgFrame             generated.ReplayMessageFrame
 	tcID                 string
 	tcParentID           string
@@ -117,10 +118,9 @@ func streamReplay(
 	emit func(any) error,
 	mediaStore media.MediaStore,
 	toolStore *toolResultStore,
-	isSpanActive func(parentSpawnCallID string) bool,
 	terminalAsk *askuser.PendingSet,
 ) (framesEmitted int, err error) {
-	sr := &streamReplayState{sessionID: sessionID, entries: entries, toolStore: toolStore, isSpanActive: isSpanActive, terminalAsk: terminalAsk}
+	sr := &streamReplayState{sessionID: sessionID, entries: entries, toolStore: toolStore, terminalAsk: terminalAsk}
 
 	sr.prepareReplay()
 
@@ -265,29 +265,29 @@ func streamReplay(
 					continue
 				}
 
-				// Emit subagent_end.
-				//
-				// Wave 3 fix 5b: the span's own Status/DurationMs are read directly
-				// from tc — the spawn/delegate ToolCall's own persisted record —
-				// instead of aggregating child tool calls.
-				// pkg/agent/subturn.go's spawnSubTurn (EventKindSubTurnEnd) now
-				// persists the sub-turn's REAL completion status/wall-clock
-				// duration onto this exact record via session.UnifiedStore.
-				// UpdateToolCallStatus once the child turn actually finishes. The
-				// aggregate is a fundamentally different, incompatible semantic —
-				// it flips to "error" whenever ANY child tool call was denied, even
-				// when the sub-turn itself legitimately completed "success" at the
-				// LLM level (a denied tool attempt is not itself a sub-turn
-				// failure), and its duration is a sum of child tool-call durations
-				// that structurally cannot reflect real wall-clock time. Live
-				// rendering (pkg/gateway/websocket.go's EventKindSubTurnEnd
-				// handler) has always used this real status/duration directly —
-				// this makes replay match it.
+				// Emit subagent_end — UNLESS this span already has a REAL
+				// persisted subagent_end (deliverSubagentEnd), in which case
+				// dispatchSpecialEntry above already emitted — or will emit,
+				// at that entry's own later position in the transcript —
+				// the authoritative one, and this synthetic, tc-derived one
+				// must be suppressed (finding 1 fix). Building it from tc
+				// here unconditionally was the bug: tc.Status/DurationMS on
+				// a delegate/spawn ToolCall is only ever the PLACEHOLDER ack
+				// async delegation writes the instant the spawning call
+				// returns (Status="success", DurationMS≈0) — nothing in the
+				// current architecture ever corrects that record in place.
+				// The real terminal status/duration lives ONLY in the
+				// persisted subagent_end entry. tc.Status is still the right
+				// (indeed the only) source for a legacy pre-ADR-091 span —
+				// see persistedSubagentEndSpans's own doc comment
+				// (prepareReplay) — which never gets a persisted end entry
+				// at all.
+				if !sr.persistedSubagentEndSpans[sr.spanID] {
+					sr.buildSubagentEnd(tc)
 
-				sr.buildSubagentEnd(tc)
-
-				if err2 := emitFrame(sr.subEnd); err2 != nil {
-					return framesEmitted, err2
+					if err2 := emitFrame(sr.subEnd); err2 != nil {
+						return framesEmitted, err2
+					}
 				}
 
 				// Emit tool_call_result for the spawn call.
@@ -508,17 +508,41 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 			"session_id", sr.sessionID, "entry_id", entry.ID)
 	}
 
-	// ADR-091 D7/I-4: a persisted subagent_message/subagent_state entry
-	// (steer_frames.go's deliverSubagentMessage/deliverSubagentState,
-	// written into the PARENT's own transcript) replays as the SAME
-	// frame type the live push sent, discriminated on the stamped
-	// entry.SystemSubtype — never Content — with the entry's own ID as
-	// message_id, mirroring goal_outcome's identical contract two
-	// blocks above. subagent_start/subagent_end are NOT handled here —
-	// they keep the existing tool-call-structure reconstruction
-	// (buildSubagentStart below), per D7's "stay exactly what they
-	// are"; see this lane's final report for why persisted
-	// start/end entries are written but not yet read back here.
+	// ADR-091 D7/I-4: a persisted subagent_message/subagent_state/
+	// subagent_end entry (steer_frames.go's deliverSubagentMessage/
+	// deliverSubagentState/deliverSubagentEnd, written into the PARENT's
+	// own transcript) replays as the SAME frame type the live push sent,
+	// discriminated on the stamped entry.SystemSubtype — never Content —
+	// with the entry's own ID as message_id, mirroring goal_outcome's
+	// identical contract two blocks above.
+	//
+	// FIX (finding 1, CRITICAL): subagent_end used to be excluded from
+	// this list and stay on the tool-call-structure reconstruction below
+	// (buildSubagentEnd) exclusively. That reconstruction reads
+	// Status/DurationMS off the spawn/delegate ToolCall record itself —
+	// which async delegation stamps with a PLACEHOLDER ack
+	// (Status="success", DurationMS≈0) the instant the spawning call
+	// returns, not the real terminal outcome. The intended correction
+	// path (a live in-process turn tracker flipping isSpanActive true
+	// until the real status landed) was structurally dead: its two data
+	// sources, steering.go's markSubTurnSpanOpen/subTurnSpanOpen and
+	// turnState.parentSpawnCallID, had zero real callers / were never
+	// assigned (ADR-091 deleted subturn.go, their only writer), so
+	// isSpanActive always answered false and the withhold never fired —
+	// every persisted subagent_end (failed, cancelled, timed out) replayed
+	// as a fabricated "success, 0 ms". Reading the entry back here — the
+	// same self-healing SessionId-restamp pattern subagent_message/
+	// subagent_state already use — makes the real, persisted terminal
+	// status/duration win. classifyToolCall below now also suppresses the
+	// tool-call-derived synthetic subagent_end whenever this span already
+	// has one of these persisted (buildSubagentEnd() is only still called
+	// for a delegate/spawn call this transcript never persisted an end
+	// entry for — legacy pre-ADR-091 data, where tc.Status is the ONLY
+	// terminal record that has ever existed for it). subagent_start stays
+	// on the tool-call-structure reconstruction (buildSubagentStart below)
+	// unmodified: unlike subagent_end, nothing about its content was ever
+	// wrong (Symptom B's real-child-agent-ID resolution already lives
+	// there), so D7's "stay exactly what they are" still holds for it.
 	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentMessage {
 		if entry.SubagentMessage != nil {
 			// UAT defect 1: stamp SessionId from sr.sessionID (the
@@ -554,6 +578,24 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 			return streamReplayStateContinue, nil
 		}
 		slog.Warn("replay: subagent_state transcript entry carries no frame — replaying it as a plain entry",
+			"session_id", sr.sessionID, "entry_id", entry.ID)
+	}
+	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentEnd {
+		if entry.SubagentEnd != nil {
+			// UAT defect 1: same self-healing stamp as subagent_message/
+			// subagent_state above — the entry was written into the
+			// PARENT's own transcript (steer_frames.go's
+			// persistSubagentEntry), so sr.sessionID (the transcript this
+			// entry was read FROM) is always correct regardless of
+			// whatever SessionId the stored frame happens to carry.
+			frame := *entry.SubagentEnd
+			frame.SessionId = sr.sessionID
+			if err2 := emitFrame(frame); err2 != nil {
+				return streamReplayStateReturn, err2
+			}
+			return streamReplayStateContinue, nil
+		}
+		slog.Warn("replay: subagent_end transcript entry carries no frame — replaying it as a plain entry",
 			"session_id", sr.sessionID, "entry_id", entry.ID)
 	}
 
@@ -613,26 +655,6 @@ func (sr *streamReplayState) prepareReplay() {
 		sr.terminalAsk = nil
 	}
 	sr.terminalAskEmitted = false
-	// isSpanActive lets a caller (handleAttachSession, wired to
-	// agent.AgentLoop.IsSubTurnActiveForSpawnCall) tell replay that a given
-	// spawn/delegate ToolCall's real sub-turn is STILL genuinely running,
-	// even though its persisted record may carry a placeholder terminal
-	// status (async delegation writes Status="success", DurationMS≈0 the
-	// instant the spawning call returns — see
-	// session.UnifiedStore.UpdateToolCallStatus's doc comment — well before
-	// the delegate itself finishes). When isSpanActive reports true for a
-	// call, streamReplay withholds that call's own terminal frame(s)
-	// (tool_call_result / subagent_end) so the client is never shown a
-	// fabricated "done" for a turn that has not actually completed — it
-	// sees only tool_call_start / subagent_start, the same "started, no
-	// result yet" shape a genuinely in-flight LIVE call would show. The
-	// real completion then arrives over the live WS event stream once the
-	// sub-turn actually finishes. nil is treated as "nothing is active"
-	// (never withhold) — callers that have no liveness authority (e.g.
-	// tests) can pass nil safely.
-	if sr.isSpanActive == nil {
-		sr.isSpanActive = func(string) bool { return false }
-	}
 
 	// Track underlying file paths already emitted so the SPA never receives
 	// two media frames for the same file. Older transcripts can carry
@@ -656,6 +678,36 @@ func (sr *streamReplayState) prepareReplay() {
 	// buildSpanRealAgentIDs' doc comment for why this differs from — and is
 	// more correct than — entry.AgentID on the OUTER spawn/delegate call.
 	sr.spanRealAgentIDs = buildSpanRealAgentIDs(sr.entries, sr.spawnIDsWithChildren)
+
+	// persistedSubagentStartSpans / persistedSubagentEndSpans: the set of
+	// span IDs ("span_" + the originating spawn/delegate ToolCall.ID, same
+	// convention as buildSubagentStart below) that already have a REAL
+	// persisted subagent_start / subagent_end system entry somewhere in
+	// this transcript (steer_frames.go's deliverSubagentStart/
+	// deliverSubagentEnd — ADR-091 D7/I-4). Two independent uses:
+	//
+	//   - persistedSubagentEndSpans gates the suppression in
+	//     classifyToolCall below: when a span already has a real
+	//     persisted end, the tool-call-derived synthetic one (built from
+	//     the spawn call's own placeholder Status/DurationMS) is never
+	//     built — dispatchSpecialEntry emits the real one instead, at its
+	//     own position in the transcript.
+	//   - persistedSubagentStartSpans combined with the absence of a
+	//     matching entry in persistedSubagentEndSpans is classifyToolCall's
+	//     replacement for the dead isSpanActive/IsSubTurnActiveForSpawnCall
+	//     liveness callback (finding 1): deliverSubagentStart persists
+	//     synchronously at launch (steer_launcher.go's
+	//     publishSteeredLaunch), before the child does any real work, so
+	//     "has a persisted start, no persisted end yet" reliably means
+	//     "genuinely still running" for any transcript written by the
+	//     current (post-ADR-091) delegation path. A legacy transcript
+	//     recorded before this mechanism existed has NEITHER a persisted
+	//     start nor a persisted end for its spawn calls — requiring BOTH a
+	//     start and the absence of an end (not just the absence of an end
+	//     alone) keeps those old, already-finished calls on the original
+	//     tc.Status-derived rendering instead of showing them as
+	//     perpetually running.
+	sr.persistedSubagentStartSpans, sr.persistedSubagentEndSpans = buildPersistedSubagentSpanIndexes(sr.entries)
 
 	// deduped: for each ToolCall.ID keep only the index of the last occurrence
 	// across ALL entries.  key = ToolCall.ID, value = (entryIdx, tcIdx).
@@ -856,18 +908,28 @@ func (sr *streamReplayState) classifyToolCall(ei int, entry session.TranscriptEn
 	// does not require any child tool calls to exist.
 	sr.isSpawnParent = isDelegateSpawnCall
 
-	// stillActive is true when isSpanActive (wired to
-	// agent.AgentLoop.IsSubTurnActiveForSpawnCall) reports that this
-	// spawn/delegate call's REAL sub-turn has not actually finished
-	// yet, even though its persisted ToolCall record may already
-	// carry a terminal-looking Status/DurationMS (async delegation's
-	// placeholder ack — see streamReplay's isSpanActive doc comment
-	// above). When true, this call's OWN terminal frame(s) —
-	// tool_call_result / subagent_end — are withheld so the client
-	// is never shown a fabricated "done" for a turn that is, in
-	// truth, still working; the real completion arrives later over
-	// the live WS event stream.
-	sr.stillActive = isDelegateSpawnCall && sr.isSpanActive(sr.tcID)
+	// spanID mirrors pkg/agent/steer_frames.go's subagentSpanID convention
+	// ("span_" + the originating tool-call id) so the persisted-span
+	// indexes below key the same way a live push and a persisted entry do.
+	sr.spanID = "span_" + sr.tcID
+
+	// stillActive (finding 1 fix — see dispatchSpecialEntry's subagent_end
+	// case above for the full root-cause writeup) is true when this
+	// spawn/delegate call's REAL sub-turn has a persisted subagent_start
+	// entry (deliverSubagentStart, stamped synchronously at launch) but no
+	// matching persisted subagent_end yet — i.e. the transcript's own
+	// record says "started, not yet concluded" for a delegation launched
+	// through the current (post-ADR-091) path. Requiring the start
+	// entry too (not just "no end yet") keeps a legacy pre-ADR-091
+	// transcript — which has neither — on its original tc.Status-derived
+	// rendering instead of showing an already-finished old delegation as
+	// stuck running forever. When stillActive is true, this call's OWN
+	// terminal frame(s) — tool_call_result / subagent_end — are withheld
+	// so the client is never shown a fabricated "done" for a turn that is,
+	// in truth, still working; the real completion arrives later either
+	// over the live WS event stream, or on the next reload once
+	// deliverSubagentEnd has persisted it.
+	sr.stillActive = isDelegateSpawnCall && sr.persistedSubagentStartSpans[sr.spanID] && !sr.persistedSubagentEndSpans[sr.spanID]
 	return streamReplayStateNext
 }
 
@@ -1121,6 +1183,33 @@ func buildSpanRealAgentIDs(entries []session.TranscriptEntry, withChildren map[s
 		}
 	}
 	return realAgentIDs
+}
+
+// buildPersistedSubagentSpanIndexes scans entries once for every persisted
+// subagent_start / subagent_end system entry (steer_frames.go's
+// deliverSubagentStart/deliverSubagentEnd, ADR-091 D7/I-4) and returns the
+// set of span IDs each carries — see streamReplayState.
+// persistedSubagentStartSpans/persistedSubagentEndSpans's own doc comment
+// (prepareReplay) for how classifyToolCall uses the two sets together.
+func buildPersistedSubagentSpanIndexes(entries []session.TranscriptEntry) (starts map[string]bool, ends map[string]bool) {
+	starts = make(map[string]bool)
+	ends = make(map[string]bool)
+	for _, entry := range entries {
+		if entry.Type != session.EntryTypeSystem {
+			continue
+		}
+		switch entry.SystemSubtype {
+		case session.SystemSubtypeSubagentStart:
+			if entry.SubagentStart != nil && entry.SubagentStart.SpanId != "" {
+				starts[entry.SubagentStart.SpanId] = true
+			}
+		case session.SystemSubtypeSubagentEnd:
+			if entry.SubagentEnd != nil && entry.SubagentEnd.SpanId != "" {
+				ends[entry.SubagentEnd.SpanId] = true
+			}
+		}
+	}
+	return starts, ends
 }
 
 type tcAddr struct{ entryIdx, tcIdx int }
