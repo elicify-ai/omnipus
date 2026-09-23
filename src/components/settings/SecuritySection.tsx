@@ -6,10 +6,6 @@
  *   Advanced layer — All jargon (sandbox internals, SSRF, deny-regex, tool grid,
  *                    audit log) under ONE AdvancedDisclosure.
  *
- * Risky controls wrapped in RiskySettingControl (US-B2 / #328):
- *   - policyMode (safe = 'deny')
- *   - bind_address (in GatewaySection — not here; done there)
- *
  * Global Tool Access via ToolPolicyEditor (US-B3 / #329):
  *   - Replaces GlobalToolPoliciesSection entirely.
  *   - Deletes local CATEGORY_LABELS / PolicyBadge / groupByCategory duplicates.
@@ -65,7 +61,6 @@ import { SandboxSection } from './SandboxSection'
 import { Label } from '@/components/ui/label'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
-import { RiskySettingControl } from '@/components/shared/RiskySettingControl'
 import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp } from './useStepUp'
 
@@ -261,16 +256,6 @@ function AutoApproveControl() {
   )
 }
 
-// ── Policy mode risky control (US-B2) ─────────────────────────────────────────
-
-const POLICY_MODE_COPY = {
-  dialogTitle: 'Switch to Allow mode?',
-  dialogDescription:
-    'Allow mode lets agents run tools without asking first. This gives agents more autonomy but lowers your oversight. Switch to Deny to stay in control.',
-  confirmLabel: 'Switch to Allow anyway',
-  cancelLabel: 'Keep Deny (safer)',
-}
-
 // ── SecuritySection ────────────────────────────────────────────────────────────
 
 export function SecuritySection() {
@@ -292,9 +277,6 @@ export function SecuritySection() {
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
 
-  // US-B2: policyMode derives its badge from the PERSISTED value (config.security.policy_mode).
-  // The local state is the draft; after save the query is invalidated so config refetches.
-  const [policyMode, setPolicyMode] = useState<'allow' | 'deny'>('deny')
   // ADR-053 D12: dailyCostCap state retired alongside the SEC-26 USD cap.
   const [agentLlmCallsPerHour, setAgentLlmCallsPerHour] = useState('')
   const [agentToolCallsPerMin, setAgentToolCallsPerMin] = useState('')
@@ -329,7 +311,6 @@ export function SecuritySection() {
   useEffect(() => {
     if (!config) return
     if (isDirtyRef.current) return
-    setPolicyMode(config.security.policy_mode)
     setAgentLlmCallsPerHour(config.security.rate_limits.max_agent_llm_calls_per_hour?.toString() ?? '')
     setAgentToolCallsPerMin(config.security.rate_limits.max_agent_tool_calls_per_minute?.toString() ?? '')
     setExecTimeoutSecs(config.security.exec_timeout_seconds?.toString() ?? '')
@@ -338,19 +319,17 @@ export function SecuritySection() {
   }, [config])
 
   const securityFormData = useMemo(() => ({
-    policy_mode: policyMode,
     exec_timeout_seconds: execTimeoutSecs,
     max_background_seconds: maxBackgroundSecs,
     agent_llm_calls_per_hour: agentLlmCallsPerHour,
     agent_tool_calls_per_min: agentToolCallsPerMin,
-  }), [policyMode, execTimeoutSecs, maxBackgroundSecs, agentLlmCallsPerHour, agentToolCallsPerMin])
+  }), [execTimeoutSecs, maxBackgroundSecs, agentLlmCallsPerHour, agentToolCallsPerMin])
 
   const { status: saveStatus, error: saveError } = useAutoSave(
     securityFormData,
     async () => {
       await updateConfig({
         security: {
-          policy_mode: policyMode,
           exec_timeout_seconds: execTimeoutSecs ? parseInt(execTimeoutSecs, 10) : undefined,
           max_background_seconds: maxBackgroundSecs ? parseInt(maxBackgroundSecs, 10) : undefined,
           rate_limits: {
@@ -462,10 +441,6 @@ export function SecuritySection() {
 
   // ADR-053 D12 retired the "Daily spending limit" UI block.
 
-  // US-B2: badge derives from persisted config.security.policy_mode (not local state).
-  // After save, the query is invalidated so persistedPolicyMode updates.
-  const persistedPolicyMode = config?.security.policy_mode ?? 'deny'
-
   return (
     <div className="space-y-[var(--space-4)]">
       <div className="flex items-center justify-between">
@@ -495,36 +470,8 @@ export function SecuritySection() {
           Protection settings
         </p>
 
-        {/* 1. Default policy mode — wraps risky "Allow" (US-B2) */}
-        <Card className="p-[var(--space-3)] space-y-[var(--space-2)]">
-          <div>
-            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Agent tool access</p>
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-              Whether agents must ask your permission before running tools or can run freely.
-            </p>
-          </div>
-          <RiskySettingControl
-            options={[
-              { value: 'deny', label: 'Must ask first (safer)' },
-              { value: 'allow', label: 'Run freely' },
-            ]}
-            currentValue={persistedPolicyMode}
-            selectedValue={policyMode}
-            safeValue="deny"
-            copy={POLICY_MODE_COPY}
-            onConfirm={(v) => {
-              markDirty()
-              setPolicyMode(v as 'allow' | 'deny')
-            }}
-            onSelectSafe={(v) => {
-              markDirty()
-              setPolicyMode(v as 'allow' | 'deny')
-            }}
-          />
-        </Card>
-
-        {/* 1b. Auto-approve (ADR-092) — separate from tool policy above, only
-            meaningful for a tool resolved to "ask". */}
+        {/* 1. Auto-approve (ADR-092) — primary-layer tool-access control:
+            whether a tool resolved to "ask" still prompts. */}
         <AutoApproveControl />
 
         {/* 2. Skill Trust (US-E4 / #340) — plain language, top-level */}

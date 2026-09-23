@@ -3,7 +3,6 @@
  *
  * Coverage:
  *   US-B1 — two-layer IA: jargon hidden until Advanced is expanded (#327)
- *   US-B2 — risky controls: badge from persisted value; confirm-to-weaken (#328)
  *   US-B3 — ToolPolicyEditor replaces GlobalToolPoliciesSection (#329)
  *   US-B4 — score deduction links to fix; score=100 reassurance (#330)
  *   #340   — SkillTrustSection is mounted in the Security tab
@@ -90,7 +89,6 @@ const PLATFORM_APP_STATE = {
 
 const MINIMAL_CONFIG = {
   security: {
-    policy_mode: 'deny' as const,
     exec_timeout_seconds: 0,
     max_background_seconds: 0,
     rate_limits: {
@@ -107,14 +105,6 @@ const MINIMAL_CONFIG = {
   },
   agents: {
     defaults: { default_agent_id: '' },
-  },
-}
-
-const ALLOW_CONFIG = {
-  ...MINIMAL_CONFIG,
-  security: {
-    ...MINIMAL_CONFIG.security,
-    policy_mode: 'allow' as const,
   },
 }
 
@@ -222,8 +212,10 @@ describe('SecuritySection — US-B1 two-layer IA', () => {
       expect(screen.getByTestId('plain-toggles')).toBeInTheDocument()
     })
 
-    // "Must ask first" button for policyMode (Deny = safe).
-    expect(screen.getByText(/must ask first/i)).toBeInTheDocument()
+    // Auto-approve is the plain-language, top-level tool-access control.
+    await waitFor(() => {
+      expect(screen.getByTestId('auto-approve-global-switch')).toBeInTheDocument()
+    })
   })
 
   it('does not render the retired Shell command approval or Enable deny patterns controls', async () => {
@@ -266,86 +258,6 @@ describe('SecuritySection — US-B1 two-layer IA', () => {
     await waitFor(() => {
       expect(document.body.textContent).toMatch(/SSRF|Landlock|seccomp/i)
     })
-  })
-})
-
-// ── US-B2: Risky controls ─────────────────────────────────────────────────────
-
-describe('SecuritySection — US-B2 risky policy mode control', () => {
-  it('shows Recommended pill on "Must ask first" (safe = deny) option', async () => {
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getAllByTestId('recommended-pill').length).toBeGreaterThan(0)
-    })
-
-    // At least one Recommended pill should be near the policy mode control
-    const pills = screen.getAllByTestId('recommended-pill')
-    expect(pills.length).toBeGreaterThan(0)
-  })
-
-  it('standing badge shows when persisted policyMode is "allow" (risky)', async () => {
-    vi.mocked(fetchConfig).mockResolvedValue(ALLOW_CONFIG as never)
-
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('risky-standing-badge')).toBeInTheDocument()
-    })
-
-    expect(screen.getByTestId('risky-standing-badge')).toHaveTextContent(/lowers your protection/i)
-  })
-
-  it('no standing badge when persisted policyMode is "deny" (safe)', async () => {
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('plain-toggles')).toBeInTheDocument()
-    })
-
-    // Give time for all queries to settle
-    await waitFor(() => {
-      expect(screen.queryByTestId('risky-standing-badge')).not.toBeInTheDocument()
-    }, { timeout: 2000 })
-  })
-
-  it('clicking risky option opens AlertDialog with safe button as default', async () => {
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('risky-option-allow')).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByTestId('risky-option-allow'))
-
-    await waitFor(() => {
-      // The cancel / keep-safe button (default / safe action)
-      expect(screen.getByText(/keep deny/i)).toBeInTheDocument()
-    })
-  })
-
-  it('cancelling the dialog keeps the safe value and hides the badge', async () => {
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('risky-option-allow')).toBeInTheDocument()
-    })
-
-    // Open the dialog
-    fireEvent.click(screen.getByTestId('risky-option-allow'))
-    await waitFor(() => {
-      expect(screen.getByText(/keep deny/i)).toBeInTheDocument()
-    })
-
-    // Click "Keep Deny (safer)" — the cancel/safe button
-    fireEvent.click(screen.getByText(/keep deny/i))
-
-    // Dialog closes, badge never appears (policyMode stays 'deny')
-    await waitFor(() => {
-      expect(screen.queryByText(/keep deny/i)).not.toBeInTheDocument()
-    })
-    // No standing badge because policyMode is still 'deny' (persisted)
-    expect(screen.queryByTestId('risky-standing-badge')).not.toBeInTheDocument()
   })
 })
 

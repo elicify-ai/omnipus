@@ -55,7 +55,6 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
     preview_enabled?: boolean
   }
   security: {
-    policy_mode: 'allow' | 'deny'
     // Prompt guard strictness is owned by the dedicated /security/prompt-guard
     // endpoint since Wave 3. This field is still populated on read for
     // backward compatibility but must NOT be sent on updateConfig calls.
@@ -90,8 +89,6 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
     }
   }
 }
-
-const VALID_POLICY_MODES = ['allow', 'deny'] as const
 
 const VALID_INJECTION_LEVELS = ['off', 'low', 'medium', 'high'] as const
 
@@ -221,7 +218,6 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
       preview_enabled: gateway.preview_enabled !== false,
     },
     security: {
-      policy_mode: validEnum(security.policy_mode, VALID_POLICY_MODES, 'deny', 'security.policy_mode'),
       prompt_injection_level: validEnum(security.prompt_injection_level, VALID_INJECTION_LEVELS, 'medium', 'security.prompt_injection_level'),
       // Spend/execution guardrails: a wrong-shaped value here is a bad
       // decision downstream, not just a display glitch — SecuritySection reads
@@ -291,7 +287,6 @@ function frontendToRawConfig(data: Partial<Config>): Record<string, unknown> {
   }
   if (data.security) {
     const sec: Record<string, unknown> = {}
-    if (data.security.policy_mode !== undefined) sec.policy_mode = data.security.policy_mode
     // prompt_injection_level intentionally omitted — owned by PUT /security/prompt-guard.
     // daily_cost_cap intentionally omitted — ADR-053 D12 retired the SEC-26
     // USD cap.
