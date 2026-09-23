@@ -851,7 +851,7 @@ func (al *AgentLoop) runDispatchedSteeredTurn(rec *session.LifecycleRecord, ts *
 		}
 	}
 	if rec.GoalRef != "" {
-		al.finishSteeredGoalTurn(ts, &result, runErr)
+		al.finishSteeredGoalTurn(ts, rec, &result, runErr)
 		return
 	}
 	if finishErr := al.completeSteeredTurn(context.Background(), rec, result, runErr); finishErr != nil {

@@ -399,7 +399,7 @@ func TestGoalDelegation_Judged(t *testing.T) {
 	goalDeferredAdjudicationDoneFn = func(sessionID string) { done <- sessionID }
 	t.Cleanup(func() { goalDeferredAdjudicationDoneFn = oldDone })
 	result := turnResult{finalContent: "[goal:evidence] verified the work\nGOAL_STATUS: met"}
-	al.finishSteeredGoalTurn(ts, &result, nil)
+	al.finishSteeredGoalTurn(ts, rec, &result, nil)
 	select {
 	case got := <-done:
 		if got != rec.SessionID {
@@ -493,7 +493,7 @@ func TestFinishSteeredGoalTurn_BareClaimFollowUpRoutesThroughAsyncNotifier(t *te
 	// checkGoalLoopAfterTurn's handleBareGoalClaim appends a teaching-steer
 	// follow-up to result.followUps on the first offense.
 	result := turnResult{finalContent: "GOAL_STATUS: met"}
-	al.finishSteeredGoalTurn(ts, &result, nil)
+	al.finishSteeredGoalTurn(ts, rec, &result, nil)
 
 	mu.Lock()
 	defer mu.Unlock()
