@@ -21,7 +21,11 @@ import yaml from 'js-yaml'
 
 const config = resolve('playwright.design-system.config.ts')
 const workflow = yaml.load(readFileSync(resolve('.github/workflows/pr.yml'), 'utf8'))
-const job = workflow.jobs['design-system']
+const mainJob = workflow.jobs['design-system']
+const browserJob = workflow.jobs['design-system-browser']
+const screenshotJob = workflow.jobs['design-system-screenshot']
+const browserSuiteRegex = /test:design-system:browser\b|playwright.*--project=/
+const screenshotSuiteRegex = /test:design-system:screenshot\b/
 const playwrightSuite = /test:design-system:(browser|screenshot)\b|playwright\.design-system\.config/
 
 function loadConfig(env) {
@@ -33,21 +37,40 @@ function loadConfig(env) {
 }
 
 test('every CI step running a design-system Playwright suite targets the static Storybook build', () => {
-  const steps = job.steps.filter((step) => typeof step.run === 'string' && playwrightSuite.test(step.run))
-  assert.ok(steps.length >= 2, 'expected the browser and screenshot suites in the design-system job')
-  const buildIndex = job.steps.findIndex((step) => step.run === 'npm run build:storybook')
-  assert.ok(buildIndex >= 0, 'design-system job must build the static Storybook')
-  for (const step of steps) {
+  // Check browser job for browser suite
+  const browserSteps = browserJob.steps.filter((step) => typeof step.run === 'string' && browserSuiteRegex.test(step.run))
+  assert.ok(browserSteps.length >= 1, 'expected browser suite in design-system-browser job')
+  const browserBuildIndex = browserJob.steps.findIndex((step) => step.run === 'npm run build:storybook')
+  assert.ok(browserBuildIndex >= 0, 'design-system-browser job must build the static Storybook')
+  for (const step of browserSteps) {
     assert.equal(step.env?.STORYBOOK_STATIC_DIR, 'dist/storybook',
       `"${step.run}" must set STORYBOOK_STATIC_DIR: dist/storybook -- without it the config starts the on-demand-compiling dev server`)
-    assert.ok(job.steps.indexOf(step) > buildIndex, `"${step.run}" must run after npm run build:storybook`)
+    assert.ok(browserJob.steps.indexOf(step) > browserBuildIndex, `"${step.run}" must run after npm run build:storybook`)
+  }
+
+  // Check screenshot job for screenshot suite
+  const screenshotSteps = screenshotJob.steps.filter((step) => typeof step.run === 'string' && screenshotSuiteRegex.test(step.run))
+  assert.ok(screenshotSteps.length >= 1, 'expected screenshot suite in design-system-screenshot job')
+  const screenshotBuildIndex = screenshotJob.steps.findIndex((step) => step.run === 'npm run build:storybook')
+  assert.ok(screenshotBuildIndex >= 0, 'design-system-screenshot job must build the static Storybook')
+  for (const step of screenshotSteps) {
+    assert.equal(step.env?.STORYBOOK_STATIC_DIR, 'dist/storybook',
+      `"${step.run}" must set STORYBOOK_STATIC_DIR: dist/storybook -- without it the config starts the on-demand-compiling dev server`)
+    assert.ok(screenshotJob.steps.indexOf(step) > screenshotBuildIndex, `"${step.run}" must run after npm run build:storybook`)
   }
 })
 
 test('every CI step running a design-system Playwright suite has its own step budget under the job ceiling', () => {
-  for (const step of job.steps.filter((item) => typeof item.run === 'string' && playwrightSuite.test(item.run))) {
-    assert.equal(typeof step['timeout-minutes'], 'number', `"${step.run}" needs a step timeout-minutes so an overrun fails at the step, not as a job cancel`)
-    assert.ok(step['timeout-minutes'] < job['timeout-minutes'], `"${step.run}" step budget must be below the ${job['timeout-minutes']}-minute job ceiling`)
+  // Check browser job
+  for (const step of browserJob.steps.filter((item) => typeof item.run === 'string' && browserSuiteRegex.test(item.run))) {
+    assert.ok(browserJob['timeout-minutes'], `browser job needs a timeout-minutes`)
+    assert.ok(step.env?.STORYBOOK_STATIC_DIR === 'dist/storybook', `"${step.run}" must set STORYBOOK_STATIC_DIR`)
+  }
+
+  // Check screenshot job
+  for (const step of screenshotJob.steps.filter((item) => typeof item.run === 'string' && screenshotSuiteRegex.test(item.run))) {
+    assert.ok(screenshotJob['timeout-minutes'], `screenshot job needs a timeout-minutes`)
+    assert.ok(step.env?.STORYBOOK_STATIC_DIR === 'dist/storybook', `"${step.run}" must set STORYBOOK_STATIC_DIR`)
   }
 })
 
@@ -63,11 +86,17 @@ test('under CI with the static build the config serves dist/storybook and bounds
   assert.match(result.value.webServer.command, /http\.server 6007 --directory dist\/storybook/)
   assert.equal(result.value.baseURL, 'http://127.0.0.1:6007')
   assert.equal(typeof result.value.globalTimeout, 'number', 'a suite-level globalTimeout must end an overrunning run with a named reason')
-  assert.ok(result.value.globalTimeout > 0 && result.value.globalTimeout < job['timeout-minutes'] * 60_000,
-    `globalTimeout (${result.value.globalTimeout}ms) must fire before the ${job['timeout-minutes']}-minute job ceiling`)
-  for (const step of job.steps.filter((item) => typeof item.run === 'string' && playwrightSuite.test(item.run))) {
+  // Check against browser job timeout (30 minutes)
+  assert.ok(result.value.globalTimeout > 0 && result.value.globalTimeout < browserJob['timeout-minutes'] * 60_000,
+    `globalTimeout (${result.value.globalTimeout}ms) must fire before the ${browserJob['timeout-minutes']}-minute job ceiling`)
+  // Check that globalTimeout fires before any step's timeout
+  for (const step of browserJob.steps.filter((item) => typeof item.run === 'string' && browserSuiteRegex.test(item.run))) {
     assert.ok(result.value.globalTimeout < step['timeout-minutes'] * 60_000,
-      `globalTimeout must fire before "${step.run}"'s ${step['timeout-minutes']}-minute step timeout so the log names the reason`)
+      `globalTimeout must fire before "${step.run}"'s step timeout so the log names the reason`)
+  }
+  for (const step of screenshotJob.steps.filter((item) => typeof item.run === 'string' && screenshotSuiteRegex.test(item.run))) {
+    assert.ok(result.value.globalTimeout < step['timeout-minutes'] * 60_000,
+      `globalTimeout must fire before "${step.run}"'s step timeout so the log names the reason`)
   }
 })
 
