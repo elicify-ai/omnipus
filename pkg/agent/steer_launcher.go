@@ -724,33 +724,50 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 	// delegate tool returns as soon as Launch+Dispatch have returned; there
 	// is no ordering hook between the parent's tool result and the child's
 	// start.
-	go func() {
-		runCtx := context.Background()
-		cancel := func() {}
-		if rec.SteeredBy != nil && rec.SteeredBy.Limits.TimeoutSeconds > 0 && !rec.CreatedAt.IsZero() {
-			runCtx, cancel = context.WithDeadline(runCtx,
-				rec.CreatedAt.Add(time.Duration(rec.SteeredBy.Limits.TimeoutSeconds)*time.Second))
-		}
-		defer cancel()
-		result, runErr := al.runTurn(runCtx, ts)
-		finalAudience := al.audienceFor(runCtx, steer.BoundaryFinalReply, sessionID)
-		if runErr == nil && result.finalContent != "" && finalAudience == steer.AudienceUser {
-			if publishErr := al.bus.PublishOutbound(runCtx, bus.OutboundMessage{
-				Channel: ts.channel, ChatID: ts.chatID, Content: result.finalContent, SessionID: sessionID,
-			}); publishErr != nil {
-				logger.WarnCF("agent", "steer: publish dispatched final reply failed",
-					map[string]any{"session_id": sessionID, "generation": gen, "error": publishErr.Error()})
-			}
-		}
-		if rec.GoalRef != "" {
-			al.finishSteeredGoalTurn(ts, &result, runErr)
-			return
-		}
-		if finishErr := al.completeSteeredTurn(context.Background(), rec, result, runErr); finishErr != nil {
-			logger.WarnCF("agent", "steer: complete dispatched turn failed",
-				map[string]any{"session_id": sessionID, "generation": gen, "error": finishErr.Error()})
-		}
-	}()
+	go al.runDispatchedSteeredTurn(rec, ts, gen)
 
 	return steer.DispatchResult{State: steer.DispatchRunning, Generation: gen}, nil
+}
+
+// runDispatchedSteeredTurn runs an admitted steered session's turn and
+// disposes of its outcome. It owns the admission slot
+// dispatchSteeredSessionWithReservation claimed for this turn and releases it
+// explicitly on the way out — the same shape the task front uses (the release
+// callback handed to task_executor.go::dispatchLaunchedTask, fired from
+// runTask's deferred closure), and NOT turnState.al / turn_exit.go::Finish,
+// which has no back-reference to release through for a steered turn.
+//
+// The release is deferred FIRST so it runs LAST: the turn's terminal write
+// lands before the next queued session starts (D9: "a session whose turn has
+// ended holds no slot"; I-3: "when a turn ends, the admission loop dispatches
+// the oldest queued session").
+func (al *AgentLoop) runDispatchedSteeredTurn(rec *session.LifecycleRecord, ts *turnState, gen int) {
+	sessionID := rec.SessionID
+	defer al.drainSteerQueue(sessionID, gen)
+
+	runCtx := context.Background()
+	cancel := func() {}
+	if rec.SteeredBy != nil && rec.SteeredBy.Limits.TimeoutSeconds > 0 && !rec.CreatedAt.IsZero() {
+		runCtx, cancel = context.WithDeadline(runCtx,
+			rec.CreatedAt.Add(time.Duration(rec.SteeredBy.Limits.TimeoutSeconds)*time.Second))
+	}
+	defer cancel()
+	result, runErr := al.runTurn(runCtx, ts)
+	finalAudience := al.audienceFor(runCtx, steer.BoundaryFinalReply, sessionID)
+	if runErr == nil && result.finalContent != "" && finalAudience == steer.AudienceUser {
+		if publishErr := al.bus.PublishOutbound(runCtx, bus.OutboundMessage{
+			Channel: ts.channel, ChatID: ts.chatID, Content: result.finalContent, SessionID: sessionID,
+		}); publishErr != nil {
+			logger.WarnCF("agent", "steer: publish dispatched final reply failed",
+				map[string]any{"session_id": sessionID, "generation": gen, "error": publishErr.Error()})
+		}
+	}
+	if rec.GoalRef != "" {
+		al.finishSteeredGoalTurn(ts, &result, runErr)
+		return
+	}
+	if finishErr := al.completeSteeredTurn(context.Background(), rec, result, runErr); finishErr != nil {
+		logger.WarnCF("agent", "steer: complete dispatched turn failed",
+			map[string]any{"session_id": sessionID, "generation": gen, "error": finishErr.Error()})
+	}
 }
