@@ -285,6 +285,35 @@ type turnState struct {
 	continuationRounds  int
 	continuationPending bool
 
+	// currentMessageID is the id #823's live/persisted unification hangs
+	// on: the SAME value goes onto this round's live streamed frames
+	// (TokenFrame.message_id / DoneFrame.message_id, stamped via
+	// turn_stream.go::stampStreamerMessageID) and onto the transcript entry
+	// persisted for that SAME round (turn_transcript.go's
+	// appendIntermediateAssistantTranscript, via roundMessageIDOrNew). Minted
+	// fresh by turn_stream.go::nextRoundMessageID at the top of every LLM
+	// call round UNLESS continueSameMessageID says this round continues the
+	// PREVIOUS round's message. Guarded by mu like every other field here.
+	currentMessageID string
+
+	// continueSameMessageID is a ONE-SHOT flag consumed by
+	// nextRoundMessageID (turn_stream.go): true only for the single round
+	// immediately following a markContinuationDispatched call, so that round
+	// reuses currentMessageID instead of minting a fresh one — the ADR-087
+	// D6 auto-continue case, where the model is finishing the SAME answer,
+	// not starting a new one.
+	//
+	// Deliberately DISTINCT from continuationPending, which also covers the
+	// D4 "truncated with complete tool calls" carve-out
+	// (markContinuationPending): that case executes the tool calls before
+	// the next round runs, so the round after it IS a new message even
+	// though continuationPending stays true until that round's own
+	// evaluateTruncatedSuccess call resolves it. Reusing continuationPending
+	// here would wrongly carry the OLD message id across a tool-call
+	// boundary. Set by markContinuationDispatched, cleared by
+	// resolveContinuation and by nextRoundMessageID's own one-shot consume.
+	continueSameMessageID bool
+
 	// truncationReason carries ADR-087 D2's narrow enum ("max_output_tokens"
 	// — the only value this package ever writes; "cancelled" is cancel.go's
 	// own, unrelated writer) for a turn whose final content was annotated by
@@ -1325,6 +1354,10 @@ func (ts *turnState) markContinuationDispatched() {
 	defer ts.mu.Unlock()
 	ts.continuationRounds++
 	ts.continuationPending = true
+	// #823: the NEXT round continues this SAME message — see
+	// continueSameMessageID's own doc comment for why markContinuationPending
+	// (the sibling D4 carve-out setter) must NOT do this.
+	ts.continueSameMessageID = true
 }
 
 // markContinuationPending marks the D6 chain unresolved WITHOUT counting a
@@ -1348,6 +1381,11 @@ func (ts *turnState) resolveContinuation() {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.continuationPending = false
+	// #823: a chain that resolves before continueSameMessageID was ever
+	// consumed by nextRoundMessageID (e.g. a later round completed WITHOUT
+	// going through the truncation branch at all) must not leave a stale
+	// "reuse the old id" flag armed for some unrelated future round.
+	ts.continueSameMessageID = false
 }
 
 // hadContinuation reports whether this turn has dispatched at least one D6

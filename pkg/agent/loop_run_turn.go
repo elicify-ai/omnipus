@@ -1436,6 +1436,14 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 			rt.ts.stampStreamerProducerAgentID(streamer)
 			rt.ts.stampStreamerTurnID(streamer)
 			rt.ts.stampStreamerParentSpawnCallID(streamer)
+			// #823: mint (or, for an ADR-087 D6 auto-continue round, reuse)
+			// this round's message id BEFORE any token can flow — mirrors the
+			// three stamps immediately above. nextRoundMessageID must run
+			// before the stamp so the freshly-obtained streamer and this
+			// round's later appendIntermediateAssistantTranscript call (if
+			// this round ends in tool calls) agree on the SAME id.
+			rt.ts.nextRoundMessageID()
+			rt.ts.stampStreamerMessageID(streamer)
 			var lastChunk string
 			// Residual native tool-call markup must never reach the
 			// live view. This is not only a rendering concern: the

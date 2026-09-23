@@ -11,6 +11,7 @@ type producerAgentIDMockStreamer struct {
 	setProducerAgentIDCalls   []string
 	setTurnIDCalls            []string
 	setParentSpawnCallIDCalls []string
+	setMessageIDCalls         []string
 }
 
 func (m *producerAgentIDMockStreamer) SetProducerAgentID(agentID string) {
@@ -36,4 +37,14 @@ func (m *producerAgentIDMockStreamer) SetTurnID(turnID string) {
 // value, so every call (including empty-string ones) is recorded.
 func (m *producerAgentIDMockStreamer) SetParentSpawnCallID(parentSpawnCallID string) {
 	m.setParentSpawnCallIDCalls = append(m.setParentSpawnCallIDCalls, parentSpawnCallID)
+}
+
+// SetMessageID mirrors *gateway.wsStreamer's #823 SetMessageID method:
+// records every call (including, in principle, an empty one — though
+// production nextRoundMessageID never actually stamps "" since it always
+// mints a fresh uuid before the first round), so tests exercising
+// stampStreamerMessageID's caller-side behavior observe production-
+// equivalent results without importing the gateway package.
+func (m *producerAgentIDMockStreamer) SetMessageID(messageID string) {
+	m.setMessageIDCalls = append(m.setMessageIDCalls, messageID)
 }
