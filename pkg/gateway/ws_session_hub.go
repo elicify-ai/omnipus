@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
+	"os"
 	"sort"
 	"strconv"
 	"sync"
@@ -133,17 +134,74 @@ type hubRegistry struct {
 
 	// idleEvictAfter is the idle duration before a hub with no bound
 	// connections, empty inbox and (once the projection lands) no open
-	// turn/span is eligible for eviction. Test-only override, off by
-	// default in production wiring — FOUNDER DECISION Q6.
+	// turn/span is eligible for eviction. FOUNDER DECISION Q6: a Go unit
+	// test does not need to override this — evictIdle takes `now` as a
+	// parameter, so a test can simulate any elapsed time without a real
+	// wait AND without touching this field (see TestHub_H8_CounterNeverGoesBackwards).
+	// This field exists for the ONE case that genuinely cannot fake time:
+	// the real-browser e2e "idle 31+ min, then send" scenario, which needs
+	// an actual running gateway process whose idle-eviction window is
+	// shortened to something a real wall-clock wait can exercise in a
+	// reasonable test runtime. See hubIdleEvictAfterEnvOverride for how a
+	// real process opts in — off by default, never user-facing, never read
+	// from config.json.
 	idleEvictAfter time.Duration
+
+	// lastEvictSweepUnixNano rate-limits the piggybacked idle-eviction
+	// sweep (BE-DESIGN.md §3.2: "a sweep piggybacked on submit, at most
+	// once per minute") — submit is the hottest path in the whole hub, so
+	// this check must be a single atomic load on every call, never a lock.
+	lastEvictSweepUnixNano atomic.Int64
 }
 
+// hubIdleSweepInterval bounds how often submit's piggybacked sweep actually
+// calls evictIdle (BE-DESIGN.md §3.2). Not the eviction THRESHOLD
+// (idleEvictAfter) — this is how often the registry CHECKS for hubs that
+// have crossed that threshold.
+const hubIdleSweepInterval = time.Minute
+
+// hubIdleEvictAfterEnvOverrideVar is the FOUNDER DECISION Q6 test-only
+// shortcut: unset in every normal install, read once at hubRegistry
+// construction, and only ever set by an e2e test's own process launch — see
+// newHubRegistry's doc comment. Deliberately not a config.json key, not
+// exposed via any REST endpoint or the SPA, and not documented in the
+// operator-facing docs — a real operator has no way to discover or set it.
+const hubIdleEvictAfterEnvOverrideVar = "OMNIPUS_TEST_ONLY_HUB_IDLE_EVICT_SECONDS"
+
 func newHubRegistry(bootID string) *hubRegistry {
+	idleEvictAfter := 10 * time.Minute
+	if raw := os.Getenv(hubIdleEvictAfterEnvOverrideVar); raw != "" {
+		if secs, err := strconv.Atoi(raw); err == nil && secs > 0 {
+			idleEvictAfter = time.Duration(secs) * time.Second
+			slog.Warn("ws: hub idle-eviction window overridden — this must NEVER be set in a production install",
+				"env_var", hubIdleEvictAfterEnvOverrideVar, "seconds", secs)
+		} else {
+			slog.Error("ws: invalid "+hubIdleEvictAfterEnvOverrideVar+", ignoring", "value", raw)
+		}
+	}
 	return &hubRegistry{
 		m:              make(map[string]*sessionHub),
 		bootID:         bootID,
-		idleEvictAfter: 10 * time.Minute,
+		idleEvictAfter: idleEvictAfter,
 	}
+}
+
+// maybeSweepIdle runs evictIdle at most once per hubIdleSweepInterval,
+// piggybacked on submit (BE-DESIGN.md §3.2) so idle sessions actually get
+// cleaned up in a running gateway without a dedicated background goroutine.
+// The rate-limit check itself is a single atomic load on the common
+// (not-yet-time) path; the CompareAndSwap ensures that if multiple
+// goroutines cross the interval at once, only one of them actually runs the
+// (registry-locking) sweep.
+func (r *hubRegistry) maybeSweepIdle(now time.Time) {
+	last := r.lastEvictSweepUnixNano.Load()
+	if now.Sub(time.Unix(0, last)) < hubIdleSweepInterval {
+		return
+	}
+	if !r.lastEvictSweepUnixNano.CompareAndSwap(last, now.UnixNano()) {
+		return // a concurrent caller already claimed this sweep
+	}
+	r.evictIdle(now)
 }
 
 // getOrCreate returns the hub for id, creating one if none exists. A newly
@@ -275,6 +333,9 @@ func (h *sessionHub) submit(frame []byte) {
 	if start {
 		go h.drain()
 	}
+	if h.registry != nil {
+		h.registry.maybeSweepIdle(time.Now())
+	}
 }
 
 // drain runs only while the inbox is non-empty (BE-DESIGN.md §1.1). It pops
@@ -352,6 +413,12 @@ func (h *sessionHub) publishBytes(frame []byte) (uint64, []byte) {
 		// and deadlock permanently. Found by TestHub_H15_GlobalBudgetDropsLRUJournal
 		// during development; see that test's history for the RED receipt.
 		h.registry.enforceGlobalBudget()
+		// BE-DESIGN.md §3.2: piggyback the idle-eviction sweep here too —
+		// every current production caller (wsStreamer.Update/Finalize) goes
+		// through publishBytes directly, not submit/drain, so this is the
+		// one chokepoint both paths share. Rate-limited to once/minute by
+		// maybeSweepIdle itself; the common-case cost is one atomic load.
+		h.registry.maybeSweepIdle(time.Now())
 	}
 	if onOverflow != nil {
 		for _, c := range overflowed {

@@ -7,6 +7,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -577,5 +578,83 @@ func TestHub_PublishBytes_MatchesJournal(t *testing.T) {
 	gotSeq, ok := decodeSeq(t, out)
 	if !ok || gotSeq != 1 {
 		t.Fatalf("decoded seq = %d ok=%v, want 1", gotSeq, ok)
+	}
+}
+
+// TestNewHubRegistry_IdleEvictAfter_DefaultAndOverride proves FOUNDER
+// DECISION Q6: idleEvictAfter defaults to 10 minutes (never overridden) in
+// every normal process, and the ONLY way to shorten it is the explicit,
+// undocumented, test-only env var — never a config file, never a REST
+// call. It restores/unsets the env var itself so it cannot leak into any
+// other test running in the same process (go test -p 1 in this repo's own
+// convention runs the whole package's tests in one process).
+func TestNewHubRegistry_IdleEvictAfter_DefaultAndOverride(t *testing.T) {
+	t.Run("default is 10 minutes", func(t *testing.T) {
+		os.Unsetenv(hubIdleEvictAfterEnvOverrideVar)
+		reg := newHubRegistry("boot-1")
+		if reg.idleEvictAfter != 10*time.Minute {
+			t.Fatalf("idleEvictAfter = %s, want 10m (default, no env override set)", reg.idleEvictAfter)
+		}
+	})
+
+	t.Run("env override shortens it", func(t *testing.T) {
+		t.Setenv(hubIdleEvictAfterEnvOverrideVar, "5")
+		reg := newHubRegistry("boot-1")
+		if reg.idleEvictAfter != 5*time.Second {
+			t.Fatalf("idleEvictAfter = %s, want 5s (env override)", reg.idleEvictAfter)
+		}
+	})
+
+	t.Run("invalid value falls back to the default rather than panicking or zeroing", func(t *testing.T) {
+		t.Setenv(hubIdleEvictAfterEnvOverrideVar, "not-a-number")
+		reg := newHubRegistry("boot-1")
+		if reg.idleEvictAfter != 10*time.Minute {
+			t.Fatalf("idleEvictAfter = %s, want 10m (invalid override must fall back to the default)", reg.idleEvictAfter)
+		}
+	})
+}
+
+// TestHubRegistry_MaybeSweepIdle_RateLimitedAndActuallyEvicts proves the
+// BE-DESIGN.md §3.2 piggybacked sweep: it evicts an eligible hub, and it
+// does NOT re-run within hubIdleSweepInterval of its last run even if
+// called again — the whole point of rate-limiting it is that it is called
+// from the hot publish/submit path.
+func TestHubRegistry_MaybeSweepIdle_RateLimitedAndActuallyEvicts(t *testing.T) {
+	reg := newHubRegistry("boot-1")
+	reg.idleEvictAfter = time.Millisecond // this test fakes elapsed time via `now`, not a real wait
+	hub := reg.getOrCreate("sess-sweep")
+	hub.publish(tokenFrame(t, 0))
+	hub.mu.Lock()
+	hub.lastActive = time.Now().Add(-time.Hour)
+	hub.mu.Unlock()
+
+	// publishBytes (called by publish, above) already ran its OWN internal
+	// maybeSweepIdle(time.Now()) as part of publishing the setup token,
+	// consuming the rate-limit slot moments ago — reset it so THIS test's
+	// "first sweep" call below is actually testing a fresh interval, not
+	// getting silently rate-limited by the setup call itself.
+	reg.lastEvictSweepUnixNano.Store(0)
+
+	base := time.Now()
+	reg.maybeSweepIdle(base)
+	if reg.lookup("sess-sweep") != nil {
+		t.Fatal("first sweep should have evicted the idle hub")
+	}
+
+	// Re-create it, age it again, and call maybeSweepIdle again WITHOUT
+	// advancing past hubIdleSweepInterval — it must be a no-op this time.
+	hub2 := reg.getOrCreate("sess-sweep")
+	hub2.mu.Lock()
+	hub2.lastActive = time.Now().Add(-time.Hour)
+	hub2.mu.Unlock()
+	reg.maybeSweepIdle(base.Add(time.Second)) // well under hubIdleSweepInterval (1 minute)
+	if reg.lookup("sess-sweep") == nil {
+		t.Fatal("a second sweep within hubIdleSweepInterval must be a no-op (rate-limited)")
+	}
+
+	// Advancing PAST the interval must let it run again.
+	reg.maybeSweepIdle(base.Add(hubIdleSweepInterval + time.Second))
+	if reg.lookup("sess-sweep") != nil {
+		t.Fatal("a sweep after hubIdleSweepInterval has elapsed must evict the (still idle) hub")
 	}
 }
