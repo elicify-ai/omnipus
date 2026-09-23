@@ -858,6 +858,12 @@ jobs:
       - run: npm run measure:design-system-bundle
       - name: Enforce production budget and Storybook exclusion
         run: node scripts/design-system/bundle-audit.mjs --baseline test-results/design-system-ci-baseline.json --candidate test-results/design-system-production-candidate.json --provenance docs/internal/design/evidence/design-system-production-provenance.json --output test-results/design-system-production-budget.json
+      - name: Upload storybook build (needed by audit)
+        uses: actions/upload-artifact@v7
+        with:
+          name: design-system-storybook-build
+          path: dist/storybook
+          if-no-files-found: error
       - name: Upload execution evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -949,23 +955,33 @@ jobs:
         with:
           name: node-modules-${{ github.run_id }}
       - run: tar -xf node_modules.tar
-      - name: Download browser evidence from all projects
+      - name: Download storybook build (needed for audit's coverage composition)
         uses: actions/download-artifact@v7
         with:
-          path: /tmp/browser-evidence
-      - name: Merge browser evidence and run audit
+          name: design-system-storybook-build
+          path: dist/storybook
+      - name: Download evidence artifacts (browser tests + execution results)
+        uses: actions/download-artifact@v7
+        with:
+          path: /tmp/ci-evidence
+      - name: Merge evidence and run audit:design-system
         run: |
           mkdir -p test-results
-          # Storybook build and browser test results from the main job
-          if [ -d /tmp/browser-evidence ]; then
-            # Copy evidence from all browser projects
-            for artifact_dir in /tmp/browser-evidence/design-system-browser-evidence-*; do
-              if [ -d "$artifact_dir" ]; then
-                cp "$artifact_dir/test-results/design-system-browser.json" "test-results/design-system-storybook-$(basename $artifact_dir | sed 's/.*evidence-//')-mapped.json" 2>/dev/null || true
+
+          # Copy design-system evidence files from the main job
+          cp /tmp/ci-evidence/design-system-evidence/test-results/design-system*.json test-results/ 2>/dev/null || true
+          cp /tmp/ci-evidence/design-system-evidence/docs/internal/design/evidence/*.json docs/internal/design/evidence/ 2>/dev/null || true
+
+          # Copy browser test results from all matrix jobs
+          if [ -d /tmp/ci-evidence ]; then
+            for artifact_dir in /tmp/ci-evidence/design-system-browser-*; do
+              if [ -d "$artifact_dir/test-results" ]; then
+                cp "$artifact_dir/test-results/design-system-browser.json" "test-results/design-system-storybook-$(basename $artifact_dir | sed 's/design-system-browser-//')-mapped.json" 2>/dev/null || true
               fi
             done
           fi
-          # Run the audit (note: Storybook index must be available from design-system job)
+
+          # Run the audit (coverage composition reads dist/storybook/index.json and the evidence files)
           npm run audit:design-system
         env:
           CI: "true"
