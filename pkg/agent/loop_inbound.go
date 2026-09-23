@@ -778,9 +778,11 @@ func (al *AgentLoop) resolveSystemMessageAgent(msg bus.InboundMessage) (agent *A
 // FIX 5d (#2): resolve the originating turn's transcript session/store so
 // this reconstructed turn persists into the SAME session the producing
 // turn was writing to — the same "run a turn that must land in a
-// specific, pre-existing session" pattern ProcessScheduled and
-// spawnSubTurn already use (al.ResolveSessionStore /
-// TranscriptSessionID+TranscriptStore threading). Without this,
+// specific, pre-existing session" pattern ProcessScheduled (loop.go) and
+// steer_reconstruct.go::reconstructSteeredTurn already use: resolve the
+// store, then thread processOptions.TranscriptSessionID and
+// .TranscriptStore together. (This used to cite `spawnSubTurn`, which
+// died with subturn.go and has zero definitions today.) Without this,
 // persistence depended ENTIRELY on a live WebSocket connection still
 // being open when the async result landed — if it had already closed,
 // the result was silently, permanently lost. A session ID that no longer
@@ -808,7 +810,8 @@ func (al *AgentLoop) resolveSystemMessageTranscript(msg bus.InboundMessage) (tra
 // change.
 //
 // FIX 1 (re-review): mirror processMessage's WorkspaceID resolution
-// (loop.go, "M4" comment ~line 5332) so a delegate-completion / async-
+// (loop_process_message.go::agentLoopProcessMessage.resolveWorkspace, the
+// "M4" comment) so a delegate-completion / async-
 // notify turn reconstructed here also stamps bus.OutboundMediaMessage
 // with the real workspace instead of silently falling back to the
 // private/global room. The session this turn persists into
@@ -824,8 +827,8 @@ func (al *AgentLoop) resolveSystemMessageWorkspaceID(msg bus.InboundMessage, tra
 	if transcriptStore != nil && transcriptSessionID != "" {
 		// FIX 1 (re-review of the re-review): distinguish a real meta-read
 		// failure from "no workspace bound" — see
-		// resolveWorkspaceIDForContinuation's doc comment (above,
-		// ~line 3099) for the full rationale.
+		// loop_inbound.go::AgentLoop.resolveWorkspaceIDForContinuation's doc
+		// comment (this same file, near the top) for the full rationale.
 		if meta, mErr := transcriptStore.GetMeta(transcriptSessionID); mErr != nil {
 			if !errors.Is(mErr, os.ErrNotExist) {
 				logger.WarnCF("agent",

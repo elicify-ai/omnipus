@@ -29,7 +29,7 @@ relationship. `pkg/steer` holds every published interface; `pkg/agent` supplies
 the production implementations; the tools, channels, and gateway packages
 inject them and cannot import `pkg/agent`.
 
-The four implementation files:
+The nine implementation files:
 
 - `pkg/agent/steer_launcher.go` — `SteerLauncher.Launch` writes the record and
   the mandatory fields (identity, ownership stamp, workspace, title and edge)
@@ -47,8 +47,33 @@ The four implementation files:
   session's generation under the same record lock so a newer instruction can
   bring it back.
 - `pkg/agent/steer_reconstruct.go` — `reconstructSteeredTurn` rebuilds a
-  steered session's `turnState` from its record on every entry path (first
-  run, wake, follow-up, boot). Identity is never per-path.
+  steered session's `turnState` from its record on every entry path that
+  RESUMES a turn: first run and revival (`SteerLauncher.Dispatch`) and the
+  wake (`loop_inbound.go::processSteeredSystemWake`). Identity is never
+  per-path. **Boot is not one of those paths** — `boot_sweep.go::
+  SteerBootRecovery` never calls it; a steered session still mid-flight at
+  boot is marked `OutcomeInterrupted` and delivered to its parent rather
+  than resumed. (That file's own header says so; this list used to claim
+  boot as a fourth entry point.)
+- `pkg/agent/steer_classify.go` — `SteerRecordClassifier` implements I-8:
+  which of the six classes a session belongs to, reading the lifecycle
+  record AND the session's own metadata and requiring them to agree.
+  Consumed by `SteerAudienceResolver` and boot recovery.
+- `pkg/agent/steer_boundary.go` — the shared per-boundary helper for every
+  publication boundary this package hosts: resolve audience, then call
+  `steer.BoundaryObserver.Observe` BEFORE acting on the decision. Also holds
+  `SetSteerAudienceDeps`, which injects the I-5 trio onto the loop.
+- `pkg/agent/steer_completion.go` — `completeSteeredTurn` applies the
+  goal-less completion disposition after a real turn exits (deliver first,
+  then mark terminal, so boot recovery can repair the gap rather than lose
+  the child's only result).
+- `pkg/agent/steer_delegate_cancel.go` — `cancelDelegatedSubtree`, the stop
+  an AGENT performs on a worker it started (`delegate(action="cancel")`),
+  routed through the same durable cascade a human's Stop uses.
+- `pkg/agent/steer_frames.go` — the four sub-agent lifecycle frames
+  (`subagent_start`/`state`/`message`/`end`) persisted into the PARENT's
+  transcript. Read its header before chasing a missing frame: start and end
+  do not share a caller.
 
 The `subturn.go` ring, borrowed `Channel`/`ChatID`, wait-inline
 (`async:false`), the `ParentDurableKey` field, and every per-site

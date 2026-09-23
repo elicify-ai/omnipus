@@ -78,7 +78,10 @@ func ToolDelegateSessionID(ctx context.Context) string {
 // via an external CLI runner (subagent_3p: claude-code/codex/opencode).
 // DelegateTool consults this at task-creation time (W2) to decide whether a
 // background task is eligible for a live in-flight transcript snapshot
-// under action:"status" — see DelegateTaskState.Is3P's doc comment.
+// under action:"status". The verdict is persisted as
+// session.LifecycleRecord.Is3P (pkg/session/lifecycle.go) and read back from
+// the durable record on every later action — ADR-091 deleted the in-process
+// DelegateTaskState this classification used to be stamped on.
 //
 // Satisfied by *agent.AgentRegistry; defined as an interface here (mirroring
 // AgentRegistryReader in handoff.go) to avoid an import cycle
@@ -153,9 +156,10 @@ type ToolCallProgressSnapshot struct {
 // a concrete type.
 type DelegateProgressReader interface {
 	// ProgressForSession returns the live progress snapshot for the turn
-	// registered under sessionKey — expected to be a
-	// DelegateTaskState.DelegateSessionID — and false when no turn is
-	// registered under that key, or one is but has not yet recorded any
+	// registered under sessionKey — expected to be the delegate session id
+	// (session.LifecycleRecord.SessionID, the id `action:"run"` returns and
+	// every later action addresses) — and false when no turn is registered
+	// under that key, or one is but has not yet recorded any
 	// tool-call-argument progress.
 	ProgressForSession(sessionKey string) (ToolCallProgressSnapshot, bool)
 }
@@ -167,10 +171,7 @@ type DelegateProgressReader interface {
 type DelegateTool struct {
 	BaseTool
 
-	launcher     steer.SessionLauncher
-	defaultModel string
-	maxTokens    int
-	temperature  float64
+	launcher steer.SessionLauncher
 
 	// getAgentRegistry, when set, resolves the live agent registry used to
 	// classify a delegation target as native or external-CLI at
@@ -220,8 +221,6 @@ type DelegateTool struct {
 	// verifyCallerOwnsSession performs (FR-039/BDD-43) — see
 	// SetOwnershipWalkMaxDepth and defaultOwnershipWalkMaxDepth.
 	ownershipWalkMaxDepth int
-
-	mu sync.Mutex
 
 	// delegationDenyBackground applies the full delegation-policy gate
 	// (FR-6.2: trust set + mode("background") + depth) for async=true calls.
@@ -278,34 +277,19 @@ type DelegateTool struct {
 	sessionMessagingEnabled func() bool
 	sessionMessagingWired   atomic.Bool
 
-	// requireParentAgentID, when set via SetRequireParentAgentID, is the
-	// live-read reader for tools.delegate.require_parent_agent_id
-	// (R2-MAJ-015) — the operator kill switch for the FR-015 fail-closed
-	// parent-agent-id guard in Execute's lifecycle-mint block.
+	// requireParentAgentID is WRITE-ONLY on this type: SetRequireParentAgentID
+	// assigns it and nothing reads it. It used to back the FR-015 fail-closed
+	// parent-agent-id guard in this tool's own lifecycle-mint block; ADR-091
+	// moved that mint onto the launcher, and the guard now lives — and reads
+	// the same key directly — at
+	// pkg/agent/steer_launcher.go::SteerLauncher.Launch, which calls
+	// config.DelegateToolConfig.EffectiveRequireParentAgentID() itself. The
+	// resolver that was this field's only consumer has been deleted.
 	//
-	// It is a func() bool, NOT a captured bool, for two independent reasons:
-	//
-	//  1. Live reads. An operator flipping the key must take effect without a
-	//     restart, exactly like sessionMessagingEnabled above. That matters
-	//     more here than almost anywhere else: the guard's failure mode is
-	//     "every delegate call in the install errors", and needing a restart
-	//     to escape it defeats the point of shipping an escape hatch.
-	//  2. Late binding. Gateway boot assigns several of this tool's
-	//     dependencies AFTER the wiring pass that constructs it runs, so a
-	//     dependency read eagerly at wiring time can be nil (or stale)
-	//     forever while registration still looks perfectly correct. Resolving
-	//     through the closure on every call sidesteps the ordering question
-	//     entirely rather than depending on getting it right.
-	//
-	// UNWIRED (nil) resolves to TRUE — the fail-closed posture, matching
-	// config.DelegateToolConfig.EffectiveRequireParentAgentID's own default
-	// for an unset key. Deliberately NOT the sessionMessagingWired treatment:
-	// there, unwired and "wired to false" must be distinguishable because
-	// fail-closed is the SAFE end of that switch and an unwired tool must not
-	// be granted the plane. Here the safe end and the unwired default are the
-	// SAME value (true = keep refusing), so an extra wired flag would carry
-	// no information — any path that reaches this resolver without a wired
-	// closure gets the strict guard, which is the correct answer.
+	// The field and SetRequireParentAgentID survive ONLY because
+	// pkg/agent/loop_wire.go still calls the setter; all three must be
+	// deleted in one change by whoever owns loop_wire.go. Do not build
+	// anything new on this field — read the config key directly instead.
 	requireParentAgentID func() bool
 
 	snapshotMaxBytes int
@@ -332,20 +316,22 @@ func (t *DelegateTool) SetSessionLauncher(launcher steer.SessionLauncher) {
 	t.launcher = launcher
 }
 
-// Compile-time check: DelegateTool implements AsyncExecutor.
-var _ AsyncExecutor = (*DelegateTool)(nil)
-
 // Compile-time check: DelegateTool implements JobSessionResolver (#583).
 var _ JobSessionResolver = (*DelegateTool)(nil)
 
-// NewDelegateTool constructs a DelegateTool. defaultModel/maxTokens/temperature
-// mirror the values the retired SubagentManager used to carry for its callers
-// (agent.Model / agent.MaxTokens / agent.Temperature at the call site).
-func NewDelegateTool(defaultModel string, maxTokens int, temperature float64) *DelegateTool {
+// NewDelegateTool constructs a DelegateTool.
+//
+// The three parameters are vestigial: they mirrored the values the retired
+// SubagentManager carried for its callers (agent.Model / agent.MaxTokens /
+// agent.Temperature at the call site), and the fields they were stored in
+// were never read again once ADR-091 moved dispatch onto
+// steer.SessionLauncher, which resolves the child's model and sampling
+// parameters from the TARGET agent's own configuration. The fields are
+// deleted; the parameters survive only until pkg/agent/loop_wire.go and
+// pkg/tools/general_builtin_catalog.go — the two production call sites, both
+// outside this lane's ownership — drop them.
+func NewDelegateTool(_ string, _ int, _ float64) *DelegateTool {
 	return &DelegateTool{
-		defaultModel:     defaultModel,
-		maxTokens:        maxTokens,
-		temperature:      temperature,
 		cancelGrace:      defaultCancelGrace,
 		now:              time.Now,
 		steerRateWindows: make(map[string][]time.Time),
@@ -408,32 +394,14 @@ func (t *DelegateTool) sessionMessagingPlaneEnabled() bool {
 	return t.sessionMessagingEnabled()
 }
 
-// SetRequireParentAgentID installs the live reader for
-// tools.delegate.require_parent_agent_id (R2-MAJ-015) — the operator kill
-// switch for the FR-015 fail-closed parent-agent-id guard. See the
-// requireParentAgentID field doc for why this is a closure and not a bool.
-//
-// The caller is expected to pass a closure that resolves the key through
-// config.DelegateToolConfig.EffectiveRequireParentAgentID, e.g.
-//
-//	tool.SetRequireParentAgentID(func() bool {
-//	    return al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID()
-//	})
-//
-// Passing nil restores the unwired default (true / strict), so this is safe
-// to call unconditionally from a re-runnable wiring pass.
+// SetRequireParentAgentID stores a reader for
+// tools.delegate.require_parent_agent_id (R2-MAJ-015) that this tool no
+// longer consults — see the requireParentAgentID field doc. The FR-015
+// guard it used to feed now reads the key itself at
+// pkg/agent/steer_launcher.go::SteerLauncher.Launch. Retained only so
+// pkg/agent/loop_wire.go keeps compiling; delete both together.
 func (t *DelegateTool) SetRequireParentAgentID(fn func() bool) {
 	t.requireParentAgentID = fn
-}
-
-// parentAgentIDRequired resolves the FR-015 guard's strictness for this call.
-// An unwired tool resolves TRUE (strict) — see the requireParentAgentID field
-// doc for why this one does not need the sessionMessagingWired treatment.
-func (t *DelegateTool) parentAgentIDRequired() bool {
-	if t.requireParentAgentID == nil {
-		return true
-	}
-	return t.requireParentAgentID()
 }
 
 // isSessionMessagingAction reports whether a delegate action touches the
@@ -534,7 +502,7 @@ const defaultCancelGrace = 5 * time.Second
 
 // SetAgentRegistry installs the live agent-registry lookup (W2) DelegateTool
 // uses at task-creation time to classify a delegation target as native or
-// external-CLI (DelegateTaskState.Is3P). getRegistry is called at
+// external-CLI (persisted as session.LifecycleRecord.Is3P). getRegistry is called at
 // task-creation time, not construction time, so hot reloads are reflected
 // automatically — see the getAgentRegistry field doc.
 func (t *DelegateTool) SetAgentRegistry(getRegistry func() DelegateAgentRegistry) {
@@ -602,20 +570,31 @@ func (t *DelegateTool) SetDelegationDenyCheckerBackground(
 	t.delegationDenyBackground = check
 }
 
+// DelegateVsTaskVsPlanGuidance is the shared "which of the three do I reach
+// for?" paragraph every front door to the same delegation primitive shows the
+// model: `delegate` (this file), `create_plan` (plan.go) and `create_task`
+// (task.go). It was pasted verbatim into all three Description() methods, so
+// a wording fix landed in one and silently disagreed with the other two —
+// three descriptions of one decision is exactly the drift this const exists
+// to prevent. Package-level and exported-shaped on purpose: plan.go and
+// task.go are in this same package and must concatenate THIS value rather
+// than their own copy.
+const DelegateVsTaskVsPlanGuidance = "Choosing between these: delegate hands work to another agent now and returns immediately — " +
+	"use it when you need the result inside this conversation. create_task files work as a card " +
+	"on the board that runs on its own and is judged against its goal — use it for work that " +
+	"outlives this conversation or that someone should see. A plan is for long-running, complex " +
+	"implementations and higher-level planning: several tasks with an order and dependencies " +
+	"between them, and an agent working on one of those tasks can itself delegate further. If the " +
+	"work is a single lookup or one action you can do yourself, just do it — starting a child " +
+	"costs time and one of a limited number of concurrent slots. "
+
 func (t *DelegateTool) Name() string {
 	return "delegate"
 }
 
 func (t *DelegateTool) Description() string {
 	return "Delegate a task to a subagent, and control/monitor it afterward. " +
-		"Choosing between these: delegate hands work to another agent now and returns immediately — " +
-		"use it when you need the result inside this conversation. create_task files work as a card " +
-		"on the board that runs on its own and is judged against its goal — use it for work that " +
-		"outlives this conversation or that someone should see. A plan is for long-running, complex " +
-		"implementations and higher-level planning: several tasks with an order and dependencies " +
-		"between them, and an agent working on one of those tasks can itself delegate further. If the " +
-		"work is a single lookup or one action you can do yourself, just do it — starting a child " +
-		"costs time and one of a limited number of concurrent slots. " +
+		DelegateVsTaskVsPlanGuidance +
 		"For a goal with two or more independent parts meant to run in parallel (for example several " +
 		"files or deliverables written by different agents), prefer a plan over several parallel run " +
 		"calls: load create_plan and execute_plan with ToolSearch (if your policy allows them). A plan's " +
@@ -808,21 +787,22 @@ func (t *DelegateTool) Parameters() map[string]any {
 	}
 }
 
+// Execute is delegate's ONLY entry point. This tool deliberately does not
+// implement AsyncExecutor: ADR-091 made every action return as soon as launch
+// and dispatch have returned, so there is no later completion for a callback
+// to report. The AsyncCallback that used to be threaded in here reached four
+// levels down (executeRun -> launchAndDispatch, executeRespond /
+// executeFollowUp -> spawnCorrectiveFollowUp) and was discarded, unread, at
+// every one of those leaves — a callback the registry could hand over but
+// that could never fire. The remaining `nil` arguments below are the last
+// trace of it; the `AsyncCallback` parameters on delegate_run.go,
+// delegate_park.go and delegate_followup.go go with them, and those three
+// files are outside this lane's ownership.
 func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	return t.execute(ctx, args, nil)
+	return t.execute(ctx, args)
 }
 
-// ExecuteAsync implements AsyncExecutor. The callback is passed through as a
-// call parameter — never stored on the DelegateTool instance.
-func (t *DelegateTool) ExecuteAsync(
-	ctx context.Context,
-	args map[string]any,
-	cb AsyncCallback,
-) *ToolResult {
-	return t.execute(ctx, args, cb)
-}
-
-func (t *DelegateTool) execute(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
+func (t *DelegateTool) execute(ctx context.Context, args map[string]any) *ToolResult {
 	action, _ := args["action"].(string)
 	if rawAction, present := args["action"]; present && rawAction != nil {
 		if _, ok := rawAction.(string); !ok {
@@ -843,7 +823,7 @@ func (t *DelegateTool) execute(ctx context.Context, args map[string]any, cb Asyn
 
 	switch action {
 	case "run":
-		return t.executeRun(ctx, args, cb)
+		return t.executeRun(ctx, args, nil)
 	case "status":
 		return t.executeStatus(ctx, args)
 	case "inbox":
@@ -853,11 +833,11 @@ func (t *DelegateTool) execute(ctx context.Context, args map[string]any, cb Asyn
 	case "steer":
 		return t.executeSteer(ctx, args)
 	case "respond":
-		return t.executeRespond(ctx, args, cb)
+		return t.executeRespond(ctx, args, nil)
 	case "cancel":
 		return t.executeCancel(ctx, args)
 	case "follow_up":
-		return t.executeFollowUp(ctx, args, cb)
+		return t.executeFollowUp(ctx, args, nil)
 	case "peek":
 		return t.executePeek(ctx, args)
 	default:

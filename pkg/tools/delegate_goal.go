@@ -103,7 +103,7 @@ func parseDelegateCriterion(item map[string]any) (steer.Criterion, error) {
 		if command == "" {
 			return steer.Criterion{}, fmt.Errorf("check.command is required")
 		}
-		expected, err := integerArgument(rawCheck["expected_exit_code"])
+		expected, err := toIntArg(rawCheck["expected_exit_code"])
 		if err != nil || expected < 0 || expected > 255 {
 			return steer.Criterion{}, fmt.Errorf("check.expected_exit_code must be an integer from 0 to 255")
 		}
@@ -118,19 +118,4 @@ func parseDelegateCriterion(item map[string]any) (steer.Criterion, error) {
 		return steer.Criterion{}, fmt.Errorf("judgment must be boolean, quantitative, or artifact")
 	}
 	return criterion, nil
-}
-
-func integerArgument(raw any) (int, error) {
-	switch value := raw.(type) {
-	case int:
-		return value, nil
-	case float64:
-		integer := int(value)
-		if float64(integer) != value {
-			return 0, fmt.Errorf("not an integer")
-		}
-		return integer, nil
-	default:
-		return 0, fmt.Errorf("not an integer")
-	}
 }

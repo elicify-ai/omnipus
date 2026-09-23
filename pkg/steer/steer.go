@@ -49,8 +49,13 @@ type AudienceResolver interface {
 // UpwardDeliverer delivers one event from a child session to its steering
 // session (I-5) — the durable-inbox-then-wake path `message_parent`
 // already runs, made the only upward path. Implemented in pkg/agent
-// (pkg/agent/steer_audience.go); injected wherever
-// tools.MessageParentWaker is wired today (it replaces that interface).
+// (pkg/agent/steer_audience.go::SteerUpwardDeliverer); injected into every
+// package that can report upward, by
+// pkg/agent/steer_boundary.go::SetSteerAudienceDeps.
+//
+// It REPLACED the former tools.MessageParentWaker, which no longer exists:
+// do not look for that interface, and do not wire a second upward path
+// beside this one.
 type UpwardDeliverer interface {
 	Deliver(ctx context.Context, event UpwardEvent) (Delivery, error)
 }
@@ -75,11 +80,17 @@ type RecordClassifier interface {
 }
 
 // BoundaryObserver is called at every publication boundary, BEFORE the
-// audience decision is acted on. The production
-// implementation (NopBoundaryObserver, this package) is a no-op; the I-7
-// test fixture supplies a recording implementation
-// (RecordingOutbound.AssertBoundaryInvoked) that tells "exercised and
-// blocked" apart from "never exercised".
+// audience decision is acted on. The one production implementation
+// (NopBoundaryObserver, this package) is a no-op.
+//
+// Test implementations record instead, so a test can tell "boundary
+// exercised and blocked" apart from "never exercised". The shared I-7
+// fixture is pkg/agent/testutil: the type is OutboundRecorder and the
+// constructor is RecordingOutbound, so the assertion reads
+// `testutil.RecordingOutbound(t).AssertBoundaryInvoked(...)`. It is not the
+// only one — pkg/agent, pkg/askuser, pkg/channels, pkg/gateway, pkg/tools
+// and this package's own consumer test each define a local recorder, so a
+// change to this interface breaks seven implementations, not two.
 type BoundaryObserver interface {
 	Observe(boundary Boundary, sessionID string, audience Audience)
 }

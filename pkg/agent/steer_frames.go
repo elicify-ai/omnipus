@@ -14,8 +14,23 @@
 // "persist first, then emit with the same id" pattern (GoalOutcomePayload's
 // own doc comment).
 //
-// The launcher emits and persists start/end directly (deliverSubagentStart,
-// deliverSubagentEnd, below) — the only production emitters of
+// All four emitters live in this file; their production CALLERS do not, and
+// they are not the same caller for start and end:
+//
+//   - subagent_start — deliverSubagentStart, called by the launcher
+//     (steer_launcher.go::SteerLauncher.publishSteeredLaunch, from Launch).
+//   - subagent_state — deliverSubagentState, called by the launcher
+//     (publishSteeredLaunch, and dispatchSteeredSessionWithReservation
+//     twice), by steer_cancel.go::WriteSteerRevivalState, and by
+//     steer_audience.go::SteerUpwardDeliverer.Deliver.
+//   - subagent_message — deliverSubagentMessage, called by
+//     steer_audience.go::SteerUpwardDeliverer.Deliver.
+//   - subagent_end — deliverSubagentEnd, whose ONLY production caller is
+//     steer_audience.go::SteerUpwardDeliverer.Deliver, NOT the launcher.
+//     Debugging a missing subagent_end starts there, not in
+//     steer_launcher.go.
+//
+// These remain the only production emitters of
 // EventKindSubTurnSpawn/EventKindSubTurnEnd.
 package agent
 
@@ -201,15 +216,29 @@ func (al *AgentLoop) deliverSubagentMessage(parentSessionID string, childRec *se
 
 // deliverSubagentState persists then emits ONE subagent_state frame
 // (ADR-091 D7/I-4) reporting childSessionID's lifecycle transition to its
-// steering session's side panel. Called from steer_audience.go's Deliver
-// on a TERMINAL outcome (state follows the wake-eligibility decision, not
-// every non-terminal report) — subagent_end (the existing
-// EventKindSubTurnEnd mechanism, not this file's) follows this state
-// transition, per I-4's ordering: "subagent_end follows the terminal
-// subagent_state". Mid-flight transitions this lane cannot observe
-// (queued -> running, a Stop) are NOT emitted here — see this lane's
-// final report for that residual gap (no real launcher/canceller exists
-// in this worktree to hook).
+// steering session's side panel.
+//
+// Mid-flight transitions ARE emitted. The four production callers:
+//
+//   - steer_launcher.go::SteerLauncher.publishSteeredLaunch (from Launch) —
+//     `queued` at creation.
+//   - steer_launcher.go::dispatchSteeredSessionWithReservation — `running`,
+//     at both of its admission sites (the task-origin branch handed to
+//     taskExecutor.dispatchLaunchedTask, and the ordinary
+//     reconstruct-then-run branch).
+//   - steer_cancel.go::WriteSteerRevivalState — `running` on revival.
+//   - steer_audience.go::SteerUpwardDeliverer.Deliver — the TERMINAL state,
+//     where state follows the wake-eligibility decision rather than every
+//     non-terminal report.
+//
+// subagent_end (the existing EventKindSubTurnEnd mechanism, not this file's)
+// follows the terminal state transition, per I-4's ordering: "subagent_end
+// follows the terminal subagent_state".
+//
+// An earlier version of this comment described the mid-flight gap as open
+// and said no launcher or canceller existed to hook. Both now exist and both
+// call this function; do not re-implement a second emitter for transitions
+// this one already reports.
 func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *session.LifecycleRecord, state string) {
 	if al == nil || parentSessionID == "" || childRec == nil || childRec.Origin == nil || childRec.Origin.CallID == "" {
 		return
