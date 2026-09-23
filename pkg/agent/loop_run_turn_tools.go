@@ -934,7 +934,10 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 		// the D7/D8 pre-flights and asks, through the same approver, only
 		// for what the kernel sandbox cannot confine (shellModePin carries
 		// this decision onto the tool's context, guardAndDispatch).
+		// D3 operator rules that already settle the call (all segments
+		// allowed, or any denied) skip it too: bashRulesSettlePrompt.
 		approved := ex.shellModePin == tools.ShellModeAuto ||
+			bashRulesSettlePrompt(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.toolArgs) ||
 			ex.rx.rr.rq.ri.rf.rt.al.ApprovalGrants().IsAllowed(ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID, ex.rx.rr.rq.ri.rf.rt.ts.agentID, ex.toolName, ex.toolArgs)
 		denialReason := ""
 		if !approved {

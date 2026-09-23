@@ -10,6 +10,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/shellrule"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -632,4 +633,42 @@ func (al *AgentLoop) bashShellModeFor(ts *turnState, toolName string) tools.Shel
 func (al *AgentLoop) inheritSessionPermissions(parentSessionID, parentAgentID, childSessionID, childAgentID string) {
 	al.ApprovalGrants().InheritFrom(parentSessionID, parentAgentID, childSessionID, childAgentID)
 	al.SessionModes().InheritFrom(parentSessionID, childSessionID)
+}
+
+// bashRulesSettlePrompt reports whether ADR-092 D3 operator command rules
+// already settle a bash call the "ask" policy would otherwise prompt for:
+//
+//   - every segment of the command matches an allow rule, with no deny or
+//     ask rule on any segment (deny > ask > allow still holds) — the
+//     allow rule is the retired exec allowlist's replacement, so the call
+//     proceeds without the prompt;
+//   - any segment matches a deny rule — the bash tool refuses the command
+//     outright in every mode, so prompting a human first would only ask
+//     them to approve a command that cannot run.
+//
+// The evaluation is the agent's own registered bash tool's
+// (tools.ExecTool.EvaluateCommandRules), so this decision and the tool's
+// enforcement use one rule list and one evaluator. An allow verdict does
+// not bypass the D7/D8 pre-flights: under Auto the tool still escalates a
+// write outside the sandbox or a network need. Any other verdict (no rule,
+// a partial match, an ask rule, a blind spot) returns false and the normal
+// prompt runs.
+func bashRulesSettlePrompt(ts *turnState, toolName string, args map[string]any) bool {
+	if toolName != "bash" || ts == nil || ts.agent == nil || ts.agent.Tools == nil {
+		return false
+	}
+	command, _ := args["command"].(string)
+	if command == "" {
+		return false
+	}
+	t, ok := ts.agent.Tools.Get("bash")
+	if !ok {
+		return false
+	}
+	exec, ok := t.(*tools.ExecTool)
+	if !ok {
+		return false
+	}
+	verdict := exec.EvaluateCommandRules(command)
+	return verdict.Action == shellrule.ActionDeny || verdict.FullyAllowed()
 }

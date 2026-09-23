@@ -207,6 +207,16 @@ func (t *ExecTool) evaluateCommandRules(command string) shellrule.CommandVerdict
 	return shellrule.EvaluateCommand(command, t.commandRules, shellRuleOptions())
 }
 
+// EvaluateCommandRules exposes this tool's D3 evaluation to pkg/agent's
+// pre-dispatch "ask" decision (resolveAskPolicy), so the loop and the tool
+// judge a command against the same rule list with the same evaluator.
+func (t *ExecTool) EvaluateCommandRules(command string) shellrule.CommandVerdict {
+	if t == nil {
+		return shellrule.CommandVerdict{}
+	}
+	return t.evaluateCommandRules(command)
+}
+
 // shellRuleDenialMessage explains a D3 ActionDeny verdict — SEC-17-style
 // explainability: every denial names the rule that produced it, not a bare
 // refusal.
