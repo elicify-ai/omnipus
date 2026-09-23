@@ -27,6 +27,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -242,5 +244,50 @@ func TestDelegateCancel_RunningSubagentStopsItsGrandchildren(t *testing.T) {
 	case <-grandTS.Finished():
 	case <-time.After(30 * time.Second):
 		t.Fatal("the grandchild's live turn is still running 30s after its parent was hard-cancelled")
+	}
+}
+
+// TestDelegateCancel_PartialCascadeIsNeverReportedAsCleanSuccess is Finding 3
+// (ADR-091 fix lane 2): cancelDelegatedSubtree consulted report.Unreachable
+// ONLY when nothing was reached at all, and discarded
+// report.SkippedNewerGeneration unconditionally — so reaching one node and
+// losing another read as a clean, unqualified success to the model
+// (pkg/tools/delegate_run.go's "cooperatively cancelled"/"hard-cancelled
+// immediately" wording, driven purely off cerr == nil). A partial cascade
+// must surface as an error, exactly as the neighbouring background-shell-kill
+// warning does for a lesser resource (delegate_run.go::cancelBackgroundShellWarnings).
+func TestDelegateCancel_PartialCascadeIsNeverReportedAsCleanSuccess(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	reachedID, _ := launchSteeredChild(t, al, parentID, "call-cancel-reached", "reached and stamped")
+	// unreachableID is reachedID's OWN child, so it sits inside reachedID's
+	// cascade — reachedID itself stamps fine; its own child does not.
+	unreachableID, _ := launchSteeredChild(t, al, reachedID, "call-cancel-unreachable", "corrupted on disk before the cascade runs")
+
+	lifecycle := al.GetSessionLifecycleStore()
+	// Make the grandchild's record genuinely UNREADABLE (permission denied)
+	// so the cascade's own stamp attempt for it fails partway through —
+	// reachedID still gets stamped fine. A merely malformed/torn line would
+	// self-heal to "not found" (LifecycleStore.tail tolerates a torn write
+	// by design) and prove nothing here.
+	unreachablePath := filepath.Join(lifecycle.Dir(), unreachableID+".jsonl")
+	if err := os.Chmod(unreachablePath, 0o000); err != nil {
+		t.Fatalf("make unreachable record unreadable: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreachablePath, 0o600) })
+
+	_, err := al.cancelDelegatedSubtree(reachedID, steer.Principal{Kind: steer.PrincipalKindAgent, ID: parentID}, true, "test")
+	if err == nil {
+		t.Fatal("cancelDelegatedSubtree reported a clean success for a cascade that reached a sibling but corrupted a descendant's own record")
+	}
+
+	rec, loadErr := lifecycle.Load(reachedID)
+	if loadErr != nil {
+		t.Fatalf("Load(reached): %v", loadErr)
+	}
+	if rec.Stop == nil {
+		t.Fatalf("the reachable session was not actually stamped despite the partial failure — the cascade itself, not just the report, regressed")
 	}
 }

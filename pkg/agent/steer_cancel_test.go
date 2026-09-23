@@ -331,3 +331,62 @@ func TestStopRevive_OrderUnderLock(t *testing.T) {
 		}
 	}
 }
+
+// TestSteerGenerationCancel_NeverRanChildUnblocksParent is Finding 5
+// (ADR-091 fix lane 2): the cascade terminalises descendants, and a RUNNING
+// child's cancelled turn delivers "interrupted:" upward through
+// completeSteeredTurn. A child that was only `queued` never ran a turn, so
+// nothing ever produced that upward event or terminalised its record — its
+// own parent's hasRunningOrQueuedDescendant kept seeing it forever. Produce
+// the upward event, and land the record terminal, for a stamped-but-never-ran
+// session too.
+func TestSteerGenerationCancel_NeverRanChildUnblocksParent(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	lifecycle := al.GetSessionLifecycleStore()
+	al.SetSteerAudienceDeps(
+		NewSteerAudienceResolver(NewSteerRecordClassifier(lifecycle, al.GetSessionStore())),
+		nil,
+		NewSteerUpwardDeliverer(),
+	)
+
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	queuedID, _ := launchSteeredChild(t, al, parentID, "call-mid-queued", "stopped while queued, never runs")
+
+	rec, err := lifecycle.Load(queuedID)
+	if err != nil {
+		t.Fatalf("Load(queued): %v", err)
+	}
+	if rec.State != session.LifecycleQueued {
+		t.Fatalf("state right after Launch = %q, want queued", rec.State)
+	}
+
+	before, err := al.hasRunningOrQueuedDescendant(parentID)
+	if err != nil {
+		t.Fatalf("hasRunningOrQueuedDescendant (before stop): %v", err)
+	}
+	if !before {
+		t.Fatal("test setup invalid: the parent must see the queued child before it is stopped")
+	}
+
+	canceller := al.steerCanceller()
+	if _, err := canceller.CancelSubtree(context.Background(), queuedID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"}); err != nil {
+		t.Fatalf("CancelSubtree(queued): %v", err)
+	}
+
+	after, err := lifecycle.Load(queuedID)
+	if err != nil {
+		t.Fatalf("Load(queued after stop): %v", err)
+	}
+	if after.State != session.LifecycleCancelled {
+		t.Fatalf("state after stop = %q, want cancelled — a queued child that never ran must still be terminalised by its own Stop", after.State)
+	}
+
+	blocked, err := al.hasRunningOrQueuedDescendant(parentID)
+	if err != nil {
+		t.Fatalf("hasRunningOrQueuedDescendant (after stop): %v", err)
+	}
+	if blocked {
+		t.Fatal("the parent is still waiting on a subtree that will never report — the never-ran child produced no upward event")
+	}
+}

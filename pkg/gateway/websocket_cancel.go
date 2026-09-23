@@ -74,7 +74,7 @@ func sendCancelReportFrame(wc *wsConn, sessionID, stage string, report steer.Can
 	if wc == nil {
 		return
 	}
-	partial := len(report.Unreachable) > 0
+	partial := len(report.Unreachable) > 0 || len(report.SkippedNewerGeneration) > 0
 	frame := generated.CancelStageFrame{
 		Type:                   string(generated.WsFrameTypeCancelStage),
 		SessionId:              sessionID,
@@ -99,11 +99,20 @@ func sendCancelReportFrame(wc *wsConn, sessionID, stage string, report steer.Can
 }
 
 func cancelPartialSummary(report steer.CancelReport) string {
-	if len(report.Unreachable) == 0 {
+	// [Finding 3, ADR-091 fix lane 2] SkippedNewerGeneration was previously
+	// discarded here too: a node whose live turn had already advanced past
+	// the generation this Stop stamped is STILL RUNNING, untouched by this
+	// cascade — the same "partial" fact Unreachable already forces into the
+	// summary, not a clean skip.
+	if len(report.Unreachable) == 0 && len(report.SkippedNewerGeneration) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("stopped %d of %d; %d unreachable",
+	summary := fmt.Sprintf("stopped %d of %d; %d unreachable",
 		len(report.Reached), len(report.Reached)+len(report.Unreachable), len(report.Unreachable))
+	if len(report.SkippedNewerGeneration) > 0 {
+		summary += fmt.Sprintf("; %d already advanced to a newer generation and are still running", len(report.SkippedNewerGeneration))
+	}
+	return summary
 }
 
 func sendCancelPartialNotice(wc *wsConn, sessionID string, report steer.CancelReport) {

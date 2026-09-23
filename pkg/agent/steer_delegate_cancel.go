@@ -10,6 +10,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -96,5 +97,40 @@ func (al *AgentLoop) cancelDelegatedSubtree(sessionID string, by steer.Principal
 		return nil, fmt.Errorf("steer: delegate cancel %q: %s",
 			report.Unreachable[0].ID, report.Unreachable[0].Reason)
 	}
+	// [Finding 3, ADR-091 fix lane 2] A partial cascade must never read as a
+	// clean success. Before this, Unreachable was consulted ONLY when
+	// nothing was reached at all — reach one node and lose five, and the
+	// five vanished with no error, no warning, no log — and
+	// SkippedNewerGeneration (a node whose live turn had already advanced
+	// past the generation this Stop stamped, so it is STILL RUNNING,
+	// untouched by this cascade) was discarded unconditionally. The tool
+	// layer (pkg/tools/delegate_run.go) reports "cooperatively cancelled"/
+	// "hard-cancelled immediately" purely off cerr == nil, so surfacing
+	// both facts as an error here — naming the counts and ids — is what
+	// keeps that success wording honest, mirroring how the neighbouring
+	// background-shell-kill warning refuses to let a partial sweep read as
+	// clean (delegate_run.go::cancelBackgroundShellWarnings).
+	if len(report.Unreachable) > 0 || len(report.SkippedNewerGeneration) > 0 {
+		return report.Reached, fmt.Errorf(
+			"steer: delegate cancel %q: partial cascade — reached %d; unreachable %d (%s); still running past a newer generation: %d (%s)",
+			sessionID, len(report.Reached),
+			len(report.Unreachable), unreachableSummary(report.Unreachable),
+			len(report.SkippedNewerGeneration), strings.Join(report.SkippedNewerGeneration, ", "),
+		)
+	}
 	return report.Reached, nil
+}
+
+// unreachableSummary renders every unreachable session's id and reason for
+// the partial-cascade error above — Finding 3 requires naming the ids, not
+// just the count.
+func unreachableSummary(items []steer.UnreachableSession) string {
+	if len(items) == 0 {
+		return "none"
+	}
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		parts = append(parts, fmt.Sprintf("%s: %s", item.ID, item.Reason))
+	}
+	return strings.Join(parts, "; ")
 }

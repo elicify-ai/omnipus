@@ -5,9 +5,14 @@
 package agent
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // TestAdmissionController_DefaultSoftCap verifies that a zero-arg controller
@@ -372,5 +377,104 @@ func TestAdmissionController_ExistingScope_AlwaysAdmitted(t *testing.T) {
 	ok3, _ := a.TryAdmit("scope-N")
 	if ok3 {
 		t.Fatal("TryAdmit new scope = true at cap=1, want false")
+	}
+}
+
+// TestSteerGenerationCancel_DrainsQueuedSessionFromAdmission is Finding 4
+// (ADR-091 fix lane 2): a human's Stop — websocket_cancel.go/rest_sessions.go
+// via cancelSteeredSubtree -> steer.Canceller.CancelSubtree — never touched
+// the steerAdmission start queue; only the agent's own
+// delegate(action="cancel") (steer_delegate_cancel.go::cancelDelegatedSubtree)
+// called removeQueuedSession. SteerGenerationCancel is the ONE cancelTurn
+// callback the cascade invokes for every reached (stamped) session,
+// regardless of caller — human Stop or agent Stop alike — so draining the
+// queue there closes the gap for both without adding a second call site.
+func TestSteerGenerationCancel_DrainsQueuedSessionFromAdmission(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	al.GetConfig().Performance.MaxParallelAgents = 1
+	gate := al.steerAdmission()
+
+	if admitted, _, _ := gate.tryAdmit("busy", 1); !admitted {
+		t.Fatal("expected the first admission to succeed")
+	}
+	if admitted, pos, _ := gate.tryAdmit("queued-child", 1); admitted || pos != 1 {
+		t.Fatalf("expected the second admission to queue at position 1, got admitted=%v pos=%d", admitted, pos)
+	}
+	if got := gate.queueLen(); got != 1 {
+		t.Fatalf("queue length before Stop = %d, want 1", got)
+	}
+
+	if _, err := al.SteerGenerationCancel(context.Background(), "queued-child", 1); err != nil {
+		t.Fatalf("SteerGenerationCancel: %v", err)
+	}
+
+	if got := gate.queueLen(); got != 0 {
+		t.Fatalf("queue length after Stop = %d, want 0 — a cancelled worker is still counted toward queue positions", got)
+	}
+}
+
+// TestClassifyDrainDispatchError is part of Finding 6 (ADR-091 fix lane 2):
+// drainSteerQueue's promotion goroutine must treat
+// ErrDispatchCancelled/ErrTerminal/ErrStaleGeneration as legitimate,
+// expected outcomes, and land every OTHER dispatch error terminal instead of
+// leaving the record stranded `queued` forever.
+func TestClassifyDrainDispatchError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"cancelled", fmt.Errorf("wrap: %w", steer.ErrDispatchCancelled), true},
+		{"terminal", fmt.Errorf("wrap: %w", steer.ErrTerminal), true},
+		{"stale generation", fmt.Errorf("wrap: %w", steer.ErrStaleGeneration), true},
+		{"io failure", errors.New("disk I/O error"), false},
+		{"lost race", fmt.Errorf("steer: dispatch: refused: something else"), false},
+	}
+	for _, tc := range cases {
+		if got := classifyDrainDispatchError(tc.err); got != tc.want {
+			t.Errorf("%s: classifyDrainDispatchError(%v) = %v, want %v", tc.name, tc.err, got, tc.want)
+		}
+	}
+}
+
+// TestReportSteeredSessionTerminalUpward_LandsRecordFailedAndDeliversUpward
+// is the rest of Finding 6: the shared helper drainSteerQueue's discriminated
+// error path uses (also reused by Finding 5's never-ran-Stop path) must land
+// a non-terminal record terminal, record WHY, and unblock its own parent's
+// hasRunningOrQueuedDescendant check — not just log a WARN and leave the
+// record `queued` forever.
+func TestReportSteeredSessionTerminalUpward_LandsRecordFailedAndDeliversUpward(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	lifecycle := al.GetSessionLifecycleStore()
+	al.SetSteerAudienceDeps(
+		NewSteerAudienceResolver(NewSteerRecordClassifier(lifecycle, al.GetSessionStore())),
+		nil,
+		NewSteerUpwardDeliverer(),
+	)
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	strandedID, strandedGen := launchSteeredChild(t, al, parentID, "call-stranded", "promotion fails with a non-cancellation error")
+
+	al.reportSteeredSessionTerminalUpward(context.Background(), strandedID, strandedGen,
+		session.LifecycleFailed, steer.OutcomeFailed, "dispatch_failed: disk I/O error")
+
+	rec, err := lifecycle.Load(strandedID)
+	if err != nil {
+		t.Fatalf("Load(stranded): %v", err)
+	}
+	if rec.State != session.LifecycleFailed {
+		t.Fatalf("state = %q, want failed", rec.State)
+	}
+	if rec.FailedReason != "dispatch_failed: disk I/O error" {
+		t.Fatalf("FailedReason = %q, want the dispatch failure reason", rec.FailedReason)
+	}
+
+	blocked, err := al.hasRunningOrQueuedDescendant(parentID)
+	if err != nil {
+		t.Fatalf("hasRunningOrQueuedDescendant: %v", err)
+	}
+	if blocked {
+		t.Fatal("the stranded child still counts as queued/running against its parent — its parent will wait forever")
 	}
 }

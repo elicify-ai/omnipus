@@ -17,6 +17,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -2066,5 +2067,100 @@ func TestInterruptSessionHard_CascadesAcrossSession(t *testing.T) {
 		if !ha {
 			t.Errorf("turn %d (%s): hardAbort not set after InterruptSessionHard", i, key)
 		}
+	}
+}
+
+// runDelegateSteer calls the REAL, production-wired delegate tool's "steer"
+// action exactly as the parent agent would.
+func runDelegateSteer(t *testing.T, al *AgentLoop, callerSessionID, targetSessionID, text string) *tools.ToolResult {
+	t.Helper()
+	ctx := tools.WithTranscriptSessionID(context.Background(), callerSessionID)
+	return delegateToolFor(t, al).Execute(ctx, map[string]any{
+		"action": "steer", "session_id": targetSessionID, "text": text,
+	})
+}
+
+// TestDelegateSteer_RevivesStoppedQueuedChild is Finding 1's proof of done
+// (ADR-091 fix lane 2, Q17/D8): "a Stop survives a restart; only a newer
+// instruction revives the session, as a new generation." A queued child the
+// Stop cascade stamped never had a live turn, so nothing transitioned it —
+// SteerCanceller.Revive existed with zero production callers, and
+// executeSteer (pkg/tools/delegate_followup.go) enqueued into a steering
+// queue no live turn would ever drain, silently orphaning the message while
+// telling the model it would "apply at the child's next tool boundary" (a
+// false success). A steering message on a stopped-while-queued child must
+// instead revive it as a NEW generation and redispatch it for real.
+func TestDelegateSteer_RevivesStoppedQueuedChild(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	al.GetConfig().Performance.MaxParallelAgents = 1
+	provider, releaseAll := installParkedProvider(t, al)
+	defer releaseAll()
+
+	launcher := NewSteerLauncher(al)
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	busyID, busyGen := launchSteeredChild(t, al, parentID, "call-steer-busy", "occupies the only slot")
+	queuedID, queuedGen := launchSteeredChild(t, al, parentID, "call-steer-queued", "gets stopped while queued")
+
+	if _, err := launcher.Dispatch(context.Background(), busyID, busyGen); err != nil {
+		t.Fatalf("Dispatch(busy): %v", err)
+	}
+	select {
+	case <-provider.entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the busy child never reached its provider")
+	}
+	queued, err := launcher.Dispatch(context.Background(), queuedID, queuedGen)
+	if err != nil {
+		t.Fatalf("Dispatch(queued): %v", err)
+	}
+	if queued.State != steer.DispatchQueued {
+		t.Fatalf("Dispatch(queued) = %+v, want State=queued", queued)
+	}
+
+	// Stop the queued child directly, mirroring a human Stop click on it.
+	canceller := al.steerCanceller()
+	if _, err := canceller.CancelSubtree(context.Background(), queuedID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"}); err != nil {
+		t.Fatalf("CancelSubtree(queued): %v", err)
+	}
+	stopped, err := al.GetSessionLifecycleStore().Load(queuedID)
+	if err != nil {
+		t.Fatalf("Load(queued after stop): %v", err)
+	}
+	if stopped.Stop == nil || stopped.Stop.Generation != stopped.Generation {
+		t.Fatalf("queued child has no current-generation Stop marker after CancelSubtree: %+v", stopped.Stop)
+	}
+
+	// The founder's decision: only a NEWER instruction revives it — steer it.
+	res := runDelegateSteer(t, al, parentID, queuedID, "please continue")
+	if res.IsError {
+		t.Fatalf("delegate(steer) on a stopped-while-queued child = error %q", res.ForLLM)
+	}
+
+	revived, err := al.GetSessionLifecycleStore().Load(queuedID)
+	if err != nil {
+		t.Fatalf("Load(queued after steer): %v", err)
+	}
+	if revived.Generation != stopped.Generation+1 {
+		t.Fatalf("generation after steer = %d, want %d (a NEW generation)", revived.Generation, stopped.Generation+1)
+	}
+	if revived.Terminal() {
+		t.Fatalf("revived child is terminal (state=%q) — the steer did not bring it back", revived.State)
+	}
+
+	// Prove it is not merely marked revived on disk — it actually redispatched
+	// and will run once the busy sibling's slot frees.
+	releaseAll()
+	if ts := al.getActiveTurnState(busyID); ts != nil {
+		select {
+		case <-ts.Finished():
+		case <-time.After(30 * time.Second):
+			t.Fatal("the busy child did not finish after its provider was released")
+		}
+	}
+	select {
+	case <-provider.entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the revived child never reached its provider once a slot freed — it never actually ran again")
 	}
 }

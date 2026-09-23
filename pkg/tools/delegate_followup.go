@@ -119,7 +119,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	if lerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", lerr))
 	}
-	_, verr := t.verifyCallerPrincipal(ctx, rec)
+	by, verr := t.verifyCallerPrincipal(ctx, rec)
 	if verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", verr))
 	}
@@ -139,6 +139,47 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 				"(claude-code/codex/opencode) with no steering-queue drain in its dispatch path; use "+
 				"action=\"respond\" (which redispatches a corrective session) or action=\"follow_up\" instead",
 			sessionID,
+		))
+	}
+
+	// [Finding 1, ADR-091 fix lane 2 — Q17/D8] A session carrying a Stop
+	// marker for its OWN current generation is checked FIRST, off the plain
+	// Load above — terminal or not: the founder's decision is that only a
+	// newer instruction revives a stopped session, as a new generation,
+	// never the steering queue (which a stopped session has no live
+	// consumer left to drain). Deliberately NOT folded into the
+	// Mutate-based terminal-rejection closure below: a Stop marker, once
+	// stamped for a generation, is retained forever as inert history (see
+	// SteerCanceller.Revive's own doc comment) — the same "checked off a
+	// naked Load is safe because the fact cannot become stale" reasoning
+	// executeRespond's own resumeNative uses for its terminal predicate.
+	// Reviver.ReviveStoppedSession re-validates atomically under Revive's
+	// own record lock regardless, so no window is opened here. This ALSO
+	// avoids a real bug the Mutate-closure version of this check had: once
+	// a stamped-but-never-ran session is terminalised by its own Stop
+	// (Finding 5, pkg/agent/steer_cancel.go::terminaliseNeverRanStop),
+	// persisting an UNCHANGED copy of that now-terminal record through
+	// Mutate (the "harmless no-op" pattern the terminal-rejection closure
+	// below relies on) trips the store's own immutable-terminal invariant
+	// (ErrLifecycleTerminalImmutable) — Mutate's no-op persist is only
+	// harmless when the record is NOT terminal.
+	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+		if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
+			return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
+		}
+		reviver, ok := t.steering.(steerReviver)
+		if !ok {
+			return ErrorResult(fmt.Sprintf("delegate: steer: session %s is stopped and cannot be revived: no reviver configured", sessionID))
+		}
+		revived, rerr := reviver.ReviveStoppedSession(ctx, sessionID, by, text)
+		if rerr != nil {
+			return ErrorResult(fmt.Sprintf("delegate: steer: revive stopped session %s: %v", sessionID, rerr)).WithError(rerr)
+		}
+		if !revived {
+			return ErrorResult(fmt.Sprintf("delegate: steer: session %s could not be revived", sessionID))
+		}
+		return NewToolResult(fmt.Sprintf(
+			"Session %s was stopped; the steering message revived it as a new generation and it has been redispatched.", sessionID,
 		))
 	}
 
@@ -163,8 +204,11 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// delivery is a separate side channel, not a lifecycle field) — Mutate
 	// persisting an unchanged copy of the tail record is a harmless,
 	// deliberate byproduct of reusing the RMW primitive purely for its
-	// locking guarantee. Ownership is deliberately NOT re-checked here — see
-	// the comment above for why a stale ownership read cannot happen.
+	// locking guarantee, PROVIDED the record is not terminal — which is
+	// exactly why the Stop-marker (possibly-terminal) case above is handled
+	// before ever reaching here, never inside this closure. Ownership is
+	// deliberately NOT re-checked here — see the comment above for why a
+	// stale ownership read cannot happen.
 	if merr := t.lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return session.ErrLifecycleNotFound
@@ -188,6 +232,17 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	return NewToolResult(fmt.Sprintf(
 		"Steering message queued for session %s; it will apply at the child's next tool boundary.", sessionID,
 	))
+}
+
+// steerReviver is satisfied by *agent.AgentLoop (t.steering's concrete
+// production type, wired via SetSteeringSink) beyond DelegateSteeringSink's
+// own EnqueueSteeringMessage method. Declared here, not added to
+// DelegateSteeringSink itself, so a narrower test fake standing in for the
+// steering sink is not forced to also implement revival — mirrors
+// appendFollowUpInstruction's own optional-capability type assertion on
+// t.sessionStore below.
+type steerReviver interface {
+	ReviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error)
 }
 
 func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {

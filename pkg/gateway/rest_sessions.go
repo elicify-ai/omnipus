@@ -668,10 +668,15 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 		Kind: steer.PrincipalKindHuman,
 		ID:   actorUsername(r),
 	})
-	if cascaded && len(report.Unreachable) > 0 {
+	// [Finding 3, ADR-091 fix lane 2] SkippedNewerGeneration also refuses
+	// deletion: a descendant whose live turn had already advanced past the
+	// generation this Stop stamped is STILL RUNNING, exactly the "may still
+	// be running" case this guard exists to catch.
+	if cascaded && (len(report.Unreachable) > 0 || len(report.SkippedNewerGeneration) > 0) {
 		summary := cancelPartialSummary(report)
 		slog.Warn("rest: delete session: Stop cascade incomplete; deletion refused",
-			"session_id", id, "summary", summary, "unreachable", report.Unreachable)
+			"session_id", id, "summary", summary,
+			"unreachable", report.Unreachable, "skipped_newer_generation", report.SkippedNewerGeneration)
 		jsonErr(w, http.StatusInternalServerError, summary)
 		return
 	}

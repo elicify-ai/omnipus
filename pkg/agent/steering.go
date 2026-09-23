@@ -16,6 +16,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -265,6 +266,29 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 	if err != nil || ag == nil {
 		return fmt.Errorf("enqueueSteeringFromMessage: route resolution failed: %w", err)
 	}
+	// [Finding 1, ADR-091 fix lane 2 — Q17/D8] The human writing into an
+	// open child (D5/Q9): sessionWorker.enqueue only reaches this path while
+	// w.inTurn is still true, but a Stop's durable marker lands before its
+	// cooperative grace window elapses — a message arriving in that window
+	// would otherwise be enqueued into a steering queue whose consumer is
+	// about to disappear for good, exactly the false-success failure mode
+	// Finding 1 closes for the delegate tool's own steer/respond. Only a
+	// NEWER instruction revives a durably-stopped session, as a new
+	// generation — never the steering queue.
+	if sessionID := strings.TrimSpace(msg.SessionID); sessionID != "" {
+		if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
+			if rec, lerr := lifecycle.Load(sessionID); lerr == nil && rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+				revived, rerr := al.ReviveStoppedSession(context.Background(), sessionID,
+					steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}, msg.Content)
+				if rerr != nil {
+					return fmt.Errorf("enqueueSteeringFromMessage: revive stopped session %q: %w", sessionID, rerr)
+				}
+				if revived {
+					return nil
+				}
+			}
+		}
+	}
 	// The steering queue uses route.SessionKey ("agent:<id>:<sid>") — the same
 	// key that runTurn registered the active turn under in activeTurnStates.
 	pmsg := providers.Message{
@@ -273,6 +297,68 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 		Media:   append([]string(nil), msg.Media...),
 	}
 	return al.enqueueSteeringMessage(route.SessionKey, ag.ID, pmsg)
+}
+
+// ReviveStoppedSession implements Finding 1's fix (ADR-091 fix lane 2 —
+// founder decision Q17/D8): "a Stop survives a restart; only a newer
+// instruction revives the session, as a new generation." Before this,
+// SteerCanceller.Revive had zero production callers — a session durably
+// stopped at its current generation (a queued child the cascade stamped, or
+// a parked child caught by a Stop) could never run again, and the delegate
+// tool's own steer/respond enqueued into a steering queue no live turn would
+// ever drain, silently orphaning the message.
+//
+// Returns (false, nil) when sessionID is not durably stopped at its current
+// generation — the caller's ordinary path applies instead. instruction, when
+// non-blank, is appended to the session's durable history BEFORE dispatch,
+// exactly like follow_up's own appendFollowUpInstruction
+// (pkg/tools/delegate_followup.go), so the reconstructed turn actually sees
+// it.
+func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error) {
+	if al == nil {
+		return false, fmt.Errorf("steer: revive %q: no AgentLoop wired", sessionID)
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return false, session.ErrLifecycleNotFound
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		return false, err
+	}
+	if rec.Stop == nil || rec.Stop.Generation != rec.Generation {
+		return false, nil
+	}
+	newGeneration, rerr := al.steerCanceller().Revive(ctx, sessionID, by)
+	if rerr != nil {
+		return false, fmt.Errorf("steer: revive %q: %w", sessionID, rerr)
+	}
+	if trimmed := strings.TrimSpace(instruction); trimmed != "" {
+		al.appendSteeredInstruction(sessionID, trimmed)
+	}
+	// al.dispatchSteeredSession IS steer.SessionLauncher.Dispatch's own body
+	// (SteerLauncher.Dispatch, steer_launcher.go: "a thin delegate onto
+	// AgentLoop.dispatchSteeredSession") — called directly here, exactly as
+	// admission.go::drainSteerQueue already does for its own redispatch, so
+	// revival works whether or not the optional externally-injected
+	// steer.SessionLauncher (SetSteerSessionLauncher, wired post-boot for
+	// pkg/tools callers that cannot import pkg/agent) has been set.
+	if _, derr := al.dispatchSteeredSession(ctx, sessionID, newGeneration); derr != nil {
+		return false, fmt.Errorf("steer: revive %q: dispatch generation %d: %w", sessionID, newGeneration, derr)
+	}
+	return true, nil
+}
+
+// appendSteeredInstruction is ReviveStoppedSession's best-effort analogue of
+// pkg/tools/delegate_followup.go::appendFollowUpInstruction, for the two
+// AgentLoop-native revival paths (a human's message into an open child, and
+// the delegate tool's own steer via the steerReviver capability it type-
+// asserts al into) rather than the tools-package follow_up flow.
+func (al *AgentLoop) appendSteeredInstruction(sessionID, instruction string) {
+	store := al.ResolveSessionStore(sessionID)
+	if store != nil {
+		store.AddMessage(sessionID, "user", instruction)
+	}
 }
 
 // EnqueueSteeringMessage is the exported wrapper used by the delegate tool
