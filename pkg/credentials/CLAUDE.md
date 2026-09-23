@@ -79,7 +79,7 @@ own name, and the whole file is written in ONE `writeFileAtomicFn` call under
 the sidecar flock (version re-checked under the lock). Then
 `credentials.json.migrated` is written and `credentials.store_migrated` is
 logged (counts only). `openLegacyEntry` is the ONLY nil-AAD read in the
-package. **TODO(credential-migration-removal):** the whole migration must be
+package. **TODO(credential-migration-removal, #847):** the whole migration must be
 deleted in a later release (see the header of `store_migrate.go`).
 
 - Any entry fails → nothing written, store stays LOCKED, `*MigrationError`

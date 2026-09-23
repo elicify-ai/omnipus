@@ -55,7 +55,7 @@ package credentials
 //     copies no longer open. The operator docs tell upgraded installs to do so.
 //   - Removing this file closes it for everyone (see the TODO below).
 //
-// TODO(credential-migration-removal): this migration and openLegacyEntry — the
+// TODO(credential-migration-removal, #847): this migration and openLegacyEntry — the
 // only nil-AAD read in the package — must be DELETED in a later release, once
 // v0.1.0 installs have had a release cycle to upgrade. While it exists, a v1
 // file is a laundering path for as long as the secret is unchanged. Tracking
