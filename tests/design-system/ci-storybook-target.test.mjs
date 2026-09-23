@@ -128,3 +128,41 @@ test('design-system-audit depends on browser and screenshot jobs to collect evid
   assert.ok(auditJob.needs.includes('design-system'),
     'audit must depend on design-system (for storybook build artifacts)')
 })
+
+test('audit job has no silent error suppression (|| true / 2>/dev/null)', () => {
+  const auditJob = workflow.jobs['design-system-audit']
+  const auditSteps = auditJob.steps.filter((step) => typeof step.run === 'string')
+
+  for (const step of auditSteps) {
+    assert.ok(!step.run.includes('|| true'),
+      'audit step must not suppress errors with "|| true" — missing evidence must fail loudly')
+    assert.ok(!step.run.includes('2>/dev/null'),
+      'audit step must not suppress stderr — missing evidence must fail loudly')
+    assert.ok(!step.run.includes('&& true'),
+      'audit step must not mask command failures — all steps must fail on error')
+  }
+})
+
+test('audit collects all five required evidence files before running', () => {
+  const auditJob = workflow.jobs['design-system-audit']
+  const mergeStep = auditJob.steps.find((step) => step.name && step.name.includes('Merge evidence'))
+
+  assert.ok(mergeStep, 'audit job must have a "Merge evidence" step')
+  assert.ok(typeof mergeStep.run === 'string', 'merge step must have a run command')
+
+  // Verify the five files audit:design-system expects are mentioned in the copy/merge logic
+  const requiredFiles = [
+    'test-results/design-system-components.json',
+    'test-results/design-system-storybook-chromium.json',
+    'test-results/design-system-storybook-firefox.json',
+    'test-results/design-system-storybook-webkit.json',
+    'test-results/design-system-browser.json',
+    'dist/storybook/index.json', // also required by coverage composition
+  ]
+
+  for (const file of requiredFiles) {
+    const basename = file.split('/').pop()
+    assert.ok(mergeStep.run.includes(basename) || mergeStep.run.includes(file),
+      `merge step must handle evidence file ${file}`)
+  }
+})

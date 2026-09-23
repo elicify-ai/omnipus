@@ -901,13 +901,19 @@ jobs:
         env:
           STORYBOOK_STATIC_DIR: dist/storybook
           CI: "true"
+      - name: Move per-project browser evidence (for merge)
+        if: always()
+        run: |
+          if [ -f "test-results/design-system-browser.json" ]; then
+            mv "test-results/design-system-browser.json" "test-results/design-system-browser-${{ matrix.project }}.json"
+          fi
       - name: Upload browser evidence for ${{ matrix.project }}
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: design-system-browser-evidence-${{ matrix.project }}
-          path: test-results/design-system-browser.json
-          if-no-files-found: ignore
+          path: test-results/design-system-browser-${{ matrix.project }}.json
+          if-no-files-found: error
 
   design-system-screenshot:
     name: Design system appearance gate
@@ -955,34 +961,58 @@ jobs:
         with:
           name: node-modules-${{ github.run_id }}
       - run: tar -xf node_modules.tar
-      - name: Download storybook build (needed for audit's coverage composition)
+      - name: Download storybook build (required by audit's coverage composition)
         uses: actions/download-artifact@v7
         with:
           name: design-system-storybook-build
           path: dist/storybook
-      - name: Download evidence artifacts (browser tests + execution results)
+      - name: Download all evidence artifacts
         uses: actions/download-artifact@v7
         with:
           path: /tmp/ci-evidence
-      - name: Merge evidence and run audit:design-system
+      - name: Merge evidence files and validate audit preconditions
         run: |
-          mkdir -p test-results
+          set -e  # fail fast on any error
 
-          # Copy design-system evidence files from the main job
-          cp /tmp/ci-evidence/design-system-evidence/test-results/design-system*.json test-results/ 2>/dev/null || true
-          cp /tmp/ci-evidence/design-system-evidence/docs/internal/design/evidence/*.json docs/internal/design/evidence/ 2>/dev/null || true
+          mkdir -p test-results docs/internal/design/evidence
 
-          # Copy browser test results from all matrix jobs
-          if [ -d /tmp/ci-evidence ]; then
-            for artifact_dir in /tmp/ci-evidence/design-system-browser-*; do
-              if [ -d "$artifact_dir/test-results" ]; then
-                cp "$artifact_dir/test-results/design-system-browser.json" "test-results/design-system-storybook-$(basename $artifact_dir | sed 's/design-system-browser-//')-mapped.json" 2>/dev/null || true
-              fi
-            done
-          fi
+          # Copy design-system evidence files from the main design-system job
+          # These are the component and production test results
+          cp /tmp/ci-evidence/design-system-evidence/test-results/design-system-components.json test-results/
+          cp /tmp/ci-evidence/design-system-evidence/test-results/design-system-storybook-chromium.json test-results/
+          cp /tmp/ci-evidence/design-system-evidence/test-results/design-system-storybook-firefox.json test-results/
+          cp /tmp/ci-evidence/design-system-evidence/test-results/design-system-storybook-webkit.json test-results/
+          cp /tmp/ci-evidence/design-system-evidence/docs/internal/design/evidence/design-system-production-provenance.json docs/internal/design/evidence/
 
-          # Run the audit (coverage composition reads dist/storybook/index.json and the evidence files)
-          npm run audit:design-system
+          # Copy per-project browser evidence files for merging
+          cp /tmp/ci-evidence/design-system-browser-evidence-chromium/test-results/design-system-browser-chromium.json test-results/
+          cp /tmp/ci-evidence/design-system-browser-evidence-firefox/test-results/design-system-browser-firefox.json test-results/
+          cp /tmp/ci-evidence/design-system-browser-evidence-webkit/test-results/design-system-browser-webkit.json test-results/
+          cp /tmp/ci-evidence/design-system-browser-evidence-chromium-coarse-pointer/test-results/design-system-browser-chromium-coarse-pointer.json test-results/
+
+          # Merge all per-project browser evidence files into a single design-system-browser.json
+          node scripts/design-system/merge-browser-evidence.mjs
+
+          # Verify all required evidence files exist and are not empty
+          echo "Verifying audit preconditions..."
+          for file in \
+            test-results/design-system-components.json \
+            test-results/design-system-storybook-chromium.json \
+            test-results/design-system-storybook-firefox.json \
+            test-results/design-system-storybook-webkit.json \
+            test-results/design-system-browser.json \
+            dist/storybook/index.json; do
+            if [ ! -f "$file" ] || [ ! -s "$file" ]; then
+              echo "ERROR: Required evidence file missing or empty: $file"
+              exit 1
+            fi
+          done
+          echo "All evidence files present and ready for audit."
+        env:
+          CI: "true"
+
+      - name: Run design-system audit
+        run: npm run audit:design-system
         env:
           CI: "true"
 
