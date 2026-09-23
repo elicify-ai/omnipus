@@ -554,6 +554,18 @@ func (t *ReadFileTool) Parameters() map[string]any {
 	}
 }
 
+// AutoApproveVerdict implements AutoApproveClassifier: read_file runs under
+// Auto only when its path is inside the workspace or a mount (ADR-092 D9,
+// J2) — a read anywhere else asks.
+func (t *ReadFileTool) AutoApproveVerdict(ctx context.Context, args map[string]any) AutoVerdict {
+	path, ok := args["path"].(string)
+	if !ok {
+		return autoAsks("read_file: path argument missing")
+	}
+	return autoWorkspaceVerdict(ctx, t.agentHome, t.restrict, t.Name(), FSOpRead, path, t.patterns,
+		fspolicy.PathGrantAccessRead)
+}
+
 func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	path, ok := args["path"].(string)
 	if !ok {
@@ -602,7 +614,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		length = t.maxSize
 	}
 
-	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpRead, path, t.patterns)
+	handle, err := resolveAutoCheckedPath(ctx, policy, t.Name(), FSOpRead, path, t.patterns, fspolicy.PathGrantAccessRead)
 	if err != nil {
 		// JUDGE-FR-084: a refusal is the half of "what did the verifier try
 		// to open" that matters most, so it is audited with the same
@@ -682,7 +694,7 @@ func (t *ReadFileTool) readOpenFile(
 		return ErrorResult(fmt.Sprintf("failed to sniff file content: %v", sniffErr))
 	}
 	reauthorize := func(checkCtx context.Context) error {
-		fresh, checkErr := ResolvePathAllowingPatterns(checkCtx, policy, t.Name(), "", FSOpRead, path, t.patterns)
+		fresh, checkErr := resolveAutoCheckedPath(checkCtx, policy, t.Name(), FSOpRead, path, t.patterns, fspolicy.PathGrantAccessRead)
 		if checkErr != nil {
 			return checkErr
 		}
@@ -1012,6 +1024,17 @@ func (t *WriteFileTool) Parameters() map[string]any {
 	}
 }
 
+// AutoApproveVerdict implements AutoApproveClassifier: write_file runs under
+// Auto only when its path is inside the workspace or a mount (ADR-092 D9).
+func (t *WriteFileTool) AutoApproveVerdict(ctx context.Context, args map[string]any) AutoVerdict {
+	path, ok := args["path"].(string)
+	if !ok {
+		return autoAsks("write_file: path argument missing")
+	}
+	return autoWorkspaceVerdict(ctx, t.agentHome, t.restrict, t.Name(), FSOpWrite, path, t.patterns,
+		fspolicy.PathGrantAccessWrite)
+}
+
 func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	path, ok := args["path"].(string)
 	if !ok {
@@ -1038,7 +1061,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 	overwrite, _ := args["overwrite"].(bool)
 
-	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)
+	handle, err := resolveAutoCheckedPath(ctx, policy, t.Name(), FSOpWrite, path, t.patterns, fspolicy.PathGrantAccessWrite)
 	if err != nil {
 		return PermissionDeniedResult(t.Name(), err, err.Error())
 	}
@@ -1179,6 +1202,18 @@ func (t *ListDirTool) Parameters() map[string]any {
 	}
 }
 
+// AutoApproveVerdict implements AutoApproveClassifier: list_directory runs
+// under Auto only when its path (default ".", the work folder) is inside the
+// workspace or a mount (ADR-092 D9, J2).
+func (t *ListDirTool) AutoApproveVerdict(ctx context.Context, args map[string]any) AutoVerdict {
+	path, ok := args["path"].(string)
+	if !ok {
+		path = "."
+	}
+	return autoWorkspaceVerdict(ctx, t.agentHome, t.restrict, t.Name(), FSOpList, path, t.patterns,
+		fspolicy.PathGrantAccessRead)
+}
+
 func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	path, ok := args["path"].(string)
 	if !ok {
@@ -1211,7 +1246,7 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult(fmt.Sprintf("failed to resolve filesystem policy: %v", err))
 	}
 
-	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpList, path, t.patterns)
+	handle, err := resolveAutoCheckedPath(ctx, policy, t.Name(), FSOpList, path, t.patterns, fspolicy.PathGrantAccessRead)
 	if err != nil {
 		// JUDGE-FR-084. len(t.patterns) is the allow-list length this tool
 		// was constructed with — the same discriminator ReadFileTool passes
