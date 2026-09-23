@@ -7,8 +7,8 @@
 // path decides everything before Execute, and the approval display shows the
 // ACTUAL agent-supplied command. There is no approval logic here and no
 // bash-policy borrowing: environment_setup's policy entry is its own, and the
-// binary allowlist / deny-pattern guards are bash-tool layers that do not
-// apply (the sandbox boundary below is the confinement, per ES-FR-03).
+// deny-pattern guards are a bash-tool layer that does not apply (the
+// sandbox boundary below is the confinement, per ES-FR-03).
 //
 // An approved install is a REAL subprocess started as a Bash-style background
 // session (ES-FR-02): the same shared SessionManager, the same ownership

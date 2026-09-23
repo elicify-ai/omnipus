@@ -19,8 +19,6 @@
 //     can disable it (FR-B4). It is layered with an operator-extensible
 //     custom-pattern mechanism (global + per-agent), which IS opt-in/off by
 //     default.
-//   - `pkg/policy.Evaluator.EvaluateExec` (the binary allowlist, SEC-05)
-//     applies identically to foreground and background calls (FR-B5).
 //   - Every non-god-mode invocation routes through `sandbox.ResolveLimits` +
 //     `sandbox.ApplyChildHardening`/`sandbox.Run` (ADR-035 §7) — there is no
 //     longer a separate "sandbox off but not god mode" state; the fixed
@@ -56,39 +54,26 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/environmentsetup"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
-	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/security"
+	"github.com/elicify-ai/omnipus/pkg/shellrule"
 )
 
-// ExecPolicyAuditor evaluates a bash command against the policy engine and
-// audit-logs the decision. Implemented by *policy.PolicyAuditor. Defined as an
-// interface so tests can supply lightweight mocks and so this package does not
-// need to directly import the audit package through this dependency edge.
-//
-// Contract: implementations MUST audit-log every decision (allow AND deny) as
-// a side effect of EvaluateExec. Returning a decision without logging violates
-// the SEC-15/ADR-002 §W-3 contract. This is not expressible in the signature
-// but is part of the type's invariant — test doubles must honor it.
-type ExecPolicyAuditor interface {
-	EvaluateExec(agentID, command string) policy.Decision
-}
-
-// ExecToolDeps bundles the ADR-035/ADR-036 dependencies for the bash tool.
-// All fields are optional — a nil PolicyAuditor disables binary allowlist
-// enforcement (useful when the policy layer is not configured).
+// ExecToolDeps bundles the ADR-035/ADR-036/ADR-092 dependencies for the bash
+// tool. All fields are optional — nil ShellMode/ApprovalRequester disable
+// the ADR-092 D1/D3/D7/D8 machinery and fail CLOSED to ShellModeAsk (see
+// shell_permission_mode.go's resolveShellMode) rather than silently running
+// unconfined.
 //
 // Note: the interactive approval layer (SEC-08, "ask" prompts) and the
 // allow/ask/deny TOOL POLICY gate are handled upstream of this tool entirely
 // (HookManager.ApproveTool / the compositor's EffectiveToolPolicy resolution)
 // — a "deny" verdict means Execute is never called at all, so bash does not
-// re-implement that check. What DOES live here is the narrower, automated
-// binary allowlist (SEC-05) and the deny-pattern/sandbox layers that apply
-// regardless of the policy verdict.
+// re-implement that check. What DOES live here is the surviving structural
+// guards and — ADR-092 — the D1 mode-sensitive escalation machinery that
+// applies WITHIN an "allow" (Auto mode) or "ask" (Ask mode) ceiling, which
+// the upstream allow/ask/deny gate alone cannot express.
 type ExecToolDeps struct {
-	// PolicyAuditor enforces the binary allowlist (SEC-05) and audit-logs the
-	// decision. Nil disables the check (default-permissive).
-	PolicyAuditor ExecPolicyAuditor
-
 	// GodMode reflects agent.GodModeActive(cfg), resolved ONCE at wiring time.
 	// When true, ApplyChildHardening/sandbox.Run are skipped entirely and the
 	// command runs with full host latitude (see runUnconstrained).
@@ -103,16 +88,41 @@ type ExecToolDeps struct {
 	// (FR-B7) rather than proceeding unaudited.
 	AuditFailClosed bool
 
-	// GlobalShellDenyPatterns is the operator-global, OPT-IN deny-pattern
-	// extension list (config.Sandbox.ShellDenyPatterns). Layered ON TOP of
-	// (never a substitute for) the hardcoded baseline, and only consulted
-	// when AgentShellPolicy.EnableDenyPatterns is true.
-	GlobalShellDenyPatterns []string
+	// ShellMode resolves the ADR-092 D1 effective mode (Ask/Auto/God)
+	// governing each call. Wired by pkg/agent to ShellPermissionGate
+	// (loop_policy.go), whose liveMode resolves: God Mode active -> God;
+	// bash's tool policy resolving to anything but "ask" -> Ask (an "allow"
+	// tool policy runs without the Auto machinery, a "deny" never reaches
+	// execution); "ask" with Auto-approve off, or Auto-approve on but no
+	// active kernel sandbox, -> Ask; "ask" + Auto-approve on + a kernel
+	// sandbox installed -> Auto. Auto is therefore not an independent
+	// third mode an operator picks directly — it is a narrower behavior
+	// that only ever applies when bash's own tool policy has already
+	// resolved to "ask".
+	ShellMode ShellModeResolver
 
-	// AgentShellPolicy is the per-agent shell policy (AgentConfig.ShellPolicy).
-	// Nil means no per-agent custom patterns and EnableDenyPatterns=false
-	// (operator-extensible layer off; the hardcoded baseline still applies).
-	AgentShellPolicy *config.AgentShellPolicy
+	// ApprovalRequester is the interactive escalation fallback for the D3
+	// ask-rule and D7/D8 pre-flight call sites (FR-039). Wired by pkg/agent
+	// to AgentLoop.CheckGrantOrRequestApproval — the SAME consultation
+	// function the classic ask-policy path already uses.
+	ApprovalRequester ShellApprovalRequester
+
+	// ApprovalGrants is the session-scoped grant store (pkg/security).
+	// ADR-092's D7/D8 escalation flows consult and record directly against
+	// this reference (prefix/path-widening/network-widening — none of which
+	// fit the classic exact-fingerprint IsAllowed check ApprovalRequester's
+	// own fallback still performs for its own, narrower purpose). Wired by
+	// pkg/agent to the SAME store instance AgentLoop.ApprovalGrants()
+	// returns, so a grant recorded here is visible to (and inherited by)
+	// every other consumer of that store.
+	ApprovalGrants *security.ApprovalGrantStore
+
+	// CommandRules is the ADR-092 D3 operator rule set (config.SandboxConfig.
+	// CommandRules, json command_rules, config-file-only, no wire schema —
+	// FR-018), evaluated in every mode. Empty/nil means no operator rules
+	// are configured — D3 then defers entirely to the ceiling/mode
+	// machinery, which is default-permissive by design.
+	CommandRules []shellrule.Rule
 }
 
 var (
@@ -158,22 +168,17 @@ type ExecTool struct {
 	restrictToWorkspace bool
 	allowedPathPatterns []*regexp.Regexp
 
-	// denyPatterns is the hardcoded baseline (defaultDenyPatterns).
-	// Unconditional: FR-B4 forbids disabling this via policy or config.
-	denyPatterns []*regexp.Regexp
-
-	// operatorDenyPatterns is the OPT-IN, operator-extensible layer (global +
-	// per-agent custom patterns), only consulted when
-	// enableOperatorDenyPatterns is true. Layered on top of denyPatterns,
-	// never a substitute for it.
-	operatorDenyPatterns       []*regexp.Regexp
-	enableOperatorDenyPatterns bool
-
 	sessionManager *SessionManager
 
-	// policyAuditor enforces the binary allowlist (SEC-05) uniformly for
-	// foreground and background calls (FR-B5).
-	policyAuditor ExecPolicyAuditor
+	// ADR-092 D1/D3/D7/D8: mode resolution, interactive escalation, the
+	// session grant store, and the operator command-rule set. See
+	// ExecToolDeps' own doc comments; all four are nil-safe to leave unwired
+	// (shell_permission_mode.go's resolveShellMode/enforce* functions fail
+	// closed rather than panic).
+	shellMode         ShellModeResolver
+	approvalRequester ShellApprovalRequester
+	approvalGrants    *security.ApprovalGrantStore
+	commandRules      []shellrule.Rule
 
 	// godMode / proxy: see ExecToolDeps. Resolved once at wiring time.
 	godMode bool
@@ -241,174 +246,6 @@ func (t *ExecTool) SetAuditLogger(l *audit.Logger) {
 	}
 }
 
-var (
-	// defaultDenyPatterns is the hardcoded deny-pattern baseline, ported
-	// verbatim from the pre-consolidation `exec` tool (FR-B4). Applies
-	// UNCONDITIONALLY — no policy verdict or operator configuration disables
-	// this list.
-	//
-	// The secrets-subtree literal guards (v0.2 #155 item 8) are appended below
-	// via secretGuardPatterns rather than hand-copied here — see that var's doc
-	// comment for why hand-copying is exactly the bug this replaces.
-	defaultDenyPatterns = append([]*regexp.Regexp{
-		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
-		regexp.MustCompile(`\bdel\s+/[fq]\b`),
-		regexp.MustCompile(`\brmdir\s+/s\b`),
-		// Match disk wiping commands (must be followed by space/args)
-		regexp.MustCompile(
-			`(?:^|[;&|]\s*|sudo\s+)(format|mkfs|diskpart)\s`,
-		),
-		regexp.MustCompile(`\bdd\s+if=`),
-		// Block writes to block devices (all common naming schemes).
-		regexp.MustCompile(
-			`>\s*/dev/(sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d|mmcblk\d|loop\d|dm-\d|md\d|sr\d|nbd\d)`,
-		),
-		regexp.MustCompile(`\b(shutdown|reboot|poweroff)\b`),
-		// Fork-bomb guard. Widened in v0.2 #155 item 5 to match every
-		// documented bypass shape:
-		//   `: ( ) { :|:& };:`        (whitespace anywhere)
-		//   `b(){b|b};b`              (disguised with arbitrary identifier)
-		//   `:(){ :|:& \n };:`        (newline inside braces)
-		// RLIMIT_NPROC in hardened_exec_linux.go is the kernel-layer
-		// backstop for any shape that still slips through.
-		regexp.MustCompile(`(?s)([A-Za-z_]\w*|:)\s*\(\s*\)\s*\{[^{}]*[|&][^{}]*\}\s*;\s*([A-Za-z_]\w*|:)`),
-		// NOTE: the blanket `\$\([^)]+\)` rule that used to sit here —
-		// "reject ANY command substitution" — was removed. It blocked benign
-		// substitutions (`$(seq 1 5)`, `$(date)`, `$(pwd)`), making bounded
-		// `for` loops unusable, and it made the four `$(cat|curl|wget|which `
-		// rules below it unreachable. Command substitutions are now judged
-		// STRUCTURALLY by substitutionGuard (shell_subst_guard.go), which is
-		// applied on this same unconditional baseline path in guardCommand and
-		// preserves every dangerous shape the blanket rule caught. Do not
-		// reinstate a blanket rule here without reading that file's threat
-		// notes first.
-		regexp.MustCompile(`\$\{[^}]+\}`),
-		// Legacy backtick substitutions are judged structurally by
-		// substitutionGuard, alongside $(...). That guard still refuses command
-		// position, dangerous inner commands, and hostile outer commands, while
-		// deliberately no longer treating every prose fragment wrapped in
-		// backticks as executable shell syntax (issue #767).
-		regexp.MustCompile(`\|\s*sh\b`),
-		regexp.MustCompile(`\|\s*bash\b`),
-		regexp.MustCompile(`;\s*rm\s+-[rf]`),
-		regexp.MustCompile(`&&\s*rm\s+-[rf]`),
-		regexp.MustCompile(`\|\|\s*rm\s+-[rf]`),
-		// REMOVED (ADR-068 §3, 2026-08-23): `regexp.MustCompile("<<\\s*EOF")`.
-		// Do NOT restore it. applyDenyPatterns LOWERCASES the command before
-		// matching (lowerASCII, shell_guard.go:32), so an uppercase `EOF`
-		// literal could never match anything: the rule was unreachable from the
-		// day it was written and blocked exactly zero commands over its whole
-		// life. Deleting it therefore changes no runtime behaviour.
-		//
-		// Making it fire instead would have been a REGRESSION dressed up as a
-		// fix — heredocs (`cat > notes.md << EOF … EOF`) are an ordinary,
-		// currently-working way for an agent to write a file, and the ADR-068
-		// investigation confirmed the deny layer allows every heredoc write
-		// shape UAT defect 003 reported as blocked (those were blocked by the
-		// path-containment scan below, not here).
-		//
-		// Two tests pin this: TestDefaultDenyPatterns_HeredocsArePermitted
-		// asserts heredocs stay allowed, and
-		// TestDefaultDenyPatterns_ContainNoUppercaseOnlyLiterals asserts no
-		// pattern in this list can contain an uppercase-only literal again —
-		// the whole bug class, not just this one instance (shell_guard_test.go).
-		// The four substitution rules below are now ALSO covered by
-		// substitutionGuard's R2 (which additionally handles `$(/bin/cat …)`,
-		// `$(FOO=1 curl …)` and mid-pipeline positions). They are retained
-		// verbatim as literal, cheap redundancy: if the structural scanner ever
-		// regresses, these still fire.
-		regexp.MustCompile(`\$\(\s*cat\s+`),
-		regexp.MustCompile(`\$\(\s*curl\s+`),
-		regexp.MustCompile(`\$\(\s*wget\s+`),
-		regexp.MustCompile(`\$\(\s*which\s+`),
-		regexp.MustCompile(`\bsudo\b`),
-		regexp.MustCompile(`\bchmod\s+[0-7]{3,4}\b`),
-		regexp.MustCompile(`\bchown\b`),
-		regexp.MustCompile(`\bpkill\b`),
-		regexp.MustCompile(`\bkillall\b`),
-		regexp.MustCompile(`\bkill\b`),
-		regexp.MustCompile(`\bcurl\b.*\|\s*(sh|bash)`),
-		regexp.MustCompile(`\bwget\b.*\|\s*(sh|bash)`),
-		regexp.MustCompile(`\bnpm\s+install\s+-g\b`),
-		regexp.MustCompile(`\bpip\s+install\s+--user\b`),
-		regexp.MustCompile(`\bapt\s+(install|remove|purge)\b`),
-		regexp.MustCompile(`\byum\s+(install|remove)\b`),
-		regexp.MustCompile(`\bdnf\s+(install|remove)\b`),
-		regexp.MustCompile(`\bdocker\s+run\b`),
-		regexp.MustCompile(`\bdocker\s+exec\b`),
-		regexp.MustCompile(`\bgit\s+push\b`),
-		regexp.MustCompile(`\bgit\s+force\b`),
-		regexp.MustCompile(`\bssh\b.*@`),
-		regexp.MustCompile(`\beval\b`),
-		regexp.MustCompile(`\bsource\s+.*\.sh\b`),
-		regexp.MustCompile(`<\([^)]*\)`),
-		regexp.MustCompile(`>\([^)]*\)`),
-	}, secretGuardPatterns...)
-
-	// secretGuardPatterns is the v0.2 #155 item 8 secrets-subtree literal-text
-	// backstop (option B), generated FROM fspolicy.SecretEntriesAlways rather
-	// than hand-copied.
-	//
-	// It used to be two hardcoded lines here — `\bmaster\.key\b` and
-	// `\bcredentials\.json\b` — written when the secret set had exactly those
-	// two entries. The set has since grown to five (config.json, cli.token,
-	// entities joined master.key and credentials.json; see
-	// fspolicy.SecretEntriesAlways), and grew again since (auth.json, backups).
-	// The hand-copied pair never gained any of them: this guard is a backstop
-	// over a boundary the kernel sandbox already enforces, so its silent
-	// drift was invisible in every test that exercises the kernel deny
-	// instead. A backstop that covers 2 of N entries and looks like it covers
-	// all of them is worse than no backstop, because a reviewer reads
-	// "secrets-subtree path-guard" and stops checking.
-	//
-	// Generating the list closes that class of drift structurally — there is
-	// no second copy to fall behind. TestSecretGuardPatterns_CoverEverySecretEntryAlways
-	// (shell_secret_guard_test.go) is the regression: it fails the moment
-	// SecretEntriesAlways gains an entry this can't already reach, which is
-	// possible only if this generation is ever replaced with a literal list
-	// again.
-	//
-	// Scoped to SecretEntriesAlways, not the combined SecretEntriesRelative:
-	// the per-turn half (agents/, workspaces/) is made of ordinary English
-	// words an agent legitimately types constantly ("list the workspaces",
-	// "check the agents dir"), and the own-tree exception that makes reaching
-	// them sometimes correct (fspolicy.DeniedPathsFor) is inherently
-	// contextual — a static text guard has no turn to evaluate that against.
-	// Every ALWAYS entry remains covered, but issue #767 proved that the words
-	// "system" and "config.json" are legitimate in prose. Those two are
-	// therefore path-shaped below; all other names retain literal coverage.
-	secretGuardPatterns = buildSecretGuardPatterns()
-)
-
-// buildSecretGuardPatterns compiles one case-insensitive-by-construction
-// (applyDenyPatterns lowercases the command before matching) regex per
-// fspolicy.SecretEntriesAlways entry. Most names remain context-free because
-// merely exposing them is unsafe. The two ordinary-language exceptions are
-// narrowed to explicit path components below.
-func buildSecretGuardPatterns() []*regexp.Regexp {
-	out := make([]*regexp.Regexp, 0, len(fspolicy.SecretEntriesAlways))
-	for _, name := range fspolicy.SecretEntriesAlways {
-		var pattern string
-		switch name {
-		case "config.json":
-			// Catch config.json only as an explicit path component. A bare
-			// filename in prose is deliberately allowed; the protected file lives
-			// under $OMNIPUS_HOME, so a real reference from an agent workspace
-			// carries a path separator and also reaches the path/platform guards.
-			pattern = `[/\\]config\.json\b`
-		case "system":
-			// Catch the protected system directory when it is traversed as a
-			// path. The ordinary word "system" and a bare filename are
-			// deliberately allowed; paths such as system/audit.jsonl are not.
-			pattern = `\bsystem[/\\]`
-		default:
-			pattern = `\b` + regexp.QuoteMeta(strings.ToLower(name)) + `\b`
-		}
-		out = append(out, regexp.MustCompile(pattern))
-	}
-	return out
-}
-
 // NewExecTool constructs a minimal bash tool with no deps injected (test /
 // metadata-only use).
 func NewExecTool(workingDir string, restrict bool, allowPaths ...[]*regexp.Regexp) (*ExecTool, error) {
@@ -429,19 +266,13 @@ func NewExecToolWithDeps(
 	if err != nil {
 		return nil, err
 	}
-	tool.policyAuditor = deps.PolicyAuditor
 	tool.godMode = deps.GodMode
 	tool.proxy = deps.Proxy
 	tool.auditFailClosed = deps.AuditFailClosed
-
-	tool.operatorDenyPatterns = compileDenyPatterns(deps.GlobalShellDenyPatterns, "global")
-	if deps.AgentShellPolicy != nil {
-		tool.enableOperatorDenyPatterns = deps.AgentShellPolicy.EnableDenyPatterns
-		tool.operatorDenyPatterns = append(
-			tool.operatorDenyPatterns,
-			compileDenyPatterns(deps.AgentShellPolicy.CustomDenyPatterns, "agent")...,
-		)
-	}
+	tool.shellMode = deps.ShellMode
+	tool.approvalRequester = deps.ApprovalRequester
+	tool.approvalGrants = deps.ApprovalGrants
+	tool.commandRules = deps.CommandRules
 	return tool, nil
 }
 
@@ -467,7 +298,6 @@ func NewExecToolWithConfig(
 		workingDir:          workingDir,
 		restrictToWorkspace: restrict,
 		allowedPathPatterns: allowedPathPatterns,
-		denyPatterns:        defaultDenyPatterns,
 		sessionManager:      getSessionManager(),
 	}, nil
 }
@@ -489,11 +319,10 @@ func (t *ExecTool) Description() string {
 		"session cancel. Output is truncated beyond a size cap — a SUCCEEDING command keeps up to 64,000 " +
 		"characters, a FAILING one only 10,000 (the failure cap is smaller, so a large error command's output " +
 		"is cut harder than a successful one's); redirect to a file and read it with read_file/offset when you " +
-		"need all of it. Commands are screened by a safety guard (deny patterns, a binary allowlist, and a " +
-		"path-use check) before they run — writing outside your workspace requires a mount first (see " +
-		"list_mounts / request_mount); a \"blocked by safety guard\" or \"blocked by exec allowlist\" error means " +
-		"the guard refused the command, not that it failed to run. Document runtime provisioning goes " +
-		"through the environment_setup tool, not a bash command."
+		"need all of it. Commands are screened by a safety guard (deny patterns and a path-use check) before " +
+		"they run — writing outside your workspace requires a mount first (see list_mounts / request_mount); " +
+		"a \"blocked by safety guard\" error means the guard refused the command, not that it failed to run. " +
+		"Document runtime provisioning goes through the environment_setup tool, not a bash command."
 }
 
 func (t *ExecTool) Parameters() map[string]any {
@@ -655,27 +484,41 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 		return ErrorResult(cwdErr.Error())
 	}
 
-	// FR-B4: hardcoded deny-pattern baseline (unconditional) + the opt-in
-	// operator-extensible layer + the legacy command-text absolute-path scan.
 	// The document probe is an immutable first-party command whose manifest
 	// lives outside the agent work directory by design. Its filesystem access
-	// is still confined by the per-turn kernel policy augmented below.
+	// is still confined by the per-turn kernel policy augmented below, and it
+	// is exempt from the ADR-092 D1/D3/D7/D8 machinery for the same reason it
+	// is exempt from guardCommand below: it is a fixed, non-attacker-
+	// influenced, system-triggered command, not a candidate for an
+	// escalation prompt.
 	isDocumentProbe := t.documentRuntime != nil && command == strings.Join(documentruntime.ProbeArgv(*t.documentRuntime), " ")
-	if guardErr := t.guardCommand(ctx, command, cwd); guardErr != "" && !isDocumentProbe {
-		t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
-		return ErrorResult(guardErr)
+
+	// ADR-092 D1/D3/D7/D8: resolve the effective shell mode, evaluate the
+	// unified operator rule engine (every mode), and — Auto mode only — run
+	// the filesystem/network pre-flights, escalating and recording any
+	// newly-approved grant. This is the fix for the B-1 reachability defect:
+	// grant consultation now runs from the real execution path, not only
+	// from the classic "ask" tool-policy branch upstream of Execute.
+	var perm *shellPermissionResult
+	if !isDocumentProbe {
+		var permErr *ToolResult
+		perm, permErr = t.enforceShellPermissionMode(ctx, command)
+		if permErr != nil {
+			t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
+			return permErr
+		}
 	}
 
-	// FR-B5: binary allowlist (SEC-05), applied uniformly to foreground and
-	// background — this check runs BEFORE the foreground/background branch
-	// below, so both paths are covered by the same call site.
-	if t.policyAuditor != nil {
-		agentID := ToolAgentID(ctx)
-		decision := t.policyAuditor.EvaluateExec(agentID, command)
-		if !decision.Allowed {
-			t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
-			return ErrorResult(fmt.Sprintf("Command blocked by exec allowlist: %s", decision.PolicyRule))
-		}
+	// FR-B4 surviving guards (the structural substitution guard) + the
+	// legacy command-text absolute-path scan, now grant-aware (ADR-092
+	// FR-036): perm.grants() is nil for Ask/God Mode and for the document
+	// probe, so guardCommand behaves exactly as it did before ADR-092 in
+	// both of those cases (FR-050's Ask/God branches) — Auto mode's own
+	// widenings were already resolved and recorded above, so this scan
+	// passes cleanly for exactly what was approved.
+	if guardErr := t.guardCommand(ctx, command, cwd, perm.grants()); guardErr != "" && !isDocumentProbe {
+		t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
+		return ErrorResult(guardErr)
 	}
 
 	// FR-B7: audit-log write failure fails CLOSED.
@@ -734,7 +577,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// God mode is excluded deliberately: it is an explicit operator opt-out of
 	// confinement, and runForeground routes it to runUnconstrained anyway.
 	if !t.godMode {
-		kernelPolicy, kpErr := t.turnKernelPolicy(ctx, cwd, rtLayer, docLayer)
+		kernelPolicy, kpErr := t.turnKernelPolicy(ctx, cwd, rtLayer, docLayer, perm)
 		if kpErr != nil {
 			t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
 			return ErrorResult(fmt.Sprintf("sandbox policy error: %v", kpErr))
@@ -909,7 +752,14 @@ func escapeSweepMountsUnresolvedNote() string {
 // could not be derived. Falling back on failure would hand the child the boot
 // profile, which is the WIDER of the two — a derivation bug would then quietly
 // restore the very cross-agent reach this exists to remove.
-func (t *ExecTool) turnKernelPolicy(ctx context.Context, cwd string, rt environmentsetup.RuntimeEnv, doc documentEnvLayer) (*sandbox.SandboxPolicy, error) {
+// perm is ADR-092's resolved permission state for this call (nil for the
+// document probe, which bypasses the whole D1/D3/D7/D8 machinery — see
+// executeRun). When perm is non-nil and its mode is Auto, the returned
+// policy's PathGrants render the D7 widenings already resolved this call
+// (via ResolveTurnFSPolicy's grant-overlay parameter) and its network
+// posture is set by applyAutoNetworkPosture (D8) — deny-by-default unless
+// perm.networkGranted.
+func (t *ExecTool) turnKernelPolicy(ctx context.Context, cwd string, rt environmentsetup.RuntimeEnv, doc documentEnvLayer, perm *shellPermissionResult) (*sandbox.SandboxPolicy, error) {
 	if !sandbox.TurnPolicyBaseInstalled() {
 		return nil, nil
 	}
@@ -918,7 +768,7 @@ func (t *ExecTool) turnKernelPolicy(ctx context.Context, cwd string, rt environm
 	// decision (see resolveCWD's note 3), while this is the turn's real posture.
 	// Scope does not change the derived rules anyway — post-ADR-062 it governs
 	// writes through the work dir, which is identical either way (FR-2.5).
-	authored, err := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace)
+	authored, err := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace, perm.grants())
 	if err != nil {
 		return nil, fmt.Errorf("resolve turn filesystem policy: %w", err)
 	}
@@ -929,6 +779,9 @@ func (t *ExecTool) turnKernelPolicy(ctx context.Context, cwd string, rt environm
 	augmented, err := t.augmentKernelPolicy(*policy, cwd, rt, doc)
 	if err != nil {
 		return nil, fmt.Errorf("apply runtime sandbox access: %w", err)
+	}
+	if perm != nil && perm.mode == ShellModeAuto {
+		applyAutoNetworkPosture(&augmented, perm.networkGranted)
 	}
 	return &augmented, nil
 }
