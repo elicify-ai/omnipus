@@ -33,18 +33,18 @@ properties:
     example: "550e8400-e29b-41d4-a716-446655440000"
   generation:
     type: integer
-    minimum: 0
+    minimum: 1
     description: >
-      This session's generation number. A `follow_up`/Play mints a new
-      generation via `resumed_from` rather than mutating a terminal
-      record.
-    example: 0
+      This session's generation number. Starts at 1. A `follow_up`/Play
+      mints a new generation via `resumed_from` rather than mutating a
+      terminal record.
+    example: 1
   resumed_from:
     type: string
     nullable: true
     description: >
       The prior generation's `session_id` this record resumed from.
-      Null for generation 0 (the original spawn).
+      Null for generation 1 (the original spawn).
     example: null
   state:
     type: string
@@ -243,6 +243,10 @@ properties:
       field should use optional-only semantics to avoid Zod/openapi-typescript
       codegen mismatch (see needs_input field comment).
     additionalProperties: false
+    required:
+      - steering_session_id
+      - root_session_id
+      - authorization
     properties:
       steering_session_id:
         type: string
@@ -272,6 +276,9 @@ properties:
         type: object
         description: The gate verdict at launch.
         additionalProperties: false
+        required:
+          - mode
+          - remaining_depth
         properties:
           mode:
             type: string
@@ -321,6 +328,10 @@ properties:
       field should use optional-only semantics to avoid Zod/openapi-typescript
       codegen mismatch (see needs_input field comment).
     additionalProperties: false
+    required:
+      - at
+      - generation
+      - by
     properties:
       at:
         type: string
@@ -329,7 +340,7 @@ properties:
         example: "2026-07-22T10:05:00Z"
       generation:
         type: integer
-        minimum: 0
+        minimum: 1
         description: >
           The generation this Stop marker names. A revived generation is a
           newer generation number.

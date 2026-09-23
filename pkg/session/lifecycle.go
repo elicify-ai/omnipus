@@ -477,6 +477,40 @@ func (s *LifecycleStore) persistLocked(rec *LifecycleRecord) error {
 		return fmt.Errorf("session: lifecycle: invalid owner_scope_kind %q", rec.OwnerScopeKind)
 	}
 
+	// ADR-091 I-1 — validate the four durable fields the type-design review
+	// found enforced only at SteerLauncher.Launch (pkg/agent/steer_launcher.go),
+	// never at this store's own write choke point. persistLocked is the
+	// single funnel every durable write passes through (both Persist and
+	// Mutate fold into it), so this is where a caller other than Launch —
+	// today or in the future — is stopped from writing a damaged record.
+	if rec.Generation < 1 {
+		return fmt.Errorf("session: lifecycle: generation must be >= 1, got %d", rec.Generation)
+	}
+	if rec.Origin != nil {
+		if !IsValidOriginKind(rec.Origin.Kind) {
+			return fmt.Errorf("session: lifecycle: invalid origin kind %q", rec.Origin.Kind)
+		}
+		if rec.Origin.Kind == OriginKindTask && rec.Origin.TaskID == "" {
+			return fmt.Errorf("session: lifecycle: origin kind %q requires origin.task_id", OriginKindTask)
+		}
+	}
+	if rec.SteeredBy != nil {
+		if rec.SteeredBy.SteeringSessionID == "" {
+			return fmt.Errorf("session: lifecycle: steered_by requires a non-empty steering_session_id")
+		}
+		if rec.SteeredBy.RootSessionID == "" {
+			return fmt.Errorf("session: lifecycle: steered_by requires a non-empty root_session_id")
+		}
+	}
+	if rec.Stop != nil {
+		if rec.Stop.Generation > rec.Generation {
+			return fmt.Errorf("session: lifecycle: stop.generation %d must not exceed record generation %d", rec.Stop.Generation, rec.Generation)
+		}
+		if rec.Terminal() && rec.Stop.Generation == rec.Generation {
+			return fmt.Errorf("session: lifecycle: terminal record (state %q) cannot carry a current-generation stop marker", rec.State)
+		}
+	}
+
 	prev, found, err := s.tail(rec.SessionID)
 	if err != nil {
 		return err

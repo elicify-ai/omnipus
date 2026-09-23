@@ -2737,33 +2737,37 @@ type SessionLifecycleRecord = {
       }
     | undefined;
   steered_by?:
-    | Partial<{
+    | {
         steering_session_id: string;
         root_session_id: string;
-        reporting_target: Partial<{
-          session_id: string;
-          channel: string;
-          chat_id: string;
-        }>;
-        authorization: Partial<{
+        reporting_target?:
+          | Partial<{
+              session_id: string;
+              channel: string;
+              chat_id: string;
+            }>
+          | undefined;
+        authorization: {
           mode: "direct" | "task";
           remaining_depth: number;
-        }>;
-        limits: Partial<{
-          timeout_seconds: number;
-        }>;
-        tool_exclusions: Array<string>;
-      }>
+        };
+        limits?:
+          | Partial<{
+              timeout_seconds: number;
+            }>
+          | undefined;
+        tool_exclusions?: Array<string> | undefined;
+      }
     | undefined;
   stop?:
-    | Partial<{
+    | {
         at: string;
         generation: number;
         by: Partial<{
           kind: "agent" | "human";
           id: string;
         }>;
-      }>
+      }
     | undefined;
 };
 type DelegateInboxResponse = {
@@ -3210,14 +3214,14 @@ export const Message: z.ZodType<Message> = z.object({
       parent_call_id: z.string().min(1),
       task_label: z.string().min(1).max(100),
       agent_id: z.string().optional(),
-      child_session_id: z.string().optional(),
+      child_session_id: z.string().min(1).optional(),
     })
     .optional(),
   subagent_state: z
     .object({
       type: z.literal("subagent_state"),
       session_id: z.string().min(1),
-      child_session_id: z.string().optional(),
+      child_session_id: z.string().min(1).optional(),
       span_id: z.string().min(1),
       state: z.enum([
         "queued",
@@ -3242,7 +3246,7 @@ export const Message: z.ZodType<Message> = z.object({
     .object({
       type: z.literal("subagent_message"),
       session_id: z.string().min(1),
-      child_session_id: z.string().optional(),
+      child_session_id: z.string().min(1).optional(),
       span_id: z.string().min(1),
       message_id: z.string().min(1),
       kind: z.enum([
@@ -6516,7 +6520,7 @@ export const SessionMessage = z.discriminatedUnion(
 export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
   z.object({
     session_id: z.string().min(1),
-    generation: z.number().int().gte(0),
+    generation: z.number().int().gte(1),
     resumed_from: z.string().nullish(),
     state: z.enum([
       "queued",
@@ -6575,29 +6579,27 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
             channel: z.string(),
             chat_id: z.string(),
           })
-          .partial(),
-        authorization: z
-          .object({
-            mode: z.enum(["direct", "task"]),
-            remaining_depth: z.number().int().gte(0),
-          })
-          .partial(),
+          .partial()
+          .optional(),
+        authorization: z.object({
+          mode: z.enum(["direct", "task"]),
+          remaining_depth: z.number().int().gte(0),
+        }),
         limits: z
           .object({ timeout_seconds: z.number().int().gte(0) })
-          .partial(),
-        tool_exclusions: z.array(z.string()),
+          .partial()
+          .optional(),
+        tool_exclusions: z.array(z.string()).optional(),
       })
-      .partial()
       .optional(),
     stop: z
       .object({
         at: z.string().datetime({ offset: true }),
-        generation: z.number().int().gte(0),
+        generation: z.number().int().gte(1),
         by: z
           .object({ kind: z.enum(["agent", "human"]), id: z.string() })
           .partial(),
       })
-      .partial()
       .optional(),
   });
 export const Goal: z.ZodType<Goal> = z.object({
