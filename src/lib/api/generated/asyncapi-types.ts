@@ -532,6 +532,7 @@ export interface SessionStateFrame {
   pending_approvals: Array<SessionStatePendingApproval>;
   pending_asks?: Array<AskUserQuestionCard>;
   session_id?: string;
+  auto_approve_modifier?: boolean | null;
   active_turn?: SessionStateActiveTurn;
   emitted_at: string;
 }

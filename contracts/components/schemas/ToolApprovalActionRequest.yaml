@@ -53,9 +53,10 @@ properties:
       the path-widening or network-widening grant the frame described, not
       an exact/prefix command grant; `scope` is ignored for those approvals.
 
-      When the pending approval covers a chained command (multiple
-      unmatched segments in ToolApprovalRequiredFrame.segments), this one
-      scope choice applies uniformly to every currently-unmatched segment
-      resolved by this action (ADR-092 D4: "one rule per segment" is a
-      server-side recording detail, not a per-segment client choice).
+      When the pending approval covers a chained command (more than one
+      entry in ToolApprovalRequiredFrame.segments), "prefix" is not
+      available: the server records an exact grant for the whole chain
+      and reports scope "exact" in ToolApprovalResponse. The server never
+      records a prefix grant it did not offer (see
+      CommandSegmentInfo.prefix_available).
     example: exact

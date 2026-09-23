@@ -1,15 +1,16 @@
 title: CommandSegmentInfo
 description: >
-  ADR-092 D3/D4/D7/D8. One chained-command segment (split via
-  splitShellSegments/shellCommandHead) awaiting an approval decision, listed
-  inside ToolApprovalRequiredFrame.segments. Only unmatched segments appear
-  here — a segment already covered by an existing D3 rule or session grant
-  is resolved server-side without a prompt (D4: "a later partial match
-  prompts only the unmatched segment(s)"). Documentation copy — the
-  canonical, code-generating definition is the inline schema of the same
-  name in asyncapi.yaml (referenced from that file's ToolApprovalRequiredFrame),
-  per the same ADR-034-precedent reasons ToolApprovalRequiredFrame itself is
-  not $ref'd from openapi.yaml.
+  ADR-092 D3/D4. One segment of the bash command awaiting approval, split with
+  the same splitter and program resolution the bash tool itself uses
+  (splitShellSegments / shellCommandHeadDetailed, through the tool's own D3
+  evaluator), listed inside ToolApprovalRequiredFrame.segments. Every segment
+  of the command is listed, in order, because one decision approves or denies
+  the whole call; the server records no per-segment grant for a chained
+  command. On Windows the whole command is one segment (FR-041). Documentation
+  copy — the canonical, code-generating definition is the inline schema of the
+  same name in asyncapi.yaml (referenced from that file's
+  ToolApprovalRequiredFrame), per the same ADR-034-precedent reasons
+  ToolApprovalRequiredFrame itself is not $ref'd from openapi.yaml.
 type: object
 required:
   - segment_index
@@ -78,15 +79,24 @@ properties:
   suggested_prefix:
     type: string
     description: >
-      FR-026's suggested-prefix algorithm output for this segment, shown
-      next to the "prefix" scope radio when the user picks Allow. Absent
-      when prefix_available is false.
+      The command prefix a scope="prefix" grant would cover: the program as
+      written plus the leading argument words the grant matches (FR-026).
+      Example: "npm run test" covers "npm run test --watch" but not "npm run
+      testfoo". The recorded grant matches the program by its resolved path
+      (resolved_binary), not by this text. Present iff prefix_available is
+      true.
     example: "rm"
   prefix_available:
     type: boolean
     description: >
-      False on Windows (FR-041: exact-command match only, no prefix
-      option, no chained-segment splitting) or when FR-026's algorithm
-      found no stop token narrower than the full command. The dialog omits
-      the "prefix" scope radio for this segment when false.
+      True exactly when choosing Allow with scope "prefix" would record a
+      prefix grant. The server derives this with the same function it records
+      the grant with (tools.BashPrefixGrantFor), so the dialog never offers a
+      scope the server would downgrade to exact. That requires a
+      single-segment command whose program resolves, whose suggested prefix is
+      narrower than the bare program, and which does not start with a wrapper
+      (sudo, env, timeout, xargs, sh -c). Always false for every segment of a
+      chained command (a && b, a | b: the grant is recorded as exact for the
+      whole chain) and on Windows (FR-041). The dialog omits the "prefix"
+      scope option when false. Always present.
     example: true

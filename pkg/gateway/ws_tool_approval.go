@@ -283,6 +283,18 @@ func (h *WSHandler) emitSessionState(wc *wsConn, sessionID string) {
 		}
 	}
 
+	// ADR-092 (review finding D): carry this session's per-chat Auto-approve
+	// modifier so a reloading SPA re-learns it instead of falling back to
+	// the agent x global value while the server still applies the chat's
+	// own. Absent when no session is bound yet or no modifier is set — the
+	// store is in memory, so after a gateway restart it is absent too and
+	// the UI follows the server.
+	if sessionID != "" && h.agentLoop != nil {
+		if v, ok := h.agentLoop.SessionModes().Get(sessionID); ok {
+			frame.AutoApproveModifier = &v
+		}
+	}
+
 	// askuserquestion-tool-spec v3 US-6 S1/FR-9: snapshot every PENDING
 	// AskUserQuestion card so a reconnecting SPA re-hydrates its card +
 	// composer lock (the boot rearm sweep in gateway.go re-populates the
