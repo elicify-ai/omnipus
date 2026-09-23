@@ -4,40 +4,40 @@
 
 package tools
 
-// Tests for the DENY-PATTERN layer of the bash guard (applyDenyPatterns over
-// defaultDenyPatterns) — layer 1 of the three ADR-068 identified.
-//
-// These exist because of a bug that survived the entire life of the codebase
-// unnoticed: defaultDenyPatterns carried `<<\s*EOF`, and applyDenyPatterns
-// lowercases the command before matching (lowerASCII, shell_guard.go:32). An
-// uppercase literal cannot match a lowercased string, so the rule blocked
-// nothing, ever. Nobody noticed because no test in pkg/tools covered heredocs
-// at all — the guard looked present in the source and was absent in behaviour.
-//
-// ADR-068 §3 ruled: delete the pattern rather than make it fire, because making
-// it fire would newly block heredoc writes that work today. The two tests below
-// pin both halves of that ruling:
-//
-//   - TestDefaultDenyPatterns_HeredocsArePermitted pins the BEHAVIOUR, so the
-//     deleted rule cannot be quietly reinstated.
-//   - TestDefaultDenyPatterns_ContainNoUppercaseOnlyLiterals pins the BUG
-//     CLASS, so no future pattern can be added that is unreachable for the same
-//     reason. This is the test that would have caught the original defect.
+// ADR-091 D2 deletes the regex block-list layer (defaultDenyPatterns/
+// secretGuardPatterns/applyDenyPatterns/compileDenyPatterns/
+// denyPatternMessage) this file used to test directly. What survives —
+// substitutionGuard (structural command-substitution judgement) and the
+// path-containment scan's secret-set carve-out (checkPathSegment's
+// inTurnSecretSet check via IsCarveOut) — is exercised below through
+// guardCommand, the tool's own real entry point, rather than through the
+// deleted internals.
 
 import (
 	"context"
-	"regexp/syntax"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-// TestBashSafetyGuard_PreciseDenyPatterns is the issue #767 two-sided oracle:
-// ordinary prose must not trip shell-syntax or secret-path backstops, while
-// the concrete destructive, expansion, substitution, and secret-path shapes
-// those backstops protect must remain blocked.
-func TestBashSafetyGuard_PreciseDenyPatterns(t *testing.T) {
-	tool, err := NewExecTool(t.TempDir(), false)
+// TestBashSafetyGuard_StructuralGuardsSurvive is the issue #767 two-sided
+// oracle, narrowed to what ADR-091 D2 actually left behind: ordinary prose
+// must not trip the surviving guards, and the substitution/secret-path
+// shapes those guards protect must remain blocked.
+//
+// restrict=true (unlike the pre-ADR-091 version of this test, which used
+// restrict=false): the secret-path cases below are caught by
+// checkPathSegment's IsCarveOut check (shell_path_guard.go), which — like
+// the rest of the surviving path-containment scan — only runs when
+// restrictToWorkspace is true (guardCommand's own early return: "if
+// !t.restrictToWorkspace { return \"\" }"). Pre-ADR-091, the now-deleted
+// secretGuardPatterns regex ran UNCONDITIONALLY ahead of that check, which is
+// what let the old restrict=false fixture still catch these two cases — an
+// accepted narrowing D2 makes explicit (the ADR's own words: "the kernel
+// sandbox is the real boundary" for an unrestricted tool; restrict=true is
+// the realistic, default posture this test now exercises).
+func TestBashSafetyGuard_StructuralGuardsSurvive(t *testing.T) {
+	tool, err := NewExecTool(t.TempDir(), true)
 	require.NoError(t, err)
 
 	benign := []struct {
@@ -45,168 +45,57 @@ func TestBashSafetyGuard_PreciseDenyPatterns(t *testing.T) {
 		cmd  string
 	}{
 		{"backticked_template", "printf '%s\\n' 'Use the `template` key'"},
-		{"backticked_regex", "printf '%s\\n' 'The pattern is `.*?`'"},
-		{"backticked_setting", "printf '%s\\n' '`sandbox.god_mode = true` is deprecated'"},
 		{"system_in_prose", "printf '%s\\n' 'System status is healthy'"},
 		{"config_filename_in_prose", "printf '%s\\n' 'Document config.json in the setup guide'"},
 	}
-
-	t.Run("benign_commands_are_allowed", func(t *testing.T) {
-		for _, tc := range benign {
-			t.Run(tc.name, func(t *testing.T) {
-				if msg := tool.guardCommand(context.Background(), tc.cmd, t.TempDir()); msg != "" {
-					t.Errorf("benign command was blocked: %s\ncommand: %q", msg, tc.cmd)
-				}
-			})
-		}
-	})
+	for _, tc := range benign {
+		t.Run(tc.name, func(t *testing.T) {
+			if msg := tool.guardCommand(context.Background(), tc.cmd, t.TempDir()); msg != "" {
+				t.Errorf("benign command was blocked: %s\ncommand: %q", msg, tc.cmd)
+			}
+		})
+	}
 
 	dangerous := []struct {
 		name string
 		cmd  string
 	}{
-		{"recursive_forced_remove", "rm -rf build"},
-		{"secret_parameter_expansion", "echo ${GITHUB_TOKEN:+YES}"},
 		{"dangerous_dollar_substitution", "echo $(find . -name '*.go')"},
 		{"dangerous_backtick_substitution", "echo `find . -name '*.go'`"},
 		{"omnipus_config_path", "cat ~/.omnipus/config.json"},
 		{"omnipus_system_path", "cat ~/.omnipus/system/audit.jsonl"},
 	}
-
-	t.Run("dangerous_commands_stay_blocked", func(t *testing.T) {
-		for _, tc := range dangerous {
-			t.Run(tc.name, func(t *testing.T) {
-				if msg := tool.guardCommand(context.Background(), tc.cmd, t.TempDir()); msg == "" {
-					t.Errorf("SECURITY REGRESSION: dangerous command was allowed: %q", tc.cmd)
-				}
-			})
-		}
-	})
-}
-
-// TestDefaultDenyPatterns_HeredocsArePermitted asserts that the deny-pattern
-// layer allows heredocs.
-//
-// Oracle (ADR-068 §3, not the code): a heredoc is an ordinary way to write a
-// file and has always worked in practice. The blocked write shapes UAT defect
-// 003 reported were blocked by the PATH-CONTAINMENT scan, not by this layer —
-// so this layer must keep saying yes to all of them.
-func TestDefaultDenyPatterns_HeredocsArePermitted(t *testing.T) {
-	cases := []struct {
-		name string
-		cmd  string
-	}{
-		{
-			name: "uppercase EOF delimiter",
-			cmd:  "cat > notes.md << EOF\nhello\nEOF",
-		},
-		{
-			name: "uppercase EOF with no space after the operator",
-			cmd:  "cat > notes.md <<EOF\nhello\nEOF",
-		},
-		{
-			name: "lowercase eof delimiter",
-			cmd:  "cat > notes.md << eof\nhello\neof",
-		},
-		{
-			name: "quoted delimiter suppressing expansion",
-			cmd:  "cat > notes.md << 'EOF'\nhello\nEOF",
-		},
-		{
-			name: "indented heredoc",
-			cmd:  "cat > notes.md <<- EOF\n\thello\n\tEOF",
-		},
-		{
-			name: "non-EOF delimiter",
-			cmd:  "cat > notes.md << MARKER\nhello\nMARKER",
-		},
-		{
-			name: "here-string",
-			cmd:  `cat <<< "hello"`,
-		},
-	}
-
-	for _, tc := range cases {
+	for _, tc := range dangerous {
 		t.Run(tc.name, func(t *testing.T) {
-			got := applyDenyPatterns(tc.cmd, defaultDenyPatterns, nil)
-			require.Empty(t, got,
-				"the deny-pattern layer must permit heredocs (ADR-068 §3 deleted `<<\\s*EOF`; do not restore it)\ncommand: %q", tc.cmd)
+			if msg := tool.guardCommand(context.Background(), tc.cmd, t.TempDir()); msg == "" {
+				t.Errorf("SECURITY REGRESSION: dangerous command was allowed: %q", tc.cmd)
+			}
 		})
 	}
 }
 
-// TestDefaultDenyPatterns_ContainNoUppercaseOnlyLiterals is the bug-class
-// guard. applyDenyPatterns matches against a LOWERCASED command, so any part of
-// a pattern that can only match uppercase input is dead code that looks like a
-// security rule.
-//
-// It parses each pattern with regexp/syntax rather than scanning the source
-// text, because a naive "contains an uppercase letter" check would flag every
-// legitimate `[A-Za-z]` and `\w` class in the list. The precise property is:
-//
-//   - no LITERAL uppercase ASCII rune anywhere in the pattern; and
-//   - no character class that admits uppercase ASCII but no lowercase ASCII
-//     (a bare `[A-Z]`), which is the class-shaped version of the same defect.
-//
-// `[A-Za-z]`, `\w` and negated classes like `[^}]` all admit lowercase too, so
-// they match lowercased input perfectly well and are not flagged.
-//
-// If this test fails on a pattern other than one you just added, do NOT
-// "fix" the pattern by lowercasing it: that would newly BLOCK commands that
-// run today, which is a behaviour change requiring its own decision (this is
-// exactly the reasoning ADR-068 §3 applied to `<<\s*EOF`). Report it.
-func TestDefaultDenyPatterns_ContainNoUppercaseOnlyLiterals(t *testing.T) {
-	for _, p := range defaultDenyPatterns {
-		require.NotNil(t, p, "nil pattern in defaultDenyPatterns")
-		src := p.String()
-		t.Run(src, func(t *testing.T) {
-			parsed, err := syntax.Parse(src, syntax.Perl)
-			require.NoError(t, err, "deny pattern must be parseable: %s", src)
+// TestBashSafetyGuard_AcceptedD2ResidualRisk documents ADR-091 D2's accepted
+// trade rather than silently dropping the coverage assertion: `rm -rf` and a
+// blanket `${...}` parameter expansion inside the WORKSPACE are no longer
+// blocked by any text guard (they never touched anything a kernel sandbox
+// would deny either — a destructive-but-in-workspace command is exactly the
+// class D2's own text names: "the same accepted trade Claude Code and Codex
+// ship and document"). This is the honest replacement for what the deleted
+// defaultDenyPatterns regressions used to pin as "must stay blocked."
+func TestBashSafetyGuard_AcceptedD2ResidualRisk(t *testing.T) {
+	tool, err := NewExecTool(t.TempDir(), false)
+	require.NoError(t, err)
 
-			reasons := uppercaseOnlyParts(parsed)
-			require.Empty(t, reasons,
-				"deny pattern %q can only match UPPERCASE input, but applyDenyPatterns lowercases the "+
-					"command before matching (lowerASCII, shell_guard.go) — so this rule is unreachable "+
-					"and blocks nothing. Offending parts: %v", src, reasons)
+	for _, cmd := range []string{
+		"rm -rf build",
+		"echo ${GITHUB_TOKEN:+YES}",
+		"sudo -n true",
+	} {
+		t.Run(cmd, func(t *testing.T) {
+			msg := tool.guardCommand(context.Background(), cmd, t.TempDir())
+			require.Empty(t, msg,
+				"ADR-091 D2 accepts this residual risk for an in-workspace command; "+
+					"if this now fails, a guard was reintroduced that the ADR deliberately removed: %q", cmd)
 		})
 	}
-}
-
-// uppercaseOnlyParts walks a parsed regexp and returns a description of every
-// sub-expression that can match uppercase ASCII but not its lowercase form.
-func uppercaseOnlyParts(re *syntax.Regexp) []string {
-	var found []string
-	var walk func(r *syntax.Regexp)
-	walk = func(r *syntax.Regexp) {
-		if r == nil {
-			return
-		}
-		switch r.Op {
-		case syntax.OpLiteral:
-			for _, ru := range r.Rune {
-				if ru >= 'A' && ru <= 'Z' {
-					found = append(found, "literal "+string(ru))
-				}
-			}
-		case syntax.OpCharClass:
-			admitsUpper, admitsLower := false, false
-			for i := 0; i+1 < len(r.Rune); i += 2 {
-				lo, hi := r.Rune[i], r.Rune[i+1]
-				if lo <= 'Z' && hi >= 'A' {
-					admitsUpper = true
-				}
-				if lo <= 'z' && hi >= 'a' {
-					admitsLower = true
-				}
-			}
-			if admitsUpper && !admitsLower {
-				found = append(found, "uppercase-only character class")
-			}
-		}
-		for _, sub := range r.Sub {
-			walk(sub)
-		}
-	}
-	walk(re)
-	return found
 }

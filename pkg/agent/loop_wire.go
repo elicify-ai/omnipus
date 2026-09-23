@@ -65,34 +65,24 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 	// shell guard / deny-patterns off, regardless of per-agent shell policy.
 	godMode := GodModeActive(cfg)
 
-	globalShellDenyPatterns := cfg.Sandbox.ShellDenyPatterns
-	if godMode {
-		globalShellDenyPatterns = nil
-	}
-
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)
 		if !ok || agent == nil || agent.Tools == nil {
 			continue
 		}
 
-		var agentShellPolicy *config.AgentShellPolicy
-		for i := range cfg.Agents.List {
-			entry := &cfg.Agents.List[i]
-			if entry.ID == agentID {
-				agentShellPolicy = entry.ShellPolicy
-				break
-			}
-		}
-		if godMode {
-			agentShellPolicy = nil // drop per-agent deny patterns under god mode
-		}
-
+		// ADR-091 D2: the deny-pattern layer (globalShellDenyPatterns/
+		// agentShellPolicy, config.AgentShellPolicy) that used to populate
+		// ExecToolDeps here is retired — lane L4 removed its use
+		// (tools.ExecToolDeps no longer carries GlobalShellDenyPatterns/
+		// AgentShellPolicy). Wiring ExecToolDeps.ShellMode/
+		// ApprovalRequester/ApprovalGrants/CommandRules (the D1/D3/D7/D8
+		// replacement machinery) is lane L5's own config-surface removal
+		// pass, not yet landed on this integration branch — tracked there,
+		// not duplicated here.
 		deps := tools.ExecToolDeps{
-			GodMode:                 godMode,
-			AuditFailClosed:         resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),
-			GlobalShellDenyPatterns: globalShellDenyPatterns,
-			AgentShellPolicy:        agentShellPolicy,
+			GodMode:         godMode,
+			AuditFailClosed: resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),
 		}
 		// Plumb the kernel-sandbox egress proxy into the bash tool so the
 		// hardened path (non-god-mode) injects HTTP_PROXY pointing at the

@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -256,16 +255,11 @@ func TestGuardCommand_RefusalNamesWhatWasRefused(t *testing.T) {
 	}
 }
 
-// TestApplyDenyPatterns_NamesTheOffendingToken pins D-65.
-func TestApplyDenyPatterns_NamesTheOffendingToken(t *testing.T) {
-	msg := applyDenyPatterns("echo start && rm -rf build && echo done", defaultDenyPatterns, nil)
-	require.NotEmpty(t, msg)
-	assert.Contains(t, msg, "dangerous pattern detected")
-	assert.Contains(t, msg, `"rm -rf"`, "the matched text must be named")
-	assert.Contains(t, msg, `\brm\s+-[rf]{1,2}\b`, "the pattern must be named")
-
-	custom := []*regexp.Regexp{regexp.MustCompile(`\bsips\b`)}
-	msg = applyDenyPatterns(`ls a | sips -Z 200 b`, custom, nil)
-	assert.Contains(t, msg, `"sips"`)
-	assert.Empty(t, applyDenyPatterns("ls -la", custom, nil))
-}
+// D-65 ("deny-pattern refusals that name the offending token") pinned
+// applyDenyPatterns/denyPatternMessage, both deleted by ADR-091 D2 along
+// with the regex block list they formatted a message for. The same
+// obligation — every refusal names what tripped it, not a bare "blocked" —
+// now falls on shellRuleDenialMessage (shell_permission_mode.go, ADR-091
+// D3's replacement mechanism), which names the matched operator rule's
+// binary and arg_prefix; see TestShellRuleDenialMessage_NamesTheMatchedRule
+// in shell_permission_mode_test.go for its own regression coverage.

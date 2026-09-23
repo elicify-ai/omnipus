@@ -788,3 +788,24 @@ func init() {
 		}
 	}
 }
+
+// lowerASCII returns a copy of s with ASCII uppercase letters lowercased.
+// Avoids importing strings just for ToLower at call sites that already import
+// this package. Unicode-aware lowercasing is not needed here — shell commands
+// are ASCII.
+//
+// Moved here from shell_guard.go (ADR-091 D2's removal inventory: "lowerASCII
+// survives, moves to shell_subst_guard.go") when that file's own reason to
+// exist — applyDenyPatterns/compileDenyPatterns/denyPatternMessage, the
+// retired regex block-list matcher — was deleted whole.
+func lowerASCII(s string) string {
+	b := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b[i] = c
+	}
+	return string(b)
+}

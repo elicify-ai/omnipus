@@ -1385,7 +1385,18 @@ func newMountRootHandle(mountRoot, rawPath, realAbs string, policy fspolicy.FSPo
 // through this function, opting a turn in here reaches read_file,
 // list_directory and send_file at once; there is no per-tool wiring to
 // forget.
-func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool) (fspolicy.FSPolicy, error) {
+// grantOverlay is ADR-091 FR-036's optional grant-overlay parameter: a set of
+// D7 filesystem-widening PathGrants to fold into the returned policy on top
+// of whatever fspolicy.EffectiveFSPolicyWithReadConfined itself resolves.
+// Tool scope (FR-036): only the bash tool's own pre-flight/exec call sites
+// (shell_path_guard.go::guardCommand, shell.go::turnKernelPolicy) ever pass a
+// non-empty grantOverlay — every other of this function's eleven callers
+// (edit.go, filesystem.go, grep.go, send_file.go, web_serve.go,
+// request_mount.go, the browser tools) omits it, so a bash-approved widening
+// never reaches them. Passing more than one grantOverlay slice is invalid
+// caller usage (variadic purely to keep the parameter optional without
+// breaking every existing call site) — only the first is honored.
+func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool, grantOverlay ...[]fspolicy.PathGrant) (fspolicy.FSPolicy, error) {
 	home := config.OmnipusHomeDir()
 	workspaceID := ToolWorkspaceID(ctx)
 
@@ -1448,6 +1459,9 @@ func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool) (
 	}
 	if mountWorkspaceID != "" {
 		policy.AllowedRoots = workspace.AllowedMountRoots(home, mountWorkspaceID)
+	}
+	if len(grantOverlay) > 0 && len(grantOverlay[0]) > 0 {
+		policy.PathGrants = append(append([]fspolicy.PathGrant(nil), policy.PathGrants...), grantOverlay[0]...)
 	}
 	return policy, nil
 }
