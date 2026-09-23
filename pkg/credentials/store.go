@@ -8,7 +8,7 @@
 // Storage format (credentials.json):
 //
 //	{
-//	  "version": 1,
+//	  "version": 2,
 //	  "salt": "<base64>",
 //	  "credentials": {
 //	    "ANTHROPIC_API_KEY": {
@@ -34,11 +34,16 @@
 // what makes a future AAD change a deliberate, self-enforcing break rather
 // than something a stale read path could paper over.
 //
-// Breaking change, greenfield with no migration and no fallback read: entries
-// written before the name binding was introduced carry a nil AAD and no longer
-// decrypt. An existing install must re-enter its credentials. There is
-// deliberately no "open with the name, else try no AAD" path — it would
-// restore the vulnerability for every pre-existing entry.
+// Format versions and the one-time upgrade: a store written before the name
+// binding is at "version": 1 and its entries carry a nil AAD. Unlocking such a
+// store migrates it once, before any other read, to "version": 2 — every entry
+// opened the legacy way and re-sealed under its own name with the same key, in
+// one atomic write (store_migrate.go). After that the file is at version 2 and
+// loadFileInternal refuses every other version, so the legacy read is
+// unreachable for that store. There is deliberately no per-read "open with the
+// name, else try no AAD" fallback — it would restore the vulnerability for
+// every entry, forever. See store_migrate.go for what the migration refuses
+// and for the residual risk it cannot remove.
 package credentials
 
 import (
@@ -64,7 +69,10 @@ import (
 )
 
 const (
-	storeVersion = 1
+	// storeVersion is the name-bound format: every entry sealed with
+	// aadFor(name). The pre-binding format (legacyStoreVersion) is read only
+	// by the one-time migration in store_migrate.go.
+	storeVersion = 2
 	saltLen      = 32
 	nonceLen     = 12
 	keyLen       = 32
@@ -203,14 +211,30 @@ func (s *Store) Close() {
 //
 // The key is COPIED, never aliased: the store owns the array Close overwrites,
 // and the caller keeps ownership of the slice it passed in.
+//
+// A store still in the pre-upgrade format is migrated here, before the key is
+// installed and before anything else can read it (store_migrate.go). If the
+// migration is refused the error is returned, the file is unchanged, and the
+// store stays locked.
 func (s *Store) UnlockWithKey(key []byte) error {
 	if len(key) != keyLen {
 		return fmt.Errorf("credentials: key must be exactly %d bytes, got %d", keyLen, len(key))
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.key = make([]byte, keyLen)
-	copy(s.key, key)
+	return s.installKeyLocked(key)
+}
+
+// installKeyLocked migrates a pre-upgrade store under key and, only if that
+// succeeds, installs a private copy of key. Caller holds s.mu for writing.
+func (s *Store) installKeyLocked(key []byte) error {
+	k := make([]byte, keyLen)
+	copy(k, key)
+	if err := s.migrateLegacyLocked(k); err != nil {
+		wipe(k)
+		return err
+	}
+	s.key = k
 	return nil
 }
 
@@ -236,9 +260,7 @@ func (s *Store) UnlockWithPassphrase(passphrase string) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.key = make([]byte, keyLen)
-	copy(s.key, derived)
-	return nil
+	return s.installKeyLocked(derived)
 }
 
 // DeriveSubkey derives a 32-byte subkey from the unlocked master key using
@@ -471,6 +493,10 @@ func (s *Store) rotateFull(newKey, newSalt []byte) error {
 
 // loadFileInternal reads the store file. Caller must hold s.mu (read or write).
 // If the file does not exist, returns an empty storeFile with a fresh salt.
+//
+// Only the current format version is returned. A pre-upgrade file yields
+// ErrLegacyStoreFormat — only unlock migrates it, so no read path ever opens a
+// nil-AAD entry and no write path stamps a legacy file with the new version.
 func (s *Store) loadFileInternal() (*storeFile, error) {
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -495,6 +521,13 @@ func (s *Store) loadFileInternal() (*storeFile, error) {
 		slog.Error("credentials: store file is corrupted — fix or delete it manually",
 			"path", s.path, "error", unmarshalErr)
 		return nil, fmt.Errorf("credentials: store file corrupted (manual fix required): %w", unmarshalErr)
+	}
+	switch sf.Version {
+	case storeVersion:
+	case legacyStoreVersion:
+		return nil, ErrLegacyStoreFormat
+	default:
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedStoreVersion, sf.Version)
 	}
 	if sf.Credentials == nil {
 		sf.Credentials = make(map[string]encEntry)

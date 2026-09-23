@@ -27,9 +27,11 @@ persisted in credentials.json).
 
 ## What losing master.key actually costs
 
-Unlock still "succeeds" with a passphrase — `UnlockWithKey`/
-`UnlockWithPassphrase` verify NOTHING against stored data; they just set
-the key. Every subsequent `Get` then fails with `store.go::ErrWrongKey`
+Unlock still "succeeds" with a passphrase — on a current-format store
+`UnlockWithKey`/`UnlockWithPassphrase` verify NOTHING against stored data;
+they just set the key. (Exception: on a pre-upgrade version-1 store the
+one-time migration opens every entry, so a wrong key fails AT unlock with a
+`*MigrationError` — see "Format versions" below.) Every subsequent `Get` then fails with `store.go::ErrWrongKey`
 (see gateway_boot_credentials.go::reportInjectionErrors for the
 boot-visible shape). Rotation (`store.go::Rotate*`) re-encrypts by
 decrypting first, so it cannot recover without the old key. Net:
@@ -60,11 +62,37 @@ so a ciphertext moved to another name fails authentication instead of
 decrypting under the name it was moved to. Entry failures return
 `store.go::EntryAuthError`, which names the entry and unwraps to
 `ErrWrongKey`, so the boot fatal-vs-degrade classification is unchanged.
-Greenfield, no fallback read: entries written before the binding carry a nil
-AAD and no longer decrypt, so an existing install must re-enter its
-credentials (worded for users in `docs/troubleshooting.md`). Bump
+No per-read fallback: `decrypt` only ever uses `aadFor(name)`. Bump
 `aadDomainTag` to change the AAD construction — ciphertexts sealed
 under one tag cannot be opened under another.
+
+## Format versions and the one-time migration (`store_migrate.go`)
+
+`"version": 1` = pre-binding, nil-AAD entries; `"version": 2`
+(`storeVersion`) = name-bound. Unlock (`installKeyLocked` →
+`migrateLegacyLocked`) migrates a v1 file ONCE, before any other read:
+every entry opened with nil AAD (or `aadFor(name)` — a pre-release build
+bound names without bumping the version), re-sealed under its own name with
+the same key, whole file written in ONE `writeFileAtomicFn` call under the
+sidecar flock (version re-checked under the lock). Then
+`credentials.json.migrated` is written and `credentials.store_migrated` is
+logged (counts only). `openLegacyEntry` is the ONLY nil-AAD read in the
+package — keep it that way.
+
+- Any entry fails → nothing written, store stays LOCKED, `*MigrationError`
+  names every failing entry and unwraps to `*EntryAuthError`s (→
+  `ErrWrongKey`), so gateway boot STOPS (fatal class, not degraded).
+- v1 file + `.migrated` record present → `ErrLegacyStoreAfterMigration`
+  (replay defence against a restored, swapped pre-upgrade copy).
+- `loadFileInternal` refuses every version but 2 (`ErrLegacyStoreFormat`,
+  `ErrUnsupportedStoreVersion`) — the safety net: no read path can open a v1
+  file and no write path can stamp one as v2. Unreadable/corrupt files at
+  unlock are left to it (unlock does not report them).
+- Residual risk, unfixable: a swap made to a v1 file BEFORE its migration is
+  laundered into bound entries (nil-AAD ciphertexts carry no name). The
+  `.migrated` record is defence in depth only — whoever can write the data
+  dir can delete it. Pinned by
+  `TestMigrate_SwapInLegacyStoreIsLaunderedResidualRisk`.
 
 ## Error classification decides fatal-vs-degrade
 

@@ -105,12 +105,19 @@ A fresh install warns you to back up `master.key`. Heed it: losing that file mak
 
 ## Credentials stop working after an upgrade
 
-Every stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open. Entries written before that binding existed no longer open, and the gateway reports each one it cannot read. Re-enter them:
+Every stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open. A vault from an earlier release is upgraded to this format automatically, once, the first time the new gateway or any `omnipus` command opens it. You do not need to re-enter anything. The upgrade writes the whole file in one step: if it is interrupted, the old file is left as it was and the next start tries again.
 
-1. Open **Settings**, **Security**, **Credential Vault** and enter each value again — or run `omnipus credentials set <name> <value>`.
-2. Restart the gateway.
+The gateway refuses to start, and changes nothing, in three cases:
 
-There is deliberately no fallback that reads an old entry: it would let a value be moved between names again. Note the difference when only one entry fails while the others still work — that entry was edited on disk or copied from another entry, not written by an older release. The gateway names the entry at fault in its log.
+| Message says | What it means | What to do |
+|---|---|---|
+| "every entry failed" | The master key is not the one the vault was written with | Supply the original master key (`master.key`, `OMNIPUS_MASTER_KEY` or `OMNIPUS_KEY_FILE`) |
+| "N of M entries failed authentication" and names them | Those entries were edited or copied on disk | Remove the named entries from `credentials.json`, restart, then enter them again |
+| "already migrated it once" | An old-format vault appeared after this installation had already been upgraded | If you restored a pre-upgrade backup on purpose, delete `credentials.json.migrated` next to the vault and restart. If you did not, treat the vault as tampered with |
+
+To remove an entry by hand: stop the gateway, back up `credentials.json`, open it in a text editor, and delete the named entry (its name and its `nonce` and `ciphertext` lines) from the `credentials` section. Restart the gateway, then enter the value again in **Settings**, **Security**, **Credential Vault**, or with `omnipus credentials set <name> <value>`.
+
+After the upgrade there is deliberately no fallback that reads an old entry: it would let a value be moved between names again. If one entry fails while the others still work, that entry was edited on disk or copied from another entry. The gateway names the entry at fault in its log. Re-enter it the same way.
 
 ## The web app looks outdated after a source build
 

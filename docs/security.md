@@ -52,7 +52,13 @@ Omnipus stores credential values in an encrypted file. Settings refer to credent
 
 Rotation re-encrypts the whole vault with the new passphrase. Back up the new passphrase because Omnipus needs it to unlock the vault later.
 
-Each stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open. Entries written before that binding existed no longer open: an installation carried over from an earlier release must have its credentials entered again. Omnipus never falls back to reading an old entry, because that fallback would let a value be moved between names again.
+Each stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open.
+
+Installations from an earlier release are upgraded automatically, once. The first time the upgraded gateway (or any `omnipus` command) opens the vault, it re-encrypts every entry with its name, using the same master key, and saves the whole file in one step. You do not re-enter anything. The upgrade is recorded in the audit log as `credentials.store_migrated`, with the number of entries and no names or values. After it, the vault never reads the old format again.
+
+What the upgrade cannot protect against. The old format did not record which name a value belonged to. If someone changed your vault file before its upgrade, for example by swapping two values, the upgrade cannot tell and keeps the swap. This window closes at the first start of the upgraded gateway. After the upgrade, Omnipus refuses to upgrade an old-format file a second time: restoring a pre-upgrade copy of the vault stops the gateway with an error. That refusal relies on a small record file next to the vault (`credentials.json.migrated`). Anyone who can change files in your Omnipus home folder can also delete it, so treat that folder as sensitive.
+
+If any entry cannot be opened during the upgrade, nothing is changed and the gateway does not start. The error names each entry at fault. See [troubleshooting](troubleshooting.md#credentials-stop-working-after-an-upgrade).
 
 ## How to review security activity
 
