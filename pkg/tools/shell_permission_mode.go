@@ -34,7 +34,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -46,34 +45,41 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/shellrule"
 )
 
-// emitGrantAudit writes an audit entry for a newly-recorded ADR-092 D7/D8/D3
-// grant — SEC-15/FR-032's "grant recorded" event, routed through the
-// EXISTING audit.EventExec/Details-map shape (ExecTool.emitAudit's own
-// established pattern) rather than a new audit.Event constant: pkg/audit
-// isn't this lane's file to extend, and Details is already the documented
-// home for event-specific fields (ADR-092 spec §"Audit," FR-046). kind is
-// one of "rule_ask_approved", "fs_widen", "network_widen"; extra carries the
-// grant's own shape (path/access, or nothing for a network grant). Nil
-// auditLogger is a no-op, matching every other audit call site in this
-// package — never a reason to fail the command that was just approved.
-func (t *ExecTool) emitGrantAudit(ctx context.Context, command, kind string, extra map[string]any) {
+// emitPreflightEscalation writes the FR-032(b)/FR-046 shell.preflight_
+// escalation audit event at the exact moment a D7 (filesystem) or D8
+// (network) escalation is TRIGGERED — before the approval outcome is known.
+// emitApprovalDecision records that outcome separately (FR-032(d)). No-op
+// when t.auditLogger is nil, matching every other audit call site in this
+// package — never a reason to fail or delay the escalation itself.
+func (t *ExecTool) emitPreflightEscalation(ctx context.Context, sessionID, agentID, command string, kind audit.ShellPreflightKind, matched, requested string) {
 	if t.auditLogger == nil {
 		return
 	}
-	details := map[string]any{"adr092_kind": kind}
-	for k, v := range extra {
-		details[k] = v
+	audit.EmitShellPreflightEscalation(ctx, t.auditLogger, kind, agentID, sessionID, t.Name(), command, matched, requested)
+}
+
+// emitApprovalDecision writes the FR-032(d)/FR-046 shell.approval_decision
+// audit event for one ADR-092 approval consultation. kind identifies which
+// decision point this call came from ("rule_ask", "fs_preflight",
+// "fs_preflight_blind", "network_preflight"). willRecordGrant distinguishes
+// the "allow-with-grant" outcome (the caller records an ApprovalGrantStore
+// entry immediately after this returns approved — the D7/D8 escalations)
+// from "allow-once" (a single-call approval with no persisted grant — the
+// FR-020 blind-spot path, and requestRuleApproval's D3 rule-ask branch,
+// which records no grant of its own today). No-op when t.auditLogger is
+// nil.
+func (t *ExecTool) emitApprovalDecision(ctx context.Context, sessionID, agentID, command, kind string, approved bool, reason string, willRecordGrant bool) {
+	if t.auditLogger == nil {
+		return
 	}
-	if err := t.auditLogger.Log(&audit.Entry{
-		Event:    audit.EventExec,
-		Decision: audit.DecisionAllow,
-		AgentID:  ToolAgentID(ctx),
-		Tool:     t.Name(),
-		Command:  command,
-		Details:  details,
-	}); err != nil {
-		slog.Warn("bash: ADR-092 grant audit write failed", "agent_id", ToolAgentID(ctx), "kind", kind, "error", err)
+	outcome := audit.ShellApprovalDeny
+	if approved {
+		outcome = audit.ShellApprovalAllowOnce
+		if willRecordGrant {
+			outcome = audit.ShellApprovalAllowWithGrant
+		}
 	}
+	audit.EmitShellApprovalDecision(ctx, t.auditLogger, outcome, agentID, sessionID, t.Name(), command, kind, reason)
 }
 
 // ShellMode is pkg/tools' own copy of the ADR-092 D1 named shell-permission
@@ -263,13 +269,24 @@ func (t *ExecTool) requestRuleApproval(
 		return true, ""
 	}
 	if t.approvalRequester == nil {
+		t.emitApprovalDecision(ctx, sessionID, agentID, command, "rule_ask", false, "no_approver_configured", false)
 		return false, "no_approver_configured"
 	}
 	args := map[string]any{
 		"command":     command,
 		"adr092_kind": "rule_ask",
 	}
-	return t.approvalRequester.RequestShellApproval(ctx, sessionID, agentID, t.Name(), toolCallID, "", args)
+	approved, reason := t.approvalRequester.RequestShellApproval(ctx, sessionID, agentID, t.Name(), toolCallID, "", args)
+	// willRecordGrant=false: an approved D3 ask-rule verdict records no
+	// grant today (RecordPrefixGrant has no caller yet — ADR-092 lane L4's
+	// own scope, see pkg/gateway/rest_tool_registry.go's "prefix-scoped
+	// recording separately" note) — so this is always "allow-once" from
+	// this call site's own point of view, even though a fresh D3 rule
+	// evaluation may separately match an EXISTING prefix grant on a later
+	// call (requestRuleApproval's allCovered branch above, which never
+	// reaches this line).
+	t.emitApprovalDecision(ctx, sessionID, agentID, command, "rule_ask", approved, reason, false)
+	return approved, reason
 }
 
 // accessLabel renders a fspolicy.PathGrantAccess* bitmask as an
@@ -344,8 +361,15 @@ func (t *ExecTool) enforceFSPreflight(ctx context.Context, command, sessionID, a
 		// classifier cannot parse (unbalanced quote, a $()/backtick
 		// substitution) must escalate, never silently proceed as though it
 		// touched nothing.
+		t.emitPreflightEscalation(ctx, sessionID, agentID, command, audit.ShellPreflightFilesystem,
+			"the command could not be parsed for filesystem references (FR-020 blind spot)",
+			"unknown — classifier could not extract path/operation references")
 		approved, reason := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command,
 			"fs_preflight_blind", "the command could not be parsed for filesystem references")
+		// willRecordGrant=false: a blind-spot approval is single-call only —
+		// no PathGrant is recorded (there is no resolved {path, access} to
+		// record one for), so the next call re-evaluates from scratch.
+		t.emitApprovalDecision(ctx, sessionID, agentID, command, "fs_preflight_blind", approved, reason, false)
 		if !approved {
 			return nil, ErrorResult(preflightDenialMessage("filesystem", reason))
 		}
@@ -372,16 +396,20 @@ func (t *ExecTool) enforceFSPreflight(ctx context.Context, command, sessionID, a
 		if verdict.Contained {
 			continue
 		}
+		t.emitPreflightEscalation(ctx, sessionID, agentID, command, audit.ShellPreflightFilesystem,
+			verdict.PolicyRule, fmt.Sprintf("%s access to %s", accessLabel(op.Access), resolved))
 		approved, reason := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command, "fs_preflight",
 			fmt.Sprintf("%s needs %s access the sandbox does not currently grant: %s", resolved, accessLabel(op.Access), verdict.PolicyRule))
+		// willRecordGrant=true: an approved fs_preflight escalation always
+		// records a PathGrant immediately below (RecordPathGrant itself now
+		// emits the FR-032(c) shell.grant_recorded event — see
+		// pkg/security/approvalgrants.go).
+		t.emitApprovalDecision(ctx, sessionID, agentID, command, "fs_preflight", approved, reason, true)
 		if !approved {
 			return nil, ErrorResult(preflightDenialMessage("filesystem", reason))
 		}
 		grant := fspolicy.PathGrant{Path: resolved, Access: op.Access}
 		t.approvalGrants.RecordPathGrant(sessionID, agentID, grant)
-		t.emitGrantAudit(ctx, command, "fs_widen", map[string]any{
-			"path": grant.Path, "access": accessLabel(grant.Access), "session_id": sessionID,
-		})
 		policy.PathGrants = append(policy.PathGrants, grant)
 	}
 	return t.approvalGrants.PathGrantsFor(sessionID, agentID), nil
@@ -399,13 +427,18 @@ func (t *ExecTool) enforceNetworkPreflight(ctx context.Context, command, session
 	if !verdict.NeedsEscalation() {
 		return granted, nil
 	}
+	t.emitPreflightEscalation(ctx, sessionID, agentID, command, audit.ShellPreflightNetwork,
+		verdict.PolicyRule, "outbound network access")
 	approved, reason := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command, "network_preflight",
 		"this command needs outbound network access the sandbox does not currently grant")
+	// willRecordGrant=true: an approved network_preflight escalation always
+	// records the network grant immediately below (RecordNetworkGrant itself
+	// now emits the FR-032(c) shell.grant_recorded event).
+	t.emitApprovalDecision(ctx, sessionID, agentID, command, "network_preflight", approved, reason, true)
 	if !approved {
 		return false, ErrorResult(preflightDenialMessage("network", reason))
 	}
 	t.approvalGrants.RecordNetworkGrant(sessionID, agentID)
-	t.emitGrantAudit(ctx, command, "network_widen", map[string]any{"session_id": sessionID})
 	return true, nil
 }
 
@@ -420,6 +453,16 @@ func (t *ExecTool) enforceNetworkPreflight(ctx context.Context, command, session
 // return that result immediately and never spawn the command (FR-048: a
 // denied escalation refuses outright, never runs un-widened).
 func (t *ExecTool) enforceShellPermissionMode(ctx context.Context, command string) (*shellPermissionResult, *ToolResult) {
+	// FR-032(c)/FR-046: wire this call's audit logger into the shared grant
+	// store so RecordPathGrant/RecordNetworkGrant/RecordPrefixGrant/Record
+	// (pkg/security/approvalgrants.go) can emit shell.grant_recorded at the
+	// point the grant is actually persisted, colocated with the state
+	// mutation rather than duplicated at every call site that might record
+	// one. Idempotent and cheap (a mutex-guarded pointer set) — called once
+	// per bash invocation, before any grant recording in THIS call could
+	// occur.
+	t.approvalGrants.SetAuditLogger(t.auditLogger)
+
 	mode := t.resolveShellMode(ctx)
 	sessionID := ToolTranscriptSessionID(ctx)
 	agentID := ToolAgentID(ctx)
