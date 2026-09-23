@@ -341,6 +341,12 @@ func IsValidEventName(e EventName) bool {
 		// See events.go for the wire shape contract.
 		EventMediaDelete,
 		EventMediaCascadeDelete,
+		// ADR-092 (shell permission modes) FR-032/FR-046 typed audit events.
+		// See shell_permission_events.go for the wire shape contract.
+		EventShellModeChange,
+		EventShellPreflightEscalation,
+		EventShellGrantRecorded,
+		EventShellApprovalDecision,
 		// Legacy pre-rename project.* events, retained for back-compat with
 		// audit logs written before the project→workspace rename. No current
 		// handler emits them.

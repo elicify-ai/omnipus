@@ -21,14 +21,27 @@
 package security
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
 
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 )
+
+// bashToolName is the tool name ExecTool.Name() returns (pkg/tools/shell.go)
+// — duplicated here as a literal rather than imported, since pkg/tools
+// already imports pkg/security and the reverse would cycle. Used to gate
+// EventShellGrantRecorded emission on the "exact" scope (Record) to bash
+// calls only: ApprovalGrantStore is shared by every ask-policy tool, but
+// FR-032(c)'s "exact" grant kind is specifically ADR-092's shell/bash
+// taxonomy (it is enumerated alongside prefix/path-widening/network-
+// widening, which are all bash-only concepts) — emitting shell.grant_recorded
+// for, say, a write_file "Always Allow" would misattribute it to this ADR.
+const bashToolName = "bash"
 
 // grantKey scopes a set of always-allowed (tool → argument fingerprints) to
 // one (session, agent) pair. Both fields participate in the key so a grant
@@ -141,6 +154,43 @@ type ApprovalGrantStore struct {
 	// is broken and the child will silently fall through to a fresh approval
 	// prompt. It is therefore logged at Warn as well as counted.
 	inheritInvalidKey atomic.Int64
+
+	// auditLogger is the ADR-092 FR-032(c)/FR-046 grant-recorded audit sink.
+	// Nil by default (pure store, no audit — matches the zero-value contract
+	// every other field on this struct follows). Wired via SetAuditLogger.
+	// Guarded by mu like every other field.
+	auditLogger *audit.Logger
+}
+
+// SetAuditLogger wires this store's FR-032(c) grant-recorded audit emitter
+// (EventShellGrantRecorded). Nil-safe on the receiver; passing a nil logger
+// is also valid (explicitly disables audit for this store, matching
+// audit.EmitEntry's own nil-logger no-op contract). Idempotent — callers may
+// call it more than once (pkg/tools/shell_permission_mode.go's
+// enforceShellPermissionMode calls it once per bash invocation) without
+// side effects beyond replacing the stored pointer.
+func (s *ApprovalGrantStore) SetAuditLogger(logger *audit.Logger) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.auditLogger = logger
+	s.mu.Unlock()
+}
+
+// emitGrantRecorded writes the FR-032(c) shell.grant_recorded event for a
+// NEWLY recorded grant (callers must not call this for a no-op/duplicate
+// record — see each Record* method's own "already granted" short-circuit).
+// Reads s.auditLogger under s.mu then emits OUTSIDE the lock, so a slow
+// audit write never blocks a concurrent grant lookup/record.
+func (s *ApprovalGrantStore) emitGrantRecorded(scope audit.ShellGrantScope, resolvedBinary, agentID, sessionID, tool string, extra map[string]any) {
+	s.mu.Lock()
+	logger := s.auditLogger
+	s.mu.Unlock()
+	if logger == nil {
+		return
+	}
+	audit.EmitShellGrantRecorded(context.Background(), logger, scope, resolvedBinary, agentID, sessionID, tool, extra)
 }
 
 // NewApprovalGrantStore creates an empty grant store.
@@ -223,7 +273,6 @@ func (s *ApprovalGrantStore) Record(sessionID, agentID, tool string, args map[st
 		return false
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	key := grantKey{sessionID: sessionID, agentID: agentID}
 	tools, ok := s.grants[key]
 	if !ok {
@@ -235,7 +284,18 @@ func (s *ApprovalGrantStore) Record(sessionID, agentID, tool string, args map[st
 		fps = make(map[string]struct{})
 		tools[tool] = fps
 	}
+	_, dup := fps[fp]
 	fps[fp] = struct{}{}
+	s.mu.Unlock()
+
+	// FR-032(c): only the "bash" tool's exact grants are ADR-092's own
+	// taxonomy (see bashToolName's doc comment) — and only NEW fingerprints,
+	// never a re-Record of one already on file.
+	if !dup && tool == bashToolName {
+		s.emitGrantRecorded(audit.ShellGrantScopeExact, "", agentID, sessionID, tool, map[string]any{
+			"args_fingerprint": fp,
+		})
+	}
 	return true
 }
 
@@ -250,7 +310,6 @@ func (s *ApprovalGrantStore) RecordPrefixGrant(sessionID, agentID, tool string, 
 		return false
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	key := grantKey{sessionID: sessionID, agentID: agentID}
 	if s.prefixGrants == nil {
 		s.prefixGrants = make(map[grantKey]map[string][]ShellPrefixGrant)
@@ -262,10 +321,17 @@ func (s *ApprovalGrantStore) RecordPrefixGrant(sessionID, agentID, tool string, 
 	}
 	for _, existing := range tools[tool] {
 		if existing == grant {
+			s.mu.Unlock()
 			return true // already granted, not a duplicate entry
 		}
 	}
 	tools[tool] = append(tools[tool], grant)
+	s.mu.Unlock()
+
+	s.emitGrantRecorded(audit.ShellGrantScopePrefix, grant.Binary, agentID, sessionID, tool, map[string]any{
+		"arg_prefix":        grant.ArgPrefix,
+		"run_in_background": grant.RunInBackground,
+	})
 	return true
 }
 
@@ -306,20 +372,52 @@ func (s *ApprovalGrantStore) RecordPathGrant(sessionID, agentID string, grant fs
 		return false
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	key := grantKey{sessionID: sessionID, agentID: agentID}
 	if s.pathGrants == nil {
 		s.pathGrants = make(map[grantKey][]fspolicy.PathGrant)
 	}
 	existing := s.pathGrants[key]
+	merged := false
 	for i := range existing {
 		if existing[i].Path == grant.Path {
 			existing[i].Access |= grant.Access
-			return true
+			merged = true
+			break
 		}
 	}
-	s.pathGrants[key] = append(existing, grant)
+	if !merged {
+		s.pathGrants[key] = append(existing, grant)
+	}
+	s.mu.Unlock()
+
+	// bashToolName: RecordPathGrant is exclusively the ADR-092 D7 filesystem-
+	// widening path, always bash-scoped (see the field's own doc comment —
+	// "bash's own per-turn FSPolicy input"). Emitted on every call, merged
+	// or new: even a widened-access-bits merge into an existing path entry
+	// is a fresh grant decision an operator needs to see (e.g. a session
+	// that first widened {P, read} just widened the SAME path to {P, write}).
+	s.emitGrantRecorded(audit.ShellGrantScopePathWidening, "", agentID, sessionID, bashToolName, map[string]any{
+		"path":   grant.Path,
+		"access": pathAccessLabel(grant.Access),
+	})
 	return true
+}
+
+// pathAccessLabel renders a fspolicy.PathGrantAccess* bitmask as an
+// operator-readable word for the FR-032(c) grant-recorded audit event.
+// Package-local duplicate of shell_permission_mode.go's accessLabel
+// (pkg/tools) — pkg/tools already imports pkg/security, so the reverse
+// import would cycle; same "duplicated as an independent type" precedent
+// that file's own package comment documents for ShellMode.
+func pathAccessLabel(access uint64) string {
+	switch {
+	case access&fspolicy.PathGrantAccessWrite != 0 && access&fspolicy.PathGrantAccessRead != 0:
+		return "read+write"
+	case access&fspolicy.PathGrantAccessWrite != 0:
+		return "write"
+	default:
+		return "read"
+	}
 }
 
 // PathGrantsFor returns a defensive copy of every ADR-092 D7 filesystem
@@ -353,11 +451,21 @@ func (s *ApprovalGrantStore) RecordNetworkGrant(sessionID, agentID string) bool 
 		return false
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.networkGrants == nil {
 		s.networkGrants = make(map[grantKey]struct{})
 	}
-	s.networkGrants[grantKey{sessionID: sessionID, agentID: agentID}] = struct{}{}
+	key := grantKey{sessionID: sessionID, agentID: agentID}
+	_, dup := s.networkGrants[key]
+	s.networkGrants[key] = struct{}{}
+	s.mu.Unlock()
+
+	// bashToolName: RecordNetworkGrant is exclusively the ADR-092 D8
+	// network-widening grant, always bash-scoped (see the field's own doc
+	// comment). Idempotent state mutation — only emit on the FIRST record,
+	// not on a redundant re-grant of an already-held session grant.
+	if !dup {
+		s.emitGrantRecorded(audit.ShellGrantScopeNetworkWidening, "", agentID, sessionID, bashToolName, nil)
+	}
 	return true
 }
 
