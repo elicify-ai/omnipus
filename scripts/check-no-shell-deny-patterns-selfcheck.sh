@@ -106,7 +106,7 @@ expect "AllowedBinaries reintroduced outside pkg/policy/" 1
 fresh_tree
 mkdir -p "$TMP/tree/pkg/policy"
 printf 'package policy\n\ntype ExecPolicy struct {\n\tAllowedBinaries []string\n}\n' > "$TMP/tree/pkg/policy/policy.go"
-expect "AllowedBinaries in pkg/policy/ (known tracked gap, excluded)" 0
+expect "AllowedBinaries in pkg/policy/ (gap closed — no longer excluded)" 1
 
 # --- 7. dead exec-approval manager --------------------------------------------
 fresh_tree

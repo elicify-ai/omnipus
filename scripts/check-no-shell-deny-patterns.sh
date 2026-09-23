@@ -71,16 +71,18 @@
 #   file-existence checks below still catch a resurrected schema file.
 # - KNOWN, TRACKED, TEMPORARY GAP — not a false positive, an incomplete
 #   deletion this guard does not own: as of this commit, `pkg/config/
-#   config.go`'s `AgentShellPolicy` type and `pkg/policy/evaluator.go` /
-#   `pkg/policy/policy.go`'s `ExecPolicy.AllowedBinaries` are still present
-#   as orphaned dead code (zero live callers — `pkg/tools/shell.go`'s
-#   `ExecToolDeps` no longer names either). Both live in packages owned by
-#   the WIRE lane (pkg/config, pkg/policy), not this lane; deleting them is
-#   out of scope here (reported separately). They are excluded from this
-#   scan's two affected rules so the guard reflects what it actually
-#   verified rather than blocking on someone else's in-flight deletion.
-#   REMOVE these two exclusions the moment WIRE lands the deletion — leaving
-#   them in place afterward would silently narrow the guard.
+#   config.go`'s `AgentShellPolicy` type is still present as orphaned dead
+#   code (zero live callers). It lives in a package owned by the WIRE lane
+#   (pkg/config), not this lane; deleting it is out of scope here (reported
+#   separately). It is excluded from this scan's affected rule so the guard
+#   reflects what it actually verified rather than blocking on someone
+#   else's in-flight deletion. REMOVE this exclusion the moment WIRE lands
+#   the deletion — leaving it in place afterward would silently narrow the
+#   guard.
+#   (The matching gap for `pkg/policy/evaluator.go`'s `ExecPolicy.
+#   AllowedBinaries` and its use in `pkg/tools/bash_test.go` was closed by
+#   the CLEANUP lane's deletion of the exec-allowlist machinery — rule 5
+#   below no longer excludes either path.)
 #
 # Exit: 0 clean, 1 offenders found, 2 the check itself could not run.
 
@@ -118,11 +120,10 @@ RULES=(
   #    subagent_3p forbidden-field list + the SPA absence test), generated
   #    code, and the KNOWN TEMPORARY GAP in pkg/config/config.go (see header).
   'AgentShellPolicy|ShellPolicy|"shell_policy"::pkg cmd src::pkg/config/config\.go|pkg/gateway/rest_agents_update\.go|pkg/gateway/rest_agents_update_test\.go|pkg/gateway/agent_field_rules\.go|pkg/api/generated/|src/lib/api/generated/|src/components/agents/CreateAgentModal\.test\.tsx'
-  # 5. Exec allowlist — HandleExecAllowlist/sanitiseAllowlist are fully
-  #    retired. AllowedBinaries is the KNOWN TEMPORARY GAP (see header):
-  #    pkg/policy/{evaluator,policy}.go and their tests, plus
-  #    pkg/tools/bash_test.go which exercises that still-live package.
-  'HandleExecAllowlist|sanitiseAllowlist\(|AllowedBinaries::pkg cmd src::pkg/policy/|pkg/tools/bash_test\.go'
+  # 5. Exec allowlist — HandleExecAllowlist/sanitiseAllowlist/AllowedBinaries
+  #    are all fully retired (the CLEANUP lane deleted pkg/policy/evaluator.go,
+  #    pkg/policy/auditor.go, and their uses in pkg/tools/bash_test.go).
+  'HandleExecAllowlist|sanitiseAllowlist\(|AllowedBinaries::pkg cmd src::$^'
   # 6. Dead exec-approval manager — fully retired.
   'ExecApprovalManager::pkg cmd src::$^'
 )
