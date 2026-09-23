@@ -191,8 +191,13 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	// reviewed shift means re-pointing, not a regression. The previous
 	// gateway entries were rest_workspace_delegation.go:139,212 and
 	// rest_workspaces.go:378,962,1253,1321,1579.)
-	"pkg/gateway/rest_workspace_delegation.go:138":             true,
-	"pkg/gateway/rest_workspace_delegation.go:211":             true,
+	// (Re-pointed again 2026-09-23: ADR-091 D9's config-fold commit
+	// (8667a4e58, "performance.max_delegation_depth" comment rewrite)
+	// added two comment lines above delegationDepthCeiling, shifting both
+	// call sites in this file down by +1; still config.workspace.State's
+	// unrelated Workspace field, not agent-config.)
+	"pkg/gateway/rest_workspace_delegation.go:139":             true,
+	"pkg/gateway/rest_workspace_delegation.go:212":             true,
 	"pkg/gateway/rest_workspace_wire_snapshot_test.go:32":      true,
 	"pkg/gateway/rest_workspace_wire_snapshot_test.go:37":      true,
 	"pkg/gateway/rest_workspaces.go:390":                       true,
