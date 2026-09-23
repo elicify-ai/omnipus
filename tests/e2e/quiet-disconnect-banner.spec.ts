@@ -35,6 +35,11 @@ import { chatInput, waitForConnected } from './fixtures/selectors'
 // src/components/chat/ConnectionStatus.tsx's own exported QUIET_DROP_MS —
 // the spec's oracle constant, never re-derived here.
 const QUIET_DROP_MS = 15_000
+// ConnectionStatus.tsx's CHAT_NOTICE_MS: the chat-wide calm line ("C. Chat-wide
+// (long outage only)") appears only after this long offline. QUIET_DROP_MS
+// governs the per-answer "still working" note, which needs an interrupted
+// answer — this spec has none, so nothing at all may show before this mark.
+const CHAT_NOTICE_MS = 120_000
 
 const BANNED_TEXT = [/gateway/i, /disconnected from/i, /\b1006\b/]
 
@@ -47,7 +52,7 @@ async function assertNoBannedText(page: import('@playwright/test').Page): Promis
 
 test.describe('quiet disconnect banner (#823)', () => {
   test('a real network drop stays silent for 15s, shows only the calm line after, and clears cleanly on recovery', async ({ page, context }) => {
-    test.setTimeout(90_000)
+    test.setTimeout(CHAT_NOTICE_MS + 90_000)
 
     await page.goto('/')
     await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
@@ -72,9 +77,15 @@ test.describe('quiet disconnect banner (#823)', () => {
     await expect(page.getByTestId('connection-status-line')).toBeHidden()
     await assertNoBannedText(page)
 
-    // After QUIET_DROP_MS the calm status line appears — never the old
+    // Past QUIET_DROP_MS and up to CHAT_NOTICE_MS there is still nothing:
+    // with no interrupted answer, the short-drop window has no visible state.
+    await page.waitForTimeout(4_000)
+    await expect(page.getByTestId('connection-status-line')).toBeHidden()
+    await assertNoBannedText(page)
+
+    // At CHAT_NOTICE_MS the calm chat-wide status line appears — never the old
     // alarming banner, and still never the banned wording.
-    await expect(page.getByTestId('connection-status-line')).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByTestId('connection-status-line')).toBeVisible({ timeout: CHAT_NOTICE_MS })
     await assertNoBannedText(page)
 
     // Restore the network — recovery must clear cleanly (the ~2s "back"
