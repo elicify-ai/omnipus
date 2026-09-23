@@ -54,8 +54,12 @@ func writeCorruptedCredentialsFile(t *testing.T, path, credName string) {
 	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
 		t.Fatalf("generate random salt: %v", err)
 	}
+	// "version": 2 is the current, name-bound store format. This fixture models
+	// a CURRENT store with one undecryptable entry; at "version": 1 the file
+	// would instead be a pre-upgrade store and exercise the one-time migration
+	// (covered by boot_credential_migration_test.go), not the read path.
 	content := fmt.Sprintf(`{
-		"version": 1,
+		"version": 2,
 		"salt": %q,
 		"credentials": {
 			%q: {
