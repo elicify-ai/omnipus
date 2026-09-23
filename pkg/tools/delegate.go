@@ -242,26 +242,22 @@ type DelegateTool struct {
 	// steering-queue scope (generalizes pkg/agent/steering.go's existing
 	// mechanism — see DelegateSteeringSink's doc comment).
 	steering DelegateSteeringSink
-	// cancelSoft/cancelHard hold two-argument closures over AgentLoop's
-	// collapsed ADR-057 W13 entry points, Interrupt/InterruptSessionHard
-	// (pkg/agent/steering.go — each now takes a mandatory, explicit
-	// InterruptScope), wired in pkg/agent/session_messaging_wire.go as
-	// `func(sessionKey, hint string) ([]string, error) { return
-	// al.Interrupt(sessionKey, ScopeSelfOnly, hint) }` (soft) and the
-	// InterruptSessionHard analogue (hard) — both pinned to ScopeSelfOnly,
-	// never ScopeSubtree, matching this field's own load-bearing point
-	// below: a direct activeTurnStates.Load(sessionKey) targeting exactly
-	// ONE delegation, not a subtree sweep. (Pre-W13 these wrapped the now-
-	// retired two-argument InterruptBySessionKey/InterruptBySessionKeyHard
-	// directly — the field TYPE here never changed, only what it's wired
-	// to.) Injected to avoid a tools<->agent import cycle, matching
-	// every other AgentLoop capability this tool already consumes via a
-	// setter (SetSpawner, etc.). Returns the canceled turn's ID as a
-	// single-element descendants slice on a hit, nil descendants on a miss
-	// (target already terminated) — executeCancel uses that miss signal to
-	// detect a TOCTOU window.
-	cancelSoft func(sessionKey, hint string) ([]string, error)
-	cancelHard func(sessionKey, hint string) ([]string, error)
+	// cancelSoft/cancelHard hold closures over ADR-091's durable Stop
+	// cascade, AgentLoop.cancelDelegatedSubtree (pkg/agent/
+	// steer_delegate_cancel.go), wired in
+	// pkg/agent/session_messaging_wire.go. Injected to avoid a
+	// tools<->agent import cycle, matching every other AgentLoop capability
+	// this tool consumes via a setter (SetSpawner, etc.).
+	//
+	// They return every session id the stop REACHED — the named session plus
+	// every descendant found through the durable parent-child edge — and an
+	// empty slice when it reached nothing, which is the miss signal
+	// executeCancel uses to detect its TOCTOU window. They previously
+	// wrapped the live-turn interrupt pair (Interrupt/InterruptSessionHard),
+	// which reached nothing at all for a session whose turn had not started
+	// and missed a running child's own grandchildren; see SetCancelHooks.
+	cancelSoft func(sessionKey string, by steer.Principal, hint string) ([]string, error)
+	cancelHard func(sessionKey string, by steer.Principal, hint string) ([]string, error)
 	// cancelGrace is the cooperative-stop grace window before the hard
 	// RequestCancel backstop fires (session_messaging.cancel_grace,
 	// FR-195). Defaults to defaultCancelGrace.
@@ -452,42 +448,39 @@ func isSessionMessagingAction(action string) bool {
 	return false
 }
 
-// SetCancelHooks installs the soft (cooperative) and hard (RequestCancel
-// backstop) cancel functions. ADR-057 W13 collapsed the four legacy
-// interrupt entry points (InterruptSession, InterruptSessionHard,
-// InterruptBySessionKey, InterruptBySessionKeyHard) into two —
-// AgentLoop.Interrupt and AgentLoop.InterruptSessionHard
-// (pkg/agent/steering.go) — each now taking a mandatory, explicit
-// InterruptScope. The canonical wiring, in
-// pkg/agent/session_messaging_wire.go, is a pair of two-argument closures
-// pinned to ScopeSelfOnly: `func(sessionKey, hint string) ([]string, error)
-// { return al.Interrupt(sessionKey, ScopeSelfOnly, hint) }` (soft) and the
-// InterruptSessionHard analogue (hard) — NEVER ScopeSubtree, and never a
-// closure over the OLD, now-retired InterruptBySessionKey(Hard) pair
-// (still named here only for historical contrast). ScopeSubtree would
-// widen a single targeted cancel into a whole-subtree sweep, exactly the
-// dual-namespace-style bug this hook's own WARNING below exists to keep
-// closed (see pkg/agent/session_messaging_wire_adr057_test.go's
-// TestSetCancelHooks_ScopeSelfOnlyNotSubtree) — a future "fixing
-// consistency" edit swapping in ScopeSubtree here would silently
-// reintroduce it, unless a scope-aware regression test catches it, since
-// the compiler cannot: soft/hard keep the same
-// func(string, string) ([]string, error) signature regardless of which
-// scope the wiring closure captures.
+// SetCancelHooks installs the soft (cooperative) and hard (immediate) stop
+// functions. Each returns the session ids the stop actually REACHED, which is
+// how executeCancel tells "I stopped something" from "there was nothing to
+// stop".
+//
+// The canonical wiring (pkg/agent/session_messaging_wire.go) is a pair of
+// closures over `AgentLoop.cancelDelegatedSubtree`, ADR-091's durable Stop
+// cascade — the same one a human's Stop uses. Read that function's doc
+// comment before changing this: the live-turn interrupt pair
+// (Interrupt/InterruptSessionHard with ScopeSubtree) that used to be wired
+// here could not stop a QUEUED worker at all and, after the sub-turn path was
+// deleted, no longer reached a running worker's own grandchildren either.
+// Neither failure was visible to the compiler or to this signature, so do not
+// "simplify" the wiring back to a turn-registry interrupt.
+//
+// `by` is the principal the stop is recorded against — it lands on the
+// durable Stop marker (session.Stop.By, I-1) and is what the UI and the audit
+// trail show as who stopped the session. executeCancel derives it from
+// verifyCallerPrincipal, never manufactures it.
 //
 // WARNING — the hook MUST be invoked with the delegate's sessionKey
 // (== delegateSessionID, the caller-facing id this tool returns from run and
 // accepts on every subsequent cancel/steer/respond/peek), NEVER the parent
 // chat's transcriptSessionID/routingSessionID. The two id spaces are
-// deliberately distinct for a delegated sub-turn (see
+// deliberately distinct for a delegated child (see
 // turnState.routingSessionID's own doc comment, pkg/agent/turn.go — the
 // ROUTING id, not the transcript id, is what a chat-wide Stop cascades via)
 // — sessionKey is the unique per-delegation address, unrelated to either.
 // executeCancel passes its session_id argument here verbatim — that
 // argument IS the delegateSessionID by contract.
 func (t *DelegateTool) SetCancelHooks(
-	soft func(sessionKey, hint string) ([]string, error),
-	hard func(sessionKey, hint string) ([]string, error),
+	soft func(sessionKey string, by steer.Principal, hint string) ([]string, error),
+	hard func(sessionKey string, by steer.Principal, hint string) ([]string, error),
 ) {
 	t.cancelSoft = soft
 	t.cancelHard = hard

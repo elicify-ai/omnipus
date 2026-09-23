@@ -357,6 +357,36 @@ func (g *steerAdmission) removeQueued(sessionID string, generation int) {
 	}
 }
 
+// removeQueuedSession drops EVERY queued entry for sessionID, whatever
+// generation each carries, and reports how many it removed. Unlike
+// removeQueued it is not a rollback of one failed write: it is what the Stop
+// cascade uses (steer_delegate_cancel.go::cancelDelegatedSubtree) to take a
+// cancelled session out of the start queue.
+//
+// reserveDispatch would refuse the promotion anyway, so this is not what
+// makes a stopped session safe. It is what makes the queue HONEST: a
+// cancelled worker left sitting in it still counts toward every queue
+// position the tool reports to a model, and still shows in the side panel as
+// a session about to start.
+//
+// Active reservations are never touched, so this can never release a running
+// turn's slot.
+func (g *steerAdmission) removeQueuedSession(sessionID string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	kept := g.queue[:0]
+	removed := 0
+	for _, entry := range g.queue {
+		if entry.sessionID == sessionID {
+			removed++
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	g.queue = kept
+	return removed
+}
+
 // activeCount reports the number of turns this gate currently holds a slot
 // for — test/observability seam.
 func (g *steerAdmission) activeCount() int {

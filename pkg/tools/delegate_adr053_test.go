@@ -24,6 +24,7 @@ import (
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // fakeSteeringSink implements DelegateSteeringSink for tests.
@@ -388,13 +389,13 @@ func TestDelegateTool_Cancel_SoftThenHardBackstop(t *testing.T) {
 	var softCalled, hardCalled bool
 	var mu sync.Mutex
 	tool.SetCancelHooks(
-		func(sessionID, hint string) ([]string, error) {
+		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
 			mu.Lock()
 			softCalled = true
 			mu.Unlock()
 			return []string{"child-cancel"}, nil
 		},
-		func(sessionID, hint string) ([]string, error) {
+		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
 			mu.Lock()
 			hardCalled = true
 			mu.Unlock()
@@ -442,11 +443,14 @@ func TestDelegateTool_Cancel_Hard_SkipsGrace(t *testing.T) {
 
 	var hardCalled bool
 	tool.SetCancelHooks(
-		func(sessionID, hint string) ([]string, error) {
+		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
 			t.Fatal("soft hook must not be called for hard=true")
 			return nil, nil
 		},
-		func(sessionID, hint string) ([]string, error) { hardCalled = true; return []string{"child-hard"}, nil },
+		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+			hardCalled = true
+			return []string{"child-hard"}, nil
+		},
 	)
 
 	result := tool.Execute(ctx, map[string]any{"action": "cancel", "session_id": "child-hard", "hard": true})
@@ -691,8 +695,8 @@ func TestDelegateTool_Cancel_DeniedOnLifecycleLoadError(t *testing.T) {
 
 	cancelCalled := false
 	tool.SetCancelHooks(
-		func(string, string) ([]string, error) { cancelCalled = true; return nil, nil },
-		func(string, string) ([]string, error) { cancelCalled = true; return nil, nil },
+		func(string, steer.Principal, string) ([]string, error) { cancelCalled = true; return nil, nil },
+		func(string, steer.Principal, string) ([]string, error) { cancelCalled = true; return nil, nil },
 	)
 
 	result := tool.Execute(ctx, map[string]any{"action": "cancel", "session_id": "child-corrupt", "hard": true})
@@ -710,8 +714,14 @@ func TestDelegateTool_Cancel_DeniedWhenLifecycleUnconfigured(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.SetDelegationDenyCheckerBackground(func(ctx context.Context, targetAgentID string) *DelegationDenial { return nil })
 	tool.SetCancelHooks(
-		func(string, string) ([]string, error) { t.Fatal("soft hook must not fire"); return nil, nil },
-		func(string, string) ([]string, error) { t.Fatal("hard hook must not fire"); return nil, nil },
+		func(string, steer.Principal, string) ([]string, error) {
+			t.Fatal("soft hook must not fire")
+			return nil, nil
+		},
+		func(string, steer.Principal, string) ([]string, error) {
+			t.Fatal("hard hook must not fire")
+			return nil, nil
+		},
 	)
 	result := tool.Execute(context.Background(), map[string]any{"action": "cancel", "session_id": "any", "hard": true})
 	if !result.IsError {

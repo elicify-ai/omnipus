@@ -46,6 +46,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -190,58 +191,34 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			// a chat steer uses, so a parent->child steer lands at the child's
 			// next tool boundary exactly like a chat interrupt (INV-3).
 			dt.SetSteeringSink(al)
-			// Cancel hooks: soft = graceful stop, hard = escalate after the
-			// cancel_grace window. These MUST be keyed by the caller-facing
-			// delegateSessionID (== sessionKey in activeTurnStates), not
-			// routingSessionID — Interrupt/InterruptSessionHard's whole-chat
-			// Range fallback matches on routingSessionID, which for a
-			// delegated sub-turn is deliberately the PARENT's shared chat id
-			// (subturn.go's FR-011 inheritance), never equal to
-			// delegateSessionID. Wiring those here unscoped meant every
-			// delegate.cancel silently no-op'd (zero Range matches, which
-			// Interrupt treats as a non-error no-op) while still reporting
-			// success. Calling Interrupt/InterruptSessionHard with a scope routes
-			// through resolveInterruptAnchors' point-lookup half (a direct
-			// activeTurnStates.Load(sessionKey)) as its anchor — targeting the
-			// named delegate, never a sibling or the parent — byte-identical
-			// anchor resolution to the retired InterruptBySessionKey/
-			// InterruptBySessionKeyHard (ADR-057 FR-041 collapse).
+			// Cancel hooks. Both closures go through ADR-091's DURABLE Stop
+			// cascade (steer_delegate_cancel.go::cancelDelegatedSubtree), the
+			// same one a human's Stop uses over the socket and REST
+			// (pkg/gateway/websocket_cancel.go::cancelSteeredSubtree) — soft
+			// stamps and asks each reached turn to stop cooperatively, hard
+			// stamps and fires each turn's generation-aware abort.
 			//
-			// [FIX-5, 2026-08-03] The scope is ScopeSubtree, NOT ScopeSelfOnly.
-			// This was flipped from an earlier revision that wired ScopeSelfOnly
-			// on PRE-D1 reasoning ("cancel must reach exactly the named child and
-			// never a sibling or the parent, and ScopeSubtree would additionally
-			// walk descendants — the wrong widening"). That reasoning held only
-			// while a delegated child shared its parent's transcript/session id
-			// (pre-D1): a subtree walk rooted at "the child" then had no way to
-			// stop at the child's own boundary and would have bled into the
-			// parent/sibling's shared namespace. ADR-057 D1 gives every
-			// delegated child its OWN distinct session id (subturn.go), so
-			// ScopeSubtree rooted at a CHILD's sessionKey now reaches exactly
-			// that child's own descendants and structurally CANNOT reach the
-			// parent or a sibling (ADR-057 architecture doc line ~336, FR-042,
-			// AC-8) — the "wrong widening" the old comment warned against no
-			// longer applies to this call site.
+			// They used to be closures over the live-turn interrupt pair
+			// (al.Interrupt / al.InterruptSessionHard with ScopeSubtree). That
+			// wiring was correct for ADR-057's sub-turns and became wrong twice
+			// over when ADR-091 made a worker a SESSION:
 			//
-			// This is also a deliberate, ADR-mandated BEHAVIOR CHANGE (R-13/AC-8;
-			// spec "Operator decisions (settled — not re-litigated)" item 5;
-			// spec:3246 "R-13's behaviour change is INTENDED and confirmed"):
-			// delegate action="cancel" used to cancel one turn and leave that
-			// child's OWN grandchildren (and its own background shells) running
-			// — a live leak. Under D8/R-13 a per-delegation cancel becomes
-			// ScopeSubtree rooted at the child, exactly like a chat-root Stop
-			// already does in cancel.go's RequestCancel. See
-			// TestSetCancelHooks_ChildCancelReachesSubtree (this package's
-			// _adr057_test.go, inverted from the prior
-			// TestSetCancelHooks_ScopeSelfOnlyNotSubtree, which asserted the now-
-			// superseded ScopeSelfOnly contract) for the red/green proof of the
-			// NEW contract.
+			//   - a queued worker has no live turn, so the interrupt reached
+			//     nothing and the tool reported a success-shaped no-op while the
+			//     worker went on to start;
+			//   - ScopeSubtree walks parentTurnID links between live turns, and
+			//     no steered turn has one, so a cancel on a running child left
+			//     its own grandchildren running — reopening exactly the D8/R-13
+			//     leak that scope was chosen to close.
+			//
+			// The durable parent-child edge closes both. See
+			// cancelDelegatedSubtree's own doc comment before changing this.
 			dt.SetCancelHooks(
-				func(sessionKey, hint string) ([]string, error) {
-					return al.Interrupt(sessionKey, ScopeSubtree, hint)
+				func(sessionKey string, by steer.Principal, hint string) ([]string, error) {
+					return al.cancelDelegatedSubtree(sessionKey, by, false, hint)
 				},
-				func(sessionKey, hint string) ([]string, error) {
-					return al.InterruptSessionHard(sessionKey, ScopeSubtree, hint)
+				func(sessionKey string, by steer.Principal, hint string) ([]string, error) {
+					return al.cancelDelegatedSubtree(sessionKey, by, true, hint)
 				},
 			)
 			// FR-196 kill switch on the SYNC session-messaging-plane actions

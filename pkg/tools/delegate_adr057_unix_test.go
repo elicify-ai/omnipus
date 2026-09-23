@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,8 +69,12 @@ func TestDelegateCancel_KillsThatChildsShells(t *testing.T) {
 	// test's focus is the SHELL-KILL side effect FR-028 adds, not the
 	// turn-cancel/steering mechanism itself (covered elsewhere).
 	delegateTool.SetCancelHooks(
-		func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
-		func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
+		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+			return []string{sessionID}, nil
+		},
+		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+			return []string{sessionID}, nil
+		},
 	)
 
 	callerCtx := WithTranscriptSessionID(context.Background(), "u14-w9a-parent")
