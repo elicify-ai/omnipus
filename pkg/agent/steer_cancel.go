@@ -142,32 +142,75 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	if rec.Generation != generation || rec.Terminal() {
 		return
 	}
-	if rec.SteeredBy != nil {
-		message, merr := al.completionMessage(rec, outcome, "", failureReason)
-		if merr != nil {
-			logger.WarnCF("agent", "steer: terminal report: build upward message failed",
-				map[string]any{"session_id": sessionID, "error": merr.Error()})
-		} else if deliverer := al.getUpwardDeliverer(); deliverer != nil {
-			if _, derr := deliverer.Deliver(ctx, steer.UpwardEvent{
-				ChildSessionID: sessionID, Outcome: outcome, Message: message,
-			}); derr != nil {
-				logger.WarnCF("agent", "steer: terminal report: deliver upward event failed",
-					map[string]any{"session_id": sessionID, "error": derr.Error()})
-			}
-		} else {
-			logger.WarnCF("agent", "steer: terminal report: no upward deliverer wired",
-				map[string]any{"session_id": sessionID})
-		}
-	}
-	rec.State = nextState
-	rec.NeedsInput = nil
-	if nextState == session.LifecycleFailed {
-		rec.FailedReason = failureReason
-	}
-	if err := lifecycle.Persist(rec); err != nil {
-		logger.WarnCF("agent", "steer: terminal report: persist terminal state failed",
-			map[string]any{"session_id": sessionID, "error": err.Error()})
+	// [Defect 1, ADR-091 fix lane RX-DELIVERY, CRITICAL] This early return
+	// is the whole of the doc comment's "or the upward delivery itself
+	// fails — never overwrites state it cannot also report" promise, which
+	// the code did not keep: all three undelivered branches (message build
+	// failed, no deliverer wired, Deliver returned an error) logged a WARN
+	// and then FELL THROUGH to the terminal write below. The child landed
+	// terminal with NO inbox entry — nothing left to recover from in
+	// process, and the parent never told a descendant had gone away, so
+	// hasRunningOrQueuedDescendant (steer_completion.go) kept the parent
+	// waiting for ever on a worker that was already dead. Leaving the
+	// record NON-terminal is strictly better: it stays visible to boot
+	// recovery (boot_sweep.go::SteerBootRecovery) and to the operator,
+	// which a terminal-but-unreported record is not.
+	if rec.SteeredBy != nil && !al.deliverTerminalReport(ctx, rec, generation, outcome, failureReason) {
 		return
+	}
+	// [Defect 2, ADR-091 fix lane RX-DELIVERY, CRITICAL] This used to be a
+	// raw Load (above) -> Deliver (real I/O, just above) -> mutate the
+	// PRE-Deliver in-memory snapshot -> Persist: the exact stale
+	// read-then-write shape fix lane 1 replaced with LifecycleStore.Mutate
+	// in steer_completion.go::completeSteeredTurn (Finding D) and
+	// steer_launcher.go::commitSteeredDispatchState. Deliver's window is
+	// wide — an inbox append, transcript writes and a parent wake — and a
+	// Stop or a Revive landing inside it was silently ERASED, because the
+	// snapshot's own (nil) Stop was written straight back over the marker.
+	// pkg/session/lifecycle.go's rule is explicit: a caller doing
+	// read-then-decide-then-write MUST use Mutate. Generation AND the Stop
+	// marker are re-checked inside the SAME lock the write happens under,
+	// and every field is set on `cur` — the record as it is NOW — so a Stop
+	// stamped during delivery survives even on the paths that do write.
+	//
+	// Mutate is NOT reentrant: nothing inside this closure may call
+	// Load/Persist/Mutate.
+	stopBeforeDelivery := rec.Stop
+	mutateErr := lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
+		if cur == nil {
+			return errTerminalReportVanished
+		}
+		if cur.Generation != generation {
+			return errTerminalReportStaleGeneration
+		}
+		if cur.Terminal() {
+			return errTerminalReportAlreadyTerminal
+		}
+		if stopLandedDuringDelivery(stopBeforeDelivery, cur) {
+			return errTerminalReportStoppedDuringDelivery
+		}
+		cur.State = nextState
+		cur.NeedsInput = nil
+		if nextState == session.LifecycleFailed {
+			cur.FailedReason = failureReason
+		}
+		return nil
+	})
+	switch {
+	case mutateErr == nil:
+	case errors.Is(mutateErr, errTerminalReportStaleGeneration),
+		errors.Is(mutateErr, errTerminalReportAlreadyTerminal),
+		errors.Is(mutateErr, errTerminalReportStoppedDuringDelivery),
+		errors.Is(mutateErr, session.ErrLifecycleTerminalImmutable):
+		// The report is already durably delivered (Deliver ran above); a
+		// Stop, a Revive or another completion racing this write is a
+		// legitimate outcome, not a failure — mirrors completeSteeredTurn's
+		// own refusal switch.
+		logger.InfoCF("agent", "steer: terminal report: delivered; terminal write refused (a Stop, Revive or another completion landed during delivery)",
+			map[string]any{"session_id": sessionID, "generation": generation, "reason": mutateErr.Error()})
+	default:
+		logger.WarnCF("agent", "steer: terminal report: persist terminal state failed",
+			map[string]any{"session_id": sessionID, "generation": generation, "error": mutateErr.Error()})
 	}
 	// No second upward path here on purpose. The Deliver call above is the
 	// only one: fix lane 1 deleted completeWaitingAncestors because it
@@ -177,6 +220,88 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	// Finding A) and it carries this cancelled child's "interrupted:"
 	// outcome up exactly like a normal completion does.
 }
+
+// deliverTerminalReport builds and delivers the ONE upward event a terminal
+// report carries. It returns true ONLY when the parent's inbox entry is
+// durably written — the precondition reportSteeredSessionTerminalUpward's
+// terminal write now depends on (Defect 1).
+//
+// [Defect 3, ADR-091 fix lane RX-DELIVERY, HIGH] It is also the first caller
+// anywhere in the codebase to READ steer.Delivery.Outcome. That field carries
+// the one fact separating "the parent knows" (DeliveryWoke /
+// DeliveryQueuedIntoLiveTurn) from "the parent will never know"
+// (DeliveryStoredNotWoken), and every call site discarded it with
+// `_, err := deliverer.Deliver(...)`. On a TERMINAL report a stored-not-woken
+// outcome means the child is gone and nothing will re-enter the parent until
+// boot recovery — an indefinite stall that was completely invisible. It is
+// logged at ERROR, naming child, parent, message id and generation, and
+// deliberately does NOT fail the report: the entry IS durable, so refusing
+// the terminal write would only add a second inconsistency on top.
+func (al *AgentLoop) deliverTerminalReport(
+	ctx context.Context, rec *session.LifecycleRecord, generation int,
+	outcome steer.Outcome, failureReason string,
+) bool {
+	message, merr := al.completionMessage(rec, outcome, "", failureReason)
+	if merr != nil {
+		logger.WarnCF("agent", "steer: terminal report: build upward message failed — terminal state NOT written",
+			map[string]any{"session_id": rec.SessionID, "generation": generation, "error": merr.Error()})
+		return false
+	}
+	deliverer := al.getUpwardDeliverer()
+	if deliverer == nil {
+		logger.WarnCF("agent", "steer: terminal report: no upward deliverer wired — terminal state NOT written",
+			map[string]any{"session_id": rec.SessionID, "generation": generation})
+		return false
+	}
+	delivery, derr := deliverer.Deliver(ctx, steer.UpwardEvent{
+		ChildSessionID: rec.SessionID, Outcome: outcome, Message: message,
+	})
+	if derr != nil {
+		logger.WarnCF("agent", "steer: terminal report: deliver upward event failed — terminal state NOT written",
+			map[string]any{"session_id": rec.SessionID, "generation": generation, "error": derr.Error()})
+		return false
+	}
+	if delivery.Outcome == steer.DeliveryStoredNotWoken {
+		logger.ErrorCF("agent", "steer: terminal report: stored but the parent was NOT woken — it will wait until boot recovery re-nudges it",
+			map[string]any{
+				"session_id":        rec.SessionID,
+				"parent_session_id": rec.SteeredBy.SteeringSessionID,
+				"message_id":        delivery.MessageID,
+				"generation":        generation,
+				"outcome":           string(outcome),
+				"delivery_outcome":  string(delivery.Outcome),
+			})
+	}
+	return true
+}
+
+// stopLandedDuringDelivery reports whether cur carries a Stop marker for its
+// CURRENT generation that was NOT already on the snapshot this report was
+// built from — i.e. a Stop pressed while Deliver was doing its I/O.
+//
+// A marker that was already on the snapshot is the ordinary case, not a
+// race: terminaliseNeverRanStop (below) reaches this function precisely
+// BECAUSE the cascade has just stamped one, and refusing on it would leave
+// Finding 5's never-ran child stranded for ever — the opposite of the bug.
+// Generation alone identifies the marker: stampStop refuses to re-stamp a
+// generation that already carries one (errStopAlreadyStamped), so two
+// distinct markers can never share a generation.
+func stopLandedDuringDelivery(before *session.Stop, cur *session.LifecycleRecord) bool {
+	if cur.Stop == nil || cur.Stop.Generation != cur.Generation {
+		return false
+	}
+	return before == nil || before.Generation != cur.Stop.Generation
+}
+
+// errTerminalReport* are reportSteeredSessionTerminalUpward's Mutate-refusal
+// sentinels (Defect 2) — the terminal-report counterparts of
+// steer_completion.go's errComplete* family.
+var (
+	errTerminalReportVanished              = errors.New("steer: terminal report: record vanished during delivery")
+	errTerminalReportStaleGeneration       = errors.New("steer: terminal report: generation changed during delivery")
+	errTerminalReportAlreadyTerminal       = errors.New("steer: terminal report: record became terminal during delivery")
+	errTerminalReportStoppedDuringDelivery = errors.New("steer: terminal report: a Stop landed during delivery")
+)
 
 // terminaliseNeverRanStop closes Finding 5's gap: SteerGenerationCancel found
 // no live turn to cancel for a session this cascade just stamped Stop for —

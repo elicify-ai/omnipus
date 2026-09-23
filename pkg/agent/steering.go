@@ -18,6 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/google/uuid"
 )
 
 // SteeringMode controls how queued steering messages are dequeued.
@@ -329,12 +330,28 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 	if rec.Stop == nil || rec.Stop.Generation != rec.Generation {
 		return false, nil
 	}
+	// [Defect 4, ADR-091 fix lane RX-DELIVERY, HIGH] The instruction lands
+	// BEFORE the generation is minted, and a failure refuses the revive
+	// outright. Both halves matter:
+	//   - Ordering: nothing in the lifecycle record is touched until the new
+	//     instruction is durable, so a refusal cannot strand a record at a
+	//     freshly minted generation in `running` with no turn behind it.
+	//   - Refusal: the append used to be fire-and-forget, so a revival whose
+	//     new instruction never landed still dispatched — and
+	//     reconstructSteeredTurn (wake == nil) then rebuilt the turn from the
+	//     last `user` TRANSCRIPT entry, i.e. the ORIGINAL pre-Stop
+	//     instruction. The user typed "stop, do X instead" and the session
+	//     confidently answered the OLD question, then reported that answer
+	//     upward as a real result. Failing the revive is strictly better than
+	//     running the wrong instruction.
+	if trimmed := strings.TrimSpace(instruction); trimmed != "" {
+		if aerr := al.appendSteeredInstruction(sessionID, rec.AgentID, trimmed); aerr != nil {
+			return false, fmt.Errorf("steer: revive %q: %w", sessionID, aerr)
+		}
+	}
 	newGeneration, rerr := al.steerCanceller().Revive(ctx, sessionID, by)
 	if rerr != nil {
 		return false, fmt.Errorf("steer: revive %q: %w", sessionID, rerr)
-	}
-	if trimmed := strings.TrimSpace(instruction); trimmed != "" {
-		al.appendSteeredInstruction(sessionID, trimmed)
 	}
 	// al.dispatchSteeredSession IS steer.SessionLauncher.Dispatch's own body
 	// (SteerLauncher.Dispatch, steer_launcher.go: "a thin delegate onto
@@ -349,16 +366,49 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 	return true, nil
 }
 
-// appendSteeredInstruction is ReviveStoppedSession's best-effort analogue of
+// appendSteeredInstruction is ReviveStoppedSession's analogue of
 // pkg/tools/delegate_followup.go::appendFollowUpInstruction, for the two
 // AgentLoop-native revival paths (a human's message into an open child, and
 // the delegate tool's own steer via the steerReviver capability it type-
 // asserts al into) rather than the tools-package follow_up flow.
-func (al *AgentLoop) appendSteeredInstruction(sessionID, instruction string) {
+//
+// [Defect 4, ADR-091 fix lane RX-DELIVERY] It writes BOTH halves of the pair
+// SteerLauncher.Launch already writes for the launch instruction
+// (steer_launcher.go: sessions.AddMessage AND
+// sessions.AppendTranscriptStrict), and reports whether the instruction
+// actually landed. Before this it did neither:
+//
+//   - The TRANSCRIPT write did not exist. AddMessage writes context.jsonl
+//     (the model's history) only, but the turn a revival reconstructs takes
+//     its UserMessage from the TRANSCRIPT — steer_reconstruct.go::
+//     reconstructSteeredTurn scans transcript.jsonl backwards for the last
+//     non-blank `user` entry when wake == nil. So the revived turn re-ran the
+//     ORIGINAL pre-Stop instruction even when AddMessage had succeeded.
+//   - The ERROR return did not exist. UnifiedStore.AddMessage has no return
+//     value at all (it logs internally and tells the caller nothing) and a
+//     nil store was a silent no-op, so the caller dispatched regardless.
+//
+// AppendTranscriptStrict is the strict variant on purpose: it refuses to
+// write against a session that does not exist rather than minting an orphan
+// directory, and it propagates its transcript.jsonl error — so it is both the
+// write the reconstructed turn actually reads AND the one that can report.
+// The entry id is fresh per call (a repeat revive is a new instruction, never
+// a duplicate of the last one).
+func (al *AgentLoop) appendSteeredInstruction(sessionID, agentID, instruction string) error {
 	store := al.ResolveSessionStore(sessionID)
-	if store != nil {
-		store.AddMessage(sessionID, "user", instruction)
+	if store == nil {
+		return fmt.Errorf("record the new instruction for %q: no session store owns this session", sessionID)
 	}
+	store.AddMessage(sessionID, "user", instruction)
+	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
+		ID:      sessionID + "-instruction-" + uuid.NewString(),
+		Role:    "user",
+		AgentID: agentID,
+		Content: instruction,
+	}); err != nil {
+		return fmt.Errorf("record the new instruction for %q in the transcript the revived turn reads: %w", sessionID, err)
+	}
+	return nil
 }
 
 // EnqueueSteeringMessage is the exported wrapper used by the delegate tool
