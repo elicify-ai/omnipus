@@ -313,14 +313,6 @@ func TestHandleSandboxConfig_SSRFAllowInternal_HotReload(t *testing.T) {
 		"ssrf.allow_internal hot-reloads via 2s config poll")
 }
 
-// shell_deny_patterns field tests are RETIRED (ADR-091 D2/D5, removal
-// item 1) — the built-in shell deny-pattern list is deleted outright,
-// replaced by the D1 Ask/Auto/God Mode selector and D3's rule engine
-// (pkg/shellrule, config.SandboxConfig.CommandRules). SandboxConfigUpdate no
-// longer has a ShellDenyPatterns field at all; a client still sending the
-// key has it silently dropped by the non-strict decode (file-half unknown-
-// field tolerance, matching the greenfield "no migration, no shims" rule).
-
 // --- shared handler tests ---
 
 // TestHandleSandboxConfig_PartialRestartFlag verifies that a PUT carrying

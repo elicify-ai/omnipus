@@ -707,10 +707,6 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// the single-account model.
 	// Chain: withAuth (verifies token) → handler.
 	rae.cm.RegisterHTTPHandler("/api/v1/audit-log", rae.a.withAuth(rae.a.HandleAuditLog))
-	// /api/v1/security/exec-allowlist is RETIRED (ADR-091 D2/D5, removal
-	// item 3) — the opt-in exec allowlist is folded into D3's unified
-	// command-rule engine (pkg/shellrule); HandleExecAllowlist/
-	// sanitiseAllowlist (pkg/gateway/rest_exec.go) are deleted outright.
 	// Wave 3 security endpoints (SEC-25, SEC-28).
 	rae.cm.RegisterHTTPHandler("/api/v1/security/exec-proxy-status", rae.a.withAuth(rae.a.HandleExecProxyStatus))
 	// High-blast-radius security endpoints.

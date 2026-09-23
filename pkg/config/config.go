@@ -651,29 +651,13 @@ type AgentConfig struct {
 // AgentType classifies an agent for scope-based tool visibility filtering.
 type AgentType string
 
-// AgentShellPolicy is RETIRED (ADR-091 D2/D5, removal item 1) — the built-in
-// shell deny-pattern list and its per-agent/global opt-in are gone, replaced
-// by the D1 Ask/Auto/God Mode selector and D3's rule engine
-// (pkg/shellrule). No AgentConfig field references this type any more (the
-// `shell_policy` wire field is deleted and PUT/POST reject it outright —
-// pkg/gateway/rest_agents_update.go/rest_agents_create.go).
-//
-// The TYPE itself is kept here, unreferenced by config.go, ONLY because
-// pkg/tools/shell.go's ExecToolDeps.AgentShellPolicy field (owned by ADR-091
-// lane L4, out of this lane's scope) still names it as of this commit; ADR-091
-// lane L5 (this removal pass) cannot delete pkg/tools/shell.go's field
-// without breaking a concurrently-developed, unowned file. Delete this type
-// in the same change that removes ExecToolDeps.GlobalShellDenyPatterns/
-// AgentShellPolicy from pkg/tools/shell.go.
+// AgentShellPolicy is unreferenced by config.go — kept here only because
+// pkg/tools/shell.go's ExecToolDeps.AgentShellPolicy field (ADR-091 lane L4,
+// out of this lane's scope) still names it as of this commit; deleting it
+// here would break that concurrently-developed, unowned file. Delete this
+// type in the same change that removes that field from pkg/tools/shell.go.
 type AgentShellPolicy struct {
-	// EnableDenyPatterns activates shell command deny-pattern checking for this
-	// agent. When false (default), neither custom nor global deny patterns are
-	// applied. Operators must explicitly opt in per agent or globally.
-	EnableDenyPatterns bool `json:"enable_deny_patterns,omitempty"`
-	// CustomDenyPatterns lists agent-specific shell command deny patterns
-	// (regular expressions). Merged with the global ShellDenyPatterns list when
-	// EnableDenyPatterns is true. Patterns that fail to compile are logged at
-	// Warn and skipped.
+	EnableDenyPatterns bool     `json:"enable_deny_patterns,omitempty"`
 	CustomDenyPatterns []string `json:"custom_deny_patterns,omitempty"`
 }
 
@@ -1658,15 +1642,6 @@ type ExecConfig struct {
 	// US-14: Route exec child process HTTP traffic through the local SSRF proxy.
 	// When true (default), HTTP_PROXY and HTTPS_PROXY are set on child processes.
 	EnableProxy bool `json:"enable_proxy,omitempty" env:"OMNIPUS_TOOLS_EXEC_ENABLE_PROXY"`
-
-	// Approval ("US-7: Interactive approval before exec commands") and
-	// AllowedBinaries ("US-7/US-5: exec binary allowlist, SEC-05") are
-	// retired outright (ADR-091 D2/D5/removal items 3-4): the opt-in exec
-	// allowlist is folded into D3's unified command-rule engine
-	// (config.SandboxConfig.CommandRules, pkg/shellrule), and command
-	// approval is now the D1 Ask/Auto/God Mode selector. Greenfield — no
-	// migration, no shim; a config carrying either retired key is simply
-	// dropped on load (unknown-field tolerance).
 }
 
 type SkillsToolsConfig struct {

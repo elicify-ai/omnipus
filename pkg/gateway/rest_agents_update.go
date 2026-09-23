@@ -173,10 +173,7 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 		)
 		return true
 	}
-	// ADR-091 D2/D5: shell_policy (the per-agent block-list override,
-	// AgentShellPolicy) is retired from the wire entirely — the built-in deny
-	// list and its per-agent/global opt-in are deleted outright, replaced by
-	// the three-mode selector (Ask/Auto/God Mode) and D3's rule engine.
+	// ADR-091: shell_policy is retired from the wire entirely.
 	// gen.AgentUpdateRequest no longer has a ShellPolicy field at all, and
 	// decodeAndValidate's fast path below is non-strict by default
 	// (validate_inbound defaults false) — without this explicit raw-body
@@ -184,8 +181,7 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	// field silently dropped by Go's default JSON decode, and the PUT would
 	// report 200 with no change applied instead of the loud 400 this
 	// codebase's own create-path convention expects (same
-	// sandbox_profile/delegation_policy raw-body-sniff precedent above;
-	// ADR-091 spec R-2/FR-003/SC-014).
+	// sandbox_profile/delegation_policy raw-body-sniff precedent above).
 	if bytes.Contains(uf.rawBody, []byte(`"shell_policy"`)) {
 		jsonErr(uf.w, http.StatusBadRequest,
 			`shell_policy is retired — the built-in shell deny list and its per-agent override are gone; use the Ask/Auto/God Mode selector instead (ADR-091)`)

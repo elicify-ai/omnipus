@@ -524,12 +524,8 @@ type OmnipusSandboxConfig struct {
 	SSRF OmnipusSSRFConfig `json:"ssrf,omitempty"`
 
 	// GodMode is the runtime global "bypass-permissions" switch (O14),
-	// renamed "God Mode" and its posture clarified by ADR-091 D1/D6 (this
-	// comment corrects the pre-ADR-091 wording, which described a "shell
-	// guard / deny-patterns off" mechanism that no longer exists — the
-	// built-in deny-pattern list is deleted outright by D2, not merely
-	// bypassed by God Mode). It is DISTINCT from the --allow-god-mode boot
-	// flag: the boot flag (and the nogodmode build tag) gate AVAILABILITY;
+	// renamed "God Mode" (ADR-091 D1/D6). It is DISTINCT from the
+	// --allow-god-mode boot flag: the boot flag (and the nogodmode build tag) gate AVAILABILITY;
 	// this field is the live ON/OFF state, and — per D1's storage note —
 	// God Mode is one of the three named modes (Ask/Auto/God Mode), sharing
 	// the same underlying "bash" tool-policy value ("allow") as Auto,

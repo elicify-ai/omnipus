@@ -280,26 +280,18 @@ func (nal *newAgentLoop) initializeAudit() (*AgentLoop, bool, error) {
 
 // initializeSecurity builds policy enforcement, sandboxing, prompt protection, and the exec proxy.
 func (nal *newAgentLoop) initializeSecurity() {
-	// ADR-091 D2/D5/removal items 3-4: the opt-in exec allowlist
-	// (config.ExecConfig.AllowedBinaries, the REST surface it backed at
-	// /api/v1/security/exec-allowlist) and ExecConfig.Approval are both
-	// retired outright — folded into D3's unified command-rule engine
-	// (pkg/shellrule) and the D1 Ask/Auto/God Mode selector respectively.
-	// There is no longer a config source for either field, so the
-	// evaluator below always constructs with an empty allowlist and the
-	// "allow" default policy (the "no opt-in" branch every agent already
-	// took before this ADR, now the only branch).
+	// There is no config source for an exec binary allowlist any more, so
+	// the evaluator below always constructs with an empty allowlist and the
+	// "allow" default policy.
 	//
-	// *policy.Evaluator/PolicyAuditor themselves are NOT deleted here: the
-	// bash tool's ExecPolicyAuditor interface and ExecToolDeps.PolicyAuditor
-	// field (pkg/tools/shell.go, ADR-091 lane L4, out of this lane's scope)
-	// still consume policy.Decision/PolicyAuditor as of this commit — this
-	// lane cannot delete pkg/policy/evaluator.go or auditor.go without
-	// breaking a concurrently-developed, unowned file (reported, not
-	// stubbed, per this lane's own instructions). pkg/policy/saturation.go
-	// is unrelated to ADR-091 entirely (consumed by
-	// pkg/gateway/gateway_boot.go for the approval-saturation cap) and was
-	// never a candidate for deletion.
+	// policy.Evaluator/PolicyAuditor are still constructed here because
+	// pkg/tools/shell.go's ExecPolicyAuditor interface and
+	// ExecToolDeps.PolicyAuditor field (ADR-091 lane L4, out of this lane's
+	// scope) still consume policy.Decision/PolicyAuditor as of this commit —
+	// deleting pkg/policy/evaluator.go or auditor.go here would break that
+	// concurrently-developed, unowned file. pkg/policy/saturation.go is
+	// unrelated to ADR-091 (consumed by pkg/gateway/gateway_boot.go for the
+	// approval-saturation cap) and was never a candidate for deletion.
 	secCfg := &policy.SecurityConfig{
 		DefaultPolicy: policy.PolicyAllow,
 	}

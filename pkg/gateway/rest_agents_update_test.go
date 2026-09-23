@@ -553,13 +553,11 @@ func TestUpdateAgent_Subagent3p_RejectsDelegationPolicy(t *testing.T) {
 
 // TestUpdateAgent_Subagent3p_ForbiddenFields rejects the CLI-owned fields on PUT.
 // delegation_policy and shell_policy are both covered separately by their own
-// unconditional raw-body sniffs in rest_agents_update.go's validateRequest —
-// ADR-037 retired delegation_policy from the wire entirely, and ADR-091
-// D2/D5 retired shell_policy the same way (the built-in shell deny-pattern
-// list is deleted outright, not merely CLI-unsupported), so neither is part
-// of this per-variant forbidden-field matrix any more; both 400 unconditionally
-// for every agent type via their sniff, not via this executor-specific gate
-// (see TestUpdateAgent_Subagent3p_RejectsDelegationPolicy and
+// unconditional raw-body sniffs in rest_agents_update.go's validateRequest,
+// so neither is part of this per-variant forbidden-field matrix any more;
+// both 400 unconditionally for every agent type via their sniff, not via
+// this executor-specific gate (see
+// TestUpdateAgent_Subagent3p_RejectsDelegationPolicy and
 // TestUpdateAgent_RejectsRetiredShellPolicyField). The remaining 4 stay
 // forbidden here because the external CLI manages its own isolation/tools/skills (O13).
 func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
@@ -1260,8 +1258,7 @@ func TestUpdateAgent_NoSandboxProfile_StillSucceeds(t *testing.T) {
 }
 
 // TestUpdateAgent_RejectsRetiredShellPolicyField pins ADR-091 removal item
-// R-2/SC-014: a stale client still sending shell_policy after the built-in
-// shell deny-pattern list is deleted outright (D2/D5) gets a hard 400 from
+// R-2/SC-014: a stale client still sending shell_policy gets a hard 400 from
 // rest_agents_update.go's raw-body sniff — not a silent 200 with the field
 // dropped. decodeAndValidate's fast path (validate_inbound defaults false)
 // is a plain json.Decode with no DisallowUnknownFields, so without this

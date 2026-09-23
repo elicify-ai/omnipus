@@ -12,10 +12,7 @@ import (
 
 // TestCheckExecEgress_WarningMatrix pins both outcomes of every input the
 // check consults: the disabled-tool short circuit, the proxy-off warning
-// trigger, and the fully healthy configuration. The SEC-05 binary-allowlist
-// warning is retired alongside the allowlist itself (ADR-091 D2/D5 — folded
-// into the D3 rule engine and the Ask/Auto/God Mode selector), so
-// CheckExecEgress now has exactly one warning trigger, not two.
+// trigger, and the fully healthy configuration.
 func TestCheckExecEgress_WarningMatrix(t *testing.T) {
 	tests := []struct {
 		name      string

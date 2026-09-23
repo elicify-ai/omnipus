@@ -16,14 +16,11 @@ import (
 // FirstToken (pkg/policy/evaluator.go ~line 111) had ZERO direct test
 // references anywhere in the codebase before this addition — confirmed by
 // grep. It is not purely cosmetic: within evaluator.go it only feeds a
-// human-readable denial message. (Its other historical consumer,
-// pkg/security/execapproval.go's matchAllowlistPattern, is deleted outright
-// by ADR-091 D5 — zero production callers, retired dead code — so this
-// comment no longer names it as a live consumer.) These are pure
-// characterization tests of FirstToken's EXISTING behavior — no behavior
-// change. Gap identified in the whole-codebase Backend-High test-gap review
-// (2026-07-07); there is no wave-spec BDD scenario for FirstToken in
-// isolation, so these are GAP tests, not spec-traced ones.
+// human-readable denial message. These are pure characterization tests of
+// FirstToken's EXISTING behavior — no behavior change. Gap identified in the
+// whole-codebase Backend-High test-gap review (2026-07-07); there is no
+// wave-spec BDD scenario for FirstToken in isolation, so these are GAP
+// tests, not spec-traced ones.
 
 // TestFirstToken_NormalMultiWordInput verifies the common case: the first
 // space-separated token of a multi-word command is returned.

@@ -71,12 +71,6 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 			continue
 		}
 
-		// ADR-091 D2/D5: the built-in shell deny-pattern list and its
-		// per-agent/global opt-in (config.AgentShellPolicy,
-		// SandboxConfig.ShellDenyPatterns) are retired outright — replaced
-		// by the D1 Ask/Auto/God Mode mode selector and D3's unified
-		// command-rule engine (pkg/shellrule). This site no longer
-		// constructs or passes GlobalShellDenyPatterns/AgentShellPolicy.
 		deps := tools.ExecToolDeps{
 			GodMode:         godMode,
 			AuditFailClosed: resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),

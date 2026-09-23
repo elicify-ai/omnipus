@@ -933,15 +933,6 @@ func (c *OmnipusConfig) ToStandardConfig() *config.Config {
 		}
 	}
 
-	// ADR-091 D2/D5 (removal item R-1d): the legacy OpenClaw exec
-	// deny-pattern config (c.Tools.Exec.EnableDenyPatterns/
-	// CustomDenyPatterns) used to route onto config.Sandbox.ShellDenyPatterns
-	// and per-agent AgentConfig.ShellPolicy — both target fields are gone,
-	// deleted outright along with the built-in shell deny-pattern list they
-	// backed (replaced by the D1 Ask/Auto/God Mode selector and D3's rule
-	// engine). Greenfield — no replacement mapping; a legacy OpenClaw config
-	// with deny patterns configured simply does not carry them forward.
-
 	return cfg
 }
 
@@ -1054,12 +1045,5 @@ func (c ToolsConfig) ToStandardTools() config.ToolsConfig {
 		Cron: config.CronToolsConfig{
 			ExecTimeoutMinutes: c.Cron.ExecTimeoutMinutes,
 		},
-		// Exec deny-pattern fields (c.Tools.Exec.EnableDenyPatterns/
-		// CustomDenyPatterns) are intentionally NOT mapped anywhere
-		// (ADR-091 D2/D5, removal item R-1d): the fields they used to route
-		// onto (config.Sandbox.ShellDenyPatterns, per-agent
-		// AgentConfig.ShellPolicy) are both deleted outright, along with the
-		// built-in shell deny-pattern list they backed. Greenfield — no
-		// replacement mapping.
 	}
 }

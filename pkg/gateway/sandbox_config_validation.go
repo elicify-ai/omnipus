@@ -126,10 +126,3 @@ func validateSSRFAllowInternal(entries []string) (warnings []string, err error) 
 	}
 	return warnings, nil
 }
-
-// validateShellDenyPatterns (and the global security.shell_deny_patterns
-// list / per-agent shell_policy.custom_deny_patterns it validated) is
-// RETIRED (ADR-091 D2/D5, removal item 1) — the built-in shell deny-pattern
-// list is deleted outright, replaced by the D1 Ask/Auto/God Mode selector
-// and D3's unified command-rule engine (pkg/shellrule, config.SandboxConfig.
-// CommandRules). There is no longer a caller for this function.

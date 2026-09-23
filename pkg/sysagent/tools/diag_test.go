@@ -51,9 +51,7 @@ type doctorSetup struct {
 }
 
 // healthyDoctorSetup is an install with nothing to report: exec proxy on,
-// both sensitive files 0600, audit directory present. The exec-allowlist
-// check itself is retired (ADR-091 D2/D5) — there is no allowedBinaries
-// field left to set here.
+// both sensitive files 0600, audit directory present.
 func healthyDoctorSetup() doctorSetup {
 	return doctorSetup{
 		enableProxy: true,
@@ -150,9 +148,7 @@ func TestDoctorRun_HealthyInstallReportsNothing(t *testing.T) {
 // TestDoctorRun_AllChecksFailTogether constructs the worst install — proxy
 // off, both sensitive files world-readable, audit directory missing — and
 // asserts every one of the four findings appears with its severity and a
-// recommendation, plus the aggregate counters. (The exec-allowlist/SEC-05
-// finding is retired alongside the allowlist itself, ADR-091 D2/D5 — down
-// from five findings to four.)
+// recommendation, plus the aggregate counters.
 func TestDoctorRun_AllChecksFailTogether(t *testing.T) {
 	s := doctorSetup{enableProxy: false, credMode: 0o644, configMode: 0o644, auditDir: false}
 	rep := runDoctor(t, newDoctorDeps(t, s))

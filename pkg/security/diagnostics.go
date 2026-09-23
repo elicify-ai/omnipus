@@ -34,10 +34,5 @@ func CheckExecEgress(cfg DiagnosticConfig) []DiagnosticWarning {
 		})
 	}
 
-	// SEC-05's binary-allowlist warning is retired alongside the allowlist
-	// itself (ADR-091 D2/D5 — folded into the D3 rule engine and the
-	// Ask/Auto/God Mode selector; there is no longer a
-	// security.policy.exec.allowed_binaries key to recommend configuring).
-
 	return warnings
 }
