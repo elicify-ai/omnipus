@@ -2,7 +2,7 @@
 
 import { syncChatForeground, useChatStore } from './chat/store'
 
-import { registerChatSetReplaying, registerChatResetForReplay } from '@/store/session'
+import { registerChatSetReplaying, registerChatResetForReplay, registerGetSessionCursor } from '@/store/session'
 
 import { registerSyncChatForeground } from '@/store/session'
 
@@ -12,6 +12,12 @@ registerChatSetReplaying((value) => useChatStore.getState().setReplaying(value))
 registerChatResetForReplay((sessionId) => useChatStore.getState().resetSessionForReplay(sessionId))
 
 registerSyncChatForeground(syncChatForeground)
+
+// #823 catch-up redesign (BE-DESIGN.md §6.1) — lets session.ts's
+// attachToSession read a bucket's cursor without importing the chat store
+// directly (same circular-import-break pattern as the three registrations
+// above).
+registerGetSessionCursor((sessionId) => useChatStore.getState().sessionsById[sessionId]?.cursor ?? null)
 
 // ── Split modules (2026-09-16) ──────────────────────────────────────────────────
 //

@@ -858,7 +858,23 @@ describe('attachToSession — no bucket wipe on failed send (Wave-1 Bug 2 regres
     expect(result).toBe(false)
   })
 
-  it('DOES reset the chat bucket once send is confirmed successful', () => {
+  // PROVENANCE (#823 catch-up redesign, BE-DESIGN.md §6.1, founder decision
+  // Q3 — REPLACE, guarantee kept, test rewritten never weakened): this test
+  // used to assert the OPPOSITE — that a successful attach wiped the chat
+  // bucket (`resetChatBucketForReplay`) so the gateway's full-transcript
+  // replay could rebuild it from scratch. §6.1 replaces that mechanism: the
+  // bucket now carries its own numbered cursor across a reattach, and
+  // `attach_session` sends `{since_seq, boot_id}` so the gateway can answer
+  // with an INCREMENTAL catch-up instead of a full replay — wiping the
+  // bucket on every reattach would defeat that (it would erase the very
+  // history the incremental catch-up is trying to avoid re-sending). Wiping
+  // now happens ONLY on an explicit `session_snapshot` frame (see
+  // src/store/chat/slices/catchup-frames.ts), never as a side effect of
+  // attaching. The underlying user-visible guarantee — a reattach always
+  // ends with a correct, complete transcript on screen — is unchanged; only
+  // the mechanism moved from "wipe + full replay" to "carry a cursor +
+  // incremental or snapshot catch-up".
+  it('does NOT reset the chat bucket on a successful send, and sends the cursor fields', () => {
     const resetSpy = vi.fn()
     registerChatResetForReplay(resetSpy)
 
@@ -868,9 +884,13 @@ describe('attachToSession — no bucket wipe on failed send (Wave-1 Bug 2 regres
 
     const result = useSessionStore.getState().attachToSession('sess-ok', 'chat', 'Title', 'agent-1')
 
-    expect(resetSpy).toHaveBeenCalledWith('sess-ok')
+    expect(resetSpy).not.toHaveBeenCalled()
     expect(useSessionStore.getState().activeSessionId).toBe('sess-ok')
     expect(result).toBe(true)
+    // No local cursor exists yet for a fresh test session — the frame is
+    // sent with no since_seq/boot_id (first-ever attach shape), never a
+    // stale/undefined pair.
+    expect(okConnection.send).toHaveBeenCalledWith({ type: 'attach_session', session_id: 'sess-ok' })
   })
 })
 
