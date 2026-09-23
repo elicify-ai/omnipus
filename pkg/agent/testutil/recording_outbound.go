@@ -96,13 +96,83 @@ func (r *OutboundRecorder) AssertReceived(sessionID, kind string) {
 	r.t.Fatalf("no outbound control received for session %q with kind %q", sessionID, kind)
 }
 
+// BoundaryScope pins ONE expected audience decision at a boundary: the
+// session the boundary ran for, and the audience that decision resolved to.
+//
+// Why this type exists (ADR-091 fix lane RX-TESTS): the unscoped
+// AssertBoundaryInvoked below only ever proved "SOMETHING reached this
+// boundary" — true of a correctly contained system AND of a broken one,
+// because a broken gate still RUNS the boundary, it just answers the wrong
+// audience.
+//
+// Measured, not assumed. Mutating the production resolver
+// (pkg/agent/steer_audience.go::SteerAudienceResolver.Audience) so
+// ClassSteered resolves AudienceNone instead of AudienceSteeringSession —
+// every steered child silently losing the audience the ADR assigns it — left
+// tests/adr091::TestE2E_ThreeLevelDelegation_NoLeak GREEN, because nothing
+// leaks to the user under that mutation either, so AssertNothingTo cannot
+// see it. With the scope below the same mutation fails the test.
+//
+// (For the record: the neighbouring mutation "ClassSteered resolves
+// AudienceUser" — full containment loss — IS caught today, by
+// AssertNothingTo. Scoping is about the decisions that never reach the bus.)
+type BoundaryScope struct {
+	SessionID string
+	Audience  steer.Audience
+}
+
+// ForSession builds the BoundaryScope "this boundary ran for sessionID and
+// resolved audience".
+func ForSession(sessionID string, audience steer.Audience) BoundaryScope {
+	return BoundaryScope{SessionID: sessionID, Audience: audience}
+}
+
 // AssertBoundaryInvoked proves the boundary ran before its audience decision.
-func (r *OutboundRecorder) AssertBoundaryInvoked(boundary steer.Boundary) {
+//
+// Pass one or more BoundaryScope values to make the assertion mean something:
+// each scope requires (a) at least one recorded invocation of boundary for
+// that session which resolved EXACTLY the named audience, and (b) NO
+// invocation of boundary for that session which resolved any other audience.
+// Half (b) is the half that catches a broken containment gate: a boundary
+// that still runs but hands the decision to the wrong audience.
+//
+// Called with no scope it degrades to the original "was this boundary ever
+// reached at all?" check. That form is only sound when the caller pairs it
+// with a real containment assertion of its own (pkg/agent's boundary
+// containment pairs drain the outbound bus either side of it); on its own it
+// is vacuous, and new call sites should always pass a scope.
+func (r *OutboundRecorder) AssertBoundaryInvoked(boundary steer.Boundary, scopes ...BoundaryScope) {
 	r.t.Helper()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(r.boundaries[boundary]) == 0 {
+	invocations := r.boundaries[boundary]
+	if len(invocations) == 0 {
 		r.t.Fatalf("boundary %q was not invoked", boundary)
+		return
+	}
+	for _, scope := range scopes {
+		matched := 0
+		var wrong []steer.Audience
+		for _, invocation := range invocations {
+			switch {
+			case invocation.SessionID != scope.SessionID:
+			case invocation.Audience == scope.Audience:
+				matched++
+			default:
+				wrong = append(wrong, invocation.Audience)
+			}
+		}
+		if len(wrong) > 0 {
+			r.t.Fatalf("boundary %q resolved audience %v for session %q, want %q on every invocation — "+
+				"a boundary that still runs but answers the WRONG audience is the containment regression "+
+				"ADR-091 exists to prevent (recorded: %+v)",
+				boundary, wrong, scope.SessionID, scope.Audience, invocations)
+			continue
+		}
+		if matched == 0 {
+			r.t.Fatalf("boundary %q was never invoked for session %q with audience %q (recorded: %+v)",
+				boundary, scope.SessionID, scope.Audience, invocations)
+		}
 	}
 }
 
