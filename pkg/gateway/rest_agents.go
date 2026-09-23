@@ -657,7 +657,10 @@ func buildAgentDefaults(cfg *config.Config) gen.Agent {
 }
 
 func applyAgentEditableFields(agent *gen.Agent, cfg config.AgentConfig) {
-	descriptors := agentmutation.FieldDescriptors(cfg)
+	// The operator view: operator-only safety switches (ADR-092
+	// auto_approve_disabled) are editable here, unlike in the sysagent
+	// read tool's agent view.
+	descriptors := agentmutation.OperatorFieldDescriptors(cfg)
 	wire := make([]gen.AgentFieldDescriptor, 0, len(descriptors))
 	for _, descriptor := range descriptors {
 		row := gen.AgentFieldDescriptor{Editable: descriptor.Editable, Name: descriptor.Name}

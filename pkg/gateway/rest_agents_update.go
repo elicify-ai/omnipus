@@ -86,6 +86,7 @@ func suppliedRESTAgentFields(req *gen.AgentUpdateRequest) []string {
 	add(req.Default != nil, "default")
 	add(req.Voice != nil, "voice")
 	add(req.Executor != nil, "executor")
+	add(req.AutoApproveDisabled != nil, "auto_approve_disabled")
 	return fields
 }
 
@@ -368,7 +369,7 @@ func (uf *restAPIUpdateAgentFlow) validateTarget() bool {
 		return true
 	}
 
-	if fieldErr := agentmutation.ValidateFields(uf.foundAgent, suppliedRESTAgentFields(&uf.ru.req)); fieldErr != nil {
+	if fieldErr := agentmutation.ValidateOperatorFields(uf.foundAgent, suppliedRESTAgentFields(&uf.ru.req)); fieldErr != nil {
 		var classified *agentmutation.FieldError
 		if errors.As(fieldErr, &classified) && classified.Code == agentmutation.ProtectedField {
 			jsonErr(uf.w, http.StatusForbidden, classified.Error())

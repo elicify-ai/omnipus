@@ -18503,20 +18503,7 @@ type SandboxStatus struct {
 	// AuditOnly True when the sandbox is in permissive (audit-only) mode — policy violations are logged but not blocked.
 	AuditOnly *bool `json:"audit_only,omitempty"`
 
-	// AutoApproveEffective This gateway's current GLOBAL default for Auto-approve (mirrors SandboxConfig.auto_approve; reported here too so the chat-header badge doesn't need a second round-trip to Settings). This is the gateway-wide default, not a per-agent or per-chat resolution — this endpoint carries neither an agent nor a session, so it cannot see a per-agent `auto_approve_disabled` override or a chat's own session_mode_update modifier. The SPA composes the actual badge for one chat from three inputs: this field (the baseline), the active agent's `auto_approve_disabled` (from GET /agents/{id}), and the session's own resolved value once a session_mode_updated frame arrives (asyncapi.yaml).
-	// What the badge renders, keyed off this field and kernel_sandbox_active together (before any per-agent/per-chat override is folded in):
-	//   - auto_approve_effective=false → "Ask": every tool currently
-	//     resolved to "ask" always prompts, regardless of the kernel
-	//     sandbox. kernel_sandbox_active is irrelevant to this reading.
-	//   - auto_approve_effective=true, kernel_sandbox_active=true →
-	//     "Auto": an "ask" tool call the kernel sandbox can positively
-	//     confine auto-approves; anything it cannot still prompts.
-	//   - auto_approve_effective=true, kernel_sandbox_active=false →
-	//     "Auto → Ask" with a tooltip: Auto is configured on, but with no
-	//     kernel sandbox to check a command against, the pre-flight can
-	//     never positively clear anything, so every "ask" tool call
-	//     prompts exactly as if Auto were off — a real, user-visible
-	//     consequence of the platform/degradation state, not a bug.
+	// AutoApproveEffective The gateway-wide Auto-approve DEFAULT: exactly the live SandboxConfig.auto_approve value, reported here so the chat-header badge needs no second request. It is NOT combined with kernel_sandbox_active and NOT resolved for any agent or chat (this endpoint has no agent or session context). Auto actually takes effect for a call only when all of these hold: the tool resolves to "ask"; the resolved Auto-approve for that chat is on (this default, turned off by the agent's auto_approve_disabled, then overridden either way by the chat's own modifier — SessionModeUpdatedFrame / SessionStateFrame.auto_approve_modifier); kernel_sandbox_active is true; and god_mode_active is false. Badge reading, before the per-agent and per-chat layers are folded in: god_mode_active=true shows "God Mode" whatever the other two fields say; else auto_approve_effective=false shows "Ask"; else kernel_sandbox_active=true shows "Auto"; else "Auto → Ask" (Auto is on but with no kernel sandbox nothing can be positively cleared, so every "ask" call prompts). Always present from this gateway.
 	AutoApproveEffective *bool `json:"auto_approve_effective,omitempty"`
 
 	// Available Whether the backend is available on this platform.
@@ -18537,13 +18524,16 @@ type SandboxStatus struct {
 	// FilesystemModel Which ADR-062 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
 	FilesystemModel *SandboxStatusFilesystemModel `json:"filesystem_model,omitempty"`
 
+	// GodModeActive Whether the global God Mode override is ACTIVE in this process right now — the same value as GodModeStatus.enabled (the persisted sandbox.god_mode switch AND availability in this boot). When true every agent's tool policy is floored at "allow": no approval prompts, no per-turn kernel sandbox for spawned children, network egress open; operator deny command rules, audit logging, the prompt-injection guard and rate limiting stay on. The chat-header badge shows God Mode whenever this is true, whatever auto_approve_effective and kernel_sandbox_active say. Always present from this gateway.
+	GodModeActive *bool `json:"god_mode_active,omitempty"`
+
 	// IssueRef Set when a known kernel incompatibility is flagged. Do NOT hard-code the literal issue number in the SPA.
 	IssueRef *string `json:"issue_ref,omitempty"`
 
 	// KernelLevel Whether the backend can enforce at the kernel level. True for Landlock on Linux 5.13+. False for the fallback (app-level) backend.
 	KernelLevel bool `json:"kernel_level"`
 
-	// KernelSandboxActive ADR-092's platform predicate — whether a kernel sandbox is actually confining processes right now, the fact Auto-approve needs to decide anything: Linux — Landlock applied in enforce mode (`mode: enforce` above), not degraded. macOS — the Seatbelt backend's own active/enabled state, read directly rather than derived from `policy_applied` above, which reports the gateway's OWN confinement and is documented false on macOS by design (Seatbelt confines children only). Windows — always false, no kernel sandbox backend exists. Distinct from `policy_applied`/`kernel_level` above (which describe this process's own sandboxing posture, not specifically whether Auto's pre-flight has anything to check a command against).
+	// KernelSandboxActive ADR-092's platform predicate: whether a kernel sandbox is confining the processes agents spawn right now, the fact Auto-approve needs before it can clear anything. This is the exact value the agent loop reads when it decides Auto vs Ask for a shell call (sandbox.TurnPolicyBaseInstalled: the gateway registers a per-turn kernel policy base only once a kernel backend is enforcing for spawned children). Linux: true when Landlock was applied in enforce mode and not degraded (false in permissive mode). macOS: true when the Seatbelt boot profile was installed, so every spawned child is wrapped (policy_applied above reports the gateway's OWN confinement and is documented false on macOS by design). Windows, sandbox mode off, and the app-level fallback backend: always false. God Mode does not change this value, but under God Mode agents' children run without the per-turn kernel policy; see god_mode_active. Always present from this gateway.
 	KernelSandboxActive *bool `json:"kernel_sandbox_active,omitempty"`
 
 	// LandlockEnforced Whether Landlock file-system access rules are enforced.
@@ -21439,7 +21429,7 @@ type ToolApprovalActionRequest struct {
 
 	// Scope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
 	// Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — approving one of those records the path-widening or network-widening grant the frame described, not an exact/prefix command grant; `scope` is ignored for those approvals.
-	// When the pending approval covers a chained command (multiple unmatched segments in ToolApprovalRequiredFrame.segments), this one scope choice applies uniformly to every currently-unmatched segment resolved by this action (ADR-092 D4: "one rule per segment" is a server-side recording detail, not a per-segment client choice).
+	// When the pending approval covers a chained command (more than one entry in ToolApprovalRequiredFrame.segments), "prefix" is not available: the server records an exact grant for the whole chain and reports scope "exact" in ToolApprovalResponse. The server never records a prefix grant it did not offer (see CommandSegmentInfo.prefix_available).
 	Scope *ToolApprovalActionRequestScope `json:"scope,omitempty"`
 }
 
@@ -21448,7 +21438,7 @@ type ToolApprovalActionRequestAction string
 
 // ToolApprovalActionRequestScope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
 // Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — approving one of those records the path-widening or network-widening grant the frame described, not an exact/prefix command grant; `scope` is ignored for those approvals.
-// When the pending approval covers a chained command (multiple unmatched segments in ToolApprovalRequiredFrame.segments), this one scope choice applies uniformly to every currently-unmatched segment resolved by this action (ADR-092 D4: "one rule per segment" is a server-side recording detail, not a per-segment client choice).
+// When the pending approval covers a chained command (more than one entry in ToolApprovalRequiredFrame.segments), "prefix" is not available: the server records an exact grant for the whole chain and reports scope "exact" in ToolApprovalResponse. The server never records a prefix grant it did not offer (see CommandSegmentInfo.prefix_available).
 type ToolApprovalActionRequestScope string
 
 // ToolApprovalResponse Response from POST /api/v1/tool-approvals/{approval_id}. Confirms that the approval action was processed.
@@ -21462,7 +21452,7 @@ type ToolApprovalResponse struct {
 	// GrantRecorded Present only when action is "allow". True when the grant was stored — a session command grant (scope: exact/prefix), or the pre-flight escalation's own path-widening/network-widening grant when this approval resolved a D7/D8 escalation instead of an ordinary tool-approval-required frame. False means this call was approved once, but the next identical call (or the next command needing the same widening) will ask again — the grant did not stick (missing session, agent, or tool identity on the approval).
 	GrantRecorded *bool `json:"grant_recorded,omitempty"`
 
-	// Scope Echoes the request's `scope` (ADR-092 D4/FR-024). Present only when action is "allow" AND the resolved approval was a D3/D4 command grant — omitted for a D7/D8 path-widening or network-widening grant, and omitted when action is not "allow".
+	// Scope The scope actually RECORDED (ADR-092 D4/FR-024), which is not always the requested one: a "prefix" request is recorded as "exact" whenever no safe prefix exists (chained command, bare program, wrapper, unresolvable program, Windows, or any tool other than bash). The SPA must show this value, not its own request. Present only when action is "allow" and the grant was recorded (grant_recorded true); omitted otherwise.
 	Scope *ToolApprovalResponseScope `json:"scope,omitempty"`
 
 	// Status Result status. Always "ok" when the action was accepted.
@@ -21472,7 +21462,7 @@ type ToolApprovalResponse struct {
 // ToolApprovalResponseAction The action that was applied. Echoes the request action (ADR-092 D4), including "allow" (approve-and-remember, renamed from "always").
 type ToolApprovalResponseAction string
 
-// ToolApprovalResponseScope Echoes the request's `scope` (ADR-092 D4/FR-024). Present only when action is "allow" AND the resolved approval was a D3/D4 command grant — omitted for a D7/D8 path-widening or network-widening grant, and omitted when action is not "allow".
+// ToolApprovalResponseScope The scope actually RECORDED (ADR-092 D4/FR-024), which is not always the requested one: a "prefix" request is recorded as "exact" whenever no safe prefix exists (chained command, bare program, wrapper, unresolvable program, Windows, or any tool other than bash). The SPA must show this value, not its own request. Present only when action is "allow" and the grant was recorded (grant_recorded true); omitted otherwise.
 type ToolApprovalResponseScope string
 
 // ToolApprovalResponseStatus Result status. Always "ok" when the action was accepted.

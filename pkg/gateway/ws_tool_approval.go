@@ -122,6 +122,7 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 	if ws := h.approvalWorkspaceID(entry.SessionID); ws != "" {
 		frame.WorkspaceId = &ws
 	}
+	frame.Segments = h.bashApprovalSegments(entry)
 	raw, err := json.Marshal(frame)
 	if err != nil {
 		slog.Error("ws: marshal tool_approval_required", "error", err)
@@ -280,6 +281,18 @@ func (h *WSHandler) emitSessionState(wc *wsConn, sessionID string) {
 				AgentId:   agentID,
 				StartedAt: startedAt.UTC().Format(time.RFC3339),
 			}
+		}
+	}
+
+	// ADR-092 (review finding D): carry this session's per-chat Auto-approve
+	// modifier so a reloading SPA re-learns it instead of falling back to
+	// the agent x global value while the server still applies the chat's
+	// own. Absent when no session is bound yet or no modifier is set — the
+	// store is in memory, so after a gateway restart it is absent too and
+	// the UI follows the server.
+	if sessionID != "" && h.agentLoop != nil {
+		if v, ok := h.agentLoop.SessionModes().Get(sessionID); ok {
+			frame.AutoApproveModifier = &v
 		}
 	}
 
