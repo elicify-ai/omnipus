@@ -603,7 +603,21 @@ type OmnipusSandboxConfig struct {
 	// whole sandbox.* subtree by ancestor closure
 	// (pkg/sysagent/tools/config.go::blockedConfigKeys), so an agent cannot
 	// change this field.
-	AutoApprove bool `json:"auto_approve,omitempty"`
+	//
+	// NO `omitempty` (security fix, 2026-09-23 review): this field's
+	// default is TRUE, so `omitempty` silently drops an operator's explicit
+	// `false` from the marshalled JSON — encoding/json omits a field
+	// exactly when it holds its type's zero value, and false IS bool's zero
+	// value. SaveConfig would therefore write a config.json with NO
+	// "auto_approve" key at all after an operator turned Auto off, and the
+	// next load starts from DefaultConfig()'s seeded true (see
+	// loadConfig's own unmarshal-onto-defaults pattern, migration.go) and
+	// never sees anything in the JSON to overwrite it with — silently
+	// turning Auto back ON, the opposite of Auto's own "switching off
+	// globally stays off" requirement. Mirrors the identical, already-fixed
+	// trap on AuditLog above (json:"audit_log", no omitempty) — same
+	// default-true-boolean shape, same fix.
+	AutoApprove bool `json:"auto_approve"`
 
 	// CommandRules is the ADR-092 D3 operator shell command rule list:
 	// {action: allow|ask|deny, binary, arg_prefix?}, evaluated for every
