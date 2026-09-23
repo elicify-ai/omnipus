@@ -37,6 +37,7 @@ import {
   requireApiKey,
   startFreshChatWithJim,
 } from './fixtures/conformance-helpers'
+import { planWindowEndVerdict, type PlanPollSample } from './fixtures/plan-window-end'
 import { blockedMarker } from './fixtures/stub-external-cli'
 
 // ── Conformance_t2_PlanLifecycleE2E ──────────────────────────────────────────
@@ -440,7 +441,10 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
 }) => {
   requireApiKey()
 
-  test.setTimeout(600_000)
+  // 540s observation window + up to 660s for a judge round still in
+  // flight when it closes (see the no-wedge check at the end) + setup and
+  // transcript reads.
+  test.setTimeout(1_320_000)
   await startFreshChatWithJim(page)
 
   // Setup: per-test Main agent (chat-target owner + member assignee) in its
@@ -579,14 +583,22 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
   let reachedHoldOnce = false
   let finalPlanState = ''
   let finalPlanPhase = ''
+  // Every poll, kept for the no-wedge verdict at the end.
+  const samples: PlanPollSample[] = []
+  type PlanPoll = { state: string; plan_phase?: string; judge_rounds?: number; supervision?: { session_id?: string } }
+  const recordPoll = (body: PlanPoll) => {
+    samples.push({
+      atMs: Date.now(),
+      state: body.state,
+      phase: body.plan_phase ?? '',
+      judgeRounds: body.judge_rounds ?? 0,
+    })
+  }
   const observeDeadline = Date.now() + observeWindowMs
   while (Date.now() < observeDeadline) {
-    const poll = await apiFetch<{ state: string; plan_phase?: string; supervision?: { session_id?: string } }>(
-      page,
-      'GET',
-      `/api/v1/plans/${planId}`,
-    )
+    const poll = await apiFetch<PlanPoll>(page, 'GET', `/api/v1/plans/${planId}`)
     if (!poll.ok) throw new Error(`t3b: GET /plans/{id} poll (observe) failed ${poll.status}: ${poll.raw}`)
+    recordPoll(poll.body)
     finalPlanState = poll.body.state
     finalPlanPhase = poll.body.plan_phase ?? ''
     if (finalPlanPhase === HOLD_PHASE) reachedHoldOnce = true
@@ -678,11 +690,41 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
     `t3b: no committed targeted_retry named m2's real id (${memberIds.m2}) as retried_member_id. ${diagnostic}`,
   ).toBe(true)
 
-  // No-wedge sanity: the plan must not still be stuck neither terminal nor
-  // held after the full observation window.
+  // No-wedge check: the plan must reach a documented terminus (done/failed)
+  // or the supervision hold, and must never sit in one phase longer than the
+  // product allows.
+  //
+  // This used to be a single poll at the instant the window closed that
+  // accepted only done/failed/awaiting_supervision. This plan can never be
+  // met (m2 fails every run), so it cycles judge -> hold -> correction until
+  // plan_judge_max_rounds runs out, and how many cycles fit in 540s is model
+  // latency. A close that landed mid-judge-round therefore failed a plan that
+  // was moving normally: release/v0.1.1 CI run 35823380746 (job
+  // 107060080905) closed 61s into round 4's judge turn, after rounds of
+  // 18/40/64s and a 4.5-minute supervision turn — and passed on retry. Every
+  // recent run on that branch spent the full window, so each one was a coin
+  // toss on which phase the last poll landed in.
+  //
+  // Now, when the window closes mid-round, the check keeps polling until that
+  // round ends, bounded by the product's own round timeout
+  // (fixtures/plan-window-end.ts: planJudgeRoundTimeout + 2 ticks). A plan
+  // still in one phase past that bound is a wedge and fails here.
+  let verdict = planWindowEndVerdict(samples, Date.now())
+  while (verdict.kind === 'in_round' && Date.now() <= verdict.deadlineMs) {
+    await page.waitForTimeout(4_000)
+    const poll = await apiFetch<PlanPoll>(page, 'GET', `/api/v1/plans/${planId}`)
+    if (!poll.ok) throw new Error(`t3b: GET /plans/{id} poll (round end) failed ${poll.status}: ${poll.raw}`)
+    recordPoll(poll.body)
+    verdict = planWindowEndVerdict(samples, Date.now())
+  }
+  // The loop can exit on the clock with the last verdict still in_round;
+  // re-evaluate so a round that overran its bound is reported as a wedge.
+  if (verdict.kind === 'in_round') verdict = planWindowEndVerdict(samples, Date.now())
+  const lastSample = samples[samples.length - 1]
   expect(
-    finalPlanState === 'done' || finalPlanState === 'failed' || finalPlanPhase === HOLD_PHASE,
-    `t3b: plan ${planId} must be at a documented terminus or still legitimately held after the observation ` +
-      `window — observed state="${finalPlanState}" phase="${finalPlanPhase}".`,
+    verdict.kind === 'terminus' || verdict.kind === 'held',
+    `t3b: plan ${planId} must reach a documented terminus or the supervision hold, and never sit in one phase ` +
+      `longer than the product allows — verdict ${JSON.stringify(verdict)}; last poll ` +
+      `state="${lastSample?.state}" phase="${lastSample?.phase}" judge_rounds=${lastSample?.judgeRounds}.`,
   ).toBe(true)
 })
