@@ -94,13 +94,27 @@ func ClassifyPathOperations(command string) ([]PathOperation, bool) {
 
 // classifySegmentPathOperations classifies ONE already-split segment
 // (§5.4's C1-C8 dataset is entirely single-segment). Command-specific rules
-// come first (cp/mv/dd/rm/tee each have a well-known argument shape);
-// everything else falls through to the default rule: a redirection target
-// (`>`, `>>`) is always a write, and any other bare absolute-path argument
-// to an unrecognized command is treated as a read (the conservative default
-// — see EvaluateFSPreflight's own note that a read-only verdict is a no-op
-// for every non-ReadConfined agent, so over-classifying a word as "read"
-// never produces a spurious escalation).
+// come first — the copy-like family (cp/ln/install: sources read, last arg
+// write), mv (sources read+write, last arg write), dd (if=/of=), the
+// write-only family (rm/tee/touch/mkdir/chmod/chown/truncate: every
+// absolute-path argument is a write — chmod/chown's mode/owner argument and
+// truncate/install's flag values are never absolute paths, so they are
+// filtered out by absShellPathArgs without a special case), rsync/scp
+// (write-capable family with a network shape — remote endpoints like
+// `user@host:/path` are not absolute local paths and are invisible to this
+// classifier by design, so a single surviving local path could be either
+// upload source or download destination and is treated as a write, the
+// safe direction), and sed (a write ONLY when an in-place flag, `-i` or
+// `-i<suffix>`, is present — otherwise sed reads and writes stdout, not the
+// file). Everything else falls through to the default rule: a redirection
+// target (`>`, `>>`) is always a write, and any other bare absolute-path
+// argument to an unrecognized command is treated as a read (the
+// conservative default — see EvaluateFSPreflight's own note that a
+// read-only verdict is a no-op for every non-ReadConfined agent, so
+// over-classifying a word as "read" never produces a spurious escalation —
+// which is exactly why every command here defaults toward WRITE rather than
+// silently falling through to this read-only default: an under-classified
+// write is the actual escalation gap, not an over-classified read).
 func classifySegmentPathOperations(segment string) ([]PathOperation, bool) {
 	words, ok := tokenizeShellWords(segment)
 	if !ok {
@@ -131,7 +145,7 @@ func classifySegmentPathOperations(segment string) ([]PathOperation, bool) {
 	}
 
 	switch strings.ToLower(head) {
-	case "cp":
+	case "cp", "ln", "install":
 		paths := absShellPathArgs(args, redirectTargets)
 		if len(paths) < 2 {
 			return ops, true
@@ -158,7 +172,41 @@ func classifySegmentPathOperations(segment string) ([]PathOperation, bool) {
 				ops = append(ops, PathOperation{Path: p, Access: fspolicy.PathGrantAccessWrite})
 			}
 		}
-	case "rm", "tee":
+	case "rsync", "scp":
+		// Remote endpoints (`user@host:/path`) never look like an absolute
+		// local path, so they are invisible here by design (network
+		// transfer is D8's concern). A single surviving local path could be
+		// either an upload's source or a download's destination — treated
+		// as a write, the safe direction (see this function's own doc
+		// comment).
+		paths := absShellPathArgs(args, redirectTargets)
+		switch len(paths) {
+		case 0:
+			// no-op: nothing local to classify.
+		case 1:
+			ops = append(ops, PathOperation{Path: paths[0], Access: fspolicy.PathGrantAccessWrite})
+		default:
+			for _, p := range paths[:len(paths)-1] {
+				ops = append(ops, PathOperation{Path: p, Access: fspolicy.PathGrantAccessRead})
+			}
+			ops = append(ops, PathOperation{Path: paths[len(paths)-1], Access: fspolicy.PathGrantAccessWrite})
+		}
+	case "sed":
+		hasInPlace := false
+		for _, a := range args {
+			if a == "-i" || strings.HasPrefix(a, "-i") {
+				hasInPlace = true
+				break
+			}
+		}
+		access := fspolicy.PathGrantAccessRead
+		if hasInPlace {
+			access = fspolicy.PathGrantAccessWrite
+		}
+		for _, p := range absShellPathArgs(args, redirectTargets) {
+			ops = append(ops, PathOperation{Path: p, Access: access})
+		}
+	case "rm", "tee", "touch", "mkdir", "chmod", "chown", "truncate":
 		for _, p := range absShellPathArgs(args, redirectTargets) {
 			ops = append(ops, PathOperation{Path: p, Access: fspolicy.PathGrantAccessWrite})
 		}
