@@ -404,7 +404,7 @@ export interface WsConnectionCallbacks { // not-wire-format: SPA-only callback i
 
 // ── Reconnect schedule constants ──────────────────────────────────────────────
 // Fast phase: exponential backoff capped at MAX_FAST_DELAY_MS (10 attempts).
-// Slow phase: fixed SLOW_RETRY_DELAY_MS (20 attempts). Then onError + give up.
+// Slow phase: fixed SLOW_RETRY_DELAY_MS (20 attempts). Then gave_up (quiet UI only, #823).
 
 const MAX_FAST_ATTEMPTS = 10
 const MAX_FAST_DELAY_MS = 30_000
@@ -776,11 +776,14 @@ export class WsConnection {
     }
 
     this.ws.onerror = () => {
-      // onerror fires before onclose; onclose produces a richer message with
-      // close code and reason. We emit a minimal diagnostic here so the
-      // connection-error banner has a message, but avoid duplicating the
-      // onclose banner message.
-      this.callbacks.onError(`Connection error reaching ${getWsUrl()} — will retry`)
+      // onerror fires before onclose on every transport-level drop (network
+      // cut, server unreachable, …) and carries no diagnostic payload of its
+      // own — onclose (via _handleClose) is what decides what happens next.
+      // #823 comment: a transport drop must never reach the error channel —
+      // it is communicated only through the phase-1 quiet UI
+      // (ConnectionStatus.tsx). Log for local debugging only; do not call
+      // callbacks.onError here.
+      console.warn(`[ws] transport error reaching ${getWsUrl()}`)
     }
 
     this.ws.onclose = (event: CloseEvent) => this._handleClose(event)
@@ -813,28 +816,25 @@ export class WsConnection {
     this.ws = null
     this._stopHeartbeat()
     this.callbacks.onDisconnected()
-    // Any non-intentional close should reconnect. The persistent banner is
-    // driven by isConnected=false in the connection store (set by
-    // onDisconnected above) — ChatScreen renders the reconnect-banner div
-    // for the entire disconnected interval. We surface a richer onError
-    // message for unexpected close codes (≠ 1000 / 1001) so the user sees a
-    // diagnostic toast as well; for clean-but-unintentional 1000/1001 the
-    // banner alone is sufficient.
+    // Any non-intentional close should reconnect. #823: a transport drop
+    // (any close code, including abnormal ones such as 1006) must NEVER
+    // reach the error channel / AppShell banner — connection state is
+    // communicated only through the phase-1 quiet UI
+    // (ConnectionStatus.tsx: silent → offline → unreachable → back), driven
+    // by isConnected/reconnectPhase in the connection store, not by
+    // connectionError. Do not resurrect a callbacks.onError call here for
+    // non-1000/1001 codes — that was the old technical banner ("Disconnected
+    // from gateway — code 1006 …") this fix removes.
     if (!this.intentionalClose) {
       // Close code 1008 = policy violation / auth failure. The server rejected
       // the token. Reconnecting with the same dead token will loop forever —
       // route through the shared forceLogout() path (same debounce as the
       // QueryClient 401 handler, so a simultaneous 401 + 1008 fires teardown once).
+      // This is a genuine error path, unchanged by #823 — it forces a
+      // logout/redirect, not a banner.
       if (event.code === 1008) {
         forceLogout()
         return
-      }
-      if (event.code !== 1000 && event.code !== 1001) {
-        const codeLabel = event.code ? ` code ${event.code}` : ''
-        const reasonLabel = event.reason ? `: ${event.reason}` : ''
-        this.callbacks.onError(
-          `Disconnected from gateway —${codeLabel}${reasonLabel || ' connection lost'}. Reconnecting…`
-        )
       }
       this._scheduleReconnect()
     }
@@ -875,10 +875,12 @@ export class WsConnection {
   private _scheduleReconnect(): void {
     // ── Slow-phase exhausted → give up ────────────────────────────────────────
     if (this.inSlowPhase && this.slowRetryAttempts >= MAX_SLOW_ATTEMPTS) {
+      // #823: the give-up case maps to the quiet `unreachable` state (with its
+      // own retry affordance in ChatConnectionStatusLine), never an error
+      // banner — do not call callbacks.onError here. onReconnectStateChange
+      // is the only signal; deriveConnectionDisplay (ConnectionStatus.tsx)
+      // treats reconnectPhase === 'gave_up' as terminal.
       this.callbacks.onReconnectStateChange?.('gave_up', this.slowRetryAttempts)
-      this.callbacks.onError(
-        `Connection lost after ${MAX_FAST_ATTEMPTS + MAX_SLOW_ATTEMPTS} attempts. Click "Reconnect now" to try again.`
-      )
       return
     }
 
