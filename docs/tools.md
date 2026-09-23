@@ -54,6 +54,8 @@ What each setting does, and what you see when it fires:
 
 On the approval card, **Always Allow** remembers that exact call, so an identical one does not ask again.
 
+For a tool set to Ask, **Settings → Security → Auto-approve** can skip the card entirely when the sandbox can confirm the call stays contained (reading or writing inside your project folder, for example) and still shows it for anything that reaches further (the network, or a location outside the sandbox). See [security](security.md) for what "stays contained" means and how to turn it on or off globally, per agent, or for one conversation.
+
 The two layers — global and per agent — combine by one rule: **the stricter of the two wins** (Deny beats Ask, Ask beats Allow). A setting on one agent can only tighten the global setting, never loosen it.
 
 ```mermaid
