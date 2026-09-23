@@ -681,6 +681,31 @@ describe('ToolsAndPermissions — ADR-092 per-agent Auto-approve off-switch', ()
     })
     expect(screen.queryByTestId('agent-auto-approve-disabled')).toBeNull()
   })
+
+  it('describes the real per-chat override rule — a delegate off-switch always wins, but the chat\'s own agent can still be loosened', async () => {
+    // pkg/agent/sessionmode.go::ResolveAutoApprove: the chat modifier is the
+    // one scope allowed to loosen the chat's own agent, but a delegate's own
+    // off-switch is never overridden by a chat toggle. The old copy claimed
+    // the off-switch "always prompts, even when ... turned on for this
+    // chat" unconditionally, which is false for the chat's own agent.
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="agent-1"
+        agentType="Main"
+        tools={DEFAULT_TOOLS_CFG}
+        onChange={NOOP_CHANGE}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
+      />
+    )
+    await screen.findByTestId('agent-auto-approve-disabled')
+
+    expect(
+      screen.queryByText(/always prompts, even when auto-approve is on\s+globally or turned on for this chat/i),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText(/delegate.*off-switch always wins/i)).toBeInTheDocument()
+    expect(screen.getByText(/chat.*own agent.*can still override this switch/i)).toBeInTheDocument()
+  })
 })
 
 describe('ToolsAndPermissions — no spurious PUT on tab open (bug fix)', () => {

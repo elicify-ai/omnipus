@@ -562,7 +562,9 @@ export function ToolsAndPermissions({
               </p>
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
                 Every tool this agent has set to &ldquo;ask&rdquo; always prompts, even when Auto-approve is on
-                globally or turned on for this chat.
+                globally, as long as this agent is running as a delegate (sub-agent) inside another chat — a
+                delegate&apos;s off-switch always wins. When this is the chat&apos;s own agent, turning
+                Auto-approve on for that chat can still override this switch.
               </p>
             </span>
           </label>
