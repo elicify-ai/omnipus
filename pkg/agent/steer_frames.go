@@ -159,10 +159,20 @@ func (al *AgentLoop) deliverSubagentMessage(parentSessionID string, childRec *se
 	}
 	originCallID := childRec.Origin.CallID
 	id := fmt.Sprintf("%s:%s:msg:%d", originCallID, kind, time.Now().UnixNano())
+	childID := childRec.SessionID
 	frame := generated.SubagentMessageFrame{
 		Type:            string(generated.WsFrameTypeSubagentMessage),
 		MessageId:       id,
-		SessionId:       childRec.SessionID,
+		// UAT defect 1: SessionId is the PARENT's own session (the frame's
+		// routing key — SubagentMessageFrame.yaml: "Session in which the
+		// parent's span is running"), exactly like deliverSubagentStart
+		// above. The child's own id rides ChildSessionId, a separate field —
+		// it never belongs in SessionId. Getting this backwards is what
+		// left every subagent_message filed under the CHILD's own bucket
+		// on the SPA (which keys purely off session_id), so the parent's
+		// side panel never saw it and the pill's running count stayed 0.
+		SessionId:       parentSessionID,
+		ChildSessionId:  &childID,
 		SpanId:          subagentSpanID(originCallID),
 		Kind:            kind,
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
@@ -206,12 +216,19 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 	}
 	originCallID := childRec.Origin.CallID
 	id := fmt.Sprintf("%s:%d:state:%s", originCallID, childRec.Generation, state)
+	childID := childRec.SessionID
 	frame := generated.SubagentStateFrame{
-		Type:      string(generated.WsFrameTypeSubagentState),
-		SessionId: childRec.SessionID,
-		SpanId:    subagentSpanID(originCallID),
-		State:     state,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Type: string(generated.WsFrameTypeSubagentState),
+		// UAT defect 1: same fix as deliverSubagentMessage above — SessionId
+		// is the PARENT's own session (SubagentStateFrame.yaml: "Session in
+		// which the parent's span is running"), never the child's, with the
+		// child's id carried separately in ChildSessionId, exactly as
+		// deliverSubagentStart already does.
+		SessionId:      parentSessionID,
+		ChildSessionId: &childID,
+		SpanId:         subagentSpanID(originCallID),
+		State:          state,
+		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := al.persistSubagentEntry(parentSessionID, id, session.SystemSubtypeSubagentState, func(e *session.TranscriptEntry) {
 		e.SubagentState = &frame
