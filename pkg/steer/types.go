@@ -204,7 +204,7 @@ type CancelReport struct {
 }
 
 // Boundary names one of the places a human could see something
-// published (landing order §6). Each boundary calls the injected
+// published. Each boundary calls the injected
 // AudienceResolver, then BoundaryObserver.Observe, and nothing else
 // decides.
 type Boundary string
@@ -246,8 +246,8 @@ type BootHook func(ctx context.Context) error
 
 // Deps bundles the I-7 fixture dependencies: every steer interface
 // implementation plus the two real stores and the boot hook, all injected
-// at construction so WP-G's DelegationTree fixture (and gateway_boot.go's
-// own wiring) build from one shape.
+// at construction so pkg/agent/testutil's DelegationTree fixture (and
+// gateway_boot.go's own wiring) build from one shape.
 type Deps struct {
 	Launcher       SessionLauncher
 	Canceller      Canceller

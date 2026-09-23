@@ -896,7 +896,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	//     read-modify-write. steer_audience.go::Deliver's FR-B-013 check
 	//     reads the recipient's record at SEND time; a Stop landing between
 	//     that read and this turn was caught nowhere, and the stopped
-	//     session went back to work (landing order §0).
+	//     session went back to work.
 	//
 	// Both are scoped to STEERED sessions — steerAdmission's own population
 	// (admission.go) and the one I-3 governs. An ordinary root woken here is

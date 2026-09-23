@@ -48,7 +48,8 @@ type Tree struct {
 
 // DelegationTree builds root -> A -> B (-> C) with one distinct agent
 // profile per session. A non-nil launcher owns child creation; a nil launcher
-// uses the same persisted record shape directly for CP-0 callers.
+// uses the same persisted record shape directly for callers that need no
+// launcher.
 func DelegationTree(t fixtureT, deps steer.Deps, depth int) *Tree {
 	t.Helper()
 	if deps.SessionStore == nil || deps.LifecycleStore == nil {

@@ -132,8 +132,8 @@ type Manager struct {
 	cancelInterceptor CancelInterceptor  // set after construction via SetCancelInterceptor; may be nil
 
 	// steerAudience is ADR-091 I-5's injected steer.AudienceResolver
-	// (landing order §2: "injected into every package that hosts a
-	// boundary ... pkg/channels for boundary 7"). Nil until
+	// (injected into every package that hosts a
+	// boundary — pkg/channels for boundary 7). Nil until
 	// SetSteerAudienceResolver is called — GetStreamer then falls back to
 	// today's parentSpawnCallID-only suppression.
 	steerAudience steer.AudienceResolver
@@ -481,7 +481,7 @@ func (m *Manager) GetStreamer(ctx context.Context, channelName, chatID, sessionI
 		return nil, false
 	}
 
-	// ADR-091 boundary 7 (landing order §6, FR-B-001): a steered session's
+	// ADR-091 boundary 7 (FR-B-001): a steered session's
 	// audience is resolved ONCE here (not per Update call — the resolver is
 	// a store read, and this is the hot streaming path) and stamped onto
 	// the wrapper below, alongside today's parentSpawnCallID suppression.

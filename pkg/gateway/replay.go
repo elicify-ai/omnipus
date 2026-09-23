@@ -517,8 +517,8 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 	// blocks above. subagent_start/subagent_end are NOT handled here —
 	// they keep the existing tool-call-structure reconstruction
 	// (buildSubagentStart below), per D7's "stay exactly what they
-	// are"; see this lane's final report for why persisted
-	// start/end entries are written but not yet read back here.
+	// are": persisted start/end entries are written by steer_frames.go
+	// but not read back here.
 	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentMessage {
 		if entry.SubagentMessage != nil {
 			// UAT defect 1: stamp SessionId from sr.sessionID (the
@@ -893,7 +893,7 @@ func (sr *streamReplayState) buildSubagentStart(tc session.ToolCall) {
 	// ADR-091 I-4: "gains one optional field, child_session_id, so the
 	// open control knows where to go". Best-effort extraction from the
 	// persisted tool-call result — the delegate/create_task tool's own
-	// result shape is WP-C's, not this lane's; a missing/differently-keyed
+	// result shape is defined elsewhere; a missing/differently-keyed
 	// result simply leaves ChildSessionId nil (the open control degrades
 	// gracefully, per the field's own "optional" contract).
 	if tc.Result != nil {

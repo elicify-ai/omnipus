@@ -23,7 +23,7 @@ import (
 var gatewaySteerCancellers sync.Map // key: *agent.AgentLoop, value: steer.Canceller
 
 // setGatewaySteerCanceller binds the composition-root Canceller to gateway
-// Stop surfaces. WP-A's wiring section calls this when it supplies the
+// Stop surfaces. gateway_boot.go::wireSteerDeps calls this when it supplies the
 // generation-aware live-turn adapter; the lazy fallback keeps focused gateway
 // tests and partially landed branches functional without inventing a second
 // wire contract.

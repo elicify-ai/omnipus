@@ -408,7 +408,7 @@ type AgentLoop struct {
 	asyncNotifier *asyncNotifierImpl
 
 	// audienceResolver, boundaryObserver, upwardDeliverer are ADR-091 I-5's
-	// injected pkg/steer dependencies (landing order I-5, boundary
+	// injected pkg/steer dependencies (I-5, boundary
 	// inventory §6). Nil until SetSteerAudienceDeps is called (post-boot,
 	// once gateway_boot.go::wireSteerDeps has built the real
 	// implementations) — every boundary reads them through steer_boundary.go's
@@ -2051,7 +2051,7 @@ func (al *AgentLoop) runAgentLoop(
 		}
 	}
 
-	// ADR-091 boundary 3 (landing order §6, FR-B-001): a steered session's
+	// ADR-091 boundary 3 (FR-B-001): a steered session's
 	// final reply is never the user's audience, regardless of
 	// SendResponse — this is the re-entered-delegate leak D11 contained by
 	// hand (`processSystemMessage`'s SendResponse deny) before this ADR;

@@ -63,7 +63,7 @@ type LifecycleIndex struct {
 	// unreadableMu guards unreadable — ADR-091 I-9: every record ensureWarm
 	// could not load (a genuine read/parse error, never a plain "no record
 	// yet") during its most recent scan attempt, recorded instead of only
-	// logged so an operator-facing consumer (WP-D's boot sweep) can surface
+	// logged so an operator-facing consumer (boot_sweep.go) can surface
 	// them. Reset at the START of each scan attempt (not appended across
 	// attempts) so Report() always reflects the most recent warm-up, not an
 	// unbounded history.
@@ -72,7 +72,7 @@ type LifecycleIndex struct {
 }
 
 // UnreadableRecord names one lifecycle record ensureWarm's backfill scan
-// could not load, and why (ADR-091 landing order I-9).
+// could not load, and why (ADR-091 I-9).
 type UnreadableRecord struct {
 	ID  string
 	Err error
@@ -235,7 +235,7 @@ func (idx *LifecycleIndex) ensureWarm(s *LifecycleStore) error {
 
 // Report returns every record ensureWarm's most recent scan attempt found
 // unreadable — a genuine read/parse error, never a plain "no record yet"
-// (ADR-091 landing order I-9). Safe for concurrent use; the returned slice
+// (ADR-091 I-9). Safe for concurrent use; the returned slice
 // is an independent snapshot. Empty (nil) before ensureWarm has run, or
 // after a scan that found nothing unreadable.
 func (idx *LifecycleIndex) Report() IndexReport {

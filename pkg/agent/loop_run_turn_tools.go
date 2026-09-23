@@ -1506,7 +1506,7 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 			SessionID:   ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID,
 			Parts:       parts,
 		}
-		// ADR-091 boundary 4 (landing order §6, FR-B-001): a steered
+		// ADR-091 boundary 4 (FR-B-001): a steered
 		// session's media is persisted to its own transcript (untouched
 		// above) but never sent to a channel or published — this boundary
 		// was UNGATED before ADR-091 (sent whenever media was present).
@@ -1540,7 +1540,7 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 		ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback,
 		ex.toolResult,
 	)
-	// ADR-091 boundary 1 (landing order §6, FR-B-001): a steered session's
+	// ADR-091 boundary 1 (FR-B-001): a steered session's
 	// audience is never the user, regardless of SendResponse. audienceFor
 	// also calls steer.BoundaryObserver.Observe before this decision is
 	// acted on (FR-B-014).

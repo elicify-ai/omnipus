@@ -661,8 +661,8 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 	// cancel its durable steering subtree before any session data disappears.
 	// A partial cascade aborts deletion instead of reporting success while an
 	// unreadable descendant may still be running. The current OpenAPI delete
-	// response has no cancel-report fields; until WP-E publishes that response
-	// schema, the error body carries the same one-line partial summary used by
+	// response has no cancel-report fields; until a future response
+	// schema publishes one, the error body carries the same one-line partial summary used by
 	// the WebSocket channel and no undocumented wire fields are emitted.
 	report, cascaded := cancelSteeredSubtree(r.Context(), a.agentLoop, id, steer.Principal{
 		Kind: steer.PrincipalKindHuman,

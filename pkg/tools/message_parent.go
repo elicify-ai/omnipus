@@ -88,14 +88,13 @@ type ContentEgressFilter func(text string) string
 
 // outcomeForKind maps a message_parent kind (plus, for handback, its
 // ResultSoFar) onto the I-5 Outcome steer.UpwardDeliverer.Deliver needs
-// (ADR-091 landing order I-5, "the event IS an existing SessionMessage ...
+// (ADR-091 I-5, "the event IS an existing SessionMessage ...
 // every Outcome maps onto a kind the inbox already stores"). message_parent
 // deliberately never emits kind=error itself (see this file's package doc
 // comment), so OutcomeFailed/OutcomeTimedOut/OutcomeInterrupted never
 // originate here — those are turn-outcome events, not tool calls.
 //
-// artifact has no dedicated Outcome constant (pkg/steer is WP-A's; landing
-// order §2 forbids this lane changing it) — it is neither terminal nor
+// artifact has no dedicated Outcome constant — it is neither terminal nor
 // wake-eligible, exactly like checkpoint, so it reuses OutcomeCheckpoint.
 // handback mode=pause is likewise not one of I-5's five terminal outcomes
 // (the session keeps running); it reuses OutcomeBlocker, the closest

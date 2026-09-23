@@ -169,7 +169,7 @@ type LifecycleRecord struct {
 	SessionID string `json:"session_id"`
 	// Generation starts at 1. Pre-ADR-091 it was purely persistLocked's
 	// same-generation-write guard (L-3): a new generation is minted only by
-	// a follow_up/Play. ADR-091 landing order I-1 ADDS a second reason it
+	// a follow_up/Play. ADR-091 I-1 ADDS a second reason it
 	// moves — a stopped session revived by a newer instruction (I-6
 	// Canceller.Revive) — alongside the existing one (a terminal session
 	// given a follow-up; delegate_followup.go::spawnCorrectiveFollowUp
@@ -182,7 +182,7 @@ type LifecycleRecord struct {
 	State       LifecycleState `json:"state"`
 
 	// Origin names what created this record and, for a delegate/task
-	// origin, the originating tool-call id (ADR-091 landing order I-1).
+	// origin, the originating tool-call id (ADR-091 I-1).
 	// Present on every record written by ADR-091 code; nil on a record
 	// written before ADR-091 — I-8's classifier reads that absence as one
 	// of the signals distinguishing a legacy_delegate record from a fresh
@@ -334,7 +334,7 @@ func NewLifecycleStore(dir string) *LifecycleStore {
 func (s *LifecycleStore) Dir() string { return s.dir }
 
 // IndexReport returns the parent index's most recent unreadable-record
-// report (ADR-091 landing order I-9) — the accessor WP-D's boot sweep
+// report (ADR-091 I-9) — the accessor boot_sweep.go
 // reads "through the store it already holds" rather than reaching into the
 // unexported parentIndex field itself. Equivalent to
 // s.parentIndex.Report(); `pkg/steer` refers to the return type via
@@ -572,7 +572,7 @@ func (s *LifecycleStore) Mutate(sessionID string, fn func(*LifecycleRecord) erro
 	return s.persistLocked(next)
 }
 
-// PublishChildUnderParentLock is ADR-091 landing order I-1's launch
+// PublishChildUnderParentLock is ADR-091 I-1's launch
 // primitive: "the launcher reads the parent's record (for depth,
 // authorization and a current-generation Stop marker) and publishes the
 // child's record under the parent's record lock, so a cascade cannot

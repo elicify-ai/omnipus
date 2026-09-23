@@ -36,7 +36,7 @@ type MessageTool struct {
 	sentInRound  atomic.Bool // Tracks whether a message was sent in the current processing round
 
 	// steerAudience is ADR-091 I-5's injected steer.AudienceResolver
-	// (landing order §2: "injected into every package that hosts a
+	// ("injected into every package that hosts a
 	// boundary ... pkg/tools for boundary 8"). Nil until
 	// SetSteerAudienceResolver is called — a bare/unwired tool enforces
 	// nothing beyond today's ADR-065 ownership rule (denyUnownedTarget),
@@ -158,7 +158,7 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		channel = resolved
 	}
 
-	// ADR-091 boundary 8 (landing order §6, FR-B-009): a steered session's
+	// ADR-091 boundary 8 (FR-B-009): a steered session's
 	// own-chat-only rule is checked FIRST and independently of ADR-065
 	// ownership — it must refuse a target that denyUnownedTarget alone
 	// would allow (an unbound/unconfigured channel, e.g. the shared
@@ -254,8 +254,8 @@ func (t *MessageTool) resolveOwnChannel(workspaceID, actingAgent string) (string
 	}
 }
 
-// denySteeredSessionOffOwnChat implements ADR-091 boundary 8 (landing order
-// §6, FR-B-009, founder decision round 8): a steered session's message tool
+// denySteeredSessionOffOwnChat implements ADR-091 boundary 8 (FR-B-009,
+// founder decision round 8): a steered session's message tool
 // may target only its own session's conversation — every other target
 // (the root's webchat id, another agent's session, any external channel)
 // is refused with ErrSteeredSessionOwnChatOnly, REGARDLESS of ADR-065

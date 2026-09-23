@@ -2,8 +2,8 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Owner: WP-A. Phase 2: the real steer.SessionLauncher body — I-1/I-2's
-// generalised launcher, replacing the CP-0 "not wired" stub. Reuses the
+// The real steer.SessionLauncher body — I-1/I-2's
+// generalised launcher. Reuses the
 // shape of task_executor.go::createTaskSessionSync +
 // mintTaskLifecycleRecord, generalised with the steered-by edge (I-1).
 //
@@ -45,7 +45,7 @@ const maxLaunchAncestorWalk = 4096
 // value still win over this backstop (see Launch's limits resolution above).
 const defaultSteeredSessionTimeout = 30 * time.Minute
 
-// SteerLauncher implements steer.SessionLauncher (I-2), owned by WP-A.
+// SteerLauncher implements steer.SessionLauncher (I-2).
 type SteerLauncher struct {
 	al *AgentLoop
 }
@@ -251,7 +251,8 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 // launchSteered is Launch's steered path (I-1): the child's record is
 // published under the steering session's own record lock via
 // PublishChildUnderParentLock (pkg/session/lifecycle.go) — the primitive
-// that closes the atomicity gap the CP-0 report flagged. The depth decision,
+// that closes the atomicity gap between reading a parent's Stop status and
+// a child coming to exist. The depth decision,
 // Stop-marker stamp, and mandatory child writes run inside that callback, so
 // a concurrent Stop cascade against the same steering session cannot land
 // between "read the parent's Stop status" and "the child exists." Ancestor
