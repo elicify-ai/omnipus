@@ -634,6 +634,51 @@ func (al *AgentLoop) bashShellModeFor(ts *turnState, toolName string) tools.Shel
 	return al.shellGate.liveMode(ts.agentID, ts.transcriptSessionID)
 }
 
+// bashCommandArg reads args["command"] as a string, "" when absent or not a
+// string — shared by the two audit helpers below so a malformed/missing
+// command never panics the audit path.
+func bashCommandArg(args map[string]any) string {
+	command, _ := args["command"].(string)
+	return command
+}
+
+// emitShellRuleSettledAudit writes the FR-032(d)/review finding #8(c)
+// shell.approval_decision event for a prompt an operator D3 ALLOW rule
+// fully settled (bashRulesSettlePrompt) — before this fix, this decision
+// point left no audit trail at all, indistinguishable in the log from an
+// ordinary unprompted "allow"-ceiling execution. No grant is recorded by
+// this call site (the D3 rule itself is the standing authorization, not a
+// session grant), so the outcome is ShellApprovalAllowOnce, matching the
+// same vocabulary pkg/tools' own D3 ask-rule branch already uses for an
+// equivalent "approved, no new grant" case.
+func (al *AgentLoop) emitShellRuleSettledAudit(ts *turnState, args map[string]any) {
+	if ts == nil {
+		return
+	}
+	audit.EmitShellApprovalDecision(context.Background(), al.auditLogger,
+		audit.ShellApprovalAllowOnce, ts.agentID, ts.transcriptSessionID, "bash", bashCommandArg(args),
+		"rule_fully_allowed", "operator command_rules ALLOW rule covers every segment of this command")
+}
+
+// emitShellClassicAskDecisionAudit writes the FR-032(d)/review finding
+// #8(b) shell.approval_decision event for the classic (bash tool policy ==
+// "ask", non-Auto) human-in-the-loop decision path. Before this fix, only
+// the NEW ADR-092 D3/D7/D8 call sites inside pkg/tools emitted this event —
+// the original, pre-ADR-092 "ask" consultation this branch drives (the same
+// CheckGrantOrRequestApproval call every other ask-policy tool uses) left
+// no audit trail of its own for bash specifically.
+func (al *AgentLoop) emitShellClassicAskDecisionAudit(ts *turnState, args map[string]any, approved bool, denialReason string) {
+	if ts == nil {
+		return
+	}
+	outcome := audit.ShellApprovalDeny
+	if approved {
+		outcome = audit.ShellApprovalAllowOnce
+	}
+	audit.EmitShellApprovalDecision(context.Background(), al.auditLogger,
+		outcome, ts.agentID, ts.transcriptSessionID, "bash", bashCommandArg(args), "classic_ask", denialReason)
+}
+
 // inheritSessionPermissions copies a delegating parent's session-scoped
 // permission state onto a delegate at spawn: its approval grants (ADR-057
 // two-key InheritFrom) and its per-chat Auto-approve modifier (ADR-092

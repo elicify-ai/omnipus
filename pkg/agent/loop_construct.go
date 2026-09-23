@@ -364,6 +364,22 @@ func (nal *newAgentLoop) initializeRuntime() (*AgentLoop, error) {
 	// by the gateway's tool-approval REST path and the delegate tool's
 	// async/await paths. Always non-nil.
 	nal.al.approvalGrants = security.NewApprovalGrantStore()
+	// Review finding #8(a) (LOW, 2026-09-23 security fix lane): wire the
+	// audit logger in AT CONSTRUCTION, not only on the first bash call
+	// (pkg/tools/shell_permission_mode.go::enforceShellPermissionMode also
+	// calls SetAuditLogger idempotently on every invocation — this is not a
+	// replacement for that call, it closes the WINDOW before the first bash
+	// call ever runs). Before this fix, a grant recorded by ANY OTHER path
+	// before the first bash command of the process — e.g. a classic
+	// exact/prefix "Allow" via rest_tool_registry.go::HandleToolApprovals on
+	// a non-bash tool, or a bash grant recorded through a delegate's own
+	// early turn — emitted no shell.grant_recorded event, because
+	// al.auditLogger (set just above at line ~244) was never propagated into
+	// the store that actually records the grant. al.auditLogger is already
+	// resolved by this point in construction (nil is a valid, deliberate
+	// value — degraded/disabled audit — SetAuditLogger's own nil-safe
+	// contract).
+	nal.al.approvalGrants.SetAuditLogger(nal.al.auditLogger)
 
 	// ADR-092: per-chat Auto-approve modifier and the bash permission gate
 	// built over it. Constructed before wireExecToolDeps below, which

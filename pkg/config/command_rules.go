@@ -12,10 +12,13 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/shellrule"
 )
 
-// MaxCommandRules bounds sandbox.command_rules. Mirrors the maxItems on
-// contracts/components/schemas/SandboxConfigUpdate.yaml's command_rules so a
-// hand-edited config.json cannot carry more rules than the REST write path
-// would accept.
+// MaxCommandRules bounds sandbox.command_rules. command_rules is
+// config-file-only (ADR-092 D3/FR-018): there is no REST write path and no
+// wire schema for it at all — neither SandboxConfig.yaml nor
+// SandboxConfigUpdate.yaml mention the field. This bound exists purely to
+// stop a hand-edited (or agent-corrupted, though set_config already blocks
+// the whole sandbox.* subtree) config.json from carrying an unbounded rule
+// list that would make every bash call pay an O(n) D3 evaluation cost.
 const MaxCommandRules = 1000
 
 // maxCommandRuleFieldLen bounds binary and arg_prefix, matching the
@@ -30,14 +33,16 @@ const maxCommandRuleFieldLen = 4096
 // mistake worth rejecting loudly rather than a rule that silently never fires.
 const commandRuleBinaryForbidden = " \t\r\n;|&$<>()`'\"*?[]{}!#~\\"
 
-// ValidateCommandRules checks an ADR-092 D3 operator rule list. It is the one
-// validator for both writers of sandbox.command_rules: config load
-// (validateBootConfig) and the sandbox-config PUT handler. Every rule must
-// carry a valid action (allow/ask/deny), a binary that is a bare command name
-// or an absolute path with no whitespace or shell metacharacters, and an
-// optional arg_prefix with no control characters. An invalid rule rejects the
-// whole list: a typo such as "Deny" must fail loudly, never load as a rule the
-// matcher silently ignores.
+// ValidateCommandRules checks an ADR-092 D3 operator rule list. command_rules
+// is config-file-only (FR-018): the sandbox-config PUT handler
+// (rest_sandbox_config.go) does not read, write, or validate it — its ONE
+// writer is the config file itself, and its one caller is config load
+// (validateBootConfig). Every rule must carry a valid action
+// (allow/ask/deny), a binary that is a bare command name or an absolute path
+// with no whitespace or shell metacharacters, and an optional arg_prefix with
+// no control characters. An invalid rule rejects the whole list: a typo such
+// as "Deny" must fail loudly, never load as a rule the matcher silently
+// ignores.
 func ValidateCommandRules(rules []shellrule.Rule) error {
 	if len(rules) > MaxCommandRules {
 		return fmt.Errorf("command_rules: %d rules exceeds the maximum of %d", len(rules), MaxCommandRules)

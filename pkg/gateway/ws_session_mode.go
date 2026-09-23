@@ -79,6 +79,24 @@ func (wh *wsHandlerReadLoop) handleSessionModeUpdateFrame(data []byte) wsHandler
 	}
 
 	al := wh.h.agentLoop
+
+	// Review finding #9 (LOW, 2026-09-23 security fix lane): reject an
+	// unknown session BEFORE writing anything into SessionModeStore. Before
+	// this fix, any well-formed session id (including one that never
+	// existed, or one that already ended) was accepted, so the per-chat
+	// store could grow without bound — every entry lives until
+	// ClearSession/session teardown calls it, and neither ever runs for a
+	// session id that was never real. Checking AgentForSession first also
+	// gives the actual owning agent for the audit event below, rather than
+	// silently reporting the global default under an empty agent_id.
+	inst, err := al.AgentForSession(f.SessionId)
+	if err != nil || inst == nil {
+		slog.Warn("ws: session_mode_update for an unresolvable session; rejected",
+			"session_id", f.SessionId, "error", err)
+		return wh.wsSessionError("session_mode_update: unknown session")
+	}
+	agentID := inst.ID
+
 	modes := al.SessionModes()
 	newMode := "cleared"
 	if string(value) == "null" {
@@ -88,13 +106,6 @@ func (wh *wsHandlerReadLoop) handleSessionModeUpdateFrame(data []byte) wsHandler
 		newMode = shellModeName(f.AutoApprove)
 	}
 
-	agentID := ""
-	if inst, err := al.AgentForSession(f.SessionId); err == nil && inst != nil {
-		agentID = inst.ID
-	} else {
-		slog.Warn("ws: session_mode_update for a session with no resolvable agent; reporting the global default",
-			"session_id", f.SessionId, "error", err)
-	}
 	effective := al.SessionAutoApprove(agentID, f.SessionId)
 
 	audit.EmitShellModeChange(wh.ctx, al.AuditLogger(), audit.DecisionAllow,

@@ -325,16 +325,24 @@ var blockedConfigKeys = []blockedConfigKey{
 	// ---- the sandbox enforcement surface (entire subtree) ----
 	//
 	// Every field under sandbox.* is a security control: mode, god_mode,
-	// god_mode_allowed, tool_policies, shell_deny_patterns, allowed_paths,
-	// allowed_exec_paths, filesystem_model, egress_allow_list,
+	// god_mode_allowed, tool_policies, command_rules, auto_approve,
+	// allowed_paths, allowed_exec_paths, filesystem_model, egress_allow_list,
 	// egress_allow_cidrs, allow_network_outbound, ssrf.*, audit_log,
 	// skill_trust, prompt_injection_level, browser_evaluate_enabled. There is
 	// no non-security key in the namespace worth carving an exception for, and
 	// a subtree block is the only form that stays correct when a field is added.
+	//
+	// command_rules (ADR-092 D3) and auto_approve (ADR-092 D1) replace the
+	// retired shell_deny_patterns/AgentShellPolicy fields this list used to
+	// name — both stay agent-write-blocked by this same subtree block:
+	// command_rules is config-file-only (no REST/agent write path exists at
+	// all, FR-018), and auto_approve is the global Auto-approve default,
+	// tighten-only below at the per-agent/per-chat levels and gated behind
+	// the sandbox-config PUT's re-auth step-up when loosened.
 	{
 		Key: "sandbox",
 		Reason: "the whole sandbox namespace is the enforcement boundary itself (mode, god_mode, " +
-			"tool_policies, shell_deny_patterns, allowed_paths, allowed_exec_paths, filesystem_model, " +
+			"tool_policies, command_rules, auto_approve, allowed_paths, allowed_exec_paths, filesystem_model, " +
 			"egress and SSRF allow-lists, audit_log, skill_trust, prompt_injection_level) — " +
 			"change it in Settings → Security or config.json, never from an agent",
 		ReadOKReason: "the agent's own enforcement configuration. OPERATOR DECISION 2026-08-12: an agent granted the config tool may READ its settings — that is what the tool is for, and it is how an agent can explain WHY it cannot do something instead of just failing. Writing this namespace stays blocked: reading the cage is diagnosis, opening it is escape",

@@ -936,9 +936,17 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 		// this decision onto the tool's context, guardAndDispatch).
 		// D3 operator rules that already settle the call (all segments
 		// allowed, or any denied) skip it too: bashRulesSettlePrompt.
+		ruleFullyAllowed := bashRulesSettlePrompt(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.toolArgs)
 		approved := ex.shellModePin == tools.ShellModeAuto ||
-			bashRulesSettlePrompt(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.toolArgs) ||
+			ruleFullyAllowed ||
 			ex.rx.rr.rq.ri.rf.rt.al.ApprovalGrants().IsAllowed(ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID, ex.rx.rr.rq.ri.rf.rt.ts.agentID, ex.toolName, ex.toolArgs)
+		if ruleFullyAllowed {
+			// Review finding #8(c) (LOW): a prompt an operator D3 ALLOW
+			// rule fully settled (bashRulesSettlePrompt) left no audit
+			// trail before this fix — indistinguishable, by event log,
+			// from an ordinary unprompted "allow"-ceiling execution.
+			ex.rx.rr.rq.ri.rf.rt.al.emitShellRuleSettledAudit(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolArgs)
+		}
 		denialReason := ""
 		if !approved {
 			// About to block on a human, for up to the approval
@@ -966,6 +974,15 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 			approved, denialReason, _ = ex.rx.rr.rq.ri.rf.rt.al.CheckGrantOrRequestApproval(
 				ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID, ex.rx.rr.rq.ri.rf.rt.ts.agentID, ex.toolName, tc.ID, ex.rx.rr.rq.ri.rf.rt.ts.turnID, ex.toolArgs,
 			)
+			if ex.toolName == "bash" {
+				// Review finding #8(b) (LOW): the ordinary classic
+				// ask-policy human decision (bash tool policy == "ask",
+				// non-Auto) never emitted shell.approval_decision before
+				// this fix — only the NEW ADR-092 D3/D7/D8 call sites
+				// inside pkg/tools did.
+				ex.rx.rr.rq.ri.rf.rt.al.emitShellClassicAskDecisionAudit(
+					ex.rx.rr.rq.ri.rf.rt.ts, ex.toolArgs, approved, denialReason)
+			}
 		}
 		if !approved {
 			// Settle the placeholder to `denied` with the outcome

@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // ADR-092 FR-032(a): each of the three Auto-approve write points writes one
@@ -121,11 +123,18 @@ func TestShellModeAudit_PerChatSessionModeUpdate(t *testing.T) {
 	wc := &wsConn{sendCh: make(chan []byte, 4), doneCh: make(chan struct{})}
 	wh := &wsHandlerReadLoop{h: &WSHandler{agentLoop: api.agentLoop}, ctx: context.Background(), wc: wc}
 
-	flow := wh.dispatchFrame([]byte(`{"type":"session_mode_update","session_id":"chat-1","auto_approve":false}`),
+	// Review finding #9: session_mode_update now requires a REAL, resolvable
+	// session (rejecting an unknown id outright) — a real session must exist
+	// before this frame can apply.
+	meta, err := api.agentLoop.GetSessionStore().NewSession(session.SessionTypeChat, "test", "agent-a")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	flow := wh.dispatchFrame([]byte(fmt.Sprintf(`{"type":"session_mode_update","session_id":%q,"auto_approve":false}`, sessionID)),
 		wsTypeOnly{Type: "session_mode_update"})
 	require.Equal(t, wsHandlerReadLoopNext, flow)
 
-	v, ok := api.agentLoop.SessionModes().Get("chat-1")
+	v, ok := api.agentLoop.SessionModes().Get(sessionID)
 	require.True(t, ok, "the per-chat modifier must be stored")
 	assert.False(t, v)
 
@@ -133,7 +142,7 @@ func TestShellModeAudit_PerChatSessionModeUpdate(t *testing.T) {
 	require.Len(t, events, 1)
 	assert.Equal(t, "chat", events[0].Details["level"])
 	assert.Equal(t, "ask", events[0].Details["new_mode"])
-	assert.Equal(t, "chat-1", events[0].SessionID)
+	assert.Equal(t, sessionID, events[0].SessionID)
 
 	var ack map[string]any
 	require.NoError(t, json.Unmarshal(<-wc.sendCh, &ack))
@@ -145,6 +154,9 @@ func TestSessionModeUpdate_NullClearsAndLoosenOnIsAllowed(t *testing.T) {
 	api, _ := newShellModeAuditAPI(t)
 	wc := &wsConn{sendCh: make(chan []byte, 4), doneCh: make(chan struct{})}
 	wh := &wsHandlerReadLoop{h: &WSHandler{agentLoop: api.agentLoop}, ctx: context.Background(), wc: wc}
+	meta, err := api.agentLoop.GetSessionStore().NewSession(session.SessionTypeChat, "test", "agent-a")
+	require.NoError(t, err)
+	sessionID := meta.ID
 	send := func(body string) map[string]any {
 		require.Equal(t, wsHandlerReadLoopNext, wh.dispatchFrame([]byte(body), wsTypeOnly{Type: "session_mode_update"}))
 		var ack map[string]any
@@ -152,13 +164,37 @@ func TestSessionModeUpdate_NullClearsAndLoosenOnIsAllowed(t *testing.T) {
 		return ack
 	}
 
-	send(`{"type":"session_mode_update","session_id":"chat-2","auto_approve":false}`)
-	ack := send(`{"type":"session_mode_update","session_id":"chat-2","auto_approve":null}`)
-	_, ok := api.agentLoop.SessionModes().Get("chat-2")
+	send(fmt.Sprintf(`{"type":"session_mode_update","session_id":%q,"auto_approve":false}`, sessionID))
+	ack := send(fmt.Sprintf(`{"type":"session_mode_update","session_id":%q,"auto_approve":null}`, sessionID))
+	_, ok := api.agentLoop.SessionModes().Get(sessionID)
 	assert.False(t, ok, "null must clear the modifier")
 	assert.Equal(t, true, ack["auto_approve_effective"], "cleared chat follows the global default (on)")
 
 	api.agentLoop.GetConfig().Sandbox.AutoApprove = false
-	ack = send(`{"type":"session_mode_update","session_id":"chat-2","auto_approve":true}`)
+	ack = send(fmt.Sprintf(`{"type":"session_mode_update","session_id":%q,"auto_approve":true}`, sessionID))
 	assert.Equal(t, true, ack["auto_approve_effective"], "the chat scope may loosen past a global off")
+}
+
+// TestSessionModeUpdate_UnknownSessionRejected is the regression test for
+// review finding #9 (LOW, 2026-09-23 security fix lane): a well-formed but
+// never-created (or already-ended) session id must be rejected with a clear
+// error frame rather than silently accepted into SessionModeStore, which
+// before this fix let the per-chat store grow without bound — nothing ever
+// clears an entry for a session id that was never real.
+func TestSessionModeUpdate_UnknownSessionRejected(t *testing.T) {
+	api, _ := newShellModeAuditAPI(t)
+	wc := &wsConn{sendCh: make(chan []byte, 4), doneCh: make(chan struct{})}
+	wh := &wsHandlerReadLoop{h: &WSHandler{agentLoop: api.agentLoop}, ctx: context.Background(), wc: wc}
+
+	const bogusSessionID = "sess_never_existed_00000000000000"
+	flow := wh.dispatchFrame([]byte(fmt.Sprintf(`{"type":"session_mode_update","session_id":%q,"auto_approve":true}`, bogusSessionID)),
+		wsTypeOnly{Type: "session_mode_update"})
+	require.Equal(t, wsHandlerReadLoopContinue, flow, "an unknown session must not proceed to the ack path")
+
+	_, ok := api.agentLoop.SessionModes().Get(bogusSessionID)
+	assert.False(t, ok, "finding #9 regression: an unknown session id must never be written into SessionModeStore")
+
+	var frame map[string]any
+	require.NoError(t, json.Unmarshal(<-wc.sendCh, &frame))
+	assert.Equal(t, "error", frame["type"], "an unknown session must get an error frame, not a silent accept")
 }

@@ -648,7 +648,6 @@ type GatewayConfig struct {
 type ToolsConfig struct {
 	Web  WebToolsConfig `json:"web"`
 	Cron CronConfig     `json:"cron"`
-	Exec ExecConfig     `json:"exec"`
 }
 
 type WebToolsConfig struct {
@@ -688,11 +687,6 @@ type PerplexityConfig struct {
 
 type CronConfig struct {
 	ExecTimeoutMinutes int `json:"exec_timeout_minutes"`
-}
-
-type ExecConfig struct {
-	EnableDenyPatterns bool     `json:"enable_deny_patterns"`
-	CustomDenyPatterns []string `json:"custom_deny_patterns"`
 }
 
 func (c *OpenClawConfig) convertChannels(warnings *[]string) ChannelsConfig {
