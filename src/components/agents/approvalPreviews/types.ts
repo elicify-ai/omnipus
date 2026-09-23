@@ -37,7 +37,7 @@ export interface ToolApprovalPreviewEntry {
   Body: ComponentType<ToolApprovalPreviewContext>
   /** 'replace' only — overrides the DialogTitle text ("Tool Approval Required"). */
   title?: (ctx: ToolApprovalPreviewContext) => string
-  /** 'replace' only — overrides the Approve button's label. The dispatched action is always 'approve' regardless of label. */
+  /** 'replace' only — overrides the Approve button's label. The dispatched action is always 'allow_once' regardless of label. */
   primaryLabel?: string
   /** 'replace' only — overrides the Deny button's label. The dispatched action is always 'deny' regardless of label. */
   secondaryLabel?: string

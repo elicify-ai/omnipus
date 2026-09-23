@@ -39,7 +39,6 @@ import {
 } from '@/components/ui/accordion'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
-import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
 import { ExecutorSelector } from './ExecutorSelector'
 import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader, UploadMdButton } from './AgentFormFields'
 import { CliPathValidationHint } from './CliPathValidationHint'
@@ -388,7 +387,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   })
   // US-E6: per-agent skill assignment (opt-in, default none).
   const [agentSkills, setAgentSkills] = useState<string[]>([])
-  const [shellDenyPatterns, setShellDenyPatterns] = useState<string[]>([])
+  // ADR-091: per-agent Auto-approve off-switch — off-only, default false
+  // (inherit the global/per-chat default).
+  const [autoApproveDisabled, setAutoApproveDisabled] = useState(false)
   // Spec-4 FR-4.1: sub-agent executor (native default / external-cli / remote-a2a).
   const [executor, setExecutor] = useState<ExecutorConfig | undefined>(undefined)
 
@@ -605,7 +606,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setMaxToolIterationsDraft(String(agent.max_tool_iterations ?? 200))
     setContextWindowOverride(agent.context_window_override ?? undefined)
     setContextWindowOverrideDraft(agent.context_window_override != null ? String(agent.context_window_override) : '')
-    setShellDenyPatterns(agent.shell_policy?.custom_deny_patterns ?? [])
     // Spec-4: hydrate executor (absent → native default, modelled as undefined).
     setExecutor(agent.executor)
     if (agent.tools_cfg) setToolsCfg((prev) => ({
@@ -614,6 +614,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     }))
     // US-E6: hydrate agent skills from the API response (default none).
     setAgentSkills(agent.skills ?? [])
+    // ADR-091: hydrate the per-agent Auto-approve off-switch (default false).
+    setAutoApproveDisabled(agent.auto_approve_disabled ?? false)
     reviewedAgentRef.current = agent
     hasHydrated.current = true
     // D3 fix: flip the reactive readiness flag as the LAST line of this
@@ -728,9 +730,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // for subagent_3p (the external CLI owns its own window; the agent
       // is an exempt row with context_window_effective 0).
       ...(contextWindowOverride !== undefined ? { context_window_override: contextWindowOverride } : {}),
-      shell_policy: {
-        custom_deny_patterns: shellDenyPatterns.filter((p) => p.trim() !== ''),
-      },
       // tools_cfg is intentionally OMITTED here. Tool policies are saved via the
       // dedicated PUT /agents/{id}/tools endpoint (re-auth gated) inside
       // ToolsAndPermissions — including it in the main agent PUT would bypass the
@@ -747,13 +746,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // Omitting it (undefined) leaves the backend on its "native" default
       // rather than forcing an empty value over the wire.
       executor,
+      // ADR-091: per-agent Auto-approve off-switch. Sent unconditionally
+      // (false is the harmless "inherit the default" no-op), matching every
+      // other simple boolean field in this payload.
+      auto_approve_disabled: autoApproveDisabled,
     }
   }, [
     agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
     temperature, maxTokens, soul, memoryEnabled, voice,
     maxToolIterations, contextWindowOverride,
-    shellDenyPatterns,
-    agentSkills, executor,
+    agentSkills, executor, autoApproveDisabled,
   ])
 
   const {
@@ -1857,6 +1859,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 isMcpEditable={isFieldEditable('mcp_servers')}
                 tools={toolsCfg}
                 onChange={setToolsCfg}
+                autoApproveDisabled={autoApproveDisabled}
+                onAutoApproveDisabledChange={(next) => { markDirty(); setAutoApproveDisabled(next) }}
                 onRevisionChange={(revision) => {
                   if (reviewedAgentRef.current) {
                     reviewedAgentRef.current = { ...reviewedAgentRef.current, revision }
@@ -2216,28 +2220,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               </Card>
             </section>
 
-          {/* Shell deny patterns — item 3 reorg: relocated from Basics into
-              Advanced. A shell-hardening hint, independent of the (removed)
-              per-agent sandbox-profile concept. Editable for ALL agents
-              including locked core agents, and for native Subagents
-              (matrix: O or inherit); hidden ONLY for subagent_3p
-              (external-cli) — the external runner manages its own
-              isolation. */}
-          {!isExternalAgent && (
-            <section className="space-y-[var(--space-2-5)]">
-              <AdvancedDisclosure
-                title="Shell deny patterns"
-                titleClassName="font-headline font-semibold text-[length:var(--type-body-size)]"
-              >
-                <ShellDenyPatternsEditor
-                  value={shellDenyPatterns}
-                  onChange={(patterns) => { markDirty(); setShellDenyPatterns(patterns) }}
-                  disabled={!isFieldEditable('shell_policy')}
-                />
-              </AdvancedDisclosure>
-            </section>
-          )}
-
           {/* Executor summary — all workers (base + external). subagent_3p's
               full editor is in the Runtime tab. Locked core workers are
               handled by their locked-banner and field-level disable. The
@@ -2559,9 +2541,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto px-[var(--space-5)] py-[var(--space-4)] space-y-[var(--space-3)]">
       {/* W6-B1 / I1: cap the visible-on-open section count at Miller's 7±2.
-          Base agents open Identity + Shell deny patterns + Model Configuration
-          + Behavior (4 accordions — the Identity strip header is also
-          visible above, so the user sees 5 top-level chunks). Workers
+          Base agents open Identity + Model Configuration + Behavior (3
+          accordions — the Identity strip header is also visible above, so
+          the user sees 4 top-level chunks). Workers
           replace Behavior with Executor + Tools & Permissions (Tools is
           priority for a worker since it's their run-time surface;
           Behavior's persona/heartbeat sub-blocks don't apply). Schedules,
@@ -2630,8 +2612,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             Identity (name/description/default toggle/delegation policy
             summary/avatar color/icon) + Model Configuration (model selector,
             sampling parameters) + Fallback models (item 1: relocated here,
-            directly below Model). Shell deny patterns moved to Advanced
-            (item 3). The Executor (Spec-4) is a worker-only
+            directly below Model). The Executor (Spec-4) is a worker-only
             concern — for subagent_3p it is the headline of the Runtime
             tab below; for native workers (no external-cli selected) the
             whole thing is inherited from the caller so it is shown as a
@@ -2685,11 +2666,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         )}
 
         {/* ── ADVANCED TAB ──────────────────────────────────────────────
-            Rate limits, Execution params (timeout / max_iter), Shell deny
-            patterns (item 3: relocated here from Basics), Executor summary
-            (workers only; subagent_3p gets the full editor in the Runtime
-            tab), Activity. The Executor here is a compact summary for
-            native workers; subagent_3p's editor is in Runtime. */}
+            Rate limits, Execution params (timeout / max_iter), Executor
+            summary (workers only; subagent_3p gets the full editor in the
+            Runtime tab), Activity. The Executor here is a compact summary
+            for native workers; subagent_3p's editor is in Runtime. */}
         <TabsContent value="advanced" className="space-y-[var(--space-4)]">{advancedPanel}</TabsContent>
       </Tabs>
       <Accordion type="single" collapsible defaultValue="basics" className="block sm:hidden">

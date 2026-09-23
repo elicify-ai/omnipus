@@ -1061,6 +1061,16 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
           withBucket(targetSid, () => ({ cancelStage: frame.stage }))
           break
 
+        case 'session_mode_updated':
+          // ADR-091: acknowledgement of a session_mode_update send (or a
+          // reconnect snapshot echo) — the session's resolved per-chat
+          // Auto-approve state. Always an ack; there is no rejection case.
+          // targetSid (not frame.session_id directly) matches every other
+          // session-scoped case in this switch — same resolver, same
+          // fallback behaviour if the frame is ever missing it.
+          withBucket(targetSid, () => ({ autoApproveEffective: frame.auto_approve_effective }))
+          break
+
         case 'device_pairing_request':
           // I2: a new device is requesting pairing approval. DevicesSection
           // polls the ['devices'] query while open; invalidating it surfaces the

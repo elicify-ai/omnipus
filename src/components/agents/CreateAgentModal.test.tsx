@@ -842,7 +842,7 @@ describe('CreateAgentModal — Advanced step fields', () => {
     expect('steering_mode' in call).toBe(false)
   })
 
-  it('forwards model_params and the new shell_policy shape from Advanced', async () => {
+  it('forwards model_params from Advanced', async () => {
     const onCreate = vi.fn().mockResolvedValue(undefined)
     renderModal({ open: true, onClose: vi.fn(), onCreate })
     await fillAndAdvanceToStep3()
@@ -851,18 +851,12 @@ describe('CreateAgentModal — Advanced step fields', () => {
     fireEvent.change(screen.getByLabelText('Temperature'), {
       target: { value: '0.5' },
     })
-    fireEvent.change(screen.getByTestId('shell-deny-patterns-textarea'), {
-      target: { value: 'rm -rf /\ncurl.*169\\.254' },
-    })
 
     fireEvent.click(screen.getByTestId('wizard-create'))
     await waitFor(() => expect(onCreate).toHaveBeenCalled())
     const call = onCreate.mock.calls.at(-1)![0]
     expect(call.model_params).toEqual({ temperature: 0.5 })
-    expect(call.shell_policy).toEqual({
-      enable_deny_patterns: true,
-      custom_deny_patterns: ['rm -rf /', 'curl.*169\\.254'],
-    })
+    expect('shell_policy' in call).toBe(false)
   })
 
   // W2b field-matrix gating (docs/internal/architecture/agent-types-field-matrix.md):

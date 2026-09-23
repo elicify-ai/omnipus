@@ -4,9 +4,10 @@
  * God-mode is the single global "bypass-permissions" switch. When ON it:
  *   - flips every agent's tool permissions from "ask" → "allow" (no prompts),
  *   - disables the kernel sandbox (full host filesystem + syscalls),
- *   - opens outbound network egress,
- *   - turns off the shell guard / deny-patterns.
- * Audit logging, the prompt-guard, and rate limiting STAY ON.
+ *   - opens outbound network egress (no network pre-flight, ADR-091 D8).
+ * Audit logging, the prompt-guard, and rate limiting STAY ON — and operator
+ * `command_rules` deny entries (ADR-091 D3) still refuse a matching command,
+ * since they are enforced inside the shell tool, downstream of this floor.
  *
  * Because it removes capability restraints globally, flipping it ALWAYS asks for
  * a confirmation first (ADR-0008 ruling 6) — a dialog that names the change and
@@ -191,8 +192,8 @@ export function GodModeControl() {
           // (authorized, pending restart). Keying the card on it produced a red
           // ON switch sitting inside a calm, muted card — a milder replay of the
           // exact switch-vs-banner contradiction the D1 fix existed to remove.
-          // S1 is one restart away from disabling the kernel sandbox, egress
-          // restrictions and the shell guard for every agent, so it must read as
+          // S1 is one restart away from disabling the kernel sandbox and
+          // egress restrictions for every agent, so it must read as
           // dangerous, not as reassuring.
           persisted
             ? 'border-[var(--color-error)]/60 bg-[var(--color-error)]/10'
@@ -214,8 +215,9 @@ export function GodModeControl() {
             <div id="god-mode-consequence-copy">
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
                 Removes <strong className="text-[var(--color-secondary)]">all permission prompts</strong> and
-                disables the kernel sandbox, outbound-network restrictions, and the shell guard for every agent.
-                Audit logging, the prompt-guard, and rate limiting stay on.
+                disables the kernel sandbox and outbound-network restrictions for every agent. Configured
+                deny rules still refuse a matching command. Audit logging, the prompt-guard, and rate
+                limiting stay on.
               </p>
               <p className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                 <ShieldCheck size={12} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
@@ -336,17 +338,52 @@ export function GodModeControl() {
 }
 
 /**
- * GodModeActiveBanner — persistent indicator shown at the top of the Gateway
- * section (and anywhere god-mode visibility matters) while god-mode is active.
- * Reads the live state from AppState; renders nothing when god-mode is off.
+ * GodModeActiveBanner — persistent, app-wide indicator (ADR-091 FR-034:
+ * rendered from AppShell, not just the Gateway section) shown while god-mode
+ * is active. Reads the live state from AppState; renders nothing when
+ * god-mode is off. Carries its own working "Turn off" action — a move to
+ * AppShell means the banner can be on screen with no GodModeControl toggle
+ * anywhere nearby, so "turn it off below" is no longer a real instruction.
  */
 export function GodModeActiveBanner() {
+  const { addToast } = useUiStore()
+  const stepUp = useStepUp()
+  const queryClient = useQueryClient()
+
   const { data: godMode, isError } = useQuery({
     queryKey: ['god-mode'],
     queryFn: fetchGodMode,
   })
 
   const enabled = godMode?.enabled === true
+
+  const { mutateAsync: disableAsync, isPending: isDisabling } = useMutation({
+    mutationFn: (vars: { token?: string }) =>
+      vars.token === undefined ? setGodMode(false) : setGodMode(false, vars.token),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['god-mode'] })
+      queryClient.invalidateQueries({ queryKey: ['config'] })
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+      queryClient.invalidateQueries({ queryKey: ['pending-restart'] })
+      addToast({ message: 'God-mode disabled', variant: 'success' })
+    },
+    onError: (err: unknown) => {
+      addToast({ message: getErrorMessage(err, 'Could not change god-mode'), variant: 'error' })
+    },
+  })
+
+  function requestDisable() {
+    if (isDisabling) return
+    void stepUp
+      .gate((token) => disableAsync({ token }), {
+        title: 'Disable god mode?',
+        body: 'Agents go back to asking permission, and the sandbox around their code is switched back on.',
+        confirmLabel: 'Disable god mode',
+      })
+      .catch((err: unknown) => {
+        if (!isReAuthCancelled(err)) return
+      })
+  }
 
   // Genuinely off (query succeeded and reported enabled=false) — nothing to
   // warn about. NB: this must NOT be reached on a fetch failure — `enabled`
@@ -383,14 +420,26 @@ export function GodModeActiveBanner() {
       className="flex items-start gap-[var(--space-2-5)] rounded-lg border border-[var(--color-error)]/60 bg-[var(--color-error)]/10 px-[var(--space-3)] py-[var(--space-2-5)]"
     >
       <Warning size={18} weight="fill" className="shrink-0 mt-[var(--space-0-5)] text-[var(--color-error)]" />
-      <div className="space-y-[var(--space-1)]">
+      <div className="min-w-0 flex-1 space-y-[var(--space-1)]">
         <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-error)]">God-mode is active</p>
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]/80">
-          All permission prompts are bypassed and the kernel sandbox, network restrictions, and shell guard are
-          disabled for every agent. Audit logging, the prompt-guard, and rate limiting remain on. Turn god-mode
-          off below to restore the previous protections.
+          All permission prompts are bypassed and the kernel sandbox and network restrictions are disabled
+          for every agent. Configured deny rules still refuse a matching command. Audit logging, the
+          prompt-guard, and rate limiting remain on.
         </p>
       </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        data-testid="god-mode-banner-turn-off"
+        disabled={isDisabling}
+        onClick={requestDisable}
+        className="shrink-0 border-[var(--color-error)]/60 text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
+      >
+        {isDisabling ? 'Turning off…' : 'Turn off'}
+      </Button>
+      {stepUp.dialogs}
     </div>
   )
 }

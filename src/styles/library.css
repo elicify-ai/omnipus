@@ -36,6 +36,7 @@
 @source "../components/ui/table.tsx";
 @source "../components/ui/tabs.tsx";
 @source "../components/ui/textarea.tsx";
+@source "../components/ui/tooltip.tsx";
 @source "../components/ui/icon-button.tsx";
 @source "../components/ui/field.tsx";
 @source "../components/ui/confirm-dialog.tsx";

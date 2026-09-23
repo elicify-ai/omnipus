@@ -848,52 +848,11 @@ describe('cancelling the confirmation reverts optimistic state', () => {
     expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 
-  it('cancelling a shell-deny-patterns edit reverts the textarea to the saved patterns', async () => {
-    vi.mocked(fetchSandboxConfig).mockResolvedValue({
-      ...baseConfig,
-      shell_deny_patterns: ['^curl\\s'],
-    })
-
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('shell-deny-patterns-textarea')).toHaveValue('^curl\\s')
-    })
-
-    fireEvent.change(screen.getByTestId('shell-deny-patterns-textarea'), {
-      target: { value: '^curl\\s\n^wget\\s' },
-    })
-
-    // Debounced autosave (400ms) stages the save; the confirmation opens.
-    await waitFor(
-      () => {
-        expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
-      },
-      { timeout: 3000 },
-    )
-
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-
-    await waitFor(() => {
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
-    })
-
-    // The optimistic '^wget\s' line must be reverted to the saved patterns.
-    await waitFor(() => {
-      expect(screen.getByTestId('shell-deny-patterns-textarea')).toHaveValue('^curl\\s')
-    })
-
-    expect(mockAddToast).not.toHaveBeenCalled()
-    // Reverting must not itself re-trigger the debounced autosave (which
-    // would silently reopen the confirmation for a no-op save).
-    expect(updateSandboxConfig).not.toHaveBeenCalled()
-  }, 10_000)
-
   // SsrfEditor (extracted from SandboxSection in Wave 3, same as
   // AllowedPathsEditor) shares revertPathsSsrfToServer with the allowed-paths
-  // editor but had zero cancel-revert coverage of its own — the two
-  // other tests in this block exercise the mode radio and
-  // ShellDenyPatternsEditor, not SsrfEditor's own optimistic add/revert path.
+  // editor but had zero cancel-revert coverage of its own — the other test
+  // in this block exercises the mode radio, not SsrfEditor's own optimistic
+  // add/revert path.
   it('cancelling an SSRF allow-internal add reverts ssrfList to the saved server list', async () => {
     // A single-entry list matches no SSRF_PRESETS (lengths are 0/2/6), so
     // Advanced mode auto-expands on mount and '127.0.0.1' is visible without

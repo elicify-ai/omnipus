@@ -8,11 +8,21 @@
 // local timestamp (expiresAt = Date.now() + expires_in_ms) so the countdown
 // is independent of gateway clock skew.
 //
-// Buttons:
-//   Approve      → POST /api/v1/tool-approvals/{id} {action:"approve"}
-//   Always Allow → POST /api/v1/tool-approvals/{id} {action:"always"}
+// Buttons — wire action values renamed by ADR-091 D4 (visible labels/testids
+// UNCHANGED for now, see note below):
+//   Approve      → POST /api/v1/tool-approvals/{id} {action:"allow_once"}
+//   Always Allow → POST /api/v1/tool-approvals/{id} {action:"allow"}
 //   Deny         → POST /api/v1/tool-approvals/{id} {action:"deny"}
 //   Cancel       → POST /api/v1/tool-approvals/{id} {action:"cancel"}
+//
+// ADR-091 D4 note: the full three-button redesign ([Deny][Allow once][Allow]
+// labels, no rendered Cancel button, a scope choice — exact vs. prefix grant
+// — shown above the buttons whenever Allow is selected, and chained-command
+// segments listed per part) is still open work in this lane. This pass only
+// renames the WIRE values the old "approve"/"always" actions now send
+// (L0's contract rename — approve→allow_once, always→allow) so the
+// component compiles against the current ToolApprovalActionRequest enum;
+// visible button text/testids and the Cancel button are untouched.
 //
 // Accessibility (C2 — this is a SECURITY-CRITICAL control):
 //   - Built on the shadcn/Radix Dialog primitive, which provides a focus trap,
@@ -33,7 +43,7 @@
 //   403 → "you must be an admin to approve this tool" toast
 //   404 / 410 → the approval is no longer pending server-side (410 inside the
 //         registry's retention window, 404 after it) → markResolved: the
-//         card goes and cannot come back; an approve/always also gets a
+//         card goes and cannot come back; allow_once/allow also gets a
 //         warning that it was not applied
 //
 // Dismissal: Cancel and Close/Escape/overlay remove the card from this tab
@@ -59,11 +69,11 @@
 //     args.command is a string, in addition to (not instead of) the generic
 //     Arguments JSON dump. See the per-tool preview registry note below.
 //   - PORTED: ExecApprovalBlock's 3-way decision (Allow / Deny / "Always
-//     Allow") is now fully available here too — the Always Allow button
-//     posts {action:"always"}, which the gateway resolves by approving the
-//     call AND recording a session-scoped grant via ApprovalGrantStore.Record
+//     Allow") is now fully available here too — the Allow button posts
+//     {action:"allow"}, which the gateway resolves by approving the call AND
+//     recording a session-scoped grant via ApprovalGrantStore.Record
 //     (pkg/gateway/rest_tool_registry.go, commit 35447760). The wire contract
-//     (ToolApprovalActionRequest.action) carries "always" for every tool, not
+//     (ToolApprovalActionRequest.action) carries "allow" for every tool, not
 //     just bash — closing the gap that used to make grant-inheritance
 //     (agent-delegation-spec.md FR-D8) reachable only via the retired
 //     exec-only flow.
@@ -192,7 +202,7 @@ function ToolApprovalCard({
       if (opts?.dismissFirst) dequeue(approvalId)
       try {
         const resp = await submitToolApproval(approvalId, action)
-        if (action === 'always' && resp.grant_recorded !== true) {
+        if (action === 'allow' && resp.grant_recorded !== true) {
           addToast({
             message: 'This call is allowed, but Always Allow did not stick. The next identical call will ask again.',
             variant: 'warning',
@@ -227,7 +237,7 @@ function ToolApprovalCard({
             // this, a 404 only toasted and left a dialog whose every button
             // (Close included) re-sent a request that could only 404 again.
             markResolved(approvalId)
-            if (action === 'approve' || action === 'always') {
+            if (action === 'allow_once' || action === 'allow') {
               // Deny/cancel stay silent (what the user asked for holds or no
               // longer matters). An approval that did not land deserves a word.
               addToast({
@@ -497,7 +507,7 @@ function ToolApprovalCard({
                 <Button
                   size="sm"
                   variant="default"
-                  onClick={() => handleAction('approve')}
+                  onClick={() => handleAction('allow_once')}
                   disabled={submitting}
                   className="h-8 text-[length:var(--type-utility-xs-size)] flex-1 sm:flex-none"
                 >
@@ -520,7 +530,7 @@ function ToolApprovalCard({
                   size="sm"
                   variant="ghost"
                   data-testid="always-allow-toggle"
-                  onClick={() => handleAction('always')}
+                  onClick={() => handleAction('allow')}
                   disabled={submitting}
                   className="h-8 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] flex-1 sm:flex-none"
                 >
