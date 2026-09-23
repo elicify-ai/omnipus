@@ -651,16 +651,6 @@ type AgentConfig struct {
 // AgentType classifies an agent for scope-based tool visibility filtering.
 type AgentType string
 
-// AgentShellPolicy is unreferenced by config.go — kept here only because
-// pkg/tools/shell.go's ExecToolDeps.AgentShellPolicy field (ADR-092 lane L4,
-// out of this lane's scope) still names it as of this commit; deleting it
-// here would break that concurrently-developed, unowned file. Delete this
-// type in the same change that removes that field from pkg/tools/shell.go.
-type AgentShellPolicy struct {
-	EnableDenyPatterns bool     `json:"enable_deny_patterns,omitempty"`
-	CustomDenyPatterns []string `json:"custom_deny_patterns,omitempty"`
-}
-
 // AgentToolsCfg holds per-agent overrides for builtin tool visibility and MCP server bindings.
 type AgentToolsCfg struct {
 	Builtin AgentBuiltinToolsCfg `json:"builtin,omitempty"`

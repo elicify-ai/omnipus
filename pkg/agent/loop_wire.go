@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/shellrule"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -30,10 +31,9 @@ import (
 
 // wireExecToolDeps replaces each agent's bash tool with one constructed via
 // NewExecToolWithDeps, injecting the policy auditor (SEC-05), the ADR-035
-// god-mode/egress-proxy hardening deps, and the deny-pattern configuration
-// (ADR-036 — this is now the ONE registration path for `bash`, folding in what
-// used to be the separate workspace_shell/workspace_shell_bg wiring in
-// WireTier13Deps). This runs after NewAgentInstance has created the default
+// god-mode/egress-proxy hardening deps, and the ADR-092 permission deps
+// (mode resolver, approval fallback, grant store, operator command rules).
+// This is the ONE registration path for `bash` (ADR-036). This runs after NewAgentInstance has created the default
 // bash tool so that all other tool setup (allow paths) is preserved — we only
 // add the security deps on top.
 //
@@ -61,8 +61,8 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 	allowReadPaths := buildAllowReadPatterns(cfg)
 
 	// O14 god-mode: the single source of truth for the sandbox escape hatch
-	// (ADR-035). When active: full host fs + syscalls, network egress open,
-	// shell guard / deny-patterns off, regardless of per-agent shell policy.
+	// (ADR-035). When active: full host fs + syscalls, network egress open.
+	// ADR-092 D3 deny rules still apply (enforced inside the bash tool).
 	godMode := GodModeActive(cfg)
 
 	for _, agentID := range registry.ListAgentIDs() {
@@ -88,6 +88,19 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 		if al.policyAuditor != nil {
 			deps.PolicyAuditor = al.policyAuditor
 		}
+		// ADR-092: mode resolution, the interactive escalation fallback,
+		// the session grant store (the SAME instance AgentLoop.
+		// ApprovalGrants() returns, so a grant recorded by the tool is the
+		// one the gateway and delegate inheritance see), and the operator
+		// command rules. Nil-guarded for the same typed-nil reason as
+		// PolicyAuditor above; a nil gate leaves the tool failing closed to
+		// Ask.
+		if al.shellGate != nil {
+			deps.ShellMode = al.shellGate
+			deps.ApprovalRequester = al.shellGate
+		}
+		deps.ApprovalGrants = al.approvalGrants
+		deps.CommandRules = append([]shellrule.Rule(nil), cfg.Sandbox.CommandRules...)
 
 		restrict := cfg.Agents.Defaults.RestrictToWorkspace
 		execTool, err := tools.NewExecToolWithDeps(agent.Home, restrict, cfg, deps, allowReadPaths)

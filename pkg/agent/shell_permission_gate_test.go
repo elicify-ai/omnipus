@@ -9,88 +9,104 @@ package agent
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/shellrule"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-func TestShellPermissionGate_ResolveShellMode_GlobalOnly(t *testing.T) {
-	al, cfg, _, _, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-	cfg.Sandbox.ToolPolicies = map[string]string{"bash": "allow"}
-
-	gate := &ShellPermissionGate{Loop: al}
-	got := gate.ResolveShellMode(context.Background(), "some-agent", "some-session")
-	assert.Equal(t, tools.ShellModeAuto, got, "bash=allow, no GodMode -> Auto")
+// newGateTestLoop builds an AgentLoop through NewAgentLoop with the bash
+// ceiling and Auto-approve settings the case needs set BEFORE construction,
+// because ResolveApprovalToolPolicy reads the policy snapshot each agent
+// instance takes at construction time.
+func newGateTestLoop(t *testing.T, bashPolicy string, autoApprove bool, agents ...config.AgentConfig) *AgentLoop {
+	t.Helper()
+	home := filepath.Join(t.TempDir(), "home")
+	require.NoError(t, os.MkdirAll(home, 0o700))
+	cfg := &config.Config{}
+	cfg.Agents.Defaults = config.AgentDefaults{
+		Home:              home,
+		DefaultModel:      config.DefaultModel{Model: "test-model"},
+		MaxTokens:         4096,
+		MaxToolIterations: 10,
+	}
+	cfg.Agents.List = append([]config.AgentConfig{{ID: testDefaultAgentID, Home: home}}, agents...)
+	cfg.Sandbox.ToolPolicies = map[string]string{"bash": bashPolicy}
+	cfg.Sandbox.AutoApprove = autoApprove
+	return mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 }
 
-func TestShellPermissionGate_ResolveShellMode_GodMode(t *testing.T) {
-	al, cfg, _, _, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-	cfg.Sandbox.ToolPolicies = map[string]string{"bash": "allow"}
-	cfg.Sandbox.GodMode = true
-
-	gate := &ShellPermissionGate{Loop: al}
-	got := gate.ResolveShellMode(context.Background(), "some-agent", "some-session")
-	assert.Equal(t, tools.ShellModeGod, got)
+// withKernelSandbox registers a per-turn kernel policy base for the test's
+// duration — the predicate Auto needs (FR-008) — and removes it afterwards.
+func withKernelSandbox(t *testing.T) {
+	t.Helper()
+	sandbox.RegisterTurnPolicyBase(&sandbox.TurnPolicyInput{HomePath: t.TempDir()})
+	t.Cleanup(func() { sandbox.RegisterTurnPolicyBase(nil) })
 }
 
-func TestShellPermissionGate_ResolveShellMode_AskWhenBashPolicyNotAllow(t *testing.T) {
-	al, cfg, _, _, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-	cfg.Sandbox.ToolPolicies = map[string]string{"bash": "ask"}
+func TestShellPermissionGate_LiveMode(t *testing.T) {
+	ctx := context.Background()
 
-	gate := &ShellPermissionGate{Loop: al}
-	got := gate.ResolveShellMode(context.Background(), "some-agent", "some-session")
-	assert.Equal(t, tools.ShellModeAsk, got)
-}
-
-func TestShellPermissionGate_ResolveShellMode_AgentOverrideTightensAuto(t *testing.T) {
-	al, cfg, _, _, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-	cfg.Sandbox.ToolPolicies = map[string]string{"bash": "allow"}
-	agentID := "tightened-agent"
-	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
-		ID: agentID,
-		Tools: &config.AgentToolsCfg{
-			Builtin: config.AgentBuiltinToolsCfg{
-				Policies: map[string]config.ToolPolicy{"bash": config.ToolPolicyAsk},
-			},
-		},
+	t.Run("ask policy + Auto-approve on + kernel sandbox resolves Auto", func(t *testing.T) {
+		withKernelSandbox(t)
+		al := newGateTestLoop(t, "ask", true)
+		assert.Equal(t, tools.ShellModeAuto, al.shellGate.ResolveShellMode(ctx, testDefaultAgentID, "sess"))
 	})
-
-	gate := &ShellPermissionGate{Loop: al}
-	got := gate.ResolveShellMode(context.Background(), agentID, "some-session")
-	assert.Equal(t, tools.ShellModeAsk, got, "the agent's own stricter bash override must tighten the global Auto default")
-}
-
-func TestShellPermissionGate_ResolveShellMode_ChatModifierTightens(t *testing.T) {
-	al, cfg, _, _, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-	cfg.Sandbox.ToolPolicies = map[string]string{"bash": "allow"}
-
-	store := NewSessionModeStore()
-	store.Set("chat-session", ShellModeAsk)
-	gate := &ShellPermissionGate{Loop: al, ModeStore: store}
-
-	got := gate.ResolveShellMode(context.Background(), "some-agent", "chat-session")
-	assert.Equal(t, tools.ShellModeAsk, got, "the per-chat modifier must tighten the global Auto default")
+	t.Run("no kernel sandbox degrades Auto to Ask (FR-008)", func(t *testing.T) {
+		sandbox.RegisterTurnPolicyBase(nil)
+		al := newGateTestLoop(t, "ask", true)
+		assert.Equal(t, tools.ShellModeAsk, al.shellGate.ResolveShellMode(ctx, testDefaultAgentID, "sess"))
+	})
+	t.Run("global Auto-approve off resolves Ask", func(t *testing.T) {
+		withKernelSandbox(t)
+		al := newGateTestLoop(t, "ask", false)
+		assert.Equal(t, tools.ShellModeAsk, al.shellGate.ResolveShellMode(ctx, testDefaultAgentID, "sess"))
+	})
+	t.Run("per-agent off-switch resolves Ask", func(t *testing.T) {
+		withKernelSandbox(t)
+		al := newGateTestLoop(t, "ask", true, config.AgentConfig{ID: "jim", AutoApproveDisabled: true})
+		assert.Equal(t, tools.ShellModeAsk, al.shellGate.ResolveShellMode(ctx, "jim", "sess"))
+		assert.Equal(t, tools.ShellModeAuto, al.shellGate.ResolveShellMode(ctx, testDefaultAgentID, "sess"),
+			"another agent still follows the global default")
+	})
+	t.Run("per-chat on loosens past a global off", func(t *testing.T) {
+		withKernelSandbox(t)
+		al := newGateTestLoop(t, "ask", false)
+		al.SessionModes().Set("chat-on", true)
+		assert.Equal(t, tools.ShellModeAuto, al.shellGate.ResolveShellMode(ctx, testDefaultAgentID, "chat-on"))
+		assert.Equal(t, tools.ShellModeAsk, al.shellGate.ResolveShellMode(ctx, testDefaultAgentID, "other-chat"))
+	})
+	t.Run("per-chat off tightens a global on", func(t *testing.T) {
+		withKernelSandbox(t)
+		al := newGateTestLoop(t, "ask", true)
+		al.SessionModes().Set("chat-off", false)
+		assert.Equal(t, tools.ShellModeAsk, al.shellGate.ResolveShellMode(ctx, testDefaultAgentID, "chat-off"))
+	})
+	t.Run("allow policy never gets the Auto machinery", func(t *testing.T) {
+		withKernelSandbox(t)
+		al := newGateTestLoop(t, "allow", true)
+		assert.Equal(t, tools.ShellModeAsk, al.shellGate.ResolveShellMode(ctx, testDefaultAgentID, "sess"))
+	})
+	t.Run("a mode pinned by the loop wins over the live value", func(t *testing.T) {
+		withKernelSandbox(t)
+		al := newGateTestLoop(t, "ask", true)
+		pinned := withPinnedShellMode(ctx, tools.ShellModeAsk)
+		assert.Equal(t, tools.ShellModeAsk, al.shellGate.ResolveShellMode(pinned, testDefaultAgentID, "sess"))
+	})
 }
 
 func TestShellPermissionGate_ResolveShellMode_NilReceiverFailsClosed(t *testing.T) {
 	var gate *ShellPermissionGate
-	got := gate.ResolveShellMode(context.Background(), "a", "s")
-	assert.Equal(t, tools.ShellModeAsk, got)
-
-	gate2 := &ShellPermissionGate{} // Loop is nil
-	got2 := gate2.ResolveShellMode(context.Background(), "a", "s")
-	assert.Equal(t, tools.ShellModeAsk, got2)
+	assert.Equal(t, tools.ShellModeAsk, gate.ResolveShellMode(context.Background(), "a", "s"))
+	assert.Equal(t, tools.ShellModeAsk, (&ShellPermissionGate{}).ResolveShellMode(context.Background(), "a", "s"))
 }
 
 // TestShellPermissionGate_RequestShellApproval_ReachesCheckGrantOrRequestApproval

@@ -7,6 +7,8 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/elicify-ai/omnipus/pkg/shellrule"
 )
 
 // SkillTrustLevel controls how skills without a verifiable SHA-256 hash are handled (SEC-09).
@@ -602,6 +604,16 @@ type OmnipusSandboxConfig struct {
 	// (pkg/sysagent/tools/config.go::blockedConfigKeys), so an agent cannot
 	// change this field.
 	AutoApprove bool `json:"auto_approve,omitempty"`
+
+	// CommandRules is the ADR-092 D3 operator shell command rule list:
+	// {action: allow|ask|deny, binary, arg_prefix?}, evaluated for every
+	// bash call in every mode (God Mode included), deny beats ask beats
+	// allow. Read by pkg/agent's exec-tool wiring (loop_wire.go) into
+	// tools.ExecToolDeps.CommandRules; written by the re-auth-gated
+	// sandbox-config PUT (pkg/gateway/rest_sandbox_config.go), which
+	// re-wires the bash tool so a change applies without a restart.
+	// Validated at boot and on every write by ValidateCommandRules.
+	CommandRules []shellrule.Rule `json:"command_rules,omitempty"`
 
 	// Experimental holds feature flags for dark-launched capabilities.
 	// All flags default to false (deny-by-default per SEC design).

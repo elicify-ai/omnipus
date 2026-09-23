@@ -371,6 +371,13 @@ func (vb *validateBootConfigState) validateSandbox() (error, bool) {
 	if err := vb.cfg.Sandbox.DevServerPortRange.Validate(); err != nil {
 		return err, true
 	}
+
+	// ADR-092 D3: operator command rules. Same validator as the REST write
+	// path, so a hand-edited config.json cannot carry a rule the matcher
+	// would silently ignore (an unknown action) or never match.
+	if err := ValidateCommandRules(vb.cfg.Sandbox.CommandRules); err != nil {
+		return fmt.Errorf("config error: sandbox.%w", err), true
+	}
 	return nil, false
 }
 

@@ -399,6 +399,19 @@ type AgentLoop struct {
 	// async/await paths (Inherit — pkg/agent/subturn.go).
 	approvalGrants *security.ApprovalGrantStore
 
+	// sessionModes holds the ADR-092 per-chat Auto-approve modifier (the
+	// session_mode_update WS frame). Session-scoped like approvalGrants:
+	// cleared by CloseSession, copied to delegates at spawn. Always non-nil
+	// after NewAgentLoop.
+	sessionModes *SessionModeStore
+
+	// shellGate is the single ADR-092 adapter every agent's bash tool is
+	// wired with (ExecToolDeps.ShellMode / ApprovalRequester), and the one
+	// resolveAskPolicy consults to decide whether a bash call prompts before
+	// dispatch — one resolver for both, so the two cannot disagree. Always
+	// non-nil after NewAgentLoop.
+	shellGate *ShellPermissionGate
+
 	// asyncNotifier is the single process-wide AsyncNotifier instance
 	// (async-notifier-spec.md), extracted from the formerly-inline
 	// asyncCallback closure below. Scoped to the loop's lifetime the same

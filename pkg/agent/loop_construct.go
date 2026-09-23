@@ -396,6 +396,12 @@ func (nal *newAgentLoop) initializeRuntime() (*AgentLoop, error) {
 	// async/await paths. Always non-nil.
 	nal.al.approvalGrants = security.NewApprovalGrantStore()
 
+	// ADR-092: per-chat Auto-approve modifier and the bash permission gate
+	// built over it. Constructed before wireExecToolDeps below, which
+	// injects the gate into every agent's bash tool.
+	nal.al.sessionModes = NewSessionModeStore()
+	nal.al.shellGate = &ShellPermissionGate{Loop: nal.al, ModeStore: nal.al.sessionModes}
+
 	// Process-wide AsyncNotifier (async-notifier-spec.md): the reusable
 	// "wake the conversation when background work finishes" primitive,
 	// extracted from the asyncCallback closure below. Always non-nil.

@@ -295,57 +295,6 @@ func (al *AgentLoop) loadToolApprover() PolicyApprover {
 	return a
 }
 
-// ResolveEffectiveShellMode resolves the ADR-092 D1 three-level, tighten-only
-// mode merge — global -> per-agent -> per-chat modifier — into the single
-// named ShellMode (Ask/Auto/God) in force for one turn's bash calls. This is
-// the mode-resolution CONTRACT other lanes build against:
-//
-//   - Lane L5's mode-write handlers (global PUT via rest_sandbox_config.go,
-//     per-agent/per-chat writes) call this with the CANDIDATE value spliced
-//     into the appropriate slot and compare the result to the candidate: if
-//     they differ, the candidate would have loosened the effective mode and
-//     the write MUST be rejected with 4xx (FR-003) before ever reaching
-//     config.json or SessionModeStore.Set.
-//   - Lane L4's bash exec gate calls this with the LIVE values (global from
-//     GlobalShellMode(cfg), agent from AgentShellModeOverride(cfg, agentID),
-//     chat from SessionModeStore.Get(sessionID)) to learn which mode governs
-//     the command about to run, then translates the result into the D3/D7/D8
-//     enforcement decisions those lanes own.
-//
-// global is REQUIRED (always a valid ShellMode — GlobalShellMode never
-// returns the zero value). agentOverride and chatModifier are nil when that
-// layer has no explicit value (agent rides the ceiling / no chat modifier
-// set) — nil at a layer means "defer to the layer above," never "loosen to
-// the loosest possible mode."
-//
-// Tighten-only is structural, not merely checked: every layer's
-// contribution is folded in via tighterShellMode (sessionmode.go), so a
-// looser agentOverride or chatModifier — whether from a bypassed write-time
-// check, a hand-edited config.json, or a stale SessionModeStore entry —
-// NEVER widens the result past what the layer above it already resolved to.
-// This is the resolution-time backstop under FR-003's write-time 4xx, not a
-// substitute for it: S43/S44 (the write-time rejection tests) are lane L5's
-// job; the tests in loop_policy_mode_test.go prove THIS function refuses to
-// honor a loosening value even when one somehow reaches it.
-//
-// God Mode interaction: ShellModeGod can only ever come from global (D1 —
-// AgentShellModeOverride and SessionModeStore never produce it). Once global
-// is ShellModeGod, tighterShellMode(ShellModeGod, x) == x for any x != "" —
-// i.e. an agent or chat override still tightens God Mode down to Ask/Auto
-// exactly as it would tighten Auto, with no special-casing required; the
-// ordinary merge already gives God Mode zero special treatment beyond being
-// the loosest rank.
-func ResolveEffectiveShellMode(global ShellMode, agentOverride, chatModifier *ShellMode) ShellMode {
-	eff := global
-	if agentOverride != nil {
-		eff = tighterShellMode(eff, *agentOverride)
-	}
-	if chatModifier != nil {
-		eff = tighterShellMode(eff, *chatModifier)
-	}
-	return eff
-}
-
 // CheckGrantOrRequestApproval is the SOLE consultation point for tool-approval
 // grants on the "ask" policy path (ADR-036 §3.4). It first checks the
 // session-scoped "Always Allow" grant store (al.ApprovalGrants()); only when
@@ -548,76 +497,112 @@ func (al *AgentLoop) emitScheduledAutoDenyAudit(
 }
 
 // ShellPermissionGate implements tools.ShellModeResolver and
-// tools.ShellApprovalRequester — the ADR-092 D1/FR-039 adapter connecting
-// pkg/tools' bash-tool enforcement (mode resolution, and the D3 ask-rule /
-// D7 / D8 escalation call sites) to the AgentLoop primitives that already
-// exist for exactly this purpose, without pkg/tools importing pkg/agent
-// (see shell_permission_mode.go's own package-boundary comment for why that
-// import would cycle).
+// tools.ShellApprovalRequester: the ADR-092 adapter connecting the bash
+// tool's enforcement (pkg/tools/shell_permission_mode.go — D3 ask rules, D7
+// filesystem and D8 network pre-flights) to the AgentLoop state that decides
+// them, without pkg/tools importing pkg/agent (that import would cycle).
 //
-// Constructed once at wire time (pkg/agent/loop_wire.go, lane L5) and
-// injected via ExecToolDeps.ShellMode / ExecToolDeps.ApprovalRequester —
-// both fields on the SAME *ShellPermissionGate value, since one adapter
-// implements both interfaces. ModeStore is a *SessionModeStore
-// (sessionmode.go); a nil ModeStore is valid (no per-chat modifier layer
-// wired yet) and simply means the per-chat modifier never applies — the
-// global/per-agent layers still resolve normally.
+// One instance per AgentLoop, built in NewAgentLoop and injected into every
+// agent's bash tool by wireExecToolDepsOn as both ExecToolDeps.ShellMode and
+// ExecToolDeps.ApprovalRequester. ModeStore is the loop's own per-chat
+// Auto-approve store (AgentLoop.SessionModes()).
 type ShellPermissionGate struct {
 	Loop      *AgentLoop
 	ModeStore *SessionModeStore
 }
 
-// ResolveShellMode implements tools.ShellModeResolver: the three-level
-// tighten-only mode merge (global -> per-agent -> per-chat) ADR-092 D1/FR-002
-// describes, built entirely from ResolveEffectiveShellMode and the two
-// presentation-layer readers (GlobalShellMode, AgentShellModeOverride) lane
-// L2 already built — this function adds no new merge logic of its own, it
-// only supplies the LIVE values (FR-002's own doc comment: "Lane L4's bash
-// exec gate calls this with the LIVE values").
-//
-// A nil receiver or a nil Loop fails CLOSED to ShellModeAsk — the same
-// fail-safe direction every other resolver in this package takes on a
-// missing dependency, never fail-open to a looser mode.
+// shellModeKey carries the bash mode the agent loop settled on for one tool
+// call (see withPinnedShellMode).
+type shellModeKey struct{}
+
+// withPinnedShellMode records, on the tool call's context, the mode the
+// agent loop used when it decided whether to prompt before dispatch
+// (resolveAskPolicy). ResolveShellMode returns this pinned value instead of
+// re-resolving, so the tool enforces exactly the decision the loop acted on
+// (ADR-092 FR-006: a command is resolved against the mode in force at the
+// pre-dispatch check). Without the pin, a chat toggled from Auto to off
+// between the loop skipping the prompt and the tool running would leave the
+// tool in Ask mode, which assumes the loop already prompted: the command
+// would run with neither a prompt nor the Auto pre-flights.
+func withPinnedShellMode(ctx context.Context, mode tools.ShellMode) context.Context {
+	return context.WithValue(ctx, shellModeKey{}, mode)
+}
+
+func pinnedShellMode(ctx context.Context) (tools.ShellMode, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	m, ok := ctx.Value(shellModeKey{}).(tools.ShellMode)
+	return m, ok && m != ""
+}
+
+// ResolveShellMode implements tools.ShellModeResolver. A mode pinned on ctx
+// by the agent loop wins; otherwise the live value is resolved (liveMode).
+// A nil receiver or nil Loop fails closed to Ask.
 func (g *ShellPermissionGate) ResolveShellMode(ctx context.Context, agentID, sessionID string) tools.ShellMode {
+	if m, ok := pinnedShellMode(ctx); ok {
+		return m
+	}
+	return g.liveMode(agentID, sessionID)
+}
+
+// liveMode resolves which bash enforcement mode applies to agentID's call in
+// sessionID right now:
+//
+//	God Mode active                          -> God (no approvals, no sandbox;
+//	                                            D3 deny rules still apply)
+//	bash policy is not "ask"                 -> Ask. "allow" runs without the
+//	                                            Auto machinery (the contract:
+//	                                            Auto never touches an allow
+//	                                            tool); "deny" never reaches
+//	                                            execution at all.
+//	"ask" + Auto-approve off                 -> Ask (the loop prompts first)
+//	"ask" + Auto-approve on + no kernel      -> Ask (FR-008: with nothing to
+//	  sandbox enforcing                         check a command against, Auto
+//	                                            behaves like Ask)
+//	"ask" + Auto-approve on + kernel sandbox -> Auto (no upfront prompt; the
+//	                                            tool's pre-flights ask only
+//	                                            for what the sandbox cannot
+//	                                            confine)
+//
+// Auto-approve is ResolveAutoApprove over cfg.Sandbox.AutoApprove, the
+// agent's AutoApproveDisabled, and the chat's SessionModeStore modifier.
+// Every missing dependency fails closed to Ask.
+func (g *ShellPermissionGate) liveMode(agentID, sessionID string) tools.ShellMode {
 	if g == nil || g.Loop == nil {
 		return tools.ShellModeAsk
 	}
 	cfg := g.Loop.GetConfig()
-	global := GlobalShellMode(cfg)
-
-	var agentPtr, chatPtr *ShellMode
-	if m, ok := AgentShellModeOverride(cfg, agentID); ok {
-		agentPtr = &m
+	if cfg == nil {
+		return tools.ShellModeAsk
 	}
-	if g.ModeStore != nil {
-		if m, ok := g.ModeStore.Get(sessionID); ok {
-			chatPtr = &m
-		}
+	if GodModeActive(cfg) {
+		return tools.ShellModeGod
 	}
-
-	eff := ResolveEffectiveShellMode(global, agentPtr, chatPtr)
-	return tools.ShellMode(eff)
+	if g.Loop.ResolveApprovalToolPolicy(agentID, "bash") != string(config.ToolPolicyAsk) {
+		return tools.ShellModeAsk
+	}
+	var chat *bool
+	if v, ok := g.ModeStore.Get(sessionID); ok {
+		chat = &v
+	}
+	if !ResolveAutoApprove(cfg, agentID, chat) {
+		return tools.ShellModeAsk
+	}
+	if !sandbox.TurnPolicyBaseInstalled() {
+		return tools.ShellModeAsk
+	}
+	return tools.ShellModeAuto
 }
 
-// RequestShellApproval implements tools.ShellApprovalRequester — the two
-// NEW ADR-092 FR-039 call sites (D3 ask-rule verdict, D7/D8 pre-flight
-// escalation) reach AgentLoop.CheckGrantOrRequestApproval through here, the
-// SAME consultation function the classic "ask" tool-policy path
-// (resolveAskPolicy) already used, fixing the B-1 reachability defect: an
-// "allow" ceiling (which is exactly what Auto mode presents as, D1/FR-001)
-// never touched the grant store at all before this adapter existed.
+// RequestShellApproval implements tools.ShellApprovalRequester: the D3
+// ask-rule and D7/D8 pre-flight escalation call sites in pkg/tools reach
+// AgentLoop.CheckGrantOrRequestApproval — the same consultation function the
+// classic "ask" tool-policy path uses — through here. pkg/tools checks its
+// own prefix/path/network grant kinds first and calls this only to reach the
+// interactive approval dialog.
 //
-// pkg/tools' own D7/D8/D3-prefix grant checks (ApprovalGrantStore.
-// PathGrantsFor/HasNetworkGrant/IsPrefixAllowed, consulted directly against
-// ExecToolDeps.ApprovalGrants before this is ever called) already handle
-// the NEW grant kinds this ADR adds; CheckGrantOrRequestApproval's own
-// exact-fingerprint IsAllowed check is harmless-but-redundant for those
-// synthetic escalation args (it will simply miss), and this function adds
-// nothing beyond forwarding to it — the interactive dialog machinery is
-// what pkg/tools has no other way to reach.
-//
-// A nil receiver or a nil Loop fails CLOSED (approved=false) rather than
-// panicking or silently auto-approving.
+// A nil receiver or nil Loop fails closed (approved=false).
 func (g *ShellPermissionGate) RequestShellApproval(
 	ctx context.Context,
 	sessionID, agentID, toolName, toolCallID, turnID string,
@@ -627,4 +612,15 @@ func (g *ShellPermissionGate) RequestShellApproval(
 		return false, "shell permission gate not wired"
 	}
 	return g.Loop.CheckGrantOrRequestApproval(ctx, sessionID, agentID, toolName, toolCallID, turnID, args)
+}
+
+// bashShellModeFor returns the ADR-092 mode for a bash call in ts's turn, or
+// "" for any other tool. resolveAskPolicy records it before deciding whether
+// to prompt, and the same value is pinned on the bash tool's context, so the
+// prompt decision and the tool's enforcement come from one resolution.
+func (al *AgentLoop) bashShellModeFor(ts *turnState, toolName string) tools.ShellMode {
+	if toolName != "bash" || ts == nil {
+		return ""
+	}
+	return al.shellGate.liveMode(ts.agentID, ts.transcriptSessionID)
 }
