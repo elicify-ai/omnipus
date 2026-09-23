@@ -4,9 +4,13 @@ import { useResolvedAutoApprove } from '@/hooks/useResolvedAutoApprove'
 
 /**
  * ChatModeBadge — chat-header indicator of the active chat's resolved
- * ADR-092 permission state. Three renderings, per the founder's ruling that
+ * ADR-092 permission state. Four renderings, per the founder's ruling that
  * "safe" is what never leaves the kernel sandbox, judged per call:
  *
+ *   God Mode active                         → "God Mode" — a stronger floor
+ *                                               than Auto/Ask; checked FIRST,
+ *                                               whatever the other two say
+ *                                               (SandboxStatus's own contract).
  *   Auto-approve off                        → "Ask" (kernel state irrelevant —
  *                                               every "ask" tool always prompts)
  *   Auto-approve on,  kernel sandbox active  → "Auto"
@@ -20,7 +24,18 @@ import { useResolvedAutoApprove } from '@/hooks/useResolvedAutoApprove'
  * does, so the two can never disagree about the chat's current state.
  */
 export function ChatModeBadge({ className }: { className?: string }) {
-  const { resolved, kernelSandboxActive } = useResolvedAutoApprove()
+  const { resolved, kernelSandboxActive, godModeActive } = useResolvedAutoApprove()
+
+  if (godModeActive) {
+    // error variant, matching GodModeActiveBanner's own red styling — God
+    // Mode is the highest-risk state this badge can report, not a neutral
+    // status like Ask/Auto.
+    return (
+      <Badge variant="error" className={className} data-testid="chat-mode-badge">
+        God Mode
+      </Badge>
+    )
+  }
 
   if (!resolved) {
     return (

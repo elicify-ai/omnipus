@@ -21,10 +21,28 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import * as api from '@/lib/api'
+import type { SandboxStatus } from '@/lib/api'
 import { AutoApprovePicker } from './AutoApprovePicker'
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
+}
+
+// A full, realistic SandboxStatus (every required field present, not just
+// the Auto-approve-related optional ones) — see ChatModeBadge.test.tsx's
+// identical helper for why: a fixture that only ever mocked the optional
+// fields, cast through `as never`, is exactly what hid ADR-092 review
+// finding A (the real handler omitted these fields entirely).
+function sandboxStatus(overrides: Partial<SandboxStatus> = {}): SandboxStatus {
+  return {
+    backend: 'landlock',
+    available: true,
+    kernel_level: true,
+    policy_applied: true,
+    seccomp_enabled: true,
+    bind_ports_count: 0,
+    ...overrides,
+  }
 }
 
 function renderPicker(props: { disabled?: boolean } = {}) {
@@ -45,12 +63,12 @@ beforeEach(() => {
     useChatStore.setState({ autoApproveEffective: undefined, sessionsById: {} })
   })
   vi.mocked(api.fetchAgents).mockResolvedValue([AGENT_NO_OVERRIDE] as never)
-  vi.mocked(api.fetchSandboxStatus).mockResolvedValue({ auto_approve_effective: false, kernel_sandbox_active: true } as never)
+  vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({ auto_approve_effective: false, kernel_sandbox_active: true }))
 })
 
 describe('AutoApprovePicker — resolution', () => {
   it('reflects global on, no per-agent/per-chat override', async () => {
-    vi.mocked(api.fetchSandboxStatus).mockResolvedValue({ auto_approve_effective: true, kernel_sandbox_active: true } as never)
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({ auto_approve_effective: true, kernel_sandbox_active: true }))
     renderPicker()
     await waitFor(() => {
       expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-checked', 'true')
@@ -66,7 +84,7 @@ describe('AutoApprovePicker — resolution', () => {
 
   it('the per-agent auto_approve_disabled floors it off even when global is on', async () => {
     vi.mocked(api.fetchAgents).mockResolvedValue([AGENT_FORCES_OFF] as never)
-    vi.mocked(api.fetchSandboxStatus).mockResolvedValue({ auto_approve_effective: true, kernel_sandbox_active: true } as never)
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({ auto_approve_effective: true, kernel_sandbox_active: true }))
     renderPicker()
     await waitFor(() => {
       expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-checked', 'false')

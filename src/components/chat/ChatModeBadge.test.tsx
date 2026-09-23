@@ -24,10 +24,32 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import * as api from '@/lib/api'
+import type { SandboxStatus } from '@/lib/api'
 import { ChatModeBadge } from './ChatModeBadge'
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
+}
+
+// A full, realistic SandboxStatus — every REQUIRED field
+// (contracts/components/schemas/SandboxStatus.yaml: backend, available,
+// kernel_level, policy_applied, seccomp_enabled, bind_ports_count) present,
+// not just the three optional Auto-approve-related fields this suite cares
+// about. Fixtures that only ever mocked the optional fields, cast through
+// `as never`, are exactly the pattern that hid ADR-092 review finding A: the
+// real GET /security/sandbox-status handler omitted kernel_sandbox_active/
+// auto_approve_effective entirely until the gateway lane's fix landed, and a
+// type-erased fixture never would have caught that mismatch.
+function sandboxStatus(overrides: Partial<SandboxStatus> = {}): SandboxStatus {
+  return {
+    backend: 'landlock',
+    available: true,
+    kernel_level: true,
+    policy_applied: true,
+    seccomp_enabled: true,
+    bind_ports_count: 0,
+    ...overrides,
+  }
 }
 
 function renderBadge() {
@@ -49,7 +71,7 @@ beforeEach(() => {
 
 describe('ChatModeBadge — three states', () => {
   it('reads "Ask" when Auto-approve is off', async () => {
-    vi.mocked(api.fetchSandboxStatus).mockResolvedValue({ auto_approve_effective: false, kernel_sandbox_active: true } as never)
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({ auto_approve_effective: false, kernel_sandbox_active: true }))
     renderBadge()
     await waitFor(() => {
       expect(screen.getByTestId('chat-mode-badge')).toHaveTextContent('Ask')
@@ -57,7 +79,7 @@ describe('ChatModeBadge — three states', () => {
   })
 
   it('reads "Auto" when Auto-approve is on and the kernel sandbox is active', async () => {
-    vi.mocked(api.fetchSandboxStatus).mockResolvedValue({ auto_approve_effective: true, kernel_sandbox_active: true } as never)
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({ auto_approve_effective: true, kernel_sandbox_active: true }))
     renderBadge()
     await waitFor(() => {
       expect(screen.getByTestId('chat-mode-badge')).toHaveTextContent('Auto')
@@ -66,7 +88,7 @@ describe('ChatModeBadge — three states', () => {
   })
 
   it('reads "Auto → Ask" with an explanatory tooltip when Auto-approve is on but no kernel sandbox is active', async () => {
-    vi.mocked(api.fetchSandboxStatus).mockResolvedValue({ auto_approve_effective: true, kernel_sandbox_active: false } as never)
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({ auto_approve_effective: true, kernel_sandbox_active: false }))
     renderBadge()
     const trigger = await screen.findByTestId('chat-mode-badge-trigger')
     expect(trigger).toHaveTextContent('Auto → Ask')
@@ -82,7 +104,7 @@ describe('ChatModeBadge — three states', () => {
     vi.mocked(api.fetchAgents).mockResolvedValue([
       { id: 'mia', name: 'Mia', type: 'core', status: 'active', auto_approve_disabled: true },
     ] as never)
-    vi.mocked(api.fetchSandboxStatus).mockResolvedValue({ auto_approve_effective: true, kernel_sandbox_active: true } as never)
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({ auto_approve_effective: true, kernel_sandbox_active: true }))
     renderBadge()
     await waitFor(() => {
       expect(screen.getByTestId('chat-mode-badge')).toHaveTextContent('Ask')
@@ -90,7 +112,7 @@ describe('ChatModeBadge — three states', () => {
   })
 
   it('a resolved per-chat override can loosen past a globally-off default', async () => {
-    vi.mocked(api.fetchSandboxStatus).mockResolvedValue({ auto_approve_effective: false, kernel_sandbox_active: true } as never)
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({ auto_approve_effective: false, kernel_sandbox_active: true }))
     act(() => {
       // The hook reads the foreground-synced field, set directly here — see
       // AutoApprovePicker.test.tsx's identical comment for why.
@@ -100,5 +122,48 @@ describe('ChatModeBadge — three states', () => {
     await waitFor(() => {
       expect(screen.getByTestId('chat-mode-badge')).toHaveTextContent('Auto')
     })
+  })
+})
+
+// ADR-092 review finding A: SandboxStatus.god_mode_active is a stronger
+// floor than Auto — checked first, whatever auto_approve_effective and
+// kernel_sandbox_active say (contracts/components/schemas/SandboxStatus.yaml).
+describe('ChatModeBadge — God Mode floor (item 1)', () => {
+  it('reads "God Mode" when god_mode_active is true, even though auto_approve_effective is false', async () => {
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({
+      auto_approve_effective: false,
+      kernel_sandbox_active: true,
+      god_mode_active: true,
+    }))
+    renderBadge()
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-mode-badge')).toHaveTextContent('God Mode')
+    })
+    expect(screen.queryByTestId('chat-mode-badge')).not.toHaveTextContent('Ask')
+  })
+
+  it('reads "God Mode" even when auto_approve_effective is true and the kernel sandbox is active (not "Auto")', async () => {
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({
+      auto_approve_effective: true,
+      kernel_sandbox_active: true,
+      god_mode_active: true,
+    }))
+    renderBadge()
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-mode-badge')).toHaveTextContent('God Mode')
+    })
+  })
+
+  it('does not read "God Mode" when god_mode_active is false or absent', async () => {
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({
+      auto_approve_effective: false,
+      kernel_sandbox_active: true,
+      god_mode_active: false,
+    }))
+    renderBadge()
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-mode-badge')).toHaveTextContent('Ask')
+    })
+    expect(screen.queryByTestId('chat-mode-badge')).not.toHaveTextContent('God Mode')
   })
 })
