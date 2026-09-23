@@ -30,9 +30,9 @@ function makeToolCall(overrides: Partial<ToolCallWithId>): ToolCallWithId {
 
 // ── stable data-tool contract (gate 6, F1) ───────────────────────────────────
 // Pinned at the unit level (mirrors the same assertion in
-// GenericToolCall.test.tsx) — several consumers (e2e/visual-QA selectors,
-// SubagentBlock step rows) key off `data-tool` to find a specific tool call's
-// badge, so its presence/value is a contract, not an implementation detail.
+// GenericToolCall.test.tsx) — several consumers (e2e/visual-QA selectors) key
+// off `data-tool` to find a specific tool call's badge, so its presence/value
+// is a contract, not an implementation detail.
 
 describe('ToolCallBadge — stable data-tool contract (F1)', () => {
   it('renders the tool-call-badge root with a data-tool attribute matching the raw tool name', () => {
@@ -51,20 +51,18 @@ describe('ToolCallBadge — stable data-tool contract (F1)', () => {
 // ── delegation-denied branch (gate 3) — ported from GenericToolCall.tsx ──────
 // A denied delegate call rendered amber "Delegation denied · <axis>" via
 // GenericToolCall's live/replay path but red generic "Failed" via
-// ToolCallBadge (SubagentBlock steps / MessageItem history) for the exact
-// same DelegationFailure sentinel shape. Both callers must now render the
-// same chip.
+// ToolCallBadge (MessageItem's historical list) for the exact same
+// DelegationFailure sentinel shape. Both callers must now render the same
+// chip.
 //
-// Fix 2 (2026-07-16, revised): a denied delegate 'run' call (the default
-// action/shape these fixtures all use) is now hidden in the thread even on
-// error — isError no longer overrides delegate visibility (see
-// toolVisibility.ts's shouldRenderToolCall doc comment: the failure is
-// explained by the delegating agent's own response text, not a thread
-// chip). This describe block is testing the CHIP'S OWN render logic (does it
-// draw the amber "Delegation denied" branch correctly), which is a separate
-// concern from whether the row is visible by default — so verbose chat is
-// forced on here to get past the now-independent visibility gate, exactly
-// as a user who opted into verbose chat would see it.
+// ADR-091 D7/AC-7: a denied delegate 'run' call (the default action/shape
+// these fixtures all use) is visible in the thread by DEFAULT now — delegate
+// never consults isError at all (see toolVisibility.ts's shouldRenderToolCall
+// doc comment). This describe block is testing the CHIP'S OWN render logic
+// (does it draw the amber "Delegation denied" branch correctly), which is a
+// separate concern from default visibility — verbose chat is still forced on
+// here (harmless: verbose short-circuits to visible regardless) so this
+// block keeps working unchanged however default visibility evolves.
 
 describe('ToolCallBadge — delegation-denied branch (ported from GenericToolCall)', () => {
   beforeEach(() => {
@@ -402,8 +400,8 @@ describe('ToolCallBadge — flat text-line status dot', () => {
 
 // ── activity-bar tool visibility: verbose-chat gate ─────────────────────────
 // Traces to: src/lib/toolVisibility.ts shouldRenderToolCall — ToolCallBadge is
-// the single shared renderer used by both MessageItem (historical list) and
-// SubagentBlock (nested steps), so gating here covers both call sites.
+// rendered from MessageItem's historical/live list, its one production
+// caller (ADR-091 D10 deleted SubagentBlock, the other former caller).
 
 describe('ToolCallBadge — verbose chat gate', () => {
   beforeEach(() => {
@@ -451,10 +449,12 @@ describe('ToolCallBadge — verbose chat gate', () => {
   // (item 8c, 2026-07-16 fix wave): a LIVE toggle within a single render —
   // proves the row reacts to the store subscription rather than only being
   // correct at mount time (all the tests around this one render fresh per
-  // state instead).
-  it('a background delegate dispatch appears when verbose chat is toggled on live, and disappears when toggled back off — same render instance', () => {
+  // state instead). Uses a delegate STATUS poll (the one delegate shape
+  // still hidden by default, ADR-091 D7/AC-7) rather than a 'run' dispatch,
+  // since 'run' is now visible unconditionally and would never toggle.
+  it('a background delegate status poll appears when verbose chat is toggled on live, and disappears when toggled back off — same render instance', () => {
     render(
-      <ToolCallBadge toolCall={makeToolCall({ tool: 'delegate', params: {}, status: 'success' })} />
+      <ToolCallBadge toolCall={makeToolCall({ tool: 'delegate', params: { action: 'status' }, status: 'success' })} />
     )
     expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
 
@@ -469,10 +469,24 @@ describe('ToolCallBadge — verbose chat gate', () => {
     expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
   })
 
-  it('hides a background delegate dispatch by default (action=run, async=true)', () => {
+  // ADR-091 D7/AC-7: the parent's chat must show exactly the one line a
+  // delegation produces — the span/step surfaces this case used to defer to
+  // (SubagentBlock, shouldRenderSubagentSpan) are deleted, so this tool-call
+  // line is now the thread's only delegation surface and must be visible by
+  // default, not gated behind verbose chat.
+  it('shows a delegate run by default (action=run, async=true)', () => {
     render(
       <ToolCallBadge
         toolCall={makeToolCall({ tool: 'delegate', params: {}, status: 'success' })}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  it('hides a delegate status poll by default (noise, not a standalone action)', () => {
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({ tool: 'delegate', params: { action: 'status' }, status: 'success' })}
       />
     )
     expect(screen.queryByTestId('tool-call-badge')).toBeNull()
@@ -483,32 +497,10 @@ describe('ToolCallBadge — verbose chat gate', () => {
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 
-  // REVISED 2026-07-16 (was: "REGRESSION ... is NOT hidden" asserting
-  // visible-on-error): delegate no longer gets an isError override. A
-  // failed/denied delegate 'run' call is returned to the delegating agent's
-  // own turn as the tool result — that agent explains it in its own
-  // response text, and the raw denial stays inspectable in the
-  // ActivityPanel (surface="panel" — see ActivityPanel.test.tsx). The
-  // thread row stays hidden here; only verboseChatEnabled brings it back
-  // (see the next test).
-  it('a background delegate dispatch with an error status stays HIDDEN — no isError exception for delegate (LLM-mediated failure presentation)', () => {
-    render(
-      <ToolCallBadge
-        toolCall={makeToolCall({
-          tool: 'delegate',
-          params: {},
-          status: 'error',
-          error: 'delegation_denied',
-        })}
-      />
-    )
-    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
-  })
-
-  it('...but becomes visible once verbose chat is enabled', () => {
-    act(() => {
-      useChatPreferencesStore.setState({ verboseChatEnabled: true })
-    })
+  // ADR-091 D7/AC-7: delegate never consults isError — a 'run' call is
+  // already visible unconditionally (see the "shows a delegate run by
+  // default" test above), so an error status changes nothing for it.
+  it('a delegate run with an error status stays VISIBLE — same as any other outcome (ADR-091 D7/AC-7)', () => {
     render(
       <ToolCallBadge
         toolCall={makeToolCall({
@@ -522,9 +514,40 @@ describe('ToolCallBadge — verbose chat gate', () => {
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 
+  it('a delegate status poll with an error status stays HIDDEN — no isError exception for delegate', () => {
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({
+          tool: 'delegate',
+          params: { action: 'status' },
+          status: 'error',
+          error: 'timeout',
+        })}
+      />
+    )
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+  })
+
+  it('...but a hidden status poll becomes visible once verbose chat is enabled', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({
+          tool: 'delegate',
+          params: { action: 'status' },
+          status: 'error',
+          error: 'timeout',
+        })}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
   // REVISED 2026-07-16 (was: "REGRESSION ... is NOT hidden"): the
-  // background-dispatch/poll/read sub-cases of `bash` carry the same
-  // LLM-mediated rationale as delegate above — no isError exception.
+  // background-dispatch/poll/read sub-cases of `bash` — unlike delegate —
+  // carry a no-isError-exception rule.
   it('a background bash dispatch with an error status stays HIDDEN — no isError exception for background bash', () => {
     render(
       <ToolCallBadge
@@ -541,14 +564,13 @@ describe('ToolCallBadge — verbose chat gate', () => {
 
   // REVISED 2026-07-16 (was: "REGRESSION ... is NOT hidden"): same
   // no-isError-exception rule applies to the `_marshal_error` sentinel too
-  // — it is just another outcome signal, and delegate/background-bash
-  // ignore outcome entirely now (verbose-only).
-  it('a background delegate dispatch with a _marshal_error result and success status stays HIDDEN', () => {
+  // for background bash — it is just another outcome signal.
+  it('a delegate status poll with a _marshal_error result and success status stays HIDDEN', () => {
     render(
       <ToolCallBadge
         toolCall={makeToolCall({
           tool: 'delegate',
-          params: {},
+          params: { action: 'status' },
           status: 'success',
           result: { _marshal_error: 'json: unsupported type: chan int' },
         })}
@@ -572,13 +594,13 @@ describe('ToolCallBadge — verbose chat gate', () => {
   })
 })
 
-// ── ADR-082 D9 review S11: a delegated worker's set_goal step is visible ─────
-// SubagentBlock renders a delegated worker's nested steps through this
-// component. `set_goal` refuses on a sub-turn (ADR-088 FR-005), and the
-// thread policy hides the raw `set_goal` chip by default — so the worker's
-// attempt used to vanish entirely. It now routes to the dedicated UI: the
-// quiet "Goal registration failed" trace for the refusal, the record card
-// for a success, and the ordinary raw badge once verbose chat is on.
+// ── ADR-082 D9 review S11: a delegated worker's set_goal call is visible ─────
+// `set_goal` refuses on a sub-turn (ADR-088 FR-005), and the thread policy
+// hides the raw `set_goal` chip by default — so a worker's own attempt used
+// to vanish entirely from this component's rendering. It now routes to the
+// dedicated UI: the quiet "Goal registration failed" trace for the refusal,
+// the record card for a success, and the ordinary raw badge once verbose
+// chat is on.
 
 describe('ToolCallBadge — set_goal routes to the dedicated goal UI (S11)', () => {
   beforeEach(() => {

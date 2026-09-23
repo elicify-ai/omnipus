@@ -4,7 +4,7 @@
 // origin/hotfix/v0.1.1 — see the header comment in toolVisibility.ts.
 
 import { describe, it, expect } from 'vitest'
-import { shouldRenderToolCall, shouldRenderToolCallInPanel } from './toolVisibility'
+import { shouldRenderToolCall } from './toolVisibility'
 
 describe('shouldRenderToolCall — ToolSearch', () => {
   it.each([
@@ -107,21 +107,24 @@ describe('shouldRenderToolCall — set_goal (ADR-088 D5/A-3)', () => {
 })
 
 describe('shouldRenderToolCall — delegate', () => {
-  // Fix 2 (user-approved 2026-07-16, revised same day): a 'run' delegation
-  // is hidden regardless of async — this INVERTS the pre-fix behavior for
-  // { action: 'run', async: false } (explicit blocking/sync run), which used
-  // to be visible. The thread's sole delegation surface is now the
-  // SubagentBlock span card (gated by shouldRenderSubagentSpan below), not
-  // this row.
+  // ADR-091 D7/AC-7 (revised from the Fix 2 hide-by-default rule): the
+  // SubagentBlock span card and its gate (`shouldRenderSubagentSpan`) are
+  // deleted — a child's own frames never arrive in the parent's bucket any
+  // more, so there is no span-level surface left in the thread at all. This
+  // tool-call line is therefore now the parent chat's ONLY delegation
+  // surface, and AC-7 requires it to show: a 'run' delegation (the default
+  // action, sync or async) is visible in the normal thread. Only `status`
+  // (polling a previously-delegated task) stays hidden — pure noise, no
+  // standalone meaning to a reader.
   it.each<[Record<string, unknown> | undefined, boolean]>([
-    [undefined, false], // defaults: action=run, async=true → hidden
-    [{}, false],
-    [{ async: true }, false], // explicit async=true, same as default → hidden
-    [{ async: false }, false], // INVERTED: explicit await (blocking) is now ALSO hidden
+    [undefined, true], // defaults: action=run → visible (ADR-091 D7/AC-7)
+    [{}, true],
+    [{ async: true }, true], // explicit async=true, same as default → visible
+    [{ async: false }, true], // explicit blocking run — still visible
     [{ action: 'status' }, false], // status polling → hidden
     [{ action: 'status', async: false }, false], // status wins over async
-    [{ action: 'run', async: false }, false], // INVERTED: explicit run + await is now hidden too
-    [{ action: 'kill' }, true], // any action other than run/status is unchanged — always visible
+    [{ action: 'run', async: false }, true], // explicit run + await → visible
+    [{ action: 'kill' }, true], // any action other than status is visible
   ])('params=%o → %s', (params, expected) => {
     expect(shouldRenderToolCall('delegate', params, false)).toBe(expected)
   })
@@ -197,8 +200,12 @@ describe('shouldRenderToolCall — verbose override', () => {
     expect(shouldRenderToolCall('bash', { run_in_background: true }, true)).toBe(true)
   })
 
-  it('a hidden background delegate call becomes visible when verbose', () => {
-    expect(shouldRenderToolCall('delegate', undefined, true)).toBe(true)
+  it('a delegate run is visible by default even without verbose (ADR-091 D7/AC-7)', () => {
+    expect(shouldRenderToolCall('delegate', undefined, false)).toBe(true)
+  })
+
+  it('a hidden delegate status-poll call becomes visible when verbose', () => {
+    expect(shouldRenderToolCall('delegate', { action: 'status' }, true)).toBe(true)
   })
 
   it('a hidden set_goal call becomes visible when verbose', () => {
@@ -213,13 +220,14 @@ describe('shouldRenderToolCall — verbose override', () => {
 
 // ── isError override — now a PER-TOOL-CLASS decision (revised 2026-07-16),
 // not a blanket short-circuit. `ToolSearch` keeps the override (nothing else
-// narrates its failure). `delegate` and the background-dispatch/poll/read
-// sub-cases of `bash` deliberately do NOT: a subagent/background-shell
-// failure is returned to the CALLING agent's own turn as the tool result —
-// that agent explains it in its own response text — and the raw failure
-// stays fully transparent in the ActivityPanel slide-out
-// (shouldRenderToolCallInPanel shows everything but ToolSearch). Only verbose
-// chat brings these specific rows back into the thread. ──────────────────
+// narrates its failure). The background-dispatch/poll/read sub-cases of
+// `bash` deliberately do NOT: a background-shell failure is returned to the
+// CALLING agent's own turn as the tool result — that agent explains it in
+// its own response text. Only verbose chat brings these specific rows back
+// into the thread. `delegate` (below) doesn't consult isError at all any
+// more — its visibility is param-based only (ADR-091 D7/AC-7: the `run`
+// line is already visible by default; only `status` stays hidden, and that
+// hiding does not depend on outcome either). ──────────────────
 
 describe('shouldRenderToolCall — isError override still forces ToolSearch/Skill visibility', () => {
   it.each<[string, Record<string, unknown> | undefined]>([
@@ -233,28 +241,27 @@ describe('shouldRenderToolCall — isError override still forces ToolSearch/Skil
   })
 })
 
-describe('shouldRenderToolCall — isError override does NOT apply to delegate (LLM-mediated failure presentation)', () => {
-  // A failed/denied delegate 'run' or 'status' call stays hidden even on
-  // error — only verboseChatEnabled reveals it. The delegating agent's own
-  // response text is the place the failure gets explained; the panel is the
-  // place the raw result stays inspectable.
-  it.each<[Record<string, unknown> | undefined]>([
-    [undefined], // default action=run, async=true
-    [{}],
-    [{ async: true }],
-    [{ async: false }], // explicit blocking run — still no error exception
-    [{ action: 'status' }],
-  ])('params=%o stays hidden when isError=true (non-verbose)', (params) => {
-    expect(shouldRenderToolCall('delegate', params, false, true)).toBe(false)
+describe('shouldRenderToolCall — delegate ignores isError entirely (param-based only, ADR-091 D7/AC-7)', () => {
+  // A 'run' delegation (the default) is visible unconditionally — isError
+  // changes nothing for it, since it is already visible either way. A
+  // 'status' poll stays hidden even on error — pure noise, no standalone
+  // meaning regardless of outcome. Neither case has ever depended on
+  // verbose chat to be internally consistent between isError=true/false;
+  // verbose chat's own short-circuit (checked first in the function) is
+  // what reveals `status` when the user opts in.
+  it.each<[Record<string, unknown> | undefined, boolean]>([
+    [undefined, true], // default action=run, async=true → visible
+    [{}, true],
+    [{ async: true }, true],
+    [{ async: false }, true], // explicit blocking run — still visible
+    [{ action: 'status' }, false], // status polling → hidden regardless of error
+    [{ action: 'kill' }, true], // unrelated action — already always visible
+  ])('params=%o isError=true → %s', (params, expected) => {
+    expect(shouldRenderToolCall('delegate', params, false, true)).toBe(expected)
   })
 
-  it('becomes visible on error only once verbose chat is enabled', () => {
-    expect(shouldRenderToolCall('delegate', undefined, true, true)).toBe(true)
-  })
-
-  it('a delegate action unrelated to run/status (e.g. kill) is unaffected — already always visible', () => {
-    expect(shouldRenderToolCall('delegate', { action: 'kill' }, false, true)).toBe(true)
-    expect(shouldRenderToolCall('delegate', { action: 'kill' }, false, false)).toBe(true)
+  it('a hidden status poll becomes visible on error only once verbose chat is enabled', () => {
+    expect(shouldRenderToolCall('delegate', { action: 'status' }, true, true)).toBe(true)
   })
 })
 
@@ -287,8 +294,8 @@ describe('shouldRenderToolCall — isError=false explicit is a no-op (regression
   it.each<[string, Record<string, unknown> | undefined, boolean]>([
     ['ToolSearch', undefined, false],
     ['Skill', undefined, false],
-    ['delegate', undefined, false],
-    ['delegate', { async: false }, false], // no longer forced visible (see describe block above)
+    ['delegate', undefined, true], // run is visible by default (ADR-091 D7/AC-7)
+    ['delegate', { action: 'status' }, false], // status stays hidden
     ['bash', { run_in_background: true }, false],
     ['bash', { action: 'kill' }, true],
     ['remember', undefined, true],
@@ -304,41 +311,16 @@ describe('shouldRenderToolCall — isError=false explicit is a no-op (regression
 // parent's bucket any more (I-4), so there is no span-level content left to
 // render in the thread at any verbosity. The delegate tool-call line
 // (shouldRenderToolCall's 'delegate' case, above) is the thread's only
-// remaining delegation surface.
-
-// ── shouldRenderToolCallInPanel — ActivityPanel-only policy (Fix 2,
-// user-approved 2026-07-16): INVERTED from the thread — show everything
-// except ToolSearch by default; verbose reveals ToolSearch too. This is the
-// transparency valve for exactly what the thread hides (including failed
-// delegate/background-bash rows, by design). ──────────────────────────────
-
-describe('shouldRenderToolCallInPanel', () => {
-  it('hides ToolSearch by default', () => {
-    expect(shouldRenderToolCallInPanel('ToolSearch', false)).toBe(false)
-  })
-
-  it('shows ToolSearch when verbose chat is enabled', () => {
-    expect(shouldRenderToolCallInPanel('ToolSearch', true)).toBe(true)
-  })
-
-  // FR-015 back-compat: load_tool is the pre-ADR-071-D1 name for ToolSearch;
-  // a pre-rename transcript's recorded calls must get the same panel
-  // treatment as new ones, not fall through to the always-visible default.
-  it('hides load_tool by default, same as ToolSearch', () => {
-    expect(shouldRenderToolCallInPanel('load_tool', false)).toBe(false)
-  })
-
-  it('shows load_tool when verbose chat is enabled', () => {
-    expect(shouldRenderToolCallInPanel('load_tool', true)).toBe(true)
-  })
-
-  it.each(['delegate', 'bash', 'read_file', 'mcp_some_tool'])(
-    '%s is visible in the panel by default (non-verbose) — the panel is the transparency surface',
-    (tool) => {
-      expect(shouldRenderToolCallInPanel(tool, false)).toBe(true)
-    },
-  )
-})
+// remaining delegation surface, and (D7/AC-7) is now visible by default for
+// the `run` action rather than deferring to a deleted span surface.
+//
+// `shouldRenderToolCallInPanel` and ToolCallBadge's `surface="panel"` prop
+// are ALSO deleted here: the ActivityPanel step list they gated (nested
+// native-agent step rows) is gone along with SubagentBlock — ActivityPanel.tsx
+// no longer renders ToolCallBadge at all (it has its own flat ActivityRow),
+// and MessageItem.tsx (ToolCallBadge's one remaining production caller)
+// never passes `surface`, so it was zero-caller dead code. See
+// ToolCallBadge.tsx/.test.tsx for the corresponding deletion.
 
 // ── ADR-075 / browser-agent-capability-spec FR-028 + FR-039 ──────────────
 //
@@ -421,16 +403,7 @@ describe('shouldRenderToolCall — all six new browser tools render in their own
   // thread rendering it gated — is deleted: a child's own frames never
   // arrive in the parent's bucket any more, so there is no span content in
   // the thread to reach at any verbosity. The badge-level answer above is
-  // therefore now the whole answer for the parent thread; the panel
-  // (`shouldRenderToolCallInPanel`, below) remains the transparency surface
-  // for a call inside a CHILD's own session, opened separately.
-})
-
-// The panel remains the transparency surface for tool calls the thread
-// hides by default (ToolSearch aside) — including a browser tool a child
-// session ran, when that child's own view is opened (ADR-091 D7).
-describe('shouldRenderToolCallInPanel — admits a browser tool', () => {
-  it('admits a delegated browser_snapshot — the panel is the transparency surface FR-039 names', () => {
-    expect(shouldRenderToolCallInPanel('browser_snapshot', false)).toBe(true)
-  })
+  // therefore now the whole answer for the parent thread; a call inside a
+  // CHILD's own session is reached by opening that session directly (the
+  // side panel's Open control), not through any thread-side gate here.
 })
