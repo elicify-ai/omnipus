@@ -23,13 +23,17 @@ Use the credential vault when you add an application programming interface key, 
 5. Open **Advanced / technical details** to set global rules for individual tools. Choose Allow, Ask, or Deny for each tool.
 6. Open an agent's **Tools & Permissions** panel when you need a rule for that agent, including a switch to turn Auto-approve off for that one agent. A global Deny, or a global Auto-approve that is already off, cannot be loosened there — an agent-level setting can only add restriction.
 7. In a conversation, use the **Auto-approve** switch next to the message box to turn it on or off for that chat only. This is the one place that can turn Auto-approve on even when the agent or global default has it off — you are watching the conversation, so Omnipus accepts that.
-8. Review each approval request before you respond. Choose **Approve**, **Always Allow**, or **Deny**. Always Allow remembers that exact command and folder, so an identical call does not ask again in that chat.
+8. Review each approval request before you respond. Choose **Approve**, **Always Allow**, or **Deny**. Always Allow remembers that exact command and folder, so an identical call does not ask again in that chat — for a shell command it can also offer to remember a whole family of similar commands; see "Command rules compared with one-time approvals" below.
 
 **What "safe" means for Auto-approve.** A command only skips the prompt when the sandbox itself can confirm it stays inside the boundaries you have set — both which files it touches and whether it reaches the network. Auto-approve does not judge intent or guess; it only relaxes the prompt when the sandbox can make that guarantee.
 
 For example, with Auto-approve on, an agent reading and editing files inside your project folder runs immediately, because that activity never leaves the sandbox. The same agent running `curl https://example.com` or `git push` still asks, because reaching the network is outside what the sandbox confines. Once you approve one of those, Omnipus remembers it for that chat, so the same kind of request stops asking for the rest of the conversation.
 
 Without an active kernel-level sandbox — see the platform notes below — nothing can be positively confirmed as staying contained, so Auto-approve has no effect and every "Ask" tool prompts every time, the same as if it were off. The chat header shows this as **Auto → Ask**.
+
+Auto-approve only ever matters for a tool currently set to **Ask**. It never changes a tool set to Allow (which already runs without asking) or Deny (which still cannot run at all).
+
+**Scheduled, unattended runs are different.** When a task runs on a schedule with nobody present to answer a prompt, a tool set to Ask is denied automatically the moment it would have asked — Auto-approve is not consulted, because there is no sandbox check that can substitute for a human simply not being there. Give a scheduled agent's tools an explicit Allow if it needs to use them unattended; see [tools](tools.md).
 
 These controls answer different questions.
 
@@ -54,7 +58,7 @@ Auto-approve and Shell command approval, above, set a default for shell commands
 
 ### Where rules live
 
-Rules live in the `sandbox.command_rules` array inside your `config.json`, in the Omnipus data directory. By default that is `~/.omnipus/config.json` in your home folder; if you set the `OMNIPUS_HOME` environment variable, it is `config.json` inside that folder instead. Edit the file with any text editor while Omnipus is stopped, or see "When a rule takes effect" below for editing while it is running.
+Rules live in the `sandbox.command_rules` array inside your `config.json`, in the Omnipus data directory. By default that is `~/.omnipus/config.json` in your home folder; if you set the `OMNIPUS_HOME` environment variable, it is `config.json` inside that folder instead. Edit the file with any text editor — Omnipus is meant to be running while you do; see "When a rule takes effect" below.
 
 ### The shape of a rule
 
@@ -111,29 +115,37 @@ Worked example: with the `ask`-before-`npm publish` rule above and no rule at al
 
 | Rule action | Ask mode | Auto mode | God Mode |
 |---|---|---|---|
-| `deny` | Refuses the command. | Refuses the command. | Refuses the command — the one check God Mode does not turn off. |
+| `deny` | Refuses the command. Nobody is asked to approve something that cannot run. | Refuses the command. | Refuses the command — the one check God Mode does not turn off. |
 | `ask` | No extra effect — every command already asks in Ask mode. | Forces an approval prompt for that command, even though Auto would otherwise let it through without one. | No extra effect — God Mode shows no prompts, and an `ask` rule does not create one. |
-| `allow` | No extra effect — the command still follows Ask mode's own approval flow. | No extra effect beyond what Auto already does for a command with no matching rule. | No extra effect — God Mode already runs everything without asking. |
+| `allow` | Skips the approval prompt, but only when **every** part of the command matches an allow rule and no part matches a deny or ask rule. | No extra effect on the prompt — Auto already runs a matching command without asking. Does **not** skip Auto's own safety checks. | No extra effect — God Mode already runs everything without asking. |
 
-A `deny` rule is the one control that reaches into every mode, including God Mode. An `ask` rule only changes anything in Auto mode, where it adds a prompt Auto would not otherwise show. An `allow` rule documents that a command is trusted, but does not currently change what happens beyond what a `deny` or `ask` rule elsewhere would already enforce.
+A `deny` rule reaches into every mode, including God Mode, and always wins over an `allow` on another part of the same command. An `ask` rule only changes anything in Auto mode, where it adds a prompt Auto would not otherwise show. An `allow` rule's one real effect is in Ask mode: if every part of a chained command matches an allow rule — for example `git status && go test ./...` with the rules from the earlier example — the prompt is skipped entirely, the same way the old exec allowlist worked. One un-ruled or partially-matched part is enough to fall back to the normal prompt. An allow rule never widens what Auto itself checks: a command that writes outside the workspace or needs the network still asks under Auto, allow rule or not — the rule only ever removes a prompt, never a safety check.
 
 ### Command rules compared with one-time approvals
 
-When an approval prompt appears, choosing **Always Allow** remembers that one exact command and folder for the rest of the conversation only — it disappears when the chat ends, and nobody else's conversations are affected. A command rule in `config.json` is the opposite: it applies to every agent, every conversation, permanently, until you edit the file again.
+When a shell approval prompt appears, choosing **Always Allow** offers a choice of how much it remembers: **Allow this exact command**, or — when Omnipus can suggest one — **Allow commands starting with `<program and its leading words>`**. Either way, the memory lasts for the rest of that conversation only; it disappears when the chat ends, and nobody else's conversations are affected. A chained command (`a && b`) is shown and approved one part at a time. A command rule in `config.json` is the opposite: it applies to every agent, every conversation, permanently, until you edit the file again.
+
+The "starting with" choice is not always offered. Omnipus only suggests a prefix when approving that prefix would not quietly cover more than you actually saw: it is not offered for a chained command (the words after a prefix could belong to the next part), for a bare program with no arguments (`ls` — that would approve any use of `ls`), or for a command run through a wrapper like `sudo`, `env`, `timeout`, `xargs`, or `sh -c` (the wrapper alone would approve whatever it goes on to run). In any of those cases, only the exact-command choice is offered, and the confirmation tells you exactly what was recorded.
 
 Use a one-time approval for something you only expect to approve in this conversation. Use a command rule for a standing decision — "this team always needs `npm publish` reviewed," or "never run `rm -rf` on this machine, ever" — that should not depend on remembering to click Allow the same way every time.
 
 ### Agents cannot change these rules
 
-The whole `sandbox` section of `config.json`, including `command_rules`, is off-limits to an agent's own configuration tool. An agent can read its own security settings so it can explain why it is refusing something, but it cannot loosen or add to them — that stays a change only you make, in the file itself or through a gateway restart.
+The whole `sandbox` section of `config.json`, including `command_rules`, is off-limits to an agent's own configuration tool. An agent can read its own security settings so it can explain why it is refusing something, but it cannot loosen or add to them — that stays a change only you make, directly in the file.
 
 ### When a rule takes effect
 
-*(Placeholder — confirming with the team building this: whether a `command_rules` edit applies to the next command, needs a live-reload, or needs a full gateway restart. This will be filled in once confirmed — do not assume any of the three without that confirmation.)*
+No restart needed. Omnipus checks `config.json` for changes every 2 seconds; when it changes, Omnipus reloads it, validates it, and rebuilds every agent's shell tool with the new rules. A command already running when you save the file keeps running under the rules that were in force when it started — only the next command picks up the change.
 
 ### If a rule is written incorrectly
 
-*(Placeholder — Omnipus will validate `command_rules` when it loads and reject an invalid entry with an error naming the bad rule; the exact error wording and where you will see it are still being finalized. This will be filled in once confirmed.)*
+An invalid rule rejects the **entire** reload, not just that one rule — the previous, still-valid configuration stays in force, so a typo cannot leave you with fewer rules than you intended. The error names the specific rule and what is wrong with it, for example:
+
+```
+config error: sandbox.command_rules[1]: action "Deny" must be one of allow, ask, deny
+```
+
+(Rule actions are lower-case — `allow`, `ask`, `deny` — a capitalized `"Deny"` is exactly the kind of typo this catches.) You will see this in the Omnipus server log at the time you saved the file, and `GET /health` reports the gateway as degraded, with the same message, until you fix the file and save it again.
 
 ## How to manage saved secrets
 
