@@ -179,8 +179,8 @@ func (t *GoalClaimTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	// so the bound-session lookup below still refuses any turn that is not
 	// that session's owner.
 	if depth := ToolDelegationDepth(ctx); depth > 0 && ToolRunningTaskID(ctx) == "" {
-		return ErrorResult("goal_claim is owner-session-only: a delegated sub-turn cannot claim the " +
-			"parent session's goal (ADR-084 JUDGE-FR-090) — report your findings back to the parent instead")
+		return ErrorResult("goal_claim is owner-session-only: a delegated sub-turn cannot claim " +
+			"this session's goal (ADR-084 JUDGE-FR-090) — report your findings back to the parent instead")
 	}
 
 	var goalID, goalCondition string
