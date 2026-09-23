@@ -21,7 +21,6 @@ Two separate things decide whether an agent's tool call runs:
 1. **The tool's policy: Allow, Ask or Deny.** This is set per tool. Allow runs without asking, Ask stops and waits for you, and Deny means the agent cannot use the tool at all.
 2. **Auto-approve.** This is an on/off switch on top of Ask. It never changes a tool set to Allow or Deny. For a tool set to Ask, it lets Omnipus skip the prompt for calls it can judge safe, and still ask for the rest.
 
-<!-- verify-after-build -->
 For example: `write_file` is set to Ask. With Auto-approve off, every file write shows an approval card. With Auto-approve on, a write to a file inside the workspace runs without a card, and a write to your Desktop still asks.
 
 ### Set tool policies
@@ -32,17 +31,21 @@ For example: `write_file` is set to Ask. With Auto-approve off, every file write
 
 On a new installation the shell tool, `bash`, is set to **Ask**.
 
-> **Known issue:** the **Agent tool access** choice near the top of the Security screen (**Must ask first (safer)** or **Run freely**) is saved but does not change how any tool behaves; nothing in the server reads it. The per-tool policies above are what decide.
-
 ### Turn Auto-approve on or off
 
 Auto-approve can be set in three places. On a new installation it is **on** globally.
 
 | Where | What it does | Example |
 |---|---|---|
-| **Settings → Security → Auto-approve** | The default for every agent and chat. Changing it asks you to re-type your password. | You turn it off. Every tool set to Ask now prompts every time, in every chat. |
+| **Settings → Security → Auto-approve** | The default for every agent and chat. Changing it asks you to confirm and re-type your password. | You turn it off. Every tool set to Ask now prompts every time, in every chat. |
 | An agent's **Tools & Permissions** panel → **Never auto-approve for this agent** | Turns Auto-approve off for that one agent. It can only turn it off, never on. | A finance agent should always ask. You tick the box; its Ask tools always prompt. |
 | The **Auto** switch next to the message box in a chat | Turns Auto-approve on or off for that chat only. It is available once the chat has at least one message. | Auto-approve is off globally, but you are watching this chat closely. You switch it on here, and only this chat changes. |
+
+On the Security screen, the switch carries this description:
+
+> For any tool set to “ask”, skip the prompt — except a short list that still asks: sending email, changes to settings, agents, channels, providers, skills or MCP servers, deletions, installs, and browser scripts or uploads. Files stay confined to the workspace and its mounts — for example, saving to notes/a.md inside your workspace runs with no prompt, but a path outside it still asks. Connected-server (MCP) tools ask unless their server marks them safe. Needs an active kernel sandbox (none on Windows).
+
+That is a summary. The full list of tools that still ask is under "What Auto-approve runs and what still asks" below; it also includes asking for a mounted folder, running diagnostics and provider or channel tests, and publishing a web preview.
 
 The chat switch is the one place that can turn Auto-approve **on** when the agent or the global default has it off, because you are present in that conversation. It has one limit: when the chat's agent hands work to another agent (a delegate), and that other agent has **Never auto-approve** ticked, the delegate's own switch wins. Your chat switch covers the agent you are talking to, not a delegate that was set to always ask.
 
@@ -59,26 +62,28 @@ The badge at the top of a chat shows which state applies to that chat right now.
 | **Auto** | Auto-approve is on and a kernel sandbox is active. Safe calls run; the rest ask. |
 | **Auto → Ask** | Auto-approve is on, but there is no active kernel sandbox, so it has no effect. Every tool set to Ask prompts. The badge's tooltip says so. |
 
-<!-- verify-after-build -->
-In an agent's **Tools & Permissions** panel and in the global tool list, each tool set to Ask carries a small marker showing what Auto-approve does with it: it runs, it runs only inside the workspace, or it still asks.
+In an agent's **Tools & Permissions** panel and in **Tool Access — Global Policies**, each tool set to Ask carries a small marker showing what Auto-approve does with it:
+
+| Marker | Meaning |
+|---|---|
+| **Auto: runs** | Runs without a prompt. |
+| **Auto: runs inside workspace** | Runs without a prompt when its file is inside the workspace or a mounted folder; otherwise asks. |
+| **Auto: asks** | Always asks. |
+
+Tools set to Allow or Deny show no marker, because Auto-approve does not affect them. The shell tool, `bash`, shows no marker either, because it has its own checks (below). Tools from connected servers get a marker too, based on how their server labels them.
 
 ### What Auto-approve runs and what still asks
 
 Auto-approve only matters for a tool set to **Ask**. Omnipus judges each call on its own, not the tool as a whole.
 
-<!-- verify-after-build -->
 **Most tools run without a prompt.** That includes reading and searching your workspace, web search and opening web pages, the browser (clicking, typing, navigating, screenshots), memory and the knowledge base, tasks, plans and goals, handing work to another agent, and read-only listings of settings, agents and workspaces. For example, with Auto-approve on, Mia editing a knowledge-base note set to Ask no longer shows an approval card.
 
-<!-- verify-after-build -->
-**File tools run only inside the workspace or a mounted folder.** `read_file`, `list_directory`, `write_file`, `edit_file` and `append_file` run without a prompt when every path they touch is inside the agent's workspace or a folder you mounted into it. Anything outside asks, **including reads**. For example, `write_file` to `notes/plan.md` runs; `read_file` of `/etc/hosts` asks. The same rule applies to the file `send_file` sends and to the file name `browser_screenshot` saves to. Omnipus secret files, such as the master key, are never covered.
+**File tools run only inside the workspace or a mounted folder.** `read_file`, `list_directory`, `write_file`, `edit_file` and `append_file` run without a prompt when the path they touch is inside the agent's workspace or a folder you mounted into it. Anything outside asks, **including reads**. For example, `write_file` to `notes/plan.md` runs; `read_file` of `/etc/hosts` asks. The same rule applies to the file `send_file` sends. `browser_screenshot` saves its picture into the workspace under a name Omnipus picks, so it normally runs. Omnipus secret files, such as the master key, are never covered.
 
-<!-- verify-after-build -->
 This is stricter than the shell. Under Auto-approve, the shell command `cat /etc/hosts` runs, because the sandbox lets commands read outside the workspace, while `read_file /etc/hosts` asks. That difference is deliberate.
 
-<!-- verify-after-build -->
-**Messages and files sent to chat channels go out with no prompt.** `send_message` and `send_file` run under Auto-approve. A message, or a file from the workspace, can leave the machine to Telegram, Slack or another connected channel without anyone approving it. If that is not acceptable for an agent, set those two tools to Ask and tick **Never auto-approve** for that agent, or set them to Deny. Email is different: `send_email` and `reply` always ask.
+**Messages and files sent to chat channels go out with no prompt.** `send_message` runs under Auto-approve, and so does `send_file` for a file inside the workspace or a mounted folder. A message, or a file from the workspace, can leave the machine to Telegram, Slack or another connected channel without anyone approving it. If that is not acceptable for an agent, set those two tools to Ask and tick **Never auto-approve** for that agent, or set them to Deny. Email is different: `send_email` and `reply` always ask.
 
-<!-- verify-after-build -->
 **These 28 tools always ask, even with Auto-approve on:**
 
 | Group | Tools |
@@ -95,7 +100,6 @@ This is stricter than the shell. Under Auto-approve, the shell command `cat /etc
 | Agents and workspaces | `create_agent`, `update_agent`, `update_workspace` |
 | Skills | `create_skill`, `edit_skill`, `remove_skill` |
 
-<!-- verify-after-build -->
 **Tools from connected servers (MCP) mostly still ask.** A connected server can label each of its tools. Under Auto-approve, a server tool runs only when its server labels it read-only or explicitly not destructive. Every other server tool asks, including one with no label at all. Most servers send no labels today, so in practice most server tools still ask. Omnipus trusts these labels because you chose to connect the server, and adding a server is on the always-ask list.
 
 **The shell tool, `bash`, has its own checks.** Under Auto-approve, a command runs without a prompt when the sandbox can contain it. It still asks when the command:
@@ -110,12 +114,13 @@ Auto-approve does not check what a command means. A command that deletes files i
 
 ### Scheduled and unattended runs
 
-<!-- verify-after-build -->
 A scheduled task runs with nobody present to answer a prompt. The same rule applies there as in a chat: anything Auto-approve would run in a chat also runs in a scheduled run. Anything that would need a person is refused straight away, with a clear error in the task's transcript:
 
 ```
 Not run: this is a headless scheduled run with no operator available to approve ask-policy tools.
 ```
+
+A shell command that would need a prompt (for example one that needs the network) is refused the same way; its error ends with `auto-denied: no operator attached to this headless/scheduled run to approve it`.
 
 For example, with Auto-approve on, a scheduled agent can write its report into the workspace, but a `delete_task` call is refused. If a scheduled agent must use a tool that still asks, set that tool to Allow for that agent. See [tools](tools.md).
 
@@ -220,8 +225,13 @@ The columns below match the badge at the top of the chat. **Ask** also covers **
 
 An `ask` rule prompts in every state except God Mode. That includes an agent whose `bash` policy you set to Allow: the rule still asks before `npm publish`, even though every other command runs freely.
 
-<!-- verify-after-build -->
-When an `ask` rule is what triggers the prompt, you see one approval card for the command, and it says the rule is the reason.
+When an `ask` rule triggers the prompt, you see **one** approval card for the command, not two. When the agent's `bash` policy is Ask and Auto-approve is not active, that card also names the rule, for example:
+
+```
+matches an operator rule that requires approval (binary="npm" arg_prefix="publish")
+```
+
+Choosing **Always Allow** on that card remembers the exact command for the rest of the chat, so the same command does not prompt again there. **Approve Once** remembers nothing, and the next `npm publish` asks again.
 
 **An allow rule only covers a plain command.** It skips the card only for a part with nothing added around the program and its arguments:
 

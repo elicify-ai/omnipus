@@ -56,11 +56,9 @@ On the approval card, **Approve Once** runs the call and remembers nothing. **Al
 
 **Auto-approve** sits on top of Ask. It never changes a tool set to Allow or Deny. When it is on, and a kernel sandbox is active, a tool set to Ask skips the card for calls Omnipus can judge safe and still shows it for the rest. It is on by default, and you can turn it off globally, for one agent, or for one chat.
 
-<!-- verify-after-build -->
-Under Auto-approve, most tools run without a card. File tools run only when every path is inside the workspace or a mounted folder, so `write_file` to `notes/plan.md` runs while `read_file` of `/etc/hosts` asks. A fixed list of 28 tools always asks, such as `delete_task`, `send_email`, `set_config`, `browser_evaluate` and `install_skill`. `send_message` and `send_file` are **not** on that list: messages and workspace files go out to chat channels with no card. The shell has its own checks: it asks for writes outside the workspace and for network access. See [security](security.md) for the full list and the shell details.
+Under Auto-approve, most tools run without a card. File tools run only when every path is inside the workspace or a mounted folder, so `write_file` to `notes/plan.md` runs while `read_file` of `/etc/hosts` asks. A fixed list of 28 tools always asks, such as `delete_task`, `send_email`, `set_config`, `browser_evaluate` and `install_skill`. `send_message` and `send_file` are **not** on that list: messages, and files from inside the workspace, go out to chat channels with no card. The shell has its own checks: it asks for writes outside the workspace and for network access. See [security](security.md) for the full list and the shell details.
 
-<!-- verify-after-build -->
-The **Under Auto** column in the [built-in tool catalog](reference/built-in-tools.md) shows, for every built-in tool, whether it runs, runs only inside the workspace, or asks. The same answer appears as a small marker next to each tool set to Ask in the **Tools & Permissions** panel and in the global tool list.
+The **Under Auto** column in the [built-in tool catalog](reference/built-in-tools.md) shows, for every built-in tool, **Runs**, **Runs if inside workspace** or **Asks**. The same answer appears as a small marker — **Auto: runs**, **Auto: runs inside workspace** or **Auto: asks** — next to each tool set to Ask in the **Tools & Permissions** panel and in **Tool Access — Global Policies**. `bash` has no marker, because it has its own checks.
 
 The two layers — global and per agent — combine by one rule: **the stricter of the two wins** (Deny beats Ask, Ask beats Allow). A setting on one agent can only tighten the global setting, never loosen it.
 
@@ -97,14 +95,12 @@ To connect one:
 
 Server tools carry the server's name, so you can tell where a tool came from. In both policy editors they sit in their own group under the server's name. One Allow, Ask or Deny control covers every tool from that server. The stricter-wins rule applies to them like any other tool.
 
-<!-- verify-after-build -->
-Under Auto-approve, a server tool set to Ask runs without a card only when its server labels it read-only or explicitly not destructive. A tool with no label asks. Most servers send no labels today, so most server tools still ask.
+Under Auto-approve, a server tool set to Ask runs without a card only when its server labels it read-only or explicitly not destructive. A tool with no label asks. Most servers send no labels today, so most server tools still ask. Each server tool set to Ask shows its own **Auto: runs** or **Auto: asks** marker.
 
 ## Limits and things to watch
 
 - **The four base agents are locked.** Their tool settings are read-only. To change tool access, create a custom agent — see [agents](agents.md).
 - **Policies do not reach external runners.** An agent on an external command-line tool manages its own tool access; Omnipus settings have no effect.
-<!-- verify-after-build -->
 - **Scheduled runs cannot answer questions.** Auto-approve works the same in a scheduled run as in a chat: a call it would run in a chat also runs there. A call that would need a person, such as `delete_task` or a file write outside the workspace, is refused straight away with an error saying no operator is available. Give a scheduled agent Allow on any tool it needs that would otherwise ask.
 - **The shell can touch files directly.** Denying `write_file` does not stop an agent with `bash` from changing files with a command. To block file access, deny `bash`.
 - **Auto-approve needs a kernel sandbox.** On Windows, or with the process sandbox not set to Enforce, Auto-approve has no effect and every Ask tool shows its card. The chat header then shows **Auto → Ask**.

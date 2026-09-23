@@ -135,7 +135,8 @@ Testable requirements, BDD scenarios, test data, contract-first work, removal ta
 
 ### 3.10 Auto-approve for tools other than `bash` (ADR-092 D9, founder-ruled 2026-09-23)
 
-<!-- verify-after-build: FR-051 to FR-062 describe the ratified design; re-check each against the merged lanes L1-L6. -->
+*Implemented; FR-051 to FR-062 and S54 to S64 checked against `feat/adr-092-shell-permissions` @ `5d6515d0c` (2026-09-24).*
+
 Source: [`adr-092-auto-for-other-tools-design.md`](adr-092-auto-for-other-tools-design.md) (revision 3) and the founder's `auto-approve-choices.json` (2026-09-23T14:20:18Z). Expected values in tests come from those two documents, never from the implementation.
 
 **FR-051 — One Auto predicate for every tool.** Auto is active for a call exactly when God Mode is off, `ResolveAutoApprove(cfg, agentID, chatModifier)` is true, and `sandbox.TurnPolicyBaseInstalled()` is true (J13). `bash` and every other tool read the same predicate (`autoApproveActive`, extracted from `ShellPermissionGate.liveMode`). No Auto on Windows, in God Mode, or without an enforcing kernel sandbox.
@@ -144,7 +145,7 @@ Source: [`adr-092-auto-for-other-tools-design.md`](adr-092-auto-for-other-tools-
 
 **FR-053 — Classification table.** One entry per catalog tool, transcribed from the founder file: 74 RUNS, 7 RUNS-IF (`read_file`, `list_directory`, `write_file`, `edit_file`, `append_file`, `send_file`, `browser_screenshot`), 28 ASKS, `bash` excluded (its own D1–D8 mechanism). The ASKS zero value is the lookup-miss default. The 28: `request_mount`, `install_skill`, `environment_setup`, `serve_web`, `send_email`, `reply`, `delete_task`, `browser_evaluate`, `browser_upload_file`, `set_config`, `run_doctor`, `configure_provider`, `test_provider`, `enable_channel`, `disable_channel`, `configure_channel`, `test_channel`, `add_mcp_server`, `remove_mcp_server`, `create_agent`, `update_agent`, `delete_agent`, `update_workspace`, `delete_workspace`, `delete_task_in_workspace`, `create_skill`, `edit_skill`, `remove_skill`.
 
-**FR-054 — Workspace path rule (J2).** A RUNS-IF path argument is inside only when the tool's own `ResolveTurnFSPolicy` (no grant overlay) and `ResolvePath`/`ResolvePathAllowingPatterns` resolve it outside the secret set and within `WorkDir` or an `AllowedRoots` mount (`fspolicy.CoversForGrant`), for reads and writes alike. A `bash` path grant (FR-036) never widens it. `send_file` applies the read rule to the file it sends; `browser_screenshot` applies the write rule to `filename`.
+**FR-054 — Workspace path rule (J2).** A RUNS-IF path argument is inside only when the tool's own `ResolveTurnFSPolicy` (no grant overlay) and `ResolvePath`/`ResolvePathAllowingPatterns` resolve it outside the secret set and within `WorkDir` or an `AllowedRoots` mount (`fspolicy.CoversForGrant`), for reads and writes alike. A `bash` path grant (FR-036) never widens it. `send_file` applies the read rule to the file it sends; `browser_screenshot` applies the write rule to its destination, a generated name in the work folder (*[corrected at implementation]* the tool has no `filename` argument).
 
 **FR-055 — Pin and re-check.** The verdict is pinned on the call context (`WithAutoApproved`); each RUNS-IF file tool re-checks its resolved real path (`RecheckAutoPin`) and **refuses** — never re-prompts — when the path no longer passes FR-054. A mid-turn Auto toggle does not alter an already-decided call (as FR-006).
 
@@ -152,13 +153,13 @@ Source: [`adr-092-auto-for-other-tools-design.md`](adr-092-auto-for-other-tools-
 
 **FR-057 — Unattended runs (J1).** The `AutoDenyAsk` block in `resolveAskPolicy` moves after the approval checks: a call Auto runs in a chat also runs unattended; anything needing a human (ASKS tool, failed RUNS-IF condition, unlabelled MCP tool, a `bash` escalation) is auto-denied with `autoDenyHeadlessReason` and its existing audit rows. This also makes `bash` under Auto run in scheduled runs.
 
-**FR-058 — Grants.** Order: Auto verdict, then grant store, then prompt. An Auto-run call records and reads no grant. Approve Once records nothing; Always Allow records the exact-arguments grant. The prefix-scope radio is `bash`-only. Delegation: grants and the per-chat modifier inherit, but the modifier is never copied onto a delegate whose own `auto_approve_disabled` is set; the shared predicate applies this to every tool.
+**FR-058 — Grants.** Order: Auto verdict, then grant store, then prompt. An Auto-run call records and reads no grant. Approve Once records nothing; Always Allow records the exact-arguments grant. The prefix-scope radio is `bash`-only. Delegation: grants and the per-chat modifier inherit, but the modifier is never copied onto a delegate whose own `auto_approve_disabled` is set, and the shared predicate (`autoApproveActive`) refuses Auto outright for a delegated sub-turn whose agent carries it, for every tool.
 
-**FR-059 — Audit.** New event `tool.auto_approved` with details `{tool, agent_id, session_id, class, reason, paths}`, one per Auto-run call, via `audit.EmitEntry`. Prompted or denied calls emit no `tool.auto_approved`.
+**FR-059 — Audit.** New event `tool.auto_approved`, decision `allow`, one per Auto-run call, via `audit.EmitEntry`; agent and session are entry fields, details are `{tool, class, reason, paths}` with `class` one of `runs`, `runs_if_args`, `mcp_not_destructive`. Prompted or denied calls emit no `tool.auto_approved`.
 
-**FR-060 — Per-tool verdict on the wire and in the UI (J14).** `ToolRegistryEntry.auto_approve: enum[runs, runs_if_args, asks]`, contract-first (Hard Constraint #8), filled from the classification table in `rest_tool_registry.go`; MCP entries report `runs` or `asks` from FR-056. A read-only marker appears only on rows set to Ask in `ToolsAndPermissions.tsx` and the global tool-policy table. The generated `docs/reference/built-in-tools.md` gains an "Under Auto" column from the same table.
+**FR-060 — Per-tool verdict on the wire and in the UI (J14).** `ToolRegistryEntry.auto_approve: enum[runs, runs_if_args, asks]`, contract-first (Hard Constraint #8), filled from the classification table in `rest_tool_registry.go`; MCP entries report `runs` or `asks` from FR-056. A read-only marker appears only on rows whose effective policy is Ask, rendered by the shared `ToolPolicyEditor.tsx` (used by `ToolsAndPermissions.tsx` and the global tool-policy table), labelled exactly **Auto: runs**, **Auto: runs inside workspace**, **Auto: asks**; no marker for `bash` or an unclassified tool. The generated `docs/reference/built-in-tools.md` gains an "Under Auto" column from the same table.
 
-**FR-061 — One dialog for a `bash` ask rule.** With `bash` resolved to plain `ask` and a genuine operator `{action: ask}` rule match, the D3 verdict is settled inside the single upfront prompt (request carries `adr092_kind: "rule_ask"`); `enforceShellPermissionMode` skips `requestRuleApproval` when `withRuleAskSettled` is pinned. D3 `deny` and D7/D8 still apply. Headless: auto-denied once.
+**FR-061 — One dialog for a `bash` ask rule.** With `bash` resolved to plain `ask` and a genuine operator `{action: ask}` rule match, the D3 verdict is settled inside the single upfront prompt (request carries `adr092_kind: "rule_ask"` and a `note` naming the matched rule); `enforceShellPermissionMode` skips `requestRuleApproval` when `tools.WithRuleAskSettled` is pinned. D3 `deny` and D7/D8 still apply. Headless: auto-denied once. "Always Allow" on that prompt records an exact grant over the request arguments, so the identical command does not prompt again in that chat (found by `CheckGrantOrRequestApproval`); "Approve Once" records nothing.
 
 **FR-062 — Drift guard.** `pkg/gateway/auto_approve_classification_test.go` against `buildCentralBuiltinRegistry`: every registry tool has an explicit entry; no stale keys (except `bash`); every global-ceiling key has an entry; every RUNS-IF tool implements `AutoApproveClassifier`; `AutoApproveClassOf("no_such_tool") == AutoAsks` and ASKS is the zero value; a golden copy of the 28-name ask-list equals the table's ASKS set; no `mcp_` keys. Each check carries a mutation self-check.
 
@@ -290,7 +291,6 @@ Grouped by FR; each carries `Traces to:`. Scenarios unchanged from the first dra
 
 ### 4.10 Auto for tools other than `bash` (new, D9)
 
-<!-- verify-after-build -->
 **S54 — In-workspace file write runs, outside asks** *(Happy + Error Path)*
 - **Given** `write_file` on `ask`, Auto on, a kernel sandbox enforcing, **When** the agent writes `notes/a.md`, **Then** it runs with zero approver calls; **When** it writes a Desktop path, **Then** one prompt is shown.
 - *Traces to:* FR-052, FR-054. (Design T1.)
