@@ -210,6 +210,21 @@ func (s *wsStreamer) wsHandler() *WSHandler {
 	return nil
 }
 
+// wsHandlerHubs returns this streamer's *hubRegistry (#823 catch-up
+// redesign) via wsHandler(), or nil when no *WSHandler is wired (a bare
+// test fixture — see wsHandler's own doc comment for why that degrade is
+// intentional). A *WSHandler built through the real newWSHandler
+// constructor always has a non-nil hubs field, but a test-constructed
+// WSHandler literal (common in this package's older tests) may not, so this
+// also tolerates a nil hubs field defensively.
+func (s *wsStreamer) wsHandlerHubs() *hubRegistry {
+	h := s.wsHandler()
+	if h == nil {
+		return nil
+	}
+	return h.hubs
+}
+
 // streamOwnerClaim is the value stored in WSHandler.streamOwners: which turn
 // holds a chatID's live-stream slot, and when it claimed it. claimedAt backs
 // claimStreamOwnership's stale-claim force-reclaim safety net.
@@ -347,6 +362,25 @@ func (s *wsStreamer) SetTurnID(turnID string) {
 	s.statsMu.Unlock()
 }
 
+// SetMessageID stamps the per-round message id (#823 catch-up redesign)
+// that Update/Finalize will attach to their TokenFrame/DoneFrame's
+// message_id field. Called by the agent loop via the inline
+// `interface{ SetMessageID(messageID string) }` (pkg/agent/turn_stream.go's
+// stampStreamerMessageID), mirroring SetTurnID's pattern exactly, using the
+// SAME id turn_transcript.go's roundMessageIDOrNew persists onto the
+// matching transcript entry. A no-op on an empty messageID, like SetTurnID —
+// this should not happen in practice (nextRoundMessageID always mints a
+// non-empty id), but a no-op is the safer failure mode than blanking out an
+// already-stamped value.
+func (s *wsStreamer) SetMessageID(messageID string) {
+	if messageID == "" {
+		return
+	}
+	s.statsMu.Lock()
+	s.messageID = messageID
+	s.statsMu.Unlock()
+}
+
 // SetParentSpawnCallID stamps the delegation-nesting correlation that will be
 // attributed to the transcript entry Finalize writes. Called by the agent
 // loop (via the inline SetParentSpawnCallID interface, mirroring SetTurnID
@@ -481,6 +515,10 @@ func (s *wsStreamer) SetContinuationContent(full string) {
 func (s *wsStreamer) Update(_ context.Context, content string) error {
 	s.statsMu.Lock()
 	producerAgentID := s.agentID
+	// #823 catch-up redesign: captured under the same lock as
+	// producerAgentID for TokenFrame.turn_id/message_id below.
+	turnID := s.turnID
+	messageID := s.messageID
 	// Live-stream ownership gate (see WSHandler.streamOwners' doc comment):
 	// resolved once, lazily, on this streamer's first Update() call, then
 	// reused. A streamer with no turnID (legacy/best-effort caller) or no
@@ -593,13 +631,6 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 		return nil
 	}
 
-	if len(targets) == 0 {
-		// ADR-082 FR-006: zero bound connections costs no backoff wait — the
-		// producer (the LLM streaming callback) is never slowed by an absent
-		// viewer. Return immediately without touching any channel.
-		return nil
-	}
-
 	frame := generated.TokenFrame{
 		Type:      string(generated.WsFrameTypeToken),
 		Content:   content,
@@ -612,9 +643,43 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	if producerAgentID != "" {
 		frame.AgentId = &producerAgentID
 	}
+	// #823 catch-up redesign (BE-DESIGN.md §6.3): stamp turn_id/message_id
+	// so a client can append this token to the right bubble by id rather
+	// than "whatever bubble is currently open" — required for catch-up to
+	// ever resume the correct bubble after a gap. Absent (nil) rather than
+	// "" when unset, matching TokenFrame's own omitempty *string shape —
+	// unset happens for a caller that never went through the agent loop's
+	// SetTurnID/SetMessageID stamps (a bare test fixture, or the
+	// webchatChannel.Send fallback path, which has no turn at all).
+	if turnID != "" {
+		frame.TurnId = &turnID
+	}
+	if messageID != "" {
+		frame.MessageId = &messageID
+	}
 	data, err := json.Marshal(frame)
 	if err != nil {
 		return fmt.Errorf("ws: marshal token frame: %w", err)
+	}
+	// #823 catch-up redesign (BE-DESIGN.md §1.1/§1.2): every token is
+	// numbered through the session's hub BEFORE delivery, independent of
+	// which connections happen to be bound right now — this is what lets a
+	// reconnecting tab's catch-up read the journal and get every token that
+	// was published while it was away, not just the ones a live connection
+	// happened to be attached for. publishBytes both journals the
+	// seq-stamped frame (for a FUTURE attach/catch-up read) and hands back
+	// the EXACT bytes it journaled, which are what gets delivered below —
+	// byte-identical to what the journal holds (H3's multi-tab guarantee),
+	// even though delivery here still resolves its OWN targets via
+	// resolveSessionConnsLocked rather than the hub's own conns set (the
+	// real attach/bind cutover — BE-DESIGN.md §4 — is not wired yet; see
+	// ws_session_hub.go's file header).
+	var out []byte
+	if hr := s.wsHandlerHubs(); hr != nil && s.sessionID != "" {
+		hub := hr.getOrCreate(s.sessionID)
+		_, out = hub.publishBytes(data)
+	} else {
+		out = data
 	}
 	// ADR-082 D2/FR-004/FR-005: deliver to EVERY connection currently bound
 	// to this session, resolved above. Route each through sendRawFrameBytes
@@ -629,7 +694,7 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	// marshalled (checked above).
 	for _, conn := range targets {
 		before := conn.droppedTokens.Load()
-		sendRawFrameBytes(conn, string(generated.WsFrameTypeToken), data)
+		sendRawFrameBytes(conn, string(generated.WsFrameTypeToken), out)
 		if conn.droppedTokens.Load() > before {
 			slog.Warn("ws: token backpressure", "session_id", s.sessionID, "chat_id", s.chatID, "agent_id", producerAgentID)
 		}

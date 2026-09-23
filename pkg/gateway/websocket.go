@@ -1534,6 +1534,18 @@ type wsStreamer struct {
 	// can never match a real entry either, silently disabling the Truncated
 	// flag for every real cancel. Guarded by statsMu like agentID.
 	turnID string
+	// messageID identifies the specific assistant message (bubble) this
+	// streamer's tokens/done belong to (#823 catch-up redesign, BE-DESIGN.md
+	// §6.3): stable across reconnect/catch-up so a client can append a
+	// late-arriving token to the SAME bubble instead of guessing "the last
+	// one". Stamped by the agent loop via SetMessageID (turn_stream.go's
+	// stampStreamerMessageID, mirroring SetTurnID's pattern exactly)
+	// immediately after obtaining the streamer, using the SAME id
+	// appendIntermediateAssistantTranscript persists onto the matching
+	// transcript entry (turn_transcript.go's roundMessageIDOrNew) — so a
+	// live TokenFrame/DoneFrame's message_id always equals the persisted
+	// entry's id for the same round. Guarded by statsMu like turnID.
+	messageID string
 	// parentSpawnCallID identifies the spawning "delegate"/"spawn" ToolCall.ID
 	// in the PARENT turn when this streamer belongs to a CHILD delegation
 	// sub-turn (empty for a root/non-delegated turn). Stamped by the agent
