@@ -148,18 +148,6 @@ properties:
       value domain would collide. Hot-reloaded, like the rest of this
       handler's fields — no restart required.
     example: true
-  command_rules:
-    type: array
-    maxItems: 1000
-    items:
-      $ref: './CommandRule.yaml'
-    description: >
-      ADR-092 D3 operator shell command rules (sandbox.command_rules),
-      in stored order. Always present on GET — an empty array means no
-      operator rules are configured, and bash then follows its tool policy
-      and the Auto-approve setting unmodified. Evaluated for every bash call
-      in every mode, God Mode included; deny beats ask beats allow. See
-      CommandRule for the matching semantics.
   requires_restart:
     type: boolean
     description: >

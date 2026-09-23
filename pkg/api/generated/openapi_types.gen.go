@@ -1781,27 +1781,6 @@ func (e CliValidateResponseReason) Valid() bool {
 	}
 }
 
-// Defines values for CommandRuleAction.
-const (
-	CommandRuleActionAllow CommandRuleAction = "allow"
-	CommandRuleActionAsk   CommandRuleAction = "ask"
-	CommandRuleActionDeny  CommandRuleAction = "deny"
-)
-
-// Valid indicates whether the value is a known member of the CommandRuleAction enum.
-func (e CommandRuleAction) Valid() bool {
-	switch e {
-	case CommandRuleActionAllow:
-		return true
-	case CommandRuleActionAsk:
-		return true
-	case CommandRuleActionDeny:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ConfigurationActivationStatus.
 const (
 	ConfigurationActivationStatusActive       ConfigurationActivationStatus = "active"
@@ -6860,27 +6839,6 @@ func (e RunnerTestResponseReason) Valid() bool {
 	}
 }
 
-// Defines values for SandboxConfigCommandRulesAction.
-const (
-	SandboxConfigCommandRulesActionAllow SandboxConfigCommandRulesAction = "allow"
-	SandboxConfigCommandRulesActionAsk   SandboxConfigCommandRulesAction = "ask"
-	SandboxConfigCommandRulesActionDeny  SandboxConfigCommandRulesAction = "deny"
-)
-
-// Valid indicates whether the value is a known member of the SandboxConfigCommandRulesAction enum.
-func (e SandboxConfigCommandRulesAction) Valid() bool {
-	switch e {
-	case SandboxConfigCommandRulesActionAllow:
-		return true
-	case SandboxConfigCommandRulesActionAsk:
-		return true
-	case SandboxConfigCommandRulesActionDeny:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for SandboxConfigFilesystemModel.
 const (
 	SandboxConfigFilesystemModelConfined SandboxConfigFilesystemModel = "confined"
@@ -6914,27 +6872,6 @@ func (e SandboxConfigMode) Valid() bool {
 	case SandboxConfigModeOff:
 		return true
 	case SandboxConfigModePermissive:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SandboxConfigUpdateCommandRulesAction.
-const (
-	SandboxConfigUpdateCommandRulesActionAllow SandboxConfigUpdateCommandRulesAction = "allow"
-	SandboxConfigUpdateCommandRulesActionAsk   SandboxConfigUpdateCommandRulesAction = "ask"
-	SandboxConfigUpdateCommandRulesActionDeny  SandboxConfigUpdateCommandRulesAction = "deny"
-)
-
-// Valid indicates whether the value is a known member of the SandboxConfigUpdateCommandRulesAction enum.
-func (e SandboxConfigUpdateCommandRulesAction) Valid() bool {
-	switch e {
-	case SandboxConfigUpdateCommandRulesActionAllow:
-		return true
-	case SandboxConfigUpdateCommandRulesActionAsk:
-		return true
-	case SandboxConfigUpdateCommandRulesActionDeny:
 		return true
 	default:
 		return false
@@ -12817,21 +12754,6 @@ type CliValidateResponse struct {
 // CliValidateResponseReason Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
 type CliValidateResponseReason string
 
-// CommandRule One ADR-092 D3 operator shell command rule (sandbox.command_rules in config.json). Every rule names a program (`binary`) and, optionally, the leading argument words it applies to (`arg_prefix`). Rules are evaluated for every bash call in every mode, including God Mode. When several rules match the same command part, the strictest wins regardless of how specific each rule is: deny beats ask beats allow. A chained command (`a && b`, `a | b`, `a; b`) is split into its parts and each part must clear on its own. `binary` is matched against the program the command actually resolves to on the child's PATH (resolve-and-verify, ADR-092 FR-040), never against raw command text, so a look-alike executable earlier on PATH does not satisfy an allow rule for the real one. On Windows the rule matches the whole command exactly (FR-041): no chained-part splitting, and `arg_prefix` must equal the full argument text. Rules bind to a command's leading program only; they do not see through interpreters (`sh -c '...'`, `xargs`, `find -exec`).
-type CommandRule struct {
-	// Action allow — run the matched command without a prompt, even when bash's tool policy is "ask". ask — always show the approval dialog for the matched command, even when bash's tool policy is "allow". deny — refuse the matched command outright, in every mode including God Mode.
-	Action CommandRuleAction `json:"action"`
-
-	// ArgPrefix Optional leading argument words, matched whole-word: `run test` matches `npm run test -v` but not `npm run testfoo`. Omitted or empty means the rule applies to every invocation of `binary`.
-	ArgPrefix *string `json:"arg_prefix,omitempty"`
-
-	// Binary The program the rule applies to: a bare command name (`git`, resolved on PATH) or an absolute path (`/usr/bin/git`). Must not contain whitespace or shell metacharacters.
-	Binary string `json:"binary"`
-}
-
-// CommandRuleAction allow — run the matched command without a prompt, even when bash's tool policy is "ask". ask — always show the approval dialog for the matched command, even when bash's tool policy is "allow". deny — refuse the matched command outright, in every mode including God Mode.
-type CommandRuleAction string
-
 // ConfigurationActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
 type ConfigurationActivationStatus string
 
@@ -18486,18 +18408,6 @@ type SandboxConfig struct {
 	// Deliberately named `auto_approve`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide. Hot-reloaded, like the rest of this handler's fields — no restart required.
 	AutoApprove *bool `json:"auto_approve,omitempty"`
 
-	// CommandRules ADR-092 D3 operator shell command rules (sandbox.command_rules), in stored order. Always present on GET — an empty array means no operator rules are configured, and bash then follows its tool policy and the Auto-approve setting unmodified. Evaluated for every bash call in every mode, God Mode included; deny beats ask beats allow. See CommandRule for the matching semantics.
-	CommandRules *[]struct {
-		// Action allow — run the matched command without a prompt, even when bash's tool policy is "ask". ask — always show the approval dialog for the matched command, even when bash's tool policy is "allow". deny — refuse the matched command outright, in every mode including God Mode.
-		Action SandboxConfigCommandRulesAction `json:"action"`
-
-		// ArgPrefix Optional leading argument words, matched whole-word: `run test` matches `npm run test -v` but not `npm run testfoo`. Omitted or empty means the rule applies to every invocation of `binary`.
-		ArgPrefix *string `json:"arg_prefix,omitempty"`
-
-		// Binary The program the rule applies to: a bare command name (`git`, resolved on PATH) or an absolute path (`/usr/bin/git`). Must not contain whitespace or shell metacharacters.
-		Binary string `json:"binary"`
-	} `json:"command_rules,omitempty"`
-
 	// FilesystemModel The ADR-062 filesystem model this installation is configured for. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set. It never changes what an agent may WRITE — writes are confined to the workspace and its mounts under both models.
 	// Reported here, and settable via SandboxConfigUpdate, because the two postures are indistinguishable from outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because that path happened to be on the enumerated list. Without a control, the only way to change it was to hand-edit config.json.
 	FilesystemModel *SandboxConfigFilesystemModel `json:"filesystem_model,omitempty"`
@@ -18536,9 +18446,6 @@ type SandboxConfig struct {
 	WorkspacePathGuardEnvOverride *bool `json:"workspace_path_guard_env_override,omitempty"`
 }
 
-// SandboxConfigCommandRulesAction allow — run the matched command without a prompt, even when bash's tool policy is "ask". ask — always show the approval dialog for the matched command, even when bash's tool policy is "allow". deny — refuse the matched command outright, in every mode including God Mode.
-type SandboxConfigCommandRulesAction string
-
 // SandboxConfigFilesystemModel The ADR-062 filesystem model this installation is configured for. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set. It never changes what an agent may WRITE — writes are confined to the workspace and its mounts under both models.
 // Reported here, and settable via SandboxConfigUpdate, because the two postures are indistinguishable from outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because that path happened to be on the enumerated list. Without a control, the only way to change it was to hand-edit config.json.
 type SandboxConfigFilesystemModel string
@@ -18546,7 +18453,7 @@ type SandboxConfigFilesystemModel string
 // SandboxConfigMode Configured sandbox enforcement mode.
 type SandboxConfigMode string
 
-// SandboxConfigUpdate Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal, auto_approve and command_rules are hot-reloaded. This endpoint is the routing target for ADR-092's global Auto-approve default write (auto_approve below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use. No new auth mechanism; the requirement is routing the write through this handler rather than a bespoke endpoint that bypasses it.
+// SandboxConfigUpdate Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and auto_approve are hot-reloaded. This endpoint is the routing target for ADR-092's global Auto-approve default write (auto_approve below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use. No new auth mechanism; the requirement is routing the write through this handler rather than a bespoke endpoint that bypasses it.
 type SandboxConfigUpdate struct {
 	// AllowNetworkOutbound Allow agent tool calls to make outbound network connections.
 	AllowNetworkOutbound *bool `json:"allow_network_outbound,omitempty"`
@@ -18557,18 +18464,6 @@ type SandboxConfigUpdate struct {
 	// AutoApprove Set the ADR-092 global default for Auto-approve. Auto is a SEPARATE setting from tool policy — it only has meaning for a tool currently resolved to "ask" (see SandboxConfig.auto_approve for the full behavioural description) and applies to every such tool, not only bash. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
 	// Per-agent and per-chat Auto settings are NOT set here: a per-agent override is `auto_approve_disabled` on PUT /agents/{id} (AgentUpdateRequest) — off-only, tighten-only. A chat's session modifier is the session_mode_update WS frame (asyncapi.yaml, SessionModeUpdateFrame) — the one place in this contract allowed to LOOSEN (turn Auto on for that chat even when the agent or this global default has it off), because a human is present in that session. The per-agent field is tighten-only relative to this global default; this global default has no scope above it to tighten against.
 	AutoApprove *bool `json:"auto_approve,omitempty"`
-
-	// CommandRules Replace the whole ADR-092 D3 operator command rule list (sandbox.command_rules). The list is written as sent — this is a full replacement, not a merge; send an empty array to remove every rule. One invalid rule rejects the whole request with 400 and nothing is saved. Takes effect immediately for new bash calls, no restart required. Like every field on this endpoint, the write needs the password step-up (requireReAuth), so an agent cannot add, remove or loosen a rule on its own.
-	CommandRules *[]struct {
-		// Action allow — run the matched command without a prompt, even when bash's tool policy is "ask". ask — always show the approval dialog for the matched command, even when bash's tool policy is "allow". deny — refuse the matched command outright, in every mode including God Mode.
-		Action SandboxConfigUpdateCommandRulesAction `json:"action"`
-
-		// ArgPrefix Optional leading argument words, matched whole-word: `run test` matches `npm run test -v` but not `npm run testfoo`. Omitted or empty means the rule applies to every invocation of `binary`.
-		ArgPrefix *string `json:"arg_prefix,omitempty"`
-
-		// Binary The program the rule applies to: a bare command name (`git`, resolved on PATH) or an absolute path (`/usr/bin/git`). Must not contain whitespace or shell metacharacters.
-		Binary string `json:"binary"`
-	} `json:"command_rules,omitempty"`
 
 	// FilesystemModel Switch the ADR-062 filesystem model. "confined" restricts reads and execution to enumerated paths; "open" leaves both unrestricted apart from the secret set. Neither model changes what may be WRITTEN.
 	// Restart-gated, like `mode`: the running kernel profile was installed at boot and is not rebuilt in place, so the change is persisted and takes effect on the next start. Omit the field to leave the model unchanged.
@@ -18592,9 +18487,6 @@ type SandboxConfigUpdate struct {
 	// WorkspacePathGuard ADR-068 §6. Turns the IN-PROCESS bash workspace path guard on or off. Distinct from `mode`, which is the kernel sandbox — the two are separate boundaries and setting one has no effect on the other (UAT defect 002 was operators expecting otherwise). When true, a WRITE outside the agent's working directory needs an approved workspace mount; reads outside it are allowed either way. Restart-gated: it resolves into AgentDefaults.RestrictToWorkspace at boot. Ignored at runtime while OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE is set, which outranks it — see workspace_path_guard_env_override on the GET response.
 	WorkspacePathGuard *bool `json:"workspace_path_guard,omitempty"`
 }
-
-// SandboxConfigUpdateCommandRulesAction allow — run the matched command without a prompt, even when bash's tool policy is "ask". ask — always show the approval dialog for the matched command, even when bash's tool policy is "allow". deny — refuse the matched command outright, in every mode including God Mode.
-type SandboxConfigUpdateCommandRulesAction string
 
 // SandboxConfigUpdateFilesystemModel Switch the ADR-062 filesystem model. "confined" restricts reads and execution to enumerated paths; "open" leaves both unrestricted apart from the secret set. Neither model changes what may be WRITTEN.
 // Restart-gated, like `mode`: the running kernel profile was installed at boot and is not rebuilt in place, so the change is persisted and takes effect on the next start. Omit the field to leave the model unchanged.

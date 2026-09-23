@@ -1446,8 +1446,6 @@ components:
       $ref: ./components/schemas/RetentionConfig.yaml
     RetentionSweepResult:
       $ref: ./components/schemas/RetentionSweepResult.yaml
-    CommandRule:
-      $ref: ./components/schemas/CommandRule.yaml
     SandboxConfig:
       $ref: ./components/schemas/SandboxConfig.yaml
     SandboxStatus:

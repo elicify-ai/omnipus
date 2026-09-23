@@ -7,7 +7,7 @@ description: >
   in the same request body.
   mode and allowed_paths are restart-gated
   (the response includes requires_restart=true when either changes).
-  ssrf.allow_internal, auto_approve and command_rules are hot-reloaded.
+  ssrf.allow_internal and auto_approve are hot-reloaded.
   This endpoint is the routing target for ADR-092's global Auto-approve
   default write (auto_approve below) specifically because it already
   gates every write behind requireReAuth (see putSandboxConfig ->
@@ -100,20 +100,6 @@ properties:
       global default; this global default has no scope above it to
       tighten against.
     example: true
-  command_rules:
-    type: array
-    maxItems: 1000
-    items:
-      $ref: './CommandRule.yaml'
-    description: >
-      Replace the whole ADR-092 D3 operator command rule list
-      (sandbox.command_rules). The list is written as sent — this is a
-      full replacement, not a merge; send an empty array to remove every
-      rule. One invalid rule rejects the whole request with 400 and nothing
-      is saved. Takes effect immediately for new bash calls, no restart
-      required. Like every field on this endpoint, the write needs the
-      password step-up (requireReAuth), so an agent cannot add, remove or
-      loosen a rule on its own.
   workspace_path_guard:
     type: boolean
     description: >

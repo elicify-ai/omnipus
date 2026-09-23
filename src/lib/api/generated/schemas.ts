@@ -1333,32 +1333,6 @@ type ChannelIdentity = {
   kind: "agent" | "user";
   id?: string | undefined;
 };
-type SandboxConfig = Partial<{
-  mode: "off" | "permissive" | "enforce";
-  filesystem_model: "confined" | "open";
-  applied_mode: string;
-  allow_network_outbound: boolean;
-  allowed_paths: Array<string>;
-  ssrf_enabled: boolean;
-  ssrf_allow_internal: Array<string>;
-  ssrf: Partial<{
-    enabled: boolean;
-    allow_internal: Array<string>;
-  }>;
-  god_mode: boolean;
-  god_mode_available: boolean;
-  workspace_path_guard: boolean;
-  workspace_path_guard_env_override: boolean;
-  auto_approve: boolean;
-  command_rules: Array<CommandRule>;
-  requires_restart: boolean;
-  saved: boolean;
-}>;
-type CommandRule = {
-  action: "allow" | "ask" | "deny";
-  binary: string;
-  arg_prefix?: string | undefined;
-};
 type AuditLogResponse = {
   entries: Array<AuditEntry>;
   chain_status: "valid" | "broken" | "unknown";
@@ -1586,20 +1560,6 @@ type Skill = {
   argument_hint?: string | undefined;
   last_invoked?: (string | null) | undefined;
 };
-type SandboxConfigUpdate = Partial<{
-  mode: "off" | "permissive" | "enforce";
-  filesystem_model: "confined" | "open";
-  allow_network_outbound: boolean;
-  allowed_paths: Array<string>;
-  ssrf_enabled: boolean;
-  ssrf_allow_internal: Array<string>;
-  ssrf: Partial<{
-    allow_internal: Array<string>;
-  }>;
-  auto_approve: boolean;
-  command_rules: Array<CommandRule>;
-  workspace_path_guard: boolean;
-}>;
 type Task = {
   id: string;
   title: string;
@@ -3572,12 +3532,7 @@ export const RateLimitsUpdateResponse = z
     warning: z.string().optional(),
   })
   .passthrough();
-export const CommandRule: z.ZodType<CommandRule> = z.object({
-  action: z.enum(["allow", "ask", "deny"]),
-  binary: z.string().min(1).max(4096),
-  arg_prefix: z.string().max(4096).optional(),
-});
-export const SandboxConfig: z.ZodType<SandboxConfig> = z
+export const SandboxConfig = z
   .object({
     mode: z.enum(["off", "permissive", "enforce"]),
     filesystem_model: z.enum(["confined", "open"]),
@@ -3595,13 +3550,12 @@ export const SandboxConfig: z.ZodType<SandboxConfig> = z
     workspace_path_guard: z.boolean(),
     workspace_path_guard_env_override: z.boolean(),
     auto_approve: z.boolean(),
-    command_rules: z.array(CommandRule).max(1000),
     requires_restart: z.boolean(),
     saved: z.boolean(),
   })
   .partial()
   .passthrough();
-export const SandboxConfigUpdate: z.ZodType<SandboxConfigUpdate> = z
+export const SandboxConfigUpdate = z
   .object({
     mode: z.enum(["off", "permissive", "enforce"]),
     filesystem_model: z.enum(["confined", "open"]),
@@ -3614,7 +3568,6 @@ export const SandboxConfigUpdate: z.ZodType<SandboxConfigUpdate> = z
       .partial()
       .passthrough(),
     auto_approve: z.boolean(),
-    command_rules: z.array(CommandRule).max(1000),
     workspace_path_guard: z.boolean(),
   })
   .partial()
