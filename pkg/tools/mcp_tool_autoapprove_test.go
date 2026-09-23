@@ -11,9 +11,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// boolPtr is a tiny helper — mcp.ToolAnnotations.DestructiveHint is *bool,
-// and Go has no address-of-literal syntax.
-func boolPtr(b bool) *bool { return &b }
+// boolPtr (web_serve_test.go, same package) already provides the *bool
+// helper mcp.ToolAnnotations.DestructiveHint needs below.
 
 // TestMCPTool_AutoApproveVerdict_T9 is ADR-092 D9's T9: the five MCP
 // annotation shapes the design's §4 rule distinguishes, transcribed
@@ -32,31 +31,31 @@ func TestMCPTool_AutoApproveVerdict_T9(t *testing.T) {
 			name:        "readOnlyHint true runs",
 			annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 			wantRun:     true,
-			wantClass:   "mcp_not_destructive",
+			wantClass:   AutoVerdictClassMCPNotDestructive,
 		},
 		{
 			name:        "destructiveHint false runs",
 			annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false)},
 			wantRun:     true,
-			wantClass:   "mcp_not_destructive",
+			wantClass:   AutoVerdictClassMCPNotDestructive,
 		},
 		{
 			name:        "destructiveHint true asks",
 			annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true)},
 			wantRun:     false,
-			wantClass:   "asks",
+			wantClass:   AutoVerdictClassAsks,
 		},
 		{
 			name:        "no annotations at all asks",
 			annotations: nil,
 			wantRun:     false,
-			wantClass:   "asks",
+			wantClass:   AutoVerdictClassAsks,
 		},
 		{
 			name:        "annotations present, DestructiveHint nil, ReadOnlyHint false asks",
 			annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: nil},
 			wantRun:     false,
-			wantClass:   "asks",
+			wantClass:   AutoVerdictClassAsks,
 		},
 	}
 
