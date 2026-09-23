@@ -149,6 +149,22 @@ func validateOutcomeMessage(outcome steer.Outcome, class session.SessionMessageD
 // "subagent_state(needs_input)" for a park — never
 // "subagent_message(question)"). Empty return means "no subagent_message
 // for this outcome."
+//
+// ADR-091 fix lane RX-HANG: steer.OutcomeLifecycleNotice used to return ""
+// here too — paired with subagentStateForOutcome ALSO returning "" for the
+// same outcome, the side panel showed literally nothing when a steered
+// child exhausted its tool-iteration budget, on top of the parent never
+// even being woken (message_inbox.go's classifyEnvelope, fixed
+// separately). "error" is the correct kind, not a new invented one: it is
+// the underlying SessionMessage's OWN discriminator
+// (completionMessage/steer_completion.go builds this outcome as a kind
+// "error", fatal:false SessionMessage) and is already a valid member of
+// SubagentMessageFrame.Kind's enum (contracts/components/schemas/
+// SubagentMessageFrame.yaml) — no contract change needed. The frame's Text
+// carries deliverySummary's existing generic "error" formatting, which
+// renders the message's own failureReason text (the
+// "max_tool_iterations: ..." notice), so the panel shows plainly that the
+// tool-step budget was exhausted, not a bare unexplained ping.
 func subagentMessageKindForOutcome(o steer.Outcome) string {
 	switch o {
 	case steer.OutcomeProgress:
@@ -159,6 +175,8 @@ func subagentMessageKindForOutcome(o steer.Outcome) string {
 		return "blocker"
 	case steer.OutcomeGoalVerdict:
 		return "goal_status"
+	case steer.OutcomeLifecycleNotice:
+		return "error"
 	default:
 		return ""
 	}
@@ -171,6 +189,24 @@ func subagentMessageKindForOutcome(o steer.Outcome) string {
 // disposition). Mid-flight transitions this lane cannot observe
 // (queued -> running, a Stop) are not covered here — see this lane's final
 // report. Empty return means "no subagent_state for this outcome."
+//
+// ADR-091 fix lane RX-HANG: deliberately still "" for
+// steer.OutcomeLifecycleNotice, unlike subagentMessageKindForOutcome above.
+// The state value would be session.LifecycleRunning — the record's own
+// nextState for this outcome — but steer_frames.go::deliverSubagentState
+// keys its persisted frame id purely on (originCallID, childRec.Generation,
+// state): "<call_id>:<generation>:state:running". That is the EXACT SAME
+// id steer_launcher.go's dispatch path already wrote once, at the moment
+// this same child first went queued->running, for this same generation —
+// so a second `running` ping here would silently collide and be dropped by
+// AppendTranscriptStrict's id-dedupe (Deliver's own doc comment above),
+// not actually reach the panel. subagentMessageKindForOutcome's "error"
+// message (a fresh, nanosecond-id'd frame every time) is what makes the
+// panel show something for this outcome; adding a guaranteed-dropped state
+// ping here would only be dead code. A real per-notice "running-idle"
+// state distinct from ordinary "running" would need a new
+// SubagentStateFrame.state enum value and a non-colliding id scheme —
+// out of this lane's owned files (steer_frames.go).
 func subagentStateForOutcome(o steer.Outcome) string {
 	switch o {
 	case steer.OutcomeParkedQuestion:

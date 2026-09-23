@@ -285,11 +285,28 @@ func completionDisposition(result turnResult, runErr error, answer string) (stee
 		// (loop_run_turn.go::finalizeTurn sets finalContent to the
 		// toolLimitResponse sentinel and marks the turn failed). This is a
 		// non-fatal lifecycle notice — the child stopped early, it did not
-		// crash — so the parent gets an `error` (fatal: false) inbox entry
-		// that never wakes it (I-5), and the record stays running so the
-		// parent can nudge the child rather than treat it terminal-failed.
+		// crash — so the parent gets an `error` (fatal: false) inbox entry;
+		// the record stays running so the child remains resumable rather
+		// than terminal-failed.
+		//
+		// ADR-091 fix lane RX-HANG: this outcome used to ALSO be non-wake-
+		// eligible (I-5's blanket "fatal: false never wakes" rule), which
+		// meant the parent was never told anything happened at all — it
+		// could not "nudge the child" because it never learned the child
+		// had stopped. hasRunningOrQueuedDescendant then saw this child
+		// stuck at `running` forever and refused to let the PARENT complete
+		// either, hanging the whole ancestor chain silently up to the
+		// user's chat, recoverable only by a gateway restart
+		// (boot_sweep.go::recoverSteered). The failureReason text below
+		// carries the message_inbox.go::LifecycleNoticeReasonPrefixToolIterations
+		// prefix that classifyEnvelope now recognizes as wake-eligible even
+		// though Fatal stays false, so the parent IS woken — see that
+		// constant's doc comment for the full reasoning. Pairs with
+		// hasRunningOrQueuedDescendant's own idle-check below, which stops
+		// treating a `running`-but-no-live-turn child (exactly this
+		// outcome) as blocking its parent's own completion forever.
 		return steer.OutcomeLifecycleNotice, session.LifecycleRunning,
-			"max_tool_iterations: the session reached its tool-iteration limit without a final answer"
+			session.LifecycleNoticeReasonPrefixToolIterations + " the session reached its tool-iteration limit without a final answer"
 	case result.turnFailed || result.status == TurnEndStatusError:
 		return steer.OutcomeFailed, session.LifecycleFailed, "failed: the turn ended with an error"
 	case result.status == TurnEndStatusParked:
@@ -348,6 +365,24 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 	return message, err
 }
 
+// hasRunningOrQueuedDescendant reports whether parentID has any descendant
+// that is genuinely still working — a `queued` child (admitted or not, it
+// WILL run) or a `running` child with a live turn actually in flight.
+//
+// ADR-091 fix lane RX-HANG: a `running` child is deliberately NOT enough on
+// its own. completionDisposition's steer.OutcomeLifecycleNotice case keeps
+// a child that exhausted its tool-iteration budget at LifecycleRunning on
+// purpose — it is resumable, not dead — but that also means its turn has
+// already fully exited (runDispatchedSteeredTurn's defer chain has already
+// cleared it from al.activeTurnStates) with nothing else ever going to
+// change its record. Counting that child as "blocking" made its PARENT
+// wait forever too, even after fixing the wake itself (message_inbox.go's
+// classifyEnvelope): the parent would be woken, but its own
+// completeSteeredTurn call would still see this child as `running` and
+// refuse to complete. getActiveTurnState + IsAlive() is the SAME
+// live-turn signal steer_audience.go's Deliver already uses to decide
+// in-turn-queue vs. async wake — a `running` record with no live turn is
+// idle, not executing, and must not block its parent's completion.
 func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error) {
 	lifecycle := al.GetSessionLifecycleStore()
 	seen := map[string]bool{parentID: true}
@@ -365,8 +400,17 @@ func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error)
 				continue
 			}
 			seen[child.SessionID] = true
-			if child.State == session.LifecycleQueued || child.State == session.LifecycleRunning {
+			switch child.State {
+			case session.LifecycleQueued:
 				return true, nil
+			case session.LifecycleRunning:
+				if ts := al.getActiveTurnState(child.SessionID); ts != nil && ts.IsAlive() {
+					return true, nil
+				}
+				// A `running` record with no live turn (e.g. a tool-
+				// iteration lifecycle notice) is idle, not executing —
+				// fall through and keep walking its own descendants
+				// instead of blocking on it.
 			}
 			queue = append(queue, child.SessionID)
 		}

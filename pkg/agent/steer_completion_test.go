@@ -132,6 +132,13 @@ func TestCompletion_Disposition_PersistedAndValidated(t *testing.T) {
 	}{
 		{name: "non-empty quiet", answer: "finished", wantState: session.LifecycleCompleted, wantKind: "handback"},
 		{name: "empty quiet", answer: "   ", wantState: session.LifecycleFailed, wantKind: "error", wantText: "empty_answer:", wantFatal: true},
+		// ADR-091 fix lane RX-HANG: state/kind/text/fatal are UNCHANGED by
+		// this lane's fix — the child stays resumable (LifecycleRunning,
+		// fatal: false is still correct; this is not a crash). What
+		// changed is WHETHER the parent is woken by this exact message,
+		// which this table does not assert — see
+		// TestCompletion_IterationLimit_NonFatal_WakesParent for that
+		// (deliberately flipped) pinned expectation.
 		{name: "iteration limit is a non-fatal lifecycle notice", answer: toolLimitResponse, turnFailed: true, wantState: session.LifecycleRunning, wantKind: "error", wantText: "max_tool_iterations:", wantFatal: false},
 		{name: "non-empty queued descendant", answer: "parent answer", withQueued: true, wantState: session.LifecycleRunning},
 	}
@@ -192,15 +199,25 @@ func TestCompletion_Disposition_PersistedAndValidated(t *testing.T) {
 	}
 }
 
-// TestCompletion_IterationLimit_NonFatal_DoesNotWakeParent covers landing
-// order §2 I-5's "max-iterations lifecycle notice" row: a steered child whose
+// TestCompletion_IterationLimit_NonFatal_WakesParent covers landing order
+// §2 I-5's "max-iterations lifecycle notice" row: a steered child whose
 // turn ends at the tool-iteration ceiling (loop_run_turn.go::finalizeTurn
 // sets finalContent to the toolLimitResponse sentinel and marks the turn
 // failed) is delivered to its parent as an `error` entry with `fatal: false` —
-// a notice that the child stopped early, not a crash — and a non-fatal error
-// never wakes the parent. A genuine failure is the contrast: `fatal: true`
-// and the parent is woken.
-func TestCompletion_IterationLimit_NonFatal_DoesNotWakeParent(t *testing.T) {
+// a notice that the child stopped early, not a crash.
+//
+// ADR-091 fix lane RX-HANG (deliberate behavior change, round-2 fix): this
+// test used to be named …_DoesNotWakeParent and pinned the OLD, defective
+// rule that a non-fatal error never wakes the parent — for THIS specific
+// outcome, that meant the parent was never told the child had stopped at
+// all, hasRunningOrQueuedDescendant then saw the child `running` forever,
+// and the whole ancestor chain hung silently up to the user's chat with no
+// log line and no UI signal (recoverable only by a gateway restart). The
+// parent MUST be woken so it can decide to retry, raise the tool-iteration
+// budget, or give up — Fatal stays false (see below) so the child does not
+// look dead; a genuine failure is still the contrast: `fatal: true` and the
+// parent is woken, as before.
+func TestCompletion_IterationLimit_NonFatal_WakesParent(t *testing.T) {
 	tests := []struct {
 		name      string
 		result    turnResult
@@ -211,10 +228,10 @@ func TestCompletion_IterationLimit_NonFatal_DoesNotWakeParent(t *testing.T) {
 		wantState session.LifecycleState
 	}{
 		{
-			name:      "iteration limit produces a non-fatal notice and does not wake",
+			name:      "iteration limit produces a non-fatal notice and DOES wake the parent",
 			result:    turnResult{finalContent: toolLimitResponse, turnFailed: true},
 			wantFatal: false,
-			wantWake:  false,
+			wantWake:  true,
 			wantText:  "max_tool_iterations:",
 			wantState: session.LifecycleRunning,
 		},
@@ -436,6 +453,101 @@ func TestCompletion_LastChildCompletesWaitingParent(t *testing.T) {
 		if !rec.Terminal() {
 			t.Errorf("session %s state = %q, want terminal (nothing may be left running)", id, rec.State)
 		}
+	}
+}
+
+// TestCompletion_ToolIterationLimit_WakesAndUnblocksParent is ADR-091 fix
+// lane RX-HANG's exit proof: it is the SAME real two-hop shape as
+// TestCompletion_LastChildCompletesWaitingParent above (root -> waitingParent
+// -> lastChild, a genuine re-entered turn through al.processSystemMessage,
+// never a mock of the completion or delivery path) but exercises the defect
+// this lane fixes instead — lastChild does not finish with an answer, it
+// exhausts its tool-iteration budget (steer.OutcomeLifecycleNotice).
+//
+// Before this lane's fix this test hangs the way the bug report describes:
+// completeSteeredTurn(lastChild, ...) returns normally (the record stays
+// `running`, by design — a lifecycle notice is not a crash), but the
+// `error`/fatal:false inbox entry it delivers is not wake-eligible, so
+// asyncNotifier never publishes anything to al.bus.InboundChan() — the read
+// below times out. waitingParent is left `running` forever with a `running`
+// descendant, exactly the ancestor-chain hang three independent reviewers
+// and the lead confirmed at HEAD.
+//
+// After the fix: message_inbox.go::classifyEnvelope recognizes the
+// "max_tool_iterations:" failureReason prefix as wake-eligible even though
+// Fatal stays false, so the wake IS published; waitingParent is re-entered
+// with a real turn (depthEchoProvider echoes the wake's own content back,
+// so a non-empty answer is genuinely produced, not invented by the test);
+// and steer_completion.go::hasRunningOrQueuedDescendant no longer counts
+// lastChild's `running`-but-no-live-turn record as blocking, so
+// waitingParent's own completeSteeredTurn call actually lands it
+// LifecycleCompleted instead of returning nil forever. lastChild itself
+// stays LifecycleRunning throughout (D7/the founder's decision: resumable,
+// not dead) — this test's own assertion on that is the proof the "keep it
+// resumable" intent survived the fix, not just "not blocking" in isolation.
+func TestCompletion_ToolIterationLimit_WakesAndUnblocksParent(t *testing.T) {
+	al, cleanup := newSteerALWithProvider(t, &depthEchoProvider{})
+	defer cleanup()
+	wireSteerCompletionDeps(t, al)
+	rootID := newTestSteeringSession(t, al, "ws-1")
+	waitingParent := launchRunningChild(t, al, rootID, "call-parent")
+	lastChild := launchRunningChild(t, al, waitingParent.SessionID, "call-child")
+
+	// lastChild's turn ends at the tool-iteration ceiling — the exact
+	// shape loop_run_turn.go::finalizeTurn produces (finalContent set to
+	// the toolLimitResponse sentinel, turnFailed true) — never a normal
+	// final answer.
+	if err := al.completeSteeredTurn(context.Background(), lastChild, turnResult{finalContent: toolLimitResponse, turnFailed: true}, nil); err != nil {
+		t.Fatalf("completeSteeredTurn(lastChild): %v", err)
+	}
+
+	gotChild, err := al.GetSessionLifecycleStore().Load(lastChild.SessionID)
+	if err != nil {
+		t.Fatalf("Load(lastChild): %v", err)
+	}
+	if gotChild.State != session.LifecycleRunning {
+		t.Fatalf("lastChild state = %q, want running (a tool-iteration notice keeps the child resumable, not dead)", gotChild.State)
+	}
+
+	// The grandchild's notice must actually wake waitingParent — the exact
+	// point this lane fixes. On unfixed code this read times out because
+	// nothing was ever wake-eligible for a non-fatal error, and the whole
+	// ancestor chain hangs silently forever with no log line and no UI
+	// signal, exactly as the bug report describes.
+	var wake bus.InboundMessage
+	select {
+	case wake = <-al.bus.InboundChan():
+	case <-time.After(5 * time.Second):
+		t.Fatal("lastChild's tool-iteration notice never woke waitingParent — the parent is never told anything happened and hangs forever (ADR-091 RX-HANG)")
+	}
+	if _, err := al.processSystemMessage(context.Background(), wake); err != nil {
+		t.Fatalf("processSystemMessage(wake waitingParent): %v", err)
+	}
+
+	// waitingParent must actually LAND terminal — proving
+	// hasRunningOrQueuedDescendant no longer blocks on lastChild's
+	// `running`-but-idle record. On unfixed hasRunningOrQueuedDescendant
+	// (even if the wake above were somehow delivered by another means)
+	// this would stay `running` forever: the child never left `running`,
+	// so the parent's own completeSteeredTurn call would keep returning
+	// nil.
+	got, err := al.GetSessionLifecycleStore().Load(waitingParent.SessionID)
+	if err != nil {
+		t.Fatalf("Load(waitingParent): %v", err)
+	}
+	if got.State != session.LifecycleCompleted {
+		t.Fatalf("waitingParent state after its wake ran = %q, want completed (it must not stay blocked on a running-but-idle child)", got.State)
+	}
+
+	msgs, _, _, err := al.GetMessageInboxStore().Drain(rootID, waitingParent.SessionID, "", 10)
+	if err != nil {
+		t.Fatalf("Drain(root): %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("root messages = %d, want 1", len(msgs))
+	}
+	if kind, err := msgs[0].Discriminator(); err != nil || kind != "handback" {
+		t.Fatalf("root message kind = %q (%v), want handback — the root must genuinely learn waitingParent completed", kind, err)
 	}
 }
 
