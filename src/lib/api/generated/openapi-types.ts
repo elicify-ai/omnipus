@@ -8840,6 +8840,12 @@ export interface components {
              * @example github-mcp
              */
             server_id?: string;
+            /**
+             * @description ADR-092 D9: this tool's verdict when Auto-approve is active and the tool's effective policy is "ask". "runs" = always runs with no prompt. "runs_if_args" = runs only when this call's arguments meet the tool's own condition (e.g. a file path resolves inside the workspace or a mount); otherwise it asks. "asks" = always asks under Auto, and is auto-denied in an unattended run. For source="builtin" this is read from the static classifier table (tools.AutoApproveClassOf); "bash" is excluded (its own per-command mechanism, D3/D7/D8) and never appears with this field set. For source="mcp" this reflects the server's tool annotations: "runs" when the server marks the tool read-only or explicitly not destructive, "asks" otherwise (including tools with no annotations at all).
+             * @example runs
+             * @enum {string}
+             */
+            auto_approve?: "runs" | "runs_if_args" | "asks";
         };
         /**
          * AgentToolEntry
