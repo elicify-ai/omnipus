@@ -277,7 +277,7 @@ func NewExecToolWithDeps(
 }
 
 // NewExecToolWithConfig constructs a bash tool without the ADR-036 deps
-// (policy auditor / god-mode / proxy / operator deny patterns default to
+// (policy auditor / god-mode / proxy / operator command rules default to
 // off/nil). Used for early registration (before the AgentLoop's dependencies
 // are ready — see pkg/agent/instance.go) and for metadata-only catalog
 // instances (pkg/tools/general_builtin_catalog.go). cfg is accepted for
@@ -319,9 +319,10 @@ func (t *ExecTool) Description() string {
 		"session cancel. Output is truncated beyond a size cap — a SUCCEEDING command keeps up to 64,000 " +
 		"characters, a FAILING one only 10,000 (the failure cap is smaller, so a large error command's output " +
 		"is cut harder than a successful one's); redirect to a file and read it with read_file/offset when you " +
-		"need all of it. Commands are screened by a safety guard (deny patterns and a path-use check) before " +
-		"they run — writing outside your workspace requires a mount first (see list_mounts / request_mount); " +
-		"a \"blocked by safety guard\" error means the guard refused the command, not that it failed to run. " +
+		"need all of it. Commands pass a path-use check and the session's permission mode — command rules, " +
+		"and, under Auto, a check for writes outside the workspace and network access — before they run; " +
+		"writing outside your workspace requires a mount first (see list_mounts / request_mount); " +
+		"a \"blocked\" error means the guard refused the command, not that it failed to run. " +
 		"Document runtime provisioning goes through the environment_setup tool, not a bash command."
 }
 
