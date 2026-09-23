@@ -19,7 +19,6 @@ export function emptySessionState(): SessionChatState {
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: null,
-    terminalCatchUpPending: false,
     sessionTokens: 0,
     sessionCost: 0,
     rateLimitEvent: null,
@@ -35,7 +34,6 @@ export function emptySessionState(): SessionChatState {
     pendingAsk: null,
     activeTurnId: null,
     activeTurnAgentId: null,
-    activeTurnBubbleOpened: false,
     // #823 catch-up redesign (BE-DESIGN.md §6.1/§6.2) — see SessionCursor's
     // and SessionChatState.cursor's doc comments.
     cursor: null,

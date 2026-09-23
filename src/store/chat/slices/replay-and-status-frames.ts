@@ -978,26 +978,16 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
               // it a second time — a permanent Stop button and locked
               // composer.
               if (!isTurnFinished(targetSid, activeTurn.turn_id)) {
-                withBucket(targetSid, (b) => {
-                  // If a bubble for this session is already streaming (e.g.
-                  // an older gateway that sends session_state LAST, after
-                  // tokens have already started flowing for this very
-                  // turn), do not reset the "bubble opened" flag to false —
-                  // the 'token' case's own fix already flipped it true the
-                  // instant the first token landed, and stomping it back to
-                  // false here would make a later replay-terminator-shaped
-                  // done wrongly think it still needs to open a placeholder.
-                  const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
-                  const lastMsg = lastMsgId ? b.messagesById[lastMsgId] : undefined
-                  const alreadyStreaming =
-                    !!lastMsg && (lastMsg.isStreaming === true || lastMsg.status === 'streaming')
-                  return {
-                    isStreaming: true,
-                    activeTurnId: activeTurn.turn_id,
-                    activeTurnAgentId: activeTurn.agent_id,
-                    activeTurnBubbleOpened: b.activeTurnBubbleOpened || alreadyStreaming,
-                  }
-                })
+                // #823 catch-up redesign pass 2 (§6.3, Q3): no "bubble
+                // opened" flag to maintain any more — bubble existence is
+                // now derived directly from message_id-keyed lookups
+                // (resolveTokenBubbleByMessageId, slices/frames.ts), not
+                // tracked as separate bucket state.
+                withBucket(targetSid, () => ({
+                  isStreaming: true,
+                  activeTurnId: activeTurn.turn_id,
+                  activeTurnAgentId: activeTurn.agent_id,
+                }))
               }
             } else {
               // CR3: this snapshot says NO turn is in flight for this
@@ -1022,11 +1012,13 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
               const existing = get().sessionsById[targetSid]
               if (existing?.activeTurnId) {
                 withBucket(targetSid, (b) => {
-                  const bubbleOpen = !!b.activeTurnBubbleOpened
+                  // #823 catch-up redesign pass 2: "is a bubble actually
+                  // open" is now answered directly (findOpenAssistantMessageId)
+                  // rather than via a separately-tracked flag.
+                  const bubbleOpen = findOpenAssistantMessageId(b.messageOrder, b.messagesById) !== null
                   return {
                     activeTurnId: null,
                     activeTurnAgentId: null,
-                    activeTurnBubbleOpened: false,
                     ...(bubbleOpen ? {} : { isStreaming: false }),
                   }
                 })

@@ -834,7 +834,6 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           isStreaming: false,
           activeTurnId: null,
           activeTurnAgentId: null,
-          activeTurnBubbleOpened: false,
         }))
         maybeDrainNext()
         return
@@ -975,7 +974,6 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             cancelStage: null,
             activeTurnId: null,
             activeTurnAgentId: null,
-            activeTurnBubbleOpened: false,
           }
           if (needsMsgFix) {
             const messagesById = { ...bucket.messagesById }

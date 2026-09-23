@@ -312,12 +312,6 @@ export interface SessionChatState {
   isReplaying: boolean
   /** Set when a done frame arrives while isReplaying was true. */
   replayCompletedForSession: string | null
-  /**
-   * Issue #822: a real turn done arrived during replay before catch-up opened
-   * any assistant bubble. The next token is the completed catch-up snapshot,
-   * not a new live stream. Optional for hand-built fixture compatibility.
-   */
-  terminalCatchUpPending?: boolean
   sessionTokens: number
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
@@ -476,39 +470,13 @@ export interface SessionChatState {
    * carries NO `active_turn` for this session (review CR3/S2). Review
    * finding S1/CR1: the `done`/`error` cases classify their OWN frame
    * shape to decide whether they are the thing that finalizes a turn — they
-   * never read `activeTurnId`/`activeTurnBubbleOpened` to make that call,
-   * only to know WHICH bubble/turn to finalize once they've already decided
-   * to. Optional for the same fixture-compat reason as
-   * `toolCallOwnerMessageId` above.
+   * never read `activeTurnId` to make that call, only to know WHICH
+   * bubble/turn to finalize once they've already decided to. Optional for
+   * the same fixture-compat reason as `toolCallOwnerMessageId` above.
    */
   activeTurnId?: string | null
   /** Agent id paired with `activeTurnId` — see its doc comment. */
   activeTurnAgentId?: string | null
-  /**
-   * ADR-082 D4, review S1/CR1: whether the empty streaming placeholder for
-   * `activeTurnId` has already been opened. Deliberately NOT keyed off
-   * `isReplaying`: the MIN_REPLAY_DISPLAY_MS debounce (see
-   * `setReplaying`/the `done` case) can leave `isReplaying` true for up to
-   * 750ms after the replay-terminating `done` has already run, and a
-   * genuinely fast turn's own `done` can arrive inside that window — using
-   * `isReplaying` alone as the "is this the replay-terminator" test would
-   * then wrongly re-open a second, empty bubble on the turn's REAL `done`.
-   * This flag instead tracks the one fact that actually matters: has the
-   * placeholder/bubble for `activeTurnId` been created yet. Set true by
-   * THREE independent writers, because the wire order between
-   * session_state/replay-terminator-done/tokens is not guaranteed (an older
-   * gateway sends session_state LAST; even the fixed contract can race a
-   * fast concurrent turn): (1) the 'done' case, opening the placeholder
-   * itself once replay has landed; (2) the 'token' case, the instant ANY
-   * token arrives for an announced turn — a token proves a bubble exists
-   * even if this store never got to open one itself; (3) the 'session_state'
-   * case, when it finds a bubble already streaming for this session at
-   * announcement time. False/unset while a turn is announced but neither a
-   * placeholder nor any content has appeared yet; irrelevant once
-   * `activeTurnId` is cleared (finalization, disconnect, or explicit cancel
-   * all clear it too).
-   */
-  activeTurnBubbleOpened?: boolean
   /**
    * #823 catch-up redesign (BE-DESIGN.md §6.1) — this bucket's position in
    * the gateway hub's per-session event log, or `null`/unset when no
