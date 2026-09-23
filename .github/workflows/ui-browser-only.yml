@@ -1,0 +1,690 @@
+# Temporary: runs ONLY the ui-browser E2E shard (the live-browser specs) on a
+# GitHub-hosted runner, copied from pr.yml's setup + playwright jobs. Delete
+# this branch when the check is done.
+name: ui-browser only
+
+on:
+  push:
+    branches:
+      - ci/ui-browser-mdns
+      - ci/ui-browser-release
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    name: Install Node dependencies
+    # ADR-067 step 3 (§7.1): npm ci ran in 11 of 20 pull-request jobs, each
+    # installing ~1,018 packages, measured ~5 minutes cold — the single
+    # largest cost in the workflow, dominating the Tier 1 budget closely
+    # enough that tiering barely mattered. This job installs ONCE; every job
+    # that needs node_modules downloads the already-built tree as an
+    # artifact instead of re-running npm ci.
+    #
+    # Chosen over actions/setup-node's built-in `cache: npm` option: that
+    # caches ~/.npm (npm's download cache), not node_modules — every
+    # consuming job would still have to run `npm ci` itself (dependency
+    # resolution, integrity checks, ~1,018 package extractions/links to
+    # disk), just against a warm local cache instead of the network. This
+    # repo has no "postinstall" script in package.json and no npm
+    # "workspaces" entry (both checked), so node_modules is a single flat,
+    # symlink-free tree — safe to tar up once and extract verbatim wherever
+    # it's needed. That is strictly less work per consuming job than even a
+    # cache-warmed `npm ci`, and it removes 10 of the 11 registry round
+    # trips entirely rather than just speeding them up.
+    # actions/upload-artifact already compresses in transit, so the archive
+    # step below does not add its own compression on top.
+    #
+    # Cost trade-off: this adds one serialized ~5-minute step ahead of Tier 1
+    # (Tier 1's own node-consuming jobs previously paid that same ~5 minutes
+    # each, but in PARALLEL, so Tier 1 wall-clock is roughly unchanged). What
+    # it removes is a duplicate ~5-minute npm ci from every OTHER
+    # node-consuming job, including the slow Tier 2/3 jobs (test, security,
+    # perf-smoke, playwright) that previously paid it too despite already
+    # running after Tier 1 had cleared — that is where the real wall-clock
+    # and billed-runner-minute savings land: roughly 55 runner-minutes of
+    # duplicated npm ci (11 x ~5 min) drops to roughly 5 (this job) + a
+    # handful of ~1-minute download+extract steps.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Archive node_modules
+        run: tar -cf node_modules.tar node_modules
+
+      - name: Upload node_modules artifact
+        # The name is keyed on run_id ONLY — deliberately NOT run_id +
+        # run_attempt. "Re-run failed jobs" increments run_attempt but does
+        # NOT re-run jobs that already succeeded, so this job does not run
+        # again and no attempt-2 artifact is ever produced. With run_attempt
+        # in the name, all 11 consuming jobs then died at their download step
+        # ("Unable to find an artifact with the name ..."), i.e. every partial
+        # re-run failed 11 jobs for an infra reason unrelated to the code.
+        # An artifact belongs to the RUN, not the attempt, so a run_id-only
+        # name is still visible to later attempts of the same run.
+        #
+        # `overwrite: true` is the other half: on "Re-run ALL jobs" this job
+        # DOES run again, and re-uploading the same name into the same run is
+        # a 409 conflict without it. Together the two make both re-run modes
+        # work.
+        uses: actions/upload-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}
+          path: node_modules.tar
+          retention-days: 1
+          overwrite: true
+
+
+  playwright:
+    name: E2E — ${{ matrix.group }}
+    # Deliberately NOT go/spa-restricted (unlike vuln_check/cgo-gate/test/
+    # security/perf-smoke/lint above, or typecheck/lint-spa/vitest below):
+    # this exercises the full stack through a real browser and must still
+    # run on an spa-only PR, so it stays gated on `code` alone. Its `test`
+    # need is therefore explicitly allowed to be 'skipped' (go==false) as
+    # well as 'success' — see the comment on `e2e-plan` above for why a bare
+    # success() here would be wrong. A genuine failure/cancellation of any
+    # need still blocks, exactly as before.
+    #
+    # `!cancelled()` leads the expression for the same reason as `fast-tier`
+    # and `e2e-plan` above: without a status-check function, GitHub
+    # implicitly ANDs its own `success()` onto this `if:`, which would
+    # silently defeat the `(... == 'skipped')` tolerance below.
+    runs-on: ubuntu-latest
+    needs: [setup]
+    if: ${{ !cancelled() && needs.setup.result == 'success' }}
+    strategy:
+      fail-fast: false
+      # Groups, key slots, and spec lists come from tests/e2e/shards.json via the e2e-plan
+      # job — NOT hardcoded here — so pr.yml and deploy/ci-worker/runci.sh cannot drift.
+      matrix:
+        include:
+          - group: ui-browser
+            key_slot: b
+            specs: "tests/e2e/browser-control-handover.spec.ts tests/e2e/browser-live-video.spec.ts tests/e2e/uat-browser-panel.spec.ts tests/e2e/uat-ownership-api.spec.ts"
+    env:
+      OMNIPUS_HOME: /tmp/omnipus-e2e
+      # Per-shard LLM keys — runner-agnostic (secrets inject identically on a GitHub-hosted
+      # or an external/self-hosted runner). _B/_C are OPTIONAL: unset ⇒ the "Resolve shard
+      # LLM key" step falls back to key A, so a repo with only OPENROUTER_API_KEY_CI still
+      # runs (every shard uses key A, i.e. today's single-key behavior). Pinning each
+      # concurrent LLM shard to its own key keeps them off one shared rate-limit window.
+      OPENROUTER_KEY_A: ${{ secrets.OPENROUTER_API_KEY_CI }}
+      OPENROUTER_KEY_B: ${{ secrets.OPENROUTER_API_KEY_CI_B }}
+      OPENROUTER_KEY_C: ${{ secrets.OPENROUTER_API_KEY_CI_C }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}
+
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
+
+      - name: Build SPA
+        # Vite outputs to dist/spa/. Must be synced into pkg/gateway/spa/ before
+        # go build so the //go:embed directive in pkg/gateway/embed.go resolves.
+        # The assets/ subdir contains hashed bundles that change every build;
+        # remove it first to avoid stale hashed chunks being embedded alongside
+        # the new ones. See CLAUDE.md "Build & E2E Testing" for full rationale.
+        run: npm run build
+
+      - name: Sync SPA into embed target
+        run: |
+          set -euo pipefail
+          rm -rf pkg/gateway/spa
+          cp -r dist/spa pkg/gateway/spa
+
+      - name: Verify SPA sync
+        # Fail fast if the sync produced an empty embed target. An empty assets/
+        # directory means go build would embed a broken SPA and Playwright tests
+        # would load a blank page — better to catch this here than in test output.
+        run: |
+          set -euo pipefail
+          if [ -z "$(ls -A pkg/gateway/spa/assets 2>/dev/null)" ]; then
+            echo "SPA sync failed: pkg/gateway/spa/assets is empty or missing" >&2
+            exit 1
+          fi
+
+      - name: Build gateway binary
+        # Build to /tmp/omnipus-ci so self-managed-gateway specs (hot-reload,
+        # user-crud) that use setup.ts DEFAULT_OMNIPUS_BINARY find it. Also
+        # keep a copy as ./omnipus for the global-setup gateway.
+        run: |
+          # -tags goolm,stdjson is required: cmd/omnipus/main.go is gated
+          # //go:build stdjson as a deliberate fail-fast against tag-less builds
+          # ("function main is undeclared" otherwise). Matches the canonical
+          # build tags (cross-platform.yml, Makefile).
+          CGO_ENABLED=0 go build -tags goolm,stdjson -o /tmp/omnipus-ci ./cmd/omnipus/
+          cp /tmp/omnipus-ci ./omnipus
+
+      - name: Prepare gateway home directory
+        # Fresh directory every run — never reuse state between jobs.
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/omnipus-e2e
+          mkdir -p /tmp/omnipus-e2e
+
+      - name: Provision gateway's managed Chrome via the installer (Squad K)
+        # Founder ruling 2026-09-19: the GATEWAY's capture browser must come
+        # via the managed installer (EnsureChromiumFullBuild), not by
+        # pointing the gateway at the Playwright cache. The Playwright cache
+        # step a few steps below still installs chromium for the test
+        # HARNESS browser (Playwright's own machinery) — that is untouched.
+        #
+        # This step is placed AFTER "Prepare gateway home directory" (so it
+        # provisions the SAME /tmp/omnipus-e2e the rest of the job uses) and
+        # calls the new `omnipus browser provision` subcommand added by
+        # Squad K — a non-interactive, no-side-effects entry point onto the
+        # SAME managed install path the gateway's Preprovision invokes. The
+        # leaf prints "exec_path=<abs path>" on success and exits non-zero
+        # with the LOUD error EnsureChromiumFullBuild now returns on
+        # missing-manifest / missing-platform / integrity failure (the
+        # silent headless-shell swap was the actual defect — installer.go's
+        # now-explicit "manifest missing" branch is what surfaces here).
+        #
+        # The earlier proposal in this brief's first cut called
+        # `omnipus doctor` instead. That was wrong three ways: doctor never
+        # installs, doctor exits 1 on ANY warning (always fires on a
+        # fresh runner), and the immediately following pre-existing step
+        # ran `rm -rf /tmp/omnipus-e2e` and wiped the install root before
+        # any test could use it. `omnipus browser provision` exists
+        # exactly to be the correct call.
+        #
+        # A 64-hex placeholder master key is fine: the install path does
+        # not decrypt anything, and the gateway's credential vault is
+        # unused here. No secret material is read or printed.
+        env:
+          OMNIPUS_MASTER_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+        run: |
+          set -euo pipefail
+          export OMNIPUS_HOME=/tmp/omnipus-e2e
+          /tmp/omnipus-ci browser provision || {
+            echo "::error::omnipus browser provision failed — the gateway's managed Chrome could not be installed before tests ran." >&2
+            echo "::error::See the install/manifest error above. The gateway's live-view pipeline (WebRTC tabCapture) will not work without a full Chrome build, per capability.go:35-48." >&2
+            echo "::error::Founder ruling 2026-09-19: the gateway's capture browser must come via the installer; the Playwright cache is not an acceptable substitute." >&2
+            exit 1
+          }
+          # Sanity-check the install — chrome.sha256 must verify so a
+          # future spec running `tabCapture` does not silently start
+          # against a tampered binary. Chromeintegrity is the same
+          # verifier the runtime uses (installer.go:546).
+          if [ ! -f "$OMNIPUS_HOME/browser/chromium/chrome.sha256" ]; then
+            echo "::error::chrome.sha256 manifest is missing after provision; the install was not completed by the new command." >&2
+            exit 1
+          fi
+          echo "Gateway managed Chrome provisioned under $OMNIPUS_HOME/browser/chromium/"
+
+      - name: Resolve shard LLM key
+        # Map this shard's key_slot (from shards.json) to an OpenRouter key and expose it to
+        # every later step as OPENROUTER_API_KEY_CI via $GITHUB_ENV — so the seed/onboard/
+        # verify/test steps below need no per-step secret wiring. Slots b/c fall back to key A
+        # when their secret is unset, so the workflow still runs with only the primary key
+        # configured (every shard on key A = today's single-key behavior). add-mask keeps the
+        # resolved value out of logs (a/b/c are registered secrets and thus already masked).
+        run: |
+          set -euo pipefail
+          case "${{ matrix.key_slot }}" in
+            b) KEY="${OPENROUTER_KEY_B:-$OPENROUTER_KEY_A}" ;;
+            c) KEY="${OPENROUTER_KEY_C:-$OPENROUTER_KEY_A}" ;;
+            *) KEY="${OPENROUTER_KEY_A}" ;;
+          esac
+          if [ -z "$KEY" ]; then
+            echo "::error::No OpenRouter key resolved for slot '${{ matrix.key_slot }}'. Set the OPENROUTER_API_KEY_CI secret (and optionally _B / _C)." >&2
+            exit 1
+          fi
+          echo "::add-mask::$KEY"
+          echo "OPENROUTER_API_KEY_CI=$KEY" >> "$GITHUB_ENV"
+
+      - name: Seed gateway config
+        # providers is a flat array of ModelConfig entries (see pkg/config/config.go).
+        # Each row's `provider` (catalog id) is EXPLICIT and REQUIRED — the old
+        # "<protocol>/<model>" prefix-splitting migration was deleted (ADR-067
+        # FR-034, C1 fix): a row with no `provider` fails config load with
+        # "provider is required" instead of being guessed. `model` is the bare
+        # catalog model id. agents.defaults.default_model must match one provider
+        # entry's (provider, model) pair exactly.
+        # dev_mode_bypass unblocks onboarding endpoints that require bearer auth
+        # before an admin account exists (CLAUDE.md "Build & E2E Testing").
+        #
+        # IMPORTANT — do NOT add any "tools": {"delegate": {"enabled": false}} or any
+        # other tools.<name>.enabled=false entry here. migrateDeprecatedToolEnableFlags
+        # (pkg/config/migration.go) converts those into sandbox.tool_policies deny
+        # entries at config-load time, which would deny delegate for ALL agents and break
+        # T24 (cancel cascade) and the handoff/subagent E2E tests.
+        # Instead, tool policies are set explicitly under sandbox.tool_policies below.
+        #
+        # sandbox.audit_log must be true at BOOT (it is restart-gated) for T26.
+        # sandbox.tool_policies.delegate = "allow" is explicit so no migration run can
+        # override it (an existing "allow" policy is never downgraded by the migrator).
+        run: |
+          set -euo pipefail
+          cat > /tmp/omnipus-e2e/config.json <<'EOF'
+          {
+            "version": 1,
+            "gateway": {
+              "port": 6060,
+              "dev_mode_bypass": true
+            },
+            "sandbox": {
+              "audit_log": true,
+              "tool_policies": {
+                "delegate": "allow"
+              }
+            },
+            "agents": {
+              "defaults": {
+                "default_model": {
+                  "provider": "openrouter",
+                  "model": "z-ai/glm-5.2"
+                },
+                "auto_recap_enabled": true
+              }
+            },
+            "providers": [
+              {
+                "provider": "openrouter",
+                "model": "z-ai/glm-5.2",
+                "api_base": "https://openrouter.ai/api/v1",
+                "api_key_ref": "OPENROUTER_API_KEY"
+              }
+            ]
+          }
+          EOF
+
+      - name: Seed OpenRouter credential
+        # omnipus credentials set writes the key into credentials.json (AES-256-GCM).
+        # The credential name MUST match the provider's api_key_ref in config.json
+        # (OPENROUTER_API_KEY, uppercase — matches the env-var convention documented
+        # in pkg/config/config.go:924-927).
+        run: |
+          set -euo pipefail
+          ./omnipus credentials set OPENROUTER_API_KEY "${OPENROUTER_API_KEY_CI}"
+        env:
+          # OPENROUTER_API_KEY_CI is set per-shard in "Resolve shard LLM key" via $GITHUB_ENV.
+          OMNIPUS_MASTER_KEY: ${{ secrets.OMNIPUS_MASTER_KEY_CI }}
+
+      - name: Start gateway
+        # Redirect all output to a log file so the step does not block.
+        # The PID is captured so the teardown step can kill it cleanly.
+        # --allow-empty permits gateway boot without a fully configured provider,
+        # which is needed in case the credential seed step is extended in future.
+        #
+        # ADR-082 D1 deleted the ADR-045 orphan-foreground-turn watchdog in
+        # full (the old OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 override
+        # that used to reap a leaked, navigated-away-from turn quickly no
+        # longer exists — a turn now runs to completion regardless of whether
+        # any UI connection is watching it, by design).
+        run: |
+          OMNIPUS_MASTER_KEY=${{ secrets.OMNIPUS_MASTER_KEY_CI }} \
+            ./omnipus start --allow-empty > /tmp/omnipus.log 2>&1 &
+          GATEWAY_PID=$!
+          echo "${GATEWAY_PID}" > /tmp/omnipus.pid
+
+          sleep 0.5
+          if ! kill -0 "${GATEWAY_PID}" 2>/dev/null; then
+            echo "Gateway process died immediately. Panic log:" >&2
+            cat /tmp/omnipus-e2e/logs/gateway_panic.log 2>/dev/null || echo "(no panic log)" >&2
+            cat /tmp/omnipus.log >&2
+            exit 1
+          fi
+
+      - name: Wait for gateway to be ready
+        # Poll /health every second for up to 60 s. The 60 s ceiling is a
+        # generous safety net for CI runner cold-start latency, not an accepted
+        # budget. If the gateway does not respond, the gateway-log artifact
+        # (uploaded below) contains the full output.
+        run: |
+          set -euo pipefail
+          timeout 60 bash -c 'until curl -sf http://localhost:6060/health; do sleep 1; done' \
+            || (echo "Gateway did not become ready within 60 s — check gateway-log artifact" >&2 && exit 1)
+
+      - name: Complete onboarding via API
+        # Drive onboarding programmatically to skip the UI wizard. Must pass
+        # the REAL OpenRouter key: the onboarding handler appends a second
+        # provider entry (with api_key_ref="openrouter_API_KEY" — mixed case)
+        # and the agent's model lookup picks this newer entry. If a placeholder
+        # key goes in here, every LLM call 401s even though the seed provider
+        # has a valid key.
+        # Model must match the seeded provider's (provider, model) pair — the
+        # exact key ADR-067's GetModelConfig matches on — so the onboarding
+        # handler updates the existing entry instead of writing a second,
+        # divergent one.
+        run: |
+          set -euo pipefail
+          # -sf DISCARDS the server's answer: on any non-2xx, curl exits 22
+          # having printed nothing, so the step fails with no reason anywhere in
+          # the log. Every E2E shard has been failing here on this branch and on
+          # release/v0.1.1 alike, and the log says only that a step failed.
+          # A silent failure in the diagnostic path is the worst kind.
+          #
+          # Capture status and body instead, and print the body on failure. The
+          # key is registered with add-mask, so it stays masked in whatever the
+          # server echoes back.
+          body=$(jq -n --arg key "${OPENROUTER_API_KEY_CI}" \
+            '{provider:{id:"openrouter",auth_method:"api_key",api_key:$key,model:"z-ai/glm-5.2"},admin:{username:"admin",password:"admin123"}}' \
+            | curl -s -o /tmp/onboard-body.txt -w '%{http_code}' \
+                -X POST http://localhost:6060/api/v1/onboarding/complete \
+                -H 'Content-Type: application/json' \
+                -d @-)
+          if [ "$body" != "200" ] && [ "$body" != "204" ]; then
+            echo "::error::onboarding/complete returned HTTP $body" >&2
+            echo "--- response body ---" >&2
+            head -c 2000 /tmp/onboard-body.txt >&2 || true
+            echo >&2
+            echo "--- gateway log tail ---" >&2
+            tail -40 "${OMNIPUS_HOME:-/tmp/omnipus-e2e}/logs/gateway.log" 2>/dev/null >&2 || echo "(no gateway log at ${OMNIPUS_HOME:-/tmp/omnipus-e2e}/logs/gateway.log)" >&2
+            exit 1
+          fi
+        # OPENROUTER_API_KEY_CI comes from "Resolve shard LLM key" (per-shard, via $GITHUB_ENV).
+
+      # T0.4: Preflight — fail fast if OPENROUTER_API_KEY_CI is unset.
+      # This catches mis-configured CI runs before any Playwright step executes,
+      # giving a clear error message instead of per-test LLM timeout failures.
+      - name: Verify OPENROUTER_API_KEY_CI is set
+        # Resolved per-shard in "Resolve shard LLM key" and inherited via $GITHUB_ENV.
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENROUTER_API_KEY_CI:-}" ]; then
+            echo "ERROR: OPENROUTER_API_KEY_CI secret is not set in this repository." >&2
+            echo "This secret is required for the Playwright E2E suite." >&2
+            echo "Add it under Settings > Secrets and variables > Actions." >&2
+            exit 1
+          fi
+          echo "OPENROUTER_API_KEY_CI is set (${#OPENROUTER_API_KEY_CI} chars)."
+
+      - name: Install Playwright browsers
+        # Install the engines the shard's playwright.config.ts projects
+        # actually launch: the preview-isolation shard matches the
+        # isolation-firefox / isolation-webkit projects; every other shard
+        # is Chromium-only.
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.group }}" = "preview-isolation" ]; then
+            npx playwright install --with-deps chromium firefox webkit
+          else
+            npx playwright install --with-deps chromium
+          fi
+
+      - name: Verify Playwright browser binaries exist (preview-isolation shard)
+        # Defensive check on top of the conditional install above: the original
+        # defect (run 35346106208, E2E — preview-isolation) was 60
+        # `browserType.launch: Executable doesn't exist at
+        # /home/runner/.cache/ms-playwright/firefox-1532/...` failures surfacing
+        # at TEST launch time, because the install step at that commit was a
+        # one-liner that installed chromium only. `npx playwright install`
+        # exits 0 when the requested browsers install, so a future regression
+        # that drops firefox/webkit from the preview-isolation branch would
+        # still pass this step's preconditions yet explode 60 lines later in
+        # the run step. This assertion closes that gap at the only point
+        # where the cause is still locally diagnosable.
+        #
+        # Paths are the build numbers Playwright 1.61.1 publishes (frozen by
+        # package-lock.json's exact `"playwright": "1.61.1"` pin). If the
+        # version ever bumps, change here too — a stale expected path is the
+        # exact "test ran but assertion proved nothing" false green this
+        # step is designed against.
+        if: matrix.group == 'preview-isolation'
+        run: |
+          set -euo pipefail
+          missing=()
+          for p in \
+            /home/runner/.cache/ms-playwright/firefox-1532/firefox/firefox \
+            /home/runner/.cache/ms-playwright/webkit-2311/pw_run.sh; do
+            if [ ! -e "$p" ]; then
+              missing+=("$p")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Playwright browser binary missing after install:" >&2
+            for m in "${missing[@]}"; do
+              echo "  $m" >&2
+            done
+            echo "Expected (per Playwright @1.61.1 pinned in package-lock.json):" >&2
+            echo "  firefox-1532 -> /home/runner/.cache/ms-playwright/firefox-1532/firefox/firefox" >&2
+            echo "  webkit-2311  -> /home/runner/.cache/ms-playwright/webkit-2311/pw_run.sh" >&2
+            exit 1
+          fi
+          echo "preview-isolation Playwright binaries verified: firefox-1532, webkit-2311"
+
+      - name: Run Playwright tests
+        # OPENROUTER_API_KEY_CI is inherited per-shard from $GITHUB_ENV (Resolve shard LLM key).
+        # Mirror it onto OPENROUTER_API_KEY so self-managed gateways
+        # (tests/e2e/setup.ts startGateway → onboardAdmin) send the same live
+        # key instead of sk-test-placeholder, which OpenRouter 400s.
+        #
+        # --reporter=html,list,json ADDS the json reporter on top of
+        # playwright.config.ts's own `reporter: [['html'], ['list']]` — the
+        # CLI --reporter flag fully REPLACES the config's reporter list rather
+        # than appending to it, so html and list are re-listed here with their
+        # defaults (matching the config's own un-configured entries) purely so
+        # the existing playwright-report/ artifact upload below keeps working;
+        # json is the new addition the next step reads. PLAYWRIGHT_JSON_OUTPUT_NAME
+        # routes the json reporter's output to a file instead of stdout.
+        #
+        # Do not treat a green exit code here as the full verdict: Playwright's
+        # own exit status reflects only `unexpected` (failed-after-all-retries)
+        # results. A skipped test and a test that failed once and then passed
+        # under playwright.config.ts's retries: 3 both exit 0 — see the next
+        # step, which reads the json reporter's stats block to catch both.
+        env:
+          OMNIPUS_URL: http://localhost:6060
+          OPENROUTER_API_KEY: ${{ env.OPENROUTER_API_KEY_CI }}
+          PLAYWRIGHT_JSON_OUTPUT_NAME: /tmp/pw-results.json
+        run: |
+          set -euo pipefail
+          # The preview-headed project pins headless:false — the browser's
+          # own PDF viewer (ADR-067 §13.4 item 4) is what's measured, and
+          # headless Chromium has none. Runners have no X server, so launch
+          # on a real headed Chromium backed by an in-memory X server. Do
+          # NOT flip the project to headless — that replaces the thing
+          # under test.
+          #
+          # Display-provisioning history for this shard:
+          #
+          #   * Run 35346106208 (on commit e875f001e) failed with the bare
+          #     ui/aura/env.cc:246 death because the shard had NO display
+          #     provisioning at all — Chromium launched with DISPLAY unset.
+          #     The xvfb-run -a wiring arrived later in eaa6a3210 and was
+          #     never executed on that run, so the run does not, by itself,
+          #     implicate xauth.
+          #
+          #   * eaa6a3210 then added `xvfb-run -a`. xvfb-run shells out to
+          #     `xauth` to write the X server cookie, and the ci-worker
+          #     (commit 871b8885e, Sep 11) proved that path fails on a
+          #     runner image without xauth — "xauth command not found",
+          #     gate exit 3, before Xvfb ever starts. Whether the GitHub-
+          #     hosted ubuntu-latest image (Ubuntu 24.04/26.04) ships
+          #     xauth is not verified here; the dependency is fragile
+          #     either way.
+          #
+          # Xvfb itself has no xauth dependency. Start it directly on :99
+          # and verify the server is answering before handing off — that
+          # removes the dependency class entirely rather than relying on
+          # xauth being present.
+          #
+          # The verify is a bounded poll for /tmp/.X11-unix/X99 (the
+          # canonical "Xvfb is accepting connections" signal) rather than
+          # a fixed sleep — a blind sleep races Xvfb's own startup and
+          # reads as a code regression when it loses.
+          if [ "${{ matrix.group }}" = "preview-headed" ]; then
+            if ! command -v Xvfb >/dev/null 2>&1; then
+              echo "::error::Xvfb not on PATH — the preview-headed shard WILL fail at browserType.launch; this is an environment failure, not a code defect" >&2
+              exit 1
+            fi
+            XLOG="${RUNNER_TEMP:-/tmp}/xvfb.log"
+            Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >"$XLOG" 2>&1 &
+            _XVFB_PID=$!
+            export DISPLAY=:99
+            _xvfb_ready=0
+            for _ in $(seq 1 50); do
+              if [ -S /tmp/.X11-unix/X99 ] && kill -0 "$_XVFB_PID" 2>/dev/null; then
+                _xvfb_ready=1
+                break
+              fi
+              sleep 0.1
+            done
+            if [ "$_xvfb_ready" -ne 1 ]; then
+              echo "::error::Xvfb did not become reachable on :99 — preview-headed will fail at browserType.launch; this is an environment failure, not a code defect. See $XLOG" >&2
+              cat "$XLOG" >&2 || true
+              kill "$_XVFB_PID" 2>/dev/null || true
+              exit 1
+            fi
+            echo "Xvfb up on :99 (pid $_XVFB_PID)"
+            # Reap on script exit; the run step is its own shell, so EXIT is
+            # the right hook here (RETURN would fire on every function return).
+            trap 'kill "$_XVFB_PID" 2>/dev/null || true' EXIT
+            npx playwright test ${{ matrix.specs }} --reporter=html,list,json
+          else
+            npx playwright test ${{ matrix.specs }} --reporter=html,list,json
+          fi
+
+      - name: Fail on skipped or flaky Playwright tests
+        # Two ways this suite went green without being green:
+        #  * skipped>0 — two tests were silently skipped in the last green
+        #    run. `npx playwright test` does not fail on a skip; it's not a
+        #    Playwright "failure" by definition.
+        #  * flaky>0 — retries: 3 (playwright.config.ts) turned a real
+        #    failure green last Saturday: a test that fails once and then
+        #    passes on retry is reported as "flaky", not "unexpected", and
+        #    does not fail the run either.
+        # The json reporter's own stats block is the one place both counts
+        # are unambiguous — read that instead of re-deriving them from
+        # console text. Runs unconditionally (always()) so it still reports
+        # accurately even when the run step above already failed outright.
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ ! -f /tmp/pw-results.json ]; then
+            echo "::error::Playwright JSON report not found at /tmp/pw-results.json — cannot verify skipped/flaky counts" >&2
+            exit 1
+          fi
+          # jq exits 0 and prints "null" (or nothing, on an empty file) for a
+          # missing/malformed key -- set -e does NOT catch that, and the old
+          # `[ "$skipped" -gt 0 ]` check silently evaluated false on a
+          # non-numeric value (stderr: "integer expected"), letting a killed
+          # Playwright run that left an empty or truncated report file pass
+          # this gate. `jq -e` exits 1 on null/absent; the numeric guard below
+          # closes the empty-file case even -e alone doesn't catch. Verified
+          # in isolation (empty file, and valid JSON missing .stats) before
+          # this landed -- both previously passed silently, both now fail.
+          skipped=$(jq -e '.stats.skipped' /tmp/pw-results.json) || { echo "::error::Playwright JSON report has no readable .stats.skipped -- cannot verify coverage" >&2; exit 1; }
+          flaky=$(jq -e '.stats.flaky' /tmp/pw-results.json) || { echo "::error::Playwright JSON report has no readable .stats.flaky -- cannot verify coverage" >&2; exit 1; }
+          expected=$(jq -e '.stats.expected' /tmp/pw-results.json) || { echo "::error::Playwright JSON report has no readable .stats.expected -- cannot verify coverage" >&2; exit 1; }
+          unexpected=$(jq -e '.stats.unexpected' /tmp/pw-results.json) || { echo "::error::Playwright JSON report has no readable .stats.unexpected -- cannot verify coverage" >&2; exit 1; }
+          for statname in skipped flaky expected unexpected; do
+            val="${!statname}"
+            case "$val" in
+              ''|*[!0-9]*)
+                echo "::error::Playwright stats.$statname is not a plain non-negative integer (got: '$val') -- treating report as unverifiable" >&2
+                exit 1
+                ;;
+            esac
+          done
+          echo "Playwright stats: expected=$expected skipped=$skipped flaky=$flaky unexpected=$unexpected"
+          rc=0
+          if [ "$skipped" -gt 0 ]; then
+            echo "::error::$skipped Playwright test(s) were skipped — coverage silently shrank. See docs/internal/false-green-patterns.md." >&2
+            rc=1
+          fi
+          if [ "$flaky" -gt 0 ]; then
+            echo "::error::$flaky Playwright test(s) only passed after a retry (flaky) — retries: 3 masked a real failure. See docs/internal/false-green-patterns.md." >&2
+            rc=1
+          fi
+          exit $rc
+
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-artifacts-${{ matrix.group }}
+          # Re-running all jobs reuses this run_id, so the same artifact name is
+          # uploaded twice and upload-artifact 409s — failing an always()/failure()
+          # step and the job, for a reason unrelated to the code under test.
+          overwrite: true
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
+      - name: Prepare gateway logs for upload
+        # Bound each log (last 5000 lines / 5 MB) and scrub provider-key
+        # shapes before upload — logs are archived on every outcome, so no
+        # credential material may ride along.
+        if: always()
+        run: |
+          set -euo pipefail
+          STAGING=/tmp/gateway-logs-staging
+          rm -rf "$STAGING" && mkdir -p "$STAGING"
+          for f in /tmp/omnipus.log /tmp/omnipus-e2e/logs/*; do
+            [ -f "$f" ] || continue
+            out="$STAGING/$(basename "$f")"
+            tail -c 5242880 "$f" | tail -n 5000 \
+              | sed -E 's/sk-or-[A-Za-z0-9_-]+/[REDACTED]/g; s/sk-[A-Za-z0-9_-]{16,}/[REDACTED]/g' > "$out"
+          done
+
+      - name: Upload gateway logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gateway-logs-${{ matrix.group }}
+          # Re-running all jobs reuses this run_id, so the same artifact name is
+          # uploaded twice and upload-artifact 409s — failing an always()/failure()
+          # step and the job, for a reason unrelated to the code under test.
+          overwrite: true
+          path: /tmp/gateway-logs-staging/
+          retention-days: 7
+
+      - name: Stop gateway
+        if: always()
+        run: |
+          if [ -f /tmp/omnipus.pid ]; then
+            kill "$(cat /tmp/omnipus.pid)" 2>/dev/null || true
+          fi
+
+  # ---------------------------------------------------------------------------
+  # The single required check.
+  #
+  # Branch protection currently names JOB IDS (typecheck, lint, test, security,
+  # perf-smoke, playwright, wire-types-lint, verify-contracts). GitHub reports
+  # check runs under a job's DISPLAY NAME, and every one of those jobs sets
+  # `name:` — so the required contexts match nothing that is ever emitted, and
+  # `playwright` is a matrix job that can only ever emit "E2E — <group>". The
+  # practical effect is that no result from this workflow gates any merge.
+  #
+  # Requiring eight name strings that must each stay in sync with a `name:`
+  # field is the kind of duplicated definition that drifts silently. This job
+  # exists so protection can require exactly ONE context that cannot drift:
+  # it depends on every gate and re-derives the verdict from their results.
+  #
+  # Semantics, deliberately:
+  #   failure/cancelled in ANY dependency -> fail. No exceptions, no allowlist.
+  #   skipped                             -> pass. Language scoping means a
+  #                                          Go-only PR legitimately skips the
+  #                                          SPA jobs and vice versa.
+  #   changes must have SUCCEEDED         -> otherwise "everything skipped"
+  #                                          reads as success while nothing ran.
