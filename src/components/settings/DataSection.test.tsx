@@ -79,7 +79,7 @@ function renderSection() {
 
 const baseConfig: Config = {
   gateway: { bind_address: '0.0.0.0', port: 5000 },
-  security: { policy_mode: 'allow', rate_limits: {} },
+  security: { rate_limits: {} },
   data: { session_retention_days: 90 },
 }
 

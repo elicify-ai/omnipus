@@ -73,7 +73,6 @@ const LOCAL_APP_STATE = {
 
 const MINIMAL_CONFIG = {
   security: {
-    policy_mode: 'deny' as const,
     exec_timeout_seconds: 0,
     max_background_seconds: 0,
     rate_limits: {
