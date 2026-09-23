@@ -4373,12 +4373,16 @@ export interface components {
             model?: string;
             verdict?: components["schemas"]["JudgeVerdict"];
             /**
-             * @description BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
+             * @description BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
              * @example browser_handover_notice
              * @enum {string}
              */
-            system_subtype?: "browser_handover_notice" | "goal_outcome";
+            system_subtype?: "browser_handover_notice" | "goal_outcome" | "subagent_start" | "subagent_state" | "subagent_message" | "subagent_end";
             goal_outcome?: components["schemas"]["GoalOutcome"];
+            subagent_start?: components["schemas"]["SubagentStartFrame"];
+            subagent_state?: components["schemas"]["SubagentStateFrame"];
+            subagent_message?: components["schemas"]["SubagentMessageFrame"];
+            subagent_end?: components["schemas"]["SubagentEndFrame"];
         };
         /** @description A single tool invocation recorded in a transcript entry. Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts. */
         ToolCall: {
@@ -16102,6 +16106,163 @@ export interface components {
              * @example await answers — per-child unacked ceiling reached
              */
             error?: string;
+        };
+        /**
+         * SubagentStartFrame
+         * @description Server → client (FR-H-004). Opening bracket of a subagent span. Emitted when the agent loop spawns a sub-turn. The SPA uses span_id to group subsequent nested tool_call_start / tool_call_result frames under a collapsible span UI.
+         */
+        SubagentStartFrame: {
+            /** @enum {string} */
+            type: "subagent_start";
+            /** @description Session in which this sub-turn is running. */
+            session_id: string;
+            /** @description Unique identifier for this span. Constructed by the server as "span_" + parent spawn ToolCall.ID. */
+            span_id: string;
+            /** @description The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts. */
+            parent_call_id: string;
+            /** @description Human-readable label for the subagent task, extracted from the spawn call's "label" or "task" parameter (truncated to 60 chars by the server; schema allows up to 100 to accommodate edge cases). */
+            task_label: string;
+            /** @description Agent running the sub-turn. */
+            agent_id?: string;
+            /**
+             * @description Optional session id of the opened child session. Present for steered sessions; absent for legacy subturn spans. Enables the open control on the side panel row (ADR-091 I-4).
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            child_session_id?: string;
+        };
+        /**
+         * SubagentStateFrame
+         * @description Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+         */
+        SubagentStateFrame: {
+            /** @enum {string} */
+            type: "subagent_state";
+            /** @description Session in which the parent's span is running. */
+            session_id: string;
+            /**
+             * @description Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            child_session_id?: string;
+            /** @description Matches the `span_id` from the bracketing `subagent_start` frame. */
+            span_id: string;
+            /**
+             * @description The child's current durable lifecycle state (SessionLifecycleRecord.state).
+             * @example running
+             * @enum {string}
+             */
+            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            /** @description Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3). */
+            steering_receipt?: {
+                /**
+                 * @description The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
+                 * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+                 */
+                correlation_id: string;
+                /**
+                 * Format: date-time
+                 * @example 2026-07-22T10:00:30Z
+                 */
+                applied_at: string;
+            };
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp this state ping was emitted.
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+        };
+        /**
+         * SubagentMessageFrame
+         * @description Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span event riding between the existing `subagent_start`/`subagent_end` brackets, feeding pill/panel/board live as a child pushes typed messages / the parent steers it. Rides the existing since-cursor WS replay (same pattern as `ReplayMessageFrame`).
+         *     SHAPE DECISION (flagged for review): this is a FLAT, UI-facing PROJECTION of the underlying `SessionMessage` — it does not embed the full 12-variant `SessionMessage` discriminated union. Reasons: (1) the full union is hosted INLINE in `openapi.yaml` per ADR-034 specifically because oapi-codegen needs internal component refs inside a `oneOf` — embedding it inside an asyncapi frame would require a second, hand-duplicated copy of all 12 variants inside `asyncapi.yaml` (which does not resolve cross-file `$ref` for its own codegen, per the existing `GoalStatusFrame.yaml` note), multiplying maintenance burden for a live UI ping that only ever needs a handful of display fields; (2) this mirrors the established precedent of `GoalStatusFrame` itself being a flat projection of goal state rather than embedding a full Goal record. Full-fidelity SessionMessage data (every typed field, for every kind) is available via `delegate.inbox`/`delegate.peek` (`DelegateInboxResponse`/`DelegatePeekResponse`) — this frame is a live nudge, not the source of truth.
+         */
+        SubagentMessageFrame: {
+            /** @enum {string} */
+            type: "subagent_message";
+            /** @description Session in which the parent's span is running. */
+            session_id: string;
+            /**
+             * @description Optional session id of the delegated child session this mid-span update is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            child_session_id?: string;
+            /** @description Matches the `span_id` from the bracketing `subagent_start` frame. */
+            span_id: string;
+            /**
+             * @description The underlying SessionMessage's `message_id` — correlates this live ping with the full record fetchable via `delegate.inbox`/`peek`.
+             * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WF
+             */
+            message_id: string;
+            /**
+             * @description The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+             * @example progress
+             * @enum {string}
+             */
+            kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond" | "goal_status";
+            /**
+             * @description Flattened display text (progress.text / checkpoint.summary / blocker.text / question.text / error.text / steer.text / respond.text), when the kind carries one.
+             * @example Scanning pkg/plan for the write-set boundary...
+             */
+            text?: string;
+            /**
+             * @description Present for `kind: progress` when a percentage estimate was given.
+             * @example 40
+             */
+            pct?: number;
+            /**
+             * @description Present for `question`/`decision_request`/`steer`/`respond` — lets the SPA thread a live reply.
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+             */
+            correlation_id?: string;
+            /**
+             * @description Agent ID (or "human") that authored the underlying message.
+             * @example ray
+             */
+            sender_identity: string;
+            /**
+             * @description True when the underlying message's free-text content originated from a child agent and must render in untrusted-content framing (FE-7/MAJ-12).
+             * @example true
+             */
+            untrusted_origin: boolean;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp the underlying message was created.
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+        };
+        /**
+         * SubagentEndFrame
+         * @description Server → client (FR-H-004). Closing bracket of a subagent span. Emitted when the sub-turn finishes. The SPA transitions the span from "running" to a terminal status and records duration and optional result. NOTE: status MUST be validated — the SPA's generated Zod schema (src/lib/api/generated/schemas.ts, built from this enum) rejects any status string not in this set; such frames are dropped.
+         */
+        SubagentEndFrame: {
+            /** @enum {string} */
+            type: "subagent_end";
+            /** @description Session in which this sub-turn ran. */
+            session_id: string;
+            /** @description Matches the span_id from the preceding subagent_start frame. */
+            span_id: string;
+            /**
+             * @description Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
+             * @enum {string}
+             */
+            status: "success" | "error" | "cancelled" | "interrupted" | "timeout" | "parked";
+            /** @description Wall-clock duration of the sub-turn in milliseconds. */
+            duration_ms?: number;
+            /** @description Optional textual summary of the sub-turn's output. */
+            final_result?: string;
+            /**
+             * @description When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+             * @enum {string}
+             */
+            reason?: "parent_timeout" | "parent_cancelled" | "parent_done_early" | "unknown";
+            /** @description Agent that ran the sub-turn. */
+            agent_id?: string;
+            /** @description The spawn ToolCall.ID that triggered this sub-turn. */
+            parent_call_id?: string;
+            /** @description Internal reason string emitted by the orphan-watchdog synthetic end frame. Not rendered directly in the UI. */
+            message?: string;
         };
         /**
          * ExternalCliTool

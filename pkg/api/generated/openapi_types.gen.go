@@ -4979,10 +4979,209 @@ func (e MessageStatus) Valid() bool {
 	}
 }
 
+// Defines values for MessageSubagentEndReason.
+const (
+	MessageSubagentEndReasonParentCancelled MessageSubagentEndReason = "parent_cancelled"
+	MessageSubagentEndReasonParentDoneEarly MessageSubagentEndReason = "parent_done_early"
+	MessageSubagentEndReasonParentTimeout   MessageSubagentEndReason = "parent_timeout"
+	MessageSubagentEndReasonUnknown         MessageSubagentEndReason = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentEndReason enum.
+func (e MessageSubagentEndReason) Valid() bool {
+	switch e {
+	case MessageSubagentEndReasonParentCancelled:
+		return true
+	case MessageSubagentEndReasonParentDoneEarly:
+		return true
+	case MessageSubagentEndReasonParentTimeout:
+		return true
+	case MessageSubagentEndReasonUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentEndStatus.
+const (
+	MessageSubagentEndStatusCancelled   MessageSubagentEndStatus = "cancelled"
+	MessageSubagentEndStatusError       MessageSubagentEndStatus = "error"
+	MessageSubagentEndStatusInterrupted MessageSubagentEndStatus = "interrupted"
+	MessageSubagentEndStatusParked      MessageSubagentEndStatus = "parked"
+	MessageSubagentEndStatusSuccess     MessageSubagentEndStatus = "success"
+	MessageSubagentEndStatusTimeout     MessageSubagentEndStatus = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentEndStatus enum.
+func (e MessageSubagentEndStatus) Valid() bool {
+	switch e {
+	case MessageSubagentEndStatusCancelled:
+		return true
+	case MessageSubagentEndStatusError:
+		return true
+	case MessageSubagentEndStatusInterrupted:
+		return true
+	case MessageSubagentEndStatusParked:
+		return true
+	case MessageSubagentEndStatusSuccess:
+		return true
+	case MessageSubagentEndStatusTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentEndType.
+const (
+	MessageSubagentEndTypeSubagentEnd MessageSubagentEndType = "subagent_end"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentEndType enum.
+func (e MessageSubagentEndType) Valid() bool {
+	switch e {
+	case MessageSubagentEndTypeSubagentEnd:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentMessageKind.
+const (
+	MessageSubagentMessageKindArtifact        MessageSubagentMessageKind = "artifact"
+	MessageSubagentMessageKindBlocker         MessageSubagentMessageKind = "blocker"
+	MessageSubagentMessageKindCheckpoint      MessageSubagentMessageKind = "checkpoint"
+	MessageSubagentMessageKindDecisionRequest MessageSubagentMessageKind = "decision_request"
+	MessageSubagentMessageKindError           MessageSubagentMessageKind = "error"
+	MessageSubagentMessageKindGoalStatus      MessageSubagentMessageKind = "goal_status"
+	MessageSubagentMessageKindHandback        MessageSubagentMessageKind = "handback"
+	MessageSubagentMessageKindProgress        MessageSubagentMessageKind = "progress"
+	MessageSubagentMessageKindQuestion        MessageSubagentMessageKind = "question"
+	MessageSubagentMessageKindRespond         MessageSubagentMessageKind = "respond"
+	MessageSubagentMessageKindSteer           MessageSubagentMessageKind = "steer"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentMessageKind enum.
+func (e MessageSubagentMessageKind) Valid() bool {
+	switch e {
+	case MessageSubagentMessageKindArtifact:
+		return true
+	case MessageSubagentMessageKindBlocker:
+		return true
+	case MessageSubagentMessageKindCheckpoint:
+		return true
+	case MessageSubagentMessageKindDecisionRequest:
+		return true
+	case MessageSubagentMessageKindError:
+		return true
+	case MessageSubagentMessageKindGoalStatus:
+		return true
+	case MessageSubagentMessageKindHandback:
+		return true
+	case MessageSubagentMessageKindProgress:
+		return true
+	case MessageSubagentMessageKindQuestion:
+		return true
+	case MessageSubagentMessageKindRespond:
+		return true
+	case MessageSubagentMessageKindSteer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentMessageType.
+const (
+	MessageSubagentMessageTypeSubagentMessage MessageSubagentMessageType = "subagent_message"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentMessageType enum.
+func (e MessageSubagentMessageType) Valid() bool {
+	switch e {
+	case MessageSubagentMessageTypeSubagentMessage:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentStartType.
+const (
+	MessageSubagentStartTypeSubagentStart MessageSubagentStartType = "subagent_start"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentStartType enum.
+func (e MessageSubagentStartType) Valid() bool {
+	switch e {
+	case MessageSubagentStartTypeSubagentStart:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentStateState.
+const (
+	MessageSubagentStateStateCancelled  MessageSubagentStateState = "cancelled"
+	MessageSubagentStateStateCompleted  MessageSubagentStateState = "completed"
+	MessageSubagentStateStateFailed     MessageSubagentStateState = "failed"
+	MessageSubagentStateStateNeedsInput MessageSubagentStateState = "needs_input"
+	MessageSubagentStateStatePaused     MessageSubagentStateState = "paused"
+	MessageSubagentStateStateQueued     MessageSubagentStateState = "queued"
+	MessageSubagentStateStateRunning    MessageSubagentStateState = "running"
+	MessageSubagentStateStateTimedOut   MessageSubagentStateState = "timed_out"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentStateState enum.
+func (e MessageSubagentStateState) Valid() bool {
+	switch e {
+	case MessageSubagentStateStateCancelled:
+		return true
+	case MessageSubagentStateStateCompleted:
+		return true
+	case MessageSubagentStateStateFailed:
+		return true
+	case MessageSubagentStateStateNeedsInput:
+		return true
+	case MessageSubagentStateStatePaused:
+		return true
+	case MessageSubagentStateStateQueued:
+		return true
+	case MessageSubagentStateStateRunning:
+		return true
+	case MessageSubagentStateStateTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentStateType.
+const (
+	MessageSubagentStateTypeSubagentState MessageSubagentStateType = "subagent_state"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentStateType enum.
+func (e MessageSubagentStateType) Valid() bool {
+	switch e {
+	case MessageSubagentStateTypeSubagentState:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageSystemSubtype.
 const (
 	MessageSystemSubtypeBrowserHandoverNotice MessageSystemSubtype = "browser_handover_notice"
 	MessageSystemSubtypeGoalOutcome           MessageSystemSubtype = "goal_outcome"
+	MessageSystemSubtypeSubagentEnd           MessageSystemSubtype = "subagent_end"
+	MessageSystemSubtypeSubagentMessage       MessageSystemSubtype = "subagent_message"
+	MessageSystemSubtypeSubagentStart         MessageSystemSubtype = "subagent_start"
+	MessageSystemSubtypeSubagentState         MessageSystemSubtype = "subagent_state"
 )
 
 // Valid indicates whether the value is a known member of the MessageSystemSubtype enum.
@@ -4991,6 +5190,14 @@ func (e MessageSystemSubtype) Valid() bool {
 	case MessageSystemSubtypeBrowserHandoverNotice:
 		return true
 	case MessageSystemSubtypeGoalOutcome:
+		return true
+	case MessageSystemSubtypeSubagentEnd:
+		return true
+	case MessageSystemSubtypeSubagentMessage:
+		return true
+	case MessageSystemSubtypeSubagentStart:
+		return true
+	case MessageSystemSubtypeSubagentState:
 		return true
 	default:
 		return false
@@ -8219,10 +8426,209 @@ func (e SessionDetailMessagesStatus) Valid() bool {
 	}
 }
 
+// Defines values for SessionDetailMessagesSubagentEndReason.
+const (
+	SessionDetailMessagesSubagentEndReasonParentCancelled SessionDetailMessagesSubagentEndReason = "parent_cancelled"
+	SessionDetailMessagesSubagentEndReasonParentDoneEarly SessionDetailMessagesSubagentEndReason = "parent_done_early"
+	SessionDetailMessagesSubagentEndReasonParentTimeout   SessionDetailMessagesSubagentEndReason = "parent_timeout"
+	SessionDetailMessagesSubagentEndReasonUnknown         SessionDetailMessagesSubagentEndReason = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentEndReason enum.
+func (e SessionDetailMessagesSubagentEndReason) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentEndReasonParentCancelled:
+		return true
+	case SessionDetailMessagesSubagentEndReasonParentDoneEarly:
+		return true
+	case SessionDetailMessagesSubagentEndReasonParentTimeout:
+		return true
+	case SessionDetailMessagesSubagentEndReasonUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentEndStatus.
+const (
+	SessionDetailMessagesSubagentEndStatusCancelled   SessionDetailMessagesSubagentEndStatus = "cancelled"
+	SessionDetailMessagesSubagentEndStatusError       SessionDetailMessagesSubagentEndStatus = "error"
+	SessionDetailMessagesSubagentEndStatusInterrupted SessionDetailMessagesSubagentEndStatus = "interrupted"
+	SessionDetailMessagesSubagentEndStatusParked      SessionDetailMessagesSubagentEndStatus = "parked"
+	SessionDetailMessagesSubagentEndStatusSuccess     SessionDetailMessagesSubagentEndStatus = "success"
+	SessionDetailMessagesSubagentEndStatusTimeout     SessionDetailMessagesSubagentEndStatus = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentEndStatus enum.
+func (e SessionDetailMessagesSubagentEndStatus) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentEndStatusCancelled:
+		return true
+	case SessionDetailMessagesSubagentEndStatusError:
+		return true
+	case SessionDetailMessagesSubagentEndStatusInterrupted:
+		return true
+	case SessionDetailMessagesSubagentEndStatusParked:
+		return true
+	case SessionDetailMessagesSubagentEndStatusSuccess:
+		return true
+	case SessionDetailMessagesSubagentEndStatusTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentEndType.
+const (
+	SessionDetailMessagesSubagentEndTypeSubagentEnd SessionDetailMessagesSubagentEndType = "subagent_end"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentEndType enum.
+func (e SessionDetailMessagesSubagentEndType) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentEndTypeSubagentEnd:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentMessageKind.
+const (
+	SessionDetailMessagesSubagentMessageKindArtifact        SessionDetailMessagesSubagentMessageKind = "artifact"
+	SessionDetailMessagesSubagentMessageKindBlocker         SessionDetailMessagesSubagentMessageKind = "blocker"
+	SessionDetailMessagesSubagentMessageKindCheckpoint      SessionDetailMessagesSubagentMessageKind = "checkpoint"
+	SessionDetailMessagesSubagentMessageKindDecisionRequest SessionDetailMessagesSubagentMessageKind = "decision_request"
+	SessionDetailMessagesSubagentMessageKindError           SessionDetailMessagesSubagentMessageKind = "error"
+	SessionDetailMessagesSubagentMessageKindGoalStatus      SessionDetailMessagesSubagentMessageKind = "goal_status"
+	SessionDetailMessagesSubagentMessageKindHandback        SessionDetailMessagesSubagentMessageKind = "handback"
+	SessionDetailMessagesSubagentMessageKindProgress        SessionDetailMessagesSubagentMessageKind = "progress"
+	SessionDetailMessagesSubagentMessageKindQuestion        SessionDetailMessagesSubagentMessageKind = "question"
+	SessionDetailMessagesSubagentMessageKindRespond         SessionDetailMessagesSubagentMessageKind = "respond"
+	SessionDetailMessagesSubagentMessageKindSteer           SessionDetailMessagesSubagentMessageKind = "steer"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentMessageKind enum.
+func (e SessionDetailMessagesSubagentMessageKind) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentMessageKindArtifact:
+		return true
+	case SessionDetailMessagesSubagentMessageKindBlocker:
+		return true
+	case SessionDetailMessagesSubagentMessageKindCheckpoint:
+		return true
+	case SessionDetailMessagesSubagentMessageKindDecisionRequest:
+		return true
+	case SessionDetailMessagesSubagentMessageKindError:
+		return true
+	case SessionDetailMessagesSubagentMessageKindGoalStatus:
+		return true
+	case SessionDetailMessagesSubagentMessageKindHandback:
+		return true
+	case SessionDetailMessagesSubagentMessageKindProgress:
+		return true
+	case SessionDetailMessagesSubagentMessageKindQuestion:
+		return true
+	case SessionDetailMessagesSubagentMessageKindRespond:
+		return true
+	case SessionDetailMessagesSubagentMessageKindSteer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentMessageType.
+const (
+	SessionDetailMessagesSubagentMessageTypeSubagentMessage SessionDetailMessagesSubagentMessageType = "subagent_message"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentMessageType enum.
+func (e SessionDetailMessagesSubagentMessageType) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentMessageTypeSubagentMessage:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentStartType.
+const (
+	SessionDetailMessagesSubagentStartTypeSubagentStart SessionDetailMessagesSubagentStartType = "subagent_start"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStartType enum.
+func (e SessionDetailMessagesSubagentStartType) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentStartTypeSubagentStart:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentStateState.
+const (
+	SessionDetailMessagesSubagentStateStateCancelled  SessionDetailMessagesSubagentStateState = "cancelled"
+	SessionDetailMessagesSubagentStateStateCompleted  SessionDetailMessagesSubagentStateState = "completed"
+	SessionDetailMessagesSubagentStateStateFailed     SessionDetailMessagesSubagentStateState = "failed"
+	SessionDetailMessagesSubagentStateStateNeedsInput SessionDetailMessagesSubagentStateState = "needs_input"
+	SessionDetailMessagesSubagentStateStatePaused     SessionDetailMessagesSubagentStateState = "paused"
+	SessionDetailMessagesSubagentStateStateQueued     SessionDetailMessagesSubagentStateState = "queued"
+	SessionDetailMessagesSubagentStateStateRunning    SessionDetailMessagesSubagentStateState = "running"
+	SessionDetailMessagesSubagentStateStateTimedOut   SessionDetailMessagesSubagentStateState = "timed_out"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateState enum.
+func (e SessionDetailMessagesSubagentStateState) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentStateStateCancelled:
+		return true
+	case SessionDetailMessagesSubagentStateStateCompleted:
+		return true
+	case SessionDetailMessagesSubagentStateStateFailed:
+		return true
+	case SessionDetailMessagesSubagentStateStateNeedsInput:
+		return true
+	case SessionDetailMessagesSubagentStateStatePaused:
+		return true
+	case SessionDetailMessagesSubagentStateStateQueued:
+		return true
+	case SessionDetailMessagesSubagentStateStateRunning:
+		return true
+	case SessionDetailMessagesSubagentStateStateTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentStateType.
+const (
+	SessionDetailMessagesSubagentStateTypeSubagentState SessionDetailMessagesSubagentStateType = "subagent_state"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateType enum.
+func (e SessionDetailMessagesSubagentStateType) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentStateTypeSubagentState:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionDetailMessagesSystemSubtype.
 const (
 	SessionDetailMessagesSystemSubtypeBrowserHandoverNotice SessionDetailMessagesSystemSubtype = "browser_handover_notice"
 	SessionDetailMessagesSystemSubtypeGoalOutcome           SessionDetailMessagesSystemSubtype = "goal_outcome"
+	SessionDetailMessagesSystemSubtypeSubagentEnd           SessionDetailMessagesSystemSubtype = "subagent_end"
+	SessionDetailMessagesSystemSubtypeSubagentMessage       SessionDetailMessagesSystemSubtype = "subagent_message"
+	SessionDetailMessagesSystemSubtypeSubagentStart         SessionDetailMessagesSystemSubtype = "subagent_start"
+	SessionDetailMessagesSystemSubtypeSubagentState         SessionDetailMessagesSystemSubtype = "subagent_state"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesSystemSubtype enum.
@@ -8231,6 +8637,14 @@ func (e SessionDetailMessagesSystemSubtype) Valid() bool {
 	case SessionDetailMessagesSystemSubtypeBrowserHandoverNotice:
 		return true
 	case SessionDetailMessagesSystemSubtypeGoalOutcome:
+		return true
+	case SessionDetailMessagesSystemSubtypeSubagentEnd:
+		return true
+	case SessionDetailMessagesSystemSubtypeSubagentMessage:
+		return true
+	case SessionDetailMessagesSystemSubtypeSubagentStart:
+		return true
+	case SessionDetailMessagesSystemSubtypeSubagentState:
 		return true
 	default:
 		return false
@@ -17401,10 +17815,128 @@ type Message struct {
 	// Status Completion status of this message turn.
 	Status *MessageStatus `json:"status,omitempty"`
 
+	// SubagentEnd Server → client (FR-H-004). Closing bracket of a subagent span. Emitted when the sub-turn finishes. The SPA transitions the span from "running" to a terminal status and records duration and optional result. NOTE: status MUST be validated — the SPA's generated Zod schema (src/lib/api/generated/schemas.ts, built from this enum) rejects any status string not in this set; such frames are dropped.
+	SubagentEnd *struct {
+		// AgentId Agent that ran the sub-turn.
+		AgentId *string `json:"agent_id,omitempty"`
+
+		// DurationMs Wall-clock duration of the sub-turn in milliseconds.
+		DurationMs *int `json:"duration_ms,omitempty"`
+
+		// FinalResult Optional textual summary of the sub-turn's output.
+		FinalResult *string `json:"final_result,omitempty"`
+
+		// Message Internal reason string emitted by the orphan-watchdog synthetic end frame. Not rendered directly in the UI.
+		Message *string `json:"message,omitempty"`
+
+		// ParentCallId The spawn ToolCall.ID that triggered this sub-turn.
+		ParentCallId *string `json:"parent_call_id,omitempty"`
+
+		// Reason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+		Reason *MessageSubagentEndReason `json:"reason,omitempty"`
+
+		// SessionId Session in which this sub-turn ran.
+		SessionId string `json:"session_id"`
+
+		// SpanId Matches the span_id from the preceding subagent_start frame.
+		SpanId string `json:"span_id"`
+
+		// Status Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
+		Status MessageSubagentEndStatus `json:"status"`
+		Type   MessageSubagentEndType   `json:"type"`
+	} `json:"subagent_end,omitempty"`
+
+	// SubagentMessage Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span event riding between the existing `subagent_start`/`subagent_end` brackets, feeding pill/panel/board live as a child pushes typed messages / the parent steers it. Rides the existing since-cursor WS replay (same pattern as `ReplayMessageFrame`).
+	// SHAPE DECISION (flagged for review): this is a FLAT, UI-facing PROJECTION of the underlying `SessionMessage` — it does not embed the full 12-variant `SessionMessage` discriminated union. Reasons: (1) the full union is hosted INLINE in `openapi.yaml` per ADR-034 specifically because oapi-codegen needs internal component refs inside a `oneOf` — embedding it inside an asyncapi frame would require a second, hand-duplicated copy of all 12 variants inside `asyncapi.yaml` (which does not resolve cross-file `$ref` for its own codegen, per the existing `GoalStatusFrame.yaml` note), multiplying maintenance burden for a live UI ping that only ever needs a handful of display fields; (2) this mirrors the established precedent of `GoalStatusFrame` itself being a flat projection of goal state rather than embedding a full Goal record. Full-fidelity SessionMessage data (every typed field, for every kind) is available via `delegate.inbox`/`delegate.peek` (`DelegateInboxResponse`/`DelegatePeekResponse`) — this frame is a live nudge, not the source of truth.
+	SubagentMessage *struct {
+		// ChildSessionId Optional session id of the delegated child session this mid-span update is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
+		ChildSessionId *string `json:"child_session_id,omitempty"`
+
+		// CorrelationId Present for `question`/`decision_request`/`steer`/`respond` — lets the SPA thread a live reply.
+		CorrelationId *string `json:"correlation_id,omitempty"`
+
+		// CreatedAt RFC3339 timestamp the underlying message was created.
+		CreatedAt time.Time `json:"created_at"`
+
+		// Kind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+		Kind MessageSubagentMessageKind `json:"kind"`
+
+		// MessageId The underlying SessionMessage's `message_id` — correlates this live ping with the full record fetchable via `delegate.inbox`/`peek`.
+		MessageId string `json:"message_id"`
+
+		// Pct Present for `kind: progress` when a percentage estimate was given.
+		Pct *int `json:"pct,omitempty"`
+
+		// SenderIdentity Agent ID (or "human") that authored the underlying message.
+		SenderIdentity string `json:"sender_identity"`
+
+		// SessionId Session in which the parent's span is running.
+		SessionId string `json:"session_id"`
+
+		// SpanId Matches the `span_id` from the bracketing `subagent_start` frame.
+		SpanId string `json:"span_id"`
+
+		// Text Flattened display text (progress.text / checkpoint.summary / blocker.text / question.text / error.text / steer.text / respond.text), when the kind carries one.
+		Text *string                    `json:"text,omitempty"`
+		Type MessageSubagentMessageType `json:"type"`
+
+		// UntrustedOrigin True when the underlying message's free-text content originated from a child agent and must render in untrusted-content framing (FE-7/MAJ-12).
+		UntrustedOrigin bool `json:"untrusted_origin"`
+	} `json:"subagent_message,omitempty"`
+
+	// SubagentStart Server → client (FR-H-004). Opening bracket of a subagent span. Emitted when the agent loop spawns a sub-turn. The SPA uses span_id to group subsequent nested tool_call_start / tool_call_result frames under a collapsible span UI.
+	SubagentStart *struct {
+		// AgentId Agent running the sub-turn.
+		AgentId *string `json:"agent_id,omitempty"`
+
+		// ChildSessionId Optional session id of the opened child session. Present for steered sessions; absent for legacy subturn spans. Enables the open control on the side panel row (ADR-091 I-4).
+		ChildSessionId *string `json:"child_session_id,omitempty"`
+
+		// ParentCallId The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
+		ParentCallId string `json:"parent_call_id"`
+
+		// SessionId Session in which this sub-turn is running.
+		SessionId string `json:"session_id"`
+
+		// SpanId Unique identifier for this span. Constructed by the server as "span_" + parent spawn ToolCall.ID.
+		SpanId string `json:"span_id"`
+
+		// TaskLabel Human-readable label for the subagent task, extracted from the spawn call's "label" or "task" parameter (truncated to 60 chars by the server; schema allows up to 100 to accommodate edge cases).
+		TaskLabel string                   `json:"task_label"`
+		Type      MessageSubagentStartType `json:"type"`
+	} `json:"subagent_start,omitempty"`
+
+	// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+	SubagentState *struct {
+		// ChildSessionId Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
+		ChildSessionId *string `json:"child_session_id,omitempty"`
+
+		// CreatedAt RFC3339 timestamp this state ping was emitted.
+		CreatedAt time.Time `json:"created_at"`
+
+		// SessionId Session in which the parent's span is running.
+		SessionId string `json:"session_id"`
+
+		// SpanId Matches the `span_id` from the bracketing `subagent_start` frame.
+		SpanId string `json:"span_id"`
+
+		// State The child's current durable lifecycle state (SessionLifecycleRecord.state).
+		State MessageSubagentStateState `json:"state"`
+
+		// SteeringReceipt Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3).
+		SteeringReceipt *struct {
+			AppliedAt time.Time `json:"applied_at"`
+
+			// CorrelationId The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
+			CorrelationId string `json:"correlation_id"`
+		} `json:"steering_receipt,omitempty"`
+		Type MessageSubagentStateType `json:"type"`
+	} `json:"subagent_state,omitempty"`
+
 	// Summary Compaction summary text (present only on type=compaction entries).
 	Summary *string `json:"summary,omitempty"`
 
-	// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
+	// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
 	SystemSubtype *MessageSystemSubtype `json:"system_subtype,omitempty"`
 
 	// Timestamp RFC3339 timestamp when this entry was recorded.
@@ -17541,7 +18073,31 @@ type MessageRole string
 // MessageStatus Completion status of this message turn.
 type MessageStatus string
 
-// MessageSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
+// MessageSubagentEndReason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+type MessageSubagentEndReason string
+
+// MessageSubagentEndStatus Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
+type MessageSubagentEndStatus string
+
+// MessageSubagentEndType defines model for Message.SubagentEnd.Type.
+type MessageSubagentEndType string
+
+// MessageSubagentMessageKind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+type MessageSubagentMessageKind string
+
+// MessageSubagentMessageType defines model for Message.SubagentMessage.Type.
+type MessageSubagentMessageType string
+
+// MessageSubagentStartType defines model for Message.SubagentStart.Type.
+type MessageSubagentStartType string
+
+// MessageSubagentStateState The child's current durable lifecycle state (SessionLifecycleRecord.state).
+type MessageSubagentStateState string
+
+// MessageSubagentStateType defines model for Message.SubagentState.Type.
+type MessageSubagentStateType string
+
+// MessageSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
 type MessageSystemSubtype string
 
 // MessageToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
@@ -20642,10 +21198,128 @@ type SessionDetail struct {
 		// Status Completion status of this message turn.
 		Status *SessionDetailMessagesStatus `json:"status,omitempty"`
 
+		// SubagentEnd Server → client (FR-H-004). Closing bracket of a subagent span. Emitted when the sub-turn finishes. The SPA transitions the span from "running" to a terminal status and records duration and optional result. NOTE: status MUST be validated — the SPA's generated Zod schema (src/lib/api/generated/schemas.ts, built from this enum) rejects any status string not in this set; such frames are dropped.
+		SubagentEnd *struct {
+			// AgentId Agent that ran the sub-turn.
+			AgentId *string `json:"agent_id,omitempty"`
+
+			// DurationMs Wall-clock duration of the sub-turn in milliseconds.
+			DurationMs *int `json:"duration_ms,omitempty"`
+
+			// FinalResult Optional textual summary of the sub-turn's output.
+			FinalResult *string `json:"final_result,omitempty"`
+
+			// Message Internal reason string emitted by the orphan-watchdog synthetic end frame. Not rendered directly in the UI.
+			Message *string `json:"message,omitempty"`
+
+			// ParentCallId The spawn ToolCall.ID that triggered this sub-turn.
+			ParentCallId *string `json:"parent_call_id,omitempty"`
+
+			// Reason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+			Reason *SessionDetailMessagesSubagentEndReason `json:"reason,omitempty"`
+
+			// SessionId Session in which this sub-turn ran.
+			SessionId string `json:"session_id"`
+
+			// SpanId Matches the span_id from the preceding subagent_start frame.
+			SpanId string `json:"span_id"`
+
+			// Status Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
+			Status SessionDetailMessagesSubagentEndStatus `json:"status"`
+			Type   SessionDetailMessagesSubagentEndType   `json:"type"`
+		} `json:"subagent_end,omitempty"`
+
+		// SubagentMessage Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span event riding between the existing `subagent_start`/`subagent_end` brackets, feeding pill/panel/board live as a child pushes typed messages / the parent steers it. Rides the existing since-cursor WS replay (same pattern as `ReplayMessageFrame`).
+		// SHAPE DECISION (flagged for review): this is a FLAT, UI-facing PROJECTION of the underlying `SessionMessage` — it does not embed the full 12-variant `SessionMessage` discriminated union. Reasons: (1) the full union is hosted INLINE in `openapi.yaml` per ADR-034 specifically because oapi-codegen needs internal component refs inside a `oneOf` — embedding it inside an asyncapi frame would require a second, hand-duplicated copy of all 12 variants inside `asyncapi.yaml` (which does not resolve cross-file `$ref` for its own codegen, per the existing `GoalStatusFrame.yaml` note), multiplying maintenance burden for a live UI ping that only ever needs a handful of display fields; (2) this mirrors the established precedent of `GoalStatusFrame` itself being a flat projection of goal state rather than embedding a full Goal record. Full-fidelity SessionMessage data (every typed field, for every kind) is available via `delegate.inbox`/`delegate.peek` (`DelegateInboxResponse`/`DelegatePeekResponse`) — this frame is a live nudge, not the source of truth.
+		SubagentMessage *struct {
+			// ChildSessionId Optional session id of the delegated child session this mid-span update is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
+			ChildSessionId *string `json:"child_session_id,omitempty"`
+
+			// CorrelationId Present for `question`/`decision_request`/`steer`/`respond` — lets the SPA thread a live reply.
+			CorrelationId *string `json:"correlation_id,omitempty"`
+
+			// CreatedAt RFC3339 timestamp the underlying message was created.
+			CreatedAt time.Time `json:"created_at"`
+
+			// Kind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+			Kind SessionDetailMessagesSubagentMessageKind `json:"kind"`
+
+			// MessageId The underlying SessionMessage's `message_id` — correlates this live ping with the full record fetchable via `delegate.inbox`/`peek`.
+			MessageId string `json:"message_id"`
+
+			// Pct Present for `kind: progress` when a percentage estimate was given.
+			Pct *int `json:"pct,omitempty"`
+
+			// SenderIdentity Agent ID (or "human") that authored the underlying message.
+			SenderIdentity string `json:"sender_identity"`
+
+			// SessionId Session in which the parent's span is running.
+			SessionId string `json:"session_id"`
+
+			// SpanId Matches the `span_id` from the bracketing `subagent_start` frame.
+			SpanId string `json:"span_id"`
+
+			// Text Flattened display text (progress.text / checkpoint.summary / blocker.text / question.text / error.text / steer.text / respond.text), when the kind carries one.
+			Text *string                                  `json:"text,omitempty"`
+			Type SessionDetailMessagesSubagentMessageType `json:"type"`
+
+			// UntrustedOrigin True when the underlying message's free-text content originated from a child agent and must render in untrusted-content framing (FE-7/MAJ-12).
+			UntrustedOrigin bool `json:"untrusted_origin"`
+		} `json:"subagent_message,omitempty"`
+
+		// SubagentStart Server → client (FR-H-004). Opening bracket of a subagent span. Emitted when the agent loop spawns a sub-turn. The SPA uses span_id to group subsequent nested tool_call_start / tool_call_result frames under a collapsible span UI.
+		SubagentStart *struct {
+			// AgentId Agent running the sub-turn.
+			AgentId *string `json:"agent_id,omitempty"`
+
+			// ChildSessionId Optional session id of the opened child session. Present for steered sessions; absent for legacy subturn spans. Enables the open control on the side panel row (ADR-091 I-4).
+			ChildSessionId *string `json:"child_session_id,omitempty"`
+
+			// ParentCallId The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
+			ParentCallId string `json:"parent_call_id"`
+
+			// SessionId Session in which this sub-turn is running.
+			SessionId string `json:"session_id"`
+
+			// SpanId Unique identifier for this span. Constructed by the server as "span_" + parent spawn ToolCall.ID.
+			SpanId string `json:"span_id"`
+
+			// TaskLabel Human-readable label for the subagent task, extracted from the spawn call's "label" or "task" parameter (truncated to 60 chars by the server; schema allows up to 100 to accommodate edge cases).
+			TaskLabel string                                 `json:"task_label"`
+			Type      SessionDetailMessagesSubagentStartType `json:"type"`
+		} `json:"subagent_start,omitempty"`
+
+		// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+		SubagentState *struct {
+			// ChildSessionId Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
+			ChildSessionId *string `json:"child_session_id,omitempty"`
+
+			// CreatedAt RFC3339 timestamp this state ping was emitted.
+			CreatedAt time.Time `json:"created_at"`
+
+			// SessionId Session in which the parent's span is running.
+			SessionId string `json:"session_id"`
+
+			// SpanId Matches the `span_id` from the bracketing `subagent_start` frame.
+			SpanId string `json:"span_id"`
+
+			// State The child's current durable lifecycle state (SessionLifecycleRecord.state).
+			State SessionDetailMessagesSubagentStateState `json:"state"`
+
+			// SteeringReceipt Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3).
+			SteeringReceipt *struct {
+				AppliedAt time.Time `json:"applied_at"`
+
+				// CorrelationId The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
+				CorrelationId string `json:"correlation_id"`
+			} `json:"steering_receipt,omitempty"`
+			Type SessionDetailMessagesSubagentStateType `json:"type"`
+		} `json:"subagent_state,omitempty"`
+
 		// Summary Compaction summary text (present only on type=compaction entries).
 		Summary *string `json:"summary,omitempty"`
 
-		// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
+		// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
 		SystemSubtype *SessionDetailMessagesSystemSubtype `json:"system_subtype,omitempty"`
 
 		// Timestamp RFC3339 timestamp when this entry was recorded.
@@ -20891,7 +21565,31 @@ type SessionDetailMessagesRole string
 // SessionDetailMessagesStatus Completion status of this message turn.
 type SessionDetailMessagesStatus string
 
-// SessionDetailMessagesSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
+// SessionDetailMessagesSubagentEndReason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+type SessionDetailMessagesSubagentEndReason string
+
+// SessionDetailMessagesSubagentEndStatus Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
+type SessionDetailMessagesSubagentEndStatus string
+
+// SessionDetailMessagesSubagentEndType defines model for SessionDetail.Messages.SubagentEnd.Type.
+type SessionDetailMessagesSubagentEndType string
+
+// SessionDetailMessagesSubagentMessageKind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+type SessionDetailMessagesSubagentMessageKind string
+
+// SessionDetailMessagesSubagentMessageType defines model for SessionDetail.Messages.SubagentMessage.Type.
+type SessionDetailMessagesSubagentMessageType string
+
+// SessionDetailMessagesSubagentStartType defines model for SessionDetail.Messages.SubagentStart.Type.
+type SessionDetailMessagesSubagentStartType string
+
+// SessionDetailMessagesSubagentStateState The child's current durable lifecycle state (SessionLifecycleRecord.state).
+type SessionDetailMessagesSubagentStateState string
+
+// SessionDetailMessagesSubagentStateType defines model for SessionDetail.Messages.SubagentState.Type.
+type SessionDetailMessagesSubagentStateType string
+
+// SessionDetailMessagesSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
 type SessionDetailMessagesSystemSubtype string
 
 // SessionDetailMessagesToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.

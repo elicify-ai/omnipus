@@ -293,6 +293,7 @@ export const SubagentMessageFrame = z
   .object({
     type: z.literal("subagent_message"),
     session_id: z.string().min(1),
+    child_session_id: z.string().optional(),
     span_id: z.string().min(1),
     message_id: z.string().min(1),
     kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond", "goal_status"]),
@@ -309,6 +310,7 @@ export const SubagentStateFrame = z
   .object({
     type: z.literal("subagent_state"),
     session_id: z.string().min(1),
+    child_session_id: z.string().optional(),
     span_id: z.string().min(1),
     state: z.enum(["queued", "running", "needs_input", "paused", "completed", "failed", "cancelled", "timed_out"]),
     steering_receipt: z

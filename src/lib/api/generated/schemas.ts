@@ -175,8 +175,106 @@ type Message = {
   descendants_canceled?: Array<string> | undefined;
   model?: string | undefined;
   verdict?: JudgeVerdict | undefined;
-  system_subtype?: ("browser_handover_notice" | "goal_outcome") | undefined;
+  system_subtype?:
+    | (
+        | "browser_handover_notice"
+        | "goal_outcome"
+        | "subagent_start"
+        | "subagent_state"
+        | "subagent_message"
+        | "subagent_end"
+      )
+    | undefined;
   goal_outcome?: GoalOutcome | undefined;
+  subagent_start?:
+    | {
+        type: "subagent_start";
+        session_id: string;
+        span_id: string;
+        parent_call_id: string;
+        task_label: string;
+        agent_id?: string | undefined;
+        child_session_id?: string | undefined;
+      }
+    | undefined;
+  subagent_state?:
+    | {
+        type: "subagent_state";
+        session_id: string;
+        child_session_id?: string | undefined;
+        span_id: string;
+        state:
+          | "queued"
+          | "running"
+          | "needs_input"
+          | "paused"
+          | "completed"
+          | "failed"
+          | "cancelled"
+          | "timed_out";
+        steering_receipt?:
+          | {
+              correlation_id: string;
+              applied_at: string;
+            }
+          | undefined;
+        created_at: string;
+      }
+    | undefined;
+  subagent_message?:
+    | {
+        type: "subagent_message";
+        session_id: string;
+        child_session_id?: string | undefined;
+        span_id: string;
+        message_id: string;
+        kind:
+          | "progress"
+          | "checkpoint"
+          | "artifact"
+          | "blocker"
+          | "question"
+          | "decision_request"
+          | "error"
+          | "handback"
+          | "steer"
+          | "respond"
+          | "goal_status";
+        text?: string | undefined;
+        pct?: number | undefined;
+        correlation_id?: string | undefined;
+        sender_identity: string;
+        untrusted_origin: boolean;
+        created_at: string;
+      }
+    | undefined;
+  subagent_end?:
+    | {
+        type: "subagent_end";
+        session_id: string;
+        span_id: string;
+        status:
+          | "success"
+          | "error"
+          | "cancelled"
+          | "interrupted"
+          | "timeout"
+          | "parked";
+        duration_ms?: number | undefined;
+        final_result?: string | undefined;
+        reason?:
+          | (
+              | "parent_timeout"
+              | "parent_cancelled"
+              | "parent_done_early"
+              | "unknown"
+            )
+          | undefined;
+        agent_id?: string | undefined;
+        parent_call_id?: string | undefined;
+        message?: string | undefined;
+      }
+    | undefined;
 };
 type Attachment = {
   type: "image" | "audio" | "video" | "file";
@@ -3094,9 +3192,108 @@ export const Message: z.ZodType<Message> = z.object({
   model: z.string().optional(),
   verdict: JudgeVerdict.optional(),
   system_subtype: z
-    .enum(["browser_handover_notice", "goal_outcome"])
+    .enum([
+      "browser_handover_notice",
+      "goal_outcome",
+      "subagent_start",
+      "subagent_state",
+      "subagent_message",
+      "subagent_end",
+    ])
     .optional(),
   goal_outcome: GoalOutcome.optional(),
+  subagent_start: z
+    .object({
+      type: z.literal("subagent_start"),
+      session_id: z.string().min(1),
+      span_id: z.string().min(1),
+      parent_call_id: z.string().min(1),
+      task_label: z.string().min(1).max(100),
+      agent_id: z.string().optional(),
+      child_session_id: z.string().optional(),
+    })
+    .optional(),
+  subagent_state: z
+    .object({
+      type: z.literal("subagent_state"),
+      session_id: z.string().min(1),
+      child_session_id: z.string().optional(),
+      span_id: z.string().min(1),
+      state: z.enum([
+        "queued",
+        "running",
+        "needs_input",
+        "paused",
+        "completed",
+        "failed",
+        "cancelled",
+        "timed_out",
+      ]),
+      steering_receipt: z
+        .object({
+          correlation_id: z.string(),
+          applied_at: z.string().datetime({ offset: true }),
+        })
+        .optional(),
+      created_at: z.string().datetime({ offset: true }),
+    })
+    .optional(),
+  subagent_message: z
+    .object({
+      type: z.literal("subagent_message"),
+      session_id: z.string().min(1),
+      child_session_id: z.string().optional(),
+      span_id: z.string().min(1),
+      message_id: z.string().min(1),
+      kind: z.enum([
+        "progress",
+        "checkpoint",
+        "artifact",
+        "blocker",
+        "question",
+        "decision_request",
+        "error",
+        "handback",
+        "steer",
+        "respond",
+        "goal_status",
+      ]),
+      text: z.string().optional(),
+      pct: z.number().int().gte(0).lte(100).optional(),
+      correlation_id: z.string().optional(),
+      sender_identity: z.string().min(1),
+      untrusted_origin: z.boolean(),
+      created_at: z.string().datetime({ offset: true }),
+    })
+    .optional(),
+  subagent_end: z
+    .object({
+      type: z.literal("subagent_end"),
+      session_id: z.string().min(1),
+      span_id: z.string().min(1),
+      status: z.enum([
+        "success",
+        "error",
+        "cancelled",
+        "interrupted",
+        "timeout",
+        "parked",
+      ]),
+      duration_ms: z.number().int().gte(0).optional(),
+      final_result: z.string().optional(),
+      reason: z
+        .enum([
+          "parent_timeout",
+          "parent_cancelled",
+          "parent_done_early",
+          "unknown",
+        ])
+        .optional(),
+      agent_id: z.string().optional(),
+      parent_call_id: z.string().optional(),
+      message: z.string().optional(),
+    })
+    .optional(),
 });
 export const SessionDetail: z.ZodType<SessionDetail> = z.object({
   session: Session,
@@ -14438,6 +14635,7 @@ export const SubagentMessageFrame = z
   .object({
     type: z.literal("subagent_message"),
     session_id: z.string().min(1),
+    child_session_id: z.string().optional(),
     span_id: z.string().min(1),
     message_id: z.string().min(1),
     kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond", "goal_status"]),
@@ -14454,6 +14652,7 @@ export const SubagentStateFrame = z
   .object({
     type: z.literal("subagent_state"),
     session_id: z.string().min(1),
+    child_session_id: z.string().optional(),
     span_id: z.string().min(1),
     state: z.enum(["queued", "running", "needs_input", "paused", "completed", "failed", "cancelled", "timed_out"]),
     steering_receipt: z
