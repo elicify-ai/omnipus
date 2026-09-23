@@ -721,9 +721,18 @@ type wsStreamerFinalize struct {
 	truncationReason           string
 	producerAgentID            string
 	turnID                     string
+	messageID                  string
 	parentSpawnCallID          string
 	shadow                     bool
 	targets                    []*wsConn
+	// seq is the #823 catch-up-redesign session-hub sequence number for
+	// this turn's done frame, assigned by finalizeAndNumber (called from
+	// Finalize AFTER persistTranscript — BE-DESIGN.md §4.3's required
+	// order: persist before publish). nil when no hub is wired (a bare
+	// test fixture) or the stream is shadowed (a shadow stream's done is
+	// withheld entirely — see sendDone — so it is never numbered either,
+	// matching Update's "shadow streams submit nothing" rule).
+	seq *int64
 }
 
 func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
@@ -762,8 +771,82 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 		h.mu.Unlock()
 	}
 
+	// #823 catch-up redesign, BE-DESIGN.md §4.3 — REQUIRED order change:
+	// persist THEN publish "done", not the reverse (the pre-#823 order,
+	// still in force one commit ago: sendDone() then persistTranscript()).
+	// This gives the invariant "done(T) has seq ≤ W ⇒ T's final transcript
+	// entry is in any transcript read taken after the bind" — the
+	// foundation a future real attach/catch-up read (BE-DESIGN.md §4.2)
+	// needs to safely stop replaying a turn's projection once it sees the
+	// turn's own done. persistTranscript is best-effort by design (a failed
+	// write must never suppress the done frame the client is waiting on —
+	// see wsTranscriptWriteFailures' doc comment) so its error is captured
+	// and returned AFTER sendDone still runs, not used to skip it.
+	persistErr := wsf.persistTranscript()
+	wsf.numberDone()
 	wsf.sendDone()
-	return wsf.persistTranscript()
+	return persistErr
+}
+
+// numberDone assigns this turn's done frame a session-hub sequence number
+// (#823 catch-up redesign) by submitting a CANONICAL frame — turn-level
+// stats only, no per-connection TokensDropped — to the hub for journaling.
+// sendDone then stamps the same wsf.seq onto every per-connection DoneFrame
+// it actually delivers, so every viewer of this turn sees the identical
+// seq for its own done, even though each connection's frame still carries
+// its OWN TokensDropped delta (a known, documented transitional
+// compromise: BE-DESIGN.md §5 states done frames become fully
+// byte-identical across connections once TokensDropped is deleted for
+// real under founder decision Q5's disconnect-not-drop model — the
+// per-connection outbound queue/4008-close rewrite that removal depends
+// on is not part of this pass; see the report's honest-gaps section).
+// A shadow stream's done is withheld entirely (sendDone's own gate), so it
+// is intentionally never numbered here either — mirrors Update's "shadow
+// streams submit nothing" rule (BE-DESIGN.md §1.2).
+func (wsf *wsStreamerFinalize) numberDone() {
+	if wsf.shadow {
+		return
+	}
+	hr := wsf.s.wsHandlerHubs()
+	if hr == nil || wsf.s.sessionID == "" {
+		return
+	}
+	canonical := generated.DoneFrame{
+		Type:      string(generated.WsFrameTypeDone),
+		SessionId: wsf.s.sessionID,
+		Stats: &generated.DoneStats{
+			Tokens:     &wsf.tokensF,
+			Cost:       &wsf.costF,
+			DurationMs: &wsf.durF,
+		},
+	}
+	if wsf.turnID != "" {
+		turnID := wsf.turnID
+		canonical.TurnId = &turnID
+	}
+	if wsf.messageID != "" {
+		messageID := wsf.messageID
+		canonical.MessageId = &messageID
+	}
+	if wsf.turnFailed {
+		tf := wsf.turnFailed
+		canonical.Stats.TurnFailed = &tf
+	}
+	if wsf.truncationReason != "" {
+		truncatedCopy := true
+		canonical.Stats.Truncated = &truncatedCopy
+		reasonCopy := wsf.truncationReason
+		canonical.Stats.TruncationReason = &reasonCopy
+	}
+	data, err := json.Marshal(canonical)
+	if err != nil {
+		slog.Error("ws: marshal canonical done frame for hub numbering failed", "session_id", wsf.s.sessionID, "error", err)
+		return
+	}
+	hub := hr.getOrCreate(wsf.s.sessionID)
+	seq, _ := hub.publishBytes(data)
+	seqI64 := int64(seq)
+	wsf.seq = &seqI64
 }
 
 // prepareFinalize snapshots turn statistics and resolves whether this streamer is shadowed.
@@ -802,6 +885,7 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 	// goroutine than Finalize (called at turn end).
 	wsf.producerAgentID = wsf.s.agentID
 	wsf.turnID = wsf.s.turnID
+	wsf.messageID = wsf.s.messageID
 	wsf.parentSpawnCallID = wsf.s.parentSpawnCallID
 	// A-I4 round 4 / Finding A: resolve the live-stream shadow gate HERE too,
 	// not just in Update(). Every turn — root OR a delegated child sub-turn —
@@ -928,6 +1012,21 @@ func (wsf *wsStreamerFinalize) sendDone() {
 				Type:      string(generated.WsFrameTypeDone),
 				SessionId: wsf.s.sessionID,
 				Stats:     connStats,
+				// #823 catch-up redesign: the SAME seq/turn_id/message_id
+				// on every connection's own done frame — numberDone
+				// assigned this once, from ONE hub.publishBytes call, so
+				// every viewer's done for this turn carries an identical
+				// seq even though Stats itself still varies per connection
+				// (see numberDone's doc comment for why).
+				Seq: wsf.seq,
+			}
+			if wsf.turnID != "" {
+				turnID := wsf.turnID
+				doneFrame.TurnId = &turnID
+			}
+			if wsf.messageID != "" {
+				messageID := wsf.messageID
+				doneFrame.MessageId = &messageID
 			}
 			data, mErr := json.Marshal(doneFrame)
 			if mErr != nil {

@@ -89,9 +89,24 @@ func TestWSStreamer_ZeroListeners_NoBackoff(t *testing.T) {
 		require.NoError(t, s.Update(context.Background(), "x"))
 	}
 	elapsed := time.Since(start)
-	assert.Less(t, elapsed, 100*time.Millisecond,
-		"1000 Update calls with zero bound connections must complete in well under 100ms "+
-			"(got %s) — a per-frame backoff wait would push this into seconds", elapsed)
+	// #823 catch-up redesign: threshold widened from 100ms to 1s, with
+	// provenance, not weakened. Every Update call now ALSO submits its
+	// token to the session's hub for numbering (ws_session_hub.go's
+	// publishBytes — a mutex-guarded journal append) even with zero
+	// listeners, per BE-DESIGN.md §1.2's core invariant ("numbering does
+	// not depend on connections") — a real, intentional, per-call cost that
+	// did not exist before this redesign. Measured locally: ~205ms for
+	// 1000 calls (~0.2ms/call). 1s keeps ~5x headroom over that measurement
+	// for a loaded CI runner while staying two orders of magnitude below
+	// what a REINTRODUCED per-frame backoff would cost (the original
+	// comment's math: 10ms+50ms/frame × 1000 = 60+ seconds) — the guarantee
+	// this test protects (no per-frame backoff wait) is unchanged; only the
+	// numeric budget for the OTHER, always-present cost moved.
+	assert.Less(t, elapsed, 1*time.Second,
+		"1000 Update calls with zero bound connections must complete in well under 1s "+
+			"(got %s) — a per-frame backoff wait would push this into 60+ seconds, far "+
+			"past this budget, while the hub's own zero-conn numbering cost stays in the "+
+			"low hundreds of ms", elapsed)
 }
 
 // TestWSStreamer_PeerDropDoesNotSkipFanOut proves FR-005: a drop/backpressure
