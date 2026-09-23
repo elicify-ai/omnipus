@@ -402,16 +402,31 @@ func (t *ExecTool) requestPreflightApproval(ctx context.Context, sessionID, agen
 
 // resolvePreflightPath resolves a D7 classifier candidate (raw command text,
 // already absolute — ClassifyPathOperations' own scope) to the realpath'd
-// form EvaluateFSPreflight expects. Mirrors checkPathSegment's own resolve-
-// then-fall-back-to-nearest-existing-ancestor shape (shell_path_guard.go)
-// rather than reimplementing it: a not-yet-created write target still
-// resolves through its existing parent, and an unresolvable path is judged
-// on its lexical (cleaned) form rather than aborting.
+// form EvaluateFSPreflight expects, entirely via resolvePathAgainstExisting
+// Ancestor (filesystem.go — FR-034's sanctioned raw-I/O layer, alongside
+// resolvepath.go/PathHandle): a not-yet-created write target still resolves
+// through its existing parent, and an unresolvable path is judged on its
+// lexical (cleaned) form rather than aborting.
+//
+// FR-034 fix (2026-09-23 security review): this used to call
+// filepath.EvalSymlinks(clean) directly as a first attempt, with
+// resolvePathAgainstExistingAncestor only as the not-yet-existing-target
+// fallback — a raw, unaudited filesystem I/O call TestFSTools_
+// NoDirectFilesystemIO's AST walk correctly flags in any pkg/tools file not
+// on its allowlist. The direct call was also REDUNDANT:
+// resolvePathAgainstExistingAncestor's own walk starts at the exact target
+// and calls filepath.EvalSymlinks there first — when clean exists outright,
+// that first iteration IS the direct-call case, byte-for-byte (both return
+// filepath.Clean(EvalSymlinks(clean)); EvalSymlinks itself already calls
+// Clean on its result, so the two forms are identical). Collapsing to one
+// call site is therefore a no-op for every existing-path input and, for a
+// not-yet-existing one, exactly the ancestor-walk behaviour this function's
+// doc comment already promised — not a behaviour change, and not an
+// allowlist exemption: the raw I/O now happens ONLY inside
+// resolvePathAgainstExistingAncestor (filesystem.go), which is where
+// FR-034 already sanctions it.
 func resolvePreflightPath(raw string) string {
 	clean := filepath.Clean(raw)
-	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
-		return resolved
-	}
 	if resolved, err := resolvePathAgainstExistingAncestor(clean); err == nil {
 		return resolved
 	}
