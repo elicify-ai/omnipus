@@ -282,6 +282,16 @@ func (t *ExecTool) requestRuleApproval(
 	if allCovered {
 		return true, ""
 	}
+	if ToolAutoDenyAsk(ctx) {
+		// Finding #7 (MEDIUM): a scheduled/headless run has nobody to
+		// answer an interactive dialog, so a D3 ask-rule verdict that would
+		// otherwise prompt is denied outright rather than stalled on
+		// ToolApprovalTimeout — the SAME posture loop_run_turn_tools.go's
+		// classic ask-policy branch already applies via ts.opts.AutoDenyAsk,
+		// now extended to this ADR-092 call site.
+		t.emitApprovalDecision(ctx, sessionID, agentID, command, "rule_ask", false, headlessShellDenyReason, false)
+		return false, headlessShellDenyReason
+	}
 	if t.approvalRequester == nil {
 		t.emitApprovalDecision(ctx, sessionID, agentID, command, "rule_ask", false, "no_approver_configured", false)
 		return false, "no_approver_configured"
@@ -327,10 +337,26 @@ func preflightDenialMessage(kind, reason string) string {
 		kind, reason)
 }
 
+// headlessShellDenyReason is finding #7's headless auto-deny reason for the
+// ADR-092 D3/D7/D8 approval-request call sites (requestRuleApproval,
+// requestPreflightApproval) — the counterpart, inside pkg/tools, of
+// loop_run_turn_tools.go's own AutoDenyAsk short-circuit for the classic
+// ask-policy path. A scheduled/headless run has no operator to answer an
+// interactive dialog, so any decision that would otherwise need one is
+// denied outright rather than stalled on ToolApprovalTimeout — LEAD
+// DECISION (2026-09-23): "Auto and operator allow rules APPLY to headless
+// runs exactly as to interactive ones... anything that would need a human
+// prompt... is auto-DENIED headless, with a clear error."
+const headlessShellDenyReason = "auto-denied: no operator attached to this headless/scheduled run to approve it"
+
 // requestPreflightApproval is FR-039's third new CheckGrantOrRequestApproval
 // call site: a D7 or D8 pre-flight verdict needs more than the sandbox's
 // current grant already covers.
 func (t *ExecTool) requestPreflightApproval(ctx context.Context, sessionID, agentID, toolCallID, command, kind, note string) (bool, string) {
+	if ToolAutoDenyAsk(ctx) {
+		// Finding #7: see headlessShellDenyReason's doc comment.
+		return false, headlessShellDenyReason
+	}
 	if t.approvalRequester == nil {
 		return false, "no_approver_configured"
 	}
@@ -489,7 +515,22 @@ func (t *ExecTool) enforceShellPermissionMode(ctx context.Context, command strin
 	if verdict.Action == shellrule.ActionDeny {
 		return nil, ErrorResult(shellRuleDenialMessage(verdict))
 	}
-	if verdict.Action == shellrule.ActionAsk && mode == ShellModeAuto {
+	// Finding #11 (HIGH, 2026-09-23 security fix lane): a matching D3 ask
+	// rule must produce a human prompt (or the finding #7 headless auto-
+	// deny) in every mode except God Mode — not only Auto. Before this fix,
+	// a bash tool policy resolved directly to "allow" (bypassing the D1
+	// Ask/Auto/God mode selector entirely — a real, reachable operator
+	// override, not merely a theoretical state) pinned mode to ShellModeAsk
+	// here without the classic upstream ask-policy gate ever having run
+	// (that gate only fires when the ceiling resolves to literally "ask"),
+	// so an {action: ask, binary: npm, arg_prefix: publish} rule matching
+	// `npm publish` produced NO prompt anywhere — mode != ShellModeAuto
+	// skipped this branch, and toctouPolicy != "ask" meant
+	// loop_run_turn_tools.go's own ask-policy branch never ran either.
+	// FR-019 requires deny > ask > allow in every mode; this closes the gap
+	// for the one mode (God) where an ask rule is correctly a no-op (no
+	// approvals exist there at all — D1's own definition of God Mode).
+	if verdict.Action == shellrule.ActionAsk && mode != ShellModeGod {
 		approved, reason := t.requestRuleApproval(ctx, sessionID, agentID, toolCallID, command, verdict)
 		if !approved {
 			return nil, ErrorResult(fmt.Sprintf(

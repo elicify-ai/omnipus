@@ -345,7 +345,7 @@ func TestEnforceShellPermissionMode_AutoD3AskRuleEscalates(t *testing.T) {
 // Ask mode: the D3 ask verdict is a no-op (the classic upstream ask-policy
 // gate already required approval before Execute was ever called) — this
 // lane's new escalation call site must not ALSO prompt a second time.
-func TestEnforceShellPermissionMode_AskModeD3AskRuleIsNoOp(t *testing.T) {
+func TestEnforceShellPermissionMode_AskModeD3AskRuleStillPrompts(t *testing.T) {
 	tool, ctx, requester, _ := permTestFixture(t, ShellModeAsk, true)
 
 	resolvedTrue, err := shellrule.ResolveBinary("true", os.Getenv("PATH"))
@@ -356,7 +356,19 @@ func TestEnforceShellPermissionMode_AskModeD3AskRuleIsNoOp(t *testing.T) {
 	require.Nil(t, result)
 	require.NotNil(t, perm)
 	assert.Equal(t, ShellModeAsk, perm.mode)
-	assert.Equal(t, 0, requester.callCount(), "Ask mode's own upstream gate already asked; this call site must not double-prompt")
+	// Review finding #11 (2026-09-23 security fix lane): a D3 ask rule
+	// must always produce a prompt in every mode except God Mode — this
+	// call site can no longer assume "Ask mode's own upstream gate already
+	// asked" and skip itself, because the SAME ShellModeAsk pin also
+	// covers a bash tool policy resolved directly to "allow" (bypassing
+	// the classic ask-policy gate entirely, which only runs when the
+	// ceiling resolves to literally "ask"). A real classic-Ask-mode call
+	// that already showed the generic upfront dialog will now show a
+	// second, D3-specific one when a rule matches — an accepted, narrow
+	// UX trade-off; the alternative (silently skipping this branch) is
+	// exactly the finding #11 CRITICAL gap: an "allow"-ceiling bash policy
+	// with a matching D3 ask rule got NO prompt anywhere at all.
+	assert.Equal(t, 1, requester.callCount(), "a D3 ask rule must reach the approval requester in Ask mode too (finding #11)")
 }
 
 // --- Unwired dependencies fail closed, never open ---
