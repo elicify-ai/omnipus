@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -388,5 +390,231 @@ func TestSteerGenerationCancel_NeverRanChildUnblocksParent(t *testing.T) {
 	}
 	if blocked {
 		t.Fatal("the parent is still waiting on a subtree that will never report — the never-ran child produced no upward event")
+	}
+}
+
+// --- ADR-091 fix lane RX-DELIVERY: reportSteeredSessionTerminalUpward ---
+//
+// The three defects proved below all live in ONE function, and all three have
+// the same consequence: a child is written terminal that its parent will
+// never hear about, so the parent waits for ever on a descendant that is
+// already gone.
+
+// recordingUpwardDeliverer is a steer.UpwardDeliverer test double that
+// returns a scripted Delivery/error pair and can run a caller-supplied hook
+// DURING Deliver — the window in which the real deliverer does its I/O (an
+// inbox append, transcript writes, a parent wake) and in which a concurrent
+// Stop or Revive can land.
+type recordingUpwardDeliverer struct {
+	mu       sync.Mutex
+	events   []steer.UpwardEvent
+	delivery steer.Delivery
+	err      error
+	// duringDeliver runs inside Deliver, before it returns.
+	duringDeliver func()
+}
+
+func (d *recordingUpwardDeliverer) Deliver(_ context.Context, event steer.UpwardEvent) (steer.Delivery, error) {
+	d.mu.Lock()
+	d.events = append(d.events, event)
+	hook := d.duringDeliver
+	delivery, err := d.delivery, d.err
+	d.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return delivery, err
+}
+
+func (d *recordingUpwardDeliverer) calls() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.events)
+}
+
+// wireTerminalReportDeliverer installs deliverer as al's ONE upward
+// deliverer, alongside the real audience resolver the terminal-report path
+// expects.
+func wireTerminalReportDeliverer(al *AgentLoop, deliverer steer.UpwardDeliverer) {
+	lifecycle := al.GetSessionLifecycleStore()
+	al.SetSteerAudienceDeps(
+		NewSteerAudienceResolver(NewSteerRecordClassifier(lifecycle, al.GetSessionStore())),
+		nil,
+		deliverer,
+	)
+}
+
+// TestReportSteeredSessionTerminalUpward_FailedDeliveryLeavesRecordRunnable
+// is DEFECT 1 (CRITICAL). reportSteeredSessionTerminalUpward's own doc
+// comment promises it "Refuses ... whenever the record ... is already
+// terminal, OR THE UPWARD DELIVERY ITSELF FAILS — never overwrites state it
+// cannot also report." The code logged a WARN on a failed Deliver and then
+// fell straight through to the terminal write, so the child landed terminal
+// with NO inbox entry: nothing left to recover from in process, and the
+// parent never told that a descendant went away.
+func TestReportSteeredSessionTerminalUpward_FailedDeliveryLeavesRecordRunnable(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	lifecycle := al.GetSessionLifecycleStore()
+	deliverer := &recordingUpwardDeliverer{err: errors.New("inbox append failed: disk full")}
+	wireTerminalReportDeliverer(al, deliverer)
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	childID, childGen := launchSteeredChild(t, al, parentID, "call-undeliverable", "work nobody will ever hear about")
+
+	al.reportSteeredSessionTerminalUpward(context.Background(), childID, childGen,
+		session.LifecycleFailed, steer.OutcomeFailed, "dispatch_failed: disk I/O error")
+
+	if deliverer.calls() != 1 {
+		t.Fatalf("Deliver called %d times, want exactly 1", deliverer.calls())
+	}
+	rec, err := lifecycle.Load(childID)
+	if err != nil {
+		t.Fatalf("Load(child): %v", err)
+	}
+	if rec.Terminal() {
+		t.Fatalf("state = %q: the record was written TERMINAL after the upward report failed — "+
+			"the parent will never learn this child died and nothing in process can repair it", rec.State)
+	}
+	if rec.FailedReason != "" {
+		t.Fatalf("FailedReason = %q, want empty — no terminal disposition may be recorded for an undelivered report", rec.FailedReason)
+	}
+}
+
+// TestReportSteeredSessionTerminalUpward_NoDelivererLeavesRecordRunnable is
+// DEFECT 1's second undelivered branch: with no upward deliverer wired there
+// is no inbox entry at all, so the terminal write must be refused for exactly
+// the same reason.
+func TestReportSteeredSessionTerminalUpward_NoDelivererLeavesRecordRunnable(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	lifecycle := al.GetSessionLifecycleStore()
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	childID, childGen := launchSteeredChild(t, al, parentID, "call-no-deliverer", "work nobody will ever hear about")
+
+	// Deliberately NOT wiring an upward deliverer.
+	al.reportSteeredSessionTerminalUpward(context.Background(), childID, childGen,
+		session.LifecycleCancelled, steer.OutcomeInterrupted, "interrupted: the session was cancelled")
+
+	rec, err := lifecycle.Load(childID)
+	if err != nil {
+		t.Fatalf("Load(child): %v", err)
+	}
+	if rec.Terminal() {
+		t.Fatalf("state = %q: the record was written TERMINAL with no upward deliverer wired — "+
+			"no inbox entry exists and the parent will wait for ever", rec.State)
+	}
+}
+
+// TestReportSteeredSessionTerminalUpward_StopLandingDuringDeliveryIsNotErased
+// is DEFECT 2 (CRITICAL) — the stale read-then-write shape fix lane 1 already
+// replaced with LifecycleStore.Mutate in completeSteeredTurn (Finding D) and
+// steer_launcher.go::commitSteeredDispatchState. The function did
+// Load -> Deliver (real I/O) -> mutate the PRE-Deliver snapshot -> Persist,
+// so a Stop pressed while Deliver was running was silently erased: the
+// snapshot's Stop == nil was written straight back over it.
+func TestReportSteeredSessionTerminalUpward_StopLandingDuringDeliveryIsNotErased(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	lifecycle := al.GetSessionLifecycleStore()
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	childID, childGen := launchSteeredChild(t, al, parentID, "call-stop-race", "work interrupted mid-report")
+
+	stopAt := time.Now().UTC()
+	deliverer := &recordingUpwardDeliverer{
+		delivery: steer.Delivery{MessageID: childID + ":1:final", Outcome: steer.DeliveryWoke},
+	}
+	deliverer.duringDeliver = func() {
+		// A human presses Stop while Deliver is still doing its I/O.
+		if err := lifecycle.Mutate(childID, func(cur *session.LifecycleRecord) error {
+			cur.Stop = &session.Stop{
+				At:         stopAt,
+				Generation: cur.Generation,
+				By:         steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"},
+			}
+			return nil
+		}); err != nil {
+			t.Errorf("stamp Stop during Deliver: %v", err)
+		}
+	}
+	wireTerminalReportDeliverer(al, deliverer)
+
+	al.reportSteeredSessionTerminalUpward(context.Background(), childID, childGen,
+		session.LifecycleFailed, steer.OutcomeFailed, "dispatch_failed: disk I/O error")
+
+	rec, err := lifecycle.Load(childID)
+	if err != nil {
+		t.Fatalf("Load(child): %v", err)
+	}
+	if rec.Stop == nil {
+		t.Fatal("the Stop pressed during Deliver was ERASED: the durable record that Stop was ever pressed is gone")
+	}
+	if rec.Stop.Generation != childGen || !rec.Stop.At.Equal(stopAt) {
+		t.Fatalf("Stop = %#v, want the marker stamped during delivery at generation %d", rec.Stop, childGen)
+	}
+	if rec.State == session.LifecycleFailed {
+		t.Fatalf("state = %q: the pre-Deliver snapshot was written back over a record a Stop had just landed on", rec.State)
+	}
+}
+
+// TestReportSteeredSessionTerminalUpward_StoredNotWokenLoggedAtError is
+// DEFECT 3 (HIGH). steer.Delivery.Outcome carries the one fact that
+// distinguishes "the parent knows" (DeliveryWoke) from "the parent will never
+// know" (DeliveryStoredNotWoken), and every caller in the codebase discarded
+// it with `_, err := deliverer.Deliver(...)`. On a TERMINAL report that is a
+// parent stalled indefinitely, and it was completely invisible.
+func TestReportSteeredSessionTerminalUpward_StoredNotWokenLoggedAtError(t *testing.T) {
+	readLog := captureLogFile(t, logger.ERROR)
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	childID, childGen := launchSteeredChild(t, al, parentID, "call-stored-not-woken", "work whose parent is never woken")
+	messageID := childID + ":1:final"
+	wireTerminalReportDeliverer(al, &recordingUpwardDeliverer{
+		delivery: steer.Delivery{MessageID: messageID, Outcome: steer.DeliveryStoredNotWoken},
+	})
+
+	al.reportSteeredSessionTerminalUpward(context.Background(), childID, childGen,
+		session.LifecycleFailed, steer.OutcomeFailed, "dispatch_failed: disk I/O error")
+
+	captured := readLog()
+	if !strings.Contains(captured, `"level":"error"`) {
+		t.Fatalf("a terminal report the parent was never woken for produced no ERROR line; captured log:\n%s", captured)
+	}
+	for _, want := range []string{childID, parentID, messageID, string(steer.DeliveryStoredNotWoken)} {
+		if !strings.Contains(captured, want) {
+			t.Errorf("captured ERROR log does not name %q; captured log:\n%s", want, captured)
+		}
+	}
+	if !strings.Contains(captured, `"generation":`) {
+		t.Errorf("captured ERROR log does not carry the generation; captured log:\n%s", captured)
+	}
+}
+
+// TestReportSteeredSessionTerminalUpward_WokenDeliveryStaysQuiet is the
+// negative half of DEFECT 3: a report the parent was actually woken for must
+// produce no ERROR line at all, so the new signal stays worth reading.
+func TestReportSteeredSessionTerminalUpward_WokenDeliveryStaysQuiet(t *testing.T) {
+	readLog := captureLogFile(t, logger.ERROR)
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	childID, childGen := launchSteeredChild(t, al, parentID, "call-woken", "work whose parent is woken")
+	wireTerminalReportDeliverer(al, &recordingUpwardDeliverer{
+		delivery: steer.Delivery{MessageID: childID + ":1:final", Outcome: steer.DeliveryWoke},
+	})
+
+	al.reportSteeredSessionTerminalUpward(context.Background(), childID, childGen,
+		session.LifecycleFailed, steer.OutcomeFailed, "dispatch_failed: disk I/O error")
+
+	if captured := readLog(); strings.Contains(captured, `"level":"error"`) {
+		t.Fatalf("a delivered-and-woken terminal report logged at ERROR; captured log:\n%s", captured)
+	}
+	rec, err := al.GetSessionLifecycleStore().Load(childID)
+	if err != nil {
+		t.Fatalf("Load(child): %v", err)
+	}
+	if rec.State != session.LifecycleFailed || rec.FailedReason != "dispatch_failed: disk I/O error" {
+		t.Fatalf("state = %q / FailedReason = %q, want failed with the dispatch reason — "+
+			"a successfully delivered report must still land terminal", rec.State, rec.FailedReason)
 	}
 }

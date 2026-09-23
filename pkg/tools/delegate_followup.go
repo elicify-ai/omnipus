@@ -371,7 +371,23 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	if err := t.lifecycle.Persist(&newRec); err != nil {
 		return ErrorResult(fmt.Sprintf("delegate: follow_up: failed to persist new generation: %v", err)).WithError(err)
 	}
-	t.appendFollowUpInstruction(newSessionID, instructions)
+	// [Defect 4, ADR-091 fix lane RX-DELIVERY] REFUSE to dispatch when the
+	// new instruction did not land. reconstructSteeredTurn would otherwise
+	// rebuild the turn from the last `user` transcript entry — the PREVIOUS
+	// instruction — and the session would confidently answer the old
+	// question and report it upward as a real result. The record is landed
+	// failed for the same reason the dispatch-failure path just below does
+	// it: a new generation was already persisted, so leaving it `queued`
+	// would strand it and block its parent for ever.
+	if err := t.appendFollowUpInstruction(newSessionID, instructions); err != nil {
+		t.transitionLifecycle(newSessionID, session.LifecycleFailed, err.Error())
+		slog.Error("delegate: follow-up instruction did not land; dispatch refused",
+			"session_id", newSessionID,
+			"generation", newRec.Generation,
+			"agent_id", rec.AgentID,
+			"error", err)
+		return ErrorResult(fmt.Sprintf("delegate: follow_up: %v", err)).WithError(err)
+	}
 
 	dispatch, err := t.launcher.Dispatch(ctx, newSessionID, newRec.Generation)
 	if err != nil {
@@ -401,17 +417,87 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	return NewToolResult(message)
 }
 
+// followUpInstructionWriter is the write capability
+// appendFollowUpInstruction needs from the session store. AddMessage extends
+// the model's history (context.jsonl); AppendTranscriptStrict writes the
+// transcript entry the rebuilt turn actually READS BACK, and is the only one
+// of the two that can report a failure. The concrete production
+// *session.UnifiedStore satisfies both; a read-only status fake does not, and
+// is refused rather than silently skipped.
+type followUpInstructionWriter interface {
+	AddMessage(sessionKey, role, content string)
+	AppendTranscriptStrict(sessionID string, entry session.TranscriptEntry) error
+}
+
 // appendFollowUpInstruction adds the new user instruction to the session's
-// durable model history before Dispatch reconstructs the turn. The concrete
-// production store implements this optional write capability; narrow status
-// fakes used by older tests remain read-only.
-func (t *DelegateTool) appendFollowUpInstruction(sessionID, instruction string) {
-	writer, ok := t.sessionStore.(interface {
-		AddMessage(sessionKey, role, content string)
-	})
-	if ok && strings.TrimSpace(instruction) != "" {
-		writer.AddMessage(sessionID, "user", instruction)
+// durable history AND to its transcript, before Dispatch reconstructs the
+// turn, and reports whether it actually landed.
+//
+// [Defect 4, ADR-091 fix lane RX-DELIVERY, HIGH] It used to be
+// fire-and-forget in two independent ways, either of which alone makes a
+// followed-up session re-run its PREVIOUS instruction and report that answer
+// upward as a real result:
+//
+//   - It wrote only AddMessage, which has NO return value (UnifiedStore logs
+//     internally and tells the caller nothing), and a nil store or a failed
+//     type assertion was a silent no-op. Callers dispatched regardless.
+//   - AddMessage writes context.jsonl only. The turn Dispatch reconstructs
+//     takes its UserMessage from the TRANSCRIPT —
+//     agent/steer_reconstruct.go::reconstructSteeredTurn scans
+//     transcript.jsonl backwards for the last non-blank `user` entry when
+//     wake == nil — which only agent/steer_launcher.go's launch path ever
+//     wrote. So the new instruction never reached the place that turn reads.
+//
+// Both halves are fixed here by mirroring the launch path's own write pair
+// (AddMessage AND AppendTranscriptStrict) and returning the strict append's
+// error. The entry id is fresh per call: a follow-up is a new instruction,
+// never a duplicate of the last one.
+//
+// The signature deliberately keeps its original two parameters: the OTHER
+// call site (delegate_park.go::resumeNative) belongs to a different fix lane,
+// and adding a parameter would break its compilation rather than let it adopt
+// the new error return on its own schedule. The transcript entry's agent id
+// is therefore looked up here, best-effort — it is display metadata, never a
+// reason to refuse an instruction that is otherwise durable.
+func (t *DelegateTool) appendFollowUpInstruction(sessionID, instruction string) error {
+	instruction = strings.TrimSpace(instruction)
+	if instruction == "" {
+		return nil
 	}
+	if t.sessionStore == nil {
+		// Degraded boot: loop_wire.go skips SetSessionStore entirely when
+		// al.GetSessionStore() is nil, the same state
+		// cloneCorrectiveSessionIdentity above already treats as "nothing to
+		// write". Refusing here would add nothing: with no session store,
+		// agent/steer_reconstruct.go::reconstructSteeredTurn fails outright
+		// ("session store is not wired") long before it could re-run a stale
+		// instruction, so the dispatch cannot succeed with the wrong
+		// instruction either way. Loud, not silent.
+		slog.Warn("delegate: follow-up instruction not recorded: no session store is wired (degraded boot)",
+			"session_id", sessionID)
+		return nil
+	}
+	writer, ok := t.sessionStore.(followUpInstructionWriter)
+	if !ok {
+		return fmt.Errorf("session store cannot record the new instruction for %q "+
+			"(no write capability); the session would re-run its previous instruction", sessionID)
+	}
+	writer.AddMessage(sessionID, "user", instruction)
+	agentID := ""
+	if t.lifecycle != nil {
+		if rec, lerr := t.lifecycle.Load(sessionID); lerr == nil && rec != nil {
+			agentID = rec.AgentID
+		}
+	}
+	if err := writer.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
+		ID:      sessionID + "-instruction-" + uuid.NewString(),
+		Role:    "user",
+		AgentID: agentID,
+		Content: instruction,
+	}); err != nil {
+		return fmt.Errorf("record the new instruction for %q in the transcript the rebuilt turn reads: %w", sessionID, err)
+	}
+	return nil
 }
 
 // correctiveSessionStore is the write-capable production UnifiedStore shape

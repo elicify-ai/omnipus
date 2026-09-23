@@ -50,23 +50,42 @@ type followUpLauncher struct {
 }
 
 type followUpHistoryStore struct {
-	history map[string][]providers.Message
+	history map[string][]session.TranscriptEntry
+	// appendErr, when non-nil, is what the transcript write fails with — the
+	// "the new instruction did not land" case of DEFECT 4 (ADR-091 fix lane
+	// RX-DELIVERY).
+	appendErr error
+	messages  map[string][]providers.Message
 }
 
-func (s *followUpHistoryStore) ReadTranscript(string) ([]session.TranscriptEntry, error) {
-	return nil, nil
+func (s *followUpHistoryStore) ReadTranscript(sessionID string) ([]session.TranscriptEntry, error) {
+	return s.history[sessionID], nil
 }
 
 func (s *followUpHistoryStore) AddMessage(sessionID, role, content string) {
-	if s.history == nil {
-		s.history = make(map[string][]providers.Message)
+	if s.messages == nil {
+		s.messages = make(map[string][]providers.Message)
 	}
-	s.history[sessionID] = append(s.history[sessionID], providers.Message{Role: role, Content: content})
+	s.messages[sessionID] = append(s.messages[sessionID], providers.Message{Role: role, Content: content})
+}
+
+// AppendTranscriptStrict is the write reconstructSteeredTurn actually reads
+// back (steer_reconstruct.go scans transcript.jsonl for the last `user`
+// entry), so appendFollowUpInstruction requires it.
+func (s *followUpHistoryStore) AppendTranscriptStrict(sessionID string, entry session.TranscriptEntry) error {
+	if s.appendErr != nil {
+		return s.appendErr
+	}
+	if s.history == nil {
+		s.history = make(map[string][]session.TranscriptEntry)
+	}
+	s.history[sessionID] = append(s.history[sessionID], entry)
+	return nil
 }
 
 func wireFollowUpTestLauncher(tool *DelegateTool) (*followUpLauncher, *followUpHistoryStore) {
 	launcher := &followUpLauncher{dispatch: steer.DispatchResult{State: steer.DispatchRunning}}
-	history := &followUpHistoryStore{history: make(map[string][]providers.Message)}
+	history := &followUpHistoryStore{}
 	tool.SetSessionLauncher(launcher)
 	tool.SetSessionStore(history)
 	return launcher, history
@@ -95,6 +114,17 @@ func TestDelegateTool_FollowUp_NativeBumpsGenerationThenDispatches(t *testing.T)
 		t.Fatalf("NewUnifiedStore: %v", err)
 	}
 	t.Cleanup(func() { _ = sessions.Close() })
+	// The instruction now lands in the child's own TRANSCRIPT (the write the
+	// rebuilt turn reads back), and AppendTranscriptStrict refuses to write
+	// against a session that does not exist — so the child must be a real
+	// session in this store, as it always is in production.
+	parentMeta, err := sessions.NewSession(session.SessionTypeChat, "webchat", "parent-agent")
+	if err != nil {
+		t.Fatalf("create steering session: %v", err)
+	}
+	if _, err := sessions.CreateSessionWithID("child-followup-resume-native", parentMeta.ID, session.SessionTypeDelegate, "webchat", "worker"); err != nil {
+		t.Fatalf("create native child session: %v", err)
+	}
 	tool.SetSessionStore(sessions)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
@@ -194,6 +224,7 @@ func TestDelegateTool_FollowUp_DispatchFailure_LoggedUnconditionally(t *testing.
 
 	tool, lc, _, _ := newADR053TestTool(t)
 	tool.SetSessionLauncher(failingLauncher)
+	tool.SetSessionStore(&followUpHistoryStore{})
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: sessionID, Generation: 1, State: session.LifecycleCompleted,
@@ -229,5 +260,112 @@ func TestDelegateTool_FollowUp_DispatchFailure_LoggedUnconditionally(t *testing.
 	}
 	if rec.FailedReason == "" {
 		t.Error("a failed lifecycle record must carry a non-empty FailedReason")
+	}
+}
+
+// --- ADR-091 fix lane RX-DELIVERY, DEFECT 4 (HIGH) ---
+//
+// appendFollowUpInstruction was fire-and-forget: UnifiedStore.AddMessage has
+// no return value, a nil store or a failed type assertion was a silent
+// no-op, and spawnCorrectiveFollowUp dispatched regardless. The dispatched
+// turn is then rebuilt by agent/steer_reconstruct.go::reconstructSteeredTurn
+// (wake == nil), which scans the TRANSCRIPT backwards for the last non-blank
+// `user` entry — so a session whose new instruction never landed re-runs its
+// PREVIOUS instruction and reports that answer upward as a real result.
+
+// TestDelegateTool_FollowUp_RefusesDispatchWhenTheInstructionCannotLand is
+// the refusal half: no dispatch may happen once the new instruction is known
+// not to have landed.
+func TestDelegateTool_FollowUp_RefusesDispatchWhenTheInstructionCannotLand(t *testing.T) {
+	const sessionID = "child-followup-instruction-lost"
+	launcher := &followUpLauncher{dispatch: steer.DispatchResult{State: steer.DispatchRunning, Generation: 2}}
+	tool, lc, _, _ := newADR053TestTool(t)
+	tool.SetSessionLauncher(launcher)
+	tool.SetSessionStore(&followUpHistoryStore{appendErr: fmt.Errorf("transcript append failed: disk full")})
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: sessionID, Generation: 1, State: session.LifecycleCompleted,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1"},
+		WorkspaceID:    "ws-1", AgentID: "worker",
+	}); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+
+	result := tool.Execute(ctx, map[string]any{
+		"action": "follow_up", "session_id": sessionID, "text": "stop, do this instead: summarise the release notes",
+	})
+
+	if launcher.sessionID != "" {
+		t.Fatalf("Dispatch was called for %q even though the new instruction never landed — "+
+			"the session will re-run its PREVIOUS instruction and report that answer upward as a real result",
+			launcher.sessionID)
+	}
+	if !result.IsError {
+		t.Fatalf("follow_up reported success though the new instruction never landed: %s", result.ForLLM)
+	}
+	rec, err := lc.Load(sessionID)
+	if err != nil {
+		t.Fatalf("Load after refusal: %v", err)
+	}
+	if rec.State != session.LifecycleFailed || rec.FailedReason == "" {
+		t.Errorf("a refused follow-up must leave a discoverable failed record, got state=%s reason=%q",
+			rec.State, rec.FailedReason)
+	}
+}
+
+// TestDelegateTool_FollowUp_WritesTheInstructionWhereTheRebuiltTurnReadsIt is
+// the landing half: AddMessage alone writes context.jsonl, but the rebuilt
+// turn takes its UserMessage from the TRANSCRIPT, so the instruction has to
+// be written there too — exactly as SteerLauncher.Launch already writes the
+// launch instruction to both.
+func TestDelegateTool_FollowUp_WritesTheInstructionWhereTheRebuiltTurnReadsIt(t *testing.T) {
+	const sessionID = "child-followup-instruction-transcript"
+	const original = "ORIGINAL: audit the whole checkout flow"
+	const replacement = "stop, do this instead: summarise the release notes"
+	tool, lc, _, _ := newADR053TestTool(t)
+	launcher, store := wireFollowUpTestLauncher(tool)
+	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
+		ID: sessionID + "-task", Role: "user", AgentID: "worker", Content: original,
+	}); err != nil {
+		t.Fatalf("seed original instruction: %v", err)
+	}
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: sessionID, Generation: 1, State: session.LifecycleCompleted,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1"},
+		WorkspaceID:    "ws-1", AgentID: "worker",
+	}); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+
+	result := tool.Execute(ctx, map[string]any{
+		"action": "follow_up", "session_id": sessionID, "text": replacement,
+	})
+	if result.IsError {
+		t.Fatalf("follow_up failed: %s", result.ForLLM)
+	}
+	if launcher.sessionID != sessionID {
+		t.Fatalf("Dispatch session = %q, want %q", launcher.sessionID, sessionID)
+	}
+
+	entries, err := store.ReadTranscript(sessionID)
+	if err != nil {
+		t.Fatalf("ReadTranscript: %v", err)
+	}
+	// The same backwards scan reconstructSteeredTurn performs.
+	lastUser := ""
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Role == "user" && strings.TrimSpace(entries[i].Content) != "" {
+			lastUser = entries[i].Content
+			break
+		}
+	}
+	if lastUser == original {
+		t.Fatalf("the rebuilt turn would re-run the ORIGINAL instruction %q — the new instruction never reached the transcript", lastUser)
+	}
+	if lastUser != replacement {
+		t.Fatalf("last `user` transcript entry = %q, want the new instruction %q", lastUser, replacement)
 	}
 }
