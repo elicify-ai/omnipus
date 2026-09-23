@@ -1,0 +1,38 @@
+title: SessionModeUpdatedFrame
+description: >
+  Server → client. Acknowledges a session_mode_update request with the
+  session's resulting resolved Auto-approve state. A request is always
+  acknowledged here — this is the one frame allowed to loosen, so there is
+  no "rejected for looseness" case the way there is for the global/per-agent
+  scopes; a malformed request still gets the existing, session-scoped
+  ErrorFrame instead. Session-scoped (registered in
+  SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089)
+  — a chat-lifecycle/settings frame, not turn output, so
+  producing_session_id is absent (FR-013), matching SessionCloseAckFrame's
+  own precedent. Documentation copy — the canonical, code-generating
+  definition is the inline schema of the same name in asyncapi.yaml.
+type: object
+required:
+  - type
+  - session_id
+  - auto_approve_effective
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: session_mode_updated
+  session_id:
+    type: string
+    minLength: 1
+  auto_approve_effective:
+    type: boolean
+    description: >
+      The resolved Auto-approve state for THIS session after applying (or
+      clearing) the modifier — the true per-session resolution that
+      SandboxStatus.auto_approve_effective cannot provide (that field is
+      the gateway-wide default only, with no session or agent context).
+      Combine with SandboxStatus.kernel_sandbox_active for the same
+      "Auto → Ask" degradation rendering described on that field: true
+      here with no active kernel sandbox still means every "ask" tool call
+      in this session prompts.
+    example: true

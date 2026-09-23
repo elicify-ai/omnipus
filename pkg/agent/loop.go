@@ -26,7 +26,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/plan"
-	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -196,10 +195,9 @@ type AgentLoop struct {
 	// gateway constructs once.
 	sessionLifecycleStoreForTools *session.LifecycleStore
 
-	// Security (SEC-15, SEC-17): audit logging and policy evaluation.
+	// Security (SEC-15): audit logging.
 	// Initialized in NewAgentLoop when sandbox.audit_log is enabled.
-	auditLogger   *audit.Logger
-	policyAuditor *policy.PolicyAuditor
+	auditLogger *audit.Logger
 
 	// Kernel-level sandbox backend (SEC-01, SEC-02, SEC-03). Selected at startup
 	// via sandbox.SelectBackend: LinuxBackend on Linux 5.13+ (Landlock+seccomp),
@@ -387,17 +385,15 @@ type AgentLoop struct {
 
 	// approvalGrants tracks per-session "Always Allow" tool-approval grants,
 	// scoped by (session_id, agent_id, tool_name). Always non-nil after
-	// NewAgentLoop. Fixes the tool-consent-boundary bug: the grant used to
-	// live on the per-WebSocket-CONNECTION wsApprovalHook.alwaysAllowed map
-	// and was silently discarded on every reconnect (network blip, idle,
-	// gateway restart, refresh — the SPA auto-reconnects on any drop). This
-	// store instead lives for the AgentLoop's lifetime and is cleared
-	// per-SESSION (via CloseSession), not per-connection, so the grant
-	// survives reconnects while still expiring with the session it belongs
-	// to. Shared by the gateway's tool-approval REST path (IsAllowed/Record —
-	// see AgentLoop.CheckGrantOrRequestApproval) and the delegate tool's
-	// async/await paths (Inherit — pkg/agent/subturn.go).
+	// NewAgentLoop. It lives for the AgentLoop's lifetime and is cleared
+	// per-SESSION (CloseSession), not per WebSocket connection, so a grant
+	// survives reconnects (network blip, idle, refresh) while still expiring
+	// with its session. Shared by the tool-approval REST path, the bash tool
+	// (ADR-092 grant kinds) and delegate inheritance (subturn.go).
 	approvalGrants *security.ApprovalGrantStore
+
+	sessionModes *SessionModeStore    // ADR-092 per-chat Auto-approve; see SessionModes
+	shellGate    *ShellPermissionGate // ADR-092 bash gate, shared by tool and loop
 
 	// asyncNotifier is the single process-wide AsyncNotifier instance
 	// (async-notifier-spec.md), extracted from the formerly-inline

@@ -114,6 +114,98 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		}
 	}
 
+	// The global map must be a full, wildcard-free enumeration (CLAUDE.md hard
+	// constraint 6): it must enumerate EXACTLY the names in pkg/coreagent's
+	// allStaticToolNames, one for one.
+	//
+	// That identity is NOT asserted here, and deliberately no longer has a
+	// hardcoded count standing in for it. Package config cannot import
+	// pkg/coreagent (pkg/coreagent already imports pkg/config — that direction
+	// is a cycle), so the only thing this package could ever express was a
+	// magic number, which is a strictly weaker control: it says "expected 85,
+	// got 86" while the real question is WHICH tool is missing from WHICH
+	// surface, and it has to be hand-grown (with a paragraph of changelog
+	// prose) every time a tool lands.
+	//
+	// The real, mechanical, by-name guard runs from the other side, where the
+	// import direction is legal: pkg/coreagent's
+	// TestCatalog_MatchesGlobalCeilingEntryForEntry checks BOTH directions
+	// (every catalog name has a ceiling entry; every ceiling entry is in the
+	// catalog) plus length equality, and names the offending tool when it
+	// fails. pkg/gateway's TestBuildKnownBuiltinToolNames_MatchesCoreagentStatic
+	// ToolCatalog closes the third side (the live tool registry). Do not
+	// reintroduce a count literal here — add the tool to both surfaces and let
+	// those two tests speak.
+	//
+	// What IS still asserted locally is that the map is non-empty and that
+	// every entry carries a legal, explicit policy value — the sweep below —
+	// so a corrupted or wildcard-bearing ceiling still fails in this package.
+	if len(cfg.Sandbox.ToolPolicies) == 0 {
+		t.Fatal("sandbox.tool_policies must be a fully-enumerated global ceiling, got no entries")
+	}
+	for name, policy := range cfg.Sandbox.ToolPolicies {
+		switch policy {
+		case "allow", "ask", "deny":
+		default:
+			t.Errorf("tool %q has illegal seeded policy %q — must be allow, ask or deny", name, policy)
+		}
+		if strings.ContainsAny(name, "*?") {
+			t.Errorf(
+				"tool %q is a wildcard entry — the static builtin ceiling must be literal and "+
+					"wildcard-free (CLAUDE.md hard constraint 6); wildcards are the MCP exception only",
+				name,
+			)
+		}
+	}
+
+	// Every non-destructive entry must be "allow" — this is an allow-by-default
+	// ceiling, not a narrow ask-list. disable_channel is explicitly checked as
+	// the canonical "reversible, not destructive" example. inspect_session is
+	// no longer excluded (fix-wave finding #2), and neither are the three
+	// ADR-052 plan-execution tools (2026-07-28): all four are now seeded
+	// "allow" at the ceiling, same as any other non-destructive tool, with the
+	// real gating done per-agent.
+	// bash is a fourth, ADR-092-specific exception, distinct from destructive/
+	// operatorOnly: it is neither irreversible (destructive) nor about an
+	// agent widening its own boundary (operatorOnly) — it ships "ask"
+	// (founder decision, 2026-09-23) because ADR-092's D1 three-mode
+	// selector, D7 filesystem pre-flight, and D8 network deny-by-default all
+	// only engage when the "bash" ceiling resolves to "ask"; a shipped
+	// "allow" would give a fresh install none of that machinery. Paired with
+	// sandbox.AutoApprove (seeded true, see TestDefaultConfig_SeedsAutoApprove
+	// below), the fresh-install BEHAVIOUR is still permissive for anything
+	// the kernel sandbox can positively clear — this is a routing value, not
+	// a return to "always ask".
+	for name, policy := range cfg.Sandbox.ToolPolicies {
+		if destructive[name] {
+			continue
+		}
+		if _, isOperatorOnly := operatorOnly[name]; isOperatorOnly {
+			continue
+		}
+		if name == "bash" {
+			continue
+		}
+		if policy != "allow" {
+			t.Errorf("expected non-destructive tool %q to be seeded 'allow', got %q", name, policy)
+		}
+	}
+	if got := cfg.Sandbox.ToolPolicies["disable_channel"]; got != "allow" {
+		t.Errorf("disable_channel is reversible, not a delete — expected 'allow', got %q", got)
+	}
+	if got := cfg.Sandbox.ToolPolicies["bash"]; got != "ask" {
+		t.Errorf("bash must be seeded 'ask' (ADR-092 D1, founder decision 2026-09-23), got %q", got)
+	}
+}
+
+// TestDefaultConfig_SeedsNamedAllowCeilings pins the ceiling tools whose
+// "allow" seed carries a named reason: tightening any of them has to delete
+// the assertion and its reason first. Split out of
+// TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk, which also sweeps the
+// same map for the allow-by-default rule.
+func TestDefaultConfig_SeedsNamedAllowCeilings(t *testing.T) {
+	cfg := DefaultConfig()
+
 	// ADR-052 (autonomous agent plan execution, FR-005/FR-027) — the three
 	// plan-execution tools seed an explicit "allow" CEILING (never absent,
 	// never deny).
@@ -189,71 +281,23 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	if got := cfg.Sandbox.ToolPolicies["list_jobs"]; got != "allow" {
 		t.Errorf("expected seeded ceiling policy 'allow' for \"list_jobs\", got %q", got)
 	}
+}
 
-	// The global map must be a full, wildcard-free enumeration (CLAUDE.md hard
-	// constraint 6): it must enumerate EXACTLY the names in pkg/coreagent's
-	// allStaticToolNames, one for one.
-	//
-	// That identity is NOT asserted here, and deliberately no longer has a
-	// hardcoded count standing in for it. Package config cannot import
-	// pkg/coreagent (pkg/coreagent already imports pkg/config — that direction
-	// is a cycle), so the only thing this package could ever express was a
-	// magic number, which is a strictly weaker control: it says "expected 85,
-	// got 86" while the real question is WHICH tool is missing from WHICH
-	// surface, and it has to be hand-grown (with a paragraph of changelog
-	// prose) every time a tool lands.
-	//
-	// The real, mechanical, by-name guard runs from the other side, where the
-	// import direction is legal: pkg/coreagent's
-	// TestCatalog_MatchesGlobalCeilingEntryForEntry checks BOTH directions
-	// (every catalog name has a ceiling entry; every ceiling entry is in the
-	// catalog) plus length equality, and names the offending tool when it
-	// fails. pkg/gateway's TestBuildKnownBuiltinToolNames_MatchesCoreagentStatic
-	// ToolCatalog closes the third side (the live tool registry). Do not
-	// reintroduce a count literal here — add the tool to both surfaces and let
-	// those two tests speak.
-	//
-	// What IS still asserted locally is that the map is non-empty and that
-	// every entry carries a legal, explicit policy value — the sweep below —
-	// so a corrupted or wildcard-bearing ceiling still fails in this package.
-	if len(cfg.Sandbox.ToolPolicies) == 0 {
-		t.Fatal("sandbox.tool_policies must be a fully-enumerated global ceiling, got no entries")
+// TestDefaultConfig_SeedsAutoApprove pins the shipped fresh-install defaults
+// for ADR-092's Auto shell-permission mode (founder decision, 2026-09-23):
+// paired with the "bash": "ask" ceiling above, sandbox.AutoApprove ships
+// true so a fresh install resolves to Auto, not literal Ask — commands the
+// kernel sandbox can positively clear run without a prompt; anything that
+// would leave the sandbox, reach the network, or touch a secret still asks.
+// A future change to either value must be a deliberate edit to this test,
+// not an accidental drift.
+func TestDefaultConfig_SeedsAutoApprove(t *testing.T) {
+	cfg := DefaultConfig()
+	if !cfg.Sandbox.AutoApprove {
+		t.Error("sandbox.auto_approve must be seeded true on a fresh install (ADR-092 D1)")
 	}
-	for name, policy := range cfg.Sandbox.ToolPolicies {
-		switch policy {
-		case "allow", "ask", "deny":
-		default:
-			t.Errorf("tool %q has illegal seeded policy %q — must be allow, ask or deny", name, policy)
-		}
-		if strings.ContainsAny(name, "*?") {
-			t.Errorf(
-				"tool %q is a wildcard entry — the static builtin ceiling must be literal and "+
-					"wildcard-free (CLAUDE.md hard constraint 6); wildcards are the MCP exception only",
-				name,
-			)
-		}
-	}
-
-	// Every non-destructive entry must be "allow" — this is an allow-by-default
-	// ceiling, not a narrow ask-list. disable_channel is explicitly checked as
-	// the canonical "reversible, not destructive" example. inspect_session is
-	// no longer excluded (fix-wave finding #2), and neither are the three
-	// ADR-052 plan-execution tools (2026-07-28): all four are now seeded
-	// "allow" at the ceiling, same as any other non-destructive tool, with the
-	// real gating done per-agent.
-	for name, policy := range cfg.Sandbox.ToolPolicies {
-		if destructive[name] {
-			continue
-		}
-		if _, isOperatorOnly := operatorOnly[name]; isOperatorOnly {
-			continue
-		}
-		if policy != "allow" {
-			t.Errorf("expected non-destructive tool %q to be seeded 'allow', got %q", name, policy)
-		}
-	}
-	if got := cfg.Sandbox.ToolPolicies["disable_channel"]; got != "allow" {
-		t.Errorf("disable_channel is reversible, not a delete — expected 'allow', got %q", got)
+	if got := cfg.Sandbox.ToolPolicies["bash"]; got != "ask" {
+		t.Errorf(`bash must be seeded "ask" for auto_approve to have any effect (ADR-092 D1 — Auto only applies to a tool resolved to "ask"), got %q`, got)
 	}
 }
 

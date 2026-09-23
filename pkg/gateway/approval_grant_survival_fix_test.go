@@ -134,14 +134,14 @@ func TestToolApproval_AlwaysAllow_SurvivesChildTeardown_ScopedToChildAgent(t *te
 
 	// --- Act 1: an approval raised from WITHIN Ava's own child turn (the
 	// acting session is child1ID, per approvalEntry.SessionID's own doc
-	// comment), resolved with "always". The approval modal named "ava" —
+	// comment), resolved with "allow". The approval modal named "ava" —
 	// entry.AgentID — never "jim". ---
 	lsArgs := map[string]any{"command": "ls"}
 	entry, accepted := reg.requestApproval(
 		"tc-1", "bash", lsArgs, "ava", child1ID, "turn-1",
 	)
 	require.True(t, accepted)
-	w := postToolApproval(t, api, entry.ApprovalID, "always")
+	w := postToolApproval(t, api, entry.ApprovalID, "allow")
 	require.Equal(t, http.StatusOK, w.Code)
 	var happyResp struct {
 		GrantRecorded *bool `json:"grant_recorded"`
@@ -248,7 +248,7 @@ func TestToolApproval_AlwaysAllow_RootSessionNoSpuriousParentWrite(t *testing.T)
 
 	entry, accepted := reg.requestApproval("tc-root", "bash", map[string]any{}, "jim", rootID, "turn-root")
 	require.True(t, accepted)
-	w := postToolApproval(t, api, entry.ApprovalID, "always")
+	w := postToolApproval(t, api, entry.ApprovalID, "allow")
 	require.Equal(t, http.StatusOK, w.Code)
 
 	assert.True(t, grants.IsAllowed(rootID, "jim", "bash", nil),
@@ -284,7 +284,7 @@ func TestToolApproval_AlwaysAllow_ParentUnresolved_GrantRecordedFalse(t *testing
 	lsArgs := map[string]any{"command": "ls"}
 	entry, accepted := reg.requestApproval("tc-ghost-parent", "bash", lsArgs, "ava", childID, "turn-ghost")
 	require.True(t, accepted)
-	w := postToolApproval(t, api, entry.ApprovalID, "always")
+	w := postToolApproval(t, api, entry.ApprovalID, "allow")
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var resp struct {
@@ -293,7 +293,7 @@ func TestToolApproval_AlwaysAllow_ParentUnresolved_GrantRecordedFalse(t *testing
 		GrantRecorded *bool  `json:"grant_recorded"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "always", resp.Action)
+	assert.Equal(t, "allow", resp.Action)
 	assert.Equal(t, "ok", resp.Status)
 	require.NotNil(t, resp.GrantRecorded, "always must report the grant outcome")
 	assert.False(t, *resp.GrantRecorded,

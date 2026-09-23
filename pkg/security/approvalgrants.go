@@ -21,11 +21,27 @@
 package security
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 )
+
+// bashToolName is the tool name ExecTool.Name() returns (pkg/tools/shell.go)
+// — duplicated here as a literal rather than imported, since pkg/tools
+// already imports pkg/security and the reverse would cycle. Used to gate
+// EventShellGrantRecorded emission on the "exact" scope (Record) to bash
+// calls only: ApprovalGrantStore is shared by every ask-policy tool, but
+// FR-032(c)'s "exact" grant kind is specifically ADR-092's shell/bash
+// taxonomy (it is enumerated alongside prefix/path-widening/network-
+// widening, which are all bash-only concepts) — emitting shell.grant_recorded
+// for, say, a write_file "Always Allow" would misattribute it to this ADR.
+const bashToolName = "bash"
 
 // grantKey scopes a set of always-allowed (tool → argument fingerprints) to
 // one (session, agent) pair. Both fields participate in the key so a grant
@@ -49,9 +65,70 @@ type grantKey struct {
 // false, i.e. "ask"; Record/InheritFrom/ClearSession => no-op). This lets
 // callers hold a possibly-unwired store (e.g. in a test fixture) without an
 // extra nil check at every call site.
+// ShellPrefixGrant is the ADR-092 D4 "prefix" scope Allow grant: `{binary,
+// arg_prefix}`, ignoring cwd, token-boundary matched against a segment's
+// argument words following the resolved binary — "npm run test" does not
+// match "npm run testfoo" (FR-024). Binary is the RESOLVED absolute
+// executable path (D3's resolve-and-verify, ADR-092 S24's look-alike
+// defence: a grant recorded against the real `git` must never match a
+// same-named look-alike earlier on a later, attacker-influenced PATH).
+// RunInBackground is a separate match dimension (D4): a grant recorded for
+// a foreground call does not cover the same command run_in_background, and
+// vice versa.
+type ShellPrefixGrant struct {
+	Binary          string
+	ArgPrefix       string
+	RunInBackground bool
+}
+
+// prefixMatches reports whether g covers a call whose resolved binary is
+// resolvedBinary, whose argument words are args, and whose run_in_background
+// flag is runInBackground. Token-boundary: every word of g.ArgPrefix must
+// appear, in order, as a whole word at the start of args — "run test" is a
+// prefix of ["run","test","-v"] but not of ["run","testfoo"]. An empty
+// ArgPrefix matches any arguments (a bare-binary grant).
+func (g ShellPrefixGrant) prefixMatches(resolvedBinary string, args []string, runInBackground bool) bool {
+	if g.Binary != resolvedBinary || g.RunInBackground != runInBackground {
+		return false
+	}
+	prefix := strings.Fields(g.ArgPrefix)
+	if len(prefix) == 0 {
+		return true
+	}
+	if len(args) < len(prefix) {
+		return false
+	}
+	for i, w := range prefix {
+		if args[i] != w {
+			return false
+		}
+	}
+	return true
+}
+
 type ApprovalGrantStore struct {
 	mu     sync.Mutex
 	grants map[grantKey]map[string]map[string]struct{}
+
+	// prefixGrants holds the ADR-092 D4 "prefix" scope grants, keyed the same
+	// way exact grants are (session, agent), then by tool name — a session may
+	// hold several prefix grants for the same tool (e.g. `npm run test` and
+	// `npm run build`, recorded on two separate Allow clicks).
+	prefixGrants map[grantKey]map[string][]ShellPrefixGrant
+
+	// pathGrants holds the ADR-092 D7 filesystem-widening grants (FR-016/
+	// FR-036): bash-scoped, single-path, single-access-class widenings
+	// approved through the Auto pre-flight escalation. Keyed by (session,
+	// agent) only — not by tool — because ResolveTurnFSPolicy's grant-overlay
+	// parameter (FR-036) is bash's own per-turn FSPolicy input, not a
+	// per-call fingerprint.
+	pathGrants map[grantKey][]fspolicy.PathGrant
+
+	// networkGrants holds the ADR-092 D8 network-widening grant (FR-044): a
+	// session either holds it or does not — there is no finer scope (D8 is
+	// port-level, not domain-level, and applies uniformly to the session's
+	// bash child once granted).
+	networkGrants map[grantKey]struct{}
 
 	// inheritSourceMiss counts InheritFrom calls whose four key components
 	// were all non-empty but whose SOURCE key held no grants, so nothing was
@@ -77,12 +154,52 @@ type ApprovalGrantStore struct {
 	// is broken and the child will silently fall through to a fresh approval
 	// prompt. It is therefore logged at Warn as well as counted.
 	inheritInvalidKey atomic.Int64
+
+	// auditLogger is the ADR-092 FR-032(c)/FR-046 grant-recorded audit sink.
+	// Nil by default (pure store, no audit — matches the zero-value contract
+	// every other field on this struct follows). Wired via SetAuditLogger.
+	// Guarded by mu like every other field.
+	auditLogger *audit.Logger
+}
+
+// SetAuditLogger wires this store's FR-032(c) grant-recorded audit emitter
+// (EventShellGrantRecorded). Nil-safe on the receiver; passing a nil logger
+// is also valid (explicitly disables audit for this store, matching
+// audit.EmitEntry's own nil-logger no-op contract). Idempotent — callers may
+// call it more than once (pkg/tools/shell_permission_mode.go's
+// enforceShellPermissionMode calls it once per bash invocation) without
+// side effects beyond replacing the stored pointer.
+func (s *ApprovalGrantStore) SetAuditLogger(logger *audit.Logger) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.auditLogger = logger
+	s.mu.Unlock()
+}
+
+// emitGrantRecorded writes the FR-032(c) shell.grant_recorded event for a
+// NEWLY recorded grant (callers must not call this for a no-op/duplicate
+// record — see each Record* method's own "already granted" short-circuit).
+// Reads s.auditLogger under s.mu then emits OUTSIDE the lock, so a slow
+// audit write never blocks a concurrent grant lookup/record.
+func (s *ApprovalGrantStore) emitGrantRecorded(scope audit.ShellGrantScope, resolvedBinary, agentID, sessionID, tool string, extra map[string]any) {
+	s.mu.Lock()
+	logger := s.auditLogger
+	s.mu.Unlock()
+	if logger == nil {
+		return
+	}
+	audit.EmitShellGrantRecorded(context.Background(), logger, scope, resolvedBinary, agentID, sessionID, tool, extra)
 }
 
 // NewApprovalGrantStore creates an empty grant store.
 func NewApprovalGrantStore() *ApprovalGrantStore {
 	return &ApprovalGrantStore{
-		grants: make(map[grantKey]map[string]map[string]struct{}),
+		grants:        make(map[grantKey]map[string]map[string]struct{}),
+		prefixGrants:  make(map[grantKey]map[string][]ShellPrefixGrant),
+		pathGrants:    make(map[grantKey][]fspolicy.PathGrant),
+		networkGrants: make(map[grantKey]struct{}),
 	}
 }
 
@@ -156,7 +273,6 @@ func (s *ApprovalGrantStore) Record(sessionID, agentID, tool string, args map[st
 		return false
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	key := grantKey{sessionID: sessionID, agentID: agentID}
 	tools, ok := s.grants[key]
 	if !ok {
@@ -168,8 +284,202 @@ func (s *ApprovalGrantStore) Record(sessionID, agentID, tool string, args map[st
 		fps = make(map[string]struct{})
 		tools[tool] = fps
 	}
+	_, dup := fps[fp]
 	fps[fp] = struct{}{}
+	s.mu.Unlock()
+
+	// FR-032(c): only the "bash" tool's exact grants are ADR-092's own
+	// taxonomy (see bashToolName's doc comment) — and only NEW fingerprints,
+	// never a re-Record of one already on file.
+	if !dup && tool == bashToolName {
+		s.emitGrantRecorded(audit.ShellGrantScopeExact, "", agentID, sessionID, tool, map[string]any{
+			"args_fingerprint": fp,
+		})
+	}
 	return true
+}
+
+// RecordPrefixGrant grants ADR-092 D4 "prefix" scope for tool, scoped to
+// (sessionID, agentID). A later RecordPrefixGrant of the same tool with a
+// different {binary, arg_prefix, run_in_background} adds a second entry; it
+// does not replace the first. Returns false (no-op) for a nil store, an
+// empty sessionID/agentID/tool, or an empty grant.Binary — the same
+// never-key-on-empty-string discipline Record enforces.
+func (s *ApprovalGrantStore) RecordPrefixGrant(sessionID, agentID, tool string, grant ShellPrefixGrant) bool {
+	if s == nil || sessionID == "" || agentID == "" || tool == "" || grant.Binary == "" {
+		return false
+	}
+	s.mu.Lock()
+	key := grantKey{sessionID: sessionID, agentID: agentID}
+	if s.prefixGrants == nil {
+		s.prefixGrants = make(map[grantKey]map[string][]ShellPrefixGrant)
+	}
+	tools, ok := s.prefixGrants[key]
+	if !ok {
+		tools = make(map[string][]ShellPrefixGrant)
+		s.prefixGrants[key] = tools
+	}
+	for _, existing := range tools[tool] {
+		if existing == grant {
+			s.mu.Unlock()
+			return true // already granted, not a duplicate entry
+		}
+	}
+	tools[tool] = append(tools[tool], grant)
+	s.mu.Unlock()
+
+	s.emitGrantRecorded(audit.ShellGrantScopePrefix, grant.Binary, agentID, sessionID, tool, map[string]any{
+		"arg_prefix":        grant.ArgPrefix,
+		"run_in_background": grant.RunInBackground,
+	})
+	return true
+}
+
+// IsPrefixAllowed reports whether (sessionID, agentID) holds a D4 prefix
+// grant for tool covering a call whose resolved binary is resolvedBinary,
+// whose argument words are args, and whose run_in_background flag is
+// runInBackground. Fail-safe: a nil store or an empty sessionID/agentID/
+// tool/resolvedBinary always returns false — callers MUST keep prompting
+// ("ask") whenever this returns false.
+func (s *ApprovalGrantStore) IsPrefixAllowed(sessionID, agentID, tool, resolvedBinary string, args []string, runInBackground bool) bool {
+	if s == nil || sessionID == "" || agentID == "" || tool == "" || resolvedBinary == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tools, ok := s.prefixGrants[grantKey{sessionID: sessionID, agentID: agentID}]
+	if !ok {
+		return false
+	}
+	for _, g := range tools[tool] {
+		if g.prefixMatches(resolvedBinary, args, runInBackground) {
+			return true
+		}
+	}
+	return false
+}
+
+// RecordPathGrant adds one ADR-092 D7 filesystem-widening grant (FR-016) to
+// (sessionID, agentID)'s session-scoped set. A later RecordPathGrant for the
+// same Path unions its Access bits into the existing entry rather than
+// appending a duplicate — a session that first widens {P, read} and later
+// {P, write} ends up with one entry covering both, which is what
+// ResolveTurnFSPolicy's grant-overlay parameter (FR-036) expects to render
+// as a single PathRule. Returns false (no-op) for a nil store, an empty
+// sessionID/agentID, an empty grant.Path, or a zero grant.Access.
+func (s *ApprovalGrantStore) RecordPathGrant(sessionID, agentID string, grant fspolicy.PathGrant) bool {
+	if s == nil || sessionID == "" || agentID == "" || grant.Path == "" || grant.Access == 0 {
+		return false
+	}
+	s.mu.Lock()
+	key := grantKey{sessionID: sessionID, agentID: agentID}
+	if s.pathGrants == nil {
+		s.pathGrants = make(map[grantKey][]fspolicy.PathGrant)
+	}
+	existing := s.pathGrants[key]
+	merged := false
+	for i := range existing {
+		if existing[i].Path == grant.Path {
+			existing[i].Access |= grant.Access
+			merged = true
+			break
+		}
+	}
+	if !merged {
+		s.pathGrants[key] = append(existing, grant)
+	}
+	s.mu.Unlock()
+
+	// bashToolName: RecordPathGrant is exclusively the ADR-092 D7 filesystem-
+	// widening path, always bash-scoped (see the field's own doc comment —
+	// "bash's own per-turn FSPolicy input"). Emitted on every call, merged
+	// or new: even a widened-access-bits merge into an existing path entry
+	// is a fresh grant decision an operator needs to see (e.g. a session
+	// that first widened {P, read} just widened the SAME path to {P, write}).
+	s.emitGrantRecorded(audit.ShellGrantScopePathWidening, "", agentID, sessionID, bashToolName, map[string]any{
+		"path":   grant.Path,
+		"access": pathAccessLabel(grant.Access),
+	})
+	return true
+}
+
+// pathAccessLabel renders a fspolicy.PathGrantAccess* bitmask as an
+// operator-readable word for the FR-032(c) grant-recorded audit event.
+// Package-local duplicate of shell_permission_mode.go's accessLabel
+// (pkg/tools) — pkg/tools already imports pkg/security, so the reverse
+// import would cycle; same "duplicated as an independent type" precedent
+// that file's own package comment documents for ShellMode.
+func pathAccessLabel(access uint64) string {
+	switch {
+	case access&fspolicy.PathGrantAccessWrite != 0 && access&fspolicy.PathGrantAccessRead != 0:
+		return "read+write"
+	case access&fspolicy.PathGrantAccessWrite != 0:
+		return "write"
+	default:
+		return "read"
+	}
+}
+
+// PathGrantsFor returns a defensive copy of every ADR-092 D7 filesystem
+// widening recorded for (sessionID, agentID) this session — the value
+// ResolveTurnFSPolicy's grant-overlay parameter (FR-036) is populated from
+// at every bash pre-flight/exec call site. Nil-safe; returns nil for a nil
+// store or an empty sessionID/agentID (never a stored grant leaks under an
+// empty key, matching every other method's fail-safe discipline).
+func (s *ApprovalGrantStore) PathGrantsFor(sessionID, agentID string) []fspolicy.PathGrant {
+	if s == nil || sessionID == "" || agentID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing := s.pathGrants[grantKey{sessionID: sessionID, agentID: agentID}]
+	if len(existing) == 0 {
+		return nil
+	}
+	out := make([]fspolicy.PathGrant, len(existing))
+	copy(out, existing)
+	return out
+}
+
+// RecordNetworkGrant grants the ADR-092 D8 network-widening scope (FR-044)
+// for (sessionID, agentID) — the whole session's bash child, port-level
+// (DefaultConnectPorts), not domain-level. Idempotent: recording it twice
+// leaves the same single grant. Returns false (no-op) for a nil store or an
+// empty sessionID/agentID.
+func (s *ApprovalGrantStore) RecordNetworkGrant(sessionID, agentID string) bool {
+	if s == nil || sessionID == "" || agentID == "" {
+		return false
+	}
+	s.mu.Lock()
+	if s.networkGrants == nil {
+		s.networkGrants = make(map[grantKey]struct{})
+	}
+	key := grantKey{sessionID: sessionID, agentID: agentID}
+	_, dup := s.networkGrants[key]
+	s.networkGrants[key] = struct{}{}
+	s.mu.Unlock()
+
+	// bashToolName: RecordNetworkGrant is exclusively the ADR-092 D8
+	// network-widening grant, always bash-scoped (see the field's own doc
+	// comment). Idempotent state mutation — only emit on the FIRST record,
+	// not on a redundant re-grant of an already-held session grant.
+	if !dup {
+		s.emitGrantRecorded(audit.ShellGrantScopeNetworkWidening, "", agentID, sessionID, bashToolName, nil)
+	}
+	return true
+}
+
+// HasNetworkGrant reports whether (sessionID, agentID) already holds the
+// ADR-092 D8 network-widening grant this session. Fail-safe: a nil store or
+// an empty sessionID/agentID always returns false.
+func (s *ApprovalGrantStore) HasNetworkGrant(sessionID, agentID string) bool {
+	if s == nil || sessionID == "" || agentID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.networkGrants[grantKey{sessionID: sessionID, agentID: agentID}]
+	return ok
 }
 
 // InheritFrom copies the grant set currently recorded under the SOURCE key
@@ -237,7 +547,13 @@ func (s *ApprovalGrantStore) InheritFrom(srcSessionID, srcAgentID, dstSessionID,
 
 	s.mu.Lock()
 	srcSet := s.grants[srcKey]
-	if len(srcSet) == 0 {
+	_, srcHasNetwork := s.networkGrants[srcKey]
+	// ADR-092: the source-miss short-circuit must consider all FOUR grant
+	// kinds, not only the exact-fingerprint map — a session holding nothing
+	// but a D7 path widening (no exact "Always Allow" ever recorded) must
+	// still inherit it on delegation, not be treated as an empty source and
+	// skipped before the D7/D8/D4 copy blocks below ever run.
+	if len(srcSet) == 0 && len(s.prefixGrants[srcKey]) == 0 && len(s.pathGrants[srcKey]) == 0 && !srcHasNetwork {
 		s.mu.Unlock()
 		total := s.inheritSourceMiss.Add(1)
 		slog.Debug("approvalgrants: InheritFrom found no grants to inherit under the source key",
@@ -266,6 +582,60 @@ func (s *ApprovalGrantStore) InheritFrom(srcSessionID, srcAgentID, dstSessionID,
 			for fp := range srcFPs {
 				dstFPs[fp] = struct{}{}
 			}
+		}
+	}
+	// ADR-092: the three new grant kinds inherit on delegation exactly like
+	// the exact-fingerprint grant above — "a delegate inherits it via the
+	// same InheritFrom mechanism as command grants" (D7), "same session/
+	// delegate/clear-on-close lifetime as PathGrants" (D8's own text about
+	// the network grant, and D4 about prefix grants). Same union-not-replace,
+	// copy-not-move semantics; same identity short-circuit.
+	if srcKey != dstKey {
+		if srcPrefix := s.prefixGrants[srcKey]; len(srcPrefix) > 0 {
+			dstPrefix := s.prefixGrants[dstKey]
+			if dstPrefix == nil {
+				dstPrefix = make(map[string][]ShellPrefixGrant, len(srcPrefix))
+				s.prefixGrants[dstKey] = dstPrefix
+			}
+			for tool, grants := range srcPrefix {
+				existing := dstPrefix[tool]
+				for _, g := range grants {
+					dup := false
+					for _, e := range existing {
+						if e == g {
+							dup = true
+							break
+						}
+					}
+					if !dup {
+						existing = append(existing, g)
+					}
+				}
+				dstPrefix[tool] = existing
+			}
+		}
+		if srcPaths := s.pathGrants[srcKey]; len(srcPaths) > 0 {
+			dstPaths := s.pathGrants[dstKey]
+			for _, g := range srcPaths {
+				merged := false
+				for i := range dstPaths {
+					if dstPaths[i].Path == g.Path {
+						dstPaths[i].Access |= g.Access
+						merged = true
+						break
+					}
+				}
+				if !merged {
+					dstPaths = append(dstPaths, g)
+				}
+			}
+			s.pathGrants[dstKey] = dstPaths
+		}
+		if _, ok := s.networkGrants[srcKey]; ok {
+			if s.networkGrants == nil {
+				s.networkGrants = make(map[grantKey]struct{})
+			}
+			s.networkGrants[dstKey] = struct{}{}
 		}
 	}
 	s.mu.Unlock()
@@ -308,6 +678,24 @@ func (s *ApprovalGrantStore) ClearSession(sessionID string) {
 	for key := range s.grants {
 		if key.sessionID == sessionID {
 			delete(s.grants, key)
+		}
+	}
+	// ADR-092: the three new grant kinds die with the session exactly like
+	// the exact-fingerprint grant above (D4's "session grants ... end with
+	// the chat"; D7/D8 explicitly cite the same clear-on-close lifetime).
+	for key := range s.prefixGrants {
+		if key.sessionID == sessionID {
+			delete(s.prefixGrants, key)
+		}
+	}
+	for key := range s.pathGrants {
+		if key.sessionID == sessionID {
+			delete(s.pathGrants, key)
+		}
+	}
+	for key := range s.networkGrants {
+		if key.sessionID == sessionID {
+			delete(s.networkGrants, key)
 		}
 	}
 }

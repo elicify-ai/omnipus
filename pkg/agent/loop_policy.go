@@ -10,6 +10,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/shellrule"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -347,12 +348,24 @@ func (al *AgentLoop) loadToolApprover() PolicyApprover {
 // write side, TestCheckGrantOrRequestApproval_UsesActingSessionKey below for
 // this one). ClearSession (session teardown, U17b) uses the same key for the
 // same reason: it is the acting session's own bucket, not a shared one.
+// ADR-092 D4/FR-024 extension: for the "bash" tool specifically, this
+// consultation ALSO checks the prefix-scope grant kind
+// (ApprovalGrantStore.IsPrefixAllowed) alongside the classic exact-
+// fingerprint IsAllowed check above — closing the gap where a human's
+// earlier "Allow" with scope=prefix (e.g. "npm run test") never suppressed
+// the dialog for a later, textually-different invocation ("npm run test
+// -v") on this SAME classic ask-policy path. tools.BashPrefixGrantCheck
+// does the resolve-and-verify (D3's own look-alike defence) so this
+// function never needs its own copy of that logic.
 func (al *AgentLoop) CheckGrantOrRequestApproval(
 	ctx context.Context,
 	sessionID, agentID, toolName, toolCallID, turnID string,
 	args map[string]any,
 ) (approved bool, denialReason string) {
 	if al.ApprovalGrants().IsAllowed(sessionID, agentID, toolName, args) {
+		return true, ""
+	}
+	if toolName == "bash" && tools.BashPrefixGrantCheck(al.ApprovalGrants(), sessionID, agentID, toolName, args) {
 		return true, ""
 	}
 	approver := al.loadToolApprover()
@@ -482,4 +495,180 @@ func (al *AgentLoop) emitScheduledAutoDenyAudit(
 			},
 		)
 	}
+}
+
+// ShellPermissionGate implements tools.ShellModeResolver and
+// tools.ShellApprovalRequester: the ADR-092 adapter connecting the bash
+// tool's enforcement (pkg/tools/shell_permission_mode.go — D3 ask rules, D7
+// filesystem and D8 network pre-flights) to the AgentLoop state that decides
+// them, without pkg/tools importing pkg/agent (that import would cycle).
+//
+// One instance per AgentLoop, built in NewAgentLoop and injected into every
+// agent's bash tool by wireExecToolDepsOn as both ExecToolDeps.ShellMode and
+// ExecToolDeps.ApprovalRequester. ModeStore is the loop's own per-chat
+// Auto-approve store (AgentLoop.SessionModes()).
+type ShellPermissionGate struct {
+	Loop      *AgentLoop
+	ModeStore *SessionModeStore
+}
+
+// shellModeKey carries the bash mode the agent loop settled on for one tool
+// call (see withPinnedShellMode).
+type shellModeKey struct{}
+
+// withPinnedShellMode records, on the tool call's context, the mode the
+// agent loop used when it decided whether to prompt before dispatch
+// (resolveAskPolicy). ResolveShellMode returns this pinned value instead of
+// re-resolving, so the tool enforces exactly the decision the loop acted on
+// (ADR-092 FR-006: a command is resolved against the mode in force at the
+// pre-dispatch check). Without the pin, a chat toggled from Auto to off
+// between the loop skipping the prompt and the tool running would leave the
+// tool in Ask mode, which assumes the loop already prompted: the command
+// would run with neither a prompt nor the Auto pre-flights.
+func withPinnedShellMode(ctx context.Context, mode tools.ShellMode) context.Context {
+	return context.WithValue(ctx, shellModeKey{}, mode)
+}
+
+func pinnedShellMode(ctx context.Context) (tools.ShellMode, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	m, ok := ctx.Value(shellModeKey{}).(tools.ShellMode)
+	return m, ok && m != ""
+}
+
+// ResolveShellMode implements tools.ShellModeResolver. A mode pinned on ctx
+// by the agent loop wins; otherwise the live value is resolved (liveMode).
+// A nil receiver or nil Loop fails closed to Ask.
+func (g *ShellPermissionGate) ResolveShellMode(ctx context.Context, agentID, sessionID string) tools.ShellMode {
+	if m, ok := pinnedShellMode(ctx); ok {
+		return m
+	}
+	return g.liveMode(agentID, sessionID)
+}
+
+// liveMode resolves which bash enforcement mode applies to agentID's call in
+// sessionID right now:
+//
+//	God Mode active                          -> God (no approvals, no sandbox;
+//	                                            D3 deny rules still apply)
+//	bash policy is not "ask"                 -> Ask. "allow" runs without the
+//	                                            Auto machinery (the contract:
+//	                                            Auto never touches an allow
+//	                                            tool); "deny" never reaches
+//	                                            execution at all.
+//	"ask" + Auto-approve off                 -> Ask (the loop prompts first)
+//	"ask" + Auto-approve on + no kernel      -> Ask (FR-008: with nothing to
+//	  sandbox enforcing                         check a command against, Auto
+//	                                            behaves like Ask)
+//	"ask" + Auto-approve on + kernel sandbox -> Auto (no upfront prompt; the
+//	                                            tool's pre-flights ask only
+//	                                            for what the sandbox cannot
+//	                                            confine)
+//
+// Auto-approve is ResolveAutoApprove over cfg.Sandbox.AutoApprove, the
+// agent's AutoApproveDisabled, and the chat's SessionModeStore modifier.
+// Every missing dependency fails closed to Ask.
+func (g *ShellPermissionGate) liveMode(agentID, sessionID string) tools.ShellMode {
+	if g == nil || g.Loop == nil {
+		return tools.ShellModeAsk
+	}
+	cfg := g.Loop.GetConfig()
+	if cfg == nil {
+		return tools.ShellModeAsk
+	}
+	if GodModeActive(cfg) {
+		return tools.ShellModeGod
+	}
+	if g.Loop.ResolveApprovalToolPolicy(agentID, "bash") != string(config.ToolPolicyAsk) {
+		return tools.ShellModeAsk
+	}
+	var chat *bool
+	if v, ok := g.ModeStore.Get(sessionID); ok {
+		chat = &v
+	}
+	if !ResolveAutoApprove(cfg, agentID, chat) {
+		return tools.ShellModeAsk
+	}
+	if !sandbox.TurnPolicyBaseInstalled() {
+		return tools.ShellModeAsk
+	}
+	return tools.ShellModeAuto
+}
+
+// RequestShellApproval implements tools.ShellApprovalRequester: the D3
+// ask-rule and D7/D8 pre-flight escalation call sites in pkg/tools reach
+// AgentLoop.CheckGrantOrRequestApproval — the same consultation function the
+// classic "ask" tool-policy path uses — through here. pkg/tools checks its
+// own prefix/path/network grant kinds first and calls this only to reach the
+// interactive approval dialog.
+//
+// A nil receiver or nil Loop fails closed (approved=false).
+func (g *ShellPermissionGate) RequestShellApproval(
+	ctx context.Context,
+	sessionID, agentID, toolName, toolCallID, turnID string,
+	args map[string]any,
+) (bool, string) {
+	if g == nil || g.Loop == nil {
+		return false, "shell permission gate not wired"
+	}
+	return g.Loop.CheckGrantOrRequestApproval(ctx, sessionID, agentID, toolName, toolCallID, turnID, args)
+}
+
+// bashShellModeFor returns the ADR-092 mode for a bash call in ts's turn, or
+// "" for any other tool. resolveAskPolicy records it before deciding whether
+// to prompt, and the same value is pinned on the bash tool's context, so the
+// prompt decision and the tool's enforcement come from one resolution.
+func (al *AgentLoop) bashShellModeFor(ts *turnState, toolName string) tools.ShellMode {
+	if toolName != "bash" || ts == nil {
+		return ""
+	}
+	return al.shellGate.liveMode(ts.agentID, ts.transcriptSessionID)
+}
+
+// inheritSessionPermissions copies a delegating parent's session-scoped
+// permission state onto a delegate at spawn: its approval grants (ADR-057
+// two-key InheritFrom) and its per-chat Auto-approve modifier (ADR-092
+// FR-005), both keyed on the parent's own session id and the child's own.
+func (al *AgentLoop) inheritSessionPermissions(parentSessionID, parentAgentID, childSessionID, childAgentID string) {
+	al.ApprovalGrants().InheritFrom(parentSessionID, parentAgentID, childSessionID, childAgentID)
+	al.SessionModes().InheritFrom(parentSessionID, childSessionID)
+}
+
+// bashRulesSettlePrompt reports whether ADR-092 D3 operator command rules
+// already settle a bash call the "ask" policy would otherwise prompt for:
+//
+//   - every segment of the command matches an allow rule, with no deny or
+//     ask rule on any segment (deny > ask > allow still holds) — the
+//     allow rule is the retired exec allowlist's replacement, so the call
+//     proceeds without the prompt;
+//   - any segment matches a deny rule — the bash tool refuses the command
+//     outright in every mode, so prompting a human first would only ask
+//     them to approve a command that cannot run.
+//
+// The evaluation is the agent's own registered bash tool's
+// (tools.ExecTool.EvaluateCommandRules), so this decision and the tool's
+// enforcement use one rule list and one evaluator. An allow verdict does
+// not bypass the D7/D8 pre-flights: under Auto the tool still escalates a
+// write outside the sandbox or a network need. Any other verdict (no rule,
+// a partial match, an ask rule, a blind spot) returns false and the normal
+// prompt runs.
+func bashRulesSettlePrompt(ts *turnState, toolName string, args map[string]any) bool {
+	if toolName != "bash" || ts == nil || ts.agent == nil || ts.agent.Tools == nil {
+		return false
+	}
+	command, _ := args["command"].(string)
+	if command == "" {
+		return false
+	}
+	t, ok := ts.agent.Tools.Get("bash")
+	if !ok {
+		return false
+	}
+	exec, ok := t.(*tools.ExecTool)
+	if !ok {
+		return false
+	}
+	verdict := exec.EvaluateCommandRules(command)
+	return verdict.Action == shellrule.ActionDeny || verdict.FullyAllowed()
 }

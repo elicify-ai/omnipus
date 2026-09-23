@@ -1787,7 +1787,7 @@ func (st *spawnSubTurnState) buildDelegateAgent() {
 	// (WS payload stamping, the role-B predicates, pre-arm keys), and
 	// transcriptSessionID is exactly "the parent's own real session id"
 	// (its own childID when the parent is itself a delegated child).
-	st.al.ApprovalGrants().InheritFrom(st.parentTS.transcriptSessionID, st.parentTS.agentID, st.childID, st.agent.ID)
+	st.al.inheritSessionPermissions(st.parentTS.transcriptSessionID, st.parentTS.agentID, st.childID, st.agent.ID)
 
 	// FR-H-006 REVERSAL: "delegate" is NO LONGER excluded from the child's
 	// registry. Note: distinct from the identity-swap

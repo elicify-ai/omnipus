@@ -60,7 +60,7 @@ func (t *AgentGetTool) Execute(_ context.Context, args map[string]any) *tools.To
 		"override_names": overrides, "model": state.Agent.Model, "revision": state.Revision,
 		"activation_status": activation, "editable_fields": editableDescriptors(*state.Agent),
 		"memory_enabled": state.Agent.MemoryEnabled, "default": defaultAgent, "voice": state.Agent.Voice,
-		"shell_policy": state.Agent.ShellPolicy, "context_window_override": state.Agent.ContextWindowOverride,
+		"auto_approve_disabled": state.Agent.AutoApproveDisabled, "context_window_override": state.Agent.ContextWindowOverride,
 		"model_params": state.Agent.ModelParams,
 	}
 	return tools.NewToolResult(successJSON(resp))

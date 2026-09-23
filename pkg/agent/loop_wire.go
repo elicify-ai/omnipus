@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/shellrule"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -30,45 +31,35 @@ import (
 
 // wireExecToolDeps replaces each agent's bash tool with one constructed via
 // NewExecToolWithDeps, injecting the policy auditor (SEC-05), the ADR-035
-// god-mode/egress-proxy hardening deps, and the deny-pattern configuration
-// (ADR-036 — this is now the ONE registration path for `bash`, folding in what
-// used to be the separate workspace_shell/workspace_shell_bg wiring in
-// WireTier13Deps). This runs after NewAgentInstance has created the default
+// god-mode/egress-proxy hardening deps, and the ADR-092 permission deps
+// (mode resolver, approval fallback, grant store, operator command rules).
+// This is the ONE registration path for `bash` (ADR-036). This runs after NewAgentInstance has created the default
 // bash tool so that all other tool setup (allow paths) is preserved — we only
 // add the security deps on top.
 //
 // No-op when the agent has bash disabled or when the registry lookup fails.
 func (al *AgentLoop) wireExecToolDeps() {
-	al.wireExecToolDepsOn(al.registry)
+	al.wireExecToolDepsOn(al.registry, al.GetConfig())
 }
 
 // wireExecToolDepsOn is the registry-parameterized form of wireExecToolDeps,
 // used by hot-reload to wire the new registry before the atomic swap.
-func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
-	if registry == nil {
-		return
-	}
-	// Read al.cfg under al.mu.RLock (GetConfig), NOT bare. This helper runs
-	// inside UpsertAgentFast's and ReloadProviderAndConfig's wiring pass with
-	// NO al.mu held, so a bare `al.cfg` read races every pointer-swap publisher
-	// (SwapConfig, ReloadProviderAndConfig, and MutateConfig's copy-then-swap)
-	// writing the al.cfg slot under al.mu.Lock. The locked read establishes the
-	// happens-before edge the bare read lacked.
-	cfg := al.GetConfig()
-	if cfg == nil {
+//
+// cfg is the config the registry was built from, passed in rather than read
+// via al.GetConfig(): on a reload the new config is published only AFTER
+// this wiring pass (ReloadProviderAndConfig swaps al.cfg last), so reading
+// the live pointer here would build the new bash tools from the previous
+// config's god mode, audit fail-closed setting and command rules.
+func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry, cfg *config.Config) {
+	if registry == nil || cfg == nil {
 		return
 	}
 	allowReadPaths := buildAllowReadPatterns(cfg)
 
 	// O14 god-mode: the single source of truth for the sandbox escape hatch
-	// (ADR-035). When active: full host fs + syscalls, network egress open,
-	// shell guard / deny-patterns off, regardless of per-agent shell policy.
+	// (ADR-035). When active: full host fs + syscalls, network egress open.
+	// ADR-092 D3 deny rules still apply (enforced inside the bash tool).
 	godMode := GodModeActive(cfg)
-
-	globalShellDenyPatterns := cfg.Sandbox.ShellDenyPatterns
-	if godMode {
-		globalShellDenyPatterns = nil
-	}
 
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)
@@ -76,23 +67,9 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 			continue
 		}
 
-		var agentShellPolicy *config.AgentShellPolicy
-		for i := range cfg.Agents.List {
-			entry := &cfg.Agents.List[i]
-			if entry.ID == agentID {
-				agentShellPolicy = entry.ShellPolicy
-				break
-			}
-		}
-		if godMode {
-			agentShellPolicy = nil // drop per-agent deny patterns under god mode
-		}
-
 		deps := tools.ExecToolDeps{
-			GodMode:                 godMode,
-			AuditFailClosed:         resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),
-			GlobalShellDenyPatterns: globalShellDenyPatterns,
-			AgentShellPolicy:        agentShellPolicy,
+			GodMode:         godMode,
+			AuditFailClosed: resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),
 		}
 		// Plumb the kernel-sandbox egress proxy into the bash tool so the
 		// hardened path (non-god-mode) injects HTTP_PROXY pointing at the
@@ -101,12 +78,18 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 		if al.sandboxEgressProxy != nil {
 			deps.Proxy = al.sandboxEgressProxy
 		}
-		// Nil-guarded to avoid the typed-nil-in-interface trap: storing a nil
-		// *policy.PolicyAuditor in an interface field would create a non-nil
-		// interface holding a nil pointer, defeating downstream `!= nil` checks.
-		if al.policyAuditor != nil {
-			deps.PolicyAuditor = al.policyAuditor
+		// ADR-092: mode resolution, the interactive escalation fallback,
+		// the session grant store (the SAME instance AgentLoop.
+		// ApprovalGrants() returns, so a grant recorded by the tool is the
+		// one the gateway and delegate inheritance see), and the operator
+		// command rules. Nil-guarded: a nil gate leaves the tool failing
+		// closed to Ask.
+		if al.shellGate != nil {
+			deps.ShellMode = al.shellGate
+			deps.ApprovalRequester = al.shellGate
 		}
+		deps.ApprovalGrants = al.approvalGrants
+		deps.CommandRules = append([]shellrule.Rule(nil), cfg.Sandbox.CommandRules...)
 
 		restrict := cfg.Agents.Defaults.RestrictToWorkspace
 		execTool, err := tools.NewExecToolWithDeps(agent.Home, restrict, cfg, deps, allowReadPaths)
@@ -125,7 +108,7 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 	// ADR-090: the environment_setup tool rides the same registry pass —
 	// god mode, egress proxy and the production storage adapter land with
 	// each exec-deps refresh, and hot-reload re-applies them identically.
-	al.wireEnvironmentSetupDepsOn(registry)
+	al.wireEnvironmentSetupDepsOn(registry, cfg)
 }
 
 // WireTier13Deps registers the web_serve, workspace.shell, and
@@ -155,7 +138,7 @@ func (al *AgentLoop) WireTier13Deps(deps Tier13Deps) {
 		al.sandboxEgressProxy = deps.EgressProxy
 	}
 
-	al.wireTier13DepsLocked(al.registry, deps)
+	al.wireTier13DepsLocked(al.registry, deps, al.GetConfig())
 
 	// Re-wire exec deps now that we have the egress proxy. Without this,
 	// the exec tool's hardened path runs without HTTP_PROXY env vars.
@@ -164,16 +147,20 @@ func (al *AgentLoop) WireTier13Deps(deps Tier13Deps) {
 
 // wireTier13DepsLocked is the actual wiring logic, factored out so hot-reload
 // can re-apply it against a freshly-built registry without re-stashing.
-func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13Deps) {
-	if registry == nil {
-		return
-	}
-	// Read al.cfg under al.mu.RLock (GetConfig), NOT bare — see the matching
-	// comment in wireExecToolDepsOn: this helper likewise runs in the unlocked
-	// wiring pass of UpsertAgentFast/ReloadProviderAndConfig, and a bare al.cfg
-	// read races every pointer-swap publisher of al.cfg.
-	cfg := al.GetConfig()
-	if cfg == nil {
+//
+// cfg is the config the registry was (or is being) built from, passed in
+// rather than read via al.GetConfig(): ReloadProviderAndConfig publishes the
+// new config only AFTER this wiring pass (the atomic al.cfg swap happens
+// later), so reading the live pointer here would build every web_serve tool
+// from the PREVIOUS config's ServeWorkspace duration bounds, dev-server port
+// range/concurrency cap, Tier3Commands and EgressAllowList — the same bug
+// class wireExecToolDepsOn had (fixed in 42657cc64). This does NOT apply to
+// the al.GetConfig method value passed into tools.NewWebServeTool below,
+// which the tool calls again on every serve_web request to read the LIVE
+// config at call time (preview-on-main-listener v5) — that live read is the
+// intended behavior, not the bug.
+func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13Deps, cfg *config.Config) {
+	if registry == nil || cfg == nil {
 		return
 	}
 

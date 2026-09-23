@@ -44,6 +44,8 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 	// NewAgentLoop, but ClearSession is nil-receiver-safe regardless (e.g.
 	// AgentLoop literals built directly in tests without NewAgentLoop).
 	al.approvalGrants.ClearSession(sessionID)
+	// ADR-092: the per-chat Auto-approve modifier ends with the chat too.
+	al.sessionModes.ClearSession(sessionID)
 
 	// ADR-051 Rev 4 (FR-007a, Wave 3 T9): decrement the manifest refcount
 	// for every workspace library file this session referenced. The matching

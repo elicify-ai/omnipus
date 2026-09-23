@@ -87,3 +87,14 @@ properties:
       expiresAt = Date.now() + expires_in_ms. Using a relative delta avoids
       clock-skew between server and browser (OBS-004). Minimum 0 (no negative
       expiry); maximum 86400000 (24 hours — prevents absurd expiry windows).
+  segments:
+    type: array
+    items:
+      $ref: './CommandSegmentInfo.yaml'
+    description: >
+      ADR-092 D3/D4/D7/D8 per-segment breakdown — present only when
+      tool_name is "bash" and the approval was raised by the D3 rule
+      matcher or a D7/D8 pre-flight escalation, not for an ordinary
+      non-shell tool approval. A single, unchained bash command still
+      populates this with exactly one entry so the SPA has one rendering
+      path. Absent for non-bash tool approvals.

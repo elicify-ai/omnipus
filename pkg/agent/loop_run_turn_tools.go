@@ -32,18 +32,22 @@ type agentLoopRunTurnToolsExecute struct {
 	toolArgs                  map[string]any
 	ledgerToolName            string
 	toctouPolicy              string
-	toolCallID                string
-	asyncCallback             func(_ context.Context, result *tools.ToolResult)
-	asyncCallbackGate         *asyncToolCallbackGate
-	toolCBSig                 string
-	toolResult                *tools.ToolResult
-	toolDuration              time.Duration
-	contentForLLM             string
-	recallDecision            recallInjectionDecision
-	admitted                  admittedToolResult
-	toolResultMsg             providers.Message
-	tcRecord                  session.ToolCall
-	ret0                      agentLoopRunTurnToolsFlow
+	// shellModePin is the ADR-092 bash mode resolveAskPolicy settled on for
+	// this call; guardAndDispatch pins it on the tool's context so the bash
+	// tool enforces the same decision. Empty for every non-bash call.
+	shellModePin      tools.ShellMode
+	toolCallID        string
+	asyncCallback     func(_ context.Context, result *tools.ToolResult)
+	asyncCallbackGate *asyncToolCallbackGate
+	toolCBSig         string
+	toolResult        *tools.ToolResult
+	toolDuration      time.Duration
+	contentForLLM     string
+	recallDecision    recallInjectionDecision
+	admitted          admittedToolResult
+	toolResultMsg     providers.Message
+	tcRecord          session.ToolCall
+	ret0              agentLoopRunTurnToolsFlow
 }
 
 // asyncToolCallbackGate keeps an executor that completes inline from publishing
@@ -833,6 +837,7 @@ func (ex *agentLoopRunTurnToolsExecute) enforceExecutionPolicy(tc providers.Tool
 
 // resolveAskPolicy resolves ask-policy approval before dispatch.
 func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
+	ex.shellModePin = ex.rx.rr.rq.ri.rf.rt.al.bashShellModeFor(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName)
 	if ex.toctouPolicy == "ask" {
 		// Headless auto-deny (issue #264, FR-009): a scheduled run has no
 		// operator to approve, so any `ask`-policy tool is denied without
@@ -923,7 +928,17 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 		// consults the SAME store first, so a granted call still
 		// short-circuits identically), and write the placeholder only on
 		// the path that genuinely blocks on a human.
-		approved := ex.rx.rr.rq.ri.rf.rt.al.ApprovalGrants().IsAllowed(ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID, ex.rx.rr.rq.ri.rf.rt.ts.agentID, ex.toolName, ex.toolArgs)
+		//
+		// ADR-092 Auto-approve: a bash call resolved to Auto skips this
+		// upfront prompt. The bash tool itself then runs the D3 rules and
+		// the D7/D8 pre-flights and asks, through the same approver, only
+		// for what the kernel sandbox cannot confine (shellModePin carries
+		// this decision onto the tool's context, guardAndDispatch).
+		// D3 operator rules that already settle the call (all segments
+		// allowed, or any denied) skip it too: bashRulesSettlePrompt.
+		approved := ex.shellModePin == tools.ShellModeAuto ||
+			bashRulesSettlePrompt(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.toolArgs) ||
+			ex.rx.rr.rq.ri.rf.rt.al.ApprovalGrants().IsAllowed(ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID, ex.rx.rr.rq.ri.rf.rt.ts.agentID, ex.toolName, ex.toolArgs)
 		denialReason := ""
 		if !approved {
 			// About to block on a human, for up to the approval
@@ -1331,6 +1346,9 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	// field, not a second discriminator: two independently-computed
 	// answers to "is anyone there" would eventually disagree.
 	execCtx = tools.WithAutoDenyAsk(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.opts.AutoDenyAsk)
+	if ex.shellModePin != "" {
+		execCtx = withPinnedShellMode(execCtx, ex.shellModePin)
+	}
 	// Approval can wait while configuration changes. Recheck current authority
 	// immediately before dispatch, including connector assignments removed meanwhile.
 	if flow := ex.enforceExecutionPolicy(tc); flow != agentLoopRunTurnToolsExecuteNext {

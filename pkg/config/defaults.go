@@ -187,7 +187,21 @@ func DefaultConfig() *Config {
 func defaultToolPoliciesGeneral() map[string]string {
 	return map[string]string{
 		// --- General builtin tools ---
-		"bash":           "allow",
+		// bash ships "ask" (founder decision, 2026-09-23, ADR-092): the D1
+		// three-mode selector (Ask/Auto/God Mode), the D7 filesystem
+		// pre-flight, and the D8 network deny-by-default only engage when
+		// the "bash" ceiling resolves to "ask" — a shipped "allow" would
+		// give a fresh install none of that machinery. sandbox.AutoApprove
+		// (pkg/config/sandbox.go, seeded true in DefaultConfig) is the
+		// fresh-install default for ADR-092 D1's Auto mode, so a new
+		// install's actual behaviour is: commands the kernel sandbox can
+		// confine run without a prompt, and anything that would leave the
+		// sandbox, reach the network, or touch a secret still asks. This is
+		// a fresh-install seed only — config.ReconcileToolPolicyCeiling
+		// (ADR-076) never overwrites an operator-set "bash" value on an
+		// existing install, so an install that already has "allow" written
+		// stays "allow".
+		"bash":           "ask",
 		"read_file":      "allow",
 		"write_file":     "allow",
 		"list_directory": "allow",
@@ -772,6 +786,15 @@ func defaultSandboxConfig() OmnipusSandboxConfig {
 		// independent hardcoded literal. A drift between the two is caught
 		// loudly at boot by the same coverage validator, not silently ignored.
 		ToolPolicies: defaultToolPolicyCeiling(),
+
+		// AutoApprove ships true (founder decision, 2026-09-23, ADR-092 D1):
+		// paired with the "bash": "ask" ceiling seed above, a fresh install
+		// resolves to Auto mode — safe commands the kernel sandbox can
+		// confine run without a prompt; anything that would leave the
+		// sandbox, reach the network, or touch a secret still asks. See
+		// AutoApprove's own doc comment on sandbox.go for the tighten-only
+		// override chain and the write-authorization requirement.
+		AutoApprove: true,
 	}
 }
 

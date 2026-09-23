@@ -278,50 +278,8 @@ func (nal *newAgentLoop) initializeAudit() (*AgentLoop, bool, error) {
 	return nil, false, nil
 }
 
-// initializeSecurity builds policy enforcement, sandboxing, prompt protection, and the exec proxy.
+// initializeSecurity builds sandboxing, prompt protection, and the exec proxy.
 func (nal *newAgentLoop) initializeSecurity() {
-	// SEC-05/SEC-07: Build the policy evaluator from the live config.
-	// `cfg.Tools.Exec.AllowedBinaries` is the single source of truth for the
-	// exec allowlist (the same field the UI writes to via
-	// /api/v1/security/exec-allowlist). Constructing with an explicit
-	// SecurityConfig avoids the deny-everything trap of `NewEvaluator(nil)`.
-	//
-	// Default policy derivation:
-	//   - A non-empty allowlist means the operator opted into SEC-05 binary
-	//     restriction — default_policy is "deny" so unlisted binaries are blocked.
-	//   - An empty allowlist means no opt-in — default_policy is "allow" so
-	//     the existing guardCommand() checks remain the only exec restriction.
-	// This preserves backward compatibility for agents that never touched the
-	// allowlist, while honoring fail-closed semantics for agents that did.
-	defaultPolicy := policy.PolicyAllow
-	if len(nal.cfg.Tools.Exec.AllowedBinaries) > 0 {
-		defaultPolicy = policy.PolicyDeny
-	}
-	secCfg := &policy.SecurityConfig{
-		DefaultPolicy: defaultPolicy,
-		Policy: policy.PolicySection{
-			Exec: policy.ExecPolicy{
-				AllowedBinaries: nal.cfg.Tools.Exec.AllowedBinaries,
-				Approval:        nal.cfg.Tools.Exec.Approval,
-			},
-		},
-	}
-	policyEval := policy.NewEvaluator(secCfg)
-
-	// Wrap the evaluator in a PolicyAuditor so every decision is audit-logged
-	// (ADR-002 §W-3). When audit logging is disabled the bridge is nil; the
-	// PolicyAuditor tolerates a nil logger and still enforces — enforcement
-	// must NOT depend on audit logging being enabled.
-	var auditBridgeImpl *auditBridge
-	if nal.al.auditLogger != nil {
-		auditBridgeImpl = newAuditBridge(nal.al.auditLogger)
-	}
-	var policyAuditorLogger policy.AuditLogger
-	if auditBridgeImpl != nil {
-		policyAuditorLogger = auditBridgeImpl
-	}
-	nal.al.policyAuditor = policy.NewPolicyAuditor(policyEval, policyAuditorLogger, "")
-
 	// SEC-01/02/03: Select the best-available sandbox backend. This never
 	// fails: on unsupported kernels SelectBackend returns a FallbackBackend.
 	backend, backendName := sandbox.SelectBackend()
@@ -406,6 +364,12 @@ func (nal *newAgentLoop) initializeRuntime() (*AgentLoop, error) {
 	// by the gateway's tool-approval REST path and the delegate tool's
 	// async/await paths. Always non-nil.
 	nal.al.approvalGrants = security.NewApprovalGrantStore()
+
+	// ADR-092: per-chat Auto-approve modifier and the bash permission gate
+	// built over it. Constructed before wireExecToolDeps below, which
+	// injects the gate into every agent's bash tool.
+	nal.al.sessionModes = NewSessionModeStore()
+	nal.al.shellGate = &ShellPermissionGate{Loop: nal.al, ModeStore: nal.al.sessionModes}
 
 	// Process-wide AsyncNotifier (async-notifier-spec.md): the reusable
 	// "wake the conversation when background work finishes" primitive,

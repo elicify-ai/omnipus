@@ -100,7 +100,7 @@ type Options struct {
 	URL string
 
 	// Yes, when true, causes tool_approval_required frames to be resolved with
-	// action="approve" instead of the default "deny" (US-4/AC-2).
+	// action="allow_once" instead of the default "deny" (US-4/AC-2).
 	Yes bool
 
 	// Timeout is the maximum time to wait for the done frame after connecting.
@@ -381,7 +381,9 @@ func (rn *run) handleFrame(raw []byte) runFlow {
 		}
 		action := generated.ToolApprovalActionRequestActionDeny
 		if rn.o.Yes {
-			action = generated.ToolApprovalActionRequestActionApprove
+			// Single-invocation approval, no session grant recorded — matches
+			// this one-shot CLI run's lifetime (ADR-092 D4/FR-023).
+			action = generated.ToolApprovalActionRequestActionAllowOnce
 		}
 		resolveErr := resolveApprovalWithRetry(rn.ctx, rn.httpBase, rn.o.Token, f.ApprovalId, action)
 		if resolveErr != nil {
@@ -485,7 +487,7 @@ func resolveApprovalWithRetry(
 // will cause a ~90 s hang if used here.
 //
 // Route: POST /api/v1/tool-approvals/{approval_id}
-// Body:  {"action":"approve"|"deny"|"cancel"}
+// Body:  {"action":"allow"|"allow_once"|"deny"|"cancel"}
 // Auth:  Bearer <token>
 func resolveApproval(
 	ctx context.Context,
