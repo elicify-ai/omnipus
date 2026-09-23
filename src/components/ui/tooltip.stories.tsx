@@ -18,6 +18,10 @@ const meta = {
   component: Tooltip,
   args: {
     content: 'Auto has no active kernel sandbox on this platform, so it behaves like Ask.',
+    // Satisfies TooltipProps' required `children` for CSF3's story-arg
+    // typing — the render below supplies the actual trigger JSX directly
+    // and never reads `args.children`.
+    children: <Badge>Auto → Ask</Badge>,
   },
   render: (args) => (
     <Tooltip {...args} data-testid="tooltip-trigger">

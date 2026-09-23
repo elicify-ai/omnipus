@@ -56,6 +56,8 @@ import {
   fetchBuiltinTools,
   fetchGlobalToolPolicies,
   updateGlobalToolPolicies,
+  fetchSandboxConfig,
+  updateSandboxConfig,
   getErrorMessage,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -152,6 +154,103 @@ function GlobalToolPoliciesSection() {
         </span>
       </div>
     </div>
+  )
+}
+
+// ── Auto-approve (ADR-091) — global default ───────────────────────────────────
+//
+// Auto-approve is a SEPARATE setting from tool policy (allow/deny/ask) — it
+// only has meaning for a tool currently resolved to "ask", for every such
+// tool (not only bash): "safe" is what never leaves the kernel sandbox,
+// judged per call. With no active kernel sandbox nothing can be positively
+// cleared, so an "ask" tool always prompts regardless of this setting (see
+// the chat-header badge, which reads "Auto → Ask" for exactly that case).
+//
+// Lives on the same SandboxConfig the Process Sandbox (Advanced) section
+// already manages, and goes through the same re-auth-gated
+// PUT /security/sandbox-config handler — no separate auth path to build.
+function AutoApproveControl() {
+  const { addToast } = useUiStore()
+  const stepUp = useStepUp()
+  const queryClient = useQueryClient()
+
+  const { data: sandboxConfig, isLoading, isError } = useQuery({
+    queryKey: ['sandbox-config'],
+    queryFn: fetchSandboxConfig,
+  })
+
+  const { mutateAsync: saveAsync, isPending: isSaving } = useMutation({
+    mutationFn: (vars: { next: boolean; token?: string }) =>
+      updateSandboxConfig({ auto_approve: vars.next }, vars.token),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
+      queryClient.invalidateQueries({ queryKey: ['sandbox-status'] })
+    },
+    onError: (err: unknown) => {
+      addToast({ message: getErrorMessage(err, 'Could not change Auto-approve'), variant: 'error' })
+    },
+  })
+
+  function requestChange(next: boolean) {
+    if (isSaving) return
+    void stepUp
+      .gate((token) => saveAsync({ next, token }), {
+        title: next ? 'Turn Auto-approve on?' : 'Turn Auto-approve off?',
+        body: next
+          ? 'Agents on "ask" stop prompting for a command the sandbox can confirm never leaves it. Everything else still asks.'
+          : 'Every agent tool set to "ask" prompts every time, with no auto-approval.',
+        confirmLabel: next ? 'Turn Auto-approve on' : 'Turn Auto-approve off',
+      })
+      .catch((err: unknown) => {
+        if (!isReAuthCancelled(err)) return
+      })
+  }
+
+  if (isLoading) {
+    return (
+      <Card className="p-[var(--space-3)] space-y-[var(--space-2)]">
+        <div className="h-4 w-32 rounded bg-[var(--color-surface-2)] animate-pulse" />
+        <div className="h-3 w-full rounded bg-[var(--color-surface-2)] animate-pulse" />
+      </Card>
+    )
+  }
+
+  if (isError) {
+    return (
+      <Card className="p-[var(--space-3)]">
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
+          Failed to load the Auto-approve setting. Please try again.
+        </p>
+      </Card>
+    )
+  }
+
+  const enabled = sandboxConfig?.auto_approve === true
+
+  return (
+    <Card className="p-[var(--space-3)]">
+      <div className="flex items-center justify-between gap-[var(--space-3)]">
+        <div>
+          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Auto-approve</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
+            For any tool set to &ldquo;ask&rdquo;, skip the prompt for what never leaves the sandbox and still ask
+            for everything else. Applies to every tool, not just shell commands.
+          </p>
+        </div>
+        <Switch
+          checked={enabled}
+          disabled={isSaving}
+          onCheckedChange={requestChange}
+          aria-label="Auto-approve"
+          data-testid="auto-approve-global-switch"
+        />
+      </div>
+      {/* This control's OWN useStepUp() instance — its dialogs must be
+          mounted here, not assumed to come from SecuritySection's separate
+          credential-vault stepUp instance (each useStepUp() call owns
+          independent open/close state). */}
+      {stepUp.dialogs}
+    </Card>
   )
 }
 
@@ -424,6 +523,10 @@ export function SecuritySection() {
             }}
           />
         </Card>
+
+        {/* 1b. Auto-approve (ADR-091) — separate from tool policy above, only
+            meaningful for a tool resolved to "ask". */}
+        <AutoApproveControl />
 
         {/* 2. Exec approval */}
         <Card className="p-[var(--space-3)]">

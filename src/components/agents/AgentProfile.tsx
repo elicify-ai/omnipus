@@ -387,6 +387,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   })
   // US-E6: per-agent skill assignment (opt-in, default none).
   const [agentSkills, setAgentSkills] = useState<string[]>([])
+  // ADR-091: per-agent Auto-approve off-switch — off-only, default false
+  // (inherit the global/per-chat default).
+  const [autoApproveDisabled, setAutoApproveDisabled] = useState(false)
   // Spec-4 FR-4.1: sub-agent executor (native default / external-cli / remote-a2a).
   const [executor, setExecutor] = useState<ExecutorConfig | undefined>(undefined)
 
@@ -611,6 +614,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     }))
     // US-E6: hydrate agent skills from the API response (default none).
     setAgentSkills(agent.skills ?? [])
+    // ADR-091: hydrate the per-agent Auto-approve off-switch (default false).
+    setAutoApproveDisabled(agent.auto_approve_disabled ?? false)
     reviewedAgentRef.current = agent
     hasHydrated.current = true
     // D3 fix: flip the reactive readiness flag as the LAST line of this
@@ -741,12 +746,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // Omitting it (undefined) leaves the backend on its "native" default
       // rather than forcing an empty value over the wire.
       executor,
+      // ADR-091: per-agent Auto-approve off-switch. Sent unconditionally
+      // (false is the harmless "inherit the default" no-op), matching every
+      // other simple boolean field in this payload.
+      auto_approve_disabled: autoApproveDisabled,
     }
   }, [
     agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
     temperature, maxTokens, soul, memoryEnabled, voice,
     maxToolIterations, contextWindowOverride,
-    agentSkills, executor,
+    agentSkills, executor, autoApproveDisabled,
   ])
 
   const {
@@ -1850,6 +1859,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 isMcpEditable={isFieldEditable('mcp_servers')}
                 tools={toolsCfg}
                 onChange={setToolsCfg}
+                autoApproveDisabled={autoApproveDisabled}
+                onAutoApproveDisabledChange={(next) => { markDirty(); setAutoApproveDisabled(next) }}
                 onRevisionChange={(revision) => {
                   if (reviewedAgentRef.current) {
                     reviewedAgentRef.current = { ...reviewedAgentRef.current, revision }

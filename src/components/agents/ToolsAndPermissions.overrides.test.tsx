@@ -93,6 +93,8 @@ describe('ToolsAndPermissions — sparse inherit and discovery', () => {
         isEditable
         tools={{ builtin: { policies: { read_file: 'deny' } } } as AgentToolsCfg}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
     )
     await waitFor(() => expect(screen.getByTestId('preset-cautious')).toBeInTheDocument())
@@ -119,6 +121,8 @@ describe('ToolsAndPermissions — sparse inherit and discovery', () => {
         isEditable
         tools={{ builtin: { policies: {} } } as AgentToolsCfg}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
     )
     await waitFor(() => expect(screen.getByTestId('preset-cautious')).toBeInTheDocument())
@@ -139,6 +143,8 @@ describe('ToolsAndPermissions — sparse inherit and discovery', () => {
         isMcpEditable
         tools={{ builtin: { policies: {} } } as AgentToolsCfg}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
     )
     await waitFor(() => expect(screen.getByTestId('mcp-assignment-section')).toBeInTheDocument())
@@ -205,6 +211,8 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         isMcpEditable
         tools={{ builtin: { policies: { read_file: 'deny' } } } as AgentToolsCfg}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
     )
     await waitFor(() => expect(screen.getByTestId('mcp-assignment-section')).toBeInTheDocument())
@@ -233,6 +241,8 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         isMcpEditable
         tools={{ builtin: { policies: { read_file: 'deny' } } } as AgentToolsCfg}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
     )
     await waitFor(() => expect(screen.getByTestId('mcp-assignment-section')).toBeInTheDocument())
@@ -264,6 +274,8 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         isMcpEditable
         tools={{ builtin: { policies: {} } } as AgentToolsCfg}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
     )
     await waitFor(() => expect(screen.getByLabelText('Unassign Docs')).toBeInTheDocument())
@@ -292,6 +304,8 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         isMcpEditable
         tools={{ builtin: { policies: {} } } as AgentToolsCfg}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
     )
     await waitFor(() => expect(screen.getByTestId('mcp-mode-docs-selected')).toBeInTheDocument())
@@ -322,6 +336,8 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         isMcpEditable
         tools={{ builtin: { policies: {} } } as AgentToolsCfg}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
     )
     await waitFor(() => expect(screen.getByTestId('mcp-mode-docs-all')).toBeInTheDocument())
@@ -349,6 +365,8 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         isEditable
         tools={{ builtin: { policies: {} } } as AgentToolsCfg}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
     )
     expect(await screen.findByTestId('agent-tools-load-error')).toBeInTheDocument()
@@ -366,6 +384,8 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         isEditable
         tools={{ builtin: { policies: {} } } as AgentToolsCfg}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
     )
     const cautious = await screen.findByTestId('preset-cautious')
@@ -389,6 +409,8 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         isEditable
         tools={{ builtin: { policies: {} } } as AgentToolsCfg}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
     )
 
@@ -426,6 +448,8 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         isMcpEditable
         tools={{ builtin: { policies: {} } } as AgentToolsCfg}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
     )
 
@@ -453,6 +477,8 @@ describe('ToolsAndPermissions — residual GET, presets, and MCP bindings', () =
         isEditable
         tools={{ builtin: { policies: { read_file: 'deny' } } } as AgentToolsCfg}
         onChange={() => {}}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
       />,
     )
     await waitFor(() => expect(screen.getByTestId('preset-cautious')).toBeInTheDocument())

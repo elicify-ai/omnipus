@@ -40,6 +40,8 @@ import {
 } from '@/lib/api'
 import { MCPServerPicker } from './MCPServerPicker'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { useReAuthGate, isReAuthCancelled } from '@/components/settings/useReAuthGate'
 import { useUiStore } from '@/store/ui'
@@ -63,6 +65,17 @@ interface ToolsAndPermissionsProps {
    */
   onChange: (tools: AgentToolsCfg) => void
   onRevisionChange?: (revision: string) => void
+  /**
+   * ADR-091: whether this agent forces the global Auto-approve default off
+   * for its own "ask" tool calls (`Agent.auto_approve_disabled`). Off-only by
+   * construction — there is no value meaning "force it on" at this scope, so
+   * this is always rendered as an off-switch, never a tri-state. Distinct
+   * from `tools`/`tools_cfg` above: this field persists via the parent's own
+   * main-agent save (AgentUpdateRequest), not this component's separate
+   * re-auth-gated tools endpoint.
+   */
+  autoApproveDisabled: boolean
+  onAutoApproveDisabledChange: (next: boolean) => void
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -96,6 +109,8 @@ export function ToolsAndPermissions({
   tools,
   onChange,
   onRevisionChange,
+  autoApproveDisabled,
+  onAutoApproveDisabledChange,
 }: ToolsAndPermissionsProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
@@ -519,6 +534,39 @@ export function ToolsAndPermissions({
             instead.
           </p>
         </div>
+      )}
+
+      {/* ADR-091: per-agent Auto-approve off-switch. Off-only — checking it
+          means "force Auto off for this agent"; unchecking means "inherit
+          the global/per-chat default", never "force it on". Editable for
+          locked core agents too (this field is not gated by toolsEditable —
+          it saves through the parent's own main-agent PUT, whose
+          editable_fields descriptor is the actual source of truth; the
+          save throws ProtectedAgentFieldChangeError if the backend
+          disagrees, same as every other non-tools field). Hidden for
+          subagent_3p — external CLI runners have no ask/allow/deny concept
+          for Omnipus to auto-approve inside. */}
+      {!isExternal && (
+        <Card className="p-[var(--space-3)]">
+          <label className="flex items-start gap-[var(--space-2)] cursor-pointer">
+            <Checkbox
+              checked={autoApproveDisabled}
+              onCheckedChange={(checked) => onAutoApproveDisabledChange(checked === true)}
+              data-testid="agent-auto-approve-disabled"
+              aria-label="Never auto-approve for this agent"
+              className="mt-[var(--space-0-5)]"
+            />
+            <span>
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+                Never auto-approve for this agent
+              </p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
+                Every tool this agent has set to &ldquo;ask&rdquo; always prompts, even when Auto-approve is on
+                globally or turned on for this chat.
+              </p>
+            </span>
+          </label>
+        </Card>
       )}
 
       {/* Save status — hidden for locked/external agents (no writes ever fire) */}
