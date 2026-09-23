@@ -105,3 +105,26 @@ test('local runs keep the dev-server fallback', () => {
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.value.webServer.command, /npm run storybook/)
 })
+
+test('ci-required includes all design-system browser and audit jobs', () => {
+  const ciRequired = workflow.jobs['ci-required']
+  assert.ok(ciRequired, 'ci-required job must exist')
+  assert.ok(ciRequired.needs.includes('design-system-browser'),
+    'ci-required must include design-system-browser (matrix job) to fail if any browser project fails')
+  assert.ok(ciRequired.needs.includes('design-system-screenshot'),
+    'ci-required must include design-system-screenshot to fail if appearance gate fails')
+  assert.ok(ciRequired.needs.includes('design-system-audit'),
+    'ci-required must include design-system-audit to fail if enforcement audit fails')
+})
+
+test('design-system-audit depends on browser and screenshot jobs to collect evidence', () => {
+  const auditJob = workflow.jobs['design-system-audit']
+  assert.ok(auditJob, 'design-system-audit job must exist (evidence chain)')
+  assert.ok(Array.isArray(auditJob.needs), 'audit job must have needs array')
+  assert.ok(auditJob.needs.includes('design-system-browser'),
+    'audit must depend on design-system-browser to collect evidence files before running')
+  assert.ok(auditJob.needs.includes('design-system-screenshot'),
+    'audit must depend on design-system-screenshot to ensure it completes first')
+  assert.ok(auditJob.needs.includes('design-system'),
+    'audit must depend on design-system (for storybook build artifacts)')
+})

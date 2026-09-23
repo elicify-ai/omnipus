@@ -838,19 +838,8 @@ jobs:
       # Both jobs (browser + screenshot) require the static build from this step,
       # so they must run after build:storybook.
       - run: npm run verify:design-system
-      # Enforcement audit (design-system/enforcement/contract.json): complete
-      # six-scanner audit at the checkpoint recorded in contract.json's
-      # currentCheckpoint (read by scripts/design-system-locks/current-checkpoint.mjs
-      # -- never hardcoded here) with the live token policy, canonical
-      # baseline/ledger (composed ONLY from lead-approved fragments), and composed
-      # public export→manifest→story→executed-check coverage. Intentionally a hard,
-      # blocking step with NO continue-on-error: unapproved existing debt and
-      # unsupported governed syntax are real gate failures today — suppressing the
-      # exit would manufacture a green the contract's failClosed clause forbids.
-      # Must run AFTER build:storybook/test:storybook/test:design-system:browser so
-      # --index dist/storybook/index.json and the --evidence executed-check files
-      # exist; coverage composition reads them.
-      - run: npm run audit:design-system
+      # Enforcement audit now runs in separate design-system-audit job after
+      # browser/screenshot tests complete (to collect evidence files).
       - run: npm run test:design-system:package
       # Build both revisions on this runner; a macOS baseline is not a Linux budget oracle.
       - name: Checkout immutable production baseline
@@ -906,12 +895,12 @@ jobs:
         env:
           STORYBOOK_STATIC_DIR: dist/storybook
           CI: "true"
-      - name: Upload browser artifacts for ${{ matrix.project }}
-        if: failure()
+      - name: Upload browser evidence for ${{ matrix.project }}
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: design-system-browser-${{ matrix.project }}
-          path: test-results/design-system-browser-artifacts
+          name: design-system-browser-evidence-${{ matrix.project }}
+          path: test-results/design-system-browser.json
           if-no-files-found: ignore
 
   design-system-screenshot:
@@ -944,6 +933,42 @@ jobs:
           name: design-system-appearance-diffs
           path: test-results/design-system-browser-artifacts/screenshot-*
           if-no-files-found: ignore
+
+  design-system-audit:
+    name: Design system enforcement audit
+    runs-on: ubuntu-latest
+    needs: [changes, setup, design-system, design-system-browser, design-system-screenshot]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.spa == 'true'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}
+      - run: tar -xf node_modules.tar
+      - name: Download browser evidence from all projects
+        uses: actions/download-artifact@v7
+        with:
+          path: /tmp/browser-evidence
+      - name: Merge browser evidence and run audit
+        run: |
+          mkdir -p test-results
+          # Storybook build and browser test results from the main job
+          if [ -d /tmp/browser-evidence ]; then
+            # Copy evidence from all browser projects
+            for artifact_dir in /tmp/browser-evidence/design-system-browser-evidence-*; do
+              if [ -d "$artifact_dir" ]; then
+                cp "$artifact_dir/test-results/design-system-browser.json" "test-results/design-system-storybook-$(basename $artifact_dir | sed 's/.*evidence-//')-mapped.json" 2>/dev/null || true
+              fi
+            done
+          fi
+          # Run the audit (note: Storybook index must be available from design-system job)
+          npm run audit:design-system
+        env:
+          CI: "true"
 
   wire-types-lint:
     name: Wire-Types Lint
@@ -3038,6 +3063,9 @@ jobs:
       - lint-spa
       - vitest
       - design-system
+      - design-system-browser
+      - design-system-screenshot
+      - design-system-audit
       - wire-types-lint
       - tool-error-status-lint
       - verify-contracts
