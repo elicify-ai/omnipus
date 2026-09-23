@@ -11,7 +11,7 @@
 //
 // State machine (8 states, 1 active, 7 terminal):
 //
-//	pending → approved            (approve action)
+//	pending → approved            (allow / allow_once action, ADR-091 D4)
 //	pending → denied_user         (deny action)
 //	pending → denied_cancel       (cancel action)
 //	pending → denied_timeout      (timer fires, configurable, default 600 s)
@@ -66,7 +66,11 @@ func (s ApprovalState) isTerminal() bool {
 	return false
 }
 
-// ApprovalAction is the action sent by the caller to the approve/deny/cancel endpoint.
+// ApprovalAction is this package's internal transition vocabulary — approve/deny/cancel —
+// distinct from the wire enum (ToolApprovalActionRequestAction: allow/allow_once/deny/cancel,
+// ADR-091 D4/FR-023). The gateway HTTP handler (rest_tool_registry.go) maps both wire values
+// "allow" and "allow_once" onto ApprovalActionApprove — they share the identical state
+// transition, differing only in whether a session grant is additionally recorded.
 type ApprovalAction string
 
 const (
@@ -467,7 +471,8 @@ func (r *approvalRegistryV2) notifyTimedOut(e *approvalEntry) {
 	}
 }
 
-// resolve applies an explicit action (approve/deny/cancel) to a pending approval.
+// resolve applies an explicit ApprovalAction (approve/deny/cancel) to a pending approval —
+// see ApprovalAction's doc comment for the wire-to-internal mapping.
 //
 // Resolution is BY APPROVAL ID and by nothing else (ADR-057 FR-081). The
 // registry map is keyed by approval id and this lookup is its only entry

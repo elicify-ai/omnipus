@@ -525,10 +525,9 @@ var upsertAgentFastTestHook func(attempt int)
 // repopulated from the entity store and, for a default-agent-ID change,
 // from the just-written config.json) rather than doing any disk I/O here —
 // see pkg/gateway/rest.go's fastAgentUpsert. Several of the wiring passes
-// below (e.g. wireExecToolDepsOn's per-agent ShellPolicy lookup) read the
-// agent's config back OUT of cfg.Agents.List by ID, not from a
-// caller-supplied *config.AgentConfig, which is why this looks the agent up
-// itself instead of accepting one.
+// below read the agent's config back OUT of cfg.Agents.List by ID, not from
+// a caller-supplied *config.AgentConfig, which is why this looks the agent
+// up itself instead of accepting one.
 //
 // Design, per the issue's own investigation comment: reuse NewAgentInstance
 // (the SAME constructor NewAgentRegistry itself calls per agent) plus the

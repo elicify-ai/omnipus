@@ -130,9 +130,6 @@ func firstForbiddenSubagent3pField(req *gen.AgentUpdateRequest) (string, bool) {
 	if req.ModelParams != nil {
 		return "model_params", true
 	}
-	if req.ShellPolicy != nil {
-		return "shell_policy", true
-	}
 	if req.MaxToolIterations != nil {
 		return "max_tool_iterations", true
 	}

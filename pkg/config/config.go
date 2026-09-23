@@ -619,10 +619,17 @@ type AgentConfig struct {
 	// Tools, when non-nil, overrides scope-based tool visibility for this agent.
 	// Nil means all tools allowed by the agent's type are available.
 	Tools *AgentToolsCfg `json:"tools,omitempty"`
-	// ShellPolicy configures per-agent shell command deny patterns.
-	// When non-nil, its settings are merged with the global ShellDenyPatterns
-	// at enforcement time.
-	ShellPolicy *AgentShellPolicy `json:"shell_policy,omitempty"`
+	// AutoApproveDisabled is the per-agent tighten-only override for
+	// ADR-091 D1's Auto shell-permission mode (sandbox.AutoApprove is the
+	// global default). false (default) means this agent follows the global
+	// default; true forces this agent's shell calls into Ask (every
+	// command prompts) even when the global default is Auto. There is
+	// deliberately no way to set this false when the global default is
+	// already false/Auto-disabled-by-policy — server-side tighten-only
+	// enforcement (FR-003) rejects any write that would loosen a single
+	// agent past the global default, mirroring the existing per-agent
+	// bash tool-policy override.
+	AutoApproveDisabled bool `json:"auto_approve_disabled,omitempty"`
 	// CreatedAt is the timestamp this agent record was created. Set once and
 	// never modified thereafter. Added by ADR-054 D2 (docs/internal/architecture/
 	// ADR-054-entity-config-separation.md) — the per-entity store's List()
@@ -644,19 +651,13 @@ type AgentConfig struct {
 // AgentType classifies an agent for scope-based tool visibility filtering.
 type AgentType string
 
-// AgentShellPolicy configures per-agent shell command deny patterns for the
-// workspace.shell tool. It is stored on AgentConfig so
-// that the enforcement layer can merge per-agent patterns with the global
-// OmnipusSandboxConfig.ShellDenyPatterns list.
+// AgentShellPolicy is unreferenced by config.go — kept here only because
+// pkg/tools/shell.go's ExecToolDeps.AgentShellPolicy field (ADR-091 lane L4,
+// out of this lane's scope) still names it as of this commit; deleting it
+// here would break that concurrently-developed, unowned file. Delete this
+// type in the same change that removes that field from pkg/tools/shell.go.
 type AgentShellPolicy struct {
-	// EnableDenyPatterns activates shell command deny-pattern checking for this
-	// agent. When false (default), neither custom nor global deny patterns are
-	// applied. Operators must explicitly opt in per agent or globally.
-	EnableDenyPatterns bool `json:"enable_deny_patterns,omitempty"`
-	// CustomDenyPatterns lists agent-specific shell command deny patterns
-	// (regular expressions). Merged with the global ShellDenyPatterns list when
-	// EnableDenyPatterns is true. Patterns that fail to compile are logged at
-	// Warn and skipped.
+	EnableDenyPatterns bool     `json:"enable_deny_patterns,omitempty"`
 	CustomDenyPatterns []string `json:"custom_deny_patterns,omitempty"`
 }
 
@@ -1637,14 +1638,6 @@ type CronToolsConfig struct {
 
 type ExecConfig struct {
 	ToolConfig `envPrefix:"OMNIPUS_TOOLS_EXEC_"`
-
-	// US-7: Interactive approval before exec commands.
-	// "ask" (default) prompts the user; "off" skips the prompt.
-	Approval string `json:"approval,omitempty" env:"OMNIPUS_TOOLS_EXEC_APPROVAL"`
-
-	// US-7/US-5: Glob patterns for binaries the exec tool is allowed to run.
-	// Non-empty list acts as an allowlist; all other commands are denied.
-	AllowedBinaries []string `json:"allowed_binaries,omitempty" env:"OMNIPUS_TOOLS_EXEC_ALLOWED_BINARIES"`
 
 	// US-14: Route exec child process HTTP traffic through the local SSRF proxy.
 	// When true (default), HTTP_PROXY and HTTPS_PROXY are set on child processes.

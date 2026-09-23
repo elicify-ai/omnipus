@@ -71,15 +71,6 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 			continue
 		}
 
-		// ADR-091 D2: the deny-pattern layer (globalShellDenyPatterns/
-		// agentShellPolicy, config.AgentShellPolicy) that used to populate
-		// ExecToolDeps here is retired — lane L4 removed its use
-		// (tools.ExecToolDeps no longer carries GlobalShellDenyPatterns/
-		// AgentShellPolicy). Wiring ExecToolDeps.ShellMode/
-		// ApprovalRequester/ApprovalGrants/CommandRules (the D1/D3/D7/D8
-		// replacement machinery) is lane L5's own config-surface removal
-		// pass, not yet landed on this integration branch — tracked there,
-		// not duplicated here.
 		deps := tools.ExecToolDeps{
 			GodMode:         godMode,
 			AuditFailClosed: resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),

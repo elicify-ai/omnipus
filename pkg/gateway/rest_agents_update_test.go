@@ -552,13 +552,14 @@ func TestUpdateAgent_Subagent3p_RejectsDelegationPolicy(t *testing.T) {
 }
 
 // TestUpdateAgent_Subagent3p_ForbiddenFields rejects the CLI-owned fields on PUT.
-// delegation_policy is covered separately by
-// TestUpdateAgent_Subagent3p_RejectsDelegationPolicy above (rest.go's
-// raw-body sniff) — ADR-037 retired it from the wire entirely, so it is no
-// longer part of this per-variant forbidden-field matrix at all; it 400s
-// unconditionally for every agent type via the sniff, not via this
-// executor-specific gate. The remaining 5 stay forbidden here because the
-// external CLI manages its own isolation/tools/skills (O13).
+// delegation_policy and shell_policy are both covered separately by their own
+// unconditional raw-body sniffs in rest_agents_update.go's validateRequest,
+// so neither is part of this per-variant forbidden-field matrix any more;
+// both 400 unconditionally for every agent type via their sniff, not via
+// this executor-specific gate (see
+// TestUpdateAgent_Subagent3p_RejectsDelegationPolicy and
+// TestUpdateAgent_RejectsRetiredShellPolicyField). The remaining 4 stay
+// forbidden here because the external CLI manages its own isolation/tools/skills (O13).
 func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 	id := createSubagent3p(t, api)
@@ -571,7 +572,6 @@ func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 		{"skills", `{"skills":["web-research"]}`},
 		{"fallback_models", `{"fallback_models":[{"model":"m","provider":"p"}]}`},
 		{"model_params", `{"model_params":{"temperature":0.5}}`},
-		{"shell_policy", `{"shell_policy":{"enable_deny_patterns":true}}`},
 		// W2a: max_tool_iterations joins the forbidden set on subagent_3p PUT
 		// (the external CLI runs its own turn loop — Omnipus cannot cap its
 		// per-turn tool-call budget). subagent3pForbiddenUpdateFields in
@@ -1071,8 +1071,7 @@ func TestUpdateAgent_ModelParams_PersistAndEcho(t *testing.T) {
 // TestUpdateAgent_ModelParams_PersistAndEcho_PartialPatch verifies the
 // field-level merge semantics documented at the persist site: a PUT that
 // sends only max_tokens must not clobber a temperature set by an earlier
-// PUT (mirrors the existing ShellPolicy partial-patch behavior in the same
-// handler).
+// PUT.
 func TestUpdateAgent_ModelParams_PersistAndEcho_PartialPatch(t *testing.T) {
 	api, _, _ := newModelParamsTestAPI(t)
 
@@ -1258,6 +1257,38 @@ func TestUpdateAgent_NoSandboxProfile_StillSucceeds(t *testing.T) {
 		"an ordinary update with no sandbox_profile key must still succeed; body: %s", w.Body.String())
 }
 
+// TestUpdateAgent_RejectsRetiredShellPolicyField pins ADR-091 removal item
+// R-2/SC-014: a stale client still sending shell_policy gets a hard 400 from
+// rest_agents_update.go's raw-body sniff — not a silent 200 with the field
+// dropped. decodeAndValidate's fast path (validate_inbound defaults false)
+// is a plain json.Decode with no DisallowUnknownFields, so without this
+// sniff the field would be silently ignored, exactly the "downgrade from
+// loud 400 to silent no-op" the sandbox_profile/delegation_policy sniffs
+// above already guard against.
+func TestUpdateAgent_RejectsRetiredShellPolicyField(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	id := createSubagent3p(t, api)
+
+	before, err := agentstore.New(api.homePath).Get(id)
+	require.NoError(t, err)
+
+	body := `{"shell_policy":{"enable_deny_patterns":true,"custom_deny_patterns":["rm -rf /"]}}`
+	w := httptest.NewRecorder()
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusBadRequest, w.Code,
+		"shell_policy must be rejected with 400; body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "shell_policy is retired")
+
+	// No side effect: the persisted entity record must be byte-for-byte
+	// unaffected by the rejected PUT.
+	after, err := agentstore.New(api.homePath).Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "agent record must be unchanged after a rejected shell_policy PUT")
+}
+
 // TestUpdateAgent_DoesNotChangeType proves Type is create-only. The
 // AgentUpdateRequest contract has no `type` field, so a PUT cannot
 // convert a custom into a worker or vice versa. The on-disk type is
@@ -1322,27 +1353,6 @@ func TestUpdateAgent_DoesNotChangeTypeOnWorker(t *testing.T) {
 		"update must not change Type on a worker either")
 }
 
-// TestUpdateAgent_ShellPolicy_InvalidRegex_Returns400 verifies that a
-// shell_policy.custom_deny_patterns entry with an invalid regexp is rejected
-// with 400 and the error message includes the bad pattern.
-func TestUpdateAgent_ShellPolicy_InvalidRegex_Returns400(t *testing.T) {
-	api := buildGodModeTestAPI(t, false /* allowGodMode — not relevant for this check */)
-
-	body := `{"shell_policy":{"enable_deny_patterns":true,"custom_deny_patterns":["[invalid-regexp"]}}`
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code,
-		"invalid regexp in custom_deny_patterns must return 400; body: %s", w.Body.String())
-
-	var resp map[string]string
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	assert.Contains(t, resp["error"], "[invalid-regexp",
-		"error message must include the bad pattern")
-}
-
 // TestUpdateAgent_PATCH_Returns405 verifies that a PATCH request to
 // /api/v1/agents/{id} returns 405 Method Not Allowed. PATCH used to dispatch
 // to patchAgentOwnership (the agent-ownership admin endpoint); that handler
@@ -1362,93 +1372,6 @@ func TestUpdateAgent_PATCH_Returns405(t *testing.T) {
 
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code,
 		"PATCH /api/v1/agents/{id} must return 405 (no PATCH handler registered anymore); body: %s", w.Body.String())
-}
-
-// TestUpdateAgent_ShellPolicy_ValidRegexes_Returns200 verifies that valid
-// regexps in custom_deny_patterns are accepted.
-func TestUpdateAgent_ShellPolicy_ValidRegexes_Returns200(t *testing.T) {
-	api := buildGodModeTestAPI(t, false /* allowGodMode */)
-
-	body := `{"shell_policy":{"enable_deny_patterns":true,"custom_deny_patterns":["rm\\s+-rf","curl\\s+.*(evil|malware)"]}}`
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-
-	assert.Equal(t, http.StatusOK, w.Code,
-		"valid regexps in custom_deny_patterns must return 200; body: %s", w.Body.String())
-}
-
-// TestUpdateAgent_ShellPolicy_PartialPatch_EnableDenyPatternsPreserved is a
-// regression test for the enable_deny_patterns null-poisoning bug.
-//
-// When a caller PATCHes only custom_deny_patterns (omitting enable_deny_patterns),
-// the prior value of enable_deny_patterns must be preserved in config.json.
-// The bug: req.ShellPolicy.EnableDenyPatterns was *bool; writing it unconditionally
-// persisted null, which decoded as false on the next read.
-func TestUpdateAgent_ShellPolicy_PartialPatch_EnableDenyPatternsPreserved(t *testing.T) {
-	api := buildGodModeTestAPI(t, false /* allowGodMode */)
-
-	// First PATCH: set enable_deny_patterns=true.
-	body1 := `{"shell_policy":{"enable_deny_patterns":true,"custom_deny_patterns":["rm\\s+-rf"]}}`
-	w1 := httptest.NewRecorder()
-	r1 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body1))
-	r1.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w1, r1)
-	require.Equal(t, http.StatusOK, w1.Code, "first PATCH must succeed; body: %s", w1.Body.String())
-
-	// Second PATCH: send only custom_deny_patterns (no enable_deny_patterns key).
-	body2 := `{"shell_policy":{"custom_deny_patterns":["curl\\s+evil"]}}`
-	w2 := httptest.NewRecorder()
-	r2 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body2))
-	r2.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w2, r2)
-	require.Equal(t, http.StatusOK, w2.Code, "second PATCH must succeed; body: %s", w2.Body.String())
-
-	// Read the entity store and confirm enable_deny_patterns is still true
-	// (not null or false). ADR-054 + the config.AgentsConfig.List = `json:"-"`
-	// follow-up: agents.list can never be marshaled into config.json, so the
-	// persisted value must be read from the agentstore entity record instead.
-	rec, err := agentstore.New(api.homePath).Get("test-agent")
-	require.NoError(t, err, "test-agent must be persisted")
-	require.NotNil(t, rec.ShellPolicy, "shell_policy must exist in persisted config")
-	assert.True(t, rec.ShellPolicy.EnableDenyPatterns,
-		"enable_deny_patterns must remain true after partial PATCH (null-poisoning regression)")
-}
-
-// TestUpdateAgent_ShellPolicy_EmptyArrayClearsPatterns is a regression test
-// for the clear-path silent drop: an explicitly-sent EMPTY
-// custom_deny_patterns array must overwrite (clear) the persisted list.
-// The bug: a `len(...) > 0` guard skipped empty arrays, so deleting the last
-// pattern in the SPA produced a 200 PUT whose delete was silently ignored —
-// the stale pattern list resurfaced on the next read (found live 2026-07-03).
-// Field-absent (nil) still preserves, per the partial-PATCH test above.
-func TestUpdateAgent_ShellPolicy_EmptyArrayClearsPatterns(t *testing.T) {
-	api := buildGodModeTestAPI(t, false /* allowGodMode */)
-
-	// Seed a pattern.
-	body1 := `{"shell_policy":{"enable_deny_patterns":true,"custom_deny_patterns":["rm\\s+-rf"]}}`
-	w1 := httptest.NewRecorder()
-	r1 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body1))
-	r1.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w1, r1)
-	require.Equal(t, http.StatusOK, w1.Code, "seed PATCH must succeed; body: %s", w1.Body.String())
-
-	// Clear with an explicit empty array.
-	body2 := `{"shell_policy":{"custom_deny_patterns":[]}}`
-	w2 := httptest.NewRecorder()
-	r2 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body2))
-	r2.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w2, r2)
-	require.Equal(t, http.StatusOK, w2.Code, "clear PATCH must succeed; body: %s", w2.Body.String())
-
-	rec, err := agentstore.New(api.homePath).Get("test-agent")
-	require.NoError(t, err, "test-agent must be persisted")
-	require.NotNil(t, rec.ShellPolicy, "shell_policy must exist in persisted config")
-	assert.Empty(t, rec.ShellPolicy.CustomDenyPatterns,
-		"custom_deny_patterns must be cleared by an explicit empty array")
-	assert.True(t, rec.ShellPolicy.EnableDenyPatterns,
-		"enable_deny_patterns must be untouched by the patterns-only clear")
 }
 
 // TestUpdateAgent_DefaultToggle_RegistryAndRoutingAgree is the DoD test for the

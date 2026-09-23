@@ -432,10 +432,9 @@ var blockedConfigKeys = []blockedConfigKey{
 		ReadOKReason: "readable with the write blocked. The chunk-a-secret concern it was denied for is not addressed by hiding a threshold that can be measured in a few calls",
 	},
 	{
-		Key: "tools.exec",
-		Reason: "it holds the exec binary allow-list, the exec approval mode and the egress proxy " +
-			"toggle for spawned processes",
-		ReadOKReason: "which binaries may be run and whether approval is required — the answer to 'why was my command refused'",
+		Key:          "tools.exec",
+		Reason:       "it holds the egress proxy toggle for spawned processes",
+		ReadOKReason: "whether the egress proxy is enabled — the answer to 'why did my command's network access behave this way'",
 	},
 	{
 		Key: "tools.mcp",

@@ -280,31 +280,20 @@ func (nal *newAgentLoop) initializeAudit() (*AgentLoop, bool, error) {
 
 // initializeSecurity builds policy enforcement, sandboxing, prompt protection, and the exec proxy.
 func (nal *newAgentLoop) initializeSecurity() {
-	// SEC-05/SEC-07: Build the policy evaluator from the live config.
-	// `cfg.Tools.Exec.AllowedBinaries` is the single source of truth for the
-	// exec allowlist (the same field the UI writes to via
-	// /api/v1/security/exec-allowlist). Constructing with an explicit
-	// SecurityConfig avoids the deny-everything trap of `NewEvaluator(nil)`.
+	// There is no config source for an exec binary allowlist any more, so
+	// the evaluator below always constructs with an empty allowlist and the
+	// "allow" default policy.
 	//
-	// Default policy derivation:
-	//   - A non-empty allowlist means the operator opted into SEC-05 binary
-	//     restriction — default_policy is "deny" so unlisted binaries are blocked.
-	//   - An empty allowlist means no opt-in — default_policy is "allow" so
-	//     the existing guardCommand() checks remain the only exec restriction.
-	// This preserves backward compatibility for agents that never touched the
-	// allowlist, while honoring fail-closed semantics for agents that did.
-	defaultPolicy := policy.PolicyAllow
-	if len(nal.cfg.Tools.Exec.AllowedBinaries) > 0 {
-		defaultPolicy = policy.PolicyDeny
-	}
+	// policy.Evaluator/PolicyAuditor are still constructed here because
+	// pkg/tools/shell.go's ExecPolicyAuditor interface and
+	// ExecToolDeps.PolicyAuditor field (ADR-091 lane L4, out of this lane's
+	// scope) still consume policy.Decision/PolicyAuditor as of this commit —
+	// deleting pkg/policy/evaluator.go or auditor.go here would break that
+	// concurrently-developed, unowned file. pkg/policy/saturation.go is
+	// unrelated to ADR-091 (consumed by pkg/gateway/gateway_boot.go for the
+	// approval-saturation cap) and was never a candidate for deletion.
 	secCfg := &policy.SecurityConfig{
-		DefaultPolicy: defaultPolicy,
-		Policy: policy.PolicySection{
-			Exec: policy.ExecPolicy{
-				AllowedBinaries: nal.cfg.Tools.Exec.AllowedBinaries,
-				Approval:        nal.cfg.Tools.Exec.Approval,
-			},
-		},
+		DefaultPolicy: policy.PolicyAllow,
 	}
 	policyEval := policy.NewEvaluator(secCfg)
 

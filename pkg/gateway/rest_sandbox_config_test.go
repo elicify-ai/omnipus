@@ -313,95 +313,6 @@ func TestHandleSandboxConfig_SSRFAllowInternal_HotReload(t *testing.T) {
 		"ssrf.allow_internal hot-reloads via 2s config poll")
 }
 
-// --- shell_deny_patterns field tests ---
-//
-// Parity with the per-agent shell_policy.custom_deny_patterns validation
-// (TestUpdateAgent_ShellPolicy_InvalidRegex_Returns400,
-// rest_agents_god_mode_test.go) and the documented contract ("Must each be
-// valid Go regexp patterns (400 on invalid regexp)",
-// gen.SandboxConfig.ShellDenyPatterns doc comment).
-
-// TestHandleSandboxConfig_ShellDenyPatterns_ValidAccepted verifies that a
-// well-formed regexp list is accepted and persisted.
-func TestHandleSandboxConfig_ShellDenyPatterns_ValidAccepted(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	w := sandboxConfigPUT(t, api, `{"shell_deny_patterns":["^\\s*rm\\s+-rf","curl.*\\|.*sh"]}`)
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var onDisk map[string]any
-	require.NoError(t, json.Unmarshal(raw, &onDisk))
-	sandboxDisk, _ := onDisk["sandbox"].(map[string]any)
-	require.NotNil(t, sandboxDisk)
-	patterns, _ := sandboxDisk["shell_deny_patterns"].([]any)
-	assert.Equal(t, []any{`^\s*rm\s+-rf`, `curl.*\|.*sh`}, patterns,
-		"valid shell_deny_patterns must be persisted on disk")
-}
-
-// TestHandleSandboxConfig_ShellDenyPatterns_InvalidRegexRejected verifies
-// that a malformed regexp is rejected with 400 BEFORE any disk write —
-// the bug this test guards against: compileDenyPatterns
-// (pkg/tools/shell_guard.go) silently drops any pattern that fails to
-// compile (logs Warn, continues), so a naive PUT that skipped this
-// validation would return 200 OK, persist the bad pattern, and have it
-// silently never enforce anything.
-func TestHandleSandboxConfig_ShellDenyPatterns_InvalidRegexRejected(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	// Seed a known-good value so we can assert it survives the failed PUT.
-	seedW := sandboxConfigPUT(t, api, `{"shell_deny_patterns":["curl.*\\|.*sh"]}`)
-	require.Equal(t, http.StatusOK, seedW.Code, "body: %s", seedW.Body.String())
-
-	w := sandboxConfigPUT(t, api, `{"shell_deny_patterns":["[invalid-regexp"]}`)
-	assert.Equal(t, http.StatusBadRequest, w.Code,
-		"invalid regexp in shell_deny_patterns must return 400; body: %s", w.Body.String())
-
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp["error"], "[invalid-regexp",
-		"error message must name the offending pattern")
-
-	// Confirm the failed PUT did not clobber the previously-seeded value.
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var onDisk map[string]any
-	require.NoError(t, json.Unmarshal(raw, &onDisk))
-	sandboxDisk, _ := onDisk["sandbox"].(map[string]any)
-	require.NotNil(t, sandboxDisk)
-	patterns, _ := sandboxDisk["shell_deny_patterns"].([]any)
-	assert.Equal(t, []any{`curl.*\|.*sh`}, patterns,
-		"failed PUT must not mutate the previously-persisted shell_deny_patterns")
-}
-
-// TestHandleSandboxConfig_ShellDenyPatterns_AtomicWithOtherFields verifies
-// that a PUT mixing a valid field with an invalid shell_deny_patterns entry
-// rolls back atomically — matching TestHandleSandboxConfig_AtomicValidation
-// for allowed_paths.
-func TestHandleSandboxConfig_ShellDenyPatterns_AtomicWithOtherFields(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	// Seed a known-good allowed_paths value so we can assert it survives.
-	seedW := sandboxConfigPUT(t, api, `{"allowed_paths":["/var/log"]}`)
-	require.Equal(t, http.StatusOK, seedW.Code, "body: %s", seedW.Body.String())
-
-	// PUT a *different* valid allowed_paths value alongside an invalid
-	// shell_deny_patterns entry — the whole transaction must roll back.
-	w := sandboxConfigPUT(t, api,
-		`{"allowed_paths":["/etc"],"shell_deny_patterns":["(unterminated"]}`)
-	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-
-	raw, err := os.ReadFile(api.configPath())
-	require.NoError(t, err)
-	var onDisk map[string]any
-	require.NoError(t, json.Unmarshal(raw, &onDisk))
-	sandboxDisk, _ := onDisk["sandbox"].(map[string]any)
-	require.NotNil(t, sandboxDisk)
-	paths, _ := sandboxDisk["allowed_paths"].([]any)
-	assert.Equal(t, []any{"/var/log"}, paths,
-		"the whole PUT must roll back atomically when shell_deny_patterns fails validation")
-}
-
 // --- shared handler tests ---
 
 // TestHandleSandboxConfig_PartialRestartFlag verifies that a PUT carrying
@@ -501,6 +412,69 @@ func TestHandleSandboxConfig_GET_ReturnsShape(t *testing.T) {
 	assert.True(t, hasEnabled, `ssrf.enabled must be present`)
 	_, hasAllowInternal := ssrf["allow_internal"]
 	assert.True(t, hasAllowInternal, `ssrf.allow_internal must be present`)
+
+	// ADR-091 D1: auto_approve must be present. (This harness builds a bare
+	// config.Config{} literal, not config.DefaultConfig(), so it does not
+	// carry the fresh-install true seed — see
+	// TestDefaultConfig_SeedsAutoApprove in pkg/config for that assertion.)
+	_, hasAutoApprove := resp["auto_approve"]
+	assert.True(t, hasAutoApprove, `response must include "auto_approve"`)
+}
+
+// TestHandleSandboxConfig_AutoApprove_PersistAndEcho is the ADR-091 D1
+// round trip: PUT auto_approve=false, confirm the PUT response echoes it,
+// confirm it is hot-reloaded (requires_restart is NOT forced true by this
+// field alone), and confirm a follow-up GET independently reflects the
+// persisted value — not just the PUT response, which could echo a value
+// that never landed.
+func TestHandleSandboxConfig_AutoApprove_PersistAndEcho(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	w := sandboxConfigPUT(t, api, `{"auto_approve":false}`)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var putResp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &putResp))
+	assert.Equal(t, false, putResp["auto_approve"], "PUT response must echo the new value")
+	assert.Equal(t, false, putResp["requires_restart"],
+		"auto_approve is hot-reload — a PUT touching only it must not require a restart")
+
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var onDisk map[string]any
+	require.NoError(t, json.Unmarshal(raw, &onDisk))
+	sandboxDisk, _ := onDisk["sandbox"].(map[string]any)
+	require.NotNil(t, sandboxDisk)
+	assert.Equal(t, false, sandboxDisk["auto_approve"], "auto_approve=false must be persisted on disk")
+
+	getW := httptest.NewRecorder()
+	getR := httptest.NewRequest(http.MethodGet, "/api/v1/security/sandbox-config", nil)
+	api.HandleSandboxConfig(getW, getR)
+	require.Equal(t, http.StatusOK, getW.Code, "get body: %s", getW.Body.String())
+	var getResp map[string]any
+	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &getResp))
+	assert.Equal(t, false, getResp["auto_approve"], "GET must independently reflect the persisted value")
+}
+
+// TestHandleSandboxConfig_AutoApprove_RequiresReAuth verifies that the
+// global auto_approve write is routed through the same password step-up
+// God Mode and credential writes use (ADR-091 D1/FR-045) — a PUT with no
+// fresh re-auth token is refused, even though this handler's OTHER fields
+// (e.g. ssrf.allow_internal) are also hot-reload; the gate is on the whole
+// handler via authenticateAndDecode, not per-field.
+func TestHandleSandboxConfig_AutoApprove_RequiresReAuth(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	body := `{"auto_approve":false}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	// Deliberately NOT withReAuthAdmin — an authenticated admin with no
+	// fresh re-auth consent token.
+	r = withAdminRole(r)
+	api.HandleSandboxConfig(w, r)
+
+	assert.NotEqual(t, http.StatusOK, w.Code,
+		"auto_approve write without fresh re-auth must be refused; body: %s", w.Body.String())
 }
 
 // TestHandleSandboxConfig_AtomicValidation verifies that when the PUT
