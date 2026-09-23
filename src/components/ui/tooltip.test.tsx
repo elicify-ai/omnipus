@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { Tooltip } from './tooltip'
+import { Button } from './button'
 
 describe('Tooltip — reveal/dismiss', () => {
   it('is hidden until hovered, and hides again on mouse leave', () => {
@@ -94,7 +95,7 @@ describe('Tooltip — accessibility contract', () => {
         <Tooltip content="Explanation text" data-testid="trigger">
           <span>Auto → Ask</span>
         </Tooltip>
-        <button type="button">Next control</button>
+        <Button type="button">Next control</Button>
       </div>,
     )
     const trigger = screen.getByTestId('trigger')

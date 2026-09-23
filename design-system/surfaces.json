@@ -7456,6 +7456,14 @@
     {
       "source": "src/routes/onboarding.tsx",
       "lane": 1
+    },
+    {
+      "source": "src/components/chat/ChatModeBadge.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/composer/AutoApprovePicker.tsx",
+      "lane": 3
     }
   ]
 }
