@@ -20,7 +20,7 @@ import React from 'react'
 // tests below are written directly against the implemented behavior.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { AppState, NotificationList } from '@/lib/api/generated/openapi-types'
 
@@ -56,6 +56,14 @@ vi.mock('@/lib/api', async (importOriginal) => {
     // the coexistence test needs it to actually mount) resolves workspace
     // names via this call.
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
+    // ADR-092 FR-034: GodModeActiveBanner now mounts app-wide from AppShell
+    // and queries god-mode status directly. Default to a definitive "off"
+    // response so the tests below — none of which are about god-mode —
+    // don't each pick up an unmocked, always-failing fetch and a stray
+    // "status unavailable" banner. Tests below that DO cover the banner
+    // override this per-case.
+    fetchGodMode: vi.fn().mockResolvedValue({ enabled: false, available: false, supported: true, persisted: false }),
+    setGodMode: vi.fn(),
   }
 })
 
@@ -596,5 +604,63 @@ describe('AppShell — cross-workspace approval banner coexists with other banne
     // <main> (flex-1) absorbs the rest.
     const main = screen.getByTestId('app-main-content')
     expect(main).toBeInTheDocument()
+  })
+})
+
+// ── God-mode active banner is app-wide (ADR-092 FR-034) ──────────────────────
+//
+// Before this ADR the banner only rendered inside GatewaySection (Settings →
+// Gateway) — an operator on any other screen had no signal god-mode was on.
+// It now mounts from AppShell itself, so every screen shows it, and it
+// carries its own "Turn off" action since a GodModeControl toggle may not be
+// anywhere nearby. Uses `identity.mode: 'platform'` so the step-up gate opens
+// the simpler ConfirmDialog path rather than the password ReAuthDialog.
+describe('AppShell — god-mode active banner (ADR-092 FR-034)', () => {
+  const PLATFORM_APP_STATE: AppState = {
+    onboarding_complete: true,
+    dev_mode_bypass: false,
+    identity: { mode: 'platform', edition: 'hosted', signed_in: true },
+  }
+
+  it('renders the active banner app-wide when god-mode is on, and the Turn off action disables it', async () => {
+    vi.mocked(api.fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+    vi.mocked(api.fetchGodMode).mockResolvedValue({
+      enabled: true,
+      available: true,
+      supported: true,
+      persisted: true,
+    })
+    vi.mocked(api.setGodMode).mockResolvedValue({ enabled: false, restart_required: false })
+
+    renderShell()
+
+    const banner = await waitFor(() => screen.getByTestId('god-mode-active-banner'))
+    expect(banner).toHaveAttribute('role', 'alert')
+    expect(banner).toHaveTextContent(/god-mode is active/i)
+
+    fireEvent.click(screen.getByTestId('god-mode-banner-turn-off'))
+    // Confirm mode (platform identity): a ConfirmDialog opens, no password re-entry.
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable god mode' }))
+
+    await waitFor(() => {
+      expect(api.setGodMode).toHaveBeenCalledWith(false)
+    })
+  })
+
+  it('renders nothing when god-mode is off', async () => {
+    vi.mocked(api.fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+    vi.mocked(api.fetchGodMode).mockResolvedValue({
+      enabled: false,
+      available: false,
+      supported: true,
+      persisted: false,
+    })
+
+    renderShell()
+
+    await waitFor(() => expect(api.fetchGodMode).toHaveBeenCalled())
+    expect(screen.queryByTestId('god-mode-active-banner')).not.toBeInTheDocument()
   })
 })

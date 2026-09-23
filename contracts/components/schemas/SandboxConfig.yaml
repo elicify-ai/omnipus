@@ -76,12 +76,17 @@ properties:
   god_mode:
     type: boolean
     description: >
-      O14 global god-mode ("bypass-permissions") runtime state. When true, every
-      agent's tool policy is floored at "allow", the kernel sandbox is off,
-      network egress is open, and the shell guard is off — regardless of
-      per-agent profiles. Audit logging, the prompt-injection guard, and rate
-      limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password
-      step-up). Always false when god mode is unavailable.
+      O14 global god-mode ("bypass-permissions") runtime state. When true,
+      every agent's tool-policy ceiling is floored at "allow" (for every
+      tool, not just bash) — which also makes `auto_approve` below moot for
+      that agent, since Auto only ever applies to a tool resolved to "ask"
+      and nothing is left in "ask" state once the ceiling is floored. The
+      kernel sandbox is off and network egress is open. Operator `deny`
+      command rules (ADR-092 D3) still apply — the floor cannot erase them.
+      Audit logging, the prompt-injection guard, and rate limiting stay on.
+      Toggled via POST /api/v1/gateway/god-mode (password step-up). Always
+      false when god mode is unavailable. Independent of `auto_approve` —
+      the two are separate mechanisms.
     example: false
   god_mode_available:
     type: boolean
@@ -111,16 +116,38 @@ properties:
       nothing at runtime, so the UI must present the control as locked rather
       than offering a write that silently does nothing.
     example: false
-  shell_deny_patterns:
-    type: array
-    items:
-      type: string
+  auto_approve:
+    type: boolean
     description: >
-      Global fallback shell command deny-list (regex entries).
-      Per-agent custom patterns extend this list.
-    example:
-      - "^curl\\s"
-      - "^wget\\s"
+      ADR-092's global default for Auto-approve (fresh-install default:
+      true). Auto is NOT a tool-policy value — every tool, including bash,
+      keeps the ordinary three-value policy ("allow" runs unprompted with
+      none of this machinery, "deny" makes the tool invisible to the
+      agent, "ask" is where Auto applies). For every tool currently
+      resolved to "ask", Auto-approve ON auto-approves the cases the
+      pre-flight/rule matcher can positively clear against the kernel
+      sandbox (ADR-092 D3/D7/D8) and still prompts for everything else;
+      Auto-approve OFF means an "ask" tool always prompts. Auto never
+      touches an "allow" or "deny" tool, and never reaches past what the
+      kernel sandbox can actually confine (no active kernel sandbox ⇒
+      nothing can be positively cleared ⇒ every "ask" call prompts
+      regardless of this setting — see SandboxStatus.kernel_sandbox_active).
+
+      This is the GLOBAL default only. Two narrower scopes layer on top,
+      neither stored here: a per-agent setting
+      (Agent.auto_approve_disabled) that may only turn Auto OFF for that
+      agent, and a per-chat session modifier
+      (SessionModeUpdateFrame, asyncapi.yaml) that may turn Auto ON OR OFF
+      for that one chat — deliberately allowed to loosen, since a human is
+      present in that session; every other scope in this contract is
+      tighten-only.
+
+      Deliberately named `auto_approve`, not `mode` — this schema's
+      existing `mode` field is the unrelated kernel sandbox enforcement
+      mode (off/permissive/enforce); reusing that key for a different
+      value domain would collide. Hot-reloaded, like the rest of this
+      handler's fields — no restart required.
+    example: true
   requires_restart:
     type: boolean
     description: >

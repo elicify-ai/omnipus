@@ -34,6 +34,30 @@ export function formatBashCommand(command: string): { envPrefix: string; binary:
   return { envPrefix, binary, args }
 }
 
+/**
+ * Splits `commandText` around the first occurrence of `binary` so a caller
+ * can render the resolved binary highlighted, matching formatBashCommand's
+ * existing highlight treatment. Used for ADR-092 D4's per-segment approval
+ * display (ToolApprovalModal.tsx), where each CommandSegmentInfo carries its
+ * own `resolved_binary` rather than reusing the whole-command env/binary
+ * split above. Falls back to putting the whole text in `after` (nothing
+ * highlighted) when there is no binary to find, or it does not literally
+ * appear in the text — never throws, never guesses.
+ */
+export function highlightBinaryInText(
+  commandText: string,
+  binary?: string,
+): { before: string; binary: string; after: string } {
+  if (!binary) return { before: '', binary: '', after: commandText }
+  const idx = commandText.indexOf(binary)
+  if (idx === -1) return { before: '', binary: '', after: commandText }
+  return {
+    before: commandText.slice(0, idx),
+    binary: commandText.slice(idx, idx + binary.length),
+    after: commandText.slice(idx + binary.length),
+  }
+}
+
 export function BashApprovalPreview({ args }: ToolApprovalPreviewContext) {
   const command = typeof args.command === 'string' && args.command.length > 0 ? args.command : null
   if (!command) return null

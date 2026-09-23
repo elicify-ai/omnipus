@@ -1,0 +1,92 @@
+title: CommandSegmentInfo
+description: >
+  ADR-092 D3/D4/D7/D8. One chained-command segment (split via
+  splitShellSegments/shellCommandHead) awaiting an approval decision, listed
+  inside ToolApprovalRequiredFrame.segments. Only unmatched segments appear
+  here — a segment already covered by an existing D3 rule or session grant
+  is resolved server-side without a prompt (D4: "a later partial match
+  prompts only the unmatched segment(s)"). Documentation copy — the
+  canonical, code-generating definition is the inline schema of the same
+  name in asyncapi.yaml (referenced from that file's ToolApprovalRequiredFrame),
+  per the same ADR-034-precedent reasons ToolApprovalRequiredFrame itself is
+  not $ref'd from openapi.yaml.
+type: object
+required:
+  - segment_index
+  - command_text
+additionalProperties: false
+properties:
+  segment_index:
+    type: integer
+    minimum: 0
+    description: >
+      Zero-based position of this segment among the full chained command's
+      segments (splitShellSegments order).
+    example: 0
+  command_text:
+    type: string
+    minLength: 1
+    description: This segment's raw command text (post-split, pre-resolution).
+    example: "rm -rf /etc/foo"
+  resolved_binary:
+    type: string
+    description: >
+      Absolute path the segment's leading token resolved to against the
+      child's effective PATH/env (D3 resolve-and-verify, FR-040). Absent
+      when the head could not be resolved to a literal executable — a
+      normalised head (shellCommandHeadDetailed's third return), a
+      quote-blind over-split, a redirection-only segment, or brace
+      expansion (FR-020/FR-040 blind spots). Such a segment always routes
+      to ask and offers no D3 rule match, only this dialog.
+    example: "/bin/rm"
+  args:
+    type: array
+    items:
+      type: string
+    description: Argument tokens following the resolved binary, as split.
+    example:
+      - "-rf"
+      - "/etc/foo"
+  classification:
+    type: string
+    enum:
+      - read
+      - write
+      - read_write
+      - none
+    description: >
+      FR-038 filesystem-operation classification for the path this
+      segment's D7 pre-flight escalation concerns. "none" when this segment
+      carries no filesystem escalation (an ordinary D3/D4 command-rule
+      prompt, or a D8-only network escalation).
+    example: write
+  path:
+    type: string
+    description: >
+      The filesystem path FR-038's classifier extracted for this segment.
+      Present iff classification is read/write/read_write.
+    example: "/etc/foo"
+  network_required:
+    type: boolean
+    description: >
+      FR-043's network-need classifier verdict for this segment — true
+      when approving widens the session's ConnectPortRules to
+      DefaultConnectPorts (D8/FR-044). Independent of `classification`: a
+      segment can need both a filesystem and a network grant at once (e.g.
+      `curl -o /etc/foo https://x`).
+    example: false
+  suggested_prefix:
+    type: string
+    description: >
+      FR-026's suggested-prefix algorithm output for this segment, shown
+      next to the "prefix" scope radio when the user picks Allow. Absent
+      when prefix_available is false.
+    example: "rm"
+  prefix_available:
+    type: boolean
+    description: >
+      False on Windows (FR-041: exact-command match only, no prefix
+      option, no chained-segment splitting) or when FR-026's algorithm
+      found no stop token narrower than the full command. The dialog omits
+      the "prefix" scope radio for this segment when false.
+    example: true

@@ -314,6 +314,18 @@ export interface SessionChatState {
    */
   cancelStage: 'graceful' | 'hard' | 'detached' | null
   /**
+   * ADR-092: this session's resolved per-chat Auto-approve state, or null
+   * when no `session_mode_updated` ack has arrived yet for this session
+   * (the header badge falls back to the global x per-agent resolution in
+   * that case). Set by `session_mode_updated` frames; there is no
+   * "rejected" case to handle — the server always acknowledges a
+   * `session_mode_update` send. Distinct from the wire's own
+   * `auto_approve_effective: boolean` (never null) — the extra null state
+   * here is purely "we haven't heard back yet", not a value the server
+   * ever sends.
+   */
+  autoApproveEffective?: boolean | null
+  /**
    * ISO timestamp of the most recent server frame the SPA has applied.
    * Used as the `since` cursor in attach_session to avoid replaying already-seen frames.
    */
@@ -639,6 +651,8 @@ export interface ChatStore {
   lastUserMessageAt: number | null
   /** B3: cancel progress stage for the active session, or null when idle. */
   cancelStage: 'graceful' | 'hard' | 'detached' | null
+  /** ADR-092: active session's resolved per-chat Auto-approve state. See SessionChatState.autoApproveEffective. */
+  autoApproveEffective?: boolean | null
   /** ISO timestamp of the most recent server frame for the active session. */
   lastReceivedEventTime: string | null
   /**
@@ -894,6 +908,16 @@ export interface ChatStore {
    * re-hydrate.
    */
   sendAskUserAnswer: (answer: Omit<AskUserAnswerFrame, 'type'>) => void
+  /**
+   * ADR-092: set or clear this session's per-chat Auto-approve modifier
+   * (`session_mode_update`). A human-only action — nothing agent-facing
+   * calls this. `true` turns Auto ON for this chat even when the resolved
+   * agent x global default has it off (the one deliberate loosening
+   * exception in this contract); `false` turns it off; `null` clears the
+   * modifier and reverts to the inherited agent/global resolution. Always
+   * acknowledged by a `session_mode_updated` frame — no rejection case.
+   */
+  sendSessionModeUpdate: (sessionId: string, autoApprove: boolean | null) => void
 
   // C8: defensively clear in-flight/streaming state for every session bucket.
   // Called when the stream is terminated by something OTHER than a clean done

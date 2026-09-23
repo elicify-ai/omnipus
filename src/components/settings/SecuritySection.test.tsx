@@ -35,6 +35,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSkillTrust: vi.fn(),
     updateSkillTrust: vi.fn(),
     fetchAppState: vi.fn(),
+    // ADR-092: AutoApproveControl mounts in the primary (always-rendered)
+    // layer, unlike SandboxSection (Advanced, collapsed by default) — its
+    // ['sandbox-config'] query fires on every render, so it needs a mock
+    // here too, not just inside SandboxSection's own test file.
+    fetchSandboxConfig: vi.fn(),
+    updateSandboxConfig: vi.fn(),
   }
 })
 
@@ -64,6 +70,8 @@ import {
   fetchSkillTrust,
   rotateCredentials,
   fetchAppState,
+  fetchSandboxConfig,
+  updateSandboxConfig,
 } from '@/lib/api'
 import type { AppState } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -187,6 +195,7 @@ beforeEach(() => {
   vi.mocked(fetchDoctorResults).mockResolvedValue(null)
   vi.mocked(fetchSkillTrust).mockResolvedValue(SKILL_TRUST_RESPONSE)
   vi.mocked(fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
+  vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
 })
 
 // ── US-B1: Two-layer IA ───────────────────────────────────────────────────────
@@ -319,6 +328,79 @@ describe('SecuritySection — US-B2 risky policy mode control', () => {
     })
     // No standing badge because policyMode is still 'deny' (persisted)
     expect(screen.queryByTestId('risky-standing-badge')).not.toBeInTheDocument()
+  })
+})
+
+// ── ADR-092: global Auto-approve switch ───────────────────────────────────────
+
+describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
+  it('reflects the persisted auto_approve value from sandbox-config', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: true } as never)
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('auto-approve-global-switch')).toHaveAttribute('aria-checked', 'true')
+    })
+  })
+
+  it('defaults to off when auto_approve is false', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('auto-approve-global-switch')).toHaveAttribute('aria-checked', 'false')
+    })
+  })
+
+  it('toggling opens a confirmation, and confirming saves through the re-auth-gated endpoint', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    vi.mocked(updateSandboxConfig).mockResolvedValue({ auto_approve: true, saved: true } as never)
+    renderSection()
+    // useStepUp's mode (password vs. confirm) depends on the SEPARATE
+    // ['app-state'] query resolving — wait for it explicitly so the click
+    // below doesn't race ahead and open the wrong dialog.
+    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+
+    const toggle = await screen.findByTestId('auto-approve-global-switch')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('Turn Auto-approve on?')
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Turn Auto-approve on' }))
+
+    await waitFor(() => {
+      expect(vi.mocked(updateSandboxConfig).mock.calls[0][0]).toEqual({ auto_approve: true })
+    })
+  })
+
+  it('cancelling the confirmation performs no save', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    renderSection()
+    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+
+    const toggle = await screen.findByTestId('auto-approve-global-switch')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    fireEvent.click(toggle)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).toBeNull()
+    })
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
+  })
+
+  it('shows an error state when the sandbox-config fetch fails', async () => {
+    vi.mocked(fetchSandboxConfig).mockRejectedValue(new Error('network error'))
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByText(/failed to load the auto-approve setting/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('auto-approve-global-switch')).not.toBeInTheDocument()
   })
 })
 

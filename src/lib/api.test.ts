@@ -886,7 +886,7 @@ describe('getApiSchemaErrorCount / resetApiSchemaErrorCount', () => {
 // 3. Throws ApiSchemaError when the response body is not valid JSON
 //
 // Tests use the generated LoginResponse schema (a simple well-understood shape)
-// and the live fetchAgents/fetchExecAllowlist functions which now pass schemas.
+// and the live fetchAgents/fetchSandboxStatus functions which now pass schemas.
 
 describe('request() with Zod schema — validation errors', () => {
   let fetchSpy: ReturnType<typeof vi.fn>
@@ -986,8 +986,8 @@ describe('request() with Zod schema — validation errors', () => {
       })
     )
 
-    const { fetchExecAllowlist, ApiSchemaError: ApiSchemaErrorClass, getApiSchemaErrorCount: count } = await import('./api')
-    await expect(fetchExecAllowlist()).rejects.toBeInstanceOf(ApiSchemaErrorClass)
+    const { fetchSandboxStatus, ApiSchemaError: ApiSchemaErrorClass, getApiSchemaErrorCount: count } = await import('./api')
+    await expect(fetchSandboxStatus()).rejects.toBeInstanceOf(ApiSchemaErrorClass)
     expect(count()).toBe(1)
   })
 })

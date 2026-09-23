@@ -1,8 +1,10 @@
 title: ToolApprovalActionRequest
 description: >
   Request body for POST /api/v1/tool-approvals/{approval_id}.
-  Resolves a pending tool call approval by approving, denying, cancelling, or
-  approving-and-remembering ("always") it.
+  Resolves a pending tool call approval (ADR-092 D4). Renamed from the
+  4-value approve|deny|cancel|always set: "approve" -> "allow_once",
+  "always" -> "allow" (greenfield, no upgrade path). `cancel` is retained
+  in the enum with no corresponding UI button — see its own description.
 type: object
 additionalProperties: false
 required:
@@ -12,15 +14,48 @@ properties:
     type: string
     description: >
       Action to take on this approval.
-      approve — allow this single invocation.
-      deny    — reject this single invocation.
-      cancel  — cancel this invocation (e.g. modal dismissed / turn aborted).
-      always  — allow this invocation AND record a session-scoped
-      "Always Allow" grant for (session, agent, tool) so future matching
-      calls in the same session auto-approve without re-prompting.
+      deny       — reject this single invocation (also the resolution for
+      Escape/overlay-click/X in the UI, none of which render a Cancel
+      button any more).
+      allow_once — allow this single invocation only, no grant recorded.
+      allow      — allow this invocation AND record a session-scoped grant
+      per `scope` below so future matching calls in the same session
+      auto-approve without re-prompting.
+      cancel     — client-issued resolution for the stuck-approval recovery
+      path only (a lost-server 404), distinct from `deny` (a network
+      failure, which leaves the approval unresolved so a later snapshot can
+      restore it) — ToolApprovalModal.resolution.test.tsx and the headless
+      CLI approval path (pkg/app/internal/run/run.go) both depend on `deny`
+      and `cancel` remaining distinct wire values. Never shown as a button.
     enum:
-      - approve
       - deny
+      - allow_once
+      - allow
       - cancel
-      - always
-    example: approve
+    example: allow_once
+  scope:
+    type: string
+    enum:
+      - exact
+      - prefix
+    description: >
+      Grant scope (ADR-092 D4/FR-024). Present only when action is "allow";
+      ignored otherwise. "exact" (default when omitted) — command text +
+      cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a
+      new {binary, arg_prefix} grant, ignores cwd, token-boundary matched
+      (e.g. "npm run test" does not match "npm run testfoo").
+      run_in_background is a separate match dimension for both scopes and
+      is not carried here — it is read from the pending approval's own
+      recorded tool-call args.
+
+      Not meaningful for a D7 (filesystem) or D8 (network) pre-flight
+      escalation shown via the same dialog — approving one of those records
+      the path-widening or network-widening grant the frame described, not
+      an exact/prefix command grant; `scope` is ignored for those approvals.
+
+      When the pending approval covers a chained command (multiple
+      unmatched segments in ToolApprovalRequiredFrame.segments), this one
+      scope choice applies uniformly to every currently-unmatched segment
+      resolved by this action (ADR-092 D4: "one rule per segment" is a
+      server-side recording detail, not a per-segment client choice).
+    example: exact

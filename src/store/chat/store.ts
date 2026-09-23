@@ -31,6 +31,77 @@ function drainQueuedMessage(get: () => ChatStore, next: OutboundQueueItem): void
   }
 }
 
+type JudgeVerdictHistoryEntry = Message & { type: 'judge_verdict'; verdict: NonNullable<Message['verdict']> }
+
+/** Builds the withBucket patch for mergeJudgeVerdictHistory. Module scope
+ * (same rationale as drainQueuedMessage above) so it doesn't count against
+ * create()'s grandfathered line budget (scripts/budgets/functions.txt) —
+ * see the action's own doc comment on the ChatStore interface / its call
+ * site below for the full anchor-position reasoning; this function is a
+ * pure extraction, no behaviour change. */
+function buildJudgeVerdictHistoryPatch(
+  b: SessionChatState,
+  verdictEntries: JudgeVerdictHistoryEntry[],
+  historyMessages: Message[],
+): Partial<SessionChatState> {
+  return produce(b, (draft) => {
+    for (const verdictMsg of verdictEntries) {
+      if (draft.messagesById[verdictMsg.id]) continue
+      const historyIdx = historyMessages.indexOf(verdictMsg)
+      // Anchor 1 — TURN ID (the reliable one, live-verified necessary):
+      // scan the REST list backward from the verdict for the nearest
+      // preceding entry that carries a turnId (the judged turn's own
+      // assistant message — `writeGoalVerdictTranscript` writes the
+      // verdict immediately after that turn's entries), then insert
+      // after the LAST bucket message carrying that same turnId.
+      // Timestamps CANNOT order against a replay-populated bucket:
+      // replay frames carry no timestamp (pkg/gateway/replay.go's
+      // generic ReplayMessageFrame sets Role/Content/AgentId/TurnId/
+      // Model only), so every replay-created ChatMessage is stamped
+      // with its ARRIVAL time — live-verified to make every bucket
+      // "timestamp" newer than every persisted verdict timestamp,
+      // which dumped both cards at index 0. turn_id is the one stable
+      // per-turn correlator both carriers share (REST Message.turn_id
+      // ↔ ReplayMessageFrame.turn_id → ChatMessage.turnId).
+      let insertPos = -1
+      for (let j = historyIdx - 1; j >= 0 && insertPos === -1; j--) {
+        const anchorTurnId = historyMessages[j].turnId
+        if (!anchorTurnId) continue
+        for (let k = draft.messageOrder.length - 1; k >= 0; k--) {
+          const m = draft.messagesById[draft.messageOrder[k]]
+          if (m?.turnId === anchorTurnId) { insertPos = k + 1; break }
+        }
+      }
+      // Anchor 2 — CONTENT (legacy fallback, best-effort): nearest
+      // preceding user/assistant entry with non-empty content; insert
+      // after the last bucket message with identical content. Only
+      // reachable for transcripts whose entries predate turn-id
+      // stamping. Best-effort by nature: identical contents across
+      // turns resolve to the LAST match, which can over-shoot for a
+      // repeat-reply pattern — accepted, since without turn ids there
+      // is no better signal on either carrier.
+      if (insertPos === -1) {
+        for (let j = historyIdx - 1; j >= 0 && insertPos === -1; j--) {
+          const anchor = historyMessages[j]
+          if ((anchor.role !== 'user' && anchor.role !== 'assistant') || !anchor.content) continue
+          for (let k = draft.messageOrder.length - 1; k >= 0; k--) {
+            const m = draft.messagesById[draft.messageOrder[k]]
+            if (m && (m.role === 'user' || m.role === 'assistant') && m.content === anchor.content) {
+              insertPos = k + 1
+              break
+            }
+          }
+        }
+      }
+      // No anchor found at all (verdict precedes every bucket message,
+      // or empty bucket) — append at the end.
+      if (insertPos === -1) insertPos = draft.messageOrder.length
+      draft.messagesById[verdictMsg.id] = verdictMsg as ChatMessage
+      draft.messageOrder.splice(insertPos, 0, verdictMsg.id)
+    }
+  }) as Partial<SessionChatState>
+}
+
 // agentIdAtLastMintSend records the agent that was active when the most recent
 // session-minting message went out (a send with no session_id). The
 // `session_started` ack for that mint carries the agent the SERVER resolved,
@@ -255,6 +326,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     pendingAsk: null,
     lastUserMessageAt: null,
     cancelStage: null,
+    autoApproveEffective: null,
     lastReceivedEventTime: null,
     // Phase 1 / FR-008/009/010: per-thread model override for the next
     // outgoing message. null means "no override" — the server uses the
@@ -378,68 +450,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
     // future-proofing) or a repeat REST fetch never double-inserts.
     mergeJudgeVerdictHistory: (sessionId, historyMessages) => {
       const verdictEntries = historyMessages.filter(
-        (m): m is Message & { type: 'judge_verdict'; verdict: NonNullable<Message['verdict']> } =>
+        (m): m is JudgeVerdictHistoryEntry =>
           m.type === 'judge_verdict' && !!m.verdict,
       )
       if (verdictEntries.length === 0) return
-      withBucket(sessionId, (b) => {
-        return produce(b, (draft) => {
-          for (const verdictMsg of verdictEntries) {
-            if (draft.messagesById[verdictMsg.id]) continue
-            const historyIdx = historyMessages.indexOf(verdictMsg)
-            // Anchor 1 — TURN ID (the reliable one, live-verified necessary):
-            // scan the REST list backward from the verdict for the nearest
-            // preceding entry that carries a turnId (the judged turn's own
-            // assistant message — `writeGoalVerdictTranscript` writes the
-            // verdict immediately after that turn's entries), then insert
-            // after the LAST bucket message carrying that same turnId.
-            // Timestamps CANNOT order against a replay-populated bucket:
-            // replay frames carry no timestamp (pkg/gateway/replay.go's
-            // generic ReplayMessageFrame sets Role/Content/AgentId/TurnId/
-            // Model only), so every replay-created ChatMessage is stamped
-            // with its ARRIVAL time — live-verified to make every bucket
-            // "timestamp" newer than every persisted verdict timestamp,
-            // which dumped both cards at index 0. turn_id is the one stable
-            // per-turn correlator both carriers share (REST Message.turn_id
-            // ↔ ReplayMessageFrame.turn_id → ChatMessage.turnId).
-            let insertPos = -1
-            for (let j = historyIdx - 1; j >= 0 && insertPos === -1; j--) {
-              const anchorTurnId = historyMessages[j].turnId
-              if (!anchorTurnId) continue
-              for (let k = draft.messageOrder.length - 1; k >= 0; k--) {
-                const m = draft.messagesById[draft.messageOrder[k]]
-                if (m?.turnId === anchorTurnId) { insertPos = k + 1; break }
-              }
-            }
-            // Anchor 2 — CONTENT (legacy fallback, best-effort): nearest
-            // preceding user/assistant entry with non-empty content; insert
-            // after the last bucket message with identical content. Only
-            // reachable for transcripts whose entries predate turn-id
-            // stamping. Best-effort by nature: identical contents across
-            // turns resolve to the LAST match, which can over-shoot for a
-            // repeat-reply pattern — accepted, since without turn ids there
-            // is no better signal on either carrier.
-            if (insertPos === -1) {
-              for (let j = historyIdx - 1; j >= 0 && insertPos === -1; j--) {
-                const anchor = historyMessages[j]
-                if ((anchor.role !== 'user' && anchor.role !== 'assistant') || !anchor.content) continue
-                for (let k = draft.messageOrder.length - 1; k >= 0; k--) {
-                  const m = draft.messagesById[draft.messageOrder[k]]
-                  if (m && (m.role === 'user' || m.role === 'assistant') && m.content === anchor.content) {
-                    insertPos = k + 1
-                    break
-                  }
-                }
-              }
-            }
-            // No anchor found at all (verdict precedes every bucket message,
-            // or empty bucket) — append at the end.
-            if (insertPos === -1) insertPos = draft.messageOrder.length
-            draft.messagesById[verdictMsg.id] = verdictMsg as ChatMessage
-            draft.messageOrder.splice(insertPos, 0, verdictMsg.id)
-          }
-        }) as Partial<SessionChatState>
-      })
+      withBucket(sessionId, (b) => buildJudgeVerdictHistoryPatch(b, verdictEntries, historyMessages))
     },
 
     appendMessage: (message) => {

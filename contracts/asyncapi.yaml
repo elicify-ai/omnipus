@@ -107,6 +107,10 @@ channels:
         $ref: '#/components/messages/PongFrame'
       SessionCloseAckFrame:
         $ref: '#/components/messages/SessionCloseAckFrame'
+      SessionModeUpdateFrame:
+        $ref: '#/components/messages/SessionModeUpdateFrame'
+      SessionModeUpdatedFrame:
+        $ref: '#/components/messages/SessionModeUpdatedFrame'
       DevicePairingRequestFrame:
         $ref: '#/components/messages/DevicePairingRequestFrame'
       WhatsAppPairingFrame:
@@ -579,6 +583,26 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/SessionCloseAckFrame'
+  sendSessionModeUpdate:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'Turn this session''s ADR-092 Auto-approve modifier on or off (or clear it). Unlike the global default and
+      the per-agent override, this may LOOSEN — turn Auto on for this chat even when the resolved agent x global default
+      has it off — because a human is present in the session.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/SessionModeUpdateFrame'
+  receiveSessionModeUpdated:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'Acknowledgement of a session_mode_update request, carrying the session''s resulting resolved Auto-approve state.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/SessionModeUpdatedFrame'
   receiveDevicePairingRequest:
     action: receive
     channel:
@@ -1185,6 +1209,20 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SessionCloseAckFrame'
+    SessionModeUpdateFrame:
+      name: SessionModeUpdateFrame
+      title: session_mode_update
+      summary: Turn this session's Auto-approve modifier on/off, or clear it (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SessionModeUpdateFrame'
+    SessionModeUpdatedFrame:
+      name: SessionModeUpdatedFrame
+      title: session_mode_updated
+      summary: Session Auto-approve modifier applied; resolved effective state (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SessionModeUpdatedFrame'
     DevicePairingRequestFrame:
       name: DevicePairingRequestFrame
       title: device_pairing_request
@@ -1445,6 +1483,8 @@ components:
       - cancel_stage
       - pong
       - session_close_ack
+      - session_mode_update
+      - session_mode_updated
       - device_pairing_request
       - whatsapp_pairing
       - whatsapp_pairing_subscribe
@@ -3441,6 +3481,86 @@ components:
           description: >
             ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
             (FR-089) — see this frame's description.
+    CommandSegmentInfo:
+      title: CommandSegmentInfo
+      description: >
+        ADR-092 D3/D4/D7/D8. One chained-command segment (split via
+        splitShellSegments/shellCommandHead) awaiting an approval decision,
+        listed inside ToolApprovalRequiredFrame.segments. Only unmatched
+        segments appear here — a segment already covered by an existing D3
+        rule or session grant is resolved server-side without a prompt (D4:
+        "a later partial match prompts only the unmatched segment(s)").
+      type: object
+      required:
+      - segment_index
+      - command_text
+      additionalProperties: false
+      properties:
+        segment_index:
+          type: integer
+          minimum: 0
+          description: >
+            Zero-based position of this segment among the full chained
+            command's segments (splitShellSegments order).
+        command_text:
+          type: string
+          minLength: 1
+          description: This segment's raw command text (post-split, pre-resolution).
+        resolved_binary:
+          type: string
+          description: >
+            Absolute path the segment's leading token resolved to against
+            the child's effective PATH/env (D3 resolve-and-verify, FR-040).
+            Absent when the head could not be resolved to a literal
+            executable — a normalised head (shellCommandHeadDetailed's
+            third return), a quote-blind over-split, a redirection-only
+            segment, or brace expansion (FR-020/FR-040 blind spots). Such a
+            segment always routes to ask and offers no D3 rule match, only
+            this dialog.
+        args:
+          type: array
+          items:
+            type: string
+          description: Argument tokens following the resolved binary, as split.
+        classification:
+          type: string
+          enum:
+          - read
+          - write
+          - read_write
+          - none
+          description: >
+            FR-038 filesystem-operation classification for the path this
+            segment's D7 pre-flight escalation concerns. "none" when this
+            segment carries no filesystem escalation (an ordinary D3/D4
+            command-rule prompt, or a D8-only network escalation).
+        path:
+          type: string
+          description: >
+            The filesystem path FR-038's classifier extracted for this
+            segment. Present iff classification is read/write/read_write.
+        network_required:
+          type: boolean
+          description: >
+            FR-043's network-need classifier verdict for this segment —
+            true when approving widens the session's ConnectPortRules to
+            DefaultConnectPorts (D8/FR-044). Independent of
+            `classification`: a segment can need both a filesystem and a
+            network grant at once (e.g. `curl -o /etc/foo https://x`).
+        suggested_prefix:
+          type: string
+          description: >
+            FR-026's suggested-prefix algorithm output for this segment,
+            shown next to the "prefix" scope radio when the user picks
+            Allow. Absent when prefix_available is false.
+        prefix_available:
+          type: boolean
+          description: >
+            False on Windows (FR-041: exact-command match only, no prefix
+            option, no chained-segment splitting) or when FR-026's
+            algorithm found no stop token narrower than the full command.
+            The dialog omits the "prefix" scope radio for this segment when
+            false.
     ToolApprovalRequiredFrame:
       title: ToolApprovalRequiredFrame
       description: >
@@ -3511,6 +3631,17 @@ components:
             from session meta, walking up to the delegating parent). The SPA
             shows the approval only while that workspace is active. Omitted
             when the session belongs to no workspace (shown everywhere).
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommandSegmentInfo'
+          description: >
+            ADR-092 D3/D4/D7/D8 per-segment breakdown — present only when
+            tool_name is "bash" and the approval was raised by the D3 rule
+            matcher or a D7/D8 pre-flight escalation, not for an ordinary
+            non-shell tool approval. A single, unchained bash command still
+            populates this with exactly one entry so the SPA has one
+            rendering path. Absent for non-bash tool approvals.
     ToolApprovalResolvedFrame:
       title: ToolApprovalResolvedFrame
       description: >
@@ -3986,6 +4117,94 @@ components:
           description: >
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (b) (FR-089): absent for this frame type.
+    SessionModeUpdateFrame:
+      title: SessionModeUpdateFrame
+      description: >
+        Client → server. Set or clear this session's ADR-092 per-chat
+        Auto-approve modifier — new, session-keyed state
+        (pkg/agent/sessionmode.go), structurally like ApprovalGrantStore,
+        never written into config.json and never a chat_id key on any
+        policy map (Hard Constraint #6). Auto is NOT a tool-policy value —
+        it only has meaning for a tool currently resolved to "ask", and
+        applies to every such tool, not only bash (see
+        SandboxConfig.auto_approve for the full behavioural description).
+
+        THE ONE EXCEPTION TO TIGHTEN-ONLY in this contract: unlike the
+        global default (SandboxConfig.auto_approve) and the per-agent
+        override (Agent.auto_approve_disabled, off-only), this frame may
+        LOOSEN — turn Auto ON for this one chat even when the resolved
+        agent x global default has it off — because a human is present in
+        this session to accept that risk. It may also tighten (turn Auto
+        off). Turning Auto on for a chat is deliberately a human-only
+        action: the agent-facing `set_config` tool must never be able to
+        send this frame or reach an equivalent effect (enforced
+        server-side; this frame's shape — a session-scoped WS write, not a
+        config.json path — structurally keeps it outside `set_config`'s
+        reach in the first place).
+
+        Inherits to a delegated subagent session exactly as approval
+        grants do (ApprovalGrantStore.InheritFrom); clears with the
+        session on restart.
+      type: object
+      required:
+      - type
+      - session_id
+      - auto_approve
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: session_mode_update
+        session_id:
+          type: string
+          minLength: 1
+        auto_approve:
+          type: boolean
+          nullable: true
+          description: >
+            true — turn Auto-approve ON for this chat (may loosen past the
+            resolved agent x global default). false — turn Auto-approve OFF
+            for this chat (tightens, same as every other scope). null —
+            clear this session's modifier; the chat reverts to whatever the
+            agent x global default currently resolves to, and will track
+            future changes to that default rather than staying pinned.
+    SessionModeUpdatedFrame:
+      title: SessionModeUpdatedFrame
+      description: >
+        Server → client. Acknowledges a session_mode_update request with
+        the session's resulting resolved Auto-approve state. A request is
+        always acknowledged here — this is the one frame allowed to
+        loosen, so there is no "rejected for looseness" case the way there
+        is for the global/per-agent scopes; a malformed request still gets
+        the existing, session-scoped ErrorFrame instead. Session-scoped
+        (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
+        ADR-057 W5 audit (FR-089) — a chat-lifecycle/settings frame, not
+        turn output, so producing_session_id is absent (FR-013), matching
+        SessionCloseAckFrame's own precedent.
+      type: object
+      required:
+      - type
+      - session_id
+      - auto_approve_effective
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: session_mode_updated
+        session_id:
+          type: string
+          minLength: 1
+        auto_approve_effective:
+          type: boolean
+          description: >
+            The resolved Auto-approve state for THIS session after applying
+            (or clearing) the modifier — the true per-session resolution
+            that SandboxStatus.auto_approve_effective cannot provide (that
+            field is the gateway-wide default only, with no session or
+            agent context). Combine with SandboxStatus.kernel_sandbox_active
+            for the same "Auto → Ask" degradation rendering described on
+            that field: true here with no active kernel sandbox still means
+            every "ask" tool call in this session prompts.
     DevicePairingRequestFrame:
       title: DevicePairingRequestFrame
       description: Server → client device pairing request needs admin approval.

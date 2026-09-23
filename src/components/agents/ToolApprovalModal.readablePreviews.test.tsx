@@ -6,7 +6,7 @@
 //     is genuinely absent ('replace' mode, not 'additive').
 //  2. The lasting-consequence closing line is shown.
 //  3. request_mount's title/buttons use the operator-approved "Add folder"
-//     copy, but clicking them still dispatches the SAME 'approve'/'deny'
+//     copy, but clicking them still dispatches the SAME 'allow_once'/'deny'
 //     wire actions — a label-only rename.
 //  4. Cancel is intentionally absent for request_mount (closed 2-button
 //     spec) — a deliberate, tested design decision, not an oversight.
@@ -62,7 +62,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(api.submitToolApproval).mockResolvedValue({
     approval_id: 'appr-mount-readable',
-    action: 'approve',
+    action: 'allow_once',
     status: 'ok',
   })
   queryClient.clear()
@@ -190,7 +190,7 @@ describe('ToolApprovalModal — request_mount button copy (Deliverable 2/3)', ()
 
     fireEvent.click(screen.getByRole('button', { name: /Add folder/i }))
     await waitFor(() => {
-      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-mount-readable', 'approve')
+      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-mount-readable', 'allow_once')
     })
   })
 
