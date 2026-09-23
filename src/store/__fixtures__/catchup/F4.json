@@ -1,0 +1,288 @@
+{
+  "scenario": "F4",
+  "title": "Snapshot where the answer is persisted between the bind and the transcript read",
+  "description": "The turn finishes while the reload's snapshot is being prepared. The replay already contains the whole answer (replay_message id = the live message_id), so no projection token is sent for it. The tokens and done published after the bind still arrive live after catch_up_complete: the client must ignore those tokens because the bubble with that message_id is already complete (BE-DESIGN.md §6.3), and treat done as an idempotent close.",
+  "expect": {
+    "assistant_messages": [
+      "p0 p1 p2 p3 p4 p5 p6 p7 "
+    ],
+    "catch_up_mode": "snapshot",
+    "no_duplicate_text": true,
+    "one_bubble_per_message": true,
+    "user_message": "finish while I reload"
+  },
+  "tabs": [
+    {
+      "name": "A",
+      "events": [
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "emitted_at": "2026-01-01T00:00:01Z",
+            "pending_approvals": [],
+            "type": "session_state",
+            "user_id": ""
+          }
+        },
+        {
+          "dir": "client→server",
+          "frame": {
+            "client_message_id": "client-1",
+            "content": "finish while I reload",
+            "type": "message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "boot_id": "boot-1",
+            "seq": 1,
+            "session_id": "sess-1",
+            "type": "session_started"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "client_message_id": "client-1",
+            "content": "finish while I reload",
+            "id": "id-1",
+            "seq": 2,
+            "session_id": "sess-1",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "type": "user_message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "client_message_id": "client-1",
+            "seq": 3,
+            "session_id": "sess-1",
+            "state": "received",
+            "type": "message_status"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "client_message_id": "client-1",
+            "seq": 4,
+            "session_id": "sess-1",
+            "state": "working",
+            "type": "message_status"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "p0 ",
+            "message_id": "msg-1",
+            "seq": 5,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "p1 ",
+            "message_id": "msg-1",
+            "seq": 6,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "p2 ",
+            "message_id": "msg-1",
+            "seq": 7,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "p3 ",
+            "message_id": "msg-1",
+            "seq": 8,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "note",
+          "note": "page reloaded here"
+        }
+      ]
+    },
+    {
+      "name": "A (after reload)",
+      "events": [
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "emitted_at": "2026-01-01T00:00:03Z",
+            "pending_approvals": [],
+            "type": "session_state",
+            "user_id": ""
+          }
+        },
+        {
+          "dir": "client→server",
+          "frame": {
+            "session_id": "sess-1",
+            "type": "attach_session"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "reason": "unknown_position",
+            "seq": 8,
+            "session_id": "sess-1",
+            "type": "session_snapshot"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "emitted_at": "2026-01-01T00:00:04Z",
+            "pending_approvals": [],
+            "session_id": "sess-1",
+            "type": "session_state",
+            "user_id": ""
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "client_message_id": "client-1",
+            "content": "finish while I reload",
+            "id": "id-1",
+            "role": "user",
+            "session_id": "sess-1",
+            "type": "replay_message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "p0 p1 p2 p3 p4 p5 p6 p7 ",
+            "id": "msg-1",
+            "model": "controllable-test-model",
+            "role": "assistant",
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "replay_message"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "session_id": "sess-1",
+            "stats": {
+              "duplicate_tool_call_id_count": 0,
+              "frames_emitted": 2,
+              "orphan_count": 0,
+              "truncated_result_count": 0
+            },
+            "type": "done"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "boot_id": "boot-1",
+            "mode": "snapshot",
+            "seq": 8,
+            "session_id": "sess-1",
+            "type": "catch_up_complete"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "p4 ",
+            "message_id": "msg-1",
+            "seq": 9,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "p5 ",
+            "message_id": "msg-1",
+            "seq": 10,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "p6 ",
+            "message_id": "msg-1",
+            "seq": 11,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "agent_id": "mia",
+            "content": "p7 ",
+            "message_id": "msg-1",
+            "seq": 12,
+            "session_id": "sess-1",
+            "turn_id": "turn-1",
+            "type": "token"
+          }
+        },
+        {
+          "dir": "server→client",
+          "frame": {
+            "message_id": "msg-1",
+            "seq": 13,
+            "session_id": "sess-1",
+            "stats": {
+              "cost": 0,
+              "duration_ms": 1,
+              "tokens": 0
+            },
+            "turn_id": "turn-1",
+            "type": "done"
+          }
+        }
+      ]
+    }
+  ]
+}
