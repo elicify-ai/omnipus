@@ -6,6 +6,7 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import { createSession } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { ChatModeBadge } from './ChatModeBadge'
 
 interface ChatControlsProps {
   className?: string
@@ -135,6 +136,11 @@ export function ChatControls({ className }: ChatControlsProps) {
       {/* New Chat was removed from the header — three paths for one action was
           redundant (Hick's Law). It lives where the user already is: the
           sidebar's per-workspace "New chat" row and the /new slash command. */}
+
+      {/* ADR-091: resolved permission-mode badge — Ask / Auto / "Auto → Ask".
+          Natural DOM tab order (no explicit tabIndex): it's a status
+          indicator, not an action in the closed composer tab ring. */}
+      <ChatModeBadge className="mr-[var(--space-1)]" />
 
       {/* Open browser — ADR-039 D-A1: user-initiated live browser session,
           independent of any agent tool call. */}

@@ -255,6 +255,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     pendingAsk: null,
     lastUserMessageAt: null,
     cancelStage: null,
+    autoApproveEffective: null,
     lastReceivedEventTime: null,
     // Phase 1 / FR-008/009/010: per-thread model override for the next
     // outgoing message. null means "no override" — the server uses the

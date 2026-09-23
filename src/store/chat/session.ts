@@ -25,6 +25,7 @@ export function emptySessionState(): SessionChatState {
     rateLimitEvent: null,
     lastUserMessageAt: null,
     cancelStage: null,
+    autoApproveEffective: null,
     lastReceivedEventTime: null,
     spanByParentCallId: {},
     spanBySpanId: {},

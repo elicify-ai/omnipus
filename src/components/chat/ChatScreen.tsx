@@ -42,6 +42,7 @@ import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
 import { AgentPicker } from './composer/AgentPicker'
 import { ModelPicker } from './composer/ModelPicker'
+import { AutoApprovePicker } from './composer/AutoApprovePicker'
 import { TokenCounter } from './composer/TokenCounter'
 import { MarkdownText } from './markdown-text'
 import { SubagentBlock } from './SubagentBlock'
@@ -2758,6 +2759,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             textarea, ChatGPT/Claude-style) — it was visually lost up here. */}
         <AgentPicker disabled={agentRemoved} tabIndex={3} />
         <ModelPicker disabled={agentRemoved} tabIndex={4} />
+        {/* ADR-091: per-chat Auto-approve quick switch. Deliberately NO
+            explicit tabIndex — the closed 1-8 composer ring documented
+            above (see ChatControls.tsx) stays exactly as numbered; this
+            control falls into natural DOM tab order after it, same as the
+            header tab menu. */}
+        <AutoApprovePicker disabled={agentRemoved} />
         <span className="flex-1" />
         {/* Token counter — status; hidden below @2xl of the composer root's
             @container (~42rem). */}
