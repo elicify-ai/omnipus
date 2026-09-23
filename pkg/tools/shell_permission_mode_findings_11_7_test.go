@@ -87,3 +87,27 @@ func TestEnforceShellPermissionMode_HeadlessAutoDeniesFSPreflightEscalation(t *t
 	assert.True(t, result.IsError)
 	assert.Equal(t, 0, requester.callCount(), "headless D7 escalation must not reach the interactive requester")
 }
+
+// TestEnforceShellPermissionMode_BlindSegmentWithNoRulesDoesNotPrompt is a
+// self-caught regression from widening finding #11's mode reach: the FIRST
+// version of that fix triggered a prompt for ANY blind D3 segment (an
+// unresolvable head — e.g. a `for i in $(seq 1 3)` loop's naive "i"
+// head-scan failing PATH resolution) in every mode except God, even with
+// ZERO command_rules configured, because evaluateSegment reports a blind
+// segment's Action as ActionAsk — textually identical to a genuine operator
+// rule match. That broke pkg/tools/shell_subst_guard_test.go's own
+// TestBashSubstitutionGuard_BoundedLoopExecutes (a benign, substitution-
+// bearing command that must run with no approver wired at all). Fixed by
+// gating the escalation on verdictHasGenuineAskRuleMatch (seg.MatchedRule
+// != nil), not the bare Action value — this test pins that fix directly,
+// independent of the substitution guard's own test file.
+func TestEnforceShellPermissionMode_BlindSegmentWithNoRulesDoesNotPrompt(t *testing.T) {
+	tool, ctx, requester, _ := permTestFixture(t, ShellModeAsk, true)
+	tool.commandRules = nil // zero operator rules configured
+
+	perm, result := tool.enforceShellPermissionMode(ctx, `for i in $(seq 1 3); do echo "line$i"; done`)
+	require.Nil(t, result, "a blind segment with zero command_rules must never itself force a prompt")
+	require.NotNil(t, perm)
+	assert.Equal(t, 0, requester.callCount(),
+		"a blind D3 segment must not reach the approval requester when no operator rule could possibly have produced it")
+}

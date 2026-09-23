@@ -231,6 +231,24 @@ func (t *ExecTool) EvaluateCommandRules(command string) shellrule.CommandVerdict
 	return t.evaluateCommandRules(command)
 }
 
+// verdictHasGenuineAskRuleMatch reports whether v carries at least one
+// segment whose ActionAsk verdict came from an ACTUAL operator command_rule
+// match (seg.MatchedRule != nil) — as opposed to a blind segment, which
+// evaluateSegment also reports as ActionAsk (FR-020's fail-closed default
+// for a segment it cannot classify) with no rule involved at all, even when
+// zero command_rules are configured. Only a genuine match should trigger
+// finding #11's mode-wide ask-rule escalation; see that branch's own doc
+// comment for why conflating the two broke ordinary substitution-containing
+// commands under any mode besides Auto.
+func verdictHasGenuineAskRuleMatch(v shellrule.CommandVerdict) bool {
+	for _, seg := range v.Segments {
+		if seg.Action == shellrule.ActionAsk && seg.MatchedRule != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // shellRuleDenialMessage explains a D3 ActionDeny verdict — SEC-17-style
 // explainability: every denial names the rule that produced it, not a bare
 // refusal.
@@ -564,7 +582,24 @@ func (t *ExecTool) enforceShellPermissionMode(ctx context.Context, command strin
 	// FR-019 requires deny > ask > allow in every mode; this closes the gap
 	// for the one mode (God) where an ask rule is correctly a no-op (no
 	// approvals exist there at all — D1's own definition of God Mode).
-	if verdict.Action == shellrule.ActionAsk && mode != ShellModeGod {
+	//
+	// Gated on verdictHasGenuineAskRuleMatch, NOT verdict.Action==ActionAsk
+	// alone: evaluateSegment reports ActionAsk for a BLIND segment (an
+	// unresolvable head — e.g. a `for i in $(seq 1 3)` loop's naive
+	// "i" head-scan failing PATH resolution) with EXACTLY the same Action
+	// value as a genuine operator rule match, even when zero command_rules
+	// are configured at all. Widening this branch's mode reach (above)
+	// without this distinction turned every blind segment — a routine,
+	// benign occurrence any time a command uses a substitution or an
+	// imperfectly-tokenized keyword — into a mandatory approval for every
+	// unwired/default ExecTool (which resolves the nil-ShellMode fallback
+	// to ShellModeAsk), breaking ordinary bash usage with zero rules
+	// configured. A genuinely blind segment is a DIFFERENT, unrelated
+	// concern (already handled by D7's own "blind spots route to ask"
+	// posture inside enforceFSPreflight, and by the classic ask-policy gate
+	// for real Ask-mode calls) — this branch exists only for an operator's
+	// EXPLICIT {action: ask} rule.
+	if mode != ShellModeGod && verdictHasGenuineAskRuleMatch(verdict) {
 		approved, reason := t.requestRuleApproval(ctx, sessionID, agentID, toolCallID, command, verdict)
 		if !approved {
 			return nil, ErrorResult(fmt.Sprintf(
