@@ -84,7 +84,7 @@ pkg/agent/attach_hydrate.go	AgentLoop.HydrateAgentHistoryFromTranscript	39
 pkg/gateway/rest_agents_update.go	restAPIUpdateAgentPersistAgent.updateRecord	39
 pkg/gateway/rest_library.go	restAPI.HandleLibrary	39
 pkg/gateway/rest_mcp.go	restAPI.patchMCPServer	39
-pkg/gateway/rest_sandbox_config.go	restAPI.putSandboxConfig	39
+pkg/gateway/rest_sandbox_config.go	restAPI.putSandboxConfig	37
 pkg/gateway/rest_mcp.go	restAPI.addMCPServer	38
 pkg/tools/web.go	NewWebSearchTool	38
 pkg/agent/verifier_antipatterns_adr052_qa_test.go	TestVerifierAntiPatterns	37
@@ -142,7 +142,7 @@ pkg/channels/telegram/telegram.go	TelegramChannel.handleMessage	32
 pkg/filegrep/filegrep.go	state.walkDir	32
 pkg/gateway/browser_capture_health.go	captureHealthTracker.observe	32
 pkg/gateway/rest_tasks.go	taskPatch.buildPatch	32
-pkg/gateway/websocket.go	wsHandlerReadLoop.dispatchFrame	32
+pkg/gateway/websocket.go	wsHandlerReadLoop.dispatchFrame	30
 pkg/tools/browser/live_input_dispatch.go	buildInputAction	32
 pkg/tools/browser/webrtc/dedicated_input_peer.go	DedicatedInputPeer.bindChannel	32
 pkg/tools/browser/webrtc/ingest.go	Session.attachIngestTrack	32

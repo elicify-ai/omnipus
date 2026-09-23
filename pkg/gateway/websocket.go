@@ -29,7 +29,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/pairing"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
-	"github.com/elicify-ai/omnipus/pkg/validation"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -1300,35 +1299,9 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			slog.Warn("ws: attach_session with empty session_id", "chat_id", wh.chatID)
 		}
 	case string(generated.WsFrameTypeSessionClose):
-		var f generated.SessionCloseFrame
-		if err := json.Unmarshal(data, &f); err != nil {
-			slog.Warn("ws: malformed session_close frame", "error", err)
-			return wsHandlerReadLoopContinue
-		}
-		// FR-023: explicit session close request from the client.
-		if f.SessionId == "" {
-			wh.wc.inboundDropped.Add(1)
-			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:    string(generated.WsFrameTypeError),
-				Message: "session_close requires session_id",
-			})
-			return wsHandlerReadLoopContinue
-		}
-		if err := validation.EntityID(f.SessionId); err != nil {
-			wh.wc.inboundDropped.Add(1)
-			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:    string(generated.WsFrameTypeError),
-				Message: "invalid session_id",
-			})
-			return wsHandlerReadLoopContinue
-		}
-		wh.h.agentLoop.CloseSession(f.SessionId, "explicit")
-		sid := f.SessionId
-		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeSessionCloseAck), generated.SessionCloseAckFrame{
-			Type:      string(generated.WsFrameTypeSessionCloseAck),
-			SessionId: f.SessionId,
-			Id:        &sid,
-		})
+		return wh.handleSessionCloseFrame(data)
+	case string(generated.WsFrameTypeSessionModeUpdate):
+		return wh.handleSessionModeUpdateFrame(data)
 	case string(generated.WsFrameTypePing):
 		// Application-layer pong: the SPA's 60s "any frame received" liveness
 		// check needs a server-originated frame during idle. Gorilla WS-protocol
@@ -1416,6 +1389,8 @@ func wsFrameSchemaName(frameType string) string {
 		return "DevicePairingResponseFrame"
 	case string(generated.WsFrameTypeSessionClose):
 		return "SessionCloseFrame"
+	case string(generated.WsFrameTypeSessionModeUpdate):
+		return "SessionModeUpdateFrame"
 	case string(generated.WsFrameTypeWhatsappPairingSubscribe):
 		return "WhatsAppPairingSubscribeFrame"
 	case string(generated.WsFrameTypeAskUserAnswer):

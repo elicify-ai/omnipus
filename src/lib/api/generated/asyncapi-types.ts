@@ -41,6 +41,8 @@ export type WsFrameType =
   | "cancel_stage"
   | "pong"
   | "session_close_ack"
+  | "session_mode_update"
+  | "session_mode_updated"
   | "device_pairing_request"
   | "whatsapp_pairing"
   | "whatsapp_pairing_subscribe"

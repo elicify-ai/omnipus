@@ -316,6 +316,11 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 				); err != nil {
 					slog.Error("rest: audit emit auto_approve change", "error", err)
 				}
+				// ADR-092 FR-032(a): the typed mode-change event, alongside
+				// the generic security-setting diff above.
+				audit.EmitShellModeChange(ps.r.Context(), auditLogger, audit.DecisionAllow,
+					shellModeName(*ps.body.AutoApprove), "global", audit.ShellModeActorOperator,
+					"", "", "sandbox.auto_approve")
 			}
 			if ps.changedWorkspacePathGuard {
 				if err := audit.EmitSecuritySettingChange(

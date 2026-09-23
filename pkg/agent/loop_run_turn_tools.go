@@ -35,19 +35,19 @@ type agentLoopRunTurnToolsExecute struct {
 	// shellModePin is the ADR-092 bash mode resolveAskPolicy settled on for
 	// this call; guardAndDispatch pins it on the tool's context so the bash
 	// tool enforces the same decision. Empty for every non-bash call.
-	shellModePin tools.ShellMode
-	toolCallID   string
-	asyncCallback             func(_ context.Context, result *tools.ToolResult)
-	asyncCallbackGate         *asyncToolCallbackGate
-	toolCBSig                 string
-	toolResult                *tools.ToolResult
-	toolDuration              time.Duration
-	contentForLLM             string
-	recallDecision            recallInjectionDecision
-	admitted                  admittedToolResult
-	toolResultMsg             providers.Message
-	tcRecord                  session.ToolCall
-	ret0                      agentLoopRunTurnToolsFlow
+	shellModePin      tools.ShellMode
+	toolCallID        string
+	asyncCallback     func(_ context.Context, result *tools.ToolResult)
+	asyncCallbackGate *asyncToolCallbackGate
+	toolCBSig         string
+	toolResult        *tools.ToolResult
+	toolDuration      time.Duration
+	contentForLLM     string
+	recallDecision    recallInjectionDecision
+	admitted          admittedToolResult
+	toolResultMsg     providers.Message
+	tcRecord          session.ToolCall
+	ret0              agentLoopRunTurnToolsFlow
 }
 
 // asyncToolCallbackGate keeps an executor that completes inline from publishing

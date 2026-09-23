@@ -1787,10 +1787,7 @@ func (st *spawnSubTurnState) buildDelegateAgent() {
 	// (WS payload stamping, the role-B predicates, pre-arm keys), and
 	// transcriptSessionID is exactly "the parent's own real session id"
 	// (its own childID when the parent is itself a delegated child).
-	st.al.ApprovalGrants().InheritFrom(st.parentTS.transcriptSessionID, st.parentTS.agentID, st.childID, st.agent.ID)
-	// ADR-092 FR-005: the chat's Auto-approve modifier inherits to the
-	// delegate the same way, keyed on the same parent/child session ids.
-	st.al.SessionModes().InheritFrom(st.parentTS.transcriptSessionID, st.childID)
+	st.al.inheritSessionPermissions(st.parentTS.transcriptSessionID, st.parentTS.agentID, st.childID, st.agent.ID)
 
 	// FR-H-006 REVERSAL: "delegate" is NO LONGER excluded from the child's
 	// registry. Note: distinct from the identity-swap

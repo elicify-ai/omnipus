@@ -117,3 +117,19 @@ func newGateTestLoopWithRules(t *testing.T, rules []shellrule.Rule) *AgentLoop {
 		c.Sandbox.CommandRules = rules
 	})
 }
+
+// TestShellPermissionWiring_ExecToolGetsTheAuditLogger: the ADR-092 audit
+// events the bash tool and its grant store write (pre-flight escalation,
+// grant recorded, approval decision) need the loop's audit logger on the
+// tool the production wiring registered.
+func TestShellPermissionWiring_ExecToolGetsTheAuditLogger(t *testing.T) {
+	al := newGateTestLoopCfg(t, func(c *config.Config) {
+		c.Sandbox.ToolPolicies = map[string]string{"bash": "ask"}
+		c.Sandbox.AuditLog = true
+	})
+	require.NotNil(t, al.AuditLogger())
+	f := bashToolFields(t, al, testDefaultAgentID)
+	logger := f.FieldByName("auditLogger")
+	require.False(t, logger.IsNil(), "the bash tool must receive the audit logger")
+	assert.Equal(t, reflect.ValueOf(al.AuditLogger()).Pointer(), logger.Pointer())
+}

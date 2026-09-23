@@ -12,9 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/entity"
@@ -685,6 +687,7 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 	// unrelated field forced a reload. Folding Skills into needsReload keeps
 	// both paths in sync via the same fastAgentUpsert rebuild Soul already
 	// uses.
+	uf.auditAutoApproveChange()
 	contextWindowOverrideChanged := uf.ru.req.ContextWindowOverride != nil || uf.ru.clearsContextWindowOverride
 	// req.ModelParams != nil (Q1 fix): AgentInstance.MaxTokens/Temperature
 	// are resolved and CACHED once at construction (pkg/agent/instance.go),
@@ -730,6 +733,22 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 }
 
 // respond builds the response from the newly persisted live agent state.
+// auditAutoApproveChange writes ADR-092's FR-032(a) mode-change event once a
+// PUT carrying auto_approve_disabled has been saved. new_mode is the agent's
+// resolved Auto-approve after the write (the global default with this
+// agent's off-switch applied), read from the refreshed live config. No-op
+// when the request did not carry the field.
+func (uf *restAPIUpdateAgentFlow) auditAutoApproveChange() {
+	if uf.ru.req.AutoApproveDisabled == nil || uf.ru.a.agentLoop == nil {
+		return
+	}
+	al := uf.ru.a.agentLoop
+	resolved := agent.ResolveAutoApprove(al.GetConfig(), uf.ru.id, nil)
+	audit.EmitShellModeChange(uf.r.Context(), al.AuditLogger(), audit.DecisionAllow,
+		shellModeName(resolved), "agent", audit.ShellModeActorOperator,
+		uf.ru.id, "", "agents."+uf.ru.id+".auto_approve_disabled")
+}
+
 func (uf *restAPIUpdateAgentFlow) respond() {
 	// Re-read the files so the response reflects what was just persisted.
 	soul, _ := readAgentFiles(uf.workspace)

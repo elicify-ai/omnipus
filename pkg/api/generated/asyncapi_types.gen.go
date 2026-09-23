@@ -1235,6 +1235,8 @@ const (
 	WsFrameTypeCancelStage              WsFrameType = "cancel_stage"
 	WsFrameTypePong                     WsFrameType = "pong"
 	WsFrameTypeSessionCloseAck          WsFrameType = "session_close_ack"
+	WsFrameTypeSessionModeUpdate        WsFrameType = "session_mode_update"
+	WsFrameTypeSessionModeUpdated       WsFrameType = "session_mode_updated"
 	WsFrameTypeDevicePairingRequest     WsFrameType = "device_pairing_request"
 	WsFrameTypeWhatsappPairing          WsFrameType = "whatsapp_pairing"
 	WsFrameTypeWhatsappPairingSubscribe WsFrameType = "whatsapp_pairing_subscribe"

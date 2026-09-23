@@ -624,3 +624,12 @@ func (al *AgentLoop) bashShellModeFor(ts *turnState, toolName string) tools.Shel
 	}
 	return al.shellGate.liveMode(ts.agentID, ts.transcriptSessionID)
 }
+
+// inheritSessionPermissions copies a delegating parent's session-scoped
+// permission state onto a delegate at spawn: its approval grants (ADR-057
+// two-key InheritFrom) and its per-chat Auto-approve modifier (ADR-092
+// FR-005), both keyed on the parent's own session id and the child's own.
+func (al *AgentLoop) inheritSessionPermissions(parentSessionID, parentAgentID, childSessionID, childAgentID string) {
+	al.ApprovalGrants().InheritFrom(parentSessionID, parentAgentID, childSessionID, childAgentID)
+	al.SessionModes().InheritFrom(parentSessionID, childSessionID)
+}

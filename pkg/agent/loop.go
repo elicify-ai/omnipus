@@ -387,30 +387,15 @@ type AgentLoop struct {
 
 	// approvalGrants tracks per-session "Always Allow" tool-approval grants,
 	// scoped by (session_id, agent_id, tool_name). Always non-nil after
-	// NewAgentLoop. Fixes the tool-consent-boundary bug: the grant used to
-	// live on the per-WebSocket-CONNECTION wsApprovalHook.alwaysAllowed map
-	// and was silently discarded on every reconnect (network blip, idle,
-	// gateway restart, refresh — the SPA auto-reconnects on any drop). This
-	// store instead lives for the AgentLoop's lifetime and is cleared
-	// per-SESSION (via CloseSession), not per-connection, so the grant
-	// survives reconnects while still expiring with the session it belongs
-	// to. Shared by the gateway's tool-approval REST path (IsAllowed/Record —
-	// see AgentLoop.CheckGrantOrRequestApproval) and the delegate tool's
-	// async/await paths (Inherit — pkg/agent/subturn.go).
+	// NewAgentLoop. It lives for the AgentLoop's lifetime and is cleared
+	// per-SESSION (CloseSession), not per WebSocket connection, so a grant
+	// survives reconnects (network blip, idle, refresh) while still expiring
+	// with its session. Shared by the tool-approval REST path, the bash tool
+	// (ADR-092 grant kinds) and delegate inheritance (subturn.go).
 	approvalGrants *security.ApprovalGrantStore
 
-	// sessionModes holds the ADR-092 per-chat Auto-approve modifier (the
-	// session_mode_update WS frame). Session-scoped like approvalGrants:
-	// cleared by CloseSession, copied to delegates at spawn. Always non-nil
-	// after NewAgentLoop.
-	sessionModes *SessionModeStore
-
-	// shellGate is the single ADR-092 adapter every agent's bash tool is
-	// wired with (ExecToolDeps.ShellMode / ApprovalRequester), and the one
-	// resolveAskPolicy consults to decide whether a bash call prompts before
-	// dispatch — one resolver for both, so the two cannot disagree. Always
-	// non-nil after NewAgentLoop.
-	shellGate *ShellPermissionGate
+	sessionModes *SessionModeStore    // ADR-092 per-chat Auto-approve; see SessionModes
+	shellGate    *ShellPermissionGate // ADR-092 bash gate, shared by tool and loop
 
 	// asyncNotifier is the single process-wide AsyncNotifier instance
 	// (async-notifier-spec.md), extracted from the formerly-inline

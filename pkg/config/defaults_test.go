@@ -114,82 +114,6 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		}
 	}
 
-	// ADR-052 (autonomous agent plan execution, FR-005/FR-027) — the three
-	// plan-execution tools seed an explicit "allow" CEILING (never absent,
-	// never deny).
-	//
-	// This asserted "ask" until 2026-07-28. That value matched the spec's
-	// literal seed matrix but produced the wrong RESOLVED posture: under the
-	// strictest-wins global x agent merge, an "ask" ceiling overruled Jim's own
-	// seeded "allow" and resolved "ask" for him too, making FR-005/R2-06's
-	// "Jim is the ONLY seeded agent granted unprompted plan-execution" dead on
-	// every install — and costing a 300 s approval-timeout stall per call.
-	//
-	// A ceiling grants nothing by itself; it only bounds what a per-agent
-	// policy may be granted up to. The real resolved posture — Jim allow,
-	// every other seeded agent ask, Judge deny — is asserted from the side
-	// where the import direction is legal and the REAL resolver can be called:
-	// pkg/coreagent's TestEffectiveResolution_PlanExecution_DefaultCeiling_
-	// JimAllowOthersAsk. This assertion only pins the ceiling literal so that
-	// tightening it back to "ask" has to delete a named reason first.
-	planningAllowCeiling := map[string]bool{
-		"create_plan":  true,
-		"execute_plan": true,
-		"run_task":     true,
-	}
-	for name := range planningAllowCeiling {
-		got, ok := cfg.Sandbox.ToolPolicies[name]
-		if !ok {
-			t.Errorf("expected sandbox.tool_policies to seed an entry for %q, found none", name)
-			continue
-		}
-		if got != "allow" {
-			t.Errorf("expected seeded ceiling policy 'allow' for plan-execution tool %q, got %q "+
-				"(an 'ask' ceiling silently overrules Jim's seeded 'allow' under strictest-wins)", name, got)
-		}
-	}
-	// inspect_session (fix-wave finding #2, architect F2 half 1): the ceiling
-	// seeds "allow" — the strictest-wins global x agent merge means a ceiling
-	// "deny" would OVERRULE the Judge's own seeded "allow" and resolve the
-	// Judge to deny (the landed defect this inverts). Every seeded non-Judge
-	// agent instead carries an explicit per-agent "deny" (asserted by
-	// pkg/coreagent's TestToolPolicy_InspectSession_JudgeOnly), so the
-	// resolved posture for everyone but the Judge is unchanged.
-	if got := cfg.Sandbox.ToolPolicies["inspect_session"]; got != "allow" {
-		t.Errorf("expected seeded ceiling policy 'allow' for verifier-only tool \"inspect_session\", got %q", got)
-	}
-
-	// ADR-055 (PlanSupervisor) — the supervision/containment pair. BOTH
-	// ceilings are "allow": an "ask" or "deny" ceiling on plan_correct would
-	// overrule PlanSupervisor's own seeded "allow" under strictest-wins (the
-	// inspect_session defect, repeated on the next tool), and an "ask" ceiling
-	// on stop_plan would merge Jim's seeded "allow" down to "ask", making a
-	// plan owner stopping their own plan depend on a human answering a prompt.
-	// Asserted explicitly rather than left to the allow-by-default sweep
-	// below, so someone tightening these has to delete a named assertion
-	// carrying the reason. (Until 2026-07-28 this note contrasted the pair
-	// with execute_plan's "ask" ceiling; that ceiling was the same defect and
-	// is now "allow" too — the reasoning here is unchanged, only the contrast
-	// is gone.)
-	if got := cfg.Sandbox.ToolPolicies["plan_correct"]; got != "allow" {
-		t.Errorf("expected seeded ceiling policy 'allow' for \"plan_correct\", got %q", got)
-	}
-	if got := cfg.Sandbox.ToolPolicies["stop_plan"]; got != "allow" {
-		t.Errorf("expected seeded ceiling policy 'allow' for \"stop_plan\", got %q", got)
-	}
-
-	// ADR-056 (list_jobs) — the read-only background-job roster. "allow" for
-	// the same third reason stop_plan's ceiling is: stop_plan takes a plan id,
-	// list_jobs is where an agent gets one, and an "ask" ceiling would drag
-	// every per-agent "allow" (Jim's included) down to "ask" under
-	// strictest-wins — re-introducing exactly the human-in-the-loop dependency
-	// stop_plan's ceiling exists to remove. Asserted by name for the same
-	// reason as the pair above: tightening it must require deleting a named
-	// assertion that carries the reason.
-	if got := cfg.Sandbox.ToolPolicies["list_jobs"]; got != "allow" {
-		t.Errorf("expected seeded ceiling policy 'allow' for \"list_jobs\", got %q", got)
-	}
-
 	// The global map must be a full, wildcard-free enumeration (CLAUDE.md hard
 	// constraint 6): it must enumerate EXACTLY the names in pkg/coreagent's
 	// allStaticToolNames, one for one.
@@ -271,6 +195,91 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	}
 	if got := cfg.Sandbox.ToolPolicies["bash"]; got != "ask" {
 		t.Errorf("bash must be seeded 'ask' (ADR-092 D1, founder decision 2026-09-23), got %q", got)
+	}
+}
+
+// TestDefaultConfig_SeedsNamedAllowCeilings pins the ceiling tools whose
+// "allow" seed carries a named reason: tightening any of them has to delete
+// the assertion and its reason first. Split out of
+// TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk, which also sweeps the
+// same map for the allow-by-default rule.
+func TestDefaultConfig_SeedsNamedAllowCeilings(t *testing.T) {
+	cfg := DefaultConfig()
+
+	// ADR-052 (autonomous agent plan execution, FR-005/FR-027) — the three
+	// plan-execution tools seed an explicit "allow" CEILING (never absent,
+	// never deny).
+	//
+	// This asserted "ask" until 2026-07-28. That value matched the spec's
+	// literal seed matrix but produced the wrong RESOLVED posture: under the
+	// strictest-wins global x agent merge, an "ask" ceiling overruled Jim's own
+	// seeded "allow" and resolved "ask" for him too, making FR-005/R2-06's
+	// "Jim is the ONLY seeded agent granted unprompted plan-execution" dead on
+	// every install — and costing a 300 s approval-timeout stall per call.
+	//
+	// A ceiling grants nothing by itself; it only bounds what a per-agent
+	// policy may be granted up to. The real resolved posture — Jim allow,
+	// every other seeded agent ask, Judge deny — is asserted from the side
+	// where the import direction is legal and the REAL resolver can be called:
+	// pkg/coreagent's TestEffectiveResolution_PlanExecution_DefaultCeiling_
+	// JimAllowOthersAsk. This assertion only pins the ceiling literal so that
+	// tightening it back to "ask" has to delete a named reason first.
+	planningAllowCeiling := map[string]bool{
+		"create_plan":  true,
+		"execute_plan": true,
+		"run_task":     true,
+	}
+	for name := range planningAllowCeiling {
+		got, ok := cfg.Sandbox.ToolPolicies[name]
+		if !ok {
+			t.Errorf("expected sandbox.tool_policies to seed an entry for %q, found none", name)
+			continue
+		}
+		if got != "allow" {
+			t.Errorf("expected seeded ceiling policy 'allow' for plan-execution tool %q, got %q "+
+				"(an 'ask' ceiling silently overrules Jim's seeded 'allow' under strictest-wins)", name, got)
+		}
+	}
+	// inspect_session (fix-wave finding #2, architect F2 half 1): the ceiling
+	// seeds "allow" — the strictest-wins global x agent merge means a ceiling
+	// "deny" would OVERRULE the Judge's own seeded "allow" and resolve the
+	// Judge to deny (the landed defect this inverts). Every seeded non-Judge
+	// agent instead carries an explicit per-agent "deny" (asserted by
+	// pkg/coreagent's TestToolPolicy_InspectSession_JudgeOnly), so the
+	// resolved posture for everyone but the Judge is unchanged.
+	if got := cfg.Sandbox.ToolPolicies["inspect_session"]; got != "allow" {
+		t.Errorf("expected seeded ceiling policy 'allow' for verifier-only tool \"inspect_session\", got %q", got)
+	}
+
+	// ADR-055 (PlanSupervisor) — the supervision/containment pair. BOTH
+	// ceilings are "allow": an "ask" or "deny" ceiling on plan_correct would
+	// overrule PlanSupervisor's own seeded "allow" under strictest-wins (the
+	// inspect_session defect, repeated on the next tool), and an "ask" ceiling
+	// on stop_plan would merge Jim's seeded "allow" down to "ask", making a
+	// plan owner stopping their own plan depend on a human answering a prompt.
+	// Asserted explicitly rather than left to the allow-by-default sweep
+	// below, so someone tightening these has to delete a named assertion
+	// carrying the reason. (Until 2026-07-28 this note contrasted the pair
+	// with execute_plan's "ask" ceiling; that ceiling was the same defect and
+	// is now "allow" too — the reasoning here is unchanged, only the contrast
+	// is gone.)
+	if got := cfg.Sandbox.ToolPolicies["plan_correct"]; got != "allow" {
+		t.Errorf("expected seeded ceiling policy 'allow' for \"plan_correct\", got %q", got)
+	}
+	if got := cfg.Sandbox.ToolPolicies["stop_plan"]; got != "allow" {
+		t.Errorf("expected seeded ceiling policy 'allow' for \"stop_plan\", got %q", got)
+	}
+
+	// ADR-056 (list_jobs) — the read-only background-job roster. "allow" for
+	// the same third reason stop_plan's ceiling is: stop_plan takes a plan id,
+	// list_jobs is where an agent gets one, and an "ask" ceiling would drag
+	// every per-agent "allow" (Jim's included) down to "ask" under
+	// strictest-wins — re-introducing exactly the human-in-the-loop dependency
+	// stop_plan's ceiling exists to remove. Asserted by name for the same
+	// reason as the pair above: tightening it must require deleting a named
+	// assertion that carries the reason.
+	if got := cfg.Sandbox.ToolPolicies["list_jobs"]; got != "allow" {
+		t.Errorf("expected seeded ceiling policy 'allow' for \"list_jobs\", got %q", got)
 	}
 }
 
