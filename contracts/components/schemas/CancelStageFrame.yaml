@@ -71,4 +71,10 @@ properties:
     description: ADR-091 I-6. Terminal descendants, left unwritten.
   partial:
     type: boolean
-    description: ADR-091 I-6. True when `unreachable` is non-empty.
+    description: >
+      ADR-091 I-6. True when `unreachable` is non-empty OR
+      `skipped_newer_generation` is non-empty — a session skipped because a
+      revival landed first is still running, so the cascade did not fully
+      stop the subtree either way (matches the producer,
+      `pkg/gateway/websocket_cancel.go::sendCancelReportFrame`:
+      `len(Unreachable) > 0 || len(SkippedNewerGeneration) > 0`).

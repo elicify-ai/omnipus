@@ -15140,12 +15140,12 @@ export interface components {
              */
             session_id: string;
             /**
-             * @description This session's generation number. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
-             * @example 0
+             * @description This session's generation number. Starts at 1. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
+             * @example 1
              */
             generation: number;
             /**
-             * @description The prior generation's `session_id` this record resumed from. Null for generation 0 (the original spawn).
+             * @description The prior generation's `session_id` this record resumed from. Null for generation 1 (the original spawn).
              * @example null
              */
             resumed_from?: string | null;
@@ -15267,12 +15267,12 @@ export interface components {
                  * @description The direct parent session; the inbox owner key.
                  * @example 550e8400-e29b-41d4-a716-446655440001
                  */
-                steering_session_id?: string;
+                steering_session_id: string;
                 /**
                  * @description The cascade root, verified by walking the chain at launch. Equal to steering_session_id at depth 1.
                  * @example 550e8400-e29b-41d4-a716-446655440002
                  */
-                root_session_id?: string;
+                root_session_id: string;
                 /** @description The steering session's own address; where completion wakes it. */
                 reporting_target?: {
                     /** @example 550e8400-e29b-41d4-a716-446655440001 */
@@ -15283,18 +15283,18 @@ export interface components {
                     chat_id?: string;
                 };
                 /** @description The gate verdict at launch. */
-                authorization?: {
+                authorization: {
                     /**
                      * @description How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
                      * @example direct
                      * @enum {string}
                      */
-                    mode?: "direct" | "task";
+                    mode: "direct" | "task";
                     /**
                      * @description Remaining delegation depth budget for this child's own onward delegations. Decremented from the edge or global default.
                      * @example 2
                      */
-                    remaining_depth?: number;
+                    remaining_depth: number;
                 };
                 /** @description Creator-set session limits. */
                 limits?: {
@@ -15319,14 +15319,14 @@ export interface components {
                  * @description RFC3339 timestamp when the Stop marker was written.
                  * @example 2026-07-22T10:05:00Z
                  */
-                at?: string;
+                at: string;
                 /**
                  * @description The generation this Stop marker names. A revived generation is a newer generation number.
                  * @example 1
                  */
-                generation?: number;
+                generation: number;
                 /** @description Who or what initiated the stop. */
-                by?: {
+                by: {
                     /**
                      * @description Principal kind (agent or human).
                      * @example human

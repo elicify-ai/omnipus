@@ -57,8 +57,8 @@ func TestLifecycleIndex_Report_ListsUnreadableRecordFromCorruptFile(t *testing.T
 	const corrupt = "child-report-i9-corrupt"
 
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: good, State: LifecycleRunning,
-		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: parent},
+		SessionID: good, Generation: 1, State: LifecycleRunning,
+		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: parent, RootSessionID: parent},
 		WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("seed %q: %v", good, err)
@@ -74,7 +74,7 @@ func TestLifecycleIndex_Report_ListsUnreadableRecordFromCorruptFile(t *testing.T
 	// exercise). This isolates the fact under test: ensureWarm's scan
 	// itself must record the unreadable record, not silently drop it.
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: corrupt, State: LifecycleRunning,
+		SessionID: corrupt, Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman,
 		WorkspaceID:    "ws-1", AgentID: "ray",
 	}); err != nil {

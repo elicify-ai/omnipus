@@ -270,8 +270,8 @@ func TestLifecycleParentIndex_EnsureWarmRetriesAfterFailure(t *testing.T) {
 	// Clear the obstruction and persist a real parent/child pair.
 	require.NoError(t, os.Remove(storeDir))
 	require.NoError(t, s.Persist(&LifecycleRecord{
-		SessionID: "child-x", State: LifecycleQueued,
-		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: "parent-x"},
+		SessionID: "child-x", Generation: 1, State: LifecycleQueued,
+		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: "parent-x", RootSessionID: "parent-x"},
 		WorkspaceID: "ws-1", AgentID: "ray",
 	}))
 
@@ -288,8 +288,8 @@ func TestLifecycleParentIndex_EnsureWarmRetriesAfterFailure(t *testing.T) {
 	// Persist-time incremental path (add(), not a rescan) must also be
 	// visible.
 	require.NoError(t, s.Persist(&LifecycleRecord{
-		SessionID: "child-y", State: LifecycleQueued,
-		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: "parent-x"},
+		SessionID: "child-y", Generation: 1, State: LifecycleQueued,
+		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: "parent-x", RootSessionID: "parent-x"},
 		WorkspaceID: "ws-1", AgentID: "ava",
 	}))
 	recs2, err := s.List(LifecycleFilter{SteeringSessionID: "parent-x"})
@@ -315,8 +315,8 @@ func TestLifecycleParentIndex_EnsureWarmMissingDirectoryIsNotAnError(t *testing.
 	// Positive control: once a real record exists, the (already-warmed,
 	// now empty) index still picks it up via Persist-time maintenance.
 	require.NoError(t, s.Persist(&LifecycleRecord{
-		SessionID: "child-z", State: LifecycleQueued,
-		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: "parent-x"},
+		SessionID: "child-z", Generation: 1, State: LifecycleQueued,
+		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: "parent-x", RootSessionID: "parent-x"},
 		WorkspaceID: "ws-1", AgentID: "ray",
 	}))
 	recs2, err := s.List(LifecycleFilter{SteeringSessionID: "parent-x"})

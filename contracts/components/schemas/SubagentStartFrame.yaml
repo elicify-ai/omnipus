@@ -47,6 +47,7 @@ properties:
     description: Agent running the sub-turn.
   child_session_id:
     type: string
+    minLength: 1
     description: >
       Optional session id of the opened child session. Present for steered
       sessions; absent for legacy subturn spans. Enables the open control on

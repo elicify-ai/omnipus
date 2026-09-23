@@ -52,7 +52,7 @@ func TestPublishChildUnderParentLock_ChildWriteFailureRollsBackNewParent(t *test
 		return &LifecycleRecord{
 			SessionID: childID, Generation: 1, State: LifecycleQueued,
 			OwnerScopeKind: OwnerScopeParentSession,
-			SteeredBy:      &SteeredBy{SteeringSessionID: "new-parent"},
+			SteeredBy:      &SteeredBy{SteeringSessionID: "new-parent", RootSessionID: "new-parent"},
 		}, nil
 	})
 	if err == nil {
@@ -81,7 +81,7 @@ func TestPublishChildUnderParentLock_ParentWriteFailurePublishesNoChild(t *testi
 		return &LifecycleRecord{
 			SessionID: childID, Generation: 1, State: LifecycleQueued,
 			OwnerScopeKind: OwnerScopeParentSession,
-			SteeredBy:      &SteeredBy{SteeringSessionID: parentID},
+			SteeredBy:      &SteeredBy{SteeringSessionID: parentID, RootSessionID: parentID},
 		}, nil
 	})
 	if err == nil {
@@ -121,7 +121,7 @@ func TestPublishChildUnderParentLock_ChildWriteFailureRestoresExistingParent(t *
 		return &LifecycleRecord{
 			SessionID: childID, Generation: 1, State: LifecycleQueued,
 			OwnerScopeKind: OwnerScopeParentSession,
-			SteeredBy:      &SteeredBy{SteeringSessionID: parent.SessionID},
+			SteeredBy:      &SteeredBy{SteeringSessionID: parent.SessionID, RootSessionID: parent.SessionID},
 		}, nil
 	})
 	if err == nil {
@@ -155,7 +155,7 @@ func TestLifecycleStore_PersistAndReload(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	rec := &LifecycleRecord{
 		SessionID:      "sess-1",
-		Generation:     0,
+		Generation:     1,
 		State:          LifecycleQueued,
 		OwnerScopeKind: OwnerScopeHuman,
 		WorkspaceID:    "ws-1",
@@ -215,7 +215,7 @@ func TestLifecycleStore_TerminalImmutability(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	rec := &LifecycleRecord{
 		SessionID:      "sess-term",
-		Generation:     0,
+		Generation:     1,
 		State:          LifecycleCompleted,
 		OwnerScopeKind: OwnerScopeHuman,
 		WorkspaceID:    "ws-1",
@@ -251,8 +251,8 @@ func TestLifecycleStore_TerminalImmutability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load after new generation failed: %v", err)
 	}
-	if reloaded.Generation != 1 {
-		t.Errorf("generation = %d, want 1", reloaded.Generation)
+	if reloaded.Generation != 2 {
+		t.Errorf("generation = %d, want 2", reloaded.Generation)
 	}
 	if reloaded.State != LifecycleQueued {
 		t.Errorf("state = %q, want %q", reloaded.State, LifecycleQueued)
@@ -281,6 +281,7 @@ func TestLifecycleStore_ListNonTerminalOnly(t *testing.T) {
 	for _, sp := range specs {
 		rec := &LifecycleRecord{
 			SessionID:      sp.id,
+			Generation:     1,
 			State:          sp.state,
 			OwnerScopeKind: OwnerScopeHuman,
 			WorkspaceID:    "ws-1",
@@ -390,7 +391,7 @@ func TestLifecycleStore_Mutate_NotFoundFnReceivesNil(t *testing.T) {
 func TestLifecycleStore_Mutate_AppliesAndPersists(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: "sess-m1", State: LifecycleRunning,
+		SessionID: "sess-m1", Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman, WorkspaceID: "ws", AgentID: "a",
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -424,7 +425,7 @@ func TestLifecycleStore_Mutate_AppliesAndPersists(t *testing.T) {
 func TestLifecycleStore_Mutate_TerminalImmutableGuard(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: "sess-term2", State: LifecycleCompleted,
+		SessionID: "sess-term2", Generation: 1, State: LifecycleCompleted,
 		OwnerScopeKind: OwnerScopeHuman, WorkspaceID: "ws", AgentID: "a",
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -474,7 +475,7 @@ func TestLifecycleStore_Mutate_NilSignalNoWrite(t *testing.T) {
 func TestLifecycleStore_Mutate_ConcurrentTerminalGuardHolds(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: "sess-race", State: LifecycleRunning,
+		SessionID: "sess-race", Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman, WorkspaceID: "ws", AgentID: "a",
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -544,7 +545,7 @@ func TestLifecycleStore_Mutate_ConcurrentTerminalGuardHolds(t *testing.T) {
 func TestLifecycleStore_Mutate_ConcurrentNoLostAppend(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: "sess-append", State: LifecycleRunning,
+		SessionID: "sess-append", Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman, WorkspaceID: "ws", AgentID: "a",
 	}); err != nil {
 		t.Fatalf("seed: %v", err)

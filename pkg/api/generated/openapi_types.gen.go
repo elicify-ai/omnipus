@@ -15118,7 +15118,7 @@ type DelegateStatusResponse struct {
 		// FailedReason Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively (e.g. `interrupted`, `judge_rounds_exhausted`), unlike `Plan.failed_reason`'s closed enum, so this field is left open rather than guessing at a complete set (flagged for review).
 		FailedReason *string `json:"failed_reason,omitempty"`
 
-		// Generation This session's generation number. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
+		// Generation This session's generation number. Starts at 1. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
 		Generation int `json:"generation"`
 
 		// GoalRef The goal-id this session is servicing, when it is goal-bearing.
@@ -15163,7 +15163,7 @@ type DelegateStatusResponse struct {
 		// OwnsPlanId Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `paused` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
 		OwnsPlanId *string `json:"owns_plan_id,omitempty"`
 
-		// ResumedFrom The prior generation's `session_id` this record resumed from. Null for generation 0 (the original spawn).
+		// ResumedFrom The prior generation's `session_id` this record resumed from. Null for generation 1 (the original spawn).
 		ResumedFrom *string `json:"resumed_from,omitempty"`
 
 		// SessionId Unique durable session identifier.
@@ -15175,13 +15175,13 @@ type DelegateStatusResponse struct {
 		// SteeredBy Present for steered sessions (a session launched by another session's delegate or create_task). Absent for ordinary-root sessions that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
 		SteeredBy *struct {
 			// Authorization The gate verdict at launch.
-			Authorization *struct {
+			Authorization struct {
 				// Mode How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
-				Mode *DelegateStatusResponseSessionSteeredByAuthorizationMode `json:"mode,omitempty"`
+				Mode DelegateStatusResponseSessionSteeredByAuthorizationMode `json:"mode"`
 
 				// RemainingDepth Remaining delegation depth budget for this child's own onward delegations. Decremented from the edge or global default.
-				RemainingDepth *int `json:"remaining_depth,omitempty"`
-			} `json:"authorization,omitempty"`
+				RemainingDepth int `json:"remaining_depth"`
+			} `json:"authorization"`
 
 			// Limits Creator-set session limits.
 			Limits *struct {
@@ -15197,10 +15197,10 @@ type DelegateStatusResponse struct {
 			} `json:"reporting_target,omitempty"`
 
 			// RootSessionId The cascade root, verified by walking the chain at launch. Equal to steering_session_id at depth 1.
-			RootSessionId *string `json:"root_session_id,omitempty"`
+			RootSessionId string `json:"root_session_id"`
 
 			// SteeringSessionId The direct parent session; the inbox owner key.
-			SteeringSessionId *string `json:"steering_session_id,omitempty"`
+			SteeringSessionId string `json:"steering_session_id"`
 
 			// ToolExclusions Tool names excluded for this steered session (e.g., switch_agent). Applied at launch.
 			ToolExclusions *[]string `json:"tool_exclusions,omitempty"`
@@ -15209,19 +15209,19 @@ type DelegateStatusResponse struct {
 		// Stop Present when this session's own record carries a Stop marker, written by the cancel cascade on the stopped node and every reachable non-terminal descendant (ADR-091 I-6). Absent for sessions that were not stopped. No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
 		Stop *struct {
 			// At RFC3339 timestamp when the Stop marker was written.
-			At *time.Time `json:"at,omitempty"`
+			At time.Time `json:"at"`
 
 			// By Who or what initiated the stop.
-			By *struct {
+			By struct {
 				// Id The agent id (if kind=agent) or user id (if kind=human).
 				Id *string `json:"id,omitempty"`
 
 				// Kind Principal kind (agent or human).
 				Kind *DelegateStatusResponseSessionStopByKind `json:"kind,omitempty"`
-			} `json:"by,omitempty"`
+			} `json:"by"`
 
 			// Generation The generation this Stop marker names. A revived generation is a newer generation number.
-			Generation *int `json:"generation,omitempty"`
+			Generation int `json:"generation"`
 		} `json:"stop,omitempty"`
 
 		// Terminal Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
@@ -21630,7 +21630,7 @@ type SessionLifecycleRecord struct {
 	// FailedReason Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively (e.g. `interrupted`, `judge_rounds_exhausted`), unlike `Plan.failed_reason`'s closed enum, so this field is left open rather than guessing at a complete set (flagged for review).
 	FailedReason *string `json:"failed_reason,omitempty"`
 
-	// Generation This session's generation number. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
+	// Generation This session's generation number. Starts at 1. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
 	Generation int `json:"generation"`
 
 	// GoalRef The goal-id this session is servicing, when it is goal-bearing.
@@ -21675,7 +21675,7 @@ type SessionLifecycleRecord struct {
 	// OwnsPlanId Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `paused` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
 	OwnsPlanId *string `json:"owns_plan_id,omitempty"`
 
-	// ResumedFrom The prior generation's `session_id` this record resumed from. Null for generation 0 (the original spawn).
+	// ResumedFrom The prior generation's `session_id` this record resumed from. Null for generation 1 (the original spawn).
 	ResumedFrom *string `json:"resumed_from,omitempty"`
 
 	// SessionId Unique durable session identifier.
@@ -21687,13 +21687,13 @@ type SessionLifecycleRecord struct {
 	// SteeredBy Present for steered sessions (a session launched by another session's delegate or create_task). Absent for ordinary-root sessions that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
 	SteeredBy *struct {
 		// Authorization The gate verdict at launch.
-		Authorization *struct {
+		Authorization struct {
 			// Mode How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
-			Mode *SessionLifecycleRecordSteeredByAuthorizationMode `json:"mode,omitempty"`
+			Mode SessionLifecycleRecordSteeredByAuthorizationMode `json:"mode"`
 
 			// RemainingDepth Remaining delegation depth budget for this child's own onward delegations. Decremented from the edge or global default.
-			RemainingDepth *int `json:"remaining_depth,omitempty"`
-		} `json:"authorization,omitempty"`
+			RemainingDepth int `json:"remaining_depth"`
+		} `json:"authorization"`
 
 		// Limits Creator-set session limits.
 		Limits *struct {
@@ -21709,10 +21709,10 @@ type SessionLifecycleRecord struct {
 		} `json:"reporting_target,omitempty"`
 
 		// RootSessionId The cascade root, verified by walking the chain at launch. Equal to steering_session_id at depth 1.
-		RootSessionId *string `json:"root_session_id,omitempty"`
+		RootSessionId string `json:"root_session_id"`
 
 		// SteeringSessionId The direct parent session; the inbox owner key.
-		SteeringSessionId *string `json:"steering_session_id,omitempty"`
+		SteeringSessionId string `json:"steering_session_id"`
 
 		// ToolExclusions Tool names excluded for this steered session (e.g., switch_agent). Applied at launch.
 		ToolExclusions *[]string `json:"tool_exclusions,omitempty"`
@@ -21721,19 +21721,19 @@ type SessionLifecycleRecord struct {
 	// Stop Present when this session's own record carries a Stop marker, written by the cancel cascade on the stopped node and every reachable non-terminal descendant (ADR-091 I-6). Absent for sessions that were not stopped. No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
 	Stop *struct {
 		// At RFC3339 timestamp when the Stop marker was written.
-		At *time.Time `json:"at,omitempty"`
+		At time.Time `json:"at"`
 
 		// By Who or what initiated the stop.
-		By *struct {
+		By struct {
 			// Id The agent id (if kind=agent) or user id (if kind=human).
 			Id *string `json:"id,omitempty"`
 
 			// Kind Principal kind (agent or human).
 			Kind *SessionLifecycleRecordStopByKind `json:"kind,omitempty"`
-		} `json:"by,omitempty"`
+		} `json:"by"`
 
 		// Generation The generation this Stop marker names. A revived generation is a newer generation number.
-		Generation *int `json:"generation,omitempty"`
+		Generation int `json:"generation"`
 	} `json:"stop,omitempty"`
 
 	// Terminal Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.

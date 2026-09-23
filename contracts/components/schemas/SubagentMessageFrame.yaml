@@ -44,6 +44,7 @@ properties:
     description: Session in which the parent's span is running.
   child_session_id:
     type: string
+    minLength: 1
     description: >
       Optional session id of the delegated child session this mid-span
       update is reporting on — the same value the bracketing

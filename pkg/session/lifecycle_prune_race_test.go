@@ -64,7 +64,7 @@ func TestLifecycleStore_PruneTerminal_ReopenDuringPruneWindow(t *testing.T) {
 
 	if err := s.Persist(&LifecycleRecord{
 		SessionID:      id,
-		Generation:     0,
+		Generation:     1,
 		State:          LifecycleCompleted,
 		OwnerScopeKind: OwnerScopeHuman,
 		WorkspaceID:    "ws-1",
@@ -188,8 +188,8 @@ func TestLifecycleStore_PruneTerminal_ReopenDuringPruneWindow(t *testing.T) {
 			t.Fatalf("BUG 2 reproduced: reopen committed a new non-terminal generation, but the final tail "+
 				"is terminal state %q — the reopen was lost", finalTail.State)
 		}
-		if finalTail.Generation != 1 {
-			t.Fatalf("expected the surviving reopened generation to be 1, got %d", finalTail.Generation)
+		if finalTail.Generation != 2 {
+			t.Fatalf("expected the surviving reopened generation to be 2, got %d", finalTail.Generation)
 		}
 		t.Log("reopen raced into the prune decision window and its new generation correctly survived")
 	} else {

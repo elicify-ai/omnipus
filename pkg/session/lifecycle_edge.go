@@ -153,3 +153,29 @@ type Stop struct {
 	Generation int       `json:"generation"`
 	By         Principal `json:"by"`
 }
+
+// Stopped reports whether r is stopped RIGHT NOW — the live-stop predicate
+// every dispatch/delivery/completion path must refuse against. r.Stop
+// encodes a tri-state (D8) that no other method names, so this is the one
+// place that spells out all three shapes plus the fourth,
+// unreachable-by-design one:
+//
+//   - r.Stop == nil            -> never stopped. false.
+//   - r.Stop.Generation == r.Generation -> stopped for the record's CURRENT
+//     generation. Live. true.
+//   - r.Stop.Generation <  r.Generation -> stopped once, on an EARLIER
+//     generation, since revived (I-6 Canceller.Revive deliberately keeps
+//     the old Stop marker around as inert history rather than clearing it).
+//     Not live. false.
+//   - r.Stop.Generation >  r.Generation -> unreachable in a record
+//     persistLocked accepted (it rejects Stop.Generation > Generation at
+//     the write choke point), but still representable in the Go struct —
+//     e.g. via a hand-built value that never went through Persist/Mutate.
+//     Treated as not-live (false): a Stop naming a generation that has not
+//     happened yet cannot be "stopping" the record's current generation.
+func (r *LifecycleRecord) Stopped() bool {
+	if r == nil || r.Stop == nil {
+		return false
+	}
+	return r.Stop.Generation == r.Generation
+}

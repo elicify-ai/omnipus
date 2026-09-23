@@ -132,6 +132,7 @@ func TestPublishChildUnderParentLock_NilChild_ParentOnlyWrite(t *testing.T) {
 		parentRec.OwnerScopeKind = OwnerScopeHuman
 		parentRec.WorkspaceID = "ws-1"
 		parentRec.AgentID = "chat-agent"
+		parentRec.Generation = 1
 		return nil, nil // no child to publish this call
 	})
 	if err != nil {
@@ -183,6 +184,7 @@ func TestPublishChildUnderParentLock_SameShardPair(t *testing.T) {
 			parentRec.OwnerScopeKind = OwnerScopeHuman
 			parentRec.WorkspaceID = "ws-1"
 			parentRec.AgentID = "chat-agent"
+			parentRec.Generation = 1
 			return &LifecycleRecord{
 				SessionID: child, Generation: 1, State: LifecycleQueued,
 				OwnerScopeKind: OwnerScopeParentSession, OwnerScopeID: parent,
@@ -226,6 +228,7 @@ func TestPublishChildUnderParentLock_ConcurrentDistinctParents_NeverDeadlocks(t 
 			err := s.PublishChildUnderParentLock(parent, func(parentRec *LifecycleRecord, existed bool) (*LifecycleRecord, error) {
 				parentRec.State = LifecycleRunning
 				parentRec.OwnerScopeKind = OwnerScopeHuman
+				parentRec.Generation = 1
 				if parentRec.WorkspaceID == "" {
 					parentRec.WorkspaceID = "ws-1"
 				}
