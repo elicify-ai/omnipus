@@ -51,11 +51,19 @@ func runForwarder(h *WSHandler, wc *wsConn, chatID string, bus *agent.EventBus) 
 
 // makeMinimalHandler builds a WSHandler with no real dependencies set.
 // eventForwarder only uses h.mu and h.taskChatIDs from the handler struct.
+//
+// #823 catch-up redesign: also initializes hubs, mirroring newWSHandler,
+// so tests can call h.hubSyncTap(evt) directly (the migrated equivalent of
+// runForwarder+bus.Emit for the event kinds now routed through the session
+// hub — see websocket_forward_hub.go). Harmless for every pre-existing
+// caller: nothing touched this field before this change, so no existing
+// test's behavior changes.
 func makeMinimalHandler() *WSHandler {
 	return &WSHandler{
 		sessions:    make(map[string]*wsConn),
 		sessionIDs:  make(map[string]string),
 		taskChatIDs: make(map[string]string),
+		hubs:        newHubRegistry(newHubBootID()),
 	}
 }
 
@@ -144,27 +152,30 @@ func TestSpawn_SubTurnEnd_EmitsSubagentEnd(t *testing.T) {
 // TestToolExecStart_CarriesParentCallID verifies FR-H-005:
 // tool_call_start frames fired inside a sub-turn carry parent_call_id.
 // Traces to: sprint-h-subagent-block-spec.md TDD row 4, BDD Scenario 2.
+// #823 catch-up redesign: migrated from runForwarder+bus.Emit (the retired
+// per-connection eventForwarder path, websocket_forward.go's onToolExecStart)
+// to h.hubSyncTap directly — EventKindToolExecStart is now translated and
+// delivered by the session hub (websocket_forward_hub.go's hubToolExecStart),
+// exactly once per event. The FR-H-005 parent_call_id assertions this test
+// pins are unchanged — hubToolExecStart's body was ported verbatim from
+// onToolExecStart.
 func TestToolExecStart_CarriesParentCallID(t *testing.T) {
-	bus := agent.NewEventBus()
-	defer bus.Close()
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, "chat-1", bus)
+	bindTestConnToSession(h, "chat-1", "chat-1", wc)
 
 	// Emit a ToolExecStart event that has a non-empty ParentSpawnCallID (inside a sub-turn).
-	bus.Emit(agent.Event{
+	h.hubSyncTap(agent.Event{
 		Kind: agent.EventKindToolExecStart,
 		Payload: agent.ToolExecStartPayload{
 			ToolCallID:        session.ToolCallID("t1"),
 			ChatID:            "chat-1",
+			SessionID:         "chat-1",
 			Tool:              "fs.list",
 			Arguments:         map[string]any{"path": "/tmp"},
 			ParentSpawnCallID: session.ToolCallID("c1"),
 		},
 	})
-
-	bus.Close()
-	<-done
 
 	require.Len(t, ch, 1)
 	frame := drainFrame(t, ch)
@@ -176,25 +187,23 @@ func TestToolExecStart_CarriesParentCallID(t *testing.T) {
 
 // TestToolExecStart_NoParentCallID_TopLevel verifies FR-H-005 negative case:
 // top-level tool calls (empty ParentSpawnCallID) must NOT carry parent_call_id.
+// #823 catch-up redesign: migrated to h.hubSyncTap, see the sibling test's
+// comment above.
 func TestToolExecStart_NoParentCallID_TopLevel(t *testing.T) {
-	bus := agent.NewEventBus()
-	defer bus.Close()
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, "chat-1", bus)
+	bindTestConnToSession(h, "chat-1", "chat-1", wc)
 
-	bus.Emit(agent.Event{
+	h.hubSyncTap(agent.Event{
 		Kind: agent.EventKindToolExecStart,
 		Payload: agent.ToolExecStartPayload{
 			ToolCallID: session.ToolCallID("t2"),
 			ChatID:     "chat-1",
+			SessionID:  "chat-1",
 			Tool:       "shell",
 			// ParentSpawnCallID is empty — top-level call.
 		},
 	})
-
-	bus.Close()
-	<-done
 
 	require.Len(t, ch, 1)
 	frame := drainFrame(t, ch)
@@ -355,15 +364,17 @@ func TestSpawn_SubTurnEnd_AfterParentDone_CancelsWatchdog(t *testing.T) {
 // is a structured delegation_denied payload is substituted — frame.Result
 // becomes the parsed object (not the raw string) and frame.Error carries the
 // human-readable reason. Mirrors the forwarder tests above.
+// #823 catch-up redesign: migrated from runForwarder+bus.Emit to
+// h.hubSyncTap directly — EventKindToolExecEnd now goes through the session
+// hub (websocket_forward_hub.go's hubToolExecEnd, ported verbatim from the
+// retired onToolExecEnd), exactly once per event.
 func TestToolExecEnd_DelegationDenied_SubstitutesStructuredResult(t *testing.T) {
-	bus := agent.NewEventBus()
-	defer bus.Close()
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, "chat-1", bus)
+	bindTestConnToSession(h, "chat-1", "sess-1", wc)
 
 	denial := `{"error":"delegation_denied","reason":"target untrusted","policy":"trust_set","tool":"spawn","target_agent_id":"evil"}`
-	bus.Emit(agent.Event{
+	h.hubSyncTap(agent.Event{
 		Kind: agent.EventKindToolExecEnd,
 		Payload: agent.ToolExecEndPayload{
 			ToolCallID: session.ToolCallID("call-deny"),
@@ -374,9 +385,6 @@ func TestToolExecEnd_DelegationDenied_SubstitutesStructuredResult(t *testing.T) 
 			Result:     denial,
 		},
 	})
-
-	bus.Close()
-	<-done
 
 	require.Len(t, ch, 1)
 	frame := drainFrame(t, ch)
@@ -406,14 +414,14 @@ func TestToolExecEnd_DelegationDenied_SubstitutesStructuredResult(t *testing.T) 
 // of "not substituted" is unchanged — but frame.Error is now populated from
 // that same string too, matching what pkg/gateway/replay.go's buildResult
 // already persists as session.ToolCall.Error for every failed tool call.
+// #823 catch-up redesign: migrated to h.hubSyncTap, see the sibling test's
+// comment above.
 func TestToolExecEnd_PlainError_NotSubstituted(t *testing.T) {
-	bus := agent.NewEventBus()
-	defer bus.Close()
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, "chat-1", bus)
+	bindTestConnToSession(h, "chat-1", "sess-1", wc)
 
-	bus.Emit(agent.Event{
+	h.hubSyncTap(agent.Event{
 		Kind: agent.EventKindToolExecEnd,
 		Payload: agent.ToolExecEndPayload{
 			ToolCallID: session.ToolCallID("call-err"),
@@ -424,9 +432,6 @@ func TestToolExecEnd_PlainError_NotSubstituted(t *testing.T) {
 			Result:     "permission denied",
 		},
 	})
-
-	bus.Close()
-	<-done
 
 	require.Len(t, ch, 1)
 	frame := drainFrame(t, ch)

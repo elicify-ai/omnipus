@@ -262,22 +262,13 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 		}
 
 		switch evt.Kind {
-		case agent.EventKindTurnStart:
-			f.onTurnStart(evt)
-		case agent.EventKindSubTurnSpawn:
-			f.onSubTurnSpawn(evt)
-		case agent.EventKindSubTurnEnd:
-			f.onSubTurnEnd(evt)
-		case agent.EventKindTurnEnd:
-			f.onTurnEnd(evt)
-		case agent.EventKindToolExecStart:
-			f.onToolExecStart(evt)
-		case agent.EventKindToolExecEnd:
-			f.onToolExecEnd(evt)
 		case agent.EventKindRateLimit:
+			// #823 catch-up redesign: session-scoped rate_limit now goes
+			// through the hub sync tap (websocket_forward_hub.go's
+			// hubRateLimit), exactly once per event regardless of tab
+			// count. onRateLimit now handles ONLY global-scope events
+			// (not tied to a session) — see its own doc comment.
 			f.onRateLimit(evt)
-		case agent.EventKindError:
-			f.onError(evt)
 		case agent.EventKindWhatsAppPairing:
 			f.onWhatsAppPairing(evt)
 		case agent.EventKindNotification:
@@ -286,18 +277,50 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			f.onTaskStatusChanged(evt)
 		case agent.EventKindPlanStatusChanged:
 			f.onPlanStatusChanged(evt)
-		case agent.EventKindGoalStatusChanged:
-			f.onGoalStatusChanged(evt)
-		case agent.EventKindGoalOutcome:
-			f.onGoalOutcome(evt)
-		case agent.EventKindJudgeVerdict:
-			f.onJudgeVerdict(evt)
-		case agent.EventKindLoopStatusChanged:
-			f.onLoopStatusChanged(evt)
 		case agent.EventKindTaskRunStatus:
 			f.onTaskRunStatus(evt)
-		case agent.EventKindToolResultProjection:
-			f.onToolResultProjection(evt)
+		// #823 catch-up redesign (honest gap, see SQUAD-REPORT-BEA.md):
+		// TurnStart/SubTurnSpawn/SubTurnEnd/TurnEnd stay on this
+		// per-connection path FOR NOW — the orphan-watchdog test suite
+		// (orphan_watchdog_*.go) is real-timer-driven and deadlock-prone
+		// if its precondition (watchdog armed) silently stops holding, so
+		// cutting these four over needs that whole suite migrated
+		// together in one pass, not attempted piecemeal here. The
+		// hub-side equivalents (hubTurnStart/hubSubTurnSpawn/
+		// hubSubTurnEnd/hubTurnEnd, websocket_forward_hub.go) are
+		// written and directly unit-tested, just not wired into
+		// hubSyncTap's dispatch yet.
+		case agent.EventKindTurnStart:
+			f.onTurnStart(evt)
+		case agent.EventKindSubTurnSpawn:
+			f.onSubTurnSpawn(evt)
+		case agent.EventKindSubTurnEnd:
+			f.onSubTurnEnd(evt)
+		case agent.EventKindTurnEnd:
+			f.onTurnEnd(evt)
+		case agent.EventKindToolExecStart, agent.EventKindToolExecEnd,
+			agent.EventKindError, agent.EventKindGoalStatusChanged, agent.EventKindGoalOutcome,
+			agent.EventKindJudgeVerdict, agent.EventKindLoopStatusChanged, agent.EventKindToolResultProjection:
+			// #823 catch-up redesign (BE-DESIGN.md §1.2): these kinds are
+			// now translated and delivered EXACTLY ONCE per event by the
+			// EventBus sync tap (websocket_forward_hub.go's hubSyncTap
+			// and its hubXxx handlers), not once per connected tab by
+			// this per-connection forwarder — that per-connection
+			// production was the root flaw the hub redesign closes (a
+			// session with N tabs would otherwise translate, and once
+			// hub-numbered, NUMBER, the same event N different ways).
+			// The old f.onToolExecStart/onToolExecEnd/onError/
+			// onGoalStatusChanged/onGoalOutcome/onJudgeVerdict/
+			// onLoopStatusChanged/onToolResultProjection methods that used
+			// to live in this file are DELETED, not just unwired —
+			// golangci-lint's unused-code check flagged them as dead once
+			// this case stopped calling them, and keeping unreachable code
+			// around was worse than deleting it. Every test that used to
+			// drive them through this per-connection path now calls
+			// h.hubSyncTap directly instead (see the migrated test files
+			// listed in SQUAD-REPORT-BEA.md). This case is explicitly
+			// empty (not a silent unmatched-case fallthrough) so the
+			// intent reads plainly at the call site.
 		case agent.EventKindLLMRequest, agent.EventKindLLMDelta, agent.EventKindLLMResponse,
 			agent.EventKindLLMRetry, agent.EventKindContextCompress,
 			agent.EventKindToolExecSkipped, agent.EventKindSteeringInjected, agent.EventKindFollowUpQueued,
@@ -739,311 +762,27 @@ func (f *eventForwardState) onTurnEnd(evt agent.Event) {
 }
 
 // onToolExecStart forwards agent.EventKindToolExecStart to this connection.
-func (f *eventForwardState) onToolExecStart(evt agent.Event) {
-	p, ok := evt.Payload.(agent.ToolExecStartPayload)
-	if !ok || !f.matchesEvent(p.ChatID, p.SessionID) {
-		return
-	}
-	// Prefer SessionID from payload; fall back to map lookup for legacy events.
-	startSID := p.SessionID
-	if startSID == "" {
-		startSID = f.sessionIDForChat(p.ChatID)
-	}
-	// FR-H-005: propagate parent_call_id when the tool fires inside a sub-turn.
-	// FR-I-008: propagate agent_id so live frames match replay frame parity.
-	// Nil-safety: params MUST be object (never null) — SPA calls Object.keys(params).
-	startArgs := p.Arguments
-	if startArgs == nil {
-		startArgs = map[string]any{}
-	}
-	// Use generated.ToolCallStartFrame (contract-first migration).
-	startF := generated.ToolCallStartFrame{
-		Type:      string(generated.WsFrameTypeToolCallStart),
-		SessionId: startSID,
-		CallId:    string(p.ToolCallID),
-		Tool:      p.Tool,
-		Params:    startArgs,
-	}
-	if p.AgentID != "" {
-		aid := p.AgentID
-		startF.AgentId = &aid
-	}
-	if p.ParentSpawnCallID != "" {
-		pc := string(p.ParentSpawnCallID)
-		startF.ParentCallId = &pc
-	}
-	// ADR-057 FR-012/FR-013 (W5b): tool_call_start is class (a) — a
-	// genuinely child-turn-produced frame (BDD-16; generated.
-	// ToolCallStartFrame's own doc comment). startSID above already
-	// carries the routing key per ToolExecStartPayload.SessionID's
-	// contract (events.go, U3/U9); ProducingSessionID is the emitting
-	// turn's own real session, left zero-valued by the emitter when it
-	// equals the routing key. Stamp the wire's optional
-	// producing_session_id only when it is non-empty AND differs from
-	// what was actually placed in SessionId — never "≥ 1" but the
-	// FR-013 "present iff it differs" rule, checked against startSID
-	// rather than raw p.SessionID so the sessionIDForChat fallback
-	// above can never manufacture a false "differs".
-	if producingSID := string(p.ProducingSessionID); producingSID != "" && producingSID != startSID {
-		startF.ProducingSessionId = &producingSID
-	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeToolCallStart), startF)
-}
-
 // onToolExecEnd forwards agent.EventKindToolExecEnd to this connection.
-func (f *eventForwardState) onToolExecEnd(evt agent.Event) {
-	p, ok := evt.Payload.(agent.ToolExecEndPayload)
-	if !ok || !f.matchesEvent(p.ChatID, p.SessionID) {
-		return
-	}
-	status := "success"
-	if p.IsError {
-		status = "error"
-	}
-	// Prefer SessionID from payload; fall back to map lookup for legacy events.
-	evtSID := p.SessionID
-	if evtSID == "" {
-		evtSID = f.sessionIDForChat(p.ChatID)
-	}
-	// FR-H-005: propagate parent_call_id when the tool fires inside a sub-turn.
-	// FR-I-008: propagate agent_id so live frames match replay frame parity.
-	// Use generated.ToolCallResultFrame (contract-first migration).
-	//
-	// Apply the lazy-fetch offload policy: when the string result exceeds
-	// InlineToolResultMaxBytes (50 KiB), persist it to disk and substitute a
-	// generated.ToolResultRef sentinel so the WS frame stays small.
-	var liveResult any = p.Result
-	// Structured tool failure (UAT fix, extended by ADR-059 W5): some
-	// tools emit a typed JSON object as their result rather than prose
-	// — a denied delegation (DelegationFailure) or a write_file
-	// precondition refusal (FileExistsRefusal). Parse it into a real
-	// object so the SPA receives the typed shape it can match on, and
-	// lift the human-readable reason into the frame's error field so
-	// renderers that show only `error` still show a sentence rather
-	// than a JSON blob.
-	var structuredErr string
-	if status == "error" {
-		if obj, reason, isStructured := parseStructuredToolFailure(p.Result); isStructured {
-			liveResult = obj
-			structuredErr = reason
-		}
-	}
-	if liveResult == any(p.Result) && len(p.Result) > InlineToolResultMaxBytes {
-		// JSON-encode the string to get the exact wire size.
-		if encoded, merr := json.Marshal(p.Result); merr == nil {
-			if sentinel, offloaded := maybeOffloadResult(f.h.toolStore, evtSID, encoded); offloaded {
-				liveResult = sentinel
-			}
-		}
-	}
-	resultF := generated.ToolCallResultFrame{
-		Type:      string(generated.WsFrameTypeToolCallResult),
-		SessionId: evtSID,
-		CallId:    string(p.ToolCallID),
-		Tool:      p.Tool,
-		Result:    liveResult,
-		Status:    status,
-	}
-	if p.Duration != 0 {
-		dm := int(p.Duration.Milliseconds())
-		resultF.DurationMs = &dm
-	}
-	if p.AgentID != "" {
-		aid := p.AgentID
-		resultF.AgentId = &aid
-	}
-	if p.ParentSpawnCallID != "" {
-		pc := string(p.ParentSpawnCallID)
-		resultF.ParentCallId = &pc
-	}
-	// Live/replay error parity (fixes the inverted-parity gap left by
-	// RC-5c in pkg/gateway/replay.go's buildResult): that replay
-	// reconstruction sets ToolCallResultFrame.Error from tc.Error for
-	// EVERY persisted failure (session.ToolCall.Error, populated in
-	// pkg/agent/loop.go's runTurn whenever toolResult.IsError and no
-	// richer Result was already attached — see tcRecord.Error's own
-	// RC-5 comment there), not just delegation denials. Before this,
-	// the live path here populated .Error ONLY via the
-	// parseStructuredToolFailure special case above, so a failed bash/
-	// write_file/etc. call showed NO error live but DID show one
-	// after a page reload — the exact opposite of parity. p.Result is
-	// ToolExecEndPayload.Result, which loop.go sets to the very same
-	// contentForLLM string tcRecord.Error is derived from (pre the
-	// persisted side's truncation) — so it is the same string the
-	// transcript records.
-	//
-	// It MUST be truncated to the same bound the persisted side uses,
-	// for two independent reasons:
-	//
-	//  1. SIZE. resultF.Result is subject to the
-	//     InlineToolResultMaxBytes offload a few lines above: a result
-	//     over 50 KiB is written to disk and replaced with a small
-	//     ToolResultRef sentinel, because a multi-megabyte frame can
-	//     OOM a constrained client (see maybeOffloadResult). Assigning
-	//     the raw p.Result to Error would put the entire string back
-	//     into the very same frame, defeating that guard — and the
-	//     error path is where large payloads are MOST likely (stderr
-	//     dumps, stack traces, build logs).
-	//
-	//  2. PARITY, which is the whole point of this branch. The
-	//     persisted side caps at maxFailClosedOutputChars, so an
-	//     untruncated live value means a long error renders one way
-	//     live and a different way after a reload — the same class of
-	//     divergence this change set out to remove.
-	switch {
-	case structuredErr != "":
-		// Truncated for the same two reasons the comment above states
-		// as MUST, and which the branch below already honours: frame
-		// size, and parity with the persisted side's own 2000-rune
-		// cap. This branch was the one place that skipped it.
-		se := truncateRunesForFrame(structuredErr, maxLiveErrorChars)
-		resultF.Error = &se
-	case status == "error" && p.Result != "" && liveResult != any(p.Result):
-		// Only when Result no longer carries the text itself.
-		//
-		// `liveResult != any(p.Result)` is true exactly when Result was
-		// REPLACED above — either offloaded to disk as a ToolResultRef
-		// sentinel (over InlineToolResultMaxBytes) or parsed into a
-		// structured object. In those cases the frame would otherwise
-		// reach the client with no readable reason at all, so Error is
-		// the only thing carrying it.
-		//
-		// When Result IS still the plain string, setting Error would
-		// ship the identical text twice in one frame. That is pure
-		// duplication: the SPA already has the reason in Result.
-		//
-		// Replay is unaffected and still sets Error unconditionally
-		// from the persisted record — it must, because on the persisted
-		// side Result is nil for ordinary tool failures (only media and
-		// synchronous delegate calls populate it), so Error is the ONLY
-		// carrier there. That asymmetry is deliberate: each path sets
-		// Error precisely when its own Result cannot carry the reason.
-		liveErr := truncateRunesForFrame(p.Result, maxLiveErrorChars)
-		resultF.Error = &liveErr
-	}
-	// ADR-057 FR-012/FR-013 (W5b): tool_call_result is class (a) —
-	// genuinely child-turn-produced (BDD-16; generated.
-	// ToolCallResultFrame's own doc comment). See the tool_call_start
-	// stamping above for the identical "present iff it differs from
-	// what's actually on the wire" contract.
-	var producingSIDForResult string
-	if producingSID := string(p.ProducingSessionID); producingSID != "" && producingSID != evtSID {
-		resultF.ProducingSessionId = &producingSID
-		producingSIDForResult = producingSID
-	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeToolCallResult), resultF)
-	// When switch_agent succeeds, notify the frontend to switch agents.
-	// Use evtSID (the session ID from the payload) to key the lookup, not chatID.
-	//
-	// ADR-057 FR-089 (W5 audit): agent_switched is class (a), not
-	// "class not yet assigned" (generated.AgentSwitchedFrame's doc
-	// comment pre-audit) — it is derived from THIS SAME
-	// ToolExecEndPayload, at the exact call site whose tool_call_result
-	// sibling is already verified class (a): a delegated child can
-	// invoke switch_agent on its OWN session exactly as a root turn
-	// can, so evtSID here is the CHILD's own producing session
-	// whenever switch_agent ran inside a sub-turn, distinct from the
-	// routing key placed in SessionId below. Reuses
-	// producingSIDForResult computed above rather than re-deriving it,
-	// since both frames answer the identical "does this ToolExecEnd's
-	// producer differ from its routing key" question.
-	//
-	// ADR-071 §5.2.1/§5.2.2: this used to be TWO exact-string
-	// branches (p.Tool == "hand_off" and p.Tool == "return_to_default"),
-	// one per retired tool. D4 merged both into one tool name with no
-	// arguments in ToolExecEndPayload to distinguish which branch ran
-	// (agent.ToolExecEndPayload carries no tool-arguments field).
-	//
-	// The semantic is NOT re-derived from the resulting agent id
-	// (§5.2.2 decision A's original approach: comparing the
-	// session's post-switch active agent against the registry's
-	// default agent id) — that comparison misreports an explicit
-	// switch_agent(target:"<id>") that happens to name the CURRENT
-	// default agent as a return-to-default, since the resulting
-	// AgentID is identical in both cases. Instead this reads the
-	// tool's own toDefault intent back via GetLastSwitchToDefault,
-	// populated synchronously by onHandoffFrontend (pkg/agent/loop.go)
-	// from tools.HandoffEvent.ToDefault before this ToolExecEnd event
-	// is even emitted, keyed the same way GetSessionActiveAgent is.
-	if p.Tool == "switch_agent" && status == "success" {
-		defaultAgent := f.h.agentLoop.GetRegistry().GetDefaultAgent()
-		var defaultName string
-		if defaultAgent != nil {
-			defaultName = defaultAgent.Name
-		}
-		activeAgent, activeOk := f.h.agentLoop.GetSessionActiveAgent(evtSID)
-		toDefault, sawToDefault := f.h.agentLoop.GetLastSwitchToDefault(evtSID)
-		if !activeOk {
-			// After a SUCCESSFUL switch this is an invariant
-			// violation, not a normal path (§5.2.2) — WARN rather
-			// than silently emitting nothing, so this is
-			// distinguishable in logs from the exact regression
-			// this section exists to prevent. Still emit a frame
-			// below (defaulting to the "returned to default" shape)
-			// rather than dropping it — the sibling
-			// return_to_default branch never had this guard and
-			// always emitted.
-			slog.Warn("websocket: switch_agent succeeded but no active agent found for session",
-				"session_id", evtSID)
-		}
-		if !sawToDefault {
-			// Should not happen on the success path — onHandoffFrontend
-			// stores this before Execute returns, strictly before this
-			// event fires. Fall back to the old id-comparison so a
-			// frame still emits (best-effort) rather than silently
-			// dropping, and make the anomaly visible.
-			slog.Warn("websocket: switch_agent succeeded but no toDefault record found for session; falling back to id comparison",
-				"session_id", evtSID)
-			toDefault = !activeOk || activeAgent == "" || (defaultAgent != nil && activeAgent == defaultAgent.ID)
-		}
-		switchF := generated.AgentSwitchedFrame{
-			Type:      string(generated.WsFrameTypeAgentSwitched),
-			SessionId: evtSID,
-		}
-		if activeOk && activeAgent != "" && !toDefault {
-			// Named-target switch.
-			agentName, _ := f.h.agentLoop.GetRegistry().GetAgentName(activeAgent)
-			switchF.AgentId = &activeAgent
-			if agentName != "" {
-				switchF.Message = &agentName
-			}
-		} else {
-			// Returned to default (or the active-agent lookup was
-			// unavailable — best-effort default shape per the WARN
-			// above). AgentId omitted (nil ptr) = return to default
-			// agent.
-			if defaultName != "" {
-				switchF.Message = &defaultName
-			}
-		}
-		if producingSIDForResult != "" {
-			pid := producingSIDForResult
-			switchF.ProducingSessionId = &pid
-		}
-		sendConnGenFrame(f.wc, string(generated.WsFrameTypeAgentSwitched), switchF)
-	}
-}
-
 // onRateLimit forwards agent.EventKindRateLimit to this connection.
 func (f *eventForwardState) onRateLimit(evt agent.Event) {
 	// SEC-26: forward rate-limit denials to the browser so the chat UI
 	// can display an inline indicator. Global-scope events (daily cost
 	// cap) are broadcast to every connection since they are not tied
 	// to a specific chatID.
+	//
+	// #823 catch-up redesign: SESSION-scoped rate_limit denials now go
+	// through the hub sync tap (websocket_forward_hub.go's hubRateLimit)
+	// exactly once per event instead of once per connected tab — this
+	// method now handles ONLY the global-scope branch, unchanged from
+	// before, per-connection (a global event is not tied to any one
+	// session, so it has no session hub to number it through).
 	p, ok := evt.Payload.(agent.RateLimitPayload)
-	if !ok {
+	if !ok || p.Scope != "global" {
 		return
 	}
-	// Prefer the routing session stamped on the payload so a
-	// second tab / reload attached to the same session still
-	// sees the denial. ChatID alone is a dead webchat: uuid
-	// after ServeHTTP mints a new connection.
 	rateSID := p.SessionID
 	if rateSID == "" {
 		rateSID = f.sessionIDForChat(p.ChatID)
-	}
-	if p.Scope != "global" && !f.matchesEvent(p.ChatID, rateSID) {
-		return
 	}
 	// Use generated.RateLimitFrame (contract-first migration).
 	rateF := generated.RateLimitFrame{
@@ -1066,120 +805,6 @@ func (f *eventForwardState) onRateLimit(evt agent.Event) {
 }
 
 // onError forwards agent.EventKindError to this connection.
-func (f *eventForwardState) onError(evt agent.Event) {
-	// ADR-051 §RD6: forward translated provider/LLM errors to the
-	// browser so the chat UI can render the typed ErrorFrame inline
-	// (Code/Retryable/Detail) instead of the raw provider text.
-	//
-	// NO CODE IS SUPPRESSED HERE — and `rate_limited` least of all.
-	// This arm used to end with an unconditional
-	// `if code == agent.CodeRateLimited { continue }`, justified as
-	// "the dedicated RateLimitFrame above is authoritative for that
-	// class". That justification was false, and it cost a user their
-	// only signal: an upstream HTTP 429 produced a turn that opened,
-	// said nothing, and closed reporting success.
-	//
-	// The two mechanisms share a code NAME but not a producer:
-	//
-	//   - EventKindRateLimit (the arm above) has EXACTLY ONE producer,
-	//     AgentLoop.recordRateLimitDenial (pkg/agent/loop.go), called
-	//     from two sites both guarded on Omnipus's OWN internal SEC-26
-	//     limiter being configured (cfg.Sandbox.RateLimits.MaxAgent{
-	//     LLMCallsPerHour,ToolCallsPerMinute} > 0). It means "Omnipus
-	//     denied this".
-	//   - An UPSTREAM refusal never reaches that function at all. It
-	//     travels runTurn's LLM-error block, which emits EventKindError
-	//     with Code: "rate_limited". It means "the provider denied
-	//     this" — a different fact with a different remedy (wait /
-	//     retry / switch model, not raise your own cap).
-	//
-	// So the suppression could never de-duplicate anything: it only
-	// ever deleted the provider case, with nothing replacing it.
-	//
-	// Nor is a dual-emit lurking behind it. recordRateLimitDenial emits
-	// ONE event, and its doc comment records that the prior
-	// "EventKindError + RateLimitPayload + EventKindRateLimit"
-	// dual-emit was deliberately removed as bus pollution — that
-	// removal was correct and stays. Even reinstated in its old shape
-	// it could not reach this frame: it carried a RateLimitPayload,
-	// which the ErrorPayload type assertion immediately below already
-	// rejects. Dedup belongs at the producer (one event per denial),
-	// not here — pinned end-to-end by
-	// TestEventForwarder_InternalRateLimitDenial_EmitsExactlyOneFrame.
-	p, ok := evt.Payload.(agent.ErrorPayload)
-	if !ok {
-		return
-	}
-	// Prefer the routing session stamped on the payload (survives
-	// reload: the originating chatID is a dead webchat: uuid).
-	// Fall back to the live chatID→session map for older emitters
-	// that only set ChatID.
-	errSID := p.SessionID
-	if errSID == "" {
-		errSID = f.sessionIDForChat(p.ChatID)
-	}
-	if !f.matchesEvent(p.ChatID, errSID) {
-		return
-	}
-	// FIX 2: prefer the already-computed p.Code/p.Message over a
-	// fresh TranslateLLMError call. Every ErrorPayload construction
-	// site now populates Code (pkg/agent's FIX 3) alongside a
-	// Message that is EITHER the classifier's own generic copy OR —
-	// for trusted internal stages (hook aborts, model-switch
-	// failures, session save/restore, synthetic-error-floor,
-	// external-CLI sanitized text) — caller-curated text that must
-	// reach the wire verbatim. This mirrors appendErrorTranscript's
-	// write-choke-point behavior (pkg/agent/turn.go): re-running
-	// TranslateLLMError against already-curated text here would
-	// re-classify it against the generic message catalog and
-	// silently replace the curated copy with boilerplate whenever
-	// the text happened to contain a pinned substring (e.g. a hook
-	// abort reason mentioning "safety") — exactly the live-vs-replay
-	// divergence this closes. Only fall back to a fresh translation
-	// when a call site left Code empty (defensive — after FIX 3
-	// every production site sets it).
-	translated := agent.TranslateLLMError(p.ProviderError, p.Message)
-	code := translated.Code
-	message := translated.Message
-	retryable := translated.Retryable
-	detail := translated.Detail
-	if p.Code != "" {
-		code = agent.LLMErrorCode(p.Code)
-		message = p.Message
-		retryable = agent.IsRetryableCode(code)
-		// FIX 2 (re-review): detail must follow the same
-		// curated-preferred rule as code/message/retryable above,
-		// not silently stay pinned to the fresh-classification
-		// value computed a few lines up. Recomputing from
-		// (p.ProviderError, message) — message is already the
-		// curated p.Message reassigned just above — is a no-op
-		// TODAY (every curated site passes ProviderError: nil, so
-		// agent.BuildDetail(nil, msg) echoes msg exactly like
-		// translated.Detail already does), but stops being one the
-		// day a curated site pairs a curated Code+Message with a
-		// non-nil ProviderError: buildDetail favors pe.Status/
-		// pe.Body over the message argument once pe != nil, so
-		// leaving this pinned to `translated.Detail` would render a
-		// diagnostic string that was never validated against the
-		// curated Code/Message this frame actually carries.
-		detail = agent.BuildDetail(p.ProviderError, message)
-	}
-	errF := generated.ErrorFrame{
-		Type:      string(generated.WsFrameTypeError),
-		SessionId: &errSID,
-		Message:   message,
-	}
-	errF.Payload = &generated.ErrorPayload{
-		LlmError: generated.LLMError{
-			Code:      string(code),
-			Message:   message,
-			Retryable: retryable,
-			Detail:    &detail,
-		},
-	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeError), errF)
-}
-
 // onWhatsAppPairing forwards agent.EventKindWhatsAppPairing to this connection.
 func (f *eventForwardState) onWhatsAppPairing(evt agent.Event) {
 	// #283: WhatsApp linked-device pairing (QR + status). Not tied to a
@@ -1327,114 +952,9 @@ func (f *eventForwardState) onPlanStatusChanged(evt agent.Event) {
 }
 
 // onGoalStatusChanged forwards agent.EventKindGoalStatusChanged to this connection.
-func (f *eventForwardState) onGoalStatusChanged(evt agent.Event) {
-	// ADR-049 D6/D7: a session's `/goal` loop status changed (set,
-	// round advance, met, bound reached, cleared). Broadcast to every
-	// connection, mirroring EventKindPlanStatusChanged — the SPA
-	// matches session_id client-side to the currently open session.
-	p, ok := evt.Payload.(agent.GoalStatusChangedPayload)
-	if !ok {
-		return
-	}
-	goalF := generated.GoalStatusFrame{
-		Type:         string(generated.WsFrameTypeGoalStatus),
-		SessionId:    p.SessionID,
-		Condition:    p.Condition,
-		Round:        p.Round,
-		MaxRounds:    p.MaxRounds,
-		LatestReason: p.LatestReason,
-		ActiveLoops:  p.ActiveLoops,
-		Cap:          p.Cap,
-		State:        p.State,
-	}
-	// ADR-053 R§8.11 / UAT S3 fix: goal_id disambiguates which goal
-	// generation this frame updates so the SPA's GoalPillTray can key
-	// one pill per goal-id instead of collapsing every goal a session
-	// ever carried into the `_default` bucket. Optional on the wire —
-	// omitted for a legacy pre-upgrade goal that never had one minted.
-	if p.GoalID != "" {
-		gid := p.GoalID
-		goalF.GoalId = &gid
-	}
-	// ADR-074 D5.2 / FR-011: the compiled criteria breakdown rides the
-	// `queued` (pending-confirm) emission so the SPA's echo card can
-	// itemize exactly what will run (commands verbatim). Optional on
-	// the wire — absent (nil) on every other emission.
-	setGoalStatusCriteria(&goalF, p.Criteria)
-	// ADR-080 D-STATEMENT/D-DOD: the restated goal statement and the
-	// Definition-of-Done breakdown ride the SAME `queued` emission as
-	// Criteria above — both optional on the wire, absent on every
-	// other emission (goal_loop.go's emitGoalStatusFrameWithCriteriaAndDoD
-	// only ever populates them on the pending-confirm push).
-	if p.Definition != "" {
-		def := p.Definition
-		goalF.Definition = &def
-	}
-	setGoalStatusDoD(&goalF, p.DoD)
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeGoalStatus), goalF)
-}
-
 // onGoalOutcome forwards agent.EventKindGoalOutcome to this connection.
-func (f *eventForwardState) onGoalOutcome(evt agent.Event) {
-	// A goal ENDED (founder decision 2026-09-14): the lasting outcome
-	// line. pkg/agent emits this right after saving the matching
-	// `system_subtype: goal_outcome` transcript entry, with that
-	// entry's id as message_id, so this live frame, the replayed one
-	// (replay.go) and a cold REST load converge on one thread line.
-	// Broadcast like goal_status above; the SPA routes it by
-	// session_id (SESSION_SCOPED_FRAME_TYPES).
-	p, ok := evt.Payload.(agent.GoalOutcomePayload)
-	if !ok {
-		return
-	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeGoalOutcome),
-		goalOutcomeFrame(p.SessionID, p.MessageID, p.Outcome))
-}
-
 // onJudgeVerdict forwards agent.EventKindJudgeVerdict to this connection.
-func (f *eventForwardState) onJudgeVerdict(evt agent.Event) {
-	// pkg/agent emits this right after saving the matching
-	// `judge_verdict` transcript entry (task_executor.go's
-	// writeJudgeVerdictTranscript, goal_loop.go's
-	// writeGoalVerdictTranscript). Broadcast to every connection like
-	// goal_outcome above — toJudgeVerdictFrame (replay.go) is the ONE
-	// conversion both this live push and replay use, so the two
-	// frames for one round can never differ. p.SessionID is "" for a
-	// scope=plan verdict (never emitted today) — toJudgeVerdictFrame
-	// leaves session_id absent on the wire in that case, and the SPA
-	// keeps today's GLOBAL panel-only routing for it.
-	p, ok := evt.Payload.(agent.JudgeVerdictPayload)
-	if !ok {
-		return
-	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeJudgeVerdict),
-		toJudgeVerdictFrame(p.SessionID, p.Verdict))
-}
-
 // onLoopStatusChanged forwards agent.EventKindLoopStatusChanged to this connection.
-func (f *eventForwardState) onLoopStatusChanged(evt agent.Event) {
-	// ADR-049 D6/D7: a session's `/loop` status changed (set, run
-	// fired, run-cap reached, stop). Broadcast to every connection,
-	// mirroring EventKindGoalStatusChanged above.
-	p, ok := evt.Payload.(agent.LoopStatusChangedPayload)
-	if !ok {
-		return
-	}
-	loopF := generated.LoopStatusFrame{
-		Type:      string(generated.WsFrameTypeLoopStatus),
-		SessionId: p.SessionID,
-		Mode:      p.Mode,
-		Run:       p.Run,
-		MaxRuns:   p.MaxRuns,
-		State:     p.State,
-	}
-	if p.NextDelay != nil {
-		nd := int64(*p.NextDelay)
-		loopF.NextDelay = &nd
-	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeLoopStatus), loopF)
-}
-
 // onTaskRunStatus forwards agent.EventKindTaskRunStatus to this connection.
 func (f *eventForwardState) onTaskRunStatus(evt agent.Event) {
 	// A per-execution run opened or closed (ADR-050). Broadcast so the
@@ -1458,35 +978,3 @@ func (f *eventForwardState) onTaskRunStatus(evt agent.Event) {
 }
 
 // onToolResultProjection forwards agent.EventKindToolResultProjection to this connection.
-func (f *eventForwardState) onToolResultProjection(evt agent.Event) {
-	// ADR-066 D5 / FR-022 (T066-12): a tool result this session already
-	// received was emptied in place in the model's window. Push the
-	// typed tool_result_projection frame so the SPA re-renders the
-	// matching tool call (the mark only under Verbose chat); on reload
-	// the same state arrives as ToolCall.content_state on the
-	// transcript. Session-scoped: same matchesEvent / session-id
-	// contract as tool_call_result (ToolExecEndPayload).
-	p, ok := evt.Payload.(agent.ToolResultProjectionPayload)
-	if !ok || !f.matchesEvent(p.ChatID, p.SessionID) {
-		return
-	}
-	projSID := p.SessionID
-	if projSID == "" {
-		projSID = f.sessionIDForChat(p.ChatID)
-	}
-	projF := generated.ToolResultProjectionFrame{
-		Type:         string(generated.WsFrameTypeToolResultProjection),
-		SessionId:    projSID,
-		ToolCallId:   string(p.ToolCallID),
-		ArchiveLine:  p.ArchiveLine,
-		ContentState: p.ContentState,
-	}
-	if p.Mark != "" {
-		mark := p.Mark
-		projF.Mark = &mark
-	}
-	if producingSID := string(p.ProducingSessionID); producingSID != "" && producingSID != projSID {
-		projF.ProducingSessionId = &producingSID
-	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeToolResultProjection), projF)
-}

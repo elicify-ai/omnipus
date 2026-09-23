@@ -58,21 +58,22 @@ func judgeVerdictLiveFixture(t *testing.T) (session.TranscriptEntry, task.JudgeV
 	return readBack, verdict
 }
 
+// #823 catch-up redesign: migrated from runForwarder+bus.Emit to
+// h.hubSyncTap directly — EventKindJudgeVerdict now goes through the
+// session hub (websocket_forward_hub.go's hubJudgeVerdict), sequenced for
+// this session's own connections (BE-DESIGN.md §1.4).
 func TestJudgeVerdictFrame_LiveAndReplayCarryTheSameSessionID(t *testing.T) {
 	const sessionID = "session_judge_verdict_live"
 	entry, verdict := judgeVerdictLiveFixture(t)
 
-	// Live: the real event forwarder turns the agent's event into a frame.
-	bus := agent.NewEventBus()
+	// Live: the hub sync tap turns the agent's event into a frame.
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(8)
-	done := runForwarder(h, wc, "chat-judge", bus)
-	bus.Emit(agent.Event{
+	bindTestConnToSession(h, "chat-judge", sessionID, wc)
+	h.hubSyncTap(agent.Event{
 		Kind:    agent.EventKindJudgeVerdict,
 		Payload: agent.JudgeVerdictPayload{SessionID: sessionID, Verdict: verdict},
 	})
-	bus.Close()
-	<-done
 	require.Len(t, ch, 1, "exactly one frame for one verdict")
 	liveRaw := <-ch
 
@@ -100,7 +101,18 @@ func TestJudgeVerdictFrame_LiveAndReplayCarryTheSameSessionID(t *testing.T) {
 	require.NotNil(t, replayed.SessionId, "the replayed frame must carry session_id so a reload still shows the card")
 	assert.Equal(t, sessionID, *live.SessionId)
 	assert.Equal(t, sessionID, *replayed.SessionId)
-	assert.JSONEq(t, string(liveRaw), string(replayRaw[0]), "live and replayed frames for one round must be identical")
+	// #823 catch-up redesign: the live frame now carries a real hub-assigned
+	// seq (BE-DESIGN.md §1.1) that the replayed frame deliberately does NOT
+	// (replay/snapshot bodies are unsequenced — §4.1's streamReplay call is
+	// explicitly the unsequenced path). "Live and replayed frames for one
+	// round must be identical" no longer holds byte-for-byte; it now means
+	// "identical apart from seq, which live legitimately has and replay
+	// legitimately does not" — asserted here, then the two are compared with
+	// seq zeroed out on both sides so any OTHER field drift still fails.
+	require.NotNil(t, live.Seq, "the live judge_verdict frame must carry a hub-assigned seq")
+	assert.Nil(t, replayed.Seq, "a replayed judge_verdict frame must stay unsequenced")
+	live.Seq = nil
+	assert.Equal(t, replayed, live, "live and replayed frames for one round must be identical apart from seq")
 
 	// The frame carries the contract's fields verbatim.
 	assert.Equal(t, "judge_verdict", replayed.Type)

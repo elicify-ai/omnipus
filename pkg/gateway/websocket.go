@@ -514,6 +514,16 @@ func newWSHandler(
 	// The channel Manager is the registered delegate; the bus's atomic.Pointer
 	// panics on a type mismatch if you store a different concrete type after boot.
 	// Webchat streaming flows through Manager.GetStreamer → WSHandler.GetStreamer.
+
+	// #823 catch-up redesign (BE-DESIGN.md §1.3): install the session-hub
+	// sync tap so every session-scoped conversation event is translated and
+	// numbered EXACTLY ONCE, regardless of how many tabs are attached — see
+	// websocket_forward_hub.go's file header for the root flaw this fixes.
+	// Guarded on agentLoop != nil for the (rare) test harness that
+	// constructs a *WSHandler with no agent loop wired at all.
+	if agentLoop != nil {
+		agentLoop.SetEventSyncTap(h.hubSyncTap)
+	}
 	return h
 }
 

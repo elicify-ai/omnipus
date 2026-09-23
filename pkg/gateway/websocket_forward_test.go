@@ -120,23 +120,25 @@ func TestEventForwarder_SessionBasedFallback_DoesNotLeakAcrossDifferentSessions(
 // tab's chatID, so a second tab (or a reload) attached to the same session
 // dropped the typed error. token+done still fanned out, and the error
 // bubble never appeared.
+// #823 catch-up redesign: migrated from runForwarder+bus.Emit to
+// h.hubSyncTap directly — EventKindError now goes through the session hub
+// (websocket_forward_hub.go's hubError, ported verbatim from the retired
+// onError), exactly once per event, delivered to every connection
+// resolveSessionConnsLocked finds for the payload's own SessionID — which is
+// exactly the "reaches a reattached connection by session, not by stale
+// chatID" guarantee this test pins, now enforced by the hub's delivery
+// resolution instead of eventForwarder's per-connection matchesEvent.
 func TestEventForwarder_ErrorFrame_ReachesReattachedConnection(t *testing.T) {
-	bus := agent.NewEventBus()
-	defer bus.Close()
 	h := makeMinimalHandler()
 
 	const newChatID = "webchat:new-connection-after-reload"
 	const staleChatID = "webchat:stale-connection-before-reload"
 	const durableSessionID = "session-durable-error-abc"
 
-	h.mu.Lock()
-	h.sessionIDs[newChatID] = durableSessionID
-	h.mu.Unlock()
-
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, newChatID, bus)
+	bindTestConnToSession(h, newChatID, durableSessionID, wc)
 
-	bus.Emit(agent.Event{
+	h.hubSyncTap(agent.Event{
 		Kind: agent.EventKindError,
 		Payload: agent.ErrorPayload{
 			Stage:     "workspace",
@@ -146,9 +148,6 @@ func TestEventForwarder_ErrorFrame_ReachesReattachedConnection(t *testing.T) {
 			SessionID: durableSessionID,
 		},
 	})
-
-	bus.Close()
-	<-done
 
 	require.Len(t, ch, 1,
 		"a typed error whose ChatID names a stale connection must still reach a NEW connection attached to the SAME session")
@@ -199,23 +198,22 @@ func TestEventForwarder_ErrorFrame_DoesNotLeakAcrossDifferentSessions(t *testing
 // internal-limiter twin of TestEventForwarder_ErrorFrame_ReachesReattachedConnection.
 // EventKindRateLimit used to match on ChatID only, so a second tab (or a
 // reload) attached to the same session never saw Omnipus's own SEC-26 denial.
+// #823 catch-up redesign: migrated to h.hubSyncTap directly —
+// EventKindRateLimit (SESSION scope) now goes through the session hub
+// (websocket_forward_hub.go's hubRateLimit), see
+// TestEventForwarder_ErrorFrame_ReachesReattachedConnection's comment above
+// for the full rationale.
 func TestEventForwarder_RateLimitFrame_ReachesReattachedConnection(t *testing.T) {
-	bus := agent.NewEventBus()
-	defer bus.Close()
 	h := makeMinimalHandler()
 
 	const newChatID = "webchat:new-connection-after-reload"
 	const staleChatID = "webchat:stale-connection-before-reload"
 	const durableSessionID = "session-durable-ratelimit-abc"
 
-	h.mu.Lock()
-	h.sessionIDs[newChatID] = durableSessionID
-	h.mu.Unlock()
-
 	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, newChatID, bus)
+	bindTestConnToSession(h, newChatID, durableSessionID, wc)
 
-	bus.Emit(agent.Event{
+	h.hubSyncTap(agent.Event{
 		Kind: agent.EventKindRateLimit,
 		Payload: agent.RateLimitPayload{
 			Scope:             "agent",
@@ -227,9 +225,6 @@ func TestEventForwarder_RateLimitFrame_ReachesReattachedConnection(t *testing.T)
 			SessionID:         durableSessionID,
 		},
 	})
-
-	bus.Close()
-	<-done
 
 	require.Len(t, ch, 1,
 		"an internal rate-limit whose ChatID names a stale connection must still reach a NEW connection attached to the SAME session")
@@ -287,21 +282,19 @@ func TestEventForwarder_ErrorFrame_DetailScrubsRegisteredCredential(t *testing.T
 	pe := &agent.ProviderError{Status: 503, Body: body}
 	translated := agent.TranslateLLMError(pe, "LLM call failed")
 
-	bus := agent.NewEventBus()
-	defer bus.Close()
+	// #823 catch-up redesign: migrated to h.hubSyncTap directly (see
+	// TestEventForwarder_ErrorFrame_ReachesReattachedConnection's comment).
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(4)
-	done := runForwarder(h, wc, "chat-1", bus)
+	bindTestConnToSession(h, "chat-1", "chat-1", wc)
 
-	bus.Emit(agent.Event{Kind: agent.EventKindError, Payload: agent.ErrorPayload{
+	h.hubSyncTap(agent.Event{Kind: agent.EventKindError, Payload: agent.ErrorPayload{
 		Stage:         "llm",
 		ChatID:        "chat-1",
 		Code:          string(translated.Code),
 		Message:       translated.Message,
 		ProviderError: pe,
 	}})
-	bus.Close()
-	<-done
 
 	require.Len(t, ch, 1)
 	raw := <-ch
@@ -388,17 +381,15 @@ func TestEventForwarder_ErrorFrame_PrefersPayloadCodeAndMessage(t *testing.T) {
 		},
 	}
 
+	// #823 catch-up redesign: migrated to h.hubSyncTap directly (see
+	// TestEventForwarder_ErrorFrame_ReachesReattachedConnection's comment).
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			bus := agent.NewEventBus()
-			defer bus.Close()
 			h := makeMinimalHandler()
 			wc, ch := makeForwarderTestConn(4)
-			done := runForwarder(h, wc, "chat-1", bus)
+			bindTestConnToSession(h, "chat-1", "chat-1", wc)
 
-			bus.Emit(agent.Event{Kind: agent.EventKindError, Payload: tc.payload})
-			bus.Close()
-			<-done
+			h.hubSyncTap(agent.Event{Kind: agent.EventKindError, Payload: tc.payload})
 
 			require.Len(t, ch, 1)
 			raw := <-ch
@@ -455,17 +446,15 @@ func TestEventForwarder_ErrorFrame_DetailFollowsCuratedRule(t *testing.T) {
 		},
 	}
 
+	// #823 catch-up redesign: migrated to h.hubSyncTap directly (see
+	// TestEventForwarder_ErrorFrame_ReachesReattachedConnection's comment).
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			bus := agent.NewEventBus()
-			defer bus.Close()
 			h := makeMinimalHandler()
 			wc, ch := makeForwarderTestConn(4)
-			done := runForwarder(h, wc, "chat-1", bus)
+			bindTestConnToSession(h, "chat-1", "chat-1", wc)
 
-			bus.Emit(agent.Event{Kind: agent.EventKindError, Payload: tc.payload})
-			bus.Close()
-			<-done
+			h.hubSyncTap(agent.Event{Kind: agent.EventKindError, Payload: tc.payload})
 
 			require.Len(t, ch, 1)
 			raw := <-ch
@@ -535,14 +524,25 @@ func TestEventForwarder_RateLimitFrame_RoutingAndFieldMapping(t *testing.T) {
 		},
 	}
 
+	// #823 catch-up redesign: this test spans BOTH delivery paths — an
+	// agent-scoped (session) denial now goes through the hub tap
+	// (hubRateLimit), while a global-scope denial stays on the legacy
+	// per-connection forwarder (onRateLimit, modified to handle only
+	// global scope). A real *WSHandler built via newWSHandler gets both
+	// automatically (EventBus.Emit calls the sync tap before its
+	// subscriber fan-out); this test drives a bare EventBus directly, so
+	// it must call h.hubSyncTap itself, in the same before-fan-out order,
+	// to reproduce that.
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			evBus := agent.NewEventBus()
 			defer evBus.Close()
 			h := makeMinimalHandler()
 			wc, ch := makeForwarderTestConn(4)
+			bindTestConnToSession(h, "chat-1", "chat-1", wc)
 			done := runForwarder(h, wc, "chat-1", evBus)
 
+			h.hubSyncTap(agent.Event{Kind: agent.EventKindRateLimit, Payload: tc.payload})
 			evBus.Emit(agent.Event{Kind: agent.EventKindRateLimit, Payload: tc.payload})
 			evBus.Close()
 			<-done
@@ -662,6 +662,31 @@ func TestEventForwarder_InternalRateLimitDenial_EmitsExactlyOneFrame(t *testing.
 	sub := al.SubscribeEvents(256)
 	h := makeMinimalHandlerWithAgentLoop(al)
 	wc, ch := makeForwarderTestConn(256)
+	// #823 catch-up redesign: install the hub sync tap on this AgentLoop
+	// like newWSHandler would in production. A real routingSessionID is an
+	// internally-generated id (turn.go's ts.routingSessionID =
+	// session.RoutingSessionID(ts.transcriptSessionID)), not the literal
+	// "rl-frame-session-2" sessionKey passed to ProcessDirectWithChannel
+	// below — rather than hardcode a guess at that internal id, wrap the
+	// tap to bind this connection to whatever SessionID a RateLimitPayload
+	// ACTUALLY carries, the instant it arrives and before hubSyncTap
+	// resolves delivery targets. This is the same "bind by session" contract
+	// production uses (a real WSHandler binds via handleAttachSession/
+	// handleChatMessage as sessions are minted) — this test just does not
+	// have a full webchat handshake to drive that binding itself.
+	// Also bind chatID to itself as a fallback: hubRateLimit
+	// (websocket_forward_hub.go) falls back to hubResolveSessionIDForChat
+	// when p.SessionID is empty, and ProcessDirectWithChannel's dispatch
+	// path may leave routingSessionID empty for this non-webchat entry
+	// point — this covers that case too, so the test is correct regardless
+	// of which one the real payload actually carries.
+	bindTestConnToSession(h, chatID, chatID, wc)
+	al.SetEventSyncTap(func(evt agent.Event) {
+		if p, ok := evt.Payload.(agent.RateLimitPayload); ok && p.SessionID != "" {
+			bindTestConnToSession(h, chatID, p.SessionID, wc)
+		}
+		h.hubSyncTap(evt)
+	})
 	done := make(chan struct{})
 	go h.eventForwarder(wc, chatID, sub, done)
 
@@ -711,26 +736,28 @@ func TestEventForwarder_InternalRateLimitDenial_EmitsExactlyOneFrame(t *testing.
 // When a ToolExecStartPayload event for chatID "chat-1" is emitted,
 // Then a replayFrameDecoder with type "tool_call_start" appears on sendCh.
 // Traces to: pkg/gateway/websocket.go — WSHandler.eventForwarder
+// #823 catch-up redesign: migrated to handler.hubSyncTap directly —
+// EventKindToolExecStart now goes through the session hub
+// (websocket_forward_hub.go's hubToolExecStart), exactly once per event.
+// The standalone `eb := agent.NewEventBus()` this test used to drive is a
+// DIFFERENT EventBus instance than handler.agentLoop's own internal one
+// (the one newTestWSHandler's newWSHandler call installs the tap on via
+// SetEventSyncTap), so emitting on it never reached the tap either way —
+// calling hubSyncTap directly is the correct migration, not a workaround.
 func TestEventForwarder_ForwardsToolExecStart(t *testing.T) {
 	handler, _, _ := newTestWSHandler(t)
 	t.Cleanup(handler.Wait)
 
 	wc := makeTestConn()
 	chatID := "chat-1"
+	bindTestConnToSession(handler, chatID, chatID, wc)
 
-	eb := agent.NewEventBus()
-	t.Cleanup(eb.Close)
-
-	sub := eb.Subscribe(16)
-	eventDone := make(chan struct{})
-
-	go handler.eventForwarder(wc, chatID, sub, eventDone)
-
-	eb.Emit(agent.Event{
+	handler.hubSyncTap(agent.Event{
 		Kind: agent.EventKindToolExecStart,
 		Payload: agent.ToolExecStartPayload{
 			ToolCallID: "call-xyz",
 			ChatID:     chatID,
+			SessionID:  chatID,
 			Tool:       "read_file",
 			Arguments:  map[string]any{"path": "/tmp/test.txt"},
 		},
@@ -744,15 +771,7 @@ func TestEventForwarder_ForwardsToolExecStart(t *testing.T) {
 		assert.Equal(t, "call-xyz", f.CallID, "CallID must match ToolCallID")
 		assert.Equal(t, "read_file", f.Tool, "Tool must match payload Tool")
 	case <-time.After(2 * time.Second):
-		t.Fatal("no frame received on sendCh within 2s — eventForwarder did not forward the event")
-	}
-
-	// Unsubscribe to drain the goroutine cleanly.
-	eb.Unsubscribe(sub.ID)
-	select {
-	case <-eventDone:
-	case <-time.After(1 * time.Second):
-		t.Fatal("eventForwarder goroutine did not exit after subscription closed")
+		t.Fatal("no frame received on sendCh within 2s — hubSyncTap did not forward the event")
 	}
 }
 

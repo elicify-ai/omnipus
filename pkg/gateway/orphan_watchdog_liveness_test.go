@@ -158,12 +158,19 @@ func (g *orphanGateTool) Execute(ctx context.Context, _ map[string]any) *tools.T
 // which leaves agentLoop nil) so the orphan watchdog's
 // IsSubTurnActiveForSpawnCall liveness re-check has a real answer to
 // consult instead of short-circuiting via the nil guard.
+// #823 catch-up redesign: also initializes hubs, mirroring newWSHandler
+// (see makeMinimalHandler's identical note, sprint_h_forwarder_test.go) —
+// without this, hubPublishAndDeliver silently no-ops (its own nil guard)
+// for any test that installs the hub sync tap on an AgentLoop built with
+// this helper, which is exactly what a caller wiring
+// al.SetEventSyncTap(h.hubSyncTap) needs to work.
 func makeMinimalHandlerWithAgentLoop(al *agent.AgentLoop) *WSHandler {
 	return &WSHandler{
 		sessions:    make(map[string]*wsConn),
 		sessionIDs:  make(map[string]string),
 		taskChatIDs: make(map[string]string),
 		agentLoop:   al,
+		hubs:        newHubRegistry(newHubBootID()),
 	}
 }
 
