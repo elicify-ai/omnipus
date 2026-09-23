@@ -37,6 +37,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
@@ -601,4 +602,51 @@ func BashPrefixGrantCheck(grants *security.ApprovalGrantStore, sessionID, agentI
 		return false
 	}
 	return grants.IsPrefixAllowed(sessionID, agentID, toolName, resolvedBinary, argWords, runInBackground)
+}
+
+// prefixGrantWrappers are the ADR-092 D4 wrapper heads (FR-026). A prefix
+// derived from one of them is the wrapper alone (or "sh -c"), which would
+// approve every later command run through that wrapper — so no prefix
+// grant is offered for them; the approval is recorded as exact instead.
+var prefixGrantWrappers = map[string]bool{"sudo": true, "env": true, "timeout": true, "xargs": true, "sh": true}
+
+// BashPrefixGrantFor derives the D4 "prefix" scope grant for a bash call a
+// human approved with scope=prefix, from the approval's own recorded args
+// (never from client input). It uses the same resolution
+// BashPrefixGrantCheck matches against (resolved head binary, argument
+// words, run_in_background) and FR-026's suggested prefix for the argument
+// part, so a recorded grant is exactly what the check side will find.
+//
+// ok is false — the caller records an exact grant instead, the safe
+// direction — when no narrower-than-the-program prefix exists:
+//   - the command has more than one segment (`a && b`, `a | b`): the
+//     argument words of a single prefix would span into the next
+//     segment's command;
+//   - Windows (FR-041: exact-command grants only), an unresolvable head,
+//     or a blind spot;
+//   - the prefix is the bare program (`ls`) or a wrapper (`sudo …`,
+//     `sh -c …`), which would approve every later use of it.
+func BashPrefixGrantFor(args map[string]any) (security.ShellPrefixGrant, bool) {
+	command, _ := args["command"].(string)
+	if command == "" || len(splitShellSegments(command)) != 1 {
+		return security.ShellPrefixGrant{}, false
+	}
+	resolved, _, runInBackground, ok := bashPrefixMatchInputs(args)
+	if !ok {
+		return security.ShellPrefixGrant{}, false
+	}
+	opts := shellRuleOptions()
+	prefix, ok := shellrule.SuggestedPrefix(command, opts.Platform, opts.HeadResolver)
+	if !ok {
+		return security.ShellPrefixGrant{}, false
+	}
+	words := strings.Fields(prefix)
+	if len(words) < 2 || prefixGrantWrappers[words[0]] {
+		return security.ShellPrefixGrant{}, false
+	}
+	return security.ShellPrefixGrant{
+		Binary:          resolved,
+		ArgPrefix:       strings.Join(words[1:], " "),
+		RunInBackground: runInBackground,
+	}, true
 }

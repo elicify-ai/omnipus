@@ -442,13 +442,12 @@ func resolveConfiguredPolicy(toolName string, cfg *config.AgentToolsCfg, globalP
 //     it is the writer of ApprovalGrantStore.Record on the generic approval
 //     path, restoring the "Always Allow" grant that agent-delegation-spec.md's
 //     FR-D8 grant-inheritance depends on. `scope` (exact/prefix, default
-//     exact) travels with the request but ApprovalGrantStore.Record
-//     (pkg/security/approvalgrants.go, ADR-092 lane L4) is exact-fingerprint
-//     only as of this handler — a "prefix" request is honoured as "exact"
-//     until L4 lands prefix-scoped recording; this fails toward MORE
-//     re-prompts, never fewer, so it is a safe interim behaviour, not a
-//     silent capability claim. The response always echoes the scope actually
-//     recorded, never merely the one requested.
+//     exact): "prefix" on a bash call records an ADR-092 D4 prefix grant
+//     (resolved program + leading argument words, derived server-side from
+//     the approval's own args by tools.BashPrefixGrantFor). When no safe
+//     prefix exists (chained command, bare program, wrapper, Windows, any
+//     other tool) the grant is recorded as exact — more re-prompts, never
+//     fewer. The response echoes the scope actually recorded.
 //
 // Auth:
 //   - Requires valid bearer token (withAuth, FR-014). Unauthenticated → 401.
@@ -566,16 +565,8 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		Status:     gen.ToolApprovalResponseStatusOk,
 	}
 	if recordGrant {
-		// ApprovalGrantStore.Record (pkg/security/approvalgrants.go) is
-		// exact-fingerprint only as of this handler — ADR-092 lane L4 adds
-		// prefix-scoped recording separately. A "prefix" request is recorded
-		// as "exact" until that lands: strictly more re-prompting than the
-		// client asked for, never less, so it is safe to serve today and the
-		// response echoes what was ACTUALLY recorded (exact), not what was
-		// requested, so the client never believes it has prefix coverage it
-		// does not have.
-		recorded := a.agentLoop.ApprovalGrants().Record(entry.SessionID, entry.AgentID, entry.ToolName, entry.Args)
-		recordedScope := gen.ToolApprovalResponseScopeExact
+		record, recordedScope := a.approvalGrantRecorder(entry, grantScope)
+		recorded := record(entry.SessionID)
 		if recorded {
 			logsafeInfo("tool-approval: recorded session Allow grant",
 				"approval_id", approvalID,
@@ -600,7 +591,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		// not stick, grant_recorded must be false — the child session is
 		// torn down at the end of the turn and the next same-identity use
 		// will ask again.
-		parentOK := a.recordGrantOnDelegationParent(entry, approvalID)
+		parentOK := a.recordGrantOnDelegationParent(entry, approvalID, record)
 		resp.GrantRecorded = boolPtr(recorded && parentOK)
 		if recorded {
 			resp.Scope = &recordedScope
@@ -679,7 +670,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 // relationship itself, even though its value no longer supplies the grant
 // key; the immediate grant above already succeeded, so the tool call itself
 // is unaffected, only this extra durability is missed.
-func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID string) bool {
+func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID string, record func(sessionID string) bool) bool {
 	store := a.agentLoop.GetSessionStore()
 	if store == nil {
 		return true
@@ -704,7 +695,7 @@ func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID
 			"error", err)
 		return false
 	}
-	if a.agentLoop.ApprovalGrants().Record(meta.ParentSessionID, entry.AgentID, entry.ToolName, entry.Args) {
+	if record(meta.ParentSessionID) {
 		logsafeInfo("tool-approval: also recorded Always-Allow grant on the delegating parent's session, "+
 			"scoped to the SAME agent identity the approval modal named, so it survives this delegation's "+
 			"own teardown without crossing into the parent's own agent identity",
@@ -750,4 +741,26 @@ func toolsCfgToPolicy(cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
 		policies[k] = v
 	}
 	return &tools.ToolPolicyCfg{Policies: policies}
+}
+
+// approvalGrantRecorder returns the writer for an "allow" decision's session
+// grant — keyed by (sessionID, entry.AgentID, entry.ToolName), identity
+// always from the immutable approval entry — and the scope it records. A
+// "prefix" request on a bash call records an ADR-092 D4 prefix grant when
+// tools.BashPrefixGrantFor finds a safe one; every other case records the
+// exact-fingerprint grant.
+func (a *restAPI) approvalGrantRecorder(
+	entry *approvalEntry, requested gen.ToolApprovalActionRequestScope,
+) (func(sessionID string) bool, gen.ToolApprovalResponseScope) {
+	grants := a.agentLoop.ApprovalGrants()
+	if requested == gen.ToolApprovalActionRequestScopePrefix && entry.ToolName == "bash" {
+		if g, ok := tools.BashPrefixGrantFor(entry.Args); ok {
+			return func(sessionID string) bool {
+				return grants.RecordPrefixGrant(sessionID, entry.AgentID, entry.ToolName, g)
+			}, gen.ToolApprovalResponseScopePrefix
+		}
+	}
+	return func(sessionID string) bool {
+		return grants.Record(sessionID, entry.AgentID, entry.ToolName, entry.Args)
+	}, gen.ToolApprovalResponseScopeExact
 }
