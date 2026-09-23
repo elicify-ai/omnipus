@@ -916,12 +916,23 @@ const (
 // certain tools. The version counter is reset to 0 in the clone as it is a new
 // independent registry.
 //
-// Production no longer constructs a child registry through a wholesale
-// CloneExcept here: a steered child's tool exclusion is carried on
-// LaunchRequest.ToolExclusions (the switch_agent exclusion, set by the delegate
-// tool) and applied from the record at reconstruction. A child must never be
-// able to hijack the active agent session via switch_agent, but CAN delegate
-// onward to a grandchild, governed instead by the per-workspace delegation
+// Production no longer constructs a child registry through a wholesale,
+// unconditional CloneExcept applied to every steered child the way it once
+// did: a steered child's tool exclusion is carried on LaunchRequest.
+// ToolExclusions (the switch_agent exclusion, set by the delegate tool,
+// req.ToolExclusions → LifecycleRecord.SteeredBy.ToolExclusions,
+// steer_launcher.go) and applied ONE call at reconstruction —
+// pkg/agent/steer_reconstruct.go's agentInstanceWithToolExclusions, called
+// from reconstructSteeredTurn whenever SteeredBy.ToolExclusions is
+// non-empty. (Finding 2, ADR-091 seven-reviewer gate, 2026-09: this comment
+// previously claimed the wiring above already existed while
+// steer_reconstruct.go contained no such code at all — a delegated child
+// could call switch_agent, which D2 and the long-standing identity rule
+// forbid, and the false claim here was actively stopping the next reader
+// from noticing the gap. It is fixed now; this comment describes the
+// current, real call site.) A child must never be able to hijack the
+// active agent session via switch_agent, but CAN delegate onward to a
+// grandchild, governed instead by the per-workspace delegation
 // trust-graph's mode/depth gate. This reverses the prior "a child sub-turn
 // must never be able to delegate to a grandchild" rule that used to live here:
 // see ADR-040 (docs/internal/architecture/ADR-040-fr-h-006-nested-delegation-reversal.md)

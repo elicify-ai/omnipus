@@ -26,6 +26,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // reconstructSteeredTurn builds a *turnState for rec's session, entirely
@@ -97,7 +98,21 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 			}
 		}
 	}
-	ts := newTurnState(agentInst, opts, al.newTurnEventScope(agentInst.ID, opts.SessionKey))
+	// Finding 2 fix (ADR-091 seven-reviewer gate, 2026-09): rec.SteeredBy.
+	// ToolExclusions is set by the delegate tool, persisted, exposed on the
+	// wire, and asserted by a serialisation test — but was never actually
+	// READ here. pkg/tools/registry.go's own CloneExcept doc comment
+	// claimed it was "applied from the record at reconstruction"; this file
+	// contained no such code, so a delegated child could call switch_agent,
+	// which D2 and the long-standing identity rule forbid. turnAgent is
+	// agentInst unchanged when there is nothing to exclude (the overwhelming
+	// common case), so every existing non-excluding path is byte-identical
+	// to before.
+	turnAgent := agentInst
+	if rec.SteeredBy != nil && len(rec.SteeredBy.ToolExclusions) > 0 {
+		turnAgent = agentInstanceWithToolExclusions(agentInst, rec.SteeredBy.ToolExclusions)
+	}
+	ts := newTurnState(turnAgent, opts, al.newTurnEventScope(agentInst.ID, opts.SessionKey))
 	ts.generation = rec.Generation
 	if rec.SteeredBy != nil {
 		// I-1/US-3/AS-1: "B's turn routing root is R" — the ADR-057 D2
@@ -108,4 +123,39 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		ts.routingSessionID = session.RoutingSessionID(rec.SteeredBy.RootSessionID)
 	}
 	return ts, nil
+}
+
+// agentInstanceWithToolExclusions returns an independent *AgentInstance
+// whose Tools registry has excluded names removed (pkg/tools/registry.go's
+// ToolRegistry.CloneExcept — switch_agent today, FR-H-006), leaving base
+// itself, and every OTHER session currently running that same shared agent,
+// untouched. base.Tools is a pointer SHARED by every session that runs this
+// agent (AgentRegistry.GetAgent returns the same *AgentInstance to every
+// caller) — mutating base.Tools in place, or turning *base into a fresh
+// struct via `cp := *base`, would either leak the exclusion onto every other
+// session using this agent, or trip `go vet`'s copylocks check (base
+// embeds a sync.RWMutex and an atomic.Pointer). The one existing primitive
+// in this package that already solves exactly this — an independent,
+// copylocks-safe *AgentInstance that shares every field with base except
+// the ones a caller needs to override — is
+// AgentInstance.snapshotForExternalDispatch (instance.go); this reuses it
+// rather than hand-duplicating its ~30-field snapshot here, which would
+// itself become the next stale-comment trap the moment a field is added to
+// AgentInstance and only one of the two copies is kept in sync.
+func agentInstanceWithToolExclusions(base *AgentInstance, excludedNames []string) *AgentInstance {
+	if base == nil || base.Tools == nil {
+		return base
+	}
+	excluded := make([]tools.ExcludedTool, 0, len(excludedNames))
+	for _, name := range excludedNames {
+		if name != "" {
+			excluded = append(excluded, tools.ExcludedTool(name))
+		}
+	}
+	if len(excluded) == 0 {
+		return base
+	}
+	clone := base.snapshotForExternalDispatch()
+	clone.Tools = base.Tools.CloneExcept(excluded...)
+	return clone
 }

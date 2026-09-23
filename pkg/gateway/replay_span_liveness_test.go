@@ -1,58 +1,94 @@
-// Regression coverage for two backend-observable reload/replay bugs found by
-// live UAT re-verification (2026-07):
+// Regression coverage for backend-observable reload/replay bugs found by live
+// UAT re-verification (2026-07) and by the ADR-091 seven-reviewer gate
+// (2026-09, finding 1):
 //
-//   - Symptom A: a reload landing while an async delegate's real sub-turn is
-//     still genuinely running previously showed a fabricated "done 0ms"
-//     snapshot — read literally from the placeholder ack async delegation
-//     writes the instant its spawning tool call returns (Status="success",
-//     DurationMS≈0; see session.UnifiedStore.UpdateToolCallStatus's doc
-//     comment), long before the real completion (spawnSubTurn's cleanup
-//     defer, once EventKindSubTurnEnd actually fires) corrects it.
+//   - Symptom A / finding 1's "still running" case: a reload landing while an
+//     async delegate's real sub-turn is still genuinely running previously
+//     showed a fabricated "done 0ms" snapshot — read literally from the
+//     placeholder ack async delegation writes the instant its spawning tool
+//     call returns (Status="success", DurationMS≈0; see
+//     session.UnifiedStore.UpdateToolCallStatus's doc comment), long before
+//     the real completion.
 //   - Symptom B: a completed delegation's specialized, per-agent subagent
 //     span widget disappeared on reload even though the flat "Delegate
 //     task" pill replayed correctly, because the span-level agent_id on
 //     subagent_start/subagent_end was resolved from the PARENT's own
-//     identity (the outer spawn/delegate ToolCall's own transcript entry,
-//     written by the delegator) instead of the REAL delegate's identity
-//     (which live rendering already gets right — see
-//     pkg/agent/subturn.go's SubTurnSpawnPayload.AgentID :=
-//     childTS.agentID).
+//     identity instead of the REAL delegate's identity.
+//   - Finding 1 (CRITICAL, 2026-09 gate): a persisted subagent_end with a
+//     REAL terminal status (failed, cancelled, timed out) previously
+//     replayed as a fabricated "success, 0 ms" too, because the withhold
+//     mechanism that was supposed to protect the "still running" case above
+//     was itself structurally dead (isSpanActive was wired to
+//     agent.AgentLoop.IsSubTurnActiveForSpawnCall, whose two data sources —
+//     steering.go's markSubTurnSpanOpen and turnState.parentSpawnCallID —
+//     had zero real callers / were never assigned, ADR-091 having deleted
+//     their only writer, pkg/agent/subturn.go). The fix reads the persisted
+//     subagent_end entry back (dispatchSpecialEntry in replay.go) and
+//     derives "still genuinely running" from the transcript's own persisted
+//     subagent_start/subagent_end entries instead of a live callback — see
+//     buildPersistedSubagentSpanIndexes and classifyToolCall's stillActive
+//     doc comment in replay.go.
 
 package gateway
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-// runReplayWithSpanActive is runReplay's counterpart that also wires an
-// isSpanActive callback, letting tests simulate "this spawn/delegate call's
-// real sub-turn is still genuinely running" without a real AgentLoop.
-func runReplayWithSpanActive(
-	t *testing.T,
-	entries []session.TranscriptEntry,
-	isSpanActive func(string) bool,
-) ([]replayFrameDecoder, int) {
-	t.Helper()
-	sink := &sliceSink{}
-	rs := computeReplayStats(entries)
-	n, err := streamReplay(context.Background(), "session_test", entries, rs, sink.emit, nil, nil, isSpanActive, nil)
-	require.NoError(t, err, "streamReplay must not return an error for valid input")
-	return sink.all(), n
+// subagentStartEntry builds a persisted subagent_start system entry exactly
+// as steer_frames.go's deliverSubagentStart writes one into the PARENT's own
+// transcript (ADR-091 D7/I-4) — spanID must follow the "span_" + tool-call-id
+// convention (steer_frames.go's subagentSpanID / replay.go's classifyToolCall
+// spanID) for classifyToolCall's persisted-span indexes to key it correctly.
+func subagentStartEntry(spanID, parentCallID, taskLabel string) session.TranscriptEntry {
+	return session.TranscriptEntry{
+		ID:            spanID + ":start",
+		Type:          session.EntryTypeSystem,
+		SystemSubtype: session.SystemSubtypeSubagentStart,
+		SubagentStart: &generated.SubagentStartFrame{
+			Type:         string(generated.WsFrameTypeSubagentStart),
+			SessionId:    "session_test",
+			SpanId:       spanID,
+			ParentCallId: parentCallID,
+			TaskLabel:    taskLabel,
+		},
+	}
+}
+
+// subagentEndEntry builds a persisted subagent_end system entry exactly as
+// steer_frames.go's deliverSubagentEnd writes one once the real sub-turn
+// concludes — carrying the REAL terminal status/duration, never the
+// placeholder ack that lives on the spawn/delegate ToolCall record itself.
+func subagentEndEntry(spanID, status string, durationMS int) session.TranscriptEntry {
+	d := durationMS
+	return session.TranscriptEntry{
+		ID:            spanID + ":end",
+		Type:          session.EntryTypeSystem,
+		SystemSubtype: session.SystemSubtypeSubagentEnd,
+		SubagentEnd: &generated.SubagentEndFrame{
+			Type:       string(generated.WsFrameTypeSubagentEnd),
+			SessionId:  "session_test",
+			SpanId:     spanID,
+			Status:     status,
+			DurationMs: &d,
+		},
+	}
 }
 
 // TestStreamReplay_ActiveSpawnSpan_WithholdsFabricatedDoneSnapshot is the
-// core regression test for Symptom A: when isSpanActive reports the spawn
-// call's real sub-turn is STILL running, replay must NOT emit that call's
-// own terminal frames (subagent_end, the outer tool_call_result) — only
-// tool_call_start / subagent_start, the same shape a genuinely in-flight
-// LIVE call shows. Already-completed NESTED child tool calls (real,
-// historical data) still replay normally.
+// core regression test for Symptom A / finding 1's "still running" case:
+// when the transcript's own persisted subagent_start entry has no matching
+// subagent_end yet, replay must NOT emit that call's own terminal frames
+// (subagent_end, the outer tool_call_result) — only tool_call_start /
+// subagent_start, the same shape a genuinely in-flight LIVE call shows.
+// Already-completed NESTED child tool calls (real, historical data) still
+// replay normally.
 func TestStreamReplay_ActiveSpawnSpan_WithholdsFabricatedDoneSnapshot(t *testing.T) {
 	// spawnTC carries a PLACEHOLDER terminal-looking record — exactly what
 	// async delegation writes the instant the spawning call returns,
@@ -76,9 +112,14 @@ func TestStreamReplay_ActiveSpawnSpan_WithholdsFabricatedDoneSnapshot(t *testing
 	}
 	entries := []session.TranscriptEntry{
 		assistantEntry("delegating", "mia", spawnTC, nestedTC),
+		// Persisted at launch (deliverSubagentStart fires synchronously
+		// before the child does any work) — NO matching subagent_end entry:
+		// this is exactly what a genuinely still-running delegation looks
+		// like in the transcript at reload time.
+		subagentStartEntry("span_c1", "c1", "research"),
 	}
 
-	frames, _ := runReplayWithSpanActive(t, entries, func(id string) bool { return id == "c1" })
+	frames, _ := runReplay(t, entries)
 
 	types := frameTypes(frames)
 	// ADR-091 D7: emitNestedToolCalls is deleted — a delegated child's own
@@ -97,8 +138,8 @@ func TestStreamReplay_ActiveSpawnSpan_WithholdsFabricatedDoneSnapshot(t *testing
 			"done",
 		},
 		types,
-		"BUG REGRESSION: an active spawn/delegate call's own terminal frames must be withheld, "+
-			"not fabricated from its placeholder ack",
+		"BUG REGRESSION: a still-genuinely-running spawn/delegate call's own terminal frames must be "+
+			"withheld, not fabricated from its placeholder ack",
 	)
 
 	resultFrames := filterByType(frames, "tool_call_result")
@@ -116,8 +157,7 @@ func TestStreamReplay_ActiveSpawnSpan_WithholdsFabricatedDoneSnapshot(t *testing
 // "delegate". streamReplay's isDelegateSpawnCall gate
 // (tc.Tool == "spawn" || tc.Tool == "delegate") is only exercised elsewhere in
 // this file with Tool: "delegate" — this confirms the liveness-withholding
-// also engages correctly for old transcripts recorded before the ADR-036
-// spawn->delegate rename and still carrying the legacy value.
+// also engages correctly for a transcript still carrying the legacy value.
 func TestStreamReplay_ActiveSpawnSpan_LegacySpawnToolName_WithholdsFabricatedDoneSnapshot(t *testing.T) {
 	spawnTC := session.ToolCall{
 		ID:         "c1",
@@ -135,24 +175,17 @@ func TestStreamReplay_ActiveSpawnSpan_LegacySpawnToolName_WithholdsFabricatedDon
 	}
 	entries := []session.TranscriptEntry{
 		assistantEntry("delegating", "mia", spawnTC, nestedTC),
+		subagentStartEntry("span_c1", "c1", "research"),
 	}
 
-	frames, _ := runReplayWithSpanActive(t, entries, func(id string) bool { return id == "c1" })
+	frames, _ := runReplay(t, entries)
 
 	types := frameTypes(frames)
-	// ADR-091 D7: emitNestedToolCalls is deleted — a delegated child's own
-	// tool calls (nestedTC, "t2" above) are no longer nested-replayed under
-	// the outer span at all (a delegated/task child owns its own transcript
-	// now, D1); nestedTC's presence in this fixture only proves it does NOT
-	// resurrect the deleted nested-emission path.
 	require.Equal(t,
 		[]string{
 			"replay_message",
 			"tool_call_start", // spawn call start
 			"subagent_start",  // span bracket open
-			// NO subagent_end, NO tool_call_result for c1: the real
-			// sub-turn is still active, so its terminal frames are
-			// withheld rather than fabricating "done" from the placeholder.
 			"done",
 		},
 		types,
@@ -186,23 +219,12 @@ func TestStreamReplay_ActiveSpawnCall_NoChildrenYet_WithholdsResult(t *testing.T
 	}
 	entries := []session.TranscriptEntry{
 		assistantEntry("delegating", "mia", spawnTC),
+		subagentStartEntry("span_c1", "c1", "research"),
 	}
 
-	frames, _ := runReplayWithSpanActive(t, entries, func(id string) bool { return id == "c1" })
+	frames, _ := runReplay(t, entries)
 
 	types := frameTypes(frames)
-	// Finding C (A-I4 round 4): every spawn/delegate call now gets a
-	// subagent_start bracket unconditionally (streamReplay's isSpawnParent
-	// is isDelegateSpawnCall, not "has at least one recorded child") —
-	// matching live, which always fires EventKindSubTurnSpawn for a delegate
-	// call regardless of how many tool calls the child has made so far. A
-	// still-active 0-step call now correctly shows "0 steps, working" on
-	// reload instead of no span at all; this assertion was updated from its
-	// prior `["replay_message", "tool_call_start", "done"]` (no
-	// subagent_start) to match. subagent_end + the outer tool_call_result
-	// stay withheld (Symptom A's own regression coverage, unaffected by this
-	// change) — the placeholder ack's success/0ms result must still never be
-	// shown as done.
 	require.Equal(t,
 		[]string{"replay_message", "tool_call_start", "subagent_start", "done"},
 		types,
@@ -213,10 +235,12 @@ func TestStreamReplay_ActiveSpawnCall_NoChildrenYet_WithholdsResult(t *testing.T
 }
 
 // TestStreamReplay_InactiveSpawnCall_EmitsNormally is the negative-case
-// sanity check: when isSpanActive reports false (the real sub-turn HAS
-// finished), replay must emit the full, normal sequence exactly as before —
-// proving the liveness gate only ever WITHHOLDS, never alters, the terminal
-// frame content itself.
+// sanity check for a LEGACY (pre-ADR-091) transcript: it carries neither a
+// persisted subagent_start nor a persisted subagent_end entry for its spawn
+// call — the whole persisted-lifecycle mechanism predates it — so replay
+// must fall back to the spawn call's own tc.Status/DurationMS exactly as
+// before, proving the new persisted-span gate never turns an
+// already-finished OLD delegation into a perpetually-"running" one.
 func TestStreamReplay_InactiveSpawnCall_EmitsNormally(t *testing.T) {
 	spawnTC := session.ToolCall{
 		ID:         "c1",
@@ -236,7 +260,7 @@ func TestStreamReplay_InactiveSpawnCall_EmitsNormally(t *testing.T) {
 		assistantEntry("delegating", "mia", spawnTC, nestedTC),
 	}
 
-	frames, _ := runReplayWithSpanActive(t, entries, func(string) bool { return false })
+	frames, _ := runReplay(t, entries)
 
 	types := frameTypes(frames)
 	// ADR-091 D7: emitNestedToolCalls is deleted — nestedTC ("t2") is no
@@ -252,8 +276,8 @@ func TestStreamReplay_InactiveSpawnCall_EmitsNormally(t *testing.T) {
 			"done",
 		},
 		types,
-		"a genuinely finished spawn call must replay its own terminal frame set as before "+
-			"(nested child tool calls are no longer replayed under it, ADR-091 D7)",
+		"a genuinely finished LEGACY spawn call (no persisted subagent_start/end entries at all) "+
+			"must replay its own terminal frame set from tc.Status exactly as before",
 	)
 	subEnd := findFrame(frames, "subagent_end")
 	require.NotNil(t, subEnd)
@@ -307,7 +331,7 @@ func TestStreamReplay_SpawnSpan_UsesRealChildAgentID_NotDelegatorID(t *testing.T
 	}
 	entries := []session.TranscriptEntry{parentEntry, childEntry}
 
-	frames, _ := runReplayWithSpanActive(t, entries, func(string) bool { return false })
+	frames, _ := runReplay(t, entries)
 
 	subStart := findFrame(frames, "subagent_start")
 	require.NotNil(t, subStart, "subagent_start frame must be emitted")
@@ -335,4 +359,108 @@ func TestStreamReplay_SpawnSpan_UsesRealChildAgentID_NotDelegatorID(t *testing.T
 	require.NotNil(t, spawnStart)
 	assert.Equal(t, "mia", spawnStart.AgentID,
 		"the outer 'Delegate task' pill must keep the delegator's own attribution, unaffected by the fix")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding 1 (CRITICAL, ADR-091 seven-reviewer gate, 2026-09): a persisted
+// subagent_end with a REAL terminal status must replay as THAT status, never
+// as the spawn call's own placeholder "success, 0 ms" ack.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestStreamReplay_PersistedSubagentEnd_Error_ReplaysAsError is finding 1's
+// first required case: a worker that FAILED must show failed, not
+// "success, 0 ms". The spawn call's own ToolCall record still carries the
+// placeholder ack (Status="success", DurationMS≈0 — async delegation never
+// corrects it in place); the REAL outcome lives only in the persisted
+// subagent_end entry deliverSubagentEnd wrote once the sub-turn concluded.
+func TestStreamReplay_PersistedSubagentEnd_Error_ReplaysAsError(t *testing.T) {
+	spawnTC := session.ToolCall{
+		ID:         "c1",
+		Tool:       "delegate",
+		Status:     "success", // placeholder ack — NEVER corrected in place
+		DurationMS: 0,         // placeholder ack — NEVER corrected in place
+		Parameters: map[string]any{"task": "research something", "async": true},
+	}
+	entries := []session.TranscriptEntry{
+		assistantEntry("delegating", "mia", spawnTC),
+		subagentStartEntry("span_c1", "c1", "research"),
+		// The REAL outcome: the sub-turn errored out after 7.3s.
+		subagentEndEntry("span_c1", "error", 7300),
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	subEnd := findFrame(frames, "subagent_end")
+	require.NotNil(t, subEnd, "subagent_end frame must be emitted")
+	assert.Equal(t, "error", subEnd.Status,
+		"BUG REGRESSION: a persisted subagent_end with status \"error\" must replay as \"error\", "+
+			"not as the spawn call's placeholder \"success\"")
+	assert.EqualValues(t, 7300, subEnd.DurationMs,
+		"the REAL duration from the persisted subagent_end must replay, not the placeholder 0ms")
+
+	// Exactly one subagent_end frame: the tool-call-derived synthetic one
+	// (built from the placeholder tc.Status) must be suppressed, not
+	// emitted ALONGSIDE the real persisted one.
+	assert.Len(t, filterByType(frames, "subagent_end"), 1,
+		"BUG REGRESSION: only the REAL persisted subagent_end may reach the client — the "+
+			"tool-call-derived synthetic one (from the placeholder ack) must be suppressed")
+}
+
+// TestStreamReplay_PersistedSubagentEnd_Cancelled_ReplaysAsCancelled is
+// finding 1's second required case: a worker that was CANCELLED must show
+// cancelled, not "success, 0 ms".
+func TestStreamReplay_PersistedSubagentEnd_Cancelled_ReplaysAsCancelled(t *testing.T) {
+	spawnTC := session.ToolCall{
+		ID:         "c1",
+		Tool:       "delegate",
+		Status:     "success", // placeholder ack
+		DurationMS: 0,         // placeholder ack
+		Parameters: map[string]any{"task": "research something", "async": true},
+	}
+	entries := []session.TranscriptEntry{
+		assistantEntry("delegating", "mia", spawnTC),
+		subagentStartEntry("span_c1", "c1", "research"),
+		subagentEndEntry("span_c1", "cancelled", 2100),
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	subEnd := findFrame(frames, "subagent_end")
+	require.NotNil(t, subEnd, "subagent_end frame must be emitted")
+	assert.Equal(t, "cancelled", subEnd.Status,
+		"BUG REGRESSION: a persisted subagent_end with status \"cancelled\" must replay as "+
+			"\"cancelled\", not as the spawn call's placeholder \"success\"")
+	assert.EqualValues(t, 2100, subEnd.DurationMs)
+	assert.Len(t, filterByType(frames, "subagent_end"), 1,
+		"only the REAL persisted subagent_end may reach the client")
+}
+
+// TestStreamReplay_PersistedSubagentEnd_SessionIDRestamped proves the
+// persisted subagent_end entry replays with SessionId re-stamped from the
+// transcript it was read FROM (the self-healing pattern subagent_message/
+// subagent_state already use two blocks above in dispatchSpecialEntry) —
+// not whatever SessionId the stored frame happens to carry.
+func TestStreamReplay_PersistedSubagentEnd_SessionIDRestamped(t *testing.T) {
+	spawnTC := session.ToolCall{
+		ID:         "c1",
+		Tool:       "delegate",
+		Status:     "success",
+		DurationMS: 0,
+	}
+	endEntry := subagentEndEntry("span_c1", "timeout", 30000)
+	endEntry.SubagentEnd.SessionId = "some-other-session-id" // stale/wrong on disk
+	entries := []session.TranscriptEntry{
+		assistantEntry("delegating", "mia", spawnTC),
+		subagentStartEntry("span_c1", "c1", "research"),
+		endEntry,
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	subEnd := findFrame(frames, "subagent_end")
+	require.NotNil(t, subEnd)
+	assert.Equal(t, "session_test", subEnd.SessionID,
+		"subagent_end must replay with SessionId re-stamped from the transcript owner, not the "+
+			"stored (possibly stale) value")
+	assert.Equal(t, "timeout", subEnd.Status)
 }
