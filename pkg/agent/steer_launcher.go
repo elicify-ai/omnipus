@@ -318,6 +318,7 @@ func (l *SteerLauncher) launchSteered(
 					map[string]any{"session_id": req.SteeringSessionID, "config": "tools.delegate.require_parent_agent_id"})
 			}
 			workspaceID := steererMeta.WorkspaceID
+			reportingChannel, reportingChatID := reportingTargetFor(steererMeta, req.SteeringSessionID)
 
 			if !existed {
 				// I-1 round 9: this is the steering session's first
@@ -341,8 +342,8 @@ func (l *SteerLauncher) launchSteered(
 				RootSessionID:     rootID,
 				ReportingTarget: session.ReportingTarget{
 					SessionID: req.SteeringSessionID,
-					Channel:   steererMeta.Channel,
-					ChatID:    steererMeta.PeerID,
+					Channel:   reportingChannel,
+					ChatID:    reportingChatID,
 				},
 				Authorization: session.Authorization{
 					Mode:           launchAuthorizationMode(req.Origin.Kind),
@@ -403,6 +404,53 @@ func (l *SteerLauncher) launchSteered(
 		return steer.LaunchResult{}, pubErr
 	}
 	return steer.LaunchResult{SessionID: childID, Generation: resultGen}, nil
+}
+
+// steerReportingSelfChannel is the fallback Channel a steered session's
+// ReportingTarget carries when the steering session itself has no real
+// externally-routable address (ADR-091 fix lane 1, finding A). It mirrors
+// the exact convention pkg/agent/testutil/delegation_tree.go's fixture
+// already hardcodes for every node of a synthetic delegation tree, and the
+// one gateway/websocket_cancel.go::sendExternalCancelPartialNotice already
+// treats as "no external notice to send" (alongside "web"), so this never
+// causes a synthetic destination to be dereferenced as an outbound
+// notification. It only has to be non-empty: async_notifier.go's
+// WakeParentAlways refuses any wake whose Channel/ChatID pair is empty, and
+// steer_audience.go::Deliver never routes a steered wake through a real
+// external transport — routing runs on AsyncTranscriptSessionID plus the
+// steer_message_id metadata pair (loop_inbound.go::processSystemMessage).
+const steerReportingSelfChannel = "webchat"
+
+// reportingTargetFor resolves the Channel/ChatID half of a new steered
+// child's SteeredBy.ReportingTarget (I-1: "the steering session's own
+// address; where completion wakes it").
+//
+// Finding A (ADR-091 fix lane 1, the release-blocking defect): steererMeta
+// is the STEERING session's own UnifiedMeta. For a root chat session that
+// has ever connected over a real channel, Channel/PeerID are real and are
+// used as-is — depth one always worked for exactly this reason. But a
+// steered session's OWN UnifiedMeta is minted with an empty Channel and is
+// never given a PeerID at all (CreateSessionWithID below, and
+// pkg/session/unified.go::createSessionLocked leaves PeerID unset for
+// every caller except NewChannelSession) — so a delegation nested two or
+// more levels deep produced a genuinely EMPTY ReportingTarget for the
+// grandchild's wake. async_notifier.go::WakeParentAlways refuses an empty
+// destination outright, so the parent was never re-entered and its
+// completion never reached the root; steer_completion.go's now-deleted
+// completeWaitingAncestors papered over the symptom by reusing the
+// parent's OWN stale last answer instead of the real result.
+//
+// The fix: fall back to a synthetic, always-present, self-referential
+// destination — steerReportingSelfChannel plus the steering session's own
+// id — whenever the steering session has no real one. This is evaluated
+// fresh at every launch (never inherited through a chain), so it self-heals
+// at every depth regardless of how many ancestors above it are themselves
+// steered.
+func reportingTargetFor(steererMeta *session.UnifiedMeta, steeringSessionID string) (channel, chatID string) {
+	if steererMeta != nil && steererMeta.Channel != "" && steererMeta.PeerID != "" {
+		return steererMeta.Channel, steererMeta.PeerID
+	}
+	return steerReportingSelfChannel, steeringSessionID
 }
 
 func launchAuthorizationMode(kind steer.OriginKind) session.AuthorizationMode {
@@ -833,12 +881,7 @@ func (al *AgentLoop) runDispatchedSteeredTurn(rec *session.LifecycleRecord, ts *
 	sessionID := rec.SessionID
 	defer al.drainSteerQueue(sessionID, gen)
 
-	runCtx := context.Background()
-	cancel := func() {}
-	if rec.SteeredBy != nil && rec.SteeredBy.Limits.TimeoutSeconds > 0 && !rec.CreatedAt.IsZero() {
-		runCtx, cancel = context.WithDeadline(runCtx,
-			rec.CreatedAt.Add(time.Duration(rec.SteeredBy.Limits.TimeoutSeconds)*time.Second))
-	}
+	runCtx, cancel := steeredTurnRunContext(context.Background(), rec)
 	defer cancel()
 	result, runErr := al.runTurn(runCtx, ts)
 	finalAudience := al.audienceFor(runCtx, steer.BoundaryFinalReply, sessionID)
@@ -850,12 +893,56 @@ func (al *AgentLoop) runDispatchedSteeredTurn(rec *session.LifecycleRecord, ts *
 				map[string]any{"session_id": sessionID, "generation": gen, "error": publishErr.Error()})
 		}
 	}
+	al.disposeSteeredTurnResult(ts, rec, gen, result, runErr)
+}
+
+// steeredTurnRunContext resolves the run context for one execution of a
+// steered session's turn — first run/dispatch OR a later wake/re-entry.
+//
+// Finding E (ADR-091 fix lane 1, MEDIUM): D9 says the timeout's "scope is
+// the session's lifetime across re-entries", but rec.SteeredBy.Limits.
+// TimeoutSeconds used to be read in exactly one place, runDispatchedSteeredTurn
+// (the first-run/dispatch path) — the wake path (loop_inbound.go::
+// processSteeredSystemWake) ran al.runTurn with a bare, undeadlined context,
+// so a session re-entered by a wake could run forever regardless of its
+// configured timeout. Both entry paths now share this one helper.
+//
+// A zero rec.CreatedAt used to turn the timeout OFF entirely
+// (!rec.CreatedAt.IsZero() gated the old inline check) — a missing/unset
+// timestamp silently removed a limit instead of just meaning "no better
+// anchor is known yet". Treated here as "the deadline counts from now"
+// instead: still bounded, never silently unlimited.
+func steeredTurnRunContext(base context.Context, rec *session.LifecycleRecord) (context.Context, context.CancelFunc) {
+	if rec == nil || rec.SteeredBy == nil || rec.SteeredBy.Limits.TimeoutSeconds <= 0 {
+		return base, func() {}
+	}
+	anchor := rec.CreatedAt
+	if anchor.IsZero() {
+		anchor = time.Now()
+	}
+	return context.WithDeadline(base, anchor.Add(time.Duration(rec.SteeredBy.Limits.TimeoutSeconds)*time.Second))
+}
+
+// disposeSteeredTurnResult applies the SAME post-turn disposition to a
+// steered session's real turn result on EVERY exit path — first
+// run/dispatch (runDispatchedSteeredTurn, above) and a later wake/re-entry
+// (loop_inbound.go::processSteeredSystemWake).
+//
+// Finding B (ADR-091 fix lane 1, CRITICAL, latent): before this extraction,
+// only the dispatch goroutine ever reached completeSteeredTurn/
+// finishSteeredGoalTurn — the wake path ran the turn and returned, so a
+// successfully woken session ended its turn still marked `running` no
+// matter what it produced. I-3 said "every entry path calls
+// reconstruction"; the symmetric rule this closes is "every EXIT path calls
+// completion".
+func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.LifecycleRecord, gen int, result turnResult, runErr error) {
+	sessionID := rec.SessionID
 	if rec.GoalRef != "" {
 		al.finishSteeredGoalTurn(ts, rec, &result, runErr)
 		return
 	}
 	if finishErr := al.completeSteeredTurn(context.Background(), rec, result, runErr); finishErr != nil {
-		logger.WarnCF("agent", "steer: complete dispatched turn failed",
+		logger.WarnCF("agent", "steer: complete turn failed",
 			map[string]any{"session_id": sessionID, "generation": gen, "error": finishErr.Error()})
 	}
 }
