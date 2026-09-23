@@ -149,16 +149,12 @@ var errSendTimeout = fmt.Errorf("ws: send channel full — replay send timeout")
 
 // wsHandlerHandleAttachSession carries the shared state of handleAttachSession across its stages.
 type wsHandlerHandleAttachSession struct {
-	h        *WSHandler
-	ctx      context.Context
-	chatID   string
-	attachID string
-	since    *string
-	sinceSeq *int64
-	// bootID is the client's remembered gateway boot ID from AttachSessionFrame
-	// (#823 review finding 7) — nil/empty for a first load or a pre-#823 SPA
-	// build. See resolveCatchUpLocked's boot-mismatch check.
-	bootID         *string
+	h              *WSHandler
+	ctx            context.Context
+	chatID         string
+	attachID       string
+	since          *string
+	sinceSeq       *int64
 	wc             *wsConn
 	store          *session.UnifiedStore
 	entries        []session.TranscriptEntry
@@ -183,16 +179,12 @@ type wsHandlerHandleAttachSession struct {
 	catchUp        []sequencedFrame
 	useSnapshot    bool
 	snapshotReason string
-	// resetSeq is the session's high-water sequence number, and is what a
-	// snapshot tells the client to reset its cursor to. #823 review finding
-	// 6: captured inside bindConnection's own h.mu critical section, right
-	// after diversion is armed (resolveCatchUpLocked, called from
-	// bindConnection) — not, as before that fix, in an earlier standalone
-	// step whose snapshot of the counter could go stale before diversion
-	// started. It must still predate anything delivered live from that point
-	// onward: those frames are diverted and delivered AFTER the snapshot's
-	// full replay, so if the snapshot claimed a later position the client
-	// would discard exactly those frames as "already applied".
+	// resetSeq is the session's high-water sequence number as captured BEFORE
+	// bindConnection emits anything, and is what a snapshot tells the client to
+	// reset its cursor to. It must predate the bind: frames emitted from the
+	// bind onward are delivered AFTER the snapshot's full replay, so if the
+	// snapshot claimed a later position the client would discard exactly those
+	// frames as "already applied".
 	resetSeq uint64
 }
 
@@ -209,8 +201,7 @@ type wsHandlerHandleAttachSession struct {
 // sinceSeq is the per-session sequence cursor from AttachSessionFrame.SinceSeq
 // (#823 phase 2) and supersedes it when present.
 //
-// Three catch-up modes, decided by resolveCatchUpLocked (called from
-// bindConnection):
+// Three catch-up modes, decided by planCatchUp:
 //
 //   - no cursor at all   → full replay (the first-load path).
 //   - since_seq servable → the retained, already-numbered frames strictly after
@@ -227,21 +218,16 @@ func (h *WSHandler) handleAttachSession(
 	attachID string,
 	since *string,
 	sinceSeq *int64,
-	bootID *string,
 	wc *wsConn,
 ) {
-	wh := &wsHandlerHandleAttachSession{h: h, ctx: ctx, chatID: chatID, attachID: attachID, since: since, sinceSeq: sinceSeq, bootID: bootID, wc: wc}
+	wh := &wsHandlerHandleAttachSession{h: h, ctx: ctx, chatID: chatID, attachID: attachID, since: since, sinceSeq: sinceSeq, wc: wc}
 
 	if wh.loadReplay() {
 		return
 	}
 
-	// #823 review finding 6: the catch-up decision is now made INSIDE
-	// bindConnection's own h.mu critical section — see that function's doc
-	// comment for why a separate, earlier planCatchUp() call left a window
-	// where frames numbered for a second tab between "decide what's owed"
-	// and "start receiving this session's live frames" were neither in the
-	// catch-up list nor delivered live, and were lost for good.
+	wh.planCatchUp()
+
 	wh.bindConnection()
 
 	wh.runCatchUp()
@@ -255,65 +241,21 @@ func (h *WSHandler) handleAttachSession(
 	wh.resumeLiveSession()
 }
 
-// resolveCatchUpLocked decides which of the three modes this attach uses, by
-// asking the session's retained window whether it can serve everything after
-// the client's cursor. Caller must already hold h.mu.
-//
-// #823 review finding 6: this used to run as planCatchUp(), a standalone step
-// BEFORE bindConnection, under its OWN separate lock acquisition. That left a
-// window — between planCatchUp's snapshot of the retained window and
-// bindConnection's later h.mu acquisition that registers this connection as a
-// session peer and arms live-frame diversion — during which this connection
-// was neither included in the catch-up list just computed (already fixed)
-// NOR receiving anything live (not yet a registered peer, diversion not yet
-// armed). A second tab keeping the turn moving during exactly that window had
-// its frames vanish for the reconnecting tab: not in catch-up, not live, and
-// the reconnecting tab's next live frame moved its cursor past them for good.
-// Calling this from INSIDE bindConnection's critical section, after the peer
-// registration and diversion-arm steps, closes the window: the instant this
-// decision is taken is the SAME instant this connection starts receiving
-// anything emitted afterward, so nothing in between can fall through the
-// crack.
-func (wh *wsHandlerHandleAttachSession) resolveCatchUpLocked() {
+// planCatchUp decides which of the three modes this attach uses, by asking the
+// session's retained window whether it can serve everything after the client's
+// cursor. It runs BEFORE bindConnection so the decision is taken against a
+// stable window and the frames it returns are the exact bytes already emitted.
+func (wh *wsHandlerHandleAttachSession) planCatchUp() {
 	if wh.sinceSeq == nil || *wh.sinceSeq <= 0 {
 		// No usable cursor: first load, or a client that predates since_seq.
 		return
 	}
-	// #823 review finding 7: a boot_id mismatch is checked and answered
-	// BEFORE the ordinary since_seq servability check, and always wins over
-	// it. A restarted gateway's counter starts back at 0; by the time this
-	// client reconnects, another device may have already pushed the new
-	// counter past this client's stale numeric position, so
-	// catchUpFramesLocked below would happily call it servable (or even
-	// cursor_ahead) purely by coincidence — silently skipping everything the
-	// gateway numbered since the restart. A present, non-matching boot_id is
-	// the one signal that can tell "this position is stale" apart from "this
-	// position is fine" when the numbers alone cannot: an absent boot_id (a
-	// first load, or an older SPA build that predates this field) falls
-	// through to the ordinary check unchanged.
-	if wh.bootID != nil && *wh.bootID != "" && *wh.bootID != wh.h.bootID {
-		wh.useSnapshot = true
-		wh.snapshotReason = seqReasonBootMismatch
-		wh.resetSeq = wh.h.sessionHighSeqLocked(wh.attachID)
-		slog.Info("ws: attach_session: boot_id mismatch — sending snapshot",
-			"event", "replay_snapshot_fallback",
-			"session_id", wh.attachID,
-			"since_seq", *wh.sinceSeq,
-			"reason", seqReasonBootMismatch,
-		)
-		return
-	}
-	frames, reason, ok := wh.h.catchUpFramesLocked(wh.attachID, uint64(*wh.sinceSeq))
+	frames, reason, ok := wh.h.catchUpFrames(wh.attachID, uint64(*wh.sinceSeq))
 	if !ok {
 		wh.useSnapshot = true
 		wh.snapshotReason = reason
-		// Captured in the SAME locked step as the servability check, for the
-		// same reason resetSeq's own doc comment gives: it must predate
-		// anything bindConnection emits afterward, and now that this runs
-		// INSIDE bindConnection's critical section, "captured before the
-		// bind" and "captured atomically with the decision" are the same
-		// instant.
-		wh.resetSeq = wh.h.sessionHighSeqLocked(wh.attachID)
+		// Captured before the bind, deliberately — see resetSeq's doc comment.
+		wh.resetSeq = wh.h.sessionHighSeq(wh.attachID)
 		slog.Info("ws: attach_session: cursor not servable — sending snapshot",
 			"event", "replay_snapshot_fallback",
 			"session_id", wh.attachID,
@@ -594,12 +536,6 @@ func (wh *wsHandlerHandleAttachSession) bindConnection() {
 	// left to close it. session_state is already in sendCh, so it remains the
 	// first frame for this attach.
 	wh.wc.isReplayingLive.Store(true)
-	// #823 review finding 6: decide the catch-up mode HERE, still holding
-	// h.mu, now that this connection is a registered session peer and
-	// diversion is armed — not before either of those, which is what the
-	// former standalone planCatchUp() step did. See resolveCatchUpLocked's
-	// doc comment for the window this closes.
-	wh.resolveCatchUpLocked()
 	wh.h.mu.Unlock()
 }
 

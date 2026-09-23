@@ -116,7 +116,6 @@ export interface AttachSessionFrame {
   session_id: string;
   since_seq?: number;
   since?: string;
-  boot_id?: string;
 }
 
 export interface DevicePairingResponseFrame {
@@ -531,7 +530,7 @@ export interface SessionSnapshotFrame {
   type: "session_snapshot";
   session_id: string;
   seq: number;
-  reason?: "cursor_ahead" | "retention_exceeded" | "unknown_position" | "boot_mismatch";
+  reason?: "cursor_ahead" | "retention_exceeded" | "unknown_position";
 }
 
 export interface SessionStateFrame {
@@ -541,7 +540,6 @@ export interface SessionStateFrame {
   pending_asks?: Array<AskUserQuestionCard>;
   session_id?: string;
   active_turn?: SessionStateActiveTurn;
-  boot_id?: string;
   emitted_at: string;
 }
 

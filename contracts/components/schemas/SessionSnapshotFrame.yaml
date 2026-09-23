@@ -40,7 +40,6 @@ properties:
       - cursor_ahead
       - retention_exceeded
       - unknown_position
-      - boot_mismatch
     description: >
       Why a snapshot was sent instead of an incremental catch-up.
       cursor_ahead — the client's since_seq is greater than any sequence number
@@ -51,12 +50,3 @@ properties:
       gone and serving it would leave a hole.
       unknown_position — the gateway has no emitted-frame record for this
       session at all, so it cannot confirm that since_seq + 1 exists.
-      boot_mismatch (#823 review finding 7) — the client's attach_session
-      carried a boot_id that does not match the gateway's current one, so
-      since_seq is being read against the WRONG counter: a restart resets the
-      counter to 0, and by the time the client reconnects another device may
-      have already pushed the new counter past the client's stale position, so
-      the gap looks servable (or even cursor_ahead) by coincidence while
-      silently skipping everything numbered since the restart. A boot_id
-      mismatch is checked and answered BEFORE the ordinary since_seq
-      servability check, so it always wins over the other three reasons.

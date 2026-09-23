@@ -62,7 +62,6 @@ package gateway
 import (
 	"encoding/json"
 	"log/slog"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
@@ -75,38 +74,6 @@ import (
 // Correctness never depends on the window's size: a client whose cursor falls
 // outside it is served a snapshot instead of a range with a hole in it.
 const seqJournalCap = 1024
-
-// seqJournalByteCap bounds a session's retained window by total raw bytes,
-// independent of seqJournalCap's frame count (#823 review finding 8). A
-// session whose individual frames are large — tool results up to 50KiB
-// inline, a separate copy per attached tab from the per-connection forwarder
-// — can blow well past a sane memory budget long before it reaches
-// seqJournalCap frames. 8 MiB retained per session is generous headroom over
-// the worst realistic incremental catch-up (a handful of large tool results
-// plus ordinary token traffic) while still bounding the total.
-const seqJournalByteCap = 8 * 1024 * 1024
-
-// seqIdleEvictAfter and seqSweepInterval bound how long a session's counter
-// and retained window stay in memory with no activity (#823 review finding
-// 8: "The stored-frame history grows without limit across sessions... every
-// session and delegated child session active since boot stays in memory").
-// Dropping an idle session's entry is always safe: a later reconnect for it
-// just gets seqReasonUnknownPosition (catchUpFramesLocked) instead of an
-// incremental catch-up, which — per catchUpFrames' own doc comment — is the
-// same non-lossy snapshot fallback an unservable position already produces
-// for any other reason. seqSweepInterval rate-limits the sweep so it stays
-// cheap on the hot numbering path (assignSeqLocked) rather than needing a
-// dedicated background goroutine with its own lifecycle to manage (and,
-// under this repo's "never leak a goroutine in tests" discipline, to leak).
-const (
-	seqIdleEvictAfter = 30 * time.Minute
-	seqSweepInterval  = 5 * time.Minute
-)
-
-// wsSeqNow is a swappable clock seam so tests can simulate idle time passing
-// without a real 30-minute sleep — same pattern pkg/session uses for its own
-// swappable lock seams (FR-101).
-var wsSeqNow = time.Now
 
 // Snapshot reasons carried on SessionSnapshotFrame.Reason.
 const (
@@ -126,11 +93,6 @@ const (
 	// seqReasonUnknownPosition: the gateway has no emitted-frame record for
 	// this session at all.
 	seqReasonUnknownPosition = "unknown_position"
-	// seqReasonBootMismatch (#823 review finding 7): the client's
-	// attach_session carried a boot_id that does not match this gateway
-	// process' own — see wsHandlerHandleAttachSession.resolveCatchUpLocked.
-	// Checked and answered before the other three reasons, so it always wins.
-	seqReasonBootMismatch = "boot_mismatch"
 )
 
 // sequencedFrame is one already-emitted session frame, retained for byte-exact
@@ -147,14 +109,6 @@ type sequencedFrame struct {
 type sessionSeq struct {
 	high   uint64
 	frames []sequencedFrame
-	// bytes is the running total of len(raw) across frames — #823 review
-	// finding 8's independent byte cap. Kept incrementally rather than
-	// recomputed so the trim step in recordSeqFrameLocked stays O(trimmed),
-	// not O(retained).
-	bytes int
-	// lastActive is the wall-clock time of this session's most recent
-	// assignSeqLocked call — #823 review finding 8's idle-eviction input.
-	lastActive time.Time
 }
 
 // assignSeqLocked returns the next sequence number for sessionID, creating the
@@ -163,7 +117,6 @@ type sessionSeq struct {
 // The counter only ever moves forward, and only for frames actually emitted to
 // at least one connection, so the numbers a client can observe are gap-free.
 func (h *WSHandler) assignSeqLocked(sessionID string) uint64 {
-	h.maybeEvictIdleSessionsLocked()
 	if h.sequences == nil {
 		h.sequences = make(map[string]*sessionSeq)
 	}
@@ -173,100 +126,23 @@ func (h *WSHandler) assignSeqLocked(sessionID string) uint64 {
 		h.sequences[sessionID] = s
 	}
 	s.high++
-	s.lastActive = wsSeqNow()
 	return s.high
 }
 
 // recordSeqFrameLocked appends an emitted frame to sessionID's retained window,
-// trimming the oldest entries in one batch — once the window has grown past
-// 150% of seqJournalCap OR its retained bytes exceed seqJournalByteCap (#823
-// review finding 8) — so the per-frame cost stays amortised. Caller must hold
-// h.mu.
+// trimming the oldest entries in one batch once the window has grown past 150%
+// of its cap so the per-frame cost stays amortised. Caller must hold h.mu.
 func (h *WSHandler) recordSeqFrameLocked(sessionID, kind string, seq uint64, raw []byte) {
 	s := h.sequences[sessionID]
 	if s == nil {
 		return
 	}
 	s.frames = append(s.frames, sequencedFrame{seq: seq, kind: kind, raw: raw})
-	s.bytes += len(raw)
-
-	trimTo := 0
 	if len(s.frames) > seqJournalCap*3/2 {
-		trimTo = len(s.frames) - seqJournalCap
-	}
-	if s.bytes > seqJournalByteCap {
-		// Walk forward from the frame-count trim point until the retained
-		// bytes are back under budget. Floor of 1 frame retained so
-		// frames[0] always exists for the oldest-boundary check in
-		// catchUpFramesLocked.
-		bytesToDrop := s.bytes - seqJournalByteCap
-		dropped := 0
-		for i := trimTo; i < len(s.frames)-1 && dropped < bytesToDrop; i++ {
-			dropped += len(s.frames[i].raw)
-			trimTo = i + 1
-		}
-	}
-	if trimTo > 0 {
-		var droppedBytes int
-		for _, f := range s.frames[:trimTo] {
-			droppedBytes += len(f.raw)
-		}
-		// Copy out (not a bare reslice) so the dropped frames' raw bytes are
-		// actually released to the GC instead of staying pinned by the old
-		// backing array's still-live capacity.
-		keep := make([]sequencedFrame, len(s.frames)-trimTo)
-		copy(keep, s.frames[trimTo:])
+		keep := make([]sequencedFrame, seqJournalCap)
+		copy(keep, s.frames[len(s.frames)-seqJournalCap:])
 		s.frames = keep
-		s.bytes -= droppedBytes
 	}
-}
-
-// maybeEvictIdleSessionsLocked runs evictIdleSessionsLocked at most once per
-// seqSweepInterval, piggybacked on the numbering hot path (assignSeqLocked)
-// rather than a dedicated background goroutine — see seqIdleEvictAfter's doc
-// comment. Caller must hold h.mu.
-func (h *WSHandler) maybeEvictIdleSessionsLocked() {
-	now := wsSeqNow()
-	if !h.seqLastSweep.IsZero() && now.Sub(h.seqLastSweep) < seqSweepInterval {
-		return
-	}
-	h.seqLastSweep = now
-	h.evictIdleSessionsLocked(seqIdleEvictAfter)
-}
-
-// evictIdleSessionsLocked drops the counter and retained window for every
-// session whose last recorded activity is older than idleAfter (#823 review
-// finding 8). Returns the number of sessions evicted, for tests and logging.
-// Caller must hold h.mu.
-//
-// Safe by construction: a session dropped here that later gets a
-// reconnect attempt just answers seqReasonUnknownPosition (a servable
-// cursor cannot be told apart from "nothing was ever emitted"), which
-// catchUpFrames' own doc comment already treats as a safe, non-lossy
-// snapshot fallback — the SAME fallback an unservable retention window or a
-// gateway restart already produce for the same unforced reason. It is not
-// gated on whether any connection is still attached: a connection idle for
-// seqIdleEvictAfter has, by definition, produced no frame in that window, so
-// there is no turn in flight to interrupt — the very next frame that
-// session's own streamer emits after an eviction (via assignSeqLocked)
-// simply starts the counter over at 1, which any live-attached connection
-// applies directly (it only consults since_seq at reconnect/attach time, not
-// for ordinary in-place delivery) and that same connection's own later
-// reconnect (if any) resolves via the identical cursor_ahead/unknown_position
-// snapshot fallback.
-func (h *WSHandler) evictIdleSessionsLocked(idleAfter time.Duration) int {
-	if len(h.sequences) == 0 {
-		return 0
-	}
-	cutoff := wsSeqNow().Add(-idleAfter)
-	evicted := 0
-	for id, s := range h.sequences {
-		if s.lastActive.Before(cutoff) {
-			delete(h.sequences, id)
-			evicted++
-		}
-	}
-	return evicted
 }
 
 // sessionHighSeq returns the highest sequence number emitted for sessionID, or
@@ -274,12 +150,6 @@ func (h *WSHandler) evictIdleSessionsLocked(idleAfter time.Duration) int {
 func (h *WSHandler) sessionHighSeq(sessionID string) uint64 {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.sessionHighSeqLocked(sessionID)
-}
-
-// sessionHighSeqLocked is sessionHighSeq's body, for callers that already
-// hold h.mu (bindConnection — #823 review finding 6).
-func (h *WSHandler) sessionHighSeqLocked(sessionID string) uint64 {
 	if s := h.sequences[sessionID]; s != nil {
 		return s.high
 	}
@@ -305,15 +175,7 @@ func (h *WSHandler) sessionHighSeqLocked(sessionID string) uint64 {
 func (h *WSHandler) catchUpFrames(sessionID string, after uint64) ([]sequencedFrame, string, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.catchUpFramesLocked(sessionID, after)
-}
 
-// catchUpFramesLocked is catchUpFrames' body, for callers that already hold
-// h.mu — #823 review finding 6 needs the catch-up decision made inside
-// bindConnection's own critical section (see that function's doc comment),
-// not in a separate, earlier lock acquisition that leaves a window between
-// "decide what's owed" and "start receiving live frames for this session".
-func (h *WSHandler) catchUpFramesLocked(sessionID string, after uint64) ([]sequencedFrame, string, bool) {
 	s := h.sequences[sessionID]
 	if s == nil || s.high == 0 {
 		return nil, seqReasonUnknownPosition, false
@@ -341,25 +203,6 @@ func (h *WSHandler) catchUpFramesLocked(sessionID string, after uint64) ([]seque
 		// Contiguity guarantees this cannot happen when oldest <= after+1 <= high
 		// and after < high; refuse rather than serve a silent hole.
 		return nil, seqReasonRetentionExceeded, false
-	}
-	// #823 review finding 1: verify the range served is gap-free AND reaches
-	// the session's current high-water mark before promising it to the
-	// caller. Every seq this package hands out is meant to always be paired
-	// with a stored frame in the SAME locked step (assignSeqLocked +
-	// recordSeqFrameLocked — see sendDone's fix for the one place that used
-	// to violate this), so this should never trip in a build with that fix
-	// applied. But "should never" is exactly the class of bug that produced
-	// finding 1 in the first place — a sequence number spent with nothing
-	// retained for it — and a served range with a hole or a gap before the
-	// head is indistinguishable, on the wire, from a lost frame. Refuse
-	// (forcing a snapshot) rather than trust the invariant blindly.
-	if out[0].seq != after+1 || out[len(out)-1].seq != s.high {
-		return nil, seqReasonRetentionExceeded, false
-	}
-	for i := 1; i < len(out); i++ {
-		if out[i].seq != out[i-1].seq+1 {
-			return nil, seqReasonRetentionExceeded, false
-		}
 	}
 	return out, "", true
 }
@@ -512,38 +355,10 @@ func (h *WSHandler) emitSessionFrame(wc *wsConn, frameType string, frame any) {
 		slog.Error("ws: marshal session frame failed", "type", frameType, "session_id", sessionID, "error", err)
 		return
 	}
-	// #823 review finding 9 (first half, "take the number and store the
-	// frame atomically everywhere"): assign+store happen in this ONE locked
-	// step for every numbering path in this file now, including sendDone
-	// (see its own doc comment) — no path can spend a number without a
-	// stored frame backing it, closing the storage-order half of finding 9
-	// and, jointly, finding 1's core bug.
 	h.recordSeqFrameLocked(sessionID, frameType, seq, data)
 	h.mu.Unlock()
 
-	// numbered=true: this is the single place a live session frame is
-	// numbered (see doc comment above) — see #823 review finding 5 and
-	// sendRawFrameBytes' numbered parameter doc.
-	//
-	// #823 review finding 9 (second half, wire DELIVERY order — NOT closed
-	// by this pass, documented gap): assign+store above is atomic, but the
-	// send below still happens after h.mu is released, same as before this
-	// fix. Two concurrent producers for the same session (this connection's
-	// forwarder here, and the shared token/done fan-out path in
-	// wsStreamer.Update/sendDone, which numbers via numberSessionFrame) can
-	// still have their sends reach the wire in the opposite order from the
-	// numbers just assigned, if the goroutine that assigned the LOWER
-	// number is descheduled before it reaches sendRawFrameBytes. A correct
-	// fix needs a dedicated per-session send-ordering primitive that
-	// doesn't tie up h.mu — the GLOBAL lock every session's numbering and
-	// every connection's bind/attach path depends on — across a
-	// sendRawFrameBytes call that can legitimately block up to 5s for a
-	// critical frame (done/error) with a stalled receiver; holding h.mu
-	// across that would trade a plausible, timing-dependent per-session
-	// reordering for a confirmed, gateway-wide stall risk under exactly the
-	// dead-connection conditions #823 is about. Scoped out of this pass —
-	// see the squad report's honest-gaps section.
-	sendRawFrameBytes(wc, frameType, data, true)
+	sendRawFrameBytes(wc, frameType, data)
 }
 
 // numberableSession reports which session a frame belongs to and whether the

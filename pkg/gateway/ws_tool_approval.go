@@ -256,14 +256,6 @@ func (h *WSHandler) emitSessionState(wc *wsConn, sessionID string) {
 		PendingApprovals: pendingApprovals,
 		EmittedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
-	// #823 review finding 7: every session_state carries this process' boot
-	// ID so the SPA can store it alongside its per-session seq cursor and
-	// send it back on a later attach_session — see resolveCatchUpLocked's
-	// boot-mismatch check.
-	if h.bootID != "" {
-		bootID := h.bootID
-		frame.BootId = &bootID
-	}
 
 	// ADR-082 review CR3: stamp the session this snapshot describes so a
 	// client juggling several attached sessions (or a re-attach mid-flight)

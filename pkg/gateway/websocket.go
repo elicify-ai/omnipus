@@ -183,14 +183,6 @@ type WSHandler struct {
 	// tempdir cleanup races).
 	activeConns sync.WaitGroup
 
-	// bootID is a stable identifier for THIS gateway process, minted once at
-	// construction and unchanged for its whole lifetime (#823 review finding
-	// 7). Sent to every connection on session_state and compared against
-	// whatever boot_id an attach_session carries back — see
-	// resolveCatchUpLocked's boot-mismatch check. Immutable after
-	// newWSHandler returns, so it needs no lock.
-	bootID string
-
 	mu          sync.Mutex
 	sessions    map[string]*wsConn // chatID → connection
 	sessionIDs  map[string]string  // chatID → sessionID (for transcript recording)
@@ -204,10 +196,6 @@ type WSHandler struct {
 	// mu, like the connection maps above. Lazily created by assignSeqLocked.
 	// See ws_sequence.go for the numbering, retention and snapshot-fallback rules.
 	sequences map[string]*sessionSeq
-	// seqLastSweep is the wall-clock time maybeEvictIdleSessionsLocked last
-	// ran its idle-eviction sweep (#823 review finding 8) — rate-limits the
-	// sweep to once per seqSweepInterval. Guarded by mu.
-	seqLastSweep time.Time
 
 	// liveStreamers tracks, per session id, the wsStreamer instance CURRENTLY
 	// streaming a foreground turn's live round (ADR-082 D2/D3). Registered by
@@ -439,7 +427,7 @@ func (h *WSHandler) subscribePairingInterest(wc *wsConn, channelID string, activ
 	if cached, ok := h.lastPairingState.Load(channelID); ok {
 		frameBytes, ok := cached.([]byte)
 		if ok && len(frameBytes) > 0 {
-			sendRawFrameBytes(wc, string(generated.WsFrameTypeWhatsappPairing), frameBytes, false)
+			sendRawFrameBytes(wc, string(generated.WsFrameTypeWhatsappPairing), frameBytes)
 		} else if !ok {
 			slog.Error("ws: lastPairingState held non-[]byte value, skipping re-emit", "channel_id", channelID)
 		}
@@ -505,11 +493,6 @@ func newWSHandler(
 	allowedOrigin string,
 ) *WSHandler {
 	h := &WSHandler{
-		// #823 review finding 7: minted once per process, not per session —
-		// every session's frames, and every attach_session's boot_mismatch
-		// check, compare against this SAME value for the gateway's whole
-		// lifetime.
-		bootID:                uuid.NewString(),
 		msgBus:                msgBus,
 		agentLoop:             agentLoop,
 		allowedOrigin:         allowedOrigin,
@@ -1320,7 +1303,7 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			"requested_session_id", f.SessionId,
 		)
 		if f.SessionId != "" {
-			wh.h.handleAttachSession(wh.ctx, wh.chatID, f.SessionId, f.Since, f.SinceSeq, f.BootId, wh.wc)
+			wh.h.handleAttachSession(wh.ctx, wh.chatID, f.SessionId, f.Since, f.SinceSeq, wh.wc)
 		} else {
 			slog.Warn("ws: attach_session with empty session_id", "chat_id", wh.chatID)
 		}

@@ -213,10 +213,7 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 		return fmt.Errorf("webchat: marshal media frame: %w", err)
 	}
 	for _, conn := range conns {
-		// Not numbered: this path marshals and fans out directly, bypassing
-		// the session sequence-number system entirely (pre-existing gap,
-		// out of scope for #823 review finding 5 — see ws_sequence.go).
-		sendRawFrameBytes(conn, string(generated.WsFrameTypeMedia), raw, false)
+		sendRawFrameBytes(conn, string(generated.WsFrameTypeMedia), raw)
 	}
 	return nil
 }

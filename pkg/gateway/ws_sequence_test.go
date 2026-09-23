@@ -332,7 +332,7 @@ func TestAttach_IncrementalCatchUpDeliversMissedFramesThenTerminator(t *testing.
 	handler.mu.Lock()
 	handler.sessions["chat-re"] = wcRe
 	handler.mu.Unlock()
-	handler.handleAttachSession(context.Background(), "chat-re", sid, nil, &cursor, nil, wcRe)
+	handler.handleAttachSession(context.Background(), "chat-re", sid, nil, &cursor, wcRe)
 
 	frames := reDrain()
 	require.NotEmpty(t, frames, "an incremental catch-up must deliver the missed frames")
@@ -401,7 +401,7 @@ func TestAttach_NoCursorPerformsFullReplay(t *testing.T) {
 	handler.mu.Lock()
 	handler.sessions["chat-fresh"] = wc
 	handler.mu.Unlock()
-	handler.handleAttachSession(context.Background(), "chat-fresh", meta.ID, nil, nil, nil, wc)
+	handler.handleAttachSession(context.Background(), "chat-fresh", meta.ID, nil, nil, wc)
 
 	frames := drain()
 	require.NotEmpty(t, frames)
@@ -459,7 +459,7 @@ func TestAttach_StaleCursorGetsSnapshotNotSilentGap(t *testing.T) {
 	handler.mu.Lock()
 	handler.sessions["chat-stale"] = wc
 	handler.mu.Unlock()
-	handler.handleAttachSession(context.Background(), "chat-stale", meta.ID, nil, &cursor, nil, wc)
+	handler.handleAttachSession(context.Background(), "chat-stale", meta.ID, nil, &cursor, wc)
 
 	frames := drain()
 	require.NotEmpty(t, frames)
