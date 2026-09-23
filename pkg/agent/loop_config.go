@@ -87,7 +87,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// Re-wire exec tool deps (sandbox mode + egress proxy) on the new
 	// registry. Without this, the rebuilt exec tool would lose the kernel
 	// sandbox routing and revert to the legacy `sh -c` path on a hot reload.
-	al.wireExecToolDepsOn(registry)
+	al.wireExecToolDepsOn(registry, cfg)
 
 	// Re-wire system.* tools on the new registry (FR-001, FR-002).
 	if al.sysagentDeps != nil {

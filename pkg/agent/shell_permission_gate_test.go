@@ -29,6 +29,17 @@ import (
 // instance takes at construction time.
 func newGateTestLoop(t *testing.T, bashPolicy string, autoApprove bool, agents ...config.AgentConfig) *AgentLoop {
 	t.Helper()
+	return newGateTestLoopCfg(t, func(c *config.Config) {
+		c.Agents.List = append(c.Agents.List, agents...)
+		c.Sandbox.ToolPolicies = map[string]string{"bash": bashPolicy}
+		c.Sandbox.AutoApprove = autoApprove
+	})
+}
+
+// newGateTestLoopCfg builds a loop through NewAgentLoop after mutate has
+// shaped the config.
+func newGateTestLoopCfg(t *testing.T, mutate func(*config.Config)) *AgentLoop {
+	t.Helper()
 	home := filepath.Join(t.TempDir(), "home")
 	require.NoError(t, os.MkdirAll(home, 0o700))
 	cfg := &config.Config{}
@@ -38,9 +49,8 @@ func newGateTestLoop(t *testing.T, bashPolicy string, autoApprove bool, agents .
 		MaxTokens:         4096,
 		MaxToolIterations: 10,
 	}
-	cfg.Agents.List = append([]config.AgentConfig{{ID: testDefaultAgentID, Home: home}}, agents...)
-	cfg.Sandbox.ToolPolicies = map[string]string{"bash": bashPolicy}
-	cfg.Sandbox.AutoApprove = autoApprove
+	cfg.Agents.List = []config.AgentConfig{{ID: testDefaultAgentID, Home: home}}
+	mutate(cfg)
 	return mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 }
 

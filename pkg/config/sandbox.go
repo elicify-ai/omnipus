@@ -608,11 +608,15 @@ type OmnipusSandboxConfig struct {
 	// CommandRules is the ADR-092 D3 operator shell command rule list:
 	// {action: allow|ask|deny, binary, arg_prefix?}, evaluated for every
 	// bash call in every mode (God Mode included), deny beats ask beats
-	// allow. Read by pkg/agent's exec-tool wiring (loop_wire.go) into
-	// tools.ExecToolDeps.CommandRules; written by the re-auth-gated
-	// sandbox-config PUT (pkg/gateway/rest_sandbox_config.go), which
-	// re-wires the bash tool so a change applies without a restart.
-	// Validated at boot and on every write by ValidateCommandRules.
+	// allow. Config-file-only (ADR-092 D3): no REST path or screen reads
+	// or writes it, and the agent-facing set_config tool cannot reach it
+	// (the whole sandbox.* subtree is blocked). Read by pkg/agent's
+	// exec-tool wiring (loop_wire.go) into tools.ExecToolDeps.CommandRules,
+	// so an edit to config.json takes effect on the gateway's config reload
+	// (the file poller picks up the change and rebuilds every bash tool);
+	// no restart needed. Validated on every load by ValidateCommandRules — a
+	// config with an invalid rule is rejected and the previous config stays
+	// in force.
 	CommandRules []shellrule.Rule `json:"command_rules,omitempty"`
 
 	// Experimental holds feature flags for dark-launched capabilities.

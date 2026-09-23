@@ -87,6 +87,8 @@ func TestValidateConfigKey_NamedEscalationsRefused(t *testing.T) {
 		{"sandbox.tool_policies", "rewrite its own tool policies"},
 		{"sandbox.tool_policies.bash", "grant itself shell access"},
 		{"sandbox.auto_approve", "loosen the global Auto-approve default (ADR-092 D1) — must go through the password step-up on rest_sandbox_config.go, never the agent-facing config tool"},
+		{"sandbox.command_rules", "rewrite the ADR-092 D3 operator command rules (add an allow rule, drop a deny rule) — config-file-only, no agent or REST writer"},
+		{"sandbox.command_rules.0.action", "flip one operator command rule from deny to allow"},
 		{"sandbox.allowed_paths", "widen the filesystem write boundary"},
 		{"sandbox.allowed_exec_paths", "widen what it may execute"},
 		{"sandbox.filesystem_model", "switch reads/exec from confined to open"},

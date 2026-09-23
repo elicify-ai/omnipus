@@ -39,23 +39,19 @@ import (
 //
 // No-op when the agent has bash disabled or when the registry lookup fails.
 func (al *AgentLoop) wireExecToolDeps() {
-	al.wireExecToolDepsOn(al.registry)
+	al.wireExecToolDepsOn(al.registry, al.GetConfig())
 }
 
 // wireExecToolDepsOn is the registry-parameterized form of wireExecToolDeps,
 // used by hot-reload to wire the new registry before the atomic swap.
-func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
-	if registry == nil {
-		return
-	}
-	// Read al.cfg under al.mu.RLock (GetConfig), NOT bare. This helper runs
-	// inside UpsertAgentFast's and ReloadProviderAndConfig's wiring pass with
-	// NO al.mu held, so a bare `al.cfg` read races every pointer-swap publisher
-	// (SwapConfig, ReloadProviderAndConfig, and MutateConfig's copy-then-swap)
-	// writing the al.cfg slot under al.mu.Lock. The locked read establishes the
-	// happens-before edge the bare read lacked.
-	cfg := al.GetConfig()
-	if cfg == nil {
+//
+// cfg is the config the registry was built from, passed in rather than read
+// via al.GetConfig(): on a reload the new config is published only AFTER
+// this wiring pass (ReloadProviderAndConfig swaps al.cfg last), so reading
+// the live pointer here would build the new bash tools from the previous
+// config's god mode, audit fail-closed setting and command rules.
+func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry, cfg *config.Config) {
+	if registry == nil || cfg == nil {
 		return
 	}
 	allowReadPaths := buildAllowReadPatterns(cfg)
@@ -119,7 +115,7 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 	// ADR-090: the environment_setup tool rides the same registry pass —
 	// god mode, egress proxy and the production storage adapter land with
 	// each exec-deps refresh, and hot-reload re-applies them identically.
-	al.wireEnvironmentSetupDepsOn(registry)
+	al.wireEnvironmentSetupDepsOn(registry, cfg)
 }
 
 // WireTier13Deps registers the web_serve, workspace.shell, and
@@ -162,10 +158,9 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 	if registry == nil {
 		return
 	}
-	// Read al.cfg under al.mu.RLock (GetConfig), NOT bare — see the matching
-	// comment in wireExecToolDepsOn: this helper likewise runs in the unlocked
-	// wiring pass of UpsertAgentFast/ReloadProviderAndConfig, and a bare al.cfg
-	// read races every pointer-swap publisher of al.cfg.
+	// Read al.cfg under al.mu.RLock (GetConfig), NOT bare: this helper runs
+	// in the unlocked wiring pass of UpsertAgentFast/ReloadProviderAndConfig,
+	// and a bare al.cfg read races every pointer-swap publisher of al.cfg.
 	cfg := al.GetConfig()
 	if cfg == nil {
 		return

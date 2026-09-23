@@ -749,7 +749,7 @@ func (al *AgentLoop) UpsertAgentFast(cfg *config.Config, agentID string) (*Agent
 		if al.tier13Deps != nil {
 			al.wireTier13DepsLocked(newRegistry, *al.tier13Deps)
 		}
-		al.wireExecToolDepsOn(newRegistry)
+		al.wireExecToolDepsOn(newRegistry, cfg)
 		if al.sysagentDeps != nil {
 			al.wireSysagentDepsLocked(newRegistry, al.sysagentDeps)
 		}
