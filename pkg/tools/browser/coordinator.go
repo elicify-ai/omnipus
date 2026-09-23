@@ -860,11 +860,44 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 	releaseLockOnErr = false
 
 	// WebRTC build W1-A item 3: best-effort auto-load of the configured
-	// extension (empty ExtensionDir/ExtensionID today — no caller sets them
-	// yet, so this is inert until the gateway wires the capture extension in
-	// a later wave). A load failure never fails the Chrome launch itself —
-	// browsing tools must keep working even if the optional extension can't
-	// load.
+	// capture extension. BOTH fields are wired today (NOT empty as this
+	// comment historically claimed — see ADVISOR-FABLE-REPORT.md and
+	// .squads/REGISTRY.md ROUND 11 for the cost of that stale claim,
+	// which misled 9 probe rounds into hand-launching Chrome WITHOUT the
+	// allowlist switch and burning a day on a configuration the product
+	// never ships):
+	//   * ExtensionID is `pkg/tools/browser/captureext.ExtensionID`
+	//     (the deterministic ID the wave-plan's manifest `key` pins).
+	//   * ExtensionDir is seeded at agent-register time by
+	//     pkg/agent/loop_wire.go::registerBrowserTools (method on
+	//     *registerSharedToolsWire3, around line 1185 for the assignment),
+	//     which calls captureext.Seed(<$OMNIPUS_HOME>/browser) and assigns
+	//     BOTH fields onto browserCfg on success.
+	//   * exec_resolver.go::managedExecAllocatorOpts then appends
+	//     `--allowlisted-extension-id=<id>` and
+	//     `--enable-unsafe-extension-debugging` to the managed launch's
+	//     argv whenever ExtensionID != "" (around line 360-366) — these
+	//     two flags are the Chromium tab_capture_api.cc (byte-identical
+	//     at CfT 150/151/153) side of the per-tab invocation grant.
+	//   * THIS call (LoadExtension) then performs the post-launch
+	//     Extensions.loadUnpacked the flags pre-authorised.
+	//
+	// The flip side — load-bearing for any future hand-launched probe or
+	// test harness that reaches into this code: a Chrome binary launched
+	// WITHOUT the switch will hit the canonical
+	// `getMediaStreamId → kGrantError: "Extension has not been invoked for
+	// the current page (see activeTab permission). Chrome pages cannot be
+	// captured."` rejection that the advisor's §2 evidence table pins to
+	// tab_capture_api.cc:253-262. The product path (loop → exec_resolver
+	// → coordinator) is end-to-end correct; the switch is its load-bearing
+	// precondition.
+	//
+	// A load failure here still never fails the Chrome launch itself —
+	// browsing tools must keep working even if the optional extension
+	// can't load. (Square 12 / round-12 stale-comment cure: the prior
+	// wording's "inert until the gateway wires the capture extension in a
+	// later wave" is wrong on the wire, kept below as a guard against
+	// future reversion.)
 	if cfg.ExtensionDir != "" && cfg.ExtensionID != "" {
 		if _, lerr := c.LoadExtension(ctx); lerr != nil {
 			logger.WarnCF(
