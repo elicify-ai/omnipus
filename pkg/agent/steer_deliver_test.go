@@ -271,8 +271,17 @@ func TestDeliver_RepeatWake_SameDeterministicID_OneEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Deliver (repair): %v", err)
 	}
-	if second.Outcome != steer.DeliveryStoredNotWoken {
-		t.Fatalf("duplicate Delivery.Outcome = %q, want stored_not_woken with no repeated effects", second.Outcome)
+	// Fix lane 1, Finding C. This used to assert stored_not_woken here.
+	// That encoded a real bug: dedupe was decided by Append alone, so a
+	// wake that was STORED but never actually reached the parent could
+	// never be retried and the parent waited for ever. Re-delivering a
+	// still-UNACKED entry must wake again. The no-duplicate-entry
+	// guarantee this test is named for is unchanged and still asserted
+	// below; the acked case -- the genuine duplicate, which must NOT
+	// re-wake -- is covered right after it.
+	if second.Outcome != steer.DeliveryWoke {
+		t.Fatalf("re-delivery of a still-UNACKED entry: Delivery.Outcome = %q, want woke -- "+
+			"an unacked wake must be retried or the parent hangs for ever", second.Outcome)
 	}
 
 	msgs, _, _, err := inbox.Drain(parentID, childID, "", 10)
@@ -281,6 +290,20 @@ func TestDeliver_RepeatWake_SameDeterministicID_OneEntry(t *testing.T) {
 	}
 	if len(msgs) != 1 {
 		t.Fatalf("expected exactly 1 entry after a repeated terminal delivery, got %d", len(msgs))
+	}
+
+	// Once the entry is genuinely ACKED the same delivery is a true
+	// duplicate and must repeat no effect.
+	if err := inbox.Ack(parentID, []string{messageIDOf(msgs[0])}); err != nil {
+		t.Fatalf("Ack the delivered entry: %v", err)
+	}
+	third, err := deliverer.Deliver(ctx, handbackEvent(childID, "third-attempt-after-ack"))
+	if err != nil {
+		t.Fatalf("third Deliver (after ack): %v", err)
+	}
+	if third.Outcome != steer.DeliveryStoredNotWoken {
+		t.Fatalf("re-delivery of an ACKED entry: Delivery.Outcome = %q, want stored_not_woken "+
+			"with no repeated effects", third.Outcome)
 	}
 }
 
