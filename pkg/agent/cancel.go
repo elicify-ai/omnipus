@@ -17,10 +17,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"runtime/debug"
 	"sort"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -1000,45 +998,49 @@ func stringSliceSetDiff(a, b []string) (onlyInA, onlyInB []string) {
 // this is NOT an error case, it is the documented degrade-gracefully path
 // for an install that never wired a lifecycle store at all.
 //
-// [FIX-5, Defect 2, 2026-08-03] Returns a non-nil error when ANY
-// lifecycleStore.List call in the walk fails. Before this fix, a single
-// corrupt/unreadable record made the query for that one node fail, and the
-// walk silently `continue`d past it — treating "the query itself errored"
-// identically to "this node legitimately has zero children". Every
-// descendant beneath the failure point then vanished from the returned
-// slice with NO signal to the caller: resolveBackgroundKillSessionIDs would
-// report a clean-looking background-kill cascade that actually missed half
-// the tree, and the approval-cancel cascade (websocket.go's
-// buildCancelHooks) would leave a dropped grandchild's pending
-// RequestApproval hanging until its own multi-minute timeout while the UI
-// reported the cancel as complete. The returned descendants slice is still
-// the PARTIAL set successfully discovered before the failure — callers MUST
-// treat a non-nil error as "this is a truncated view of the true descendant
-// set", never as "clean success with fewer descendants than expected".
+// [Finding 2, ADR-091 fix lane 2] Walks the durable SteeredBy edge through
+// lifecycleStore.List(LifecycleFilter{SteeringSessionID: id}) — FR-019/
+// FR-020's index-backed "children of X" query (lifecycle.go,
+// listBySteeringSessionID), resolved from the in-memory parent index rather
+// than a directory scan. This is the "every subsequent Stop cascade" the
+// index's own doc comment names as the consumer that must not degrade to
+// O(every session ever persisted): a full os.ReadDir-plus-Load-per-file scan
+// here regressed exactly that, on the Stop path a user hits when something
+// is running away, and made one unreadable UNRELATED record fail the whole
+// walk (turning a complete Stop into a reported `partial: true`). The
+// index-backed walk never has a reason to touch a session outside root's own
+// subtree at all.
+//
+// [FIX-5, Defect 2, 2026-08-03] Returns a non-nil error when ANY List call in
+// the walk fails, alongside the PARTIAL descendant set successfully
+// discovered before the failure — callers MUST treat a non-nil error as "this
+// is a truncated view of the true descendant set", never as "clean success
+// with fewer descendants than expected". Per-branch: one bad branch's List
+// failure is accumulated and the walk continues past it (via errors.Join)
+// rather than aborting the whole BFS, so a corrupt/unreachable node's OWN
+// subtree is what goes missing, not everything queued behind it.
 func CollectDescendantSessionIDs(lifecycleStore *session.LifecycleStore, rootSessionID string) ([]string, error) {
 	if lifecycleStore == nil || rootSessionID == "" {
 		return nil, nil
 	}
-	records, walkErr := loadLifecycleRecordsForDescendantWalk(lifecycleStore)
-	childrenByParent := make(map[string][]string)
-	for i := range records {
-		rec := &records[i]
-		if rec.SteeredBy == nil || rec.SteeredBy.SteeringSessionID == "" {
-			continue
-		}
-		parentID := rec.SteeredBy.SteeringSessionID
-		childrenByParent[parentID] = append(childrenByParent[parentID], rec.SessionID)
-	}
-	for parentID := range childrenByParent {
-		sort.Strings(childrenByParent[parentID])
-	}
 	visited := map[string]struct{}{rootSessionID: {}}
 	queue := []string{rootSessionID}
 	var descendants []string
+	var walkErrs []error
 	for len(queue) > 0 {
 		id := queue[0]
 		queue = queue[1:]
-		for _, childID := range childrenByParent[id] {
+		children, err := lifecycleStore.List(session.LifecycleFilter{SteeringSessionID: id})
+		if err != nil {
+			walkErrs = append(walkErrs, fmt.Errorf("list children of %q: %w", id, err))
+			continue
+		}
+		childIDs := make([]string, 0, len(children))
+		for i := range children {
+			childIDs = append(childIDs, children[i].SessionID)
+		}
+		sort.Strings(childIDs)
+		for _, childID := range childIDs {
 			if _, seen := visited[childID]; seen {
 				continue
 			}
@@ -1047,40 +1049,10 @@ func CollectDescendantSessionIDs(lifecycleStore *session.LifecycleStore, rootSes
 			queue = append(queue, childID)
 		}
 	}
-	if walkErr != nil {
-		return descendants, fmt.Errorf("descendant walk incomplete for root %q: %w", rootSessionID, walkErr)
+	if len(walkErrs) > 0 {
+		return descendants, fmt.Errorf("descendant walk incomplete for root %q: %w", rootSessionID, errors.Join(walkErrs...))
 	}
 	return descendants, nil
-}
-
-func loadLifecycleRecordsForDescendantWalk(store *session.LifecycleStore) ([]session.LifecycleRecord, error) {
-	entries, err := os.ReadDir(store.Dir())
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	records := make([]session.LifecycleRecord, 0, len(entries))
-	var loadErrs []error
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") || strings.HasPrefix(entry.Name(), ".tmp-") {
-			continue
-		}
-		id := strings.TrimSuffix(entry.Name(), ".jsonl")
-		rec, loadErr := store.Load(id)
-		if loadErr != nil {
-			if !errors.Is(loadErr, session.ErrLifecycleNotFound) {
-				loadErrs = append(loadErrs, fmt.Errorf("load %q: %w", id, loadErr))
-			}
-			continue
-		}
-		records = append(records, *rec)
-	}
-	if len(loadErrs) > 0 {
-		return records, fmt.Errorf("%d lifecycle record(s) unreadable: %w", len(loadErrs), errors.Join(loadErrs...))
-	}
-	return records, nil
 }
 
 // collectDescendantSessionIDs is al's own lifecycle-store-bound wrapper
