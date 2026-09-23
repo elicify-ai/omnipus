@@ -933,30 +933,14 @@ func (c *OmnipusConfig) ToStandardConfig() *config.Config {
 		}
 	}
 
-	// ADR-036: route the legacy OpenClaw exec deny-pattern config into the
-	// fields the merged `bash` tool actually reads instead of the dead
-	// config.ExecConfig (see the comment in ToStandardTools above and the
-	// Deprecated doc comments on config.ExecConfig itself).
-	//
-	// c.Tools.Exec.EnableDenyPatterns was OpenClaw's single GLOBAL on/off
-	// switch shared by every agent. The bash tool has no equivalent global
-	// switch — deny patterns are only consulted when an individual agent's
-	// own AgentConfig.ShellPolicy.EnableDenyPatterns is true (merged with
-	// the global Sandbox.ShellDenyPatterns list at enforcement time, see
-	// pkg/tools/shell.go). Preserving the old "on for everyone" semantics
-	// therefore means: (1) append the custom patterns to the global list,
-	// and (2) opt every migrated agent in via its ShellPolicy, so the
-	// patterns are not left sitting inert under the new tool's per-agent
-	// opt-in default (false).
-	if c.Tools.Exec.EnableDenyPatterns && len(c.Tools.Exec.CustomDenyPatterns) > 0 {
-		cfg.Sandbox.ShellDenyPatterns = append(cfg.Sandbox.ShellDenyPatterns, c.Tools.Exec.CustomDenyPatterns...)
-		for i := range cfg.Agents.List {
-			if cfg.Agents.List[i].ShellPolicy == nil {
-				cfg.Agents.List[i].ShellPolicy = &config.AgentShellPolicy{}
-			}
-			cfg.Agents.List[i].ShellPolicy.EnableDenyPatterns = true
-		}
-	}
+	// ADR-091 D2/D5 (removal item R-1d): the legacy OpenClaw exec
+	// deny-pattern config (c.Tools.Exec.EnableDenyPatterns/
+	// CustomDenyPatterns) used to route onto config.Sandbox.ShellDenyPatterns
+	// and per-agent AgentConfig.ShellPolicy — both target fields are gone,
+	// deleted outright along with the built-in shell deny-pattern list they
+	// backed (replaced by the D1 Ask/Auto/God Mode selector and D3's rule
+	// engine). Greenfield — no replacement mapping; a legacy OpenClaw config
+	// with deny patterns configured simply does not carry them forward.
 
 	return cfg
 }
@@ -1070,12 +1054,12 @@ func (c ToolsConfig) ToStandardTools() config.ToolsConfig {
 		Cron: config.CronToolsConfig{
 			ExecTimeoutMinutes: c.Cron.ExecTimeoutMinutes,
 		},
-		// Exec deny-pattern fields are intentionally NOT mapped to
-		// config.ExecConfig here: that struct is dead (ADR-036 — see its
-		// Deprecated doc comments in pkg/config/config.go). c.Exec's deny
-		// patterns are migrated into the fields the merged `bash` tool
-		// actually reads (Sandbox.ShellDenyPatterns + per-agent
-		// AgentConfig.ShellPolicy) by ToStandardConfig below instead, which
-		// has the Sandbox/Agents context this method does not.
+		// Exec deny-pattern fields (c.Tools.Exec.EnableDenyPatterns/
+		// CustomDenyPatterns) are intentionally NOT mapped anywhere
+		// (ADR-091 D2/D5, removal item R-1d): the fields they used to route
+		// onto (config.Sandbox.ShellDenyPatterns, per-agent
+		// AgentConfig.ShellPolicy) are both deleted outright, along with the
+		// built-in shell deny-pattern list they backed. Greenfield — no
+		// replacement mapping.
 	}
 }

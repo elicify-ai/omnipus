@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
@@ -85,7 +84,6 @@ func suppliedRESTAgentFields(req *gen.AgentUpdateRequest) []string {
 	add(req.Default != nil, "default")
 	add(req.Voice != nil, "voice")
 	add(req.Executor != nil, "executor")
-	add(req.ShellPolicy != nil, "shell_policy")
 	return fields
 }
 
@@ -175,6 +173,24 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 		)
 		return true
 	}
+	// ADR-091 D2/D5: shell_policy (the per-agent block-list override,
+	// AgentShellPolicy) is retired from the wire entirely — the built-in deny
+	// list and its per-agent/global opt-in are deleted outright, replaced by
+	// the three-mode selector (Ask/Auto/God Mode) and D3's rule engine.
+	// gen.AgentUpdateRequest no longer has a ShellPolicy field at all, and
+	// decodeAndValidate's fast path below is non-strict by default
+	// (validate_inbound defaults false) — without this explicit raw-body
+	// sniff a stale client still sending {"shell_policy":...} would have the
+	// field silently dropped by Go's default JSON decode, and the PUT would
+	// report 200 with no change applied instead of the loud 400 this
+	// codebase's own create-path convention expects (same
+	// sandbox_profile/delegation_policy raw-body-sniff precedent above;
+	// ADR-091 spec R-2/FR-003/SC-014).
+	if bytes.Contains(uf.rawBody, []byte(`"shell_policy"`)) {
+		jsonErr(uf.w, http.StatusBadRequest,
+			`shell_policy is retired — the built-in shell deny list and its per-agent override are gone; use the Ask/Auto/God Mode selector instead (ADR-091)`)
+		return true
+	}
 	// model_params.top_p (T2): removed from the wire entirely (see
 	// agentModelParamsInput's doc comment — no provider adapter implements
 	// nucleus sampling and there is no global default to fall back to).
@@ -241,16 +257,6 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	}
 	// Timestamp applied to the persisted agent on every successful save.
 	uf.ru.now = time.Now().UTC()
-	// Validate any custom deny patterns in shell_policy — each must be a valid Go regexp.
-	if uf.ru.req.ShellPolicy != nil && uf.ru.req.ShellPolicy.CustomDenyPatterns != nil {
-		for _, pat := range *uf.ru.req.ShellPolicy.CustomDenyPatterns {
-			if _, compileErr := regexp.Compile(pat); compileErr != nil {
-				jsonErr(uf.w, http.StatusBadRequest,
-					fmt.Sprintf("shell_policy.custom_deny_patterns: invalid regexp %q: %v", pat, compileErr))
-				return true
-			}
-		}
-	}
 	// ADR-066 D2 rung 1 — context_window_override. The generated *int
 	// collapses "absent" and "null" to nil, but the contract gives them
 	// different meanings ("send null to clear"), so peek the raw body for an
@@ -820,10 +826,10 @@ func (uf *restAPIUpdateAgentFlow) respond() {
 				if ac.UpdatedAt != nil {
 					ag.UpdatedAt = ac.UpdatedAt
 				}
-				// P-F2: echo shell_policy/fallback_models on the PUT response too —
+				// P-F2: echo fallback_models on the PUT response too —
 				// this loop previously never called applyAgentOverrides at all, so
-				// updateAgent's own response (unlike list/get) never reflected either
-				// field even though both persist correctly above. Runs before the
+				// updateAgent's own response (unlike list/get) never reflected that
+				// field even though it persists correctly above. Runs before the
 				// request-value overrides below so an explicit req.MaxToolIterations
 				// (also touched by applyAgentOverrides) still wins.
 				applyAgentOverrides(&ag, &ac)
@@ -1008,9 +1014,9 @@ func (rp *restAPIUpdateAgentPersistAgent) updateIdentityAndModel(agentRec *confi
 	// config.AgentModelParams now exists for exactly this, and
 	// pkg/agent/instance.go reads it at AgentInstance
 	// construction time so the override reaches the next turn's
-	// provider call. Field-level merge (mirrors ShellPolicy
-	// below): only the sub-fields the caller actually sent
-	// overwrite the persisted value; an omitted sub-field leaves
+	// provider call. Field-level merge: only the sub-fields the
+	// caller actually sent overwrite the persisted value; an
+	// omitted sub-field leaves
 	// it untouched, so a partial patch (e.g. only max_tokens)
 	// does not clobber an existing temperature. top_p is
 	// rejected 400 earlier in this handler (no provider adapter
@@ -1037,27 +1043,6 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 	// tool_feedback was removed from the wire in W1 (it's now per-channel
 	// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
 	// global config-level agents.defaults.tool_feedback stays.
-	if rp.ru.req.ShellPolicy != nil {
-		// Load the existing shell_policy (if any) so a partial PATCH
-		// (e.g. only custom_deny_patterns) does not clobber fields the
-		// caller did not send.
-		existing := agentRec.ShellPolicy
-		if existing == nil {
-			existing = &config.AgentShellPolicy{}
-		}
-		// Only overwrite enable_deny_patterns when the caller explicitly
-		// sent it (non-nil pointer).
-		if rp.ru.req.ShellPolicy.EnableDenyPatterns != nil {
-			existing.EnableDenyPatterns = *rp.ru.req.ShellPolicy.EnableDenyPatterns
-		}
-		// An explicitly-sent array overwrites, INCLUDING the empty array —
-		// that is how the SPA clears all deny patterns. Only a nil (field
-		// absent from the request) leaves the persisted list untouched.
-		if rp.ru.req.ShellPolicy.CustomDenyPatterns != nil {
-			existing.CustomDenyPatterns = *rp.ru.req.ShellPolicy.CustomDenyPatterns
-		}
-		agentRec.ShellPolicy = existing
-	}
 	if rp.ru.req.Color != nil {
 		agentRec.Color = *rp.ru.req.Color
 	}
@@ -1069,6 +1054,14 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 	// rejected before this persist step. Empty string clears.
 	if rp.ru.req.Voice != nil {
 		agentRec.Voice = strings.TrimSpace(*rp.ru.req.Voice)
+	}
+	// auto_approve_disabled (ADR-091 D1): off-only, tighten-only by
+	// construction — there is no wire value meaning "force it on," so this
+	// write can never loosen past the global sandbox.auto_approve default
+	// (FR-003's tighten-only requirement is satisfied by the type itself,
+	// not by a runtime check here).
+	if rp.ru.req.AutoApproveDisabled != nil {
+		agentRec.AutoApproveDisabled = *rp.ru.req.AutoApproveDisabled
 	}
 	// memory_enabled (ADR-052 FR-039): "Allowed on all agents" per
 	// AgentUpdateRequest.yaml — including locked/system agents (the

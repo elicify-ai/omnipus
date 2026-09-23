@@ -16,11 +16,10 @@ import (
 // FirstToken (pkg/policy/evaluator.go ~line 111) had ZERO direct test
 // references anywhere in the codebase before this addition — confirmed by
 // grep. It is not purely cosmetic: within evaluator.go it only feeds a
-// human-readable denial message, but pkg/security/execapproval.go's
-// matchAllowlistPattern (~lines 250, 256) uses FirstToken as the ACTUAL
-// match key for "always allow this binary" persisted-allowlist-pattern
-// decisions (policy.FirstToken(pattern) == policy.FirstToken(command)), and
-// PersistPattern's stored form depends on it too. These are pure
+// human-readable denial message. (Its other historical consumer,
+// pkg/security/execapproval.go's matchAllowlistPattern, is deleted outright
+// by ADR-091 D5 — zero production callers, retired dead code — so this
+// comment no longer names it as a live consumer.) These are pure
 // characterization tests of FirstToken's EXISTING behavior — no behavior
 // change. Gap identified in the whole-codebase Backend-High test-gap review
 // (2026-07-07); there is no wave-spec BDD scenario for FirstToken in
@@ -71,8 +70,7 @@ func TestFirstToken_LeadingTrailingWhitespaceTrimmed(t *testing.T) {
 
 // TestFirstToken_SingleWordInput verifies that a single-word (no-argument)
 // command returns the whole trimmed string, since there is no space to
-// split on. This is the case that matters most for execapproval's binary
-// allowance (e.g. "htop" with no args).
+// split on (e.g. "htop" with no args).
 func TestFirstToken_SingleWordInput(t *testing.T) {
 	assert.Equal(t, "htop", policy.FirstToken("htop"))
 	assert.Equal(t, "ls", policy.FirstToken("ls"))

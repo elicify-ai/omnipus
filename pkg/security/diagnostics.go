@@ -10,8 +10,6 @@ type DiagnosticConfig struct {
 	ExecToolEnabled bool
 	// ExecProxyEnabled is true when the exec HTTP proxy (SEC-28) is running.
 	ExecProxyEnabled bool
-	// ExecAllowedBinaries is the configured exec allowlist (SEC-05).
-	ExecAllowedBinaries []string
 }
 
 // DiagnosticWarning is a single diagnostic finding.
@@ -36,12 +34,10 @@ func CheckExecEgress(cfg DiagnosticConfig) []DiagnosticWarning {
 		})
 	}
 
-	if len(cfg.ExecAllowedBinaries) == 0 {
-		warnings = append(warnings, DiagnosticWarning{
-			Code:    "SEC-05",
-			Message: "Exec tool is enabled but no binary allowlist is configured. Any binary can be executed. Configure security.policy.exec.allowed_binaries to restrict exec.",
-		})
-	}
+	// SEC-05's binary-allowlist warning is retired alongside the allowlist
+	// itself (ADR-091 D2/D5 — folded into the D3 rule engine and the
+	// Ask/Auto/God Mode selector; there is no longer a
+	// security.policy.exec.allowed_binaries key to recommend configuring).
 
 	return warnings
 }

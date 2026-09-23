@@ -44,22 +44,22 @@ type doctorReport struct {
 // doctorSetup describes the install state a doctor test runs against. Mode 0
 // means the file is absent; the audit flag toggles ~/.omnipus/system/.
 type doctorSetup struct {
-	enableProxy     bool
-	allowedBinaries []string
-	credMode        fs.FileMode
-	configMode      fs.FileMode
-	auditDir        bool
+	enableProxy bool
+	credMode    fs.FileMode
+	configMode  fs.FileMode
+	auditDir    bool
 }
 
 // healthyDoctorSetup is an install with nothing to report: exec proxy on,
-// exec allowlist set, both sensitive files 0600, audit directory present.
+// both sensitive files 0600, audit directory present. The exec-allowlist
+// check itself is retired (ADR-091 D2/D5) — there is no allowedBinaries
+// field left to set here.
 func healthyDoctorSetup() doctorSetup {
 	return doctorSetup{
-		enableProxy:     true,
-		allowedBinaries: []string{"/usr/bin/git"},
-		credMode:        0o600,
-		configMode:      0o600,
-		auditDir:        true,
+		enableProxy: true,
+		credMode:    0o600,
+		configMode:  0o600,
+		auditDir:    true,
 	}
 }
 
@@ -71,7 +71,6 @@ func newDoctorDeps(t *testing.T, s doctorSetup) *systools.Deps {
 	t.Helper()
 	cfg := config.DefaultConfig()
 	cfg.Tools.Exec.EnableProxy = s.enableProxy
-	cfg.Tools.Exec.AllowedBinaries = s.allowedBinaries
 
 	home := t.TempDir()
 	writeFixedMode := func(name string, mode fs.FileMode) {
@@ -149,15 +148,17 @@ func TestDoctorRun_HealthyInstallReportsNothing(t *testing.T) {
 }
 
 // TestDoctorRun_AllChecksFailTogether constructs the worst install — proxy
-// off, no allowlist, both sensitive files world-readable, audit directory
-// missing — and asserts every one of the five findings appears with its
-// severity and a recommendation, plus the aggregate counters.
+// off, both sensitive files world-readable, audit directory missing — and
+// asserts every one of the four findings appears with its severity and a
+// recommendation, plus the aggregate counters. (The exec-allowlist/SEC-05
+// finding is retired alongside the allowlist itself, ADR-091 D2/D5 — down
+// from five findings to four.)
 func TestDoctorRun_AllChecksFailTogether(t *testing.T) {
 	s := doctorSetup{enableProxy: false, credMode: 0o644, configMode: 0o644, auditDir: false}
 	rep := runDoctor(t, newDoctorDeps(t, s))
 
-	if len(rep.Issues) != 5 {
-		t.Fatalf("got %d issues, want 5: %+v", len(rep.Issues), rep.Issues)
+	if len(rep.Issues) != 4 {
+		t.Fatalf("got %d issues, want 4: %+v", len(rep.Issues), rep.Issues)
 	}
 	want := []struct {
 		message     string // distinctive substring of the finding
@@ -165,7 +166,6 @@ func TestDoctorRun_AllChecksFailTogether(t *testing.T) {
 		recContains string
 	}{
 		{"exec HTTP proxy", "high", "SEC-29"},
-		{"binary allowlist", "high", "SEC-05"},
 		{"credentials.json is world/group-readable", "high", "chmod 600 ~/.omnipus/credentials.json"},
 		{"config.json is world/group-readable", "medium", "chmod 600 ~/.omnipus/config.json"},
 		{"Audit log directory", "medium", "Restart Omnipus"},
@@ -183,8 +183,8 @@ func TestDoctorRun_AllChecksFailTogether(t *testing.T) {
 			t.Errorf("finding %q recommends %q, want it to mention %q", w.message, iss.Recommendation, w.recContains)
 		}
 	}
-	if rep.ChecksFailed != 5 {
-		t.Errorf("checks_failed = %d, want 5", rep.ChecksFailed)
+	if rep.ChecksFailed != 4 {
+		t.Errorf("checks_failed = %d, want 4", rep.ChecksFailed)
 	}
 	if rep.ChecksPassed != 0 {
 		t.Errorf("checks_passed = %d, want 0", rep.ChecksPassed)
@@ -220,15 +220,6 @@ func TestDoctorRun_SingleFindingIsolation(t *testing.T) {
 			message:     "exec HTTP proxy",
 			severity:    "high",
 			recContains: "SEC-29",
-			wantPassed:  3,
-			wantPct:     25,
-		},
-		{
-			name:        "exec allowlist missing",
-			mutate:      func(s *doctorSetup) { s.allowedBinaries = nil },
-			message:     "binary allowlist",
-			severity:    "high",
-			recContains: "SEC-05",
 			wantPassed:  3,
 			wantPct:     25,
 		},

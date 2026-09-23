@@ -41,10 +41,13 @@ var validSandboxModes = map[string]bool{
 //
 // PUT accepts a partial body — any subset of
 // {mode, allow_network_outbound, allowed_paths, ssrf_enabled,
-// ssrf_allow_internal, ssrf.allow_internal}. On validation success each
-// changed field is persisted atomically via safeUpdateConfigJSON.
+// ssrf_allow_internal, ssrf.allow_internal, auto_approve}. On validation
+// success each changed field is persisted atomically via safeUpdateConfigJSON.
 // mode and allowed_paths are restart-gated (requires_restart=true).
-// ssrf.allow_internal is hot-reload (requires_restart=false).
+// ssrf.allow_internal and auto_approve are hot-reload (requires_restart=false).
+// auto_approve is ADR-091 D1's global Auto-approve default — this handler is
+// its routing target specifically because it already gates every write
+// behind requireReAuth (see authenticateAndDecode below).
 //
 // Gated by adminWrap (withAuth → RequireNotBypass); dev_mode_bypass returns 503.
 func (a *restAPI) HandleSandboxConfig(w http.ResponseWriter, r *http.Request) {
@@ -73,10 +76,6 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	allowInternal := append([]string(nil), cfg.Sandbox.SSRF.AllowInternal...)
 	if allowInternal == nil {
 		allowInternal = []string{}
-	}
-	shellDenyPatterns := append([]string(nil), cfg.Sandbox.ShellDenyPatterns...)
-	if shellDenyPatterns == nil {
-		shellDenyPatterns = []string{}
 	}
 
 	// applied_mode reflects what the gateway is ACTUALLY running with. It
@@ -124,6 +123,11 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		cfg.Sandbox.FilesystemModel, sandboxpkg.FilesystemModelConfined)
 	resolvedFsModel := gen.SandboxConfigFilesystemModel(fsModel)
 
+	// ADR-091 D1: the global default for Auto-approve. Read directly, no
+	// resolution step — unlike GodMode there is no availability gate on this
+	// value, it is a plain operator setting.
+	autoApprove := cfg.Sandbox.AutoApprove
+
 	jsonOK(w, gen.SandboxConfig{
 		Mode:                 &resolvedMode,
 		FilesystemModel:      &resolvedFsModel,
@@ -132,7 +136,7 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		SsrfEnabled:          &ssrfEnabled,
 		SsrfAllowInternal:    &allowInternal,
 		AppliedMode:          &applied,
-		ShellDenyPatterns:    &shellDenyPatterns,
+		AutoApprove:          &autoApprove,
 		GodMode:              &godModeOn,
 		GodModeAvailable:     &godModeAvail,
 
@@ -161,9 +165,9 @@ type restAPIPutSandboxConfig struct {
 	changedSSRFEnabled          bool
 	resolvedAllowInternal       *[]string
 	changedAllowInternal        bool
-	changedShellDenyPatterns    bool
 	changedFilesystemModel      bool
 	changedWorkspacePathGuard   bool
+	changedAutoApprove          bool
 	ssrfWarnings                []string
 }
 
@@ -182,14 +186,18 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	// so the snapshot is taken atomically with the write. Reading before the
 	// lock can yield a stale value when two writers race.
 	var (
-		oldMode              string
-		oldAllowedPaths      []string
-		oldAllowInternal     []string
-		oldShellDenyPatterns []string
+		oldMode          string
+		oldAllowedPaths  []string
+		oldAllowInternal []string
 		// Defaults to true so an audit entry for the first-ever write records
 		// the value that was actually in force (the fail-closed default), not
 		// Go's zero value, which would read as "it was off" when it was on.
 		oldWorkspacePathGuard = true
+		// Defaults to true — the fresh-install seed (pkg/config/defaults.go)
+		// — for the identical reason: a config.json predating this key has
+		// no "auto_approve" entry, but its EFFECTIVE value is the seeded
+		// true, not Go's false zero value.
+		oldAutoApprove = true
 	)
 
 	if err := ps.a.safeUpdateConfigJSON(func(m map[string]any) error {
@@ -242,15 +250,12 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 				ssrf["allow_internal"] = toAnySlice(*ps.resolvedAllowInternal)
 			}
 		}
-		if ps.changedShellDenyPatterns {
-			if raw, ok := sandbox["shell_deny_patterns"].([]any); ok {
-				for _, v := range raw {
-					if s, ok := v.(string); ok {
-						oldShellDenyPatterns = append(oldShellDenyPatterns, s)
-					}
-				}
+		if ps.changedAutoApprove {
+			// Hot-reload, like ssrf.allow_internal — no restart flag.
+			if prev, ok := sandbox["auto_approve"].(bool); ok {
+				oldAutoApprove = prev
 			}
-			sandbox["shell_deny_patterns"] = toAnySlice(*ps.body.ShellDenyPatterns)
+			sandbox["auto_approve"] = *ps.body.AutoApprove
 		}
 		// ADR-068 §6. Restart-gated: applyWorkspacePathGuard resolves this into
 		// AgentDefaults.RestrictToWorkspace at boot, and the guard reads that
@@ -303,13 +308,13 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 					slog.Error("rest: audit emit ssrf.allow_internal change", "error", err)
 				}
 			}
-			if ps.changedShellDenyPatterns {
+			if ps.changedAutoApprove {
 				if err := audit.EmitSecuritySettingChange(
 					ps.r.Context(), auditLogger,
-					"sandbox.shell_deny_patterns",
-					oldShellDenyPatterns, *ps.body.ShellDenyPatterns,
+					"sandbox.auto_approve",
+					oldAutoApprove, *ps.body.AutoApprove,
 				); err != nil {
-					slog.Error("rest: audit emit shell_deny_patterns change", "error", err)
+					slog.Error("rest: audit emit auto_approve change", "error", err)
 				}
 			}
 			if ps.changedWorkspacePathGuard {
@@ -379,17 +384,21 @@ func (ps *restAPIPutSandboxConfig) resolveAndValidate() bool {
 		ps.resolvedAllowInternal = ps.body.Ssrf.AllowInternal
 	}
 	ps.changedAllowInternal = ps.resolvedAllowInternal != nil
-	ps.changedShellDenyPatterns = ps.body.ShellDenyPatterns != nil
 	ps.changedFilesystemModel = ps.body.FilesystemModel != nil
 	ps.changedWorkspacePathGuard = ps.body.WorkspacePathGuard != nil
+	// ADR-091 D1/FR-045: routing the global Auto-approve default write
+	// through THIS handler (rather than a bespoke endpoint) is the whole
+	// point — it inherits authenticateAndDecode's requireReAuth step-up for
+	// free, the same password gate God Mode and credential writes use.
+	ps.changedAutoApprove = ps.body.AutoApprove != nil
 
 	if !ps.changedMode && !ps.changedAllowNetworkOutbound && !ps.changedAllowedPaths &&
-		!ps.changedSSRFEnabled && !ps.changedAllowInternal && !ps.changedShellDenyPatterns &&
-		!ps.changedFilesystemModel && !ps.changedWorkspacePathGuard {
+		!ps.changedSSRFEnabled && !ps.changedAllowInternal &&
+		!ps.changedFilesystemModel && !ps.changedWorkspacePathGuard && !ps.changedAutoApprove {
 		jsonErr(
 			ps.w,
 			http.StatusBadRequest,
-			"at least one field required — expected mode, filesystem_model, allowed_paths, ssrf.allow_internal, shell_deny_patterns, or workspace_path_guard",
+			"at least one field required — expected mode, filesystem_model, allowed_paths, ssrf.allow_internal, auto_approve, or workspace_path_guard",
 		)
 		return true
 	}
@@ -426,19 +435,13 @@ func (ps *restAPIPutSandboxConfig) resolveAndValidate() bool {
 		}
 		ps.ssrfWarnings = warnings
 	}
-	if ps.changedShellDenyPatterns {
-		if err := validateShellDenyPatterns(*ps.body.ShellDenyPatterns); err != nil {
-			jsonErr(ps.w, http.StatusBadRequest, err.Error())
-			return true
-		}
-	}
 	return false
 }
 
 // respond returns the saved configuration and whether the changes require a restart.
 func (ps *restAPIPutSandboxConfig) respond() {
 	// mode and allowed_paths are restart-gated (each is consumed at boot or
-	// agent-wiring time). ssrf.allow_internal and shell_deny_patterns are
+	// agent-wiring time). ssrf.allow_internal and auto_approve are
 	// hot-reload via the config-poll loop.
 	partialRestartRequired := ps.changedMode || ps.changedAllowedPaths || ps.changedWorkspacePathGuard
 
@@ -459,13 +462,10 @@ func (ps *restAPIPutSandboxConfig) respond() {
 		if ps.a.sandboxResult != nil {
 			updatedApplied = string(ps.a.sandboxResult.ApplyState.Mode)
 		}
-		updatedShellDenyPatterns := append([]string(nil), updatedCfg.Sandbox.ShellDenyPatterns...)
-		if updatedShellDenyPatterns == nil {
-			updatedShellDenyPatterns = []string{}
-		}
 		updatedMode := gen.SandboxConfigMode(updatedCfg.Sandbox.ResolvedMode())
 		updatedAllowNetOut := updatedCfg.Sandbox.AllowNetworkOutbound
 		updatedSsrfEnabled := updatedCfg.Sandbox.SSRF.Enabled
+		updatedAutoApprove := updatedCfg.Sandbox.AutoApprove
 		jsonOK(ps.w, gen.SandboxConfig{
 			Saved:                &saved,
 			Mode:                 &updatedMode,
@@ -474,7 +474,7 @@ func (ps *restAPIPutSandboxConfig) respond() {
 			SsrfEnabled:          &updatedSsrfEnabled,
 			SsrfAllowInternal:    &updatedAllowInternal,
 			AppliedMode:          &updatedApplied,
-			ShellDenyPatterns:    &updatedShellDenyPatterns,
+			AutoApprove:          &updatedAutoApprove,
 			RequiresRestart:      &partialRestartRequired,
 			Ssrf: &struct {
 				AllowInternal *[]string `json:"allow_internal,omitempty"`

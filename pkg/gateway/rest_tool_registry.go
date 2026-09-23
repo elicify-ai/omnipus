@@ -426,17 +426,29 @@ func resolveConfiguredPolicy(toolName string, cfg *config.AgentToolsCfg, globalP
 
 // HandleToolApprovals handles POST /api/v1/tool-approvals/{approval_id}.
 //
-// Body: {"action": "approve"|"deny"|"cancel"|"always"}
+// Body: {"action": "allow"|"allow_once"|"deny"|"cancel", "scope"?: "exact"|"prefix"}
+// (ADR-091 D4/FR-023 — renamed and re-shaped from the pre-ADR-091
+// approve/deny/cancel/always enum; "cancel" stays in the wire enum but is
+// never shown as a button, see ToolApprovalActionRequest's generated doc
+// comment.)
 //
-//   - approve/deny/cancel — resolve this single pending call (FR-017, FR-018).
-//   - always — resolve this call as approved AND record a session-scoped
-//     "Always Allow" grant for the approval's (session, agent, tool, args) so future
+//   - allow_once/deny/cancel — resolve this single pending call (FR-017,
+//     FR-018). allow_once carries no grant, unlike the old "approve".
+//   - allow — resolve this call as approved AND record a session-scoped
+//     grant for the approval's (session, agent, tool, args) so future
 //     matching calls in the same session auto-approve without re-prompting.
 //     This is the generic REST replacement for the retired
 //     exec_approval_response{decision:"always"} WS-frame path (ADR-036 §3.4):
 //     it is the writer of ApprovalGrantStore.Record on the generic approval
 //     path, restoring the "Always Allow" grant that agent-delegation-spec.md's
-//     FR-D8 grant-inheritance depends on.
+//     FR-D8 grant-inheritance depends on. `scope` (exact/prefix, default
+//     exact) travels with the request but ApprovalGrantStore.Record
+//     (pkg/security/approvalgrants.go, ADR-091 lane L4) is exact-fingerprint
+//     only as of this handler — a "prefix" request is honoured as "exact"
+//     until L4 lands prefix-scoped recording; this fails toward MORE
+//     re-prompts, never fewer, so it is a safe interim behaviour, not a
+//     silent capability claim. The response always echoes the scope actually
+//     recorded, never merely the one requested.
 //
 // Auth:
 //   - Requires valid bearer token (withAuth, FR-014). Unauthenticated → 401.
@@ -468,20 +480,25 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	if !decodeAndValidate(w, r, "ToolApprovalActionRequest", &body, validateEnabled) {
 		return
 	}
-	// recordGrant is set only for the "always" action. "always" resolves THIS
-	// call exactly like "approve" (identical terminal transition, so the pending
-	// tool call proceeds) and, once that resolve succeeds, records a
-	// session-scoped "Always Allow" grant so future matching calls auto-approve.
-	// The grant's scoping identity is read from the immutable approval entry
-	// below — never from client-supplied fields.
+	// recordGrant is set only for the "allow" action. "allow" resolves THIS
+	// call exactly like "allow_once" (identical terminal transition, so the
+	// pending tool call proceeds) and, once that resolve succeeds, records a
+	// session-scoped grant so future matching calls auto-approve. The grant's
+	// scoping identity is read from the immutable approval entry below —
+	// never from client-supplied fields. grantScope defaults to "exact" when
+	// the client omits it, per the wire contract.
 	var action ApprovalAction
 	var recordGrant bool
+	grantScope := gen.ToolApprovalActionRequestScopeExact
 	switch body.Action {
-	case gen.ToolApprovalActionRequestActionApprove:
+	case gen.ToolApprovalActionRequestActionAllowOnce:
 		action = ApprovalActionApprove
-	case gen.ToolApprovalActionRequestActionAlways:
+	case gen.ToolApprovalActionRequestActionAllow:
 		action = ApprovalActionApprove
 		recordGrant = true
+		if body.Scope != nil {
+			grantScope = *body.Scope
+		}
 	case gen.ToolApprovalActionRequestActionDeny:
 		action = ApprovalActionDeny
 	case gen.ToolApprovalActionRequestActionCancel:
@@ -490,7 +507,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		jsonErr(
 			w,
 			http.StatusBadRequest,
-			fmt.Sprintf("unknown action %q: must be approve, deny, cancel, or always", string(body.Action)),
+			fmt.Sprintf("unknown action %q: must be allow, allow_once, deny, or cancel", string(body.Action)),
 		)
 		return
 	}
@@ -528,13 +545,13 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// "always": the pending call is now approved — record the session-scoped
+	// "allow": the pending call is now approved — record the session-scoped
 	// grant. Identity (session_id, agent_id, tool, args) comes from the immutable
 	// approval entry set at creation, never from client-supplied data, so a
 	// caller cannot install a grant for an arbitrary (session, agent, tool, args).
 	// ApprovalGrantStore.Record is nil-receiver-safe and no-ops (returns false)
 	// on any empty key component (fail-safe: never records under an empty
-	// session/agent/tool key). This is now the ONLY writer of "always" grants
+	// session/agent/tool key). This is now the ONLY writer of "allow" grants
 	// (ADR-036 §3.4 retired the legacy WS-frame gate, wsApprovalHook, which
 	// used to also record grants from its own decision:"always" handling).
 	//
@@ -549,15 +566,26 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		Status:     gen.ToolApprovalResponseStatusOk,
 	}
 	if recordGrant {
+		// ApprovalGrantStore.Record (pkg/security/approvalgrants.go) is
+		// exact-fingerprint only as of this handler — ADR-091 lane L4 adds
+		// prefix-scoped recording separately. A "prefix" request is recorded
+		// as "exact" until that lands: strictly more re-prompting than the
+		// client asked for, never less, so it is safe to serve today and the
+		// response echoes what was ACTUALLY recorded (exact), not what was
+		// requested, so the client never believes it has prefix coverage it
+		// does not have.
 		recorded := a.agentLoop.ApprovalGrants().Record(entry.SessionID, entry.AgentID, entry.ToolName, entry.Args)
+		recordedScope := gen.ToolApprovalResponseScopeExact
 		if recorded {
-			logsafeInfo("tool-approval: recorded session Always-Allow grant",
+			logsafeInfo("tool-approval: recorded session Allow grant",
 				"approval_id", approvalID,
 				"session_id", entry.SessionID,
 				"agent_id", entry.AgentID,
-				"tool", entry.ToolName)
+				"tool", entry.ToolName,
+				"requested_scope", string(grantScope),
+				"recorded_scope", string(recordedScope))
 		} else {
-			logsafeWarn("tool-approval: 'always' action approved this call but the grant was NOT recorded "+
+			logsafeWarn("tool-approval: 'allow' action approved this call but the grant was NOT recorded "+
 				"(missing session_id/agent_id/tool identity on the approval entry) — the next matching call will prompt again",
 				"approval_id", approvalID,
 				"session_id", entry.SessionID,
@@ -565,15 +593,18 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 				"tool", entry.ToolName)
 		}
 		// Bug fix: also propagate the grant onto the durable identity the
-		// NEXT delegation will inherit from, so "Always Allow" clicked
-		// during a delegated child's own turn survives past that child's
-		// session lifetime. See recordGrantOnDelegationParent's doc comment.
+		// NEXT delegation will inherit from, so "Allow" clicked during a
+		// delegated child's own turn survives past that child's session
+		// lifetime. See recordGrantOnDelegationParent's doc comment.
 		// Honesty: if this IS a delegated child and the parent write did
 		// not stick, grant_recorded must be false — the child session is
 		// torn down at the end of the turn and the next same-identity use
 		// will ask again.
 		parentOK := a.recordGrantOnDelegationParent(entry, approvalID)
 		resp.GrantRecorded = boolPtr(recorded && parentOK)
+		if recorded {
+			resp.Scope = &recordedScope
+		}
 	}
 
 	jsonOK(w, resp)

@@ -280,31 +280,28 @@ func (nal *newAgentLoop) initializeAudit() (*AgentLoop, bool, error) {
 
 // initializeSecurity builds policy enforcement, sandboxing, prompt protection, and the exec proxy.
 func (nal *newAgentLoop) initializeSecurity() {
-	// SEC-05/SEC-07: Build the policy evaluator from the live config.
-	// `cfg.Tools.Exec.AllowedBinaries` is the single source of truth for the
-	// exec allowlist (the same field the UI writes to via
-	// /api/v1/security/exec-allowlist). Constructing with an explicit
-	// SecurityConfig avoids the deny-everything trap of `NewEvaluator(nil)`.
+	// ADR-091 D2/D5/removal items 3-4: the opt-in exec allowlist
+	// (config.ExecConfig.AllowedBinaries, the REST surface it backed at
+	// /api/v1/security/exec-allowlist) and ExecConfig.Approval are both
+	// retired outright — folded into D3's unified command-rule engine
+	// (pkg/shellrule) and the D1 Ask/Auto/God Mode selector respectively.
+	// There is no longer a config source for either field, so the
+	// evaluator below always constructs with an empty allowlist and the
+	// "allow" default policy (the "no opt-in" branch every agent already
+	// took before this ADR, now the only branch).
 	//
-	// Default policy derivation:
-	//   - A non-empty allowlist means the operator opted into SEC-05 binary
-	//     restriction — default_policy is "deny" so unlisted binaries are blocked.
-	//   - An empty allowlist means no opt-in — default_policy is "allow" so
-	//     the existing guardCommand() checks remain the only exec restriction.
-	// This preserves backward compatibility for agents that never touched the
-	// allowlist, while honoring fail-closed semantics for agents that did.
-	defaultPolicy := policy.PolicyAllow
-	if len(nal.cfg.Tools.Exec.AllowedBinaries) > 0 {
-		defaultPolicy = policy.PolicyDeny
-	}
+	// *policy.Evaluator/PolicyAuditor themselves are NOT deleted here: the
+	// bash tool's ExecPolicyAuditor interface and ExecToolDeps.PolicyAuditor
+	// field (pkg/tools/shell.go, ADR-091 lane L4, out of this lane's scope)
+	// still consume policy.Decision/PolicyAuditor as of this commit — this
+	// lane cannot delete pkg/policy/evaluator.go or auditor.go without
+	// breaking a concurrently-developed, unowned file (reported, not
+	// stubbed, per this lane's own instructions). pkg/policy/saturation.go
+	// is unrelated to ADR-091 entirely (consumed by
+	// pkg/gateway/gateway_boot.go for the approval-saturation cap) and was
+	// never a candidate for deletion.
 	secCfg := &policy.SecurityConfig{
-		DefaultPolicy: defaultPolicy,
-		Policy: policy.PolicySection{
-			Exec: policy.ExecPolicy{
-				AllowedBinaries: nal.cfg.Tools.Exec.AllowedBinaries,
-				Approval:        nal.cfg.Tools.Exec.Approval,
-			},
-		},
+		DefaultPolicy: policy.PolicyAllow,
 	}
 	policyEval := policy.NewEvaluator(secCfg)
 

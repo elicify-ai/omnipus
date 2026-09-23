@@ -28,18 +28,18 @@ var knownFields = map[string]struct{}{
 	"name": {}, "description": {}, "color": {}, "icon": {}, "type": {}, "locked": {}, "soul": {},
 	"skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "model": {}, "provider": {},
 	"fallback_models": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {},
-	"memory_enabled": {}, "default": {}, "voice": {}, "executor": {}, "cli_path": {}, "shell_policy": {},
+	"memory_enabled": {}, "default": {}, "voice": {}, "executor": {}, "cli_path": {},
 }
 
 var alwaysImmutable = map[string]struct{}{"type": {}, "locked": {}}
 var ordinaryProtected = map[string]struct{}{"name": {}, "description": {}, "color": {}, "icon": {}, "type": {}, "locked": {}, "soul": {}, "executor": {}}
 var hiddenProtected = map[string]struct{}{
 	"name": {}, "description": {}, "color": {}, "icon": {}, "type": {}, "locked": {}, "skills": {}, "mcp_servers": {},
-	"tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {}, "shell_policy": {}, "executor": {}, "default": {}, "voice": {},
+	"tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {}, "executor": {}, "default": {}, "voice": {},
 }
 var externalUnsupported = map[string]struct{}{
 	"soul": {}, "skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {},
-	"voice": {}, "shell_policy": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {}, "fallback_models": {},
+	"voice": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {}, "fallback_models": {},
 }
 
 var ordinaryBuiltins = map[string]struct{}{
@@ -52,7 +52,7 @@ type FieldDescriptor struct {
 	Reason   string
 }
 
-var describedFields = []string{"name", "description", "color", "icon", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "default", "voice", "shell_policy", "type"}
+var describedFields = []string{"name", "description", "color", "icon", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "default", "voice", "type"}
 
 func FieldDescriptors(agent config.AgentConfig) []FieldDescriptor {
 	out := make([]FieldDescriptor, 0, len(describedFields))

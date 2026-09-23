@@ -619,10 +619,17 @@ type AgentConfig struct {
 	// Tools, when non-nil, overrides scope-based tool visibility for this agent.
 	// Nil means all tools allowed by the agent's type are available.
 	Tools *AgentToolsCfg `json:"tools,omitempty"`
-	// ShellPolicy configures per-agent shell command deny patterns.
-	// When non-nil, its settings are merged with the global ShellDenyPatterns
-	// at enforcement time.
-	ShellPolicy *AgentShellPolicy `json:"shell_policy,omitempty"`
+	// AutoApproveDisabled is the per-agent tighten-only override for
+	// ADR-091 D1's Auto shell-permission mode (sandbox.AutoApprove is the
+	// global default). false (default) means this agent follows the global
+	// default; true forces this agent's shell calls into Ask (every
+	// command prompts) even when the global default is Auto. There is
+	// deliberately no way to set this false when the global default is
+	// already false/Auto-disabled-by-policy — server-side tighten-only
+	// enforcement (FR-003) rejects any write that would loosen a single
+	// agent past the global default, mirroring the existing per-agent
+	// bash tool-policy override.
+	AutoApproveDisabled bool `json:"auto_approve_disabled,omitempty"`
 	// CreatedAt is the timestamp this agent record was created. Set once and
 	// never modified thereafter. Added by ADR-054 D2 (docs/internal/architecture/
 	// ADR-054-entity-config-separation.md) — the per-entity store's List()
@@ -644,10 +651,20 @@ type AgentConfig struct {
 // AgentType classifies an agent for scope-based tool visibility filtering.
 type AgentType string
 
-// AgentShellPolicy configures per-agent shell command deny patterns for the
-// workspace.shell tool. It is stored on AgentConfig so
-// that the enforcement layer can merge per-agent patterns with the global
-// OmnipusSandboxConfig.ShellDenyPatterns list.
+// AgentShellPolicy is RETIRED (ADR-091 D2/D5, removal item 1) — the built-in
+// shell deny-pattern list and its per-agent/global opt-in are gone, replaced
+// by the D1 Ask/Auto/God Mode selector and D3's rule engine
+// (pkg/shellrule). No AgentConfig field references this type any more (the
+// `shell_policy` wire field is deleted and PUT/POST reject it outright —
+// pkg/gateway/rest_agents_update.go/rest_agents_create.go).
+//
+// The TYPE itself is kept here, unreferenced by config.go, ONLY because
+// pkg/tools/shell.go's ExecToolDeps.AgentShellPolicy field (owned by ADR-091
+// lane L4, out of this lane's scope) still names it as of this commit; ADR-091
+// lane L5 (this removal pass) cannot delete pkg/tools/shell.go's field
+// without breaking a concurrently-developed, unowned file. Delete this type
+// in the same change that removes ExecToolDeps.GlobalShellDenyPatterns/
+// AgentShellPolicy from pkg/tools/shell.go.
 type AgentShellPolicy struct {
 	// EnableDenyPatterns activates shell command deny-pattern checking for this
 	// agent. When false (default), neither custom nor global deny patterns are
@@ -1638,17 +1655,18 @@ type CronToolsConfig struct {
 type ExecConfig struct {
 	ToolConfig `envPrefix:"OMNIPUS_TOOLS_EXEC_"`
 
-	// US-7: Interactive approval before exec commands.
-	// "ask" (default) prompts the user; "off" skips the prompt.
-	Approval string `json:"approval,omitempty" env:"OMNIPUS_TOOLS_EXEC_APPROVAL"`
-
-	// US-7/US-5: Glob patterns for binaries the exec tool is allowed to run.
-	// Non-empty list acts as an allowlist; all other commands are denied.
-	AllowedBinaries []string `json:"allowed_binaries,omitempty" env:"OMNIPUS_TOOLS_EXEC_ALLOWED_BINARIES"`
-
 	// US-14: Route exec child process HTTP traffic through the local SSRF proxy.
 	// When true (default), HTTP_PROXY and HTTPS_PROXY are set on child processes.
 	EnableProxy bool `json:"enable_proxy,omitempty" env:"OMNIPUS_TOOLS_EXEC_ENABLE_PROXY"`
+
+	// Approval ("US-7: Interactive approval before exec commands") and
+	// AllowedBinaries ("US-7/US-5: exec binary allowlist, SEC-05") are
+	// retired outright (ADR-091 D2/D5/removal items 3-4): the opt-in exec
+	// allowlist is folded into D3's unified command-rule engine
+	// (config.SandboxConfig.CommandRules, pkg/shellrule), and command
+	// approval is now the D1 Ask/Auto/God Mode selector. Greenfield — no
+	// migration, no shim; a config carrying either retired key is simply
+	// dropped on load (unknown-field tolerance).
 }
 
 type SkillsToolsConfig struct {

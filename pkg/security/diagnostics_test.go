@@ -11,10 +11,11 @@ import (
 )
 
 // TestCheckExecEgress_WarningMatrix pins both outcomes of every input the
-// check consults: the disabled-tool short circuit, each warning trigger on
-// its own, both together, and the fully healthy configuration. The warning
-// ORDER matters too — run_doctor renders findings in the order returned, so
-// SEC-29 preceding SEC-05 is asserted, not just membership.
+// check consults: the disabled-tool short circuit, the proxy-off warning
+// trigger, and the fully healthy configuration. The SEC-05 binary-allowlist
+// warning is retired alongside the allowlist itself (ADR-091 D2/D5 — folded
+// into the D3 rule engine and the Ask/Auto/God Mode selector), so
+// CheckExecEgress now has exactly one warning trigger, not two.
 func TestCheckExecEgress_WarningMatrix(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -22,36 +23,18 @@ func TestCheckExecEgress_WarningMatrix(t *testing.T) {
 		wantCodes []string
 	}{
 		{
-			name:      "disabled tool short-circuits even with proxy off and no allowlist",
+			name:      "disabled tool short-circuits even with proxy off",
 			cfg:       security.DiagnosticConfig{ExecToolEnabled: false},
 			wantCodes: nil,
 		},
 		{
-			name:      "proxy off and no allowlist yields both warnings",
+			name:      "proxy off yields SEC-29",
 			cfg:       security.DiagnosticConfig{ExecToolEnabled: true, ExecProxyEnabled: false},
-			wantCodes: []string{"SEC-29", "SEC-05"},
-		},
-		{
-			name:      "proxy on but no allowlist yields only SEC-05",
-			cfg:       security.DiagnosticConfig{ExecToolEnabled: true, ExecProxyEnabled: true},
-			wantCodes: []string{"SEC-05"},
-		},
-		{
-			name: "proxy off with allowlist yields only SEC-29",
-			cfg: security.DiagnosticConfig{
-				ExecToolEnabled:     true,
-				ExecProxyEnabled:    false,
-				ExecAllowedBinaries: []string{"/usr/bin/git"},
-			},
 			wantCodes: []string{"SEC-29"},
 		},
 		{
-			name: "proxy on with allowlist is healthy",
-			cfg: security.DiagnosticConfig{
-				ExecToolEnabled:     true,
-				ExecProxyEnabled:    true,
-				ExecAllowedBinaries: []string{"/usr/bin/git"},
-			},
+			name:      "proxy on is healthy",
+			cfg:       security.DiagnosticConfig{ExecToolEnabled: true, ExecProxyEnabled: true},
 			wantCodes: nil,
 		},
 	}

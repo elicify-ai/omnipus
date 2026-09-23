@@ -433,9 +433,15 @@ var blockedConfigKeys = []blockedConfigKey{
 	},
 	{
 		Key: "tools.exec",
-		Reason: "it holds the exec binary allow-list, the exec approval mode and the egress proxy " +
-			"toggle for spawned processes",
-		ReadOKReason: "which binaries may be run and whether approval is required — the answer to 'why was my command refused'",
+		// ExecConfig.AllowedBinaries/Approval (the exec binary allow-list and
+		// approval mode this reason used to name) are retired outright
+		// (ADR-091 D2/D5/removal items 3-4) — folded into D3's rule engine
+		// and the D1 Ask/Auto/God Mode selector, both governed under
+		// sandbox.* (already blocked wholesale, see the "sandbox" entry
+		// above). What remains under tools.exec is enable_proxy, the egress
+		// proxy toggle for spawned processes — still worth blocking.
+		Reason:       "it holds the egress proxy toggle for spawned processes",
+		ReadOKReason: "whether the egress proxy is enabled — the answer to 'why did my command's network access behave this way'",
 	},
 	{
 		Key: "tools.mcp",

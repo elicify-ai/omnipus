@@ -528,7 +528,11 @@ var upsertAgentFastTestHook func(attempt int)
 // below (e.g. wireExecToolDepsOn's per-agent ShellPolicy lookup) read the
 // agent's config back OUT of cfg.Agents.List by ID, not from a
 // caller-supplied *config.AgentConfig, which is why this looks the agent up
-// itself instead of accepting one.
+// itself instead of accepting one. (wireExecToolDepsOn's per-agent
+// ShellPolicy lookup, once the reason cited here, is retired — ADR-091
+// D2/D5 deleted config.AgentConfig.ShellPolicy outright — but the same
+// look-up-by-ID-from-cfg.Agents.List pattern still applies to the wiring
+// passes that remain.)
 //
 // Design, per the issue's own investigation comment: reuse NewAgentInstance
 // (the SAME constructor NewAgentRegistry itself calls per agent) plus the

@@ -65,34 +65,21 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 	// shell guard / deny-patterns off, regardless of per-agent shell policy.
 	godMode := GodModeActive(cfg)
 
-	globalShellDenyPatterns := cfg.Sandbox.ShellDenyPatterns
-	if godMode {
-		globalShellDenyPatterns = nil
-	}
-
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)
 		if !ok || agent == nil || agent.Tools == nil {
 			continue
 		}
 
-		var agentShellPolicy *config.AgentShellPolicy
-		for i := range cfg.Agents.List {
-			entry := &cfg.Agents.List[i]
-			if entry.ID == agentID {
-				agentShellPolicy = entry.ShellPolicy
-				break
-			}
-		}
-		if godMode {
-			agentShellPolicy = nil // drop per-agent deny patterns under god mode
-		}
-
+		// ADR-091 D2/D5: the built-in shell deny-pattern list and its
+		// per-agent/global opt-in (config.AgentShellPolicy,
+		// SandboxConfig.ShellDenyPatterns) are retired outright — replaced
+		// by the D1 Ask/Auto/God Mode mode selector and D3's unified
+		// command-rule engine (pkg/shellrule). This site no longer
+		// constructs or passes GlobalShellDenyPatterns/AgentShellPolicy.
 		deps := tools.ExecToolDeps{
-			GodMode:                 godMode,
-			AuditFailClosed:         resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),
-			GlobalShellDenyPatterns: globalShellDenyPatterns,
-			AgentShellPolicy:        agentShellPolicy,
+			GodMode:         godMode,
+			AuditFailClosed: resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),
 		}
 		// Plumb the kernel-sandbox egress proxy into the bash tool so the
 		// hardened path (non-god-mode) injects HTTP_PROXY pointing at the
