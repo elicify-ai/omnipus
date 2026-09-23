@@ -52,7 +52,7 @@ What each setting does, and what you see when it fires:
 | Ask | Stops and waits for your approval | An approval card with Approve, Deny and Always Allow |
 | Deny | Cannot run the tool | The tool disappears from the agent's view |
 
-On the approval card, **Always Allow** remembers that exact call, so an identical one does not ask again.
+On the approval card, **Always Allow** remembers that exact call, so an identical one does not ask again. For a shell command specifically, Always Allow can instead remember a whole family of similar commands — see [security](security.md) for the exact wording and when that choice is offered.
 
 For a tool set to Ask, **Settings → Security → Auto-approve** can skip the card entirely when the sandbox can confirm the call stays contained (reading or writing inside your project folder, for example) and still shows it for anything that reaches further (the network, or a location outside the sandbox). See [security](security.md) for what "stays contained" means and how to turn it on or off globally, per agent, or for one conversation.
 
