@@ -55,7 +55,24 @@ func TestSpawnSubTurn_ParentHardAbort_RecordsInterruptedStatus(t *testing.T) {
 	// returns before ever appending to parentTS.childTurnIDs.
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock"}, Home: t.TempDir()},
+			// ADR-068 FR-014/FR-015 fixture repair: DefaultModel must name a
+			// Model, not just a Provider. Without one, `mia`'s resolved
+			// AgentInstance has an empty a.Model, so
+			// (*AgentInstance).needsModelSnapshot() (pkg/agent/instance.go)
+			// is true and runTurn's ADR-068 pre-turn gate
+			// (pkg/agent/loop_run_turn.go, "Turn refused: the agent has no
+			// model assigned") refuses the child's turn in ~2ms — BEFORE it
+			// ever reaches slowMockProvider.Chat below, and often before the
+			// test's own parentTS.Finish(true) cascade call executes. That
+			// race is what intermittently produced Status="error"/Reason=""
+			// instead of "interrupted"/"unknown" in CI (run 35867017610):
+			// the child finished on its own, for an unrelated reason, before
+			// the cascade it is supposed to observe ever reached it. Naming
+			// a Model here (matching
+			// TestSpawnSubTurn_ExplicitCancelViaRequestCancel_RecordsCancelledAndReason's
+			// fixture below) makes the child actually block in
+			// slowMockProvider.Chat, closing the race.
+			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "mock", Model: "gpt-4o-mini"}, Home: t.TempDir()},
 			List:     []config.AgentConfig{{ID: "mia"}},
 		},
 	}
