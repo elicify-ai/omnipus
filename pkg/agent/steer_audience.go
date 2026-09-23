@@ -12,6 +12,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -196,6 +197,52 @@ func deliverOwnerKey(rec *session.LifecycleRecord) string {
 	return strings.TrimSpace(rec.SteeringSessionID())
 }
 
+// deliverEntryIsAcked reports whether messageID is a genuinely ACKNOWLEDGED
+// entry under ownerKey (Finding C, above) — the durable signal that
+// distinguishes "a previous delivery ran this one to completion" from "this
+// exact content happens to already be in the inbox", which a mere Append
+// dedup cannot tell apart. Built entirely on MessageInboxStore.Drain's own
+// documented contract ("Drain returns up to maxMessages UNACKED messages"),
+// no new pkg/session surface: a message still present in Drain's output is
+// still unacked; one Drain no longer returns is acked (or never existed,
+// which Deliver's caller cannot reach here since res.MessageID was the id
+// Append itself just resolved).
+func deliverEntryIsAcked(inbox *session.MessageInboxStore, ownerKey, childSessionID, messageID string) (bool, error) {
+	cursor := ""
+	for {
+		msgs, next, more, err := inbox.Drain(ownerKey, childSessionID, cursor, session.DefaultInboxUnackedMax)
+		if err != nil {
+			return false, err
+		}
+		for _, m := range msgs {
+			if messageIDOf(m) == messageID {
+				return false, nil
+			}
+		}
+		if !more || next == cursor {
+			return true, nil
+		}
+		cursor = next
+	}
+}
+
+// messageIDOf extracts the message_id field common to every SessionMessage
+// variant via the same JSON round-trip pkg/session/message_inbox.go's own
+// envelope peek uses internally, without importing that unexported helper.
+func messageIDOf(msg generated.SessionMessage) string {
+	raw, err := msg.MarshalJSON()
+	if err != nil {
+		return ""
+	}
+	var envelope struct {
+		MessageID string `json:"message_id"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return ""
+	}
+	return envelope.MessageID
+}
+
 // withDeterministicMessageID returns msg with its MessageId field
 // overwritten to id. Only the two SessionMessage kinds a terminal Outcome
 // ever maps to (handback, error) need this — every other kind's id is
@@ -316,11 +363,39 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: append: %w", appendErr)
 	}
 
-	// A deterministic duplicate means a previous delivery already performed
-	// every externally visible effect. Repeating frames or a wake would turn
-	// inbox deduplication into at-least-once behavior at the actual sinks.
+	// Finding C (ADR-091 fix lane 1, CRITICAL): a deterministic duplicate at
+	// Append ONLY means this exact content already exists in the inbox — it
+	// does NOT mean a previous delivery's downstream effects (the frames,
+	// the wake) ever actually ran. boot_sweep.go::unacknowledged reads a
+	// still-pending entry straight OUT of the inbox and hands it back to
+	// this same Deliver unchanged, so Deduped is true BY CONSTRUCTION for
+	// every entry boot recovery can find — the short-circuit below used to
+	// make that re-delivery a total no-op: the wake never fired, and
+	// because Deliver returns err == nil, no operator notice either. A
+	// worker that finished right before a restart left its parent stalled
+	// on every subsequent boot too, contradicting this file's own retired
+	// claim that "a wake failure is never fatal — the boot re-nudge covers
+	// it" (the boot re-nudge did not cover it).
+	//
+	// The short-circuit is legitimate ONLY when the stored entry is
+	// genuinely ACKED (a real previous delivery ran to completion and the
+	// recipient consumed it) or the message was never wake-eligible to
+	// begin with. A still-unacked, wake-eligible duplicate falls through to
+	// the SAME frames + wake path a first delivery takes — safe to repeat:
+	// deliverSubagentMessage/State/End's frame ids are deterministic and
+	// AppendTranscriptStrict rejects (id-dedupes) a repeat write.
 	if res.Deduped {
-		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+		shortCircuit := !class.WakeEligible
+		if !shortCircuit {
+			acked, ackedErr := deliverEntryIsAcked(inbox, ownerKey, event.ChildSessionID, res.MessageID)
+			if ackedErr != nil {
+				return steer.Delivery{}, fmt.Errorf("steer: deliver: check acknowledgement: %w", ackedErr)
+			}
+			shortCircuit = acked
+		}
+		if shortCircuit {
+			return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+		}
 	}
 
 	// ADR-091 D7/I-4: the parent's side-panel status line, persisted as an

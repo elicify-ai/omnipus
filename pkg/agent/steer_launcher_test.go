@@ -17,6 +17,7 @@ import (
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -872,5 +873,130 @@ func TestDispatch_ChildLifetimeIndependentOfCallerContext(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatal("child did not finish after the provider was released")
 		}
+	}
+}
+
+// TestSteeredTurnRunContext is ADR-091 fix lane 1's Finding E (MEDIUM) unit
+// coverage: rec.SteeredBy.Limits.TimeoutSeconds used to be read only from
+// runDispatchedSteeredTurn (the first-run/dispatch path); this is the ONE
+// helper both that path and the wake/re-entry path
+// (loop_inbound.go::processSteeredSystemWake) now share — D9's "the
+// timeout's scope is the session's lifetime across re-entries" only holds if
+// there is one function computing it.
+func TestSteeredTurnRunContext(t *testing.T) {
+	t.Run("no SteeredBy: no deadline", func(t *testing.T) {
+		ctx, cancel := steeredTurnRunContext(context.Background(), &session.LifecycleRecord{})
+		defer cancel()
+		if _, ok := ctx.Deadline(); ok {
+			t.Fatal("an ordinary_root record (SteeredBy == nil) produced a deadline")
+		}
+	})
+	t.Run("timeout_seconds=0: no deadline", func(t *testing.T) {
+		rec := &session.LifecycleRecord{SteeredBy: &session.SteeredBy{Limits: session.Limits{TimeoutSeconds: 0}}}
+		ctx, cancel := steeredTurnRunContext(context.Background(), rec)
+		defer cancel()
+		if _, ok := ctx.Deadline(); ok {
+			t.Fatal("timeout_seconds=0 produced a deadline")
+		}
+	})
+	t.Run("configured timeout with a real CreatedAt: deadline anchored there", func(t *testing.T) {
+		created := time.Now().Add(-90 * time.Second)
+		rec := &session.LifecycleRecord{CreatedAt: created, SteeredBy: &session.SteeredBy{Limits: session.Limits{TimeoutSeconds: 120}}}
+		ctx, cancel := steeredTurnRunContext(context.Background(), rec)
+		defer cancel()
+		dl, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("expected a deadline")
+		}
+		want := created.Add(120 * time.Second)
+		if diff := dl.Sub(want); diff < -time.Second || diff > time.Second {
+			t.Fatalf("deadline = %v, want ~%v (CreatedAt + TimeoutSeconds)", dl, want)
+		}
+	})
+	// Finding E's second half: a zero CreatedAt used to turn the timeout OFF
+	// entirely (the old inline check in runDispatchedSteeredTurn gated on
+	// !rec.CreatedAt.IsZero()) — a missing/unset timestamp silently removed
+	// a configured limit instead of just meaning "no better anchor is known
+	// yet".
+	t.Run("zero CreatedAt: deadline counts from now, never silently unlimited", func(t *testing.T) {
+		rec := &session.LifecycleRecord{SteeredBy: &session.SteeredBy{Limits: session.Limits{TimeoutSeconds: 60}}}
+		before := time.Now()
+		ctx, cancel := steeredTurnRunContext(context.Background(), rec)
+		defer cancel()
+		dl, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("a missing CreatedAt silently removed the configured timeout (Finding E regression)")
+		}
+		if dl.Before(before.Add(59*time.Second)) || dl.After(time.Now().Add(61*time.Second)) {
+			t.Fatalf("deadline = %v, want ~60s from now (%v..%v)", dl, before.Add(59*time.Second), time.Now().Add(61*time.Second))
+		}
+	})
+}
+
+// wakeBlocksUntilCtxDoneProvider blocks in Chat until its context is done,
+// then returns ctx.Err() — used to observe whether a run context actually
+// carries a deadline, without depending on wall-clock timing beyond the
+// test's own bounded wait.
+type wakeBlocksUntilCtxDoneProvider struct{}
+
+func (p *wakeBlocksUntilCtxDoneProvider) Chat(ctx context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (p *wakeBlocksUntilCtxDoneProvider) GetDefaultModel() string { return "wake-timeout-test" }
+
+// TestWake_AppliesConfiguredTimeout is ADR-091 fix lane 1's Finding E
+// integration proof: the wake/re-entry path
+// (loop_inbound.go::processSteeredSystemWake) must honor
+// rec.SteeredBy.Limits.TimeoutSeconds exactly like the first-run/dispatch
+// path does — before the fix, a woken turn ran with a bare, undeadlined
+// context and could run forever regardless of its configured timeout.
+//
+// wakeBlocksUntilCtxDoneProvider blocks until ITS context is done; the test
+// bounds the WHOLE call in a 5s select so a missing deadline fails this test
+// deterministically (a timeout, not a hang) instead of blocking forever.
+func TestWake_AppliesConfiguredTimeout(t *testing.T) {
+	al, cleanup := newSteerALWithProvider(t, &wakeBlocksUntilCtxDoneProvider{})
+	defer cleanup()
+	wireSteerCompletionDeps(t, al)
+	rootID := newTestSteeringSession(t, al, "ws-1")
+	child := launchRunningChild(t, al, rootID, "call-wake-timeout")
+	if err := al.GetSessionLifecycleStore().Mutate(child.SessionID, func(r *session.LifecycleRecord) error {
+		r.SteeredBy.Limits.TimeoutSeconds = 1
+		r.CreatedAt = time.Now().Add(-500 * time.Millisecond) // half the budget already spent
+		return nil
+	}); err != nil {
+		t.Fatalf("Mutate(timeout): %v", err)
+	}
+
+	wake := bus.InboundMessage{
+		Channel:                  "system",
+		ChatID:                   "system:steer:" + child.SessionID,
+		Sender:                   bus.SenderInfo{CanonicalID: "test"},
+		Content:                  "nudge",
+		AsyncTranscriptSessionID: child.SessionID,
+		AsyncOriginAgentID:       child.AgentID,
+		Metadata:                 map[string]string{"steer_message_id": "wake-1", "steer_generation": "1"},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := al.processSystemMessage(context.Background(), wake)
+		done <- err
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("processSteeredSystemWake did not return within 5s — Finding E: " +
+			"the edge's configured timeout is not being applied on a wake/re-entry")
+	}
+
+	rec, err := al.GetSessionLifecycleStore().Load(child.SessionID)
+	if err != nil {
+		t.Fatalf("Load(child): %v", err)
+	}
+	if rec.State != session.LifecycleTimedOut {
+		t.Fatalf("child state after a wake that exceeded its configured timeout = %q, want timed_out", rec.State)
 	}
 }

@@ -75,6 +75,18 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 	if deliverer == nil {
 		return errSteerUpwardDelivererNotWired
 	}
+	// Finding A (ADR-091 fix lane 1, CRITICAL — the release blocker): this
+	// Deliver call is the ONLY upward path left. The former
+	// completeWaitingAncestors shortcut that used to run after the write
+	// below is DELETED, not kept as a fallback: it read the parent's OWN
+	// stale lastAssistantAnswer instead of ever re-entering it, so a
+	// grandchild's real result was silently replaced by whatever the parent
+	// had said BEFORE delegating. Landing order I-5 says the parent's
+	// handback is written "by the last such child's completion wake
+	// RE-ENTERING the parent" — Deliver's own wake (steer_audience.go),
+	// carried all the way through by Finding B's exit-path fix
+	// (disposeSteeredTurnResult, steer_launcher.go/loop_inbound.go), is that
+	// re-entry. There is no second, shortcut path to the parent.
 	if _, err := deliverer.Deliver(ctx, steer.UpwardEvent{
 		ChildSessionID: rec.SessionID,
 		Outcome:        outcome,
@@ -83,17 +95,78 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 		return fmt.Errorf("steer: complete: deliver %q: %w", rec.SessionID, err)
 	}
 
-	rec.State = nextState
-	rec.NeedsInput = nil
-	if nextState == session.LifecycleFailed {
-		rec.FailedReason = failureReason
+	if completeStateWriteTestHook != nil {
+		completeStateWriteTestHook(rec.SessionID)
 	}
-	if err := lifecycle.Persist(rec); err != nil {
-		return fmt.Errorf("steer: complete: persist %q: %w", rec.SessionID, err)
+
+	// Finding D (ADR-091 fix lane 1, HIGH — three reviewers found this
+	// independently): this used to be a raw Load (above) -> Deliver (I/O,
+	// just above) -> mutate the PRE-Deliver snapshot in memory -> Persist —
+	// the exact stale-write-back shape already fixed on the dispatch path
+	// (steer_launcher.go::commitSteeredDispatchState), with a WIDER window
+	// here because Deliver does real I/O (an inbox append, transcript
+	// writes, a parent wake). A Stop pressed while Deliver was still
+	// running used to be ERASED by this write: state went straight to
+	// completed/failed, Stop became nil, and the durable record that Stop
+	// was ever pressed was gone. pkg/session/lifecycle.go's own rule is
+	// explicit: a caller doing read-then-decide-then-write MUST use Mutate.
+	// This re-checks generation AND the Stop marker inside the SAME lock
+	// the write happens under, refusing rather than writing a stale
+	// snapshot over either — mirrors commitSteeredDispatchState exactly.
+	mutateErr := lifecycle.Mutate(rec.SessionID, func(cur *session.LifecycleRecord) error {
+		if cur == nil {
+			return fmt.Errorf("steer: complete: record %q vanished during delivery", rec.SessionID)
+		}
+		if cur.Generation != rec.Generation {
+			return errCompleteStaleGeneration
+		}
+		if cur.Terminal() {
+			return errCompleteAlreadyTerminal
+		}
+		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
+			return errCompleteStoppedDuringDelivery
+		}
+		cur.State = nextState
+		cur.NeedsInput = nil
+		if nextState == session.LifecycleFailed {
+			cur.FailedReason = failureReason
+		}
+		return nil
+	})
+	switch {
+	case mutateErr == nil:
+		return nil
+	case errors.Is(mutateErr, errCompleteStaleGeneration),
+		errors.Is(mutateErr, errCompleteStoppedDuringDelivery),
+		errors.Is(mutateErr, errCompleteAlreadyTerminal),
+		errors.Is(mutateErr, session.ErrLifecycleTerminalImmutable):
+		// The message is already durably delivered (Deliver ran above); a
+		// Stop, a Revive or a second completion racing this write is a
+		// legitimate outcome, not a caller-actionable failure — mirrors the
+		// top-of-function guard's own "already terminal" no-op.
+		return nil
+	default:
+		return fmt.Errorf("steer: complete: persist %q: %w", rec.SessionID, mutateErr)
 	}
-	al.completeWaitingAncestors(ctx, rec.SteeringSessionID())
-	return nil
 }
+
+// errCompleteStaleGeneration, errCompleteAlreadyTerminal and
+// errCompleteStoppedDuringDelivery are completeSteeredTurn's Mutate-refusal
+// sentinels (Finding D, above) — the completion-side counterparts of
+// steer_launcher.go's dispatchRefusalError family.
+var (
+	errCompleteStaleGeneration       = errors.New("steer: complete: generation changed during delivery")
+	errCompleteAlreadyTerminal       = errors.New("steer: complete: record became terminal during delivery")
+	errCompleteStoppedDuringDelivery = errors.New("steer: complete: a Stop landed during delivery")
+)
+
+// completeStateWriteTestHook is a test-only synchronization seam, fired
+// immediately before completeSteeredTurn's terminal-state write — after
+// Deliver has already performed its I/O, before the write that could race a
+// concurrent Stop or Revive. Mirrors steer_launcher.go's
+// dispatchStateWriteTestHook; always nil in production, never set outside a
+// _test.go file.
+var completeStateWriteTestHook func(sessionID string)
 
 // finishSteeredGoalTurn sends a goal-bearing child through the same
 // session-owned claim/Judge pipeline used by an interactive goal turn. The
@@ -163,6 +236,17 @@ func (al *AgentLoop) finishSteeredGoalTurn(ts *turnState, rec *session.Lifecycle
 			channel, chatID = "system", "steer:"+followUp.SessionID
 		}
 		notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// Finding F (ADR-091 fix lane 1, MEDIUM): a follow-up published with
+		// no steer_message_id/steer_generation metadata falls through
+		// processSystemMessage's routing check into its legacy,
+		// hand-built-SendResponse tail (AC-11's retired containment) instead
+		// of processSteeredSystemWake — bypassing reconstruction (I-3), the
+		// Stop reservation, admission (I-3 "live turns only") AND
+		// generation-aware cancel (I-6) for every re-injected goal
+		// follow-up. Stamping the SAME metadata pair WakeParent/
+		// WakeParentAlways stamp (async_notifier.go) routes this exactly
+		// like any other wake: rec.Generation is the CURRENT generation of
+		// the session this follow-up continues, never a fresh mint.
 		err := al.asyncNotifier.Notify(notifyCtx, AsyncNotifyEvent{
 			Channel:             channel,
 			ChatID:              chatID,
@@ -171,6 +255,10 @@ func (al *AgentLoop) finishSteeredGoalTurn(ts *turnState, rec *session.Lifecycle
 			SourceKind:          "steer_goal_loop",
 			SenderCanonicalID:   followUp.Sender.CanonicalID,
 			Content:             followUp.Content,
+			Metadata: map[string]any{
+				"steer_message_id": uuid.NewString(),
+				"steer_generation": rec.Generation,
+			},
 		})
 		cancel()
 		if err != nil {
@@ -317,40 +405,3 @@ func (al *AgentLoop) parkedQuestions(ownerID string) ([]string, error) {
 	return questions, nil
 }
 
-func (al *AgentLoop) completeWaitingAncestors(ctx context.Context, parentID string) {
-	for parentID != "" {
-		rec, err := al.GetSessionLifecycleStore().Load(parentID)
-		if err != nil || rec.SteeredBy == nil || rec.GoalRef != "" || rec.State != session.LifecycleRunning {
-			return
-		}
-		if active := al.getActiveTurnState(parentID); active != nil && active.IsAlive() {
-			return
-		}
-		blocked, err := al.hasRunningOrQueuedDescendant(parentID)
-		if err != nil || blocked {
-			return
-		}
-		answer, err := al.lastAssistantAnswer(parentID)
-		if err != nil || answer == "" {
-			return
-		}
-		if err := al.completeSteeredTurn(ctx, rec, turnResult{finalContent: answer}, nil); err != nil {
-			logger.WarnCF("agent", "steer: complete waiting ancestor failed",
-				map[string]any{"session_id": parentID, "error": err.Error()})
-		}
-		return // completeSteeredTurn recursively continues farther upward.
-	}
-}
-
-func (al *AgentLoop) lastAssistantAnswer(sessionID string) (string, error) {
-	entries, err := al.GetSessionStore().ReadTranscript(sessionID)
-	if err != nil {
-		return "", err
-	}
-	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Role == "assistant" && strings.TrimSpace(entries[i].Content) != "" {
-			return strings.TrimSpace(entries[i].Content), nil
-		}
-	}
-	return "", nil
-}

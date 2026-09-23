@@ -934,10 +934,16 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		if dispatchStateWriteTestHook != nil {
 			dispatchStateWriteTestHook(sessionID, generation)
 		}
-		if _, commitErr := commitSteeredDispatchState(lifecycle, sessionID, generation, session.LifecycleRunning); commitErr != nil {
+		running, commitErr := commitSteeredDispatchState(lifecycle, sessionID, generation, session.LifecycleRunning)
+		if commitErr != nil {
 			abort()
 			return "", commitErr
 		}
+		// commitSteeredDispatchState returns post-write truth (edge, goal
+		// reference, created-at) — the same reason runDispatchedSteeredTurn
+		// (steer_launcher.go) uses its own commit's return value rather than
+		// its stale pre-write snapshot for the completion disposition below.
+		rec = running
 	}
 
 	// The consumed marker and the acknowledgement are written only once the
@@ -957,7 +963,20 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		}
 	}
 	defer release()
-	result, err := al.runTurn(ctx, ts)
+
+	// Finding B (ADR-091 fix lane 1, CRITICAL, latent): this wake is an EXIT
+	// path exactly like runDispatchedSteeredTurn's dispatch goroutine — it
+	// owes the SAME post-turn disposition (completeSteeredTurn/
+	// finishSteeredGoalTurn), or a successfully woken session ends its turn
+	// still marked `running` forever (nothing else ever calls completion for
+	// it), stalling its parent's quiet-subtree check indefinitely. Finding E
+	// (MEDIUM): the same shared helper applies the edge's configured
+	// timeout to THIS re-entry too — D9 scopes it to "the session's lifetime
+	// across re-entries", not just the first dispatch.
+	runCtx, cancel := steeredTurnRunContext(ctx, rec)
+	defer cancel()
+	result, err := al.runTurn(runCtx, ts)
+	al.disposeSteeredTurnResult(ts, rec, generation, result, err)
 	return result.finalContent, err
 }
 
