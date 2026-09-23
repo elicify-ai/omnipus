@@ -925,6 +925,8 @@ type SubagentEndFrame struct {
 
 // SubagentMessageFrame — Server → client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A flat, UI-facing PROJECTION of the underlying SessionMessage riding between subagent_start/subagent_end — see components/schemas/SubagentMessageFrame.yaml for the full shape- decision rationale (why this is not a full embedded SessionMessage oneOf). Canonical copy — keep in sync by hand.
 type SubagentMessageFrame struct {
+	// Optional session id of the delegated child session this mid-span update is reporting on — the same value the bracketing subagent_start frame's child_session_id carries (ADR-091 I-4).
+	ChildSessionId  *string `json:"child_session_id,omitempty"`
 	CorrelationId   *string `json:"correlation_id,omitempty"`
 	CreatedAt       string  `json:"created_at"`
 	Kind            string  `json:"kind"`
@@ -953,10 +955,12 @@ type SubagentStartFrame struct {
 
 // SubagentStateFrame — Server → client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A flat projection of SessionLifecycleRecord.state riding between subagent_start/subagent_end, plus an optional steering- receipt. Canonical copy — keep in sync by hand.
 type SubagentStateFrame struct {
-	CreatedAt       string `json:"created_at"`
-	SessionId       string `json:"session_id"`
-	SpanId          string `json:"span_id"`
-	State           string `json:"state"`
+	// Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing subagent_start frame's child_session_id carries (ADR-091 I-4).
+	ChildSessionId  *string `json:"child_session_id,omitempty"`
+	CreatedAt       string  `json:"created_at"`
+	SessionId       string  `json:"session_id"`
+	SpanId          string  `json:"span_id"`
+	State           string  `json:"state"`
 	SteeringReceipt *struct {
 		AppliedAt     string `json:"applied_at"`
 		CorrelationId string `json:"correlation_id"`

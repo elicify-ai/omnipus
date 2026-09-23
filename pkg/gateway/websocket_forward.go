@@ -5,68 +5,33 @@ package gateway
 import (
 	"encoding/json"
 	"log/slog"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/channels"
 )
 
-// orphanWatchdogTimeout is the duration the forwarder waits after a parent turn ends
-// before synthesizing a subagent_end{status:"interrupted"} for any still-open span.
-// Configurable so tests can override to a short value (e.g., 200ms) without sleeping.
-//
-// Bumped 2026-05-11 from 5s → 60s. The old value killed legitimate subagents:
-// a sub-turn that runs 3 shell calls back-to-back through a real LLM regularly
-// takes 6–12s of wall-clock (1–4s per turn iteration × N tool calls), and Mia's
-// root turn ends within ~2s of dispatching `spawn`. With a 5s watchdog the
-// subagent was synthesizing `status:"interrupted"` after the second shell call
-// even though the agent loop was still executing — closes the cascade of
-// suite-load flakes in subagent.spec.ts (a)–(e) and handoff.spec.ts (b).
-//
-// 60s is a conservative upper bound for a single sub-turn; the parent-loop
-// `subturn.default_timeout_minutes` config knob already enforces a hard
-// runtime cap higher up the stack for legitimately stuck sub-turns.
-var orphanWatchdogTimeout = 60 * time.Second
-
-// orphanWatchdogMaxRechecks bounds how many times startOrphanWatchdog will
-// reschedule after agent.AgentLoop.IsSubTurnActiveForSpawnCall reports "still
-// active" before giving up and force-emitting the synthetic interrupted
-// terminal frame regardless of what the liveness check reports (fail-closed).
-//
-// The re-check-and-reschedule loop is correctly bounded for the NORMAL case
-// by the pre-existing sub-turn context timeout (pkg/agent/subturn.go's
-// defaultSubTurnTimeout, 5 minutes by default, or subturn.default_timeout_minutes
-// when configured) — that timeout cancels the child's context, runTurn
-// returns, and IsSubTurnActiveForSpawnCall eventually reports false once
-// spawnSubTurn's cleanup defer finishes persisting the real terminal status
-// (see turnState.subTurnRecordPersisted's doc comment, pkg/agent/turn.go).
-// But a genuinely wedged/deadlocked turn — a goroutine that neither returns
-// nor panics, e.g. blocked on a tool call that does not honor context
-// cancellation — has no ceiling of its own: IsSubTurnActiveForSpawnCall would
-// report "active" forever (isFinished never flips), and without this bound
-// the watchdog would reschedule indefinitely, logging only at slog.Debug
-// (invisible at typical production log levels) and never emitting a terminal
-// frame for that span.
-//
-// Default 15 reschedules x orphanWatchdogTimeout's default 60s = 15 minutes,
-// comfortably (~3x) above pkg/agent/subturn.go's defaultSubTurnTimeout (5
-// minutes) — a legitimately still-running sub-turn should never come close to
-// exhausting this many reschedules; long before it would, its own context
-// timeout has fired and IsSubTurnActiveForSpawnCall is already reporting
-// false. Configurable so tests can override to a small value without
-// sleeping for the real 15 minutes.
-var orphanWatchdogMaxRechecks = 15
-
-// openSpanEntry tracks an in-flight subagent span in the event forwarder.
-type openSpanEntry struct {
-	spanID          string
-	parentCallID    string
-	agentID         string
-	sessionID       string        // session_id at spawn time; carried on synthesized frames
-	parentTurnEnded bool          // set to true when EventKindTurnEnd fires for the parent turn
-	closeCh         chan struct{} // closed when EventKindSubTurnEnd arrives (cancels watchdog)
-}
+// ADR-091 UAT defect 2: the orphan watchdog (formerly orphanWatchdogTimeout /
+// orphanWatchdogMaxRechecks / openSpanEntry / startOrphanWatchdog /
+// synthesizeOrphanEnd / the rootTurnEnded latch, all removed here) is
+// retired, not re-aimed. It existed for the pre-ADR-091 design, where a
+// nested sub-turn's lifetime was structurally scoped to its parent's own
+// turn — the parent turn ending while such a span was still open really
+// was orphan evidence. Under ADR-091 a delegated child is a session of its
+// own (D1, and the founder's round-9 decision): it is DESIGNED to keep
+// running after its parent's turn ends, and its real terminal state
+// arrives independently via its own EventKindSubTurnEnd
+// (pkg/agent/steer_frames.go's deliverSubagentEnd, driven by the child's
+// own steer.Outcome — never guessed from the parent's turn). There is no
+// remaining condition where "the parent's turn ended" is evidence a child
+// span is stuck: on the UAT run that found this, EVERY healthy delegation
+// triggered it (a child marked "interrupted" this way went on to spawn a
+// grandchild; another kept working three more minutes and finished; the
+// durable transcript recorded subagent_end{status:"success"} for both).
+// Re-aiming the mechanism at a different trigger would mean inventing a
+// genuinely new staleness signal (e.g. child-lifecycle heartcheck), which
+// belongs with whichever lane owns lifecycle reconciliation, not a
+// per-connection WS forwarder — retiring is the correct, minimal fix.
 
 // ADR-057 FR-089 — W5 audit classification artefact (U11's half).
 //
@@ -154,122 +119,31 @@ type openSpanEntry struct {
 // It also matches events from an attached task session (via taskChatIDs).
 // Extended (FR-H-004, FR-H-005): emits subagent_start / subagent_end frames and
 // propagates parent_call_id on tool_call_* frames fired inside sub-turns.
-// Orphan watchdog (FR-H-004, Scenario 7): when the parent turn ends before all spans
-// are closed, a timer fires after orphanWatchdogTimeout and synthesizes
-// subagent_end{status:"interrupted"} for each still-open span.
 // eventForwardState is the per-connection state one eventForwarder loop threads
-// through its per-kind handlers: the connection, the chat id, the subscription, the
-// open subagent spans, the root-turn latch, and the closures over the handler's maps.
-// orphanFires carries a watchdog goroutine's "this span looks orphaned"
-// verdict to THIS goroutine, which alone decides whether to synthesize the
-// interrupted end.
-//
-// Root cause this closes (a delegation that completed normally reported as
-// interrupted, before or just after its real success frame): the watchdog
-// used to send the synthetic frame itself the moment
-// agent.AgentLoop.IsSubTurnActiveForSpawnCall reported "not active". A
-// sub-turn stops counting as active only after its EventKindSubTurnEnd is
-// queued on sub.C (markSubTurnSpanOpen, pkg/agent/steering.go) — but this
-// goroutine may not have consumed that event yet, so the watchdog's frame
-// could still win. Deciding here, only once every event that was already
-// queued when the verdict arrived has been handled, means a real end always
-// closes its span first; a span still open after that is genuinely
-// orphaned (or its end event was dropped, which EventBus counts and logs).
-type orphanFire struct {
-	entry  *openSpanEntry
-	reason string
-	// forced: the reschedule ceiling was exceeded (already logged at Error
-	// level by the watchdog).
-	forced bool
-	// eventsAhead: events that were queued on sub.C when the verdict
-	// arrived and have not been handled yet.
-	eventsAhead int
-}
-
+// through its per-kind handlers: the connection, the chat id, the subscription,
+// and the closures over the handler's maps.
 type eventForwardState struct {
-	h                 *WSHandler
-	wc                *wsConn
-	chatID            string
-	sub               agent.EventSubscription
-	openSpans         map[string]*openSpanEntry
-	rootTurnEnded     bool
-	rootTurnEndReason string
-	orphanFires       chan orphanFire
-	forwarderExited   chan struct{}
+	h      *WSHandler
+	wc     *wsConn
+	chatID string
+	sub    agent.EventSubscription
 }
 
 func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSubscription, done chan<- struct{}) {
 	defer close(done)
-	f := &eventForwardState{
-		h: h, wc: wc, chatID: chatID, sub: sub,
-		openSpans:       make(map[string]*openSpanEntry),
-		orphanFires:     make(chan orphanFire),
-		forwarderExited: make(chan struct{}),
-	}
-
-	// openSpans tracks in-flight subagent spans keyed by parentCallID.
-	// Accessed only from the single eventForwarder goroutine — no mutex needed.
-
-	// rootTurnEnded latches whether the root turn for this connection has
-	// already ended, and with what watchdog reason (#605). The root TurnEnd
-	// and a delegate's SubTurnSpawn are emitted from DIFFERENT goroutines
-	// (the parent turn's vs the detached async-delegate's), so a spawn event
-	// can legally reach this forwarder AFTER the root turn_end. The
-	// EventKindTurnEnd case below only arms spans already registered in
-	// openSpans — without this latch, such a late-registered span would
-	// never be armed and would stay invisible to the orphan watchdog
-	// forever. EventKindSubTurnSpawn consults the latch to arm late
-	// registrations immediately; a NEW root turn's TurnStart resets it so
-	// spans of a live root turn are not spuriously armed.
-	// Single-goroutine state like openSpans — no mutex needed.
-
-	// forwarderExited releases a watchdog blocked handing over its verdict
-	// once this goroutine has stopped reading orphanFires.
-	defer close(f.forwarderExited)
-	var pendingOrphanFires []orphanFire
+	f := &eventForwardState{h: h, wc: wc, chatID: chatID, sub: sub}
 
 	for {
-		// Settle every watchdog verdict whose already-queued events have all
-		// been handled (see orphanFires).
-		if len(pendingOrphanFires) > 0 {
-			waiting := pendingOrphanFires[:0]
-			for _, fire := range pendingOrphanFires {
-				if fire.eventsAhead > 0 {
-					waiting = append(waiting, fire)
-					continue
-				}
-				f.synthesizeOrphanEnd(fire)
-			}
-			pendingOrphanFires = waiting
-		}
-
-		var evt agent.Event
-		select {
-		case received, ok := <-sub.C:
-			if !ok {
-				return
-			}
-			evt = received
-			for i := range pendingOrphanFires {
-				if pendingOrphanFires[i].eventsAhead > 0 {
-					pendingOrphanFires[i].eventsAhead--
-				}
-			}
-		case fire := <-f.orphanFires:
-			fire.eventsAhead = len(sub.C)
-			pendingOrphanFires = append(pendingOrphanFires, fire)
-			continue
+		evt, ok := <-sub.C
+		if !ok {
+			return
 		}
 
 		switch evt.Kind {
-		case agent.EventKindTurnStart:
-			f.onTurnStart(evt)
 		case agent.EventKindSubTurnSpawn:
 			f.onSubTurnSpawn(evt)
 		case agent.EventKindSubTurnEnd:
 			f.onSubTurnEnd(evt)
-		case agent.EventKindTurnEnd:
-			f.onTurnEnd(evt)
 		case agent.EventKindToolExecStart:
 			f.onToolExecStart(evt)
 		case agent.EventKindToolExecEnd:
@@ -302,7 +176,8 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			f.onSubagentMessage(evt)
 		case agent.EventKindSubagentState:
 			f.onSubagentState(evt)
-		case agent.EventKindLLMRequest, agent.EventKindLLMDelta, agent.EventKindLLMResponse,
+		case agent.EventKindTurnStart, agent.EventKindTurnEnd,
+			agent.EventKindLLMRequest, agent.EventKindLLMDelta, agent.EventKindLLMResponse,
 			agent.EventKindLLMRetry, agent.EventKindContextCompress,
 			agent.EventKindToolExecSkipped, agent.EventKindSteeringInjected, agent.EventKindFollowUpQueued,
 			agent.EventKindInterruptReceived, agent.EventKindSubTurnResultDelivered, agent.EventKindSubTurnOrphan,
@@ -310,9 +185,15 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			agent.EventKindBackgroundProcessKill:
 			// Not part of the live WS wire protocol — this forwarder only
 			// translates the kinds handled above into browser frames.
-			// Behavior-preserving: previously these fell through the switch
-			// unmatched (no default case existed), which is a silent no-op
-			// identical to this explicit, empty case.
+			// EventKindTurnStart/TurnEnd joined this ignored list with the
+			// ADR-091 UAT defect 2 fix: their only consumer was the retired
+			// orphan watchdog (onTurnStart's rootTurnEnded-latch reset,
+			// onTurnEnd's watchdog arming) — see this file's top-of-file
+			// doc comment for why the whole mechanism was retired, not
+			// re-aimed. Behavior-preserving for every other kind here:
+			// previously these fell through the switch unmatched (no
+			// default case existed), which is a silent no-op identical to
+			// this explicit, empty case.
 		}
 	}
 }
@@ -386,222 +267,6 @@ func (f *eventForwardState) sessionIDForChat(evtChatID string) string {
 	return sid
 }
 
-// closeSpan marks a span as resolved and signals its watchdog to stop.
-func (f *eventForwardState) closeSpan(parentCallID string) {
-	if entry, ok := f.openSpans[parentCallID]; ok {
-		select {
-		case <-entry.closeCh: // already closed
-		default:
-			close(entry.closeCh)
-		}
-		delete(f.openSpans, parentCallID)
-	}
-}
-
-// startOrphanWatchdog launches a goroutine that fires after orphanWatchdogTimeout
-// if the span is not closed first. On timeout it hands its verdict to this
-// goroutine (orphanFires), which synthesizes subagent_end and logs.
-// W1-9: the goroutine also exits cleanly when wc.doneCh is closed (connection torn down).
-func (f *eventForwardState) startOrphanWatchdog(entry *openSpanEntry, reason string) {
-	// Snapshot BOTH test-shrinkable knobs ONCE, synchronously, before
-	// spawning the goroutine below — never re-read the package-level vars
-	// from inside it. This goroutine loops (reschedule on "still active")
-	// for however long a genuine delegate keeps running, re-arming
-	// time.After(orphanWatchdogTimeout) and re-checking the reschedule
-	// count against orphanWatchdogMaxRechecks on every iteration —
-	// potentially for the lifetime of a long test. A test that shrinks
-	// these vars via
-	// SetOrphanWatchdogTimeoutForTest/SetOrphanWatchdogMaxRechecksForTest
-	// and restores them (defer/t.Cleanup) the moment its OWN foreground
-	// assertions pass has no happens-before edge to this still-running
-	// goroutine's later reads — a genuine data race (WARNING: DATA RACE,
-	// websocket.go:3229 vs export_test.go:29, caught under
-	// `go test -race`, TestOrphanWatchdog_GenuinelyActiveDelegate_
-	// NeverSynthesizesInterrupted), not a flake. Capturing both up front
-	// removes every later read of the package vars from this goroutine;
-	// production behavior is unchanged since neither var is ever mutated
-	// outside tests.
-	watchdogTimeout := orphanWatchdogTimeout
-	maxRechecks := orphanWatchdogMaxRechecks
-	go func() {
-		rechecks := 0
-		for {
-			select {
-			case <-entry.closeCh:
-				// Span resolved normally — nothing to do.
-				return
-			case <-f.wc.doneCh:
-				// Connection closed while waiting — exit cleanly without emitting.
-				return
-			case <-time.After(watchdogTimeout):
-				// Span is still open after timeout. Before declaring it
-				// orphaned, confirm the real sub-turn genuinely isn't
-				// still running.
-				//
-				// Root cause this closes (transient false "interrupted"
-				// status flicker, live UAT re-verification 2026-07): this
-				// watchdog arms the instant the PARENT turn ends
-				// (EventKindTurnEnd, IsRoot), which — for a background
-				// delegate — routinely happens within a second or two of
-				// dispatch. Before 7dd9e7a5 ("background delegate's
-				// final answer lost when parent finishes first"), a
-				// delegate needing more than one LLM turn silently exited
-				// its own loop early the instant its parent ended, so
-				// the real EventKindSubTurnEnd almost always arrived
-				// (closing this span via closeCh) well inside
-				// orphanWatchdogTimeout. Critical:true now lets it run
-				// for its full, genuine duration — so a normal,
-				// still-working delegation can legitimately still be
-				// open when this timer fires, and synthesizing
-				// status:"interrupted" here fabricated a false terminal
-				// state for a turn that was, in truth, still generating
-				// (self-correcting only once the real EventKindSubTurnEnd
-				// arrived later and overwrote it). Re-checking real
-				// liveness via agent.AgentLoop.IsSubTurnActiveForSpawnCall
-				// and rescheduling instead of firing turns this
-				// heuristic, timeout-only guess into a confirm-or-wait
-				// check — a genuinely orphaned span (the real check
-				// below returns false) is still reported exactly as
-				// before.
-				stillActive := f.h.agentLoop != nil && f.h.agentLoop.IsSubTurnActiveForSpawnCall(entry.parentCallID)
-				forceCeiling := false
-				if stillActive {
-					rechecks++
-					if rechecks > maxRechecks {
-						// Ceiling exceeded: a genuinely wedged/deadlocked
-						// turn — a goroutine that neither returns nor
-						// panics, e.g. blocked on a tool call not
-						// honoring context cancellation — would
-						// otherwise keep IsSubTurnActiveForSpawnCall
-						// reporting "active" forever, and this loop
-						// would reschedule indefinitely, never emitting
-						// a terminal frame for the span. Fail closed:
-						// force the synthetic interrupted frame below
-						// regardless of what the liveness check
-						// reports, matching this codebase's established
-						// fail-closed posture elsewhere in delegation
-						// gating.
-						forceCeiling = true
-						slog.Error("ws: subagent span still reports active past the watchdog's reschedule "+
-							"ceiling — force-emitting interrupted (fail-closed)",
-							"event", "span_orphan_ceiling_exceeded",
-							"span_id", entry.spanID,
-							"parent_call_id", entry.parentCallID,
-							"reason", reason,
-							"rechecks", rechecks,
-							"max_rechecks", maxRechecks,
-						)
-					} else {
-						// Escalate Debug -> Warn once the loop has
-						// re-checked more than once or twice, so a
-						// genuinely stuck span (heading toward the
-						// ceiling above) is discoverable by an operator
-						// without changing production log levels —
-						// Debug alone is invisible at typical
-						// production log levels.
-						logFn := slog.Debug
-						if rechecks > 2 {
-							logFn = slog.Warn
-						}
-						logFn("ws: subagent span still genuinely active past watchdog timeout — rescheduling",
-							"event", "span_orphan_recheck_still_alive",
-							"span_id", entry.spanID,
-							"parent_call_id", entry.parentCallID,
-							"reason", reason,
-							"rechecks", rechecks,
-							"max_rechecks", maxRechecks,
-						)
-						continue
-					}
-				}
-				// Span is still open after timeout AND either the real
-				// sub-turn is confirmed no longer active, or the
-				// reschedule ceiling was exceeded (forceCeiling, already
-				// logged at Error level above). Hand the verdict to the
-				// forwarder goroutine, which synthesizes the interrupted
-				// end only if the span is STILL open once it has handled
-				// every event already queued — see orphanFires.
-				select {
-				case f.orphanFires <- orphanFire{entry: entry, reason: reason, forced: forceCeiling}:
-				case <-entry.closeCh:
-				case <-f.wc.doneCh:
-				case <-f.forwarderExited:
-				}
-				return
-			}
-		}
-	}()
-}
-
-// synthesizeOrphanEnd emits the synthetic interrupted subagent_end for a
-// span a watchdog found orphaned — unless the span's real end closed it
-// while the verdict waited (see orphanFires). Runs only on this goroutine.
-func (f *eventForwardState) synthesizeOrphanEnd(fire orphanFire) {
-	entry := fire.entry
-	if f.openSpans[entry.parentCallID] != entry {
-		// Closed by its real EventKindSubTurnEnd (or replaced by a newer
-		// span under the same call ID) while the verdict waited.
-		return
-	}
-	reason := fire.reason
-	switch {
-	case fire.forced:
-		// Already logged by the watchdog; avoid a second, redundant log line.
-	case reason == "unknown":
-		slog.Error("ws: subagent span orphaned with unknown reason — synthesizing interrupted end",
-			"event", "span_orphan_interrupted",
-			"span_id", entry.spanID,
-			"parent_call_id", entry.parentCallID,
-			"reason", reason,
-		)
-	default:
-		slog.Warn("ws: subagent span orphaned — synthesizing interrupted end",
-			"event", "span_orphan_interrupted",
-			"span_id", entry.spanID,
-			"parent_call_id", entry.parentCallID,
-			"reason", reason,
-		)
-	}
-	// Use generated.SubagentEndFrame (contract-first migration).
-	endFrame := generated.SubagentEndFrame{
-		Type:      string(generated.WsFrameTypeSubagentEnd),
-		SessionId: entry.sessionID,
-		SpanId:    entry.spanID,
-		Status:    "interrupted",
-		Message:   &reason,
-	}
-	if entry.agentID != "" {
-		agentID := entry.agentID
-		endFrame.AgentId = &agentID
-	}
-	if entry.parentCallID != "" {
-		pc := entry.parentCallID
-		endFrame.ParentCallId = &pc
-	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeSubagentEnd), endFrame)
-	// The span is resolved: a later real end still sends its own frame
-	// (the EventKindSubTurnEnd case never needs the entry), and a
-	// resolved span is never re-armed or synthesized twice.
-	f.closeSpan(entry.parentCallID)
-}
-
-// onTurnStart forwards agent.EventKindTurnStart to this connection.
-func (f *eventForwardState) onTurnStart(evt agent.Event) {
-	// #605: a NEW root turn began on this chat — reset the
-	// root-turn-ended latch so spans it spawns are registered
-	// unarmed (their root is alive; the TurnEnd case will arm them).
-	// Only a ROOT turn's start may reset: a child's own turn-start
-	// arrives between its SubTurnSpawn and the next root turn, and
-	// resetting on it would reopen the arming hole for a sibling
-	// delegate's later-arriving spawn event.
-	p, ok := evt.Payload.(agent.TurnStartPayload)
-	if !ok || !p.IsRoot || !f.matchesEvent(p.ChatID, "") {
-		return
-	}
-	f.rootTurnEnded = false
-	f.rootTurnEndReason = ""
-}
-
 // onSubTurnSpawn forwards agent.EventKindSubTurnSpawn to this connection.
 func (f *eventForwardState) onSubTurnSpawn(evt agent.Event) {
 	// FR-H-004: emit subagent_start when a sub-turn is spawned.
@@ -636,23 +301,6 @@ func (f *eventForwardState) onSubTurnSpawn(evt agent.Event) {
 		spawnFrame.AgentId = &aid
 	}
 	sendConnGenFrame(f.wc, string(generated.WsFrameTypeSubagentStart), spawnFrame)
-	// Register the span in openSpans for orphan watchdog tracking.
-	entry := &openSpanEntry{
-		spanID:       p.SpanID,
-		parentCallID: string(p.ParentSpawnCallID),
-		agentID:      p.AgentID,
-		sessionID:    spawnSID,
-		closeCh:      make(chan struct{}),
-	}
-	f.openSpans[string(p.ParentSpawnCallID)] = entry
-	// #605: if the root turn already ended, the EventKindTurnEnd case
-	// has already run its arming loop and will never see this entry —
-	// arm it now, or the span stays invisible to the orphan watchdog
-	// forever (no reschedule ceiling, no forced interrupted frame).
-	if f.rootTurnEnded {
-		entry.parentTurnEnded = true
-		f.startOrphanWatchdog(entry, f.rootTurnEndReason)
-	}
 }
 
 // onSubTurnEnd forwards agent.EventKindSubTurnEnd to this connection.
@@ -701,8 +349,6 @@ func (f *eventForwardState) onSubTurnEnd(evt agent.Event) {
 		endFrameEnd.Reason = &reason
 	}
 	sendConnGenFrame(f.wc, string(generated.WsFrameTypeSubagentEnd), endFrameEnd)
-	// Signal the watchdog that the span closed normally.
-	f.closeSpan(string(p.ParentSpawnCallID))
 }
 
 // onSubagentMessage forwards agent.EventKindSubagentMessage to this
@@ -728,47 +374,6 @@ func (f *eventForwardState) onSubagentState(evt agent.Event) {
 		return
 	}
 	sendConnGenFrame(f.wc, string(generated.WsFrameTypeSubagentState), p.Frame)
-}
-
-// onTurnEnd forwards agent.EventKindTurnEnd to this connection.
-func (f *eventForwardState) onTurnEnd(evt agent.Event) {
-	// W1-2: only arm the orphan watchdog when the root turn for this
-	// connection ends (IsRoot == true) and the event belongs to our chat
-	// (ChatID matches). Sub-turn ends from sibling sub-turns would otherwise
-	// spuriously interrupt still-running spans on this connection.
-	p, ok := evt.Payload.(agent.TurnEndPayload)
-	if !ok || !p.IsRoot || !f.matchesEvent(p.ChatID, p.SessionID) {
-		return
-	}
-	// Determine watchdog reason from the terminal status of the parent turn.
-	var watchdogReason string
-	switch p.Status {
-	case agent.TurnEndStatusAborted:
-		watchdogReason = "parent_cancelled"
-	case agent.TurnEndStatusError:
-		watchdogReason = "parent_timeout"
-	case agent.TurnEndStatusCompleted:
-		watchdogReason = "parent_done_early"
-	case agent.TurnEndStatusParked:
-		// Behavior-preserving: this previously fell through the
-		// `default` branch below to "unknown" (Parked was not a
-		// distinct case). Kept identical here rather than guessing
-		// a more specific wire value without frontend confirmation
-		// of what consumes it.
-		watchdogReason = "unknown"
-	default:
-		watchdogReason = "unknown"
-	}
-	// #605: latch the root-turn-ended state for spans whose
-	// SubTurnSpawn arrives after this event (see rootTurnEnded decl).
-	f.rootTurnEnded = true
-	f.rootTurnEndReason = watchdogReason
-	for _, entry := range f.openSpans {
-		if !entry.parentTurnEnded {
-			entry.parentTurnEnded = true
-			f.startOrphanWatchdog(entry, watchdogReason)
-		}
-	}
 }
 
 // onToolExecStart forwards agent.EventKindToolExecStart to this connection.

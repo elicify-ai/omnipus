@@ -301,6 +301,7 @@ export interface SubagentEndFrame {
 export interface SubagentMessageFrame {
   type: "subagent_message";
   session_id: string;
+  child_session_id?: string;
   span_id: string;
   message_id: string;
   kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond" | "goal_status";
@@ -315,6 +316,7 @@ export interface SubagentMessageFrame {
 export interface SubagentStateFrame {
   type: "subagent_state";
   session_id: string;
+  child_session_id?: string;
   span_id: string;
   state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
   steering_receipt?: {

@@ -125,8 +125,19 @@ func TestDeliver_PersistsSubagentMessage_ProgressReachesParentTranscript(t *test
 	if found.SubagentMessage.Kind != "progress" {
 		t.Fatalf("SubagentMessage.Kind = %q, want progress", found.SubagentMessage.Kind)
 	}
-	if found.SubagentMessage.SessionId != childID {
-		t.Fatalf("SubagentMessage.SessionId = %q, want the CHILD's own id %q", found.SubagentMessage.SessionId, childID)
+	// UAT defect 1 fix: SessionId is the PARENT's own session — the frame's
+	// routing key (SubagentMessageFrame.yaml: "Session in which the
+	// parent's span is running") — never the child's. Before this fix the
+	// assertion here read `!= childID` / "want the CHILD's own id", which
+	// encoded the exact bug the tester found: the SPA files a frame under
+	// whatever session_id it carries, so a child-addressed frame landed in
+	// the child's own (nonexistent) bucket instead of the parent's side
+	// panel, and the pill's running count never left 0.
+	if found.SubagentMessage.SessionId != parentID {
+		t.Fatalf("SubagentMessage.SessionId = %q, want the PARENT's own id %q", found.SubagentMessage.SessionId, parentID)
+	}
+	if found.SubagentMessage.ChildSessionId == nil || *found.SubagentMessage.ChildSessionId != childID {
+		t.Fatalf("SubagentMessage.ChildSessionId = %v, want the CHILD's own id %q", found.SubagentMessage.ChildSessionId, childID)
 	}
 }
 
@@ -159,6 +170,15 @@ func TestDeliver_PersistsSubagentState_TerminalOutcome(t *testing.T) {
 	}
 	if found.SubagentState == nil || found.SubagentState.State != "completed" {
 		t.Fatalf("expected SubagentState.State = completed, got %+v", found.SubagentState)
+	}
+	// UAT defect 1 fix: same routing-key contract as
+	// TestDeliver_PersistsSubagentMessage_ProgressReachesParentTranscript
+	// above — SessionId is the PARENT's, ChildSessionId is the child's.
+	if found.SubagentState.SessionId != parentID {
+		t.Fatalf("SubagentState.SessionId = %q, want the PARENT's own id %q", found.SubagentState.SessionId, parentID)
+	}
+	if found.SubagentState.ChildSessionId == nil || *found.SubagentState.ChildSessionId != childID {
+		t.Fatalf("SubagentState.ChildSessionId = %v, want the CHILD's own id %q", found.SubagentState.ChildSessionId, childID)
 	}
 }
 

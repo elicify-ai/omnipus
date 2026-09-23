@@ -162,6 +162,10 @@ properties:
     enum:
       - browser_handover_notice
       - goal_outcome
+      - subagent_start
+      - subagent_state
+      - subagent_message
+      - subagent_end
     description: >
       BROWSER-FR-043a (C-83) — a second, orthogonal axis on a
       `type: system` entry, discriminating WHICH kind of system entry this
@@ -177,7 +181,35 @@ properties:
       on replay as was emitted live: `browser_handover_notice` →
       `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` →
       `GoalOutcomeFrame` (the goal outcome line, founder decision
-      2026-09-14 — the entry also carries `goal_outcome`).
+      2026-09-14 — the entry also carries `goal_outcome`); `subagent_start`
+      / `subagent_state` / `subagent_message` / `subagent_end` → the
+      matching `SubagentStartFrame` / `SubagentStateFrame` /
+      `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 —
+      steer_frames.go's persisted sub-agent lifecycle frames, carried on
+      this `Message` by the dedicated `subagent_start` / `subagent_state`
+      / `subagent_message` / `subagent_end` fields below, the same
+      stamped-field convention `goal_outcome` already established).
+      Hard Constraint #8: this closes the gap where the gateway served
+      these four subtypes without the generated validator ever having
+      learned them, failing every fetch of a session that delegated
+      (the tester's own run only exercised three of the four —
+      subagent_message persists through the identical path, steer_frames.go's
+      persistSubagentEntry, so this fix covers it too rather than leaving
+      the same defect for the next delegation that happens to emit one).
     example: "browser_handover_notice"
   goal_outcome:
     $ref: './GoalOutcome.yaml'
+  # subagent_start/state/message/end below are present only on the
+  # matching `system_subtype` entry (ADR-091 D7/I-4) — steer_frames.go's
+  # persisted sub-agent lifecycle frames. Plain $ref, no sibling
+  # description: OAS 3.0.3 (this file's `openapi:` version) ignores keys
+  # sibling to $ref, matching goal_outcome's own plain-$ref precedent
+  # immediately above.
+  subagent_start:
+    $ref: './SubagentStartFrame.yaml'
+  subagent_state:
+    $ref: './SubagentStateFrame.yaml'
+  subagent_message:
+    $ref: './SubagentMessageFrame.yaml'
+  subagent_end:
+    $ref: './SubagentEndFrame.yaml'

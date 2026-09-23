@@ -42,6 +42,14 @@ properties:
     type: string
     minLength: 1
     description: Session in which the parent's span is running.
+  child_session_id:
+    type: string
+    description: >
+      Optional session id of the delegated child session this mid-span
+      update is reporting on — the same value the bracketing
+      `subagent_start` frame's `child_session_id` carries (ADR-091 I-4).
+      Present for steered sessions; absent for legacy subturn spans.
+    example: "550e8400-e29b-41d4-a716-446655440000"
   span_id:
     type: string
     minLength: 1

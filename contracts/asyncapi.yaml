@@ -2853,6 +2853,13 @@ components:
         session_id:
           type: string
           minLength: 1
+        child_session_id:
+          type: string
+          description: >
+            Optional session id of the delegated child session this
+            mid-span update is reporting on — the same value the
+            bracketing subagent_start frame's child_session_id carries
+            (ADR-091 I-4).
         span_id:
           type: string
           minLength: 1
@@ -2912,6 +2919,13 @@ components:
         session_id:
           type: string
           minLength: 1
+        child_session_id:
+          type: string
+          description: >
+            Optional session id of the delegated child session this
+            lifecycle ping is reporting on — the same value the
+            bracketing subagent_start frame's child_session_id carries
+            (ADR-091 I-4).
         span_id:
           type: string
           minLength: 1
@@ -2928,7 +2942,9 @@ components:
             - timed_out
         steering_receipt:
           type: object
-          nullable: true
+          # Not nullable — see components/schemas/SubagentStateFrame.yaml's
+          # own note: this field is emitted via an omitempty Go pointer,
+          # present or absent, never an explicit JSON null.
           required:
             - correlation_id
             - applied_at

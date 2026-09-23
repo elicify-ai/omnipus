@@ -521,7 +521,20 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 	// start/end entries are written but not yet read back here.
 	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentMessage {
 		if entry.SubagentMessage != nil {
-			if err2 := emitFrame(*entry.SubagentMessage); err2 != nil {
+			// UAT defect 1: stamp SessionId from sr.sessionID (the
+			// transcript this entry was read FROM — persistSubagentEntry
+			// only ever writes these into the PARENT's own transcript)
+			// rather than trusting whatever the stored frame carries, the
+			// same self-healing choice this function already makes for
+			// browser_handover_notice/goal_outcome just above (both built
+			// fresh from sr.sessionID, never from a stored SessionId).
+			// This makes a reload correct even for an entry persisted
+			// BEFORE deliverSubagentMessage's fix (steer_frames.go), whose
+			// stored SessionId is the child's — no separate data migration
+			// needed.
+			frame := *entry.SubagentMessage
+			frame.SessionId = sr.sessionID
+			if err2 := emitFrame(frame); err2 != nil {
 				return streamReplayStateReturn, err2
 			}
 			return streamReplayStateContinue, nil
@@ -531,7 +544,11 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 	}
 	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentState {
 		if entry.SubagentState != nil {
-			if err2 := emitFrame(*entry.SubagentState); err2 != nil {
+			// UAT defect 1: same self-healing stamp as subagent_message
+			// above.
+			frame := *entry.SubagentState
+			frame.SessionId = sr.sessionID
+			if err2 := emitFrame(frame); err2 != nil {
 				return streamReplayStateReturn, err2
 			}
 			return streamReplayStateContinue, nil

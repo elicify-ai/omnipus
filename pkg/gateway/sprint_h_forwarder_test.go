@@ -203,36 +203,44 @@ func TestToolExecStart_NoParentCallID_TopLevel(t *testing.T) {
 		"top-level tool calls must not carry parent_call_id")
 }
 
-// TestSpawn_OrphanSubTurn_EmitsInterruptedAfter5s verifies FR-H-004 / Scenario 7:
-// When the parent turn ends before the sub-turn, the orphan watchdog synthesizes
-// subagent_end{status:"interrupted"} after orphanWatchdogTimeout.
-// Uses SetOrphanWatchdogTimeoutForTest to use a short timeout (~200ms) in tests.
-// Traces to: sprint-h-subagent-block-spec.md TDD row 7, BDD Scenario 7.
-func TestSpawn_OrphanSubTurn_EmitsInterruptedAfter5s(t *testing.T) {
-	// Override watchdog timeout to 200ms so test doesn't sleep 5 seconds.
-	restore := SetOrphanWatchdogTimeoutForTest(200 * time.Millisecond)
-	defer restore()
-
+// TestSpawn_SubTurnOutlivesParentTurn_NeverSynthesizesInterrupted proves
+// ADR-091 UAT defect 2's fix: the "parent_done_early" orphan watchdog
+// (FR-H-004 Scenario 7, from the pre-ADR-091 design where a nested sub-turn
+// was structurally scoped to its parent's own turn) is retired. Under
+// ADR-091 D1 a delegated child is a session of its own, designed to keep
+// running after its parent's turn ends — the founder's round-9 decision —
+// and its real terminal state arrives independently via its own
+// EventKindSubTurnEnd (steer_frames.go's deliverSubagentEnd, driven by the
+// child's own steer.Outcome). The parent's turn ending is no longer
+// evidence of anything wrong with a still-open span; synthesizing
+// subagent_end{status:"interrupted"} here fabricated a false failure on
+// every single healthy delegation — the exact UAT symptom ("1 failed" while
+// the child worked normally, self-correcting only once the real end frame
+// eventually arrived and overwrote it).
+// Traces to: ADR-091 UAT defect 2 (the tester's three-way proof: a child
+// marked "interrupted" this way went on to spawn a grandchild, another kept
+// working three more minutes and finished, and the durable transcript
+// recorded subagent_end{status:"success"} for both).
+func TestSpawn_SubTurnOutlivesParentTurn_NeverSynthesizesInterrupted(t *testing.T) {
 	bus := agent.NewEventBus()
 	h := makeMinimalHandler()
 	wc, ch := makeForwarderTestConn(64)
 	done := runForwarder(h, wc, "chat-1", bus)
 
-	// 1. A sub-turn starts: emit subagent_start.
+	// 1. A sub-turn (an ADR-091 steered child) starts.
 	bus.Emit(agent.Event{
 		Kind: agent.EventKindSubTurnSpawn,
 		Payload: agent.SubTurnSpawnPayload{
 			AgentID:           "max",
 			SpanID:            "span_c1",
 			ParentSpawnCallID: session.ToolCallID("c1"),
-			TaskLabel:         "some task",
+			TaskLabel:         "long-running delegated work",
 			ChatID:            "chat-1",
 		},
 	})
 
-	// 2. Parent turn ends — trigger orphan watchdog.
-	// W1-2: must include ChatID matching the forwarder's chatID and IsRoot=true;
-	// sub-turn ends from unrelated chats or non-root turns must not arm the watchdog.
+	// 2. The PARENT's own turn ends normally — ADR-091 D1: the child is
+	//    designed to keep running past this point; this must arm nothing.
 	bus.Emit(agent.Event{
 		Kind: agent.EventKindTurnEnd,
 		Payload: agent.TurnEndPayload{
@@ -242,80 +250,12 @@ func TestSpawn_OrphanSubTurn_EmitsInterruptedAfter5s(t *testing.T) {
 		},
 	})
 
-	// 3. Do NOT emit SubTurnEnd. The watchdog should fire after ~200ms.
-	// W2-11: Replace time.Sleep(300ms) with require.Eventually to avoid CI flakes.
-	// Poll until the interrupted frame is emitted into the send channel.
-	// Traces to: temporal-puzzling-melody.md W2-11
-	require.Eventually(t, func() bool {
-		// Check if a frame is queued in the channel.
-		// We want at least 2 frames: subagent_start + synthesized subagent_end{interrupted}.
-		return len(ch) >= 2
-	}, 2*time.Second, 10*time.Millisecond,
-		"watchdog must emit subagent_end{interrupted} within 2s after parent turn ends")
+	// 3. The child keeps working well past what used to be the watchdog's
+	//    60s default (shortened here only by NOT waiting for it — there is
+	//    no timer left to wait for; this sleep proves none fires).
+	time.Sleep(150 * time.Millisecond)
 
-	bus.Close()
-	<-done
-
-	// Drain frames: first is subagent_start, second is synthesized subagent_end.
-	var frames []replayFrameDecoder
-	for len(ch) > 0 {
-		frames = append(frames, drainFrame(t, ch))
-	}
-
-	require.GreaterOrEqual(t, len(frames), 2,
-		"must have at least 2 frames: subagent_start and synthesized subagent_end{interrupted}")
-
-	// Find the subagent_end frame.
-	var foundEnd bool
-	for _, f := range frames {
-		if f.Type == "subagent_end" {
-			assert.Equal(t, "interrupted", f.Status,
-				"orphaned span must resolve to interrupted status")
-			assert.Equal(t, "span_c1", f.SpanID)
-			assert.Equal(t, "c1", f.ParentCallID)
-			foundEnd = true
-		}
-	}
-	assert.True(t, foundEnd, "orphan watchdog must emit subagent_end{status:interrupted}")
-}
-
-// TestSpawn_SubTurnEnd_AfterParentDone_CancelsWatchdog verifies that when
-// EventKindSubTurnEnd arrives after TurnEnd (but before the watchdog fires),
-// the watchdog is canceled and NO interrupted frame is emitted.
-func TestSpawn_SubTurnEnd_AfterParentDone_CancelsWatchdog(t *testing.T) {
-	// Use a longer watchdog timeout so our SubTurnEnd can arrive first.
-	restore := SetOrphanWatchdogTimeoutForTest(500 * time.Millisecond)
-	defer restore()
-
-	bus := agent.NewEventBus()
-	h := makeMinimalHandler()
-	wc, ch := makeForwarderTestConn(64)
-	done := runForwarder(h, wc, "chat-1", bus)
-
-	// 1. Sub-turn spawns.
-	bus.Emit(agent.Event{
-		Kind: agent.EventKindSubTurnSpawn,
-		Payload: agent.SubTurnSpawnPayload{
-			AgentID:           "max",
-			SpanID:            "span_c1",
-			ParentSpawnCallID: session.ToolCallID("c1"),
-			TaskLabel:         "task",
-			ChatID:            "chat-1",
-		},
-	})
-
-	// 2. Parent turn ends — starts watchdog (500ms timer).
-	// W1-2: must include ChatID and IsRoot=true for the watchdog to arm.
-	bus.Emit(agent.Event{
-		Kind: agent.EventKindTurnEnd,
-		Payload: agent.TurnEndPayload{
-			ChatID: "chat-1",
-			IsRoot: true,
-		},
-	})
-
-	// 3. Sub-turn ends normally (before the 500ms watchdog fires).
-	time.Sleep(50 * time.Millisecond)
+	// 4. The child finishes for real, long after the parent's turn ended.
 	bus.Emit(agent.Event{
 		Kind: agent.EventKindSubTurnEnd,
 		Payload: agent.SubTurnEndPayload{
@@ -323,31 +263,35 @@ func TestSpawn_SubTurnEnd_AfterParentDone_CancelsWatchdog(t *testing.T) {
 			Status:            agent.SubTurnStatusSuccess,
 			SpanID:            "span_c1",
 			ParentSpawnCallID: session.ToolCallID("c1"),
-			DurationMS:        100,
+			DurationMS:        150,
 			ChatID:            "chat-1",
 		},
 	})
 
-	// Wait past where the watchdog WOULD have fired (600ms > 500ms timer).
-	time.Sleep(600 * time.Millisecond)
 	bus.Close()
 	<-done
 
-	// Drain all frames.
 	var frames []replayFrameDecoder
 	for len(ch) > 0 {
 		frames = append(frames, drainFrame(t, ch))
 	}
 
-	// Must have subagent_start and subagent_end(success) — no interrupted.
-	hasInterrupted := false
+	var sawInterrupted, sawRealEnd bool
 	for _, f := range frames {
-		if f.Type == "subagent_end" && f.Status == "interrupted" {
-			hasInterrupted = true
+		if f.Type != "subagent_end" {
+			continue
+		}
+		if f.Status == "interrupted" {
+			sawInterrupted = true
+		}
+		if f.Status == "success" {
+			sawRealEnd = true
 		}
 	}
-	assert.False(t, hasInterrupted,
-		"watchdog must not fire when sub-turn ended normally before the timeout")
+	assert.False(t, sawInterrupted,
+		"a parent turn ending must NEVER synthesize subagent_end{interrupted} for a still-running "+
+			"ADR-091 child — a child is designed to outlive its parent's turn (D1)")
+	assert.True(t, sawRealEnd, "the child's own real subagent_end{success} must still be forwarded")
 }
 
 // TestToolExecEnd_DelegationDenied_SubstitutesStructuredResult proves the UAT
