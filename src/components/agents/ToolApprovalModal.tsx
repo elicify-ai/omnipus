@@ -311,11 +311,26 @@ function ToolApprovalCard({
           action === 'allow' && isShellCommand
             ? await submitToolApproval(approvalId, action, scope)
             : await submitToolApproval(approvalId, action)
-        if (action === 'allow' && resp.grant_recorded !== true) {
-          addToast({
-            message: 'This call is allowed, but Always Allow did not stick. The next identical call will ask again.',
-            variant: 'warning',
-          })
+        if (action === 'allow') {
+          if (resp.grant_recorded !== true) {
+            addToast({
+              message: 'This call is allowed, but Always Allow did not stick. The next identical call will ask again.',
+              variant: 'warning',
+            })
+          } else if (resp.scope) {
+            // ADR-092 D4/FR-024: resp.scope is the scope the server actually
+            // RECORDED, not a passthrough of the local `scope` selection —
+            // show that, not the client's own request, so a server-side
+            // downgrade (e.g. no prefix suggestion survived a race) is never
+            // silently different from what the operator is told stuck.
+            addToast({
+              message:
+                resp.scope === 'prefix'
+                  ? 'Always allowed — every command starting with that prefix is now allowed for this session.'
+                  : 'Always allowed — this exact command is now allowed for this session.',
+              variant: 'success',
+            })
+          }
         }
         // The server resolved it: remember that, rather than only hiding it.
         markResolved(approvalId)
