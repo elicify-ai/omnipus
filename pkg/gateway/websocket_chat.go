@@ -343,13 +343,74 @@ func (h *WSHandler) takePendingMessageStatus(sessionID string) (pendingMessageSt
 	return pending, true
 }
 
-func sendPendingMessageWorking(sessionID string, pending pendingMessageStatus) {
-	sendConnGenFrame(pending.wc, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
+// takeAllPendingMessageStatuses drains and returns every remaining queued
+// entry for sessionID, in FIFO order, clearing the map entry. Used at turn
+// end (see wsStreamerFinalize.sendDone) so a queued status entry can never
+// outlive the turn it was queued for.
+func (h *WSHandler) takeAllPendingMessageStatuses(sessionID string) []pendingMessageStatus {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	queue := h.pendingMessageStatuses[sessionID]
+	if len(queue) == 0 {
+		return nil
+	}
+	delete(h.pendingMessageStatuses, sessionID)
+	return queue
+}
+
+// flushPendingMessageStatusesAsWorking is called at turn end (a `done` frame
+// is about to be sent). Review finding 12: "treat a done as implying
+// working" plus "clear or expire entries at turn end" — a queued status
+// entry that never got consumed by a mid-turn GetStreamer call (e.g. a
+// round that never opened a streamer, or a non-streaming reply) must not
+// survive past the turn it belongs to: left in place, it would either keep
+// a dead connection reference alive indefinitely, or get popped by a LATER,
+// UNRELATED turn on the same session and mislabel the wrong message as
+// "working". Every remaining entry for sessionID is drained and sent
+// "working" (fanned out to all bound connections, not just the original
+// sender — see sendPendingMessageWorking) before the turn's done frame goes
+// out, so the tick always reaches a terminal, non-stuck state.
+func (h *WSHandler) flushPendingMessageStatusesAsWorking(sessionID string) {
+	for _, pending := range h.takeAllPendingMessageStatuses(sessionID) {
+		sendPendingMessageWorking(h, sessionID, pending)
+	}
+}
+
+// sendPendingMessageWorking delivers the "working" status to EVERY connection
+// currently bound to sessionID — not just pending.wc (the connection that
+// originally sent the message). Review finding 12: on a kept-chat reconnect,
+// pending.wc is the ORIGINAL (often now-dead) connection; a tab that
+// reconnected under a NEW chatID is bound to the same session via
+// h.sessionIDs but would otherwise never see the tick flip past "Received".
+// h (not just the session id) is threaded through so this can resolve the
+// current connection set under h.mu, matching every other webchat delivery
+// path (see resolveSessionConnsLocked's doc comment).
+func sendPendingMessageWorking(h *WSHandler, sessionID string, pending pendingMessageStatus) {
+	frame := generated.MessageStatusFrame{
 		Type:            string(generated.WsFrameTypeMessageStatus),
 		SessionId:       sessionID,
 		ClientMessageId: pending.clientMessageID,
 		State:           "working",
-	})
+	}
+	if h == nil {
+		// No handler to resolve the session's connection set — fall back to
+		// the originating connection only (defensive; not reached in
+		// production, where GetStreamer/sendDone always pass a real h).
+		sendConnGenFrame(pending.wc, string(generated.WsFrameTypeMessageStatus), frame)
+		return
+	}
+	h.mu.Lock()
+	targets := h.resolveSessionConnsLocked("", sessionID)
+	h.mu.Unlock()
+	if len(targets) == 0 && pending.wc != nil {
+		// No connection resolved via h.sessionIDs yet (e.g. a race right at
+		// mint time) — still deliver to the connection that sent the
+		// message rather than silently dropping the tick.
+		targets = []*wsConn{pending.wc}
+	}
+	for _, conn := range targets {
+		sendConnGenFrame(conn, string(generated.WsFrameTypeMessageStatus), frame)
+	}
 }
 
 func (hcm *wsHandlerHandleChatMessage) sendMessageStatus(state string) {

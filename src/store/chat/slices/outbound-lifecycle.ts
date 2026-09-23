@@ -31,13 +31,17 @@ function beginSend(content: string, opts?: { clientMessageId?: string; queuedAt?
 }
 
 /** Builds the optimistic user bubble for a send, carrying the correlation id
- * that MessageStatusFrame will later echo back (#823 state A). */
+ * that MessageStatusFrame will later echo back (#823 state A). `mediaRefs`
+ * (review finding 17) is stored alongside the display-only `media` so a
+ * later `resendMessage` call can resend the SAME attachments — `media`
+ * alone carries no wire-usable ref, see ChatMessage.mediaRefs' doc comment. */
 function buildQueuedUserMessage(
   sessionId: string,
   content: string,
   clientMessageId: string,
   queuedAt: string,
   attachments: MediaAttachment[] = [],
+  mediaRefs: string[] = [],
 ): ChatMessage {
   return {
     id: clientMessageId,
@@ -48,6 +52,7 @@ function buildQueuedUserMessage(
     status: 'done',
     deliveryStatus: 'sending',
     ...(attachments.length > 0 ? { media: attachments } : {}),
+    ...(mediaRefs.length > 0 ? { mediaRefs } : {}),
   }
 }
 
@@ -69,12 +74,92 @@ function withUserMessageFailed(m: ChatMessage, targetId: string): ChatMessage {
   return m.id === targetId ? ({ ...m, status: 'error' as const, deliveryStatus: 'failed' as const } as ChatMessage) : m
 }
 
+/** Review finding 17: resends messageId IN PLACE — same id, original
+ * mediaRefs, no duplicate bubble — replacing the old `sendMessage(content)`
+ * "Try again" call, which minted a fresh id (duplicate bubble) and threaded
+ * only a plain content string (dropped attachments). See resendMessage's
+ * doc comment on the ChatStore type for the full bug writeup. Kept at
+ * module scope (not nested inside createOutboundLifecycleSlice), matching
+ * this file's own established pattern (see the file-header comment) so its
+ * body does not count against that function's grandfathered line budget. */
+function performResendMessage(
+  get: StoreApi<ChatStore>['getState'],
+  getActiveSid: () => string | null,
+  withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void,
+  messageId: string,
+): void {
+  const state = get()
+  const activeSid = getActiveSid()
+  let sid: string | null = null
+  let existing: ChatMessage | undefined
+  if (activeSid && state.sessionsById[activeSid]?.messagesById[messageId]) {
+    sid = activeSid
+    existing = state.sessionsById[activeSid].messagesById[messageId]
+  } else {
+    // Not the active session — a background session's own failed send can
+    // still be retried, so scan every bucket rather than bailing out.
+    for (const [candidateSid, bucket] of Object.entries(state.sessionsById)) {
+      const found = bucket.messagesById[messageId]
+      if (found) {
+        sid = candidateSid
+        existing = found
+        break
+      }
+    }
+  }
+  if (!sid || !existing || existing.role !== 'user') return
+
+  const content = existing.content
+  const mediaRefs = existing.mediaRefs ?? []
+  const targetSid = sid
+
+  // Reset the SAME message in place first — 'sending' — never a second
+  // bubble, unlike the pre-fix `sendMessage(content)` call this replaces.
+  withBucket(targetSid, (b) => produce(b, (draft) => {
+    const m = draft.messagesById[messageId]
+    if (m) {
+      m.status = 'done'
+      m.deliveryStatus = 'sending'
+    }
+  }) as Partial<SessionChatState>)
+
+  const { connection, isConnected } = useConnectionStore.getState()
+  if (!connection || !isConnected) {
+    withBucket(targetSid, (b) => produce(b, (draft) => {
+      markUserMessageFailed(draft, messageId)
+    }) as Partial<SessionChatState>)
+    useConnectionStore.getState().setConnectionError(
+      'Message could not be resent — connection dropped. Your message was kept; press Retry to resend.'
+    )
+    return
+  }
+
+  const payload = {
+    type: 'message' as const,
+    content,
+    session_id: targetSid === '__pending' ? undefined : targetSid,
+    client_message_id: messageId,
+    agent_id: useSessionStore.getState().activeAgentId ?? undefined,
+    ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
+  }
+  get()._validateOutboundFrame(payload, targetSid)
+  const sent = connection.send(payload)
+  if (!sent) {
+    withBucket(targetSid, (b) => produce(b, (draft) => {
+      markUserMessageFailed(draft, messageId)
+    }) as Partial<SessionChatState>)
+    useConnectionStore.getState().setConnectionError(
+      'Message could not be resent — connection dropped. Your message was kept; press Retry to resend.'
+    )
+  }
+}
 
 type OutboundLifecycleSlice = Pick<ChatStore,
   | 'enqueueOutboundMessage'
   | 'drainOutboundQueue'
   | '_validateOutboundFrame'
   | 'sendMessage'
+  | 'resendMessage'
   | 'sendWorkspaceSetupKickoff'
   | 'cancelStream'
   | 'clearStreamingState'
@@ -272,7 +357,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // a temporary bucket that we'd have to migrate on the ack, at the cost
       // of ~1 round-trip of perceived latency on the very first message.
       if (activeSessionId !== null) {
-        const userMsg: ChatMessage = buildQueuedUserMessage(activeSessionId, content, clientMessageId, queuedAt, attachments)
+        const userMsg: ChatMessage = buildQueuedUserMessage(activeSessionId, content, clientMessageId, queuedAt, attachments, mediaRefs)
 
         // Mid-turn steering send: a turn is already streaming, so this
         // message does NOT start a new turn — the gateway injects it into
@@ -542,7 +627,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         // 'session_started'). If the send succeeds, the message stays visible
         // until session_started migrates the bucket.
         const pendingSid = '__pending'
-        const userMsg: ChatMessage = buildQueuedUserMessage(pendingSid, content, clientMessageId, queuedAt)
+        const userMsg: ChatMessage = buildQueuedUserMessage(pendingSid, content, clientMessageId, queuedAt, [], mediaRefs)
         const assistantMsg: ChatMessage = {
           id: generateId(),
           session_id: pendingSid,
@@ -594,6 +679,11 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         }
       }
   },
+
+    // Review finding 17: see performResendMessage's doc comment (module
+    // scope, above) for the bug this replaces and why the body lives there
+    // rather than here.
+    resendMessage: (messageId) => performResendMessage(get, getActiveSid, withBucket, messageId),
 
     sendWorkspaceSetupKickoff: (opts) => {
       const { workspaceId, workspaceName, agentId, agentType } = opts
