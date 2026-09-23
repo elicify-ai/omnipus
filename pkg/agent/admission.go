@@ -437,12 +437,15 @@ func (al *AgentLoop) steerAdmission() *steerAdmission {
 	return g
 }
 
-// drainSteerQueue is called when a turn ends (turn_exit.go::Finish) —
-// releases sessionID's slot and, if a session was waiting, dispatches it
-// through the SAME admission path Dispatch itself uses
-// (dispatchSteeredSession), started in a goroutine so Finish (which may be
-// running inside another turn's own goroutine, e.g. a hard-abort cascade)
-// never blocks on the next session's turn.
+// drainSteerQueue releases sessionID's slot and, if a session was waiting,
+// dispatches it through the SAME admission path Dispatch itself uses
+// (dispatchSteeredSessionReserved). It is called explicitly by whoever
+// claimed the slot — steer_launcher.go::runDispatchedSteeredTurn's deferred
+// release on the delegate front, loop_inbound.go::processSteeredSystemWake
+// on the wake front — never from turn_exit.go::Finish, which has no
+// back-reference to release through for a steered turn (see Finish's own
+// comment on why the slot is not released there). The dispatch of the next
+// queued session runs in a goroutine so the caller never blocks on it.
 func (al *AgentLoop) drainSteerQueue(sessionID string, generation int) {
 	next, hasNext := al.steerAdmission().release(sessionID, generation)
 	if !hasNext {

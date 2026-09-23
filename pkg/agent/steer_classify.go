@@ -2,11 +2,10 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// ADR-091 landing order I-8 — steer.RecordClassifier's real implementation.
-// Owner: WP-A (landing order §3: "pkg/session/lifecycle*.go ... ensureWarm
-// → I-9" is WP-A's row; the classifier that reads that store is this
-// file). Consumed by WP-B (AudienceResolver, on top of this) and WP-D (boot
-// recovery).
+// ADR-091 I-8 — steer.RecordClassifier's real implementation, reading the
+// lifecycle store `pkg/session/lifecycle*.go` warms (I-9). Consumed by
+// SteerAudienceResolver (steer_audience.go) and boot recovery
+// (boot_sweep.go).
 package agent
 
 import (
@@ -43,7 +42,7 @@ func NewSteerRecordClassifier(lifecycle *session.LifecycleStore, sessions *sessi
 }
 
 // Classify implements steer.RecordClassifier, resolving sessionID against
-// landing order I-8's eight-row table.
+// I-8's eight-row table.
 func (c *SteerRecordClassifier) Classify(_ context.Context, sessionID string) (steer.Class, error) {
 	rec, hasRecord, err := c.loadRecord(sessionID)
 	if err != nil {
@@ -78,7 +77,7 @@ func (c *SteerRecordClassifier) Classify(_ context.Context, sessionID string) (s
 			// No Origin, not a delegate type: a genuine pre-ADR-091 record
 			// (e.g. a chat/task session created before this ADR).
 			//
-			// Lead's CP-0 review item 2: I-8 has no explicit row for this
+			// I-8 has no explicit row for this
 			// shape (a non-delegate legacy record whose metadata happens
 			// to carry a ParentSessionID for reasons unrelated to
 			// steering). Decision: treat it as ordinary_root, NEVER
@@ -94,8 +93,8 @@ func (c *SteerRecordClassifier) Classify(_ context.Context, sessionID string) (s
 			// against every current production writer of
 			// UnifiedMeta.ParentSessionID (`grep -rn 'ParentSessionID:\|
 			// \.ParentSessionID = ' pkg/ --include='*.go' | grep -v
-			// _test.go`): the ONLY writer is subturn.go's
-			// createChildSession, which only ever creates
+			// _test.go`): the ONLY writer was the pre-ADR-091 subturn.go's
+			// createChildSession (since deleted), which only ever created
 			// session.SessionTypeDelegate sessions. So on every existing
 			// install, a record reaching this branch (non-delegate,
 			// Origin nil, meta names a parent) does not occur via any
@@ -118,10 +117,9 @@ func (c *SteerRecordClassifier) Classify(_ context.Context, sessionID string) (s
 	// SteeredBy present: valid only if its own fields are non-empty, the
 	// session's metadata agrees (R02), AND the ancestor chain re-verifies
 	// what I-1 checked at launch — no cycle, every ancestor resolves, and
-	// the walk ends at the record's own claimed RootSessionID (lead's CP-0
-	// review: row 8's "cycle, unknown ancestor, or wrong root" needs a
-	// real walk, not just the local-field/meta check this classifier did
-	// at CP-0).
+	// the walk ends at the record's own claimed RootSessionID (row 8's
+	// "cycle, unknown ancestor, or wrong root" needs a real walk, not just
+	// a local-field/meta check).
 	valid := rec.SteeredBy.SteeringSessionID != "" &&
 		rec.SteeredBy.RootSessionID != "" &&
 		hasMeta &&
@@ -138,7 +136,7 @@ func (c *SteerRecordClassifier) Classify(_ context.Context, sessionID string) (s
 
 // chainValid walks the ancestor chain starting at sb's direct steering
 // session, verifying I-1's launch-time invariants still hold at read time
-// (landing order I-8 row 8: "cycle, unknown ancestor, or wrong root"):
+// (I-8 row 8: "cycle, unknown ancestor, or wrong root"):
 //
 //   - no cycle — including a chain that loops back to sessionID itself,
 //     which is why sessionID seeds the visited set;

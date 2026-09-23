@@ -161,8 +161,8 @@ func (al *AgentLoop) deliverSubagentMessage(parentSessionID string, childRec *se
 	id := fmt.Sprintf("%s:%s:msg:%d", originCallID, kind, time.Now().UnixNano())
 	childID := childRec.SessionID
 	frame := generated.SubagentMessageFrame{
-		Type:            string(generated.WsFrameTypeSubagentMessage),
-		MessageId:       id,
+		Type:      string(generated.WsFrameTypeSubagentMessage),
+		MessageId: id,
 		// UAT defect 1: SessionId is the PARENT's own session (the frame's
 		// routing key — SubagentMessageFrame.yaml: "Session in which the
 		// parent's span is running"), exactly like deliverSubagentStart

@@ -544,7 +544,7 @@ func (n *asyncNotifierImpl) WakeParent(ctx context.Context, kind string, event t
 }
 
 // WakeParentAlways delivers the bounded typed wake for a WAKE-ELIGIBLE
-// outcome (ADR-091 landing order I-5's table: handback, question, blocker,
+// outcome (ADR-091 I-5's table: handback, question, blocker,
 // a fatal error, goal_status) WITHOUT allowWake's debounce/hourly cap —
 // FR-B-010's "wake-eligible kinds ... bypass allowWake, so a terminal
 // outcome can never be suppressed". The caller (steer.UpwardDeliverer's

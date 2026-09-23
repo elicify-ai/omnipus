@@ -336,7 +336,7 @@ func (te *TaskExecutor) getEvidenceCommitter() evidenceCommitter {
 // notifySourceChannel sends a compact task result back to the originating
 // channel. Only sends for terminal statuses.
 //
-// ADR-091 boundary 9 (landing order §6, FR-B-001): a steered task session's
+// ADR-091 boundary 9 (FR-B-001): a steered task session's
 // audience is never the user — its steering session hears about completion
 // through deliverTaskCompletionUpward (onTaskComplete), not this channel
 // notification. audienceFor also calls steer.BoundaryObserver.Observe
@@ -460,7 +460,7 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 		}
 	default:
 		// Not a terminal outcome this operation covers (e.g. cancelled —
-		// routed through the D8 cascade instead, WP-D).
+		// routed through the D8 cascade instead).
 		return
 	}
 

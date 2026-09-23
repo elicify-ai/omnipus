@@ -46,18 +46,18 @@ type streamReplayState struct {
 	persistedSubagentEndSpans   map[string]bool
 	latestByID                  map[string]tcAddr
 	lastSeenAgentID             string
-	msgFrame             generated.ReplayMessageFrame
-	tcID                 string
-	tcParentID           string
-	isNested             bool
-	isOrphan             bool
-	effectiveAgentID     string
-	isSpawnParent        bool
-	stillActive          bool
-	spanID               string
-	spanAgentID          string
-	subStart             generated.SubagentStartFrame
-	subEnd               generated.SubagentEndFrame
+	msgFrame                    generated.ReplayMessageFrame
+	tcID                        string
+	tcParentID                  string
+	isNested                    bool
+	isOrphan                    bool
+	effectiveAgentID            string
+	isSpawnParent               bool
+	stillActive                 bool
+	spanID                      string
+	spanAgentID                 string
+	subStart                    generated.SubagentStartFrame
+	subEnd                      generated.SubagentEndFrame
 }
 
 // streamReplayStateFlow reports how a block stage of streamReplayState wants the conductor to proceed.
@@ -955,7 +955,7 @@ func (sr *streamReplayState) buildSubagentStart(tc session.ToolCall) {
 	// ADR-091 I-4: "gains one optional field, child_session_id, so the
 	// open control knows where to go". Best-effort extraction from the
 	// persisted tool-call result — the delegate/create_task tool's own
-	// result shape is WP-C's, not this lane's; a missing/differently-keyed
+	// result shape is defined elsewhere; a missing/differently-keyed
 	// result simply leaves ChildSessionId nil (the open control degrades
 	// gracefully, per the field's own "optional" contract).
 	if tc.Result != nil {

@@ -340,8 +340,8 @@ type TranscriptEntry struct {
 	//       store-backed session and its OWN transcript.jsonl. The parent's
 	//       transcript is deliberately EMPTY of the child's writes. (What a
 	//       child DOES inherit verbatim from its parent is the separate
-	//       routingSessionID field — the cancel/interrupt reachability key,
-	//       subturn.go:1130 — which is a different concept from this one and
+	//       routingSessionID field — the cancel/interrupt reachability key
+	//       (the pre-ADR-091 subturn.go, since deleted) — which is a different concept from this one and
 	//       must not be conflated with it.)
 	//
 	//   (2) "replay.go uses it to withhold the entry from replay entirely" —
@@ -417,7 +417,7 @@ type TranscriptEntry struct {
 	// PARENT's own transcript at the moment they happen — "no new store":
 	// this file's existing SystemSubtype+dedicated-typed-field convention
 	// (see GoalOutcome above), applied to the ADR-053 frame shapes
-	// (contracts/asyncapi.yaml) WP-E already generates. Keyed by
+	// (contracts/asyncapi.yaml) generates. Keyed by
 	// steer.Origin.CallID (the originating delegate/create_task tool-call
 	// id — the span key), via each frame's own ParentCallId/SpanId field —
 	// not a new TranscriptEntry field, so the existing since-cursor replay

@@ -2,13 +2,13 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// ADR-091 landing order I-1 — the steered-by edge persisted on
+// ADR-091 I-1 — the steered-by edge persisted on
 // LifecycleRecord, plus the small value types it is built from (Origin,
 // SteeredBy, ReportingTarget, Authorization, Limits, Stop, Principal).
 //
-// These live in pkg/session, not pkg/steer, even though the landing order
-// (§2) presents them as part of the neutral `pkg/steer` package's published
-// shape. Reason (stated once here, cited from the CP-0 report): they are
+// These live in pkg/session, not pkg/steer, even though `pkg/steer`
+// presents them as part of its own neutral, published shape. Reason
+// (stated once here): they are
 // PERSISTED fields of session.LifecycleRecord, and I-9 has this same
 // package's LifecycleIndex return a report type to `pkg/steer` — so if
 // pkg/steer defined these types itself, pkg/session would have to import
@@ -17,8 +17,8 @@
 // cycle. The one-way resolution: pkg/session owns every type that is
 // PERSISTED on the record (or returned by the index), and pkg/steer
 // imports pkg/session and re-exports each one with a Go type alias (e.g.
-// `type Origin = session.Origin`) so the landing order's binding names
-// still resolve as `steer.Origin` etc. for every consumer outside this
+// `type Origin = session.Origin`) so callers
+// still resolve `steer.Origin` etc. for every consumer outside this
 // package. pkg/steer's own, non-persisted types (LaunchRequest, WakeInput,
 // Boundary, ...) are defined directly in pkg/steer.
 package session
@@ -26,7 +26,7 @@ package session
 import "time"
 
 // OriginKind discriminates what created a lifecycle record — a session's
-// record-level Origin.Kind (landing order I-1). One value per
+// record-level Origin.Kind (I-1). One value per
 // UnifiedSessionType plus the two kinds that have no session type of their
 // own (plan, human).
 type OriginKind string
@@ -44,7 +44,7 @@ const (
 )
 
 // IsValidOriginKind reports whether k is one of the nine canonical origin
-// kinds (landing order I-1).
+// kinds (I-1).
 func IsValidOriginKind(k OriginKind) bool {
 	switch k {
 	case OriginKindDelegate, OriginKindTask, OriginKindChat, OriginKindChannel,
@@ -81,7 +81,7 @@ const (
 // Principal identifies who acts on a steering action — an agent (by agent
 // id) or a human (the authenticated gateway identity of the WebSocket or
 // REST caller). Never constructed by a tool for the human case; the
-// gateway passes it down (landing order I-5 "Bus route authority").
+// gateway passes it down (I-5 "Bus route authority").
 type Principal struct {
 	Kind PrincipalKind `json:"kind"`
 	ID   string        `json:"id"`

@@ -55,9 +55,8 @@ type ToolResult struct {
 	// durable history retains only ForLLM's re-read marker.
 	InspectionImages []InspectionImage `json:"-"`
 
-	// Messages holds the ephemeral session history after execution.
-	// Only populated by SubTurn executions; used by evaluator_optimizer
-	// to carry stateful worker context across evaluation iterations.
+	// Messages: reserved. No production writer since ADR-091 deleted the
+	// sub-turn ephemeral ring; always nil today.
 	Messages []providers.Message `json:"-"`
 
 	// ArtifactTags exposes local artifact paths back to the LLM in a structured

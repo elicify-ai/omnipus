@@ -4,9 +4,9 @@
 
 package steer
 
-// NopBoundaryObserver is the production BoundaryObserver — every boundary
-// in the landing order §6 inventory calls Observe before acting, and in
-// production that call does nothing. WP-G's I-7 fixture supplies the only
+// NopBoundaryObserver is the production BoundaryObserver — every
+// publication boundary calls Observe before acting, and in
+// production that call does nothing. The I-7 test fixture supplies the only
 // other implementation (RecordingOutbound), used in tests to distinguish
 // "boundary exercised and blocked" from "never exercised".
 type NopBoundaryObserver struct{}

@@ -2,20 +2,18 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Owner: WP-A. ADR-091 landing order I-3 — turn reconstruction: every entry
-// path (first run, wake, follow-up, boot) rebuilds a steered session's turn
-// from its lifecycle record through this ONE function, never by hand.
+// Implements ADR-091's I-3 turn reconstruction: every entry path (first run,
+// wake, follow-up) rebuilds a steered session's turn from its lifecycle
+// record through this ONE function, never by hand.
 //
-// Scope note: this phase wires reconstruction into SessionLauncher.Dispatch
-// (the first-run and revival entry points, steer_launcher.go). Wiring it
-// into loop_inbound.go::processSystemMessage (the wake path) and the boot
-// sweep (WP-D's boot_sweep.go) is deferred — see the phase-2 report — both
-// because processSystemMessage's existing behaviour is exercised by tests
-// outside WP-G's still-incomplete 46-of-49-unclassified glob, and because
-// the boot sweep itself is WP-D-owned. The consumed-marker half of I-3's
-// consumption rule (step 3: "before executing, the turn appends a
-// `consumed <MessageID>` marker") is likewise not implemented here — it
-// belongs to the same wake-path integration.
+// reconstructSteeredTurn is called from two entry points:
+// SessionLauncher.Dispatch (first run and revival, steer_launcher.go) and
+// loop_inbound.go::processSteeredSystemWake (the wake path). The latter also
+// appends I-3's consumption marker (step 3: "before executing, the turn
+// appends a `consumed <MessageID>` marker") once the woken turn is certain
+// to run. Boot recovery (boot_sweep.go::SteerBootRecovery) does not call
+// this function — a steered session still mid-flight at boot is marked
+// OutcomeInterrupted and delivered to its parent rather than resumed.
 package agent
 
 import (

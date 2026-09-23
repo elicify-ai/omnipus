@@ -92,7 +92,7 @@ type turnState struct {
 	agentID    string
 	sessionKey string
 	// generation is the session's LifecycleRecord.Generation at the moment
-	// this turn was registered (ADR-091 landing order I-3 reconstruction /
+	// this turn was registered (ADR-091 I-3 reconstruction /
 	// I-6 revival). Zero for a turnState built outside reconstruction (a
 	// bare unit-test fixture, or a pre-ADR-091 turn) — requestCancelForGeneration
 	// treats a zero-vs-zero match the same as any other match, so a caller
@@ -900,7 +900,7 @@ func (al *AgentLoop) clearActiveTurnStateEntry(sessionKey string, ts *turnState)
 	al.activeTurnStates.CompareAndDelete(sessionKey, ts)
 }
 
-// registerTurnIfAbsent is ADR-091 landing order I-3/FR-A-013's compare-and-
+// registerTurnIfAbsent is ADR-091 I-3/FR-A-013's compare-and-
 // set turn registration: it admits ts only if NO turn is currently
 // registered under ts.sessionKey, returning true iff THIS call won.
 // SessionLauncher.Dispatch calls this (under the record lock, after I-6's
@@ -924,8 +924,8 @@ func (al *AgentLoop) registerTurnIfAbsent(ts *turnState) bool {
 	return true
 }
 
-// requestCancelForGeneration is ADR-091 landing order I-6's generation-aware
-// cancel primitive: WP-D's Canceller.CancelSubtree (steer_cancel.go) calls
+// requestCancelForGeneration is ADR-091 I-6's generation-aware
+// cancel primitive: SteerCanceller.CancelSubtree (steer_cancel.go) calls
 // this — never al.activeTurnStates directly — so a cancel that carries an
 // older generation than the CURRENTLY registered turn's is refused rather
 // than firing on the wrong (revived) turn. This is what makes "Stop then

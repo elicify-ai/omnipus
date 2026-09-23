@@ -20,12 +20,10 @@ import (
 )
 
 // steerAudienceMu guards steerAudienceResolver/steerBoundaryObserver —
-// ADR-091 I-5's injected dependencies for boundary 6 (landing order §6,
-// FR-B-001/FR-B-014). Package-level (not a wsStreamer field) because
-// wsStreamer itself is defined in websocket.go, a file outside this
-// package-row's ownership (landing order §3 row B lists
-// websocket_streamer.go, not websocket.go) — adding a new per-instance
-// field there is a "Requests to other owners" item, not something this
+// ADR-091 I-5's injected dependencies for boundary 6
+// (FR-B-001/FR-B-014). Package-level (not a wsStreamer field) because
+// wsStreamer itself is defined in websocket.go — adding a new per-instance
+// field there is a cross-file change, not something this
 // lane edits directly. Mirrors pkg/tools/message_parent.go's
 // logMessageParentWakeFailure package-var-plus-setter precedent.
 var (

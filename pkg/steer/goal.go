@@ -10,13 +10,13 @@ package steer
 // parseCriteriaArgs, and task.AcceptanceCriterion in pkg/task). Nil on
 // LaunchRequest means no goal (founder decision, round 3).
 //
-// pkg/steer may import neither pkg/tools nor pkg/task (landing order §2:
-// only pkg/session and pkg/api/generated), so this shape is restated here
-// field-for-field rather than reused by import. Phase 2's launcher body is
-// what actually validates a GoalSpec against create_task's rules (US-1/AS-5:
+// pkg/steer may import neither pkg/tools nor pkg/task (only pkg/session and
+// pkg/api/generated), so this shape is restated here
+// field-for-field rather than reused by import. steer_launcher.go's Launch
+// is what actually validates a GoalSpec against create_task's rules (US-1/AS-5:
 // "a LaunchRequest.Goal that create_task would reject is rejected with an
 // identical message") and maps an accepted one onto a real Goal record
-// (GoalRef) — CP-0 publishes only the compiled input shape.
+// (GoalRef).
 type GoalSpec struct {
 	Criteria []Criterion
 	DoD      []Criterion

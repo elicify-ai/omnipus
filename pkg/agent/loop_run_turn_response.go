@@ -510,7 +510,7 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 				Backoff:    backoff,
 			},
 		)
-		// ADR-091 boundary 5 (landing order §6, FR-B-001): a steered
+		// ADR-091 boundary 5 (FR-B-001): a steered
 		// session's retry notice is never the user's audience.
 		// audienceFor also calls steer.BoundaryObserver.Observe before this
 		// decision is acted on (FR-B-014).
@@ -575,7 +575,7 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryContextOverflow(retry
 			},
 		)
 
-		// ADR-091 boundary 5 (landing order §6, FR-B-001): a steered
+		// ADR-091 boundary 5 (FR-B-001): a steered
 		// session's retry notice is never the user's audience.
 		// audienceFor also calls steer.BoundaryObserver.Observe before this
 		// decision is acted on (FR-B-014).

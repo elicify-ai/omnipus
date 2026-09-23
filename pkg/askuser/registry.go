@@ -126,7 +126,7 @@ type Registry struct {
 	now func() time.Time
 
 	// steerAudience/steerObserver are ADR-091 I-5's injected
-	// steer.AudienceResolver/BoundaryObserver (landing order §2: "injected
+	// steer.AudienceResolver/BoundaryObserver ("injected
 	// into every package that hosts a boundary ... pkg/askuser for
 	// boundary 12"). Nil until SetSteerAudienceResolver is called —
 	// CreatePending's existing ParentSessionID-based EC-9 rejection is

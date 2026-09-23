@@ -70,7 +70,7 @@ type BootSweepResult struct {
 const failedReasonPreADR091NotResumable = "pre-adr-091-not-resumable"
 
 // SteerBootRecovery is ADR-091's boot operation. Its collaborators are the
-// published package boundaries from the landing order, so production and the
+// published pkg/steer package boundaries, so production and the
 // reboot fixture execute the same code against reopened durable stores.
 type SteerBootRecovery struct {
 	Lifecycle      *session.LifecycleStore

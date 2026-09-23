@@ -2,14 +2,14 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// ADR-091 WP-B — the shared per-boundary helper every landing-order §6 site
+// ADR-091 — the shared per-boundary helper every publication boundary
 // calls: resolve audience through the injected
 // steer.AudienceResolver, then call steer.BoundaryObserver.Observe BEFORE
 // the caller acts on the decision (I-5, FR-B-001, FR-B-014). One function,
 // reused by every boundary this package hosts directly. Boundaries hosted by
 // pkg/tools, pkg/channels, pkg/gateway and pkg/askuser call the injected
 // steer.AudienceResolver/BoundaryObserver directly, since those packages
-// cannot import this one (landing order §2).
+// cannot import this one.
 package agent
 
 import (
@@ -28,12 +28,11 @@ import (
 // wired). A nil observer defaults to steer.NopBoundaryObserver{} (the
 // production no-op).
 //
-// Called once at boot (landing order §7 "CP-0 publication": WP-A's
-// gateway_boot.go::wireSteerDeps builds the real implementations in files
-// WP-B/WP-D own; this setter is the one wiring line their real bodies still
-// need — pkg/steer.Deps carries no *AgentLoop back-reference, and
-// gateway_boot.go is not this package's file to edit). See this lane's
-// final report, "Requests to other owners", for the exact line to add.
+// Called once at boot: gateway_boot.go::wireSteerDeps builds the real
+// steer.AudienceResolver/BoundaryObserver/UpwardDeliverer implementations
+// and calls this setter to wire them in — pkg/steer.Deps carries no
+// *AgentLoop back-reference, so gateway_boot.go cannot set these fields
+// directly.
 func (al *AgentLoop) SetSteerAudienceDeps(resolver steer.AudienceResolver, observer steer.BoundaryObserver, deliverer steer.UpwardDeliverer) {
 	if observer == nil {
 		observer = steer.NopBoundaryObserver{}
