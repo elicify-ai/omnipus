@@ -1,13 +1,25 @@
 import { defineConfig } from '@playwright/test'
 
 // STORYBOOK_STATIC_DIR (e.g. `dist/storybook`) serves that directory with
-// Python's stdlib http.server instead of starting the Storybook dev server --
-// the appearance gate (screenshot.spec.ts) must never run against the dev
-// server (see that file's header comment for the 16-of-18-vs-18-of-18
-// evidence). Unset by default, so test:design-system:browser's existing
-// dev-server-by-default behavior is unchanged; test:design-system:screenshot
-// sets it in package.json/.github/workflows/pr.yml.
+// Python's stdlib http.server instead of starting the Storybook dev server.
+// Both suites in this config (browser.spec.ts and screenshot.spec.ts) must run
+// against the static build in CI, never the dev server: the dev server
+// compiles each story on first request, so under a parallel run it loses the
+// race (16-of-18 vs 18-of-18 evidence, see screenshot.spec.ts's header) and
+// is several times slower. Leaving STORYBOOK_STATIC_DIR unset on the browser
+// step is what made the design-system job hit its 45-minute ceiling on every
+// release/v0.1.1 run (2026-09-22/23): 897 of 1316 checks done, dev-server
+// "socket hang up" and missing-config-marker failures along the way. So under
+// CI the dev-server fallback is refused outright; it remains the default for
+// local runs only.
 const staticDir = process.env.STORYBOOK_STATIC_DIR
+if (process.env.CI && !staticDir && !process.env.STORYBOOK_URL) {
+  throw new Error(
+    'playwright.design-system.config.ts: CI must run the design-system suites against the static Storybook build. '
+    + 'Run `npm run build:storybook` and set STORYBOOK_STATIC_DIR=dist/storybook (or STORYBOOK_URL); '
+    + 'the on-demand-compiling dev server is too slow and flaky for the full check matrix.',
+  )
+}
 const defaultPort = staticDir ? 6007 : 6006
 const baseURL = process.env.STORYBOOK_URL ?? `http://127.0.0.1:${defaultPort}`
 
@@ -69,6 +81,13 @@ export default defineConfig({
   testMatch: ['browser.spec.ts', 'screenshot.spec.ts'],
   outputDir: 'test-results/design-system-browser-artifacts',
   timeout: 30_000,
+  // Whole-run budget under CI. A run that overruns stops here with
+  // Playwright's own "Timed out waiting ...s for the entire test run" and
+  // still writes the JSON report, instead of being killed by the job-level
+  // ceiling with no reason in the log. Kept below each step's timeout-minutes
+  // in .github/workflows/pr.yml (asserted by
+  // tests/design-system/ci-storybook-target.test.mjs).
+  globalTimeout: process.env.CI ? 25 * 60_000 : undefined,
   expect: { timeout: 5_000, ...screenshotExpect },
   retries: 0,
   fullyParallel: true,

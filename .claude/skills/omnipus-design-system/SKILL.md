@@ -297,7 +297,10 @@ depend on files earlier steps produce:
 6. `npm run build:storybook` — writes `dist/storybook` (rule 11).
 7. `npm run test:storybook`
 8. `npm run test:design-system:browser` — runs the manifest-generated Playwright checks
-   (rule 10).
+   (rule 10), with `STORYBOOK_STATIC_DIR=dist/storybook` (rule 11). Under `CI` the
+   Playwright config refuses to start the dev server and bounds the whole run with a
+   25-minute `globalTimeout`; `tests/design-system/ci-storybook-target.test.mjs` fails
+   if a workflow step drops the static target or its step budget.
 9. `npm run test:design-system:screenshot` — the appearance gate (issue #753): pixel
    screenshots of the static Storybook build, diffed against the committed darwin and
    linux baselines under `tests/design-system/screenshot.spec.ts-snapshots/`
