@@ -837,9 +837,10 @@ jobs:
       # eliminating Storybook's a11y instrumentation flakes (play/report lifecycle).
       # Both jobs (browser + screenshot) require the static build from this step,
       # so they must run after build:storybook.
-      - run: npm run verify:design-system
-      # Enforcement audit now runs in separate design-system-audit job after
-      # browser/screenshot tests complete (to collect evidence files).
+      # verify:design-system and the enforcement audit both read
+      # test-results/design-system-browser.json, which only exists after the
+      # design-system-browser matrix jobs finish and their per-project reports
+      # are merged — so both run in the design-system-audit job, not here.
       - run: npm run test:design-system:package
       # Build both revisions on this runner; a macOS baseline is not a Linux budget oracle.
       - name: Checkout immutable production baseline
@@ -1008,6 +1009,11 @@ jobs:
             fi
           done
           echo "All evidence files present and ready for audit."
+        env:
+          CI: "true"
+
+      - name: Verify design-system manifests against the executed evidence
+        run: npm run verify:design-system
         env:
           CI: "true"
 

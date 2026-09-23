@@ -21,12 +21,10 @@ import yaml from 'js-yaml'
 
 const config = resolve('playwright.design-system.config.ts')
 const workflow = yaml.load(readFileSync(resolve('.github/workflows/pr.yml'), 'utf8'))
-const mainJob = workflow.jobs['design-system']
 const browserJob = workflow.jobs['design-system-browser']
 const screenshotJob = workflow.jobs['design-system-screenshot']
 const browserSuiteRegex = /test:design-system:browser\b|playwright.*--project=/
 const screenshotSuiteRegex = /test:design-system:screenshot\b/
-const playwrightSuite = /test:design-system:(browser|screenshot)\b|playwright\.design-system\.config/
 
 function loadConfig(env) {
   const script = `const m = await import(${JSON.stringify(config)}); process.stdout.write(JSON.stringify({ webServer: m.default.webServer ?? null, globalTimeout: m.default.globalTimeout ?? null, baseURL: m.default.use?.baseURL }))`
@@ -164,5 +162,30 @@ test('audit collects all five required evidence files before running', () => {
     const basename = file.split('/').pop()
     assert.ok(mergeStep.run.includes(basename) || mergeStep.run.includes(file),
       `merge step must handle evidence file ${file}`)
+  }
+})
+
+test('every step that reads design-system-browser.json runs only after the browser evidence is merged', () => {
+  // verify:design-system and audit:design-system both read
+  // test-results/design-system-browser.json. That file only exists in the
+  // design-system-audit job, after merge-browser-evidence.mjs. Running either
+  // script in any other job fails with ENOENT (release/v0.1.1 run 35867017610).
+  const pkg = JSON.parse(readFileSync(resolve('package.json'), 'utf8'))
+  const readers = Object.entries(pkg.scripts)
+    .filter(([, cmd]) => cmd.includes('design-system-browser.json'))
+    .map(([name]) => name)
+  assert.ok(readers.includes('verify:design-system') && readers.includes('audit:design-system'),
+    `expected verify:design-system and audit:design-system to read the browser evidence, got ${readers.join(', ')}`)
+  for (const [jobName, job] of Object.entries(workflow.jobs)) {
+    const steps = job.steps ?? []
+    steps.forEach((step, index) => {
+      const run = step.run ?? ''
+      for (const reader of readers) {
+        if (!new RegExp(`npm run ${reader.replace(/[:]/g, '\\:')}\\b`).test(run)) continue
+        assert.equal(jobName, 'design-system-audit', `${reader} runs in job ${jobName}; it must run in design-system-audit`)
+        const mergedBefore = steps.slice(0, index).some((s) => (s.run ?? '').includes('merge-browser-evidence.mjs'))
+        assert.ok(mergedBefore, `${reader} runs before merge-browser-evidence.mjs in ${jobName}`)
+      }
+    })
   }
 })
