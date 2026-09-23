@@ -42,21 +42,36 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Warning, ShieldCheck, SpinnerGap } from '@phosphor-icons/react'
 import { fetchGodMode, setGodMode, getErrorMessage } from '@/lib/api'
+import { isApiError } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
 import { Button } from '@/components/ui/button'
 import { useStepUp } from './useStepUp'
 import { isReAuthCancelled } from './useReAuthGate'
 import { GatewayRestartModal } from './GatewayRestartModal'
 
+// GET /api/v1/gateway/god-mode is gated by adminWrap (withAuth →
+// RequireNotBypass) — pkg/gateway/rest_god_mode.go:49. Under
+// gateway.dev_mode_bypass=true, RequireNotBypass returns 503 BEFORE the
+// handler runs (pkg/gateway/middleware/bypass_gate.go), every single time —
+// not an outage, an expected "this surface is disabled while bypass is
+// active" response. Treating that 503 the same as a transport failure
+// produced a permanent, false "gateway may be offline" banner on every
+// screen for any dev-mode-bypass install. A genuine failure (network down,
+// 500, anything else) must still surface normally.
+function isBypassUnavailable(err: unknown): boolean {
+  return isApiError(err) && err.status === 503
+}
+
 export function GodModeControl() {
   const { addToast } = useUiStore()
   const stepUp = useStepUp()
   const queryClient = useQueryClient()
 
-  const { data: godMode, isLoading, isError } = useQuery({
+  const { data: godMode, isLoading, isError, error } = useQuery({
     queryKey: ['god-mode'],
     queryFn: fetchGodMode,
   })
+  const bypassUnavailable = isBypassUnavailable(error)
 
   // Opened when setGodMode reports restart_required=true (enabling from a
   // boot that was not yet authorized). Never opens for a disable.
@@ -139,9 +154,9 @@ export function GodModeControl() {
         confirmLabel: next ? 'Enable god mode' : 'Disable god mode',
       })
       .catch((err: unknown) => {
-        // A cancelled gate sent nothing; a real failure already toasted in
-        // the mutation's onError. Nothing else to undo.
-        if (!isReAuthCancelled(err)) return
+        // A cancelled gate sent nothing — stay silent. A real failure already
+        // toasted once via applyChangeAsync's own onError; do not toast twice.
+        if (isReAuthCancelled(err)) return
       })
   }
 
@@ -229,7 +244,15 @@ export function GodModeControl() {
                 rather than depending on the element itself being inserted. At
                 most one of the three conditions below is ever true at once. */}
             <div id="god-mode-status-note" aria-live="polite">
-              {isError && (
+              {bypassUnavailable && (
+                <p
+                  data-testid="god-mode-bypass-unavailable-note"
+                  className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic"
+                >
+                  Not available while development-mode bypass is active.
+                </p>
+              )}
+              {isError && !bypassUnavailable && (
                 <p
                   data-testid="god-mode-fetch-error-note"
                   className="text-[length:var(--type-caption-size)] text-[var(--color-error)]"
@@ -350,10 +373,11 @@ export function GodModeActiveBanner() {
   const stepUp = useStepUp()
   const queryClient = useQueryClient()
 
-  const { data: godMode, isError } = useQuery({
+  const { data: godMode, isError, error } = useQuery({
     queryKey: ['god-mode'],
     queryFn: fetchGodMode,
   })
+  const bypassUnavailable = isBypassUnavailable(error)
 
   const enabled = godMode?.enabled === true
 
@@ -381,7 +405,9 @@ export function GodModeActiveBanner() {
         confirmLabel: 'Disable god mode',
       })
       .catch((err: unknown) => {
-        if (!isReAuthCancelled(err)) return
+        // A cancelled gate sent nothing — stay silent. A real failure already
+        // toasted once via disableAsync's own onError; do not toast twice.
+        if (isReAuthCancelled(err)) return
       })
   }
 
@@ -392,6 +418,14 @@ export function GodModeActiveBanner() {
   // never silently look like "sandboxing is definitely on" — that is exactly
   // the moment an operator most needs a signal, not silence.
   if (!enabled && !isError) return null
+
+  // Under dev_mode_bypass the god-mode status endpoint always 503s
+  // (RequireNotBypass fires before the handler runs) — an expected
+  // "unavailable in this mode" response, not a real outage. Rendering the
+  // "gateway may be offline" warning here would put a false alarm on every
+  // screen for the lifetime of any dev-mode-bypass install. Say nothing;
+  // the dedicated dev-mode-bypass banner (AppShell) already covers this case.
+  if (bypassUnavailable) return null
 
   if (isError) {
     return (
