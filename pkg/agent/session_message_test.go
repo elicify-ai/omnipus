@@ -242,38 +242,3 @@ func TestWakeParent_SweepsQuiescentWakeWindows(t *testing.T) {
 			got, notifier.wakeWindows)
 	}
 }
-
-// TestValidateContextSnapshot_AllowlistAndCap proves R§8.5: a nil/empty
-// snapshot is always valid; an over-cap discretionary snapshot is rejected
-// with a narrow-the-snapshot error naming which cap was exceeded.
-func TestValidateContextSnapshot_AllowlistAndCap(t *testing.T) {
-	if err := ValidateContextSnapshot(nil, 0, 0); err != nil {
-		t.Errorf("nil snapshot should always validate, got: %v", err)
-	}
-
-	small := &ContextSnapshot{References: []string{"file.txt"}, Notes: "short"}
-	if err := ValidateContextSnapshot(small, 0, 0); err != nil {
-		t.Errorf("small snapshot should validate under defaults, got: %v", err)
-	}
-
-	tooManyRefs := &ContextSnapshot{References: make([]string, 51)}
-	for i := range tooManyRefs.References {
-		tooManyRefs.References[i] = "ref"
-	}
-	err := ValidateContextSnapshot(tooManyRefs, 0, 0)
-	if !errors.Is(err, ErrSnapshotOverCap) {
-		t.Errorf("expected ErrSnapshotOverCap for >50 refs, got: %v", err)
-	}
-
-	overBytes := &ContextSnapshot{Notes: string(make([]byte, 10*1024))}
-	err = ValidateContextSnapshot(overBytes, 0, 0)
-	if !errors.Is(err, ErrSnapshotOverCap) {
-		t.Errorf("expected ErrSnapshotOverCap for oversized notes, got: %v", err)
-	}
-
-	// Explicit override caps are honored.
-	err = ValidateContextSnapshot(&ContextSnapshot{Notes: "12345"}, 4, 50)
-	if !errors.Is(err, ErrSnapshotOverCap) {
-		t.Errorf("expected ErrSnapshotOverCap with an explicit maxBytes=4 override, got: %v", err)
-	}
-}

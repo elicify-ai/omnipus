@@ -168,9 +168,8 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	// site's comment for why the ORDER relative to Finish is load-bearing
 	// (FIX 1/5c live-verification finding).
 
-	// Inject turnState and AgentLoop into context so tools (e.g. delegate) can retrieve them.
+	// Inject turnState into context so tools (e.g. delegate) can retrieve it.
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = withTurnState(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts)
-	rc.rx.rr.rq.ri.rf.rt.turnCtx = WithAgentLoop(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.al)
 	// SEC-15: Inject agent ID so audit entries carry the agent identity.
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithAgentID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.agent.ID)
 	// Inject session key so switch_agent can address the session.
