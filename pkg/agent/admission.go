@@ -6,12 +6,16 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // ====================== FR-068: the live memory gate ======================
@@ -450,8 +454,32 @@ func (al *AgentLoop) drainSteerQueue(sessionID string, generation int) {
 	}
 	go func() {
 		if _, err := al.dispatchSteeredSessionReserved(context.Background(), next.sessionID, next.generation); err != nil {
-			logger.WarnCF("agent", "steer: drain queue: dispatch of the next queued session failed",
+			if classifyDrainDispatchError(err) {
+				logger.InfoCF("agent", "steer: drain queue: promoted session was no longer dispatchable (legitimate)",
+					map[string]any{"session_id": next.sessionID, "generation": next.generation, "error": err.Error()})
+				return
+			}
+			// Finding 6 (ADR-091 fix lane 2): the promoted entry is already
+			// out of the queue and its slot went to someone else — on any
+			// OTHER dispatch error (I/O failure, a lost race) the record is
+			// left neither queued, running, terminal nor failed unless we
+			// land it here, so its own parent's hasRunningOrQueuedDescendant
+			// check is not blocked forever on a worker that will never run.
+			logger.WarnCF("agent", "steer: drain queue: dispatch of the next queued session failed — landing it terminal so its parent is not blocked forever",
 				map[string]any{"session_id": next.sessionID, "generation": next.generation, "error": err.Error()})
+			al.reportSteeredSessionTerminalUpward(context.Background(), next.sessionID, next.generation,
+				session.LifecycleFailed, steer.OutcomeFailed, fmt.Sprintf("dispatch_failed: %v", err))
 		}
 	}()
+}
+
+// classifyDrainDispatchError reports whether err is one of the three
+// legitimate "not dispatchable right now" outcomes I-6's reserveDispatch
+// produces (ErrDispatchCancelled/ErrTerminal/ErrStaleGeneration) — expected,
+// logged at Info — versus anything else, which drainSteerQueue must not let
+// silently strand the record (Finding 6).
+func classifyDrainDispatchError(err error) bool {
+	return errors.Is(err, steer.ErrDispatchCancelled) ||
+		errors.Is(err, steer.ErrTerminal) ||
+		errors.Is(err, steer.ErrStaleGeneration)
 }

@@ -1,9 +1,12 @@
-// Owner: WP-D (landing order §7: "the WP-A lane writes the compiled no-op
-// bodies for the interfaces WP-B and WP-D later implement, in files named
-// for their owners ... ownership of those files passes to WP-B and WP-D at
-// CP-0"). WP-A (this lane) writes this file's CP-0 stub bodies only; WP-D
-// replaces them with the real I-6 cascade, reservation and revival at CP-3.
-// Do not add production logic here after CP-0 — that is WP-D's.
+// steer_cancel.go implements ADR-091 I-6: SteerCanceller.CancelSubtree/
+// StopSubtree walk the durable steering edge, stamp a Stop marker on every
+// reachable non-terminal descendant under the stopped node's own cascade
+// lock, and cancel each live turn with the stamped generation;
+// SteerCanceller.Revive increments a stopped or terminal session's
+// generation under the same record lock so a newer instruction — the ONLY
+// thing that may, per the founder's decision (Q17/D8) — can bring it back.
+// See pkg/agent/CLAUDE.md's "Delegation" section for this file's place among
+// the other three ADR-091 implementation files. Owned by ADR-091 fix lane 2.
 
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
@@ -18,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -52,7 +56,20 @@ type RevivalStateWriter func(ctx context.Context, sessionID string, generation i
 
 // SteerGenerationCancel adapts the active-turn registry to the durable
 // generation-aware cancellation contract used by SteerCanceller.
-func (al *AgentLoop) SteerGenerationCancel(_ context.Context, sessionID string, generation int) (GenerationCancelResult, error) {
+func (al *AgentLoop) SteerGenerationCancel(ctx context.Context, sessionID string, generation int) (GenerationCancelResult, error) {
+	// [Finding 4, ADR-091 fix lane 2] This is the ONE cancelTurn callback the
+	// cascade invokes for every reached (stamped) session — a human's Stop
+	// (websocket_cancel.go/rest_sessions.go, always via CancelSubtree) and
+	// the agent's own hard delegate(cancel) alike. admission.go::
+	// removeQueuedSession exists so a cancelled worker stops counting toward
+	// queue positions reported to a model and shown in the side panel; before
+	// this it was called only from the agent's own soft/hard cancel
+	// (steer_delegate_cancel.go), never from a human's Stop. Draining here —
+	// inside the cascade's per-node step, not one caller — covers both
+	// without a second call site, and is a harmless no-op for a session that
+	// was never queued.
+	al.steerAdmission().removeQueuedSession(sessionID)
+
 	ok, reason := al.requestCancelForGeneration(sessionID, generation)
 	if ok {
 		return GenerationCancelResult{Found: true, Cancelled: true}, nil
@@ -60,6 +77,10 @@ func (al *AgentLoop) SteerGenerationCancel(_ context.Context, sessionID string, 
 	if strings.HasPrefix(reason, "stale generation:") {
 		return GenerationCancelResult{Found: true, SkippedNewerGeneration: true}, nil
 	}
+	// [Finding 5, ADR-091 fix lane 2] No live turn was found for this
+	// stamped session — it was only ever queued or parked and never ran a
+	// turn, so nothing else will ever terminalise it or report it upward.
+	al.terminaliseNeverRanStop(ctx, sessionID, generation)
 	return GenerationCancelResult{}, nil
 }
 
@@ -81,6 +102,102 @@ func (al *AgentLoop) WriteSteerRevivalState(_ context.Context, sessionID string,
 		al.deliverSubagentState(rec.SteeredBy.SteeringSessionID, rec, string(session.LifecycleRunning))
 	}
 	return nil
+}
+
+// reportSteeredSessionTerminalUpward lands sessionID terminal at nextState
+// and, if it has a steering parent, delivers ONE upward event carrying
+// outcome and failureReason first — mirroring completeSteeredTurn's own
+// ordering (steer_completion.go: "Delivery is deliberately first; boot
+// recovery can repair a delivered-but-not-terminal record, while
+// terminal-first could lose the only copy of the child's result").
+//
+// Shared by two dead ends nothing else on the ADR-091 completion path ever
+// visits, because both describe a session with no turnResult to build a
+// normal completion from:
+//   - Finding 5: a Stop cascade reached a session that was only ever queued
+//     or parked — it never ran a turn, so completeSteeredTurn's own
+//     post-turn-exit call site never fires for it.
+//   - Finding 6: a queued session's promotion inside drainSteerQueue's
+//     dispatch goroutine failed outright (a non-cancellation error) before
+//     a turn ever started.
+//
+// Refuses (silently, logging at WARN on a real failure) whenever the record
+// has already moved past generation, is already terminal, or the upward
+// delivery itself fails — never overwrites state it cannot also report.
+func (al *AgentLoop) reportSteeredSessionTerminalUpward(
+	ctx context.Context, sessionID string, generation int,
+	nextState session.LifecycleState, outcome steer.Outcome, failureReason string,
+) {
+	if al == nil {
+		return
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		return
+	}
+	if rec.Generation != generation || rec.Terminal() {
+		return
+	}
+	if rec.SteeredBy != nil {
+		message, merr := al.completionMessage(rec, outcome, "", failureReason)
+		if merr != nil {
+			logger.WarnCF("agent", "steer: terminal report: build upward message failed",
+				map[string]any{"session_id": sessionID, "error": merr.Error()})
+		} else if deliverer := al.getUpwardDeliverer(); deliverer != nil {
+			if _, derr := deliverer.Deliver(ctx, steer.UpwardEvent{
+				ChildSessionID: sessionID, Outcome: outcome, Message: message,
+			}); derr != nil {
+				logger.WarnCF("agent", "steer: terminal report: deliver upward event failed",
+					map[string]any{"session_id": sessionID, "error": derr.Error()})
+			}
+		} else {
+			logger.WarnCF("agent", "steer: terminal report: no upward deliverer wired",
+				map[string]any{"session_id": sessionID})
+		}
+	}
+	rec.State = nextState
+	rec.NeedsInput = nil
+	if nextState == session.LifecycleFailed {
+		rec.FailedReason = failureReason
+	}
+	if err := lifecycle.Persist(rec); err != nil {
+		logger.WarnCF("agent", "steer: terminal report: persist terminal state failed",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return
+	}
+	if rec.SteeredBy != nil {
+		al.completeWaitingAncestors(ctx, rec.SteeringSessionID())
+	}
+}
+
+// terminaliseNeverRanStop closes Finding 5's gap: SteerGenerationCancel found
+// no live turn to cancel for a session this cascade just stamped Stop for —
+// it was only ever queued or parked and never ran a turn, so nothing will
+// ever produce the upward "interrupted:" event a RUNNING child's own
+// cancelled turn delivers via completeSteeredTurn. Without this, the
+// session's own parent (hasRunningOrQueuedDescendant, steer_completion.go)
+// keeps seeing a queued/needs_input descendant forever and never completes.
+func (al *AgentLoop) terminaliseNeverRanStop(ctx context.Context, sessionID string, generation int) {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		return
+	}
+	// Only a session THIS Stop actually stamped, still sitting at the
+	// generation it was stamped for — a concurrent Revive landing in the
+	// meantime must not be clobbered.
+	if rec.Generation != generation || rec.Terminal() || rec.Stop == nil || rec.Stop.Generation != generation {
+		return
+	}
+	al.reportSteeredSessionTerminalUpward(ctx, sessionID, generation,
+		session.LifecycleCancelled, steer.OutcomeInterrupted, "interrupted: the session was cancelled")
 }
 
 // NewSteerCanceller builds the I-6 Canceller. cancelTurn is optional only so
