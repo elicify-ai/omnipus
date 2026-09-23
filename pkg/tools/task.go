@@ -672,6 +672,14 @@ func (t *TaskCreateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskCreateTool) Description() string {
 	return "Create a task and assign it to an agent for execution.\n" +
+		"Choosing between these: delegate hands work to another agent now and returns immediately — use " +
+		"it when you need the result inside this conversation. create_task files work as a card on the " +
+		"board that runs on its own and is judged against its goal — use it for work that outlives this " +
+		"conversation or that someone should see. A plan is for long-running, complex implementations and " +
+		"higher-level planning: several tasks with an order and dependencies between them, and an agent " +
+		"working on one of those tasks can itself delegate further. If the work is a single lookup or one " +
+		"action you can do yourself, just do it — starting a child costs time and one of a limited number " +
+		"of concurrent slots. " +
 		"This is a DELEGATION: it passes the same delegation-policy gate (trust set + modes + depth) as " +
 		"any other delegation, and is refused if you are not authorized to delegate to the assignee. " +
 		"criteria AND dod are BOTH REQUIRED: at least one acceptance criterion and at least one " +
