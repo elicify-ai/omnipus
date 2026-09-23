@@ -383,6 +383,45 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 // live-turn signal steer_audience.go's Deliver already uses to decide
 // in-turn-queue vs. async wake — a `running` record with no live turn is
 // idle, not executing, and must not block its parent's completion.
+//
+// TASK-ORIGIN EXCLUSION (round-2 correctness fix, coordinator-caught):
+// al.getActiveTurnState is keyed by turnState.sessionKey, which is NOT
+// always the LifecycleRecord's own SessionID. steer_launcher.go::
+// dispatchSteeredSessionWithReservation's task-origin branch
+// (rec.Origin.Kind == session.OriginKindTask) never calls
+// registerTurnIfAbsent at all — it hands off to
+// TaskExecutor.dispatchLaunchedTask, which runs the turn through
+// processTaskDirect/processTaskDirectExternalCLI
+// (task_executor_run.go) under sessionKey =
+// fmt.Sprintf("agent:%s:task:%s", t.AgentID, t.ID) — a DIFFERENT string
+// than the child's own SessionID. So for a task-origin child,
+// getActiveTurnState(child.SessionID) returns nil UNCONDITIONALLY, for
+// the entire lifetime of its first (and typically only) turn, whether or
+// not that turn is genuinely still executing — not a narrow race window,
+// a permanent miss. Treating that nil as "idle" would let a parent
+// complete WHILE its task-origin child is still genuinely running,
+// producing a silently wrong/premature answer — strictly worse than the
+// hang this lane fixes. Reconstructing that "agent:...:task:..." key here
+// to look it up under the right name was considered and rejected: the
+// format string is owned by task_executor_run.go (outside this lane's 3
+// owned files) and duplicating it as a correctness-critical signal would
+// silently reopen this exact hole the moment that format ever changes,
+// with no compiler or test in THIS package able to catch the drift.
+// Every non-task-origin dispatch path this lane found (the generic
+// steer_launcher.go Path B AND the wake/follow-up re-entry path,
+// loop_inbound.go's processSteeredSystemWake) calls registerTurnIfAbsent
+// BEFORE writing LifecycleRunning, using the record's own SessionID —
+// getActiveTurnState is a reliable signal there, so only task-origin
+// children fall back to the old, safe, unconditional-block rule. This
+// means a task-origin child stuck `running` after its OWN tool-iteration
+// notice still blocks its parent's completion (a narrower version of the
+// original bug, scoped to that one origin kind) — the parent IS still
+// correctly woken (message_inbox.go's classifyEnvelope fix is
+// origin-agnostic), it just cannot yet complete past that child. Closing
+// that fully needs task_executor_run.go to register under the child's
+// own SessionID (or a new durable LifecycleRecord field) — both outside
+// this lane's owned files; flagged in this lane's final report rather
+// than worked around with a fragile duplicated string.
 func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error) {
 	lifecycle := al.GetSessionLifecycleStore()
 	seen := map[string]bool{parentID: true}
@@ -404,6 +443,13 @@ func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error)
 			case session.LifecycleQueued:
 				return true, nil
 			case session.LifecycleRunning:
+				taskOrigin := child.Origin != nil && child.Origin.Kind == session.OriginKindTask
+				if taskOrigin {
+					// No reliable liveness signal for this origin kind
+					// (see the task-origin exclusion note above) — fall
+					// back to the old, safe, unconditional block.
+					return true, nil
+				}
 				if ts := al.getActiveTurnState(child.SessionID); ts != nil && ts.IsAlive() {
 					return true, nil
 				}
