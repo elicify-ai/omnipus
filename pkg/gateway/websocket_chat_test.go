@@ -59,6 +59,14 @@ func TestHandleChatMessage_AcknowledgesPersistenceBeforeTurnStart(t *testing.T) 
 
 	frames := readMessageStatusFrames(t, wc, 1)
 	require.Equal(t, "received", frames[0].State)
+	// #823 Lane A: the "working" tick is now published through the session
+	// hub to every connection bound to the session (the pending entry no
+	// longer remembers the sender's *wsConn — review finding 12). This
+	// harness drives handleChatMessageWithClientID without the real accept
+	// loop, which is what registers the sender in h.sessions in production
+	// (ServeHTTP) — mirror that registration, exactly as
+	// TestQueueWorkingStatus_FansOutToAllSessionConnections does.
+	bindTestConnToSession(handler, "chat-message-status", frames[0].SessionId, wc)
 	_, ok := handler.GetStreamer(context.Background(), "webchat", "chat-message-status", frames[0].SessionId)
 	require.True(t, ok)
 	frames = append(frames, readMessageStatusFrames(t, wc, 1)...)

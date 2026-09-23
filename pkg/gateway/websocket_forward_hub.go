@@ -86,14 +86,27 @@ func (h *WSHandler) hubResolveSessionIDForChat(chatID string) string {
 }
 
 // hubPublishAndDeliver numbers frame through sessionID's hub and delivers
-// the resulting seq-stamped bytes to every connection currently resolved
-// for that session (BE-DESIGN.md §1.1/§1.2) — one hub.publishBytes call
-// regardless of how many tabs are attached, mirroring
-// wsStreamer.Update/Finalize's transitional delivery pattern. A no-op when
-// sessionID is empty (nothing to number against) or the registry is unset
-// (a bare test fixture).
+// the resulting seq-stamped bytes to every connection currently bound to
+// that session (BE-DESIGN.md §1.1/§1.2) — one publish regardless of how
+// many tabs are attached. A no-op when sessionID is empty (nothing to
+// number against) or the registry is unset (a bare test fixture).
 func (h *WSHandler) hubPublishAndDeliver(sessionID, frameType string, frame []byte) {
+	h.hubPublishAndDeliverAlsoTo(sessionID, frameType, frame, nil)
+}
+
+// hubPublishAndDeliverAlsoTo is hubPublishAndDeliver plus BE-DESIGN.md
+// §1.4's alsoUnsequencedTo=conn rule: when alsoTo is non-nil and is NOT one
+// of the session's delivery targets, it additionally receives the frame
+// WITHOUT a seq. This is for the one connection that must see a frame even
+// while it is not (yet, or any more) bound to the frame's session — the tab
+// that sent a message or pressed Stop. An unsequenced frame never moves a
+// client's cursor (§6.2), so the extra copy can never create a gap or a
+// duplicate position.
+func (h *WSHandler) hubPublishAndDeliverAlsoTo(sessionID, frameType string, frame []byte, alsoTo *wsConn) {
 	if sessionID == "" || h.hubs == nil {
+		if alsoTo != nil {
+			sendRawFrameBytes(alsoTo, frameType, frame)
+		}
 		return
 	}
 	hub := h.hubs.getOrCreate(sessionID)
@@ -101,9 +114,29 @@ func (h *WSHandler) hubPublishAndDeliver(sessionID, frameType string, frame []by
 	h.mu.Lock()
 	targets := h.resolveSessionConnsLocked("", sessionID)
 	h.mu.Unlock()
+	alsoToIsTarget := false
 	for _, conn := range targets {
+		if conn == alsoTo {
+			alsoToIsTarget = true
+		}
 		sendRawFrameBytes(conn, frameType, out)
 	}
+	if alsoTo != nil && !alsoToIsTarget {
+		sendRawFrameBytes(alsoTo, frameType, frame)
+	}
+}
+
+// hubPublishFrame marshals a generated frame struct and publishes it through
+// sessionID's hub via hubPublishAndDeliverAlsoTo. Marshal failures are
+// logged, never panicked on — a frame that cannot be encoded is a
+// programming error, and the turn that produced it must keep running.
+func (h *WSHandler) hubPublishFrame(sessionID, frameType string, frame any, alsoTo *wsConn) {
+	data, err := json.Marshal(frame)
+	if err != nil {
+		slog.Error("ws: marshal frame for hub failed", "type", frameType, "session_id", sessionID, "error", err)
+		return
+	}
+	h.hubPublishAndDeliverAlsoTo(sessionID, frameType, data, alsoTo)
 }
 
 // hubBroadcastWithSequencedCopy implements BE-DESIGN.md §1.4's

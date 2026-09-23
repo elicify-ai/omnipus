@@ -94,9 +94,13 @@ type wsHandlerHandleChatMessage struct {
 	admitted            bool
 }
 
+// pendingMessageStatus is one persisted user message still waiting for its
+// turn to open a streamer (the received→working tick). #823 (BE-DESIGN.md
+// §1.2, review finding 12): it no longer holds the sending *wsConn — the
+// "working" tick is published through the session hub to every bound tab,
+// so nothing here keeps a dead connection alive in memory.
 type pendingMessageStatus struct {
 	clientMessageID string
-	wc              *wsConn
 }
 
 // handleChatMessage mints a new session when frame.SessionID is empty, records
@@ -291,7 +295,7 @@ func (hcm *wsHandlerHandleChatMessage) queueWorkingStatus() {
 	}
 	hcm.h.pendingMessageStatuses[hcm.sessionID] = append(
 		hcm.h.pendingMessageStatuses[hcm.sessionID],
-		pendingMessageStatus{clientMessageID: hcm.clientMessageID, wc: hcm.wc},
+		pendingMessageStatus{clientMessageID: hcm.clientMessageID},
 	)
 	hcm.h.mu.Unlock()
 }
@@ -301,7 +305,7 @@ func (hcm *wsHandlerHandleChatMessage) removeQueuedWorkingStatus() bool {
 	defer hcm.h.mu.Unlock()
 	queue := hcm.h.pendingMessageStatuses[hcm.sessionID]
 	for index, pending := range queue {
-		if pending.clientMessageID != hcm.clientMessageID || pending.wc != hcm.wc {
+		if pending.clientMessageID != hcm.clientMessageID {
 			continue
 		}
 		queue = append(queue[:index], queue[index+1:]...)
@@ -376,53 +380,73 @@ func (h *WSHandler) flushPendingMessageStatusesAsWorking(sessionID string) {
 	}
 }
 
-// sendPendingMessageWorking delivers the "working" status to EVERY connection
-// currently bound to sessionID — not just pending.wc (the connection that
-// originally sent the message). Review finding 12: on a kept-chat reconnect,
-// pending.wc is the ORIGINAL (often now-dead) connection; a tab that
-// reconnected under a NEW chatID is bound to the same session via
-// h.sessionIDs but would otherwise never see the tick flip past "Received".
-// h (not just the session id) is threaded through so this can resolve the
-// current connection set under h.mu, matching every other webchat delivery
-// path (see resolveSessionConnsLocked's doc comment).
+// sendPendingMessageWorking publishes the "working" status for pending
+// through sessionID's hub (#823 BE-DESIGN.md §1.2): every tab bound to the
+// session receives it with a sequence number — the original sender, a
+// reconnected tab under a new chat id, and a second tab alike (review
+// finding 12). h is nil only for a bare test fixture, which has no hub.
 func sendPendingMessageWorking(h *WSHandler, sessionID string, pending pendingMessageStatus) {
-	frame := generated.MessageStatusFrame{
+	if h == nil {
+		return
+	}
+	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
 		Type:            string(generated.WsFrameTypeMessageStatus),
 		SessionId:       sessionID,
 		ClientMessageId: pending.clientMessageID,
 		State:           "working",
-	}
-	if h == nil {
-		// No handler to resolve the session's connection set — fall back to
-		// the originating connection only (defensive; not reached in
-		// production, where GetStreamer/sendDone always pass a real h).
-		sendConnGenFrame(pending.wc, string(generated.WsFrameTypeMessageStatus), frame)
-		return
-	}
-	h.mu.Lock()
-	targets := h.resolveSessionConnsLocked("", sessionID)
-	h.mu.Unlock()
-	if len(targets) == 0 && pending.wc != nil {
-		// No connection resolved via h.sessionIDs yet (e.g. a race right at
-		// mint time) — still deliver to the connection that sent the
-		// message rather than silently dropping the tick.
-		targets = []*wsConn{pending.wc}
-	}
-	for _, conn := range targets {
-		sendConnGenFrame(conn, string(generated.WsFrameTypeMessageStatus), frame)
-	}
+	}, nil)
 }
 
+// sendMessageStatus publishes a received/working/failed tick for this
+// message through the session hub, so every tab bound to the session sees
+// it (#823 BE-DESIGN.md §1.2). The sending connection additionally gets an
+// unsequenced copy when it is not bound to the session (e.g. a "failed"
+// tick for a message rejected before any bind) — it is the one tab whose
+// pending bubble is waiting on this exact tick.
 func (hcm *wsHandlerHandleChatMessage) sendMessageStatus(state string) {
 	if hcm.clientMessageID == "" || hcm.sessionID == "" {
 		return
 	}
-	sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
+	hcm.h.hubPublishFrame(hcm.sessionID, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
 		Type:            string(generated.WsFrameTypeMessageStatus),
 		SessionId:       hcm.sessionID,
 		ClientMessageId: hcm.clientMessageID,
 		State:           state,
-	})
+	}, hcm.wc)
+}
+
+// publishUserMessage echoes a just-persisted user message to every tab
+// bound to the session as a numbered user_message frame (#823 founder
+// decision Q1, BE-DESIGN.md §4.7). The sender's SPA moves its pending
+// bubble (matched by client_message_id) into history at this frame's
+// position; every other tab inserts it there. Published strictly AFTER the
+// transcript append succeeded, so a snapshot read taken after a later
+// attach can never miss a message whose frame it already consumed.
+func (hcm *wsHandlerHandleChatMessage) publishUserMessage(entry session.TranscriptEntry) {
+	frame := generated.UserMessageFrame{
+		Type:      string(generated.WsFrameTypeUserMessage),
+		SessionId: hcm.sessionID,
+		Id:        entry.ID,
+		Content:   entry.Content,
+		Timestamp: entry.Timestamp.UTC().Format(time.RFC3339Nano),
+	}
+	if entry.AgentID != "" {
+		aid := entry.AgentID
+		frame.AgentId = &aid
+	}
+	if entry.ClientMessageID != "" {
+		cid := entry.ClientMessageID
+		frame.ClientMessageId = &cid
+	}
+	for _, a := range entry.Attachments {
+		frame.Attachments = append(frame.Attachments, struct {
+			MimeType string `json:"mime_type"`
+			Path     string `json:"path"`
+			Size     int64  `json:"size"`
+			Type     string `json:"type"`
+		}{MimeType: a.MIMEType, Path: a.Path, Size: a.Size, Type: a.Type})
+	}
+	hcm.h.hubPublishFrame(hcm.sessionID, string(generated.WsFrameTypeUserMessage), frame, hcm.wc)
 }
 
 // resolveTargetAgent resolves the target agent from the frame's agent_id (default-agent fallbacks included) and rejects worker agents and targets that resolve to nothing.
@@ -904,10 +928,23 @@ func (hcm *wsHandlerHandleChatMessage) recordSessionAndTranscript() bool {
 				// see turnContent — never by this entry or by `content`.
 				entry.Content = "Workspace setup started."
 			}
+			if !hcm.setupKickoff {
+				// #823 BE-DESIGN.md §4.7: the persisted user entry carries the
+				// client's own message id, so replay (replay_message.
+				// client_message_id) and the live user_message echo can both
+				// reconcile the sender's pending bubble — no duplicate, and
+				// never a bubble stranded above history.
+				entry.ClientMessageID = hcm.clientMessageID
+			}
 			if err := hcm.store.AppendTranscript(hcm.sessionID, entry); err != nil {
 				slog.Warn("ws: could not record user message", "session_id", hcm.sessionID, "error", err)
 			} else {
 				hcm.transcriptPersisted = true
+				// A kickoff trigger is a system-role pill, not a user
+				// message — it is never echoed as one.
+				if !hcm.setupKickoff {
+					hcm.publishUserMessage(entry)
+				}
 			}
 			// The workspace.setup_consumed audit entry is emitted further
 			// below, AFTER a successful bus publish — not here. Emitting it

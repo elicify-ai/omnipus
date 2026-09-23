@@ -4,7 +4,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -13,29 +12,20 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// sendCancelStageFrame marshals a generated.CancelStageFrame and delivers it via wc.sendCh.
-// Mirrors sendConnGenFrame's non-critical send path (immediate try, then 10ms/50ms
-// backoffs) but is non-critical so it does not use sendConnGenFrame's critical-frame
-// timeout path. Best-effort: marshal/send errors are logged at debug level and do not
-// block the cancel state machine.
-func sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
-	if wc == nil {
-		return
-	}
-	data, err := json.Marshal(generated.CancelStageFrame{
+// sendCancelStageFrame publishes a cancel_stage frame for sessionID through
+// the session hub (#823 BE-DESIGN.md §1.2): every tab bound to the session
+// sees the Stop's progress, with a sequence number, not only the tab that
+// pressed Stop. The requesting connection wc (nil for a connection-less
+// cancel) additionally gets an unsequenced copy when it is not bound to
+// sessionID itself (§1.4 alsoUnsequencedTo=conn) — e.g. a Stop issued for a
+// delegated child session the requesting tab is not attached to.
+// Best-effort: never blocks the cancel state machine.
+func (h *WSHandler) sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
+	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeCancelStage), generated.CancelStageFrame{
 		Type:      string(generated.WsFrameTypeCancelStage),
 		SessionId: sessionID,
 		Stage:     stage,
-	})
-	if err != nil {
-		slog.Debug("ws: marshal cancel_stage frame failed", "stage", stage, "error", err)
-		return
-	}
-	// Route through sendRawFrameBytes to respect replay-divert logic and the
-	// replayMu serialization that prevents the TOCTOU race (code-reviewer Finding #2).
-	sendRawFrameBytes(wc, string(generated.WsFrameTypeCancelStage), data)
-	// sendRawFrameBytes logs at Warn on drop; suppress the duplicate debug log that
-	// existed in the old inline implementation.
+	}, wc)
 }
 
 // u11CollectDescendantSessionIDs walks the durable lifecycle store's
@@ -99,15 +89,15 @@ func u11CollectDescendantSessionIDs(ls *session.LifecycleStore, rootID string) [
 // cancel_stage frames — nil when there is no live connection to notify.
 //
 // A nil wc is a legitimate call shape whenever a cancel is triggered with no
-// live connection to acknowledge to. sendCancelStageFrame already no-ops
-// safely on a nil wc, so the SAME hook set handleCancel builds for a real
+// live connection to acknowledge to. sendCancelStageFrame still publishes to
+// the session hub on a nil wc (every bound tab sees the stage), so the SAME hook set handleCancel builds for a real
 // Stop-click also works, unmodified, for any connection-less caller — there
 // is only one place in this file that knows how to build a web-cancel's side
 // effects.
 func (h *WSHandler) buildCancelHooks(wc *wsConn) agent.CancelHooks {
 	return agent.CancelHooks{
 		SendStageFrame: func(sid, stage string) {
-			sendCancelStageFrame(wc, sid, stage)
+			h.sendCancelStageFrame(wc, sid, stage)
 		},
 		CancelPendingApprovals: func(sid, reason string) {
 			if h.approvalRegV2 == nil {
@@ -308,7 +298,7 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 			)
 		}
 		if outcome.BackgroundSessionsKilled > 0 || outcome.Armed {
-			sendCancelStageFrame(wc, sessionID, "graceful")
+			h.sendCancelStageFrame(wc, sessionID, "graceful")
 		}
 	}
 }

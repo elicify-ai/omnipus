@@ -678,6 +678,22 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 		agentIDCopy := entry.AgentID
 		sr.msgFrame.AgentId = &agentIDCopy
 	}
+	// #823 catch-up redesign (BE-DESIGN.md §4.2/§6.3): the persisted entry
+	// id is the same id the live frames used (user_message.id; an assistant
+	// round's token/done message_id), so a client can merge a replayed
+	// message with its live copy by id, and the snapshot path can tell which
+	// active-turn items the transcript read already covered.
+	if entry.ID != "" {
+		idCopy := entry.ID
+		sr.msgFrame.Id = &idCopy
+	}
+	// §4.7: the sender's own message id rides the replayed user entry, so a
+	// pending bubble whose message was already persisted reconciles instead
+	// of duplicating.
+	if entry.ClientMessageID != "" {
+		cidCopy := entry.ClientMessageID
+		sr.msgFrame.ClientMessageId = &cidCopy
+	}
 	// Wave 3 fix 5c/1: surface TranscriptEntry.TurnID — stamped on
 	// every real assistant entry at its three production write sites:
 	// pkg/agent/turn.go's appendIntermediateAssistantTranscript and

@@ -1084,8 +1084,20 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 		// worse, walked back and mis-stamped an EARLIER same-turn narration
 		// entry as truncated. See truncationReason's own field doc comment.
 		if content != "" || wsf.truncationReason != "" {
+			// #823 BE-DESIGN.md §6.3: persist the final streamed answer under
+			// the SAME id its live token/done frames carried (message_id),
+			// exactly as appendIntermediateAssistantTranscript already does for
+			// intermediate rounds — so replay_message.id equals the live
+			// message_id and a client (or the snapshot filter) can tell the
+			// persisted copy and the live copy are one message. A streamer the
+			// agent loop never stamped (a bare fixture, the Send fallback)
+			// keeps a fresh id.
+			entryID := wsf.messageID
+			if entryID == "" {
+				entryID = uuid.New().String()
+			}
 			entry := session.TranscriptEntry{
-				ID:      uuid.New().String(),
+				ID:      entryID,
 				Role:    "assistant",
 				AgentID: wsf.producerAgentID,
 				// TurnID (FIX 5c/1): stamped via SetTurnID so a mid-stream
