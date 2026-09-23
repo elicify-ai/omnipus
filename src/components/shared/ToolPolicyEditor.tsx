@@ -168,6 +168,26 @@ function resolvesExecutePlanAllow(toolId: string, p: ToolPolicy, globalPolicies?
   return !isPolicyLocked('allow', floor)
 }
 
+// ── ADR-092 J14 — per-tool "Under Auto" marker ──────────────────────────────
+//
+// A tool's `auto_approve` field (ToolRegistryEntry, ADR-092 D9) reports what
+// Auto-approve does for THIS tool once its policy resolves to "ask":
+//   "runs"          — always runs with no prompt under Auto.
+//   "runs_if_args"  — runs only when the call's own arguments meet the
+//                     tool's condition (in practice: a file path resolves
+//                     inside the workspace or a mount); otherwise it asks.
+//   "asks"          — always asks under Auto too.
+// The field is absent for `bash` (its own per-command D3/D7/D8 mechanism)
+// and for any tool the registry hasn't classified — both cases render no
+// marker, not a fabricated "asks". Shown only on rows whose EFFECTIVE
+// policy is "ask" (founder decision, J14): a tool set to Allow or Deny is
+// unaffected by Auto either way, so the marker would be noise there.
+const AUTO_APPROVE_MARKER_LABEL: Record<NonNullable<RegistryTool['auto_approve']>, string> = {
+  runs: 'Auto: runs',
+  runs_if_args: 'Auto: runs inside workspace',
+  asks: 'Auto: asks',
+}
+
 /** The rolled-up policy shown in a category's summary pill. */
 type PolicySummary = ToolPolicy | 'mixed' | 'unconfigured'
 
@@ -347,6 +367,18 @@ function CategoryToolRow({
             {isUnconfigured ? <Warning size={9} weight="bold" /> : <LockSimple size={9} weight="bold" />}
             Global: {floorLabel}
           </a>
+        )}
+        {/* ADR-092 J14: read-only "Under Auto" marker — only on a row whose
+            EFFECTIVE policy is "ask", and only when the registry actually
+            classified this tool (absent for `bash` and any unclassified
+            tool — see AUTO_APPROVE_MARKER_LABEL's own note). */}
+        {!isDiscovery && effective === 'ask' && tool.auto_approve && (
+          <span
+            data-testid={`auto-approve-marker-${tool.name}`}
+            className="inline-flex items-center shrink-0 px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold border border-[var(--color-border)] text-[var(--color-muted)]"
+          >
+            {AUTO_APPROVE_MARKER_LABEL[tool.auto_approve]}
+          </span>
         )}
       </span>
       <div className="flex gap-[var(--space-1)] shrink-0 items-center">

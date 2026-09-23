@@ -20,7 +20,8 @@
 //  9. Latest-wins: edits made while a save is in-flight are not dropped (bug fix)
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // Mock the API module. updateAgentTools now accepts an optional reAuthToken.
@@ -193,6 +194,59 @@ describe('ToolsAndPermissions — new endpoint (FR-027, FR-029)', () => {
       expect(document.querySelector('[data-testid="preset-balanced"]')).toBeInTheDocument()
       expect(document.querySelector('[data-testid="preset-full_access"]')).toBeInTheDocument()
     })
+  })
+})
+
+// ADR-092 J14: per-tool "Under Auto" marker, sourced from the registry's
+// `auto_approve` field (contract-first, ToolRegistryEntry.auto_approve).
+// Read-only, and shown ONLY on a row whose resolved policy is "ask".
+describe('ToolsAndPermissions — ADR-092 J14 "Under Auto" marker', () => {
+  it('shows "Auto: runs inside workspace" on a tool resolved to Ask that the registry classifies runs_if_args', async () => {
+    const user = userEvent.setup()
+    const toolWithAuto: RegistryTool = { ...BUILTIN_TOOL, auto_approve: 'runs_if_args' }
+    vi.mocked(api.fetchRegistryTools).mockResolvedValue([toolWithAuto])
+    vi.mocked(api.fetchAgentTools).mockResolvedValue(toolsResponse({
+      builtin: { policies: { [BUILTIN_TOOL.name]: 'ask' } },
+    }))
+
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="agent-1"
+        agentType="Main"
+        tools={DEFAULT_TOOLS_CFG}
+        onChange={NOOP_CHANGE}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
+      />
+    )
+    const categoryGrid = await screen.findByTestId('category-grid')
+    await user.click(within(categoryGrid).getByRole('button', { name: /files/i }))
+    const row = await screen.findByTestId(`tool-row-${BUILTIN_TOOL.name}`)
+    expect(within(row).getByTestId(`auto-approve-marker-${BUILTIN_TOOL.name}`)).toHaveTextContent('Auto: runs inside workspace')
+  })
+
+  it('renders no marker once the same tool is set to Allow', async () => {
+    const user = userEvent.setup()
+    const toolWithAuto: RegistryTool = { ...BUILTIN_TOOL, auto_approve: 'runs_if_args' }
+    vi.mocked(api.fetchRegistryTools).mockResolvedValue([toolWithAuto])
+    vi.mocked(api.fetchAgentTools).mockResolvedValue(toolsResponse({
+      builtin: { policies: { [BUILTIN_TOOL.name]: 'allow' } },
+    }))
+
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="agent-1"
+        agentType="Main"
+        tools={DEFAULT_TOOLS_CFG}
+        onChange={NOOP_CHANGE}
+        autoApproveDisabled={false}
+        onAutoApproveDisabledChange={() => {}}
+      />
+    )
+    const categoryGrid = await screen.findByTestId('category-grid')
+    await user.click(within(categoryGrid).getByRole('button', { name: /files/i }))
+    const row = await screen.findByTestId(`tool-row-${BUILTIN_TOOL.name}`)
+    expect(within(row).queryByTestId(`auto-approve-marker-${BUILTIN_TOOL.name}`)).not.toBeInTheDocument()
   })
 })
 
