@@ -1019,6 +1019,11 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 	}
 	stg.runningServices.steerSpawnPersisterCancel = stg.agentLoop.StartSubagentSpawnPersister(stg.ctx)
 	setGatewaySteerCanceller(stg.agentLoop, canceller)
+	// The agent's own Stop — delegate(action="cancel"), wired in
+	// pkg/agent/session_messaging_wire.go — cascades through the SAME
+	// instance the human Stop above uses, so both take one cascade lock per
+	// session instead of two (agent.SteerCanceller::cascade).
+	stg.agentLoop.SetSteerCanceller(canceller)
 }
 
 // startPlanEngine configures and starts the plan engine when its task dependencies are available.

@@ -47,6 +47,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // ---------------------------------------------------------------------
@@ -163,8 +164,12 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 			t.Fatalf("seed lifecycle record failed: %v", err)
 		}
 		tool.SetCancelHooks(
-			func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
-			func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
+			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+				return []string{sessionID}, nil
+			},
+			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+				return []string{sessionID}, nil
+			},
 		)
 
 		callerCtx := WithTranscriptSessionID(context.Background(), "fix6-cancel-parent-fail")
@@ -204,8 +209,12 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 			t.Fatalf("seed lifecycle record failed: %v", err)
 		}
 		tool.SetCancelHooks(
-			func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
-			func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
+			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+				return []string{sessionID}, nil
+			},
+			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+				return []string{sessionID}, nil
+			},
 		)
 
 		callerCtx := WithTranscriptSessionID(context.Background(), "fix6-cancel-parent-fail-soft")
@@ -239,8 +248,12 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 			t.Fatalf("seed lifecycle record failed: %v", err)
 		}
 		tool.SetCancelHooks(
-			func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
-			func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
+			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+				return []string{sessionID}, nil
+			},
+			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+				return []string{sessionID}, nil
+			},
 		)
 
 		callerCtx := WithTranscriptSessionID(context.Background(), "fix6-cancel-parent-clean")

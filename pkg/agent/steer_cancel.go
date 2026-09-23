@@ -108,6 +108,28 @@ func (c *SteerCanceller) SetRevivalStateWriter(writer RevivalStateWriter) *Steer
 // cascade lock: enumerate, stamp, generation-aware cancel, then enumerate once
 // more for children published during the first pass.
 func (c *SteerCanceller) CancelSubtree(ctx context.Context, sessionID string, by steer.Principal) (steer.CancelReport, error) {
+	return c.cascade(ctx, sessionID, by, true)
+}
+
+// StopSubtree is CancelSubtree's DURABLE half on its own: the same cascade
+// lock, the same two enumeration passes, the same Stop markers — but the live
+// turns are left to stop themselves.
+//
+// It exists for delegate(action="cancel", hard=false), whose contract
+// (ADR-053 R§Cancel/restart) promises the child a checkpoint-flush window
+// before anything is torn out from under it. The marker still has to land
+// immediately, because it is what stops admission ever promoting a queued
+// session that has been cancelled (reserveDispatch, below) — and a marker is
+// durable where a request to a live turn is not. The caller asks the reached
+// turns to stop cooperatively and escalates after its own grace window;
+// see steer_delegate_cancel.go::cancelDelegatedSubtree.
+func (c *SteerCanceller) StopSubtree(ctx context.Context, sessionID string, by steer.Principal) (steer.CancelReport, error) {
+	return c.cascade(ctx, sessionID, by, false)
+}
+
+func (c *SteerCanceller) cascade(
+	ctx context.Context, sessionID string, by steer.Principal, cancelLiveTurns bool,
+) (steer.CancelReport, error) {
 	var report steer.CancelReport
 	if c == nil || c.Lifecycle == nil {
 		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{
@@ -145,12 +167,18 @@ func (c *SteerCanceller) CancelSubtree(ctx context.Context, sessionID string, by
 		}
 	}
 
+	fireLiveCancels := func() {
+		if cancelLiveTurns {
+			c.cancelStamped(ctx, stamped, &report)
+		}
+	}
+
 	first, walkErr := CollectDescendantSessionIDs(c.Lifecycle, sessionID)
 	if walkErr != nil {
 		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: walkErr.Error()})
 	}
 	process(append([]string{sessionID}, first...))
-	c.cancelStamped(ctx, stamped, &report)
+	fireLiveCancels()
 
 	second, secondErr := CollectDescendantSessionIDs(c.Lifecycle, sessionID)
 	if secondErr != nil {
@@ -159,9 +187,51 @@ func (c *SteerCanceller) CancelSubtree(ctx context.Context, sessionID string, by
 	lateStart := len(stamped)
 	process(second)
 	if len(stamped) > lateStart {
-		c.cancelStamped(ctx, stamped, &report)
+		fireLiveCancels()
 	}
 	return report, nil
+}
+
+// steerCancellerRegistry maps *AgentLoop -> the ONE I-6 Canceller its Stop
+// surfaces share. A package-level side table rather than an AgentLoop field
+// for the reason admission.go::steerAdmissionRegistry gives: loop.go is
+// line-count-pinned (scripts/budgets/files.txt) and cannot grow by a field
+// declaration. Entries are never removed, on the same bounded-leak reasoning.
+//
+// Sharing one instance is load-bearing, not tidiness: CancelSubtree
+// serialises a subtree on the stopped node's own cascade lock, and two
+// cancellers would take two different locks for the same session — so a
+// human's Stop and an agent's delegate(action="cancel") could interleave
+// mid-cascade.
+var (
+	steerCancellerRegistry   = map[*AgentLoop]*SteerCanceller{}
+	steerCancellerRegistryMu sync.Mutex
+)
+
+// SetSteerCanceller publishes the composition root's Canceller (gateway
+// boot's wireSteerDeps) as the one al's own Stop paths use.
+func (al *AgentLoop) SetSteerCanceller(canceller *SteerCanceller) {
+	if al == nil || canceller == nil {
+		return
+	}
+	steerCancellerRegistryMu.Lock()
+	defer steerCancellerRegistryMu.Unlock()
+	steerCancellerRegistry[al] = canceller
+}
+
+// steerCanceller returns al's Canceller, constructing one on first use wired
+// to al's own generation-aware live-turn adapter (SteerGenerationCancel) so a
+// lane or focused test that never reached gateway boot still cascades for
+// real rather than stamping markers nothing acts on.
+func (al *AgentLoop) steerCanceller() *SteerCanceller {
+	steerCancellerRegistryMu.Lock()
+	defer steerCancellerRegistryMu.Unlock()
+	if c, ok := steerCancellerRegistry[al]; ok {
+		return c
+	}
+	c := NewSteerCanceller(al.GetSessionLifecycleStore(), al.SteerGenerationCancel)
+	steerCancellerRegistry[al] = c
+	return c
 }
 
 // Revive mints a generation for a stopped session or terminal follow-up.

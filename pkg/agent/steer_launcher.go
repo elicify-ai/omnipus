@@ -686,12 +686,13 @@ func commitSteeredDispatchState(
 	return committed, nil
 }
 
-// dispatchStateWriteTestHook is a test-only synchronization seam (see its
-// call site, immediately before Dispatch's running-state write). Always nil
-// in production; never set outside a _test.go file. It lets
-// steer_dispatch_race_test.go land a concurrent Stop or Revive inside the
-// window between the record snapshot and the state write deterministically,
-// instead of relying on real scheduling luck.
+// dispatchStateWriteTestHook is a test-only synchronization seam, fired from
+// both entry paths immediately before their running-state write: Dispatch
+// (below) and the wake (loop_inbound.go::processSteeredSystemWake). Always
+// nil in production; never set outside a _test.go file. It lets
+// steer_dispatch_race_test.go and steer_wake_admission_test.go land a
+// concurrent Stop or Revive inside the window between the record snapshot and
+// the state write deterministically, instead of relying on scheduling luck.
 var dispatchStateWriteTestHook func(sessionID string, gen int)
 
 // dispatchSteeredSession is I-2/I-3's authoritative admission decision.
@@ -850,7 +851,7 @@ func (al *AgentLoop) runDispatchedSteeredTurn(rec *session.LifecycleRecord, ts *
 		}
 	}
 	if rec.GoalRef != "" {
-		al.finishSteeredGoalTurn(ts, &result, runErr)
+		al.finishSteeredGoalTurn(ts, rec, &result, runErr)
 		return
 	}
 	if finishErr := al.completeSteeredTurn(context.Background(), rec, result, runErr); finishErr != nil {

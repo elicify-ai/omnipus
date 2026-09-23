@@ -33,13 +33,20 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 	if rec.Generation != snapshot.Generation || rec.Terminal() || rec.State == session.LifecycleNeedsInput {
 		return nil
 	}
-	// A goal-bearing session is completed only by the claim/Judge loop.
-	if rec.GoalRef != "" {
-		return nil
-	}
 
 	answer := strings.TrimSpace(result.finalContent)
 	outcome, nextState, failureReason := completionDisposition(result, runErr, answer)
+	// A goal-bearing session's SUCCESS is decided only by the claim/Judge
+	// loop (finishSteeredGoalTurn). Its DEATH is not: a turn that failed, ran
+	// out of time or was stopped has no claim for the Judge to adjudicate, so
+	// I-5's outcome table applies to it like any other steered session. The
+	// blanket refusal that used to sit here left such a child `running` for
+	// ever — nothing reached the parent, and hasRunningOrQueuedDescendant
+	// kept the parent from completing either.
+	if rec.GoalRef != "" && !session.IsTerminalLifecycleState(nextState) {
+		return nil
+	}
+
 	if outcome == "" {
 		if answer == "" {
 			outcome = steer.OutcomeEmptyAnswer
@@ -92,6 +99,10 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 // session-owned claim/Judge pipeline used by an interactive goal turn. The
 // Judge dispatch remains asynchronous, matching runAgentLoop's ordering.
 //
+// A turn that DIED never reaches that pipeline: failed, timed_out and
+// cancelled are I-5 outcomes, not goal verdicts, and go to
+// completeSteeredTurn — see the branch at the top of the body.
+//
 // A steered child runs through steer_launcher.go's own dispatch goroutine,
 // never through runAgentLoop's inline post-turn block (loop.go) — so
 // checkGoalLoopAfterTurn's re-injected follow-ups (result.followUps) have no
@@ -108,8 +119,25 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 // processSystemMessage). SenderCanonicalID carries the follow-up's own
 // goalLoopFollowUpSenderID stamp through unchanged so
 // checkGoalLoopAfterTurn's origin gate still accepts the re-injected turn.
-func (al *AgentLoop) finishSteeredGoalTurn(ts *turnState, result *turnResult, runErr error) {
-	if al == nil || ts == nil || result == nil || runErr != nil {
+func (al *AgentLoop) finishSteeredGoalTurn(ts *turnState, rec *session.LifecycleRecord, result *turnResult, runErr error) {
+	if al == nil || ts == nil || rec == nil || result == nil {
+		return
+	}
+	// A dead turn has no claim to adjudicate. Route the three failing
+	// outcomes of I-5's table (failed / timed_out / cancelled) through the
+	// ONE completion path instead of returning silently: completeSteeredTurn
+	// delivers the failure upward, writes the terminal state, and releases
+	// any ancestor that was only waiting on this child. Without it the
+	// record stayed `running` for ever and the parent waited on a worker
+	// that was already gone.
+	if _, nextState, _ := completionDisposition(*result, runErr, strings.TrimSpace(result.finalContent)); session.IsTerminalLifecycleState(nextState) {
+		if err := al.completeSteeredTurn(context.Background(), rec, *result, runErr); err != nil {
+			logger.WarnCF("agent", "steer: report a dead goal-bearing child upward failed",
+				map[string]any{"session_id": rec.SessionID, "state": string(nextState), "error": err.Error()})
+		}
+		return
+	}
+	if runErr != nil {
 		return
 	}
 	al.checkGoalLoopAfterTurn(context.Background(), ts.agent, ts.opts, result)

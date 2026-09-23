@@ -882,22 +882,81 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	if err != nil {
 		return "", err
 	}
+
+	// A wake is an ENTRY PATH, so it owes the same two checks
+	// steer_launcher.go::dispatchSteeredSessionWithReservation owes, in the
+	// same order and through the same primitives:
+	//
+	//   - I-3 "Admission": the concurrency counter counts TURNS EXECUTING
+	//     RIGHT NOW (D9; founder round 9, "live turns only"). A woken turn
+	//     that never called tryAdmit ran entirely outside the gate, so
+	//     max_parallel_agents counted dispatches rather than work.
+	//   - I-6's reservation: commitSteeredDispatchState re-runs
+	//     reserveDispatch against the record's LIVE tail inside one atomic
+	//     read-modify-write. steer_audience.go::Deliver's FR-B-013 check
+	//     reads the recipient's record at SEND time; a Stop landing between
+	//     that read and this turn was caught nowhere, and the stopped
+	//     session went back to work (landing order §0).
+	//
+	// Both are scoped to STEERED sessions — steerAdmission's own population
+	// (admission.go) and the one I-3 governs. An ordinary root woken here is
+	// a human's own chat, not a delegated worker; it is neither gated nor
+	// state-written by this path.
+	release := func() {}
+	if rec.SteeredBy != nil {
+		gate := al.steerAdmission()
+		admitted, _, _ := gate.tryAdmit(sessionID, generation)
+		if !admitted {
+			// At the cap. The wake entry is deliberately left UNCONSUMED —
+			// no marker, no acknowledgement — so the turn the FIFO promotion
+			// eventually starts (admission.go::drainSteerQueue ->
+			// dispatchSteeredSessionReserved) still finds it pending.
+			if _, commitErr := commitSteeredDispatchState(lifecycle, sessionID, generation, session.LifecycleQueued); commitErr != nil {
+				gate.removeQueued(sessionID, generation)
+				return "", commitErr
+			}
+			return "", nil
+		}
+		release = func() { al.drainSteerQueue(sessionID, generation) }
+	}
+
+	ts.opts.UserMessage = msg.Content
+	ts.userMessage = msg.Content
+	if !al.registerTurnIfAbsent(ts) {
+		release()
+		return "", steer.ErrStaleGeneration
+	}
+	abort := func() {
+		al.activeTurnStates.CompareAndDelete(sessionID, ts)
+		release()
+	}
+	if rec.SteeredBy != nil {
+		if dispatchStateWriteTestHook != nil {
+			dispatchStateWriteTestHook(sessionID, generation)
+		}
+		if _, commitErr := commitSteeredDispatchState(lifecycle, sessionID, generation, session.LifecycleRunning); commitErr != nil {
+			abort()
+			return "", commitErr
+		}
+	}
+
+	// The consumed marker and the acknowledgement are written only once the
+	// turn is certain to run: a wake refused above must leave its entry
+	// pending for I-6's Revive (FR-B-013), never swallow it.
 	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
 		ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system",
 		Content: marker, AgentID: rec.AgentID, Timestamp: time.Now().UTC(),
 	}); err != nil {
+		abort()
 		return "", fmt.Errorf("steer: wake: append consumed marker: %w", err)
 	}
 	if inbox := al.GetMessageInboxStore(); inbox != nil {
 		if err := inbox.Ack(sessionID, []string{messageID}); err != nil {
+			abort()
 			return "", fmt.Errorf("steer: wake: acknowledge %q: %w", messageID, err)
 		}
 	}
-	ts.opts.UserMessage = msg.Content
-	ts.userMessage = msg.Content
-	if !al.registerTurnIfAbsent(ts) {
-		return "", steer.ErrStaleGeneration
-	}
+	defer release()
 	result, err := al.runTurn(ctx, ts)
 	return result.finalContent, err
 }

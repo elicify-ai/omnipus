@@ -600,6 +600,40 @@ func cancelBackgroundShellWarnings(killFailed int, walkIncomplete bool) string {
 	return warnings
 }
 
+// droppedQueuedResult answers for a session the cancel reached while it was
+// still QUEUED — launched, admitted to the start queue, but never given a
+// turn. It returns nil for any other state, leaving the caller's own wording
+// in place.
+//
+// Such a session has no live turn: nothing to interrupt, nothing to flush to
+// a checkpoint, and no cooperative grace window worth waiting out. So both
+// hard and soft resolve identically here — the cascade's durable Stop marker
+// is what actually drops it (ADR-091 I-6: admission never promotes a stamped
+// session), and the record is landed terminal at once so the side panel, the
+// parent's own completion check (hasRunningOrQueuedDescendant) and the queue
+// positions this tool reports all agree that it is gone.
+//
+// The wording matters as much as the act. Before ADR-091's cascade was wired
+// here this call reported "terminated between the terminal check and the
+// cancel hook — no action needed" — a success shape claiming the session had
+// already ended, while it sat in the queue waiting to start. Saying plainly
+// that a session which never started has been dropped is the whole point of
+// the fix.
+func (t *DelegateTool) droppedQueuedResult(sessionID, warnings string) *ToolResult {
+	if t.lifecycle == nil {
+		return nil
+	}
+	rec, err := t.lifecycle.Load(sessionID)
+	if err != nil || rec == nil || rec.State != session.LifecycleQueued {
+		return nil
+	}
+	t.transitionLifecycle(sessionID, session.LifecycleCancelled, "stopped_by_user")
+	return NewToolResult(fmt.Sprintf(
+		"Session %s was still queued behind the concurrency limit and had not started; it has been dropped and will never run.",
+		sessionID,
+	) + warnings)
+}
+
 func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, err := requiredStringArg(args, "session_id")
 	if err != nil {
@@ -629,7 +663,13 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 	if lerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", lerr))
 	}
-	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
+	// The principal is not just the authorisation answer: it is stamped on
+	// the durable Stop marker (session.Stop.By, ADR-091 I-1) and is what the
+	// UI and the audit trail show as who stopped this session. This used to
+	// call verifyCallerOwnsSession, which computes the same identity and
+	// throws it away.
+	by, verr := t.verifyCallerPrincipal(ctx, rec)
+	if verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", verr))
 	}
 
@@ -712,7 +752,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		if t.cancelHard == nil {
 			return ErrorResult("delegate: no hard-cancel hook configured")
 		}
-		descendants, cerr := t.cancelHard(sessionID, "delegate cancel(hard=true)")
+		descendants, cerr := t.cancelHard(sessionID, by, "delegate cancel(hard=true)")
 		if cerr != nil {
 			return ErrorResult(fmt.Sprintf("delegate: cancel: %v", cerr)).WithError(cerr)
 		}
@@ -738,6 +778,9 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 				sessionID,
 			) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
 		}
+		if dropped := t.droppedQueuedResult(sessionID, cancelBackgroundShellWarnings(killFailed, walkIncomplete)); dropped != nil {
+			return dropped
+		}
 		t.transitionLifecycle(sessionID, session.LifecycleCancelled, "stopped_by_user")
 		msg := fmt.Sprintf("Session %s hard-cancelled immediately.", sessionID)
 		msg += cancelBackgroundShellWarnings(killFailed, walkIncomplete)
@@ -747,7 +790,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 	if t.cancelSoft == nil {
 		return ErrorResult("delegate: no soft-cancel hook configured")
 	}
-	softDescendants, cerr := t.cancelSoft(sessionID, "delegate cancel(hard=false)")
+	softDescendants, cerr := t.cancelSoft(sessionID, by, "delegate cancel(hard=false)")
 	if cerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", cerr)).WithError(cerr)
 	}
@@ -765,6 +808,10 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 			"Session %s terminated between the terminal check and the cancel hook — no action needed.",
 			sessionID,
 		) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
+	}
+
+	if dropped := t.droppedQueuedResult(sessionID, cancelBackgroundShellWarnings(killFailed, walkIncomplete)); dropped != nil {
+		return dropped
 	}
 
 	// cancel(soft) = soft cooperative stop + a hard RequestCancel backstop
@@ -789,7 +836,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 			// cancelHard returns (nil, nil) and there is nothing left to
 			// transition — skip transitionLifecycle rather than stamping a
 			// redundant LifecycleCancelled onto an already-terminal record.
-			backstopDescendants, cerr := t.cancelHard(sessionID, "delegate cancel(hard=false): grace elapsed")
+			backstopDescendants, cerr := t.cancelHard(sessionID, by, "delegate cancel(hard=false): grace elapsed")
 			if cerr != nil {
 				slog.Warn("delegate: cancel: hard-cancel backstop failed", "session_id", sessionID, "error", cerr)
 				return
