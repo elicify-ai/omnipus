@@ -11,6 +11,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -172,7 +173,7 @@ func TestAutoApprove_T1_WriteFileInsideRunsOutsidePrompts(t *testing.T) {
 	assert.Contains(t, inside, "File written: notes/t1.md", "the inside write must run")
 	assert.Contains(t, toolResultText(t, provider, "wf-outside"), "permission_denied")
 	_, statErr := os.Stat(outside)
-	assert.True(t, os.IsNotExist(statErr), "the denied outside write must not happen")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the denied outside write must not happen")
 }
 
 // T14: God Mode is on, so Auto is inactive (no sandbox): an agent-level Ask
