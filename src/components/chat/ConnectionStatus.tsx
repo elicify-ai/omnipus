@@ -430,18 +430,28 @@ export function AssistantMessageConnectionStatus({ messageId, agentName }: { mes
   // awaitingCatchUp) could possibly have resolved. Gating this component's
   // very existence on that flag made the awaitingCatchUp check further down
   // unreachable dead code. §6.5's rule is fully derivable from the bucket
-  // instead, with no dependency on the connection store's transient flag:
-  // "no done(T) has been applied and session_state.active_turn is not T" —
-  // i.e. THIS message is still open (no terminal done ever closed it) and
-  // its own turn is no longer the session's active one.
+  // instead, with no dependency on the connection store's transient flag.
+  //
+  // Opus review round 3 item N1 (real-browser regression, browser-confirmed
+  // at t006 of a plain, never-disconnected live turn): this used to compare
+  // `msg.turnId !== bucket.activeTurnId` reactively, on every render.
+  // `activeTurnId` is ONLY ever populated by a `session_state.active_turn`
+  // frame, and for an ordinary live turn that frame never arrives mid-turn
+  // (only the turn-less `session_state{}` at connection bind does) — so
+  // `activeTurnId` stays `null` for the entire duration of a normal live
+  // turn, making that comparison true from the FIRST token onward and
+  // showing "couldn't be finished" under every streaming answer. Fixed by
+  // reading `ChatMessage.confirmedUnfinished` — a flag the
+  // `catch_up_complete` reducer sets ONCE, only when session_state's
+  // active_turn is actually authoritative (see that field's own doc
+  // comment) — instead of re-deriving the same judgment reactively here,
+  // where a live turn and a genuinely-ended one are indistinguishable.
   const activeSessionId = useSessionStore((state) => state.activeSessionId)
   const unfinishedHere = useChatStore((state) => {
     if (activeSessionId == null) return false
     const bucket = state.sessionsById[activeSessionId]
     const msg = bucket?.messagesById?.[messageId]
-    if (!msg || msg.role !== 'assistant' || !msg.turnId) return false
-    if (msg.status === 'interrupted' || msg.status === 'error' || (msg.status === 'done' && !msg.isStreaming)) return false
-    return msg.turnId !== bucket.activeTurnId
+    return !!msg?.confirmedUnfinished
   })
   const active = (disconnectedHere || unfinishedHere) && (!isConnected || reconnectedAt !== null || unfinishedHere)
   const now = useConnectionNow(active)

@@ -58,10 +58,10 @@ export function handleCatchUpFrame({ frame, targetSid, withBucket }: CatchUpFram
     case 'catch_up_complete': {
       if (!targetSid) return true
       const completeFrame = frame as CatchUpCompleteFrame
-      withBucket(targetSid, (b) => ({
-        cursor: cursorFromTerminalFrame(completeFrame, b.cursor?.bootId),
-        awaitingCatchUp: false,
-        isReplaying: false,
+      withBucket(targetSid, (b) => produce(b, (draft) => {
+        draft.cursor = cursorFromTerminalFrame(completeFrame, draft.cursor?.bootId)
+        draft.awaitingCatchUp = false
+        draft.isReplaying = false
         // Real-browser regression (orchestrator round 4, scenarios c/e/f):
         // `replayCompletedForSession` (ChatScreen.tsx's own REST-fallback
         // "was replay finished for this session" flag — see its doc comment
@@ -79,7 +79,26 @@ export function handleCatchUpFrame({ frame, targetSid, withBucket }: CatchUpFram
         // snapshot that resolved out of order (a real, live-verified race —
         // see that effect's own doc comment) merge against a session this
         // client's WS-driven state had already fully reconstructed.
-        replayCompletedForSession: targetSid,
+        draft.replayCompletedForSession = targetSid
+        // Opus review round 3 item N1 (BE-DESIGN.md §6.5) — see
+        // ChatMessage.confirmedUnfinished's own doc comment for the full
+        // "why". This is the ONE moment session_state.active_turn (already
+        // applied to draft.activeTurnId by the session_state frame that
+        // always precedes catch_up_complete in a real attach, §4.1 A6) is
+        // authoritative for messages that predate this catch-up: a still-open
+        // assistant message whose own turn is not the confirmed active one
+        // is judged, once, right here — never re-derived reactively by the
+        // render layer, which cannot tell "mid-stream, never disconnected"
+        // from "genuinely ended without a done()" the way this moment can.
+        for (const id of draft.messageOrder) {
+          const m = draft.messagesById[id]
+          if (m?.role !== 'assistant') continue
+          if (m.status === 'interrupted' || m.status === 'error') continue
+          if (m.status === 'done' && !m.isStreaming) continue
+          if (m.turnId && m.turnId !== draft.activeTurnId) {
+            m.confirmedUnfinished = true
+          }
+        }
       }))
       return true
     }

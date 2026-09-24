@@ -456,16 +456,26 @@ describe('finding 14 — AssistantMessageConnectionStatus wiring', () => {
     expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
   })
 
-  it('BE-DESIGN.md §6.5 / Opus review round 2 item 5: renders once reconnected even though disconnectedAssistantMessageId was already cleared, when the bucket itself shows the turn ended with no done()', () => {
+  it('BE-DESIGN.md §6.5 / Opus review round 2 item 5: renders once reconnected even though disconnectedAssistantMessageId was already cleared, when catch_up_complete already confirmed the turn ended with no done()', () => {
     // Regression: connection.ts::setConnected(true) clears
     // disconnectedAssistantMessageId the INSTANT the socket reconnects — so
     // gating this component purely on `disconnectedHere` made the
     // awaitingCatchUp check downstream in deriveConnectionDisplay
     // unreachable dead code: by the time catch-up could possibly have
     // resolved, this component had already returned null. §6.5's real rule
-    // doesn't need the connection store's transient flag at all — it is
-    // fully derivable from the bucket: no done(T) applied (the bubble is
-    // still open/unfinished) and session_state.active_turn is not T.
+    // doesn't need the connection store's transient flag at all.
+    //
+    // Opus review round 3 item N1: the ORIGINAL version of this test set
+    // `activeTurnId: null` + a message with an unrelated `turnId` directly,
+    // with no signal of whether catch-up had actually run — which is
+    // EXACTLY the shape of a plain live turn too (see the sibling "does NOT
+    // render" test just below), so it could not tell the two apart. That
+    // was the test's own oracle bug the round-3 fix's reactive comparison
+    // then matched: it flagged every live turn as "unfinished" from its
+    // first token. Fixed here by setting `confirmedUnfinished: true`
+    // directly — the flag only `catch_up_complete`'s reducer sets, and only
+    // when session_state.active_turn actually confirmed this turn is gone
+    // (see ChatMessage.confirmedUnfinished's own doc comment).
     useConnectionStore.setState({
       isConnected: true,
       reconnectPhase: null,
@@ -491,7 +501,11 @@ describe('finding 14 — AssistantMessageConnectionStatus wiring', () => {
               timestamp: '2026-09-24T00:00:00Z',
               status: 'streaming',
               isStreaming: true,
-              turnId: 'turn-gone-before-restart', // != activeTurnId (null) — the turn ended without a done()
+              turnId: 'turn-gone-before-restart',
+              // Set by catch_up_complete's own sweep once it confirmed
+              // session_state.active_turn is not this turn — not derived
+              // reactively here.
+              confirmedUnfinished: true,
             },
           },
         } as never,
@@ -500,6 +514,57 @@ describe('finding 14 — AssistantMessageConnectionStatus wiring', () => {
 
     render(<AssistantMessageConnectionStatus messageId="assistant-1" agentName="Mia" />)
     expect(screen.getByTestId('assistant-connection-status')).toBeInTheDocument()
+  })
+
+  it('Opus review round 3 item N1: does NOT render for a plain live turn that never disconnected, however many tokens it has streamed', () => {
+    // Browser-confirmed regression: "This answer couldn't be finished ·
+    // Generate again" rendered under EVERY answer while it streamed, no
+    // disconnect needed — reproduced at token t006 of a live turn. Root
+    // cause: activeTurnId is only ever set from session_state.active_turn,
+    // which for an ordinary live turn never arrives mid-turn — so a bare
+    // `msg.turnId !== activeTurnId` reactive comparison was true from the
+    // very first token. This bucket shape is deliberately identical to a
+    // real live turn: isConnected true, never disconnected
+    // (disconnectedAssistantMessageId null throughout), activeTurnId still
+    // null (no session_state.active_turn has fired — this IS what a live
+    // turn's bucket looks like), the message open and streaming, and
+    // crucially NO confirmedUnfinished flag — because catch_up_complete has
+    // never run for this session at all.
+    useConnectionStore.setState({
+      isConnected: true,
+      reconnectPhase: null,
+      disconnectedAt: null,
+      reconnectedAt: null,
+      lastDisconnectDurationMs: 0,
+      lastDisconnectWasTerminal: false,
+      disconnectedAssistantMessageId: null,
+    })
+    useSessionStore.setState({ activeSessionId: TEST_SID })
+    useChatStore.setState({
+      sessionsById: {
+        [TEST_SID]: {
+          activeTurnId: null,
+          awaitingCatchUp: false,
+          isReplaying: false,
+          messageOrder: ['assistant-1'],
+          messagesById: {
+            'assistant-1': {
+              id: 'assistant-1',
+              role: 'assistant',
+              content: 't001 t002 t003 t004 t005 t006 ',
+              timestamp: '2026-09-24T00:00:00Z',
+              status: 'streaming',
+              isStreaming: true,
+              turnId: 'turn-live',
+              // No confirmedUnfinished — catch_up_complete never ran.
+            },
+          },
+        } as never,
+      },
+    })
+
+    render(<AssistantMessageConnectionStatus messageId="assistant-1" agentName="Mia" />)
+    expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
   })
 
   it('resends by message id (including any attachments) via resendMessage, not a fresh sendMessage call', () => {

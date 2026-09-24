@@ -177,6 +177,25 @@ export type ChatMessage = Message & {
    */
   mergedReplayIds?: string[]
   /**
+   * #823 catch-up redesign, Opus review round 3 item N1 (BE-DESIGN.md §6.5):
+   * set ONCE, directly, by the `catch_up_complete` reducer's own sweep — NOT
+   * recomputed reactively from `turnId !== activeTurnId` on every render.
+   * The reactive comparison was the actual N1 bug: `activeTurnId` is ONLY
+   * ever populated by a `session_state.active_turn` frame, which for an
+   * ORDINARY live turn that never disconnected never arrives mid-turn (only
+   * the very first, turn-less `session_state{}` at connection bind does) —
+   * so `activeTurnId` stays `null` for the ENTIRE duration of every normal
+   * live turn, making `msg.turnId !== activeTurnId` true from the first
+   * token onward and showing "couldn't be finished · Generate again" under
+   * every streaming answer, disconnect or not (browser-confirmed at t006 of
+   * a live turn). §6.5's real rule only makes sense evaluated ONCE, right
+   * after a genuine `catch_up_complete` — the one moment `session_state`'s
+   * `active_turn` is authoritative for messages that predate it. This flag
+   * records that one-time judgment so the render layer never has to
+   * re-derive (and re-break) it.
+   */
+  confirmedUnfinished?: boolean
+  /**
    * ADR-051 — the typed LLM error code carried on a live `ErrorFrame` /
    * `ReplayErrorFrame` payload (`payload.llm_error.code`). SPA-only display
    * field (never serialized to the wire — the bubble is rendered from the
