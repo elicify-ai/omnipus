@@ -464,6 +464,8 @@ nobody knows to retry it.
 Run this lane **last**, or on a dedicated instance: I1 and I4 disturb the whole
 server.
 
+**I3 (provider failure) is deliberately excluded from this run** — see below.
+
 ### I1 — The server restarts while workers are running
 
 **Setup.** Agents `uat-i-boss`, `uat-i-worker`. **Requires someone who can restart
@@ -517,37 +519,24 @@ not interrupted by the browser going away.
 after reconnecting, or if the UI still shows `running` for something that actually
 finished.
 
-### I3 — The AI provider fails or rate-limits mid-task
+### I3 — removed: provider-failure recovery is deferred
 
-**Setup.** Agents `uat-i3-boss`, `uat-i3-worker`. You need a provider failure. In
-order of preference: (a) ask an operator to point the worker's model at an invalid
-API key or unreachable endpoint; (b) use a model with a very low rate limit and
-start several workers at once to trip it; (c) if neither is available, record
-**BLOCKED** — do not fake it.
+**Do not test provider failure in this run.** The scenario was written, then pulled
+before anyone ran it.
 
-**Steps.**
-1. Start a delegation that will make several model calls.
-2. Cause the provider failure while the worker is `running`.
-3. Watch the worker row and the boss's chat for 5 minutes.
+Checking what the product actually does revealed that a delegated worker **cannot**
+retry a provider rate limit: the retry's enabling condition has had no production
+writer since the sub-turn mechanism was deleted. The code, its retry limit and its
+tests all still exist — the tests pass only because they hand-build a state that
+production no longer produces.
 
-**Expected.**
-- The worker either **recovers and continues** (a transient rate limit should be
-  retried), or **fails with a clear message naming the provider problem**.
-- The boss is told either way.
-- The boss's chat does **not** spin indefinitely with no explanation.
+So the scenario would fail for a cause already known and already filed
+(**issue #857**). Running it would spend a tester's time to rediscover a logged bug,
+and — worse — would put a FAIL in this report that looks like an ADR-091 regression
+when it is a separate defect with its own fix.
 
-**Screenshots.** (a) the moment of failure; (b) the row 1 minute later; (c) the
-boss's chat at 5 minutes.
-
-**PASS** if the worker recovers, or fails with a message that reaches the boss.
-**FAIL** if the worker stalls silently, or the boss waits forever with no error.
-
-> ⚠️ **Report this one carefully whatever happens.** There is reason to believe a
-> delegated worker does **not** currently retry a provider rate limit, even though a
-> retry mechanism exists in the code — its enabling condition appears never to be met
-> for delegated work. If you see no retry, that is a genuine finding, not tester
-> error. Record exactly what you observed: how long it waited, whether any retry was
-> visible, and what the boss was finally told.
+**Restore this scenario once #857 is fixed**, and run it then. The behaviour is worth
+testing; it just cannot pass today.
 
 ### I4 — A nested worker survives an interruption
 
@@ -590,11 +579,11 @@ level dies and its ancestors wait for ever.*
 | F | Panel visibility, reload, long label | 1 account, 5 agents | 20 min |
 | G | Skill refusal | 1 account, 2 agents | 10 min |
 | H | Cross-account isolation | **2 accounts, 2 browsers** | 20 min |
-| I | Recovery: restart, network drop, provider failure, nested | restart and/or provider access | 35 min |
+| I | Recovery: restart, network drop, nested interruption | restart access | 25 min |
 
 Lanes A–I are independent. Lane P should complete first because B and E need the
-numbers it records. **Lane I restarts the server and/or breaks the provider — run it
-last, or against a dedicated instance**, or it will corrupt every other lane's result.
+numbers it records. **Lane I restarts the server — run it last, or against a
+dedicated instance**, or it will corrupt every other lane's result.
 
 ---
 
@@ -613,8 +602,8 @@ last, or against a dedicated instance**, or it will corrupt every other lane's r
 6. **The 30-minute lifetime cap covers the whole life of a delegated session.** A
    follow-up that wakes it does **not** restart the clock — a worker woken repeatedly
    over 30 minutes may still time out. That is intended.
-7. **A provider failure you cannot arrange is BLOCKED, not FAIL** (I3). Record it as
-   blocked and say why — never simulate the failure and report a guess.
+7. **Provider-failure recovery is not in this run.** It is deferred to issue #857;
+   see I3. Do not test it and do not report it.
 8. **Timings in this plan are guidance**, except the explicit 3-minute no-progress
    rule, which is a real FAIL condition.
 
