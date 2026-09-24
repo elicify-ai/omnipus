@@ -209,6 +209,7 @@ func (h *WSHandler) handleChatMessageWithClientID(
 	hcm := &wsHandlerHandleChatMessage{h: h, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, clientMessageID: clientMessageID, wc: wc}
 	defer func() {
 		if !hcm.admitted {
+			hcm.h.forgetAcceptedMessage(hcm.sessionID, hcm.clientMessageID)
 			hcm.sendMessageStatus("failed")
 		}
 	}()
@@ -222,6 +223,13 @@ func (h *WSHandler) handleChatMessageWithClientID(
 	}
 
 	if hcm.resolveSessionStore() {
+		return
+	}
+
+	// #823 review item 6: a re-sent message this session already accepted is
+	// answered, never turned into a second user message and a second turn.
+	if hcm.answerRetriedMessage() {
+		hcm.admitted = true
 		return
 	}
 
@@ -356,6 +364,7 @@ func (hcm *wsHandlerHandleChatMessage) markWorkingIfTurnAlreadyActive() {
 	if !hcm.removeQueuedWorkingStatusLocked() {
 		return
 	}
+	h.markAcceptedMessageWorkingLocked(hcm.sessionID, hcm.clientMessageID)
 	if h.hubs != nil && hcm.sessionID != "" {
 		h.hubs.getOrCreate(hcm.sessionID).publishBytes(data)
 	}
@@ -422,6 +431,7 @@ func sendPendingMessageWorking(h *WSHandler, sessionID string, pending pendingMe
 	if h == nil {
 		return
 	}
+	h.markAcceptedMessageWorking(sessionID, pending.clientMessageID)
 	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
 		Type:            string(generated.WsFrameTypeMessageStatus),
 		SessionId:       sessionID,
@@ -479,7 +489,13 @@ func (hcm *wsHandlerHandleChatMessage) publishUserMessage(entry session.Transcri
 			Type     string `json:"type"`
 		}{MimeType: a.MIMEType, Path: a.Path, Size: a.Size, Type: a.Type})
 	}
-	hcm.h.hubPublishFrame(hcm.sessionID, string(generated.WsFrameTypeUserMessage), frame, hcm.wc)
+	data, err := json.Marshal(frame)
+	if err != nil {
+		slog.Error("ws: marshal user_message failed", "session_id", hcm.sessionID, "error", err)
+		return
+	}
+	hcm.h.rememberAcceptedMessage(hcm.sessionID, entry.ClientMessageID, data)
+	hcm.h.hubPublishAndDeliverAlsoTo(hcm.sessionID, string(generated.WsFrameTypeUserMessage), data, hcm.wc)
 }
 
 // resolveTargetAgent resolves the target agent from the frame's agent_id (default-agent fallbacks included) and rejects worker agents and targets that resolve to nothing.

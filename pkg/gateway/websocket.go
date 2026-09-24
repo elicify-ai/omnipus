@@ -193,6 +193,10 @@ type WSHandler struct {
 	// actually opens a streamer for their turn. It backs the received→working
 	// distinction exposed to the SPA. Guarded by mu.
 	pendingMessageStatuses map[string][]pendingMessageStatus
+	// acceptedClientMsgs remembers, per session, the client message ids
+	// already accepted, so a retried send is answered instead of starting a
+	// second turn (ws_client_message_dedupe.go). Guarded by mu.
+	acceptedClientMsgs map[string]*acceptedClientMessages
 
 	// approvalRegV2 is the Central Tool Registry approval registry (FR-016, FR-070).
 	// Injected at boot by the gateway after construction.  Nil until then.

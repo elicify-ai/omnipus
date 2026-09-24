@@ -240,3 +240,70 @@ func TestFinalize_PersistsAnswerUnderItsLiveMessageID(t *testing.T) {
 	assert.True(t, sawReplayID, "replay_message.id must equal the live message_id")
 	assert.True(t, sawClientID, "a replayed user message carries its client_message_id")
 }
+
+// TestChatMessage_RetriedClientMessageID_IsIdempotent pins #823 review item
+// 6: a message the client re-sends because it never saw the server's
+// acknowledgement (same session, same client_message_id) must NOT become a
+// second user message and a second turn. The server answers the retry by
+// re-sending that message's echo and its current status to the sender only
+// (unsequenced — nothing is published twice to the session).
+func TestChatMessage_RetriedClientMessageID_IsIdempotent(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	h, _ := newTestWSHandlerForModelName(t, msgBus)
+	wc := makeTestConn()
+	wc.sendCh = make(chan []byte, 256)
+	sid := mintSessionFor(t, h, "chat-retry", wc)
+	drainInbound := func() int {
+		n := 0
+		for {
+			select {
+			case <-msgBus.InboundChan():
+				n++
+			case <-time.After(200 * time.Millisecond):
+				return n
+			}
+		}
+	}
+	require.Equal(t, 1, drainInbound(), "the minting message starts one turn")
+	for len(wc.sendCh) > 0 {
+		<-wc.sendCh
+	}
+
+	h.handleChatMessageWithClientID(context.Background(), "chat-retry", sid, "do the thing", "", nil,
+		"", "", false, "client-retry", wc)
+	require.Equal(t, 1, drainInbound(), "the first send starts one turn")
+	hub := h.hubs.lookup(sid)
+	require.NotNil(t, hub)
+	echoesBefore := len(journalFramesOfType(t, hub, "user_message"))
+	for len(wc.sendCh) > 0 {
+		<-wc.sendCh
+	}
+
+	// The client never saw the ack and retries the SAME message.
+	h.handleChatMessageWithClientID(context.Background(), "chat-retry", sid, "do the thing", "", nil,
+		"", "", false, "client-retry", wc)
+	assert.Equal(t, 0, drainInbound(), "a retried client_message_id must not start a second turn")
+	assert.Equal(t, echoesBefore, len(journalFramesOfType(t, hub, "user_message")),
+		"a retry publishes nothing new to the session")
+
+	entries, err := h.resolveSessionStore(sid).ReadTranscript(sid)
+	require.NoError(t, err)
+	persisted := 0
+	for _, e := range entries {
+		if e.Role == "user" && e.ClientMessageID == "client-retry" {
+			persisted++
+		}
+	}
+	assert.Equal(t, 1, persisted, "the retried message is persisted exactly once")
+
+	frames := readFramesUntil(t, wc, 1, func(m map[string]any) bool {
+		return m["type"] == "message_status" && m["client_message_id"] == "client-retry"
+	})
+	echoes := framesOfType(t, frames, "user_message")
+	require.Len(t, echoes, 1, "the sender gets the original echo back so its pending bubble resolves")
+	_, hasSeq := frameSeq(t, echoes[0])
+	assert.False(t, hasSeq, "the re-sent echo is unsequenced — it must never move a cursor")
+	var status generated.MessageStatusFrame
+	require.NoError(t, json.Unmarshal(framesOfType(t, frames, "message_status")[0], &status))
+	assert.NotEqual(t, "failed", status.State, "an accepted message is never reported failed on retry")
+}
