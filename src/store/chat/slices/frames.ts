@@ -236,7 +236,23 @@ function findBubbleIdForMessageId(draft: SessionChatState, messageId: string): s
 
 function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: TokenFrameType): void {
   const m = draft.messagesById[bubbleId]
-  m.content = frame.replace ? frame.content : (m.content ?? '') + frame.content
+  if (frame.replace) {
+    m.content = frame.content
+  } else {
+    // Opus review round 3 item N3 (MEDIUM-LOW): the #823 rewrite of the
+    // token case dropped the paragraph-break insertion `pendingTextBoundary`
+    // exists for (see ChatMessage.pendingTextBoundary's own doc comment,
+    // which still describes it: "the next token append ... gets a paragraph
+    // break instead of gluing on with no separator"). Without it, the text
+    // AFTER a tool call glues directly onto the text before it with no
+    // separator — "Let me check.All done." live, vs a real break after a
+    // reload replays the same content through applyMessageArray's own
+    // (unaffected) formatting. Insert the break, then consume the flag —
+    // mirrors the pre-#823 behavior exactly.
+    const boundary = m.pendingTextBoundary && m.content ? '\n\n' : ''
+    m.content = (m.content ?? '') + boundary + frame.content
+    m.pendingTextBoundary = false
+  }
   if (frame.agent_id) m.agentId = frame.agent_id
   if (frame.turn_id && !m.turnId) m.turnId = frame.turn_id
   m.isStreaming = true

@@ -149,8 +149,16 @@ describe('F1 — live turn, one tab, no reconnect (baseline shape)', () => {
     // turn_id — the fixture's own `assistant_messages` array is the turn's
     // successive text SEGMENTS, concatenated into that one bubble's content,
     // not two separate bubbles' contents.
+    //
+    // Opus review round 3 item N3: joined with a paragraph break, not
+    // `join('')` — a bare concatenation glues the post-tool-call
+    // continuation directly onto the pre-tool-call text with no separator
+    // ("Let me check.All done.", live), which does not match what a reload
+    // produces for the SAME persisted turn (a real paragraph break between
+    // the two segments). `join('')` locked that bug in as the oracle; fixed
+    // to expect the actual correct output.
     expect(asst).toHaveLength(1)
-    expect(asst[0].content).toBe((fixture.expect.assistant_messages as string[]).join(''))
+    expect(asst[0].content).toBe((fixture.expect.assistant_messages as string[]).join('\n\n'))
     expect(asst[0].status === 'done' && !asst[0].isStreaming).toBe(true)
 
     const allCalls = (asst[0].tool_calls ?? []).map((tc) => tc.tool)
