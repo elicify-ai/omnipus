@@ -153,7 +153,12 @@ export async function verifyCoverage({ manifestDir, storybookIndex, evidenceFile
       // Which engines must verify a kind is defined by executionContract(kind); results from
       // engines outside the contract are not evidence - browser.spec.ts skips forced-colors
       // on WebKit (issue #865), and an authorized skip must not be misread as failure evidence.
-      if (compatibleMatches.filter((result) => contract.projects.includes(result.project)).some((result) => !result.pass)) errors.push(`${manifest.component}/${check.id}: evidence contains a failed or retried-failure result`)
+      // A contract with no projects (unit) is not project-scoped at all, so an empty
+      // `projects` must mean "every result counts", never "no result counts" —
+      // `[].includes(p)` is false for every p, which would silently drop all unit
+      // evidence and make a failed unit test invisible to this audit.
+      const contractResults = contract.projects.length === 0 ? compatibleMatches : compatibleMatches.filter((result) => contract.projects.includes(result.project))
+      if (contractResults.some((result) => !result.pass)) errors.push(`${manifest.component}/${check.id}: evidence contains a failed or retried-failure result`)
       const incompatibleRunners = [...new Set(matches.filter((result) => result.runner !== contract.runner).map((result) => result.runner))]
       for (const runner of incompatibleRunners) errors.push(`${manifest.component}/${check.id}: evidence runner ${runner} is incompatible with ${check.kind === 'interaction' ? 'interaction' : check.kind === 'unit' ? 'unit' : 'browser-family'} check; expected ${contract.runner}`)
       for (const project of contract.projects) {
