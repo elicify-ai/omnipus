@@ -428,3 +428,50 @@ describe('BE-DESIGN.md §6.3, Opus review round 3 N2 — a bubble closed only by
     expect(b.messageOrder.indexOf(users[0].id)).toBeGreaterThan(b.messageOrder.indexOf(asst[0].id))
   })
 })
+
+// Opus review round 3, N5 (LOW-MEDIUM): a full rebuild (session_snapshot)
+// mid-way through a multi-step turn must not split the turn into two
+// bubbles. Root cause: replay_message ALWAYS reconstructs a bubble with
+// status:'done' — even one belonging to a turn session_state has just
+// confirmed is still running — so the turn's NEXT step (a new message_id,
+// same turn_id) failed the turn-keyed merge's "still open" check and
+// started a second bubble instead of continuing the first.
+describe('BE-DESIGN.md §6.3, Opus review round 3 N5 — a replayed bubble of the server-confirmed active turn stays open', () => {
+  it('the turn\'s next step merges onto the replayed bubble of its first step, not a new one', () => {
+    useSessionStore.setState({ activeSessionId: SID })
+    useChatStore.setState({ sessionsById: {}, messages: [], messagesById: {} } as never)
+
+    useChatStore.getState().handleFrame({
+      type: 'session_snapshot', session_id: SID, seq: 10, boot_id: 'boot-1', reason: 'unknown_position',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [],
+      active_turn: { turn_id: 'turn-n5', agent_id: 'mia', started_at: '2026-09-24T00:00:00Z' }, emitted_at: '2026-09-24T00:00:01Z',
+    } as WsReceiveFrame)
+    // Step one of the turn, fully persisted, replayed as HISTORY.
+    useChatStore.getState().handleFrame({
+      type: 'replay_message', session_id: SID, id: 'msg-1', role: 'assistant', content: 'step one done.', turn_id: 'turn-n5', agent_id: 'mia', timestamp: '2026-09-24T00:00:02Z',
+    } as WsReceiveFrame)
+    // The turn's NEXT step, still in progress — same turn_id, NEW message_id.
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'step two', message_id: 'msg-2', turn_id: 'turn-n5', agent_id: 'mia', seq: 11,
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'catch_up_complete', session_id: SID, seq: 11, boot_id: 'boot-1', mode: 'snapshot',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: ' finishing.', message_id: 'msg-2', turn_id: 'turn-n5', agent_id: 'mia', seq: 12,
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'done', session_id: SID, message_id: 'msg-2', turn_id: 'turn-n5', seq: 13, stats: { tokens: 5, cost: 0.01 },
+    } as WsReceiveFrame)
+
+    const bubbles = assistantBubbles()
+    expect(bubbles).toHaveLength(1)
+    // No paragraph break here — that's N3's concern (pendingTextBoundary,
+    // set only by tool_call_start) and this scenario has no tool call; N5
+    // is purely about NOT splitting into a second bubble.
+    expect(bubbles[0].content).toBe('step one done.step two finishing.')
+    expect(bubbles[0].status).toBe('done')
+  })
+})

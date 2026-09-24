@@ -28,7 +28,7 @@ import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpen
 import { bufferForSpan, hasOpenSpanFast, markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
 import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
-import { gateFrameBySeq, cursorFromTerminalFrame, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
+import { gateFrameBySeq, cursorFromTerminalFrame, insertHistoryMessageId, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
 import { ORPHAN_BUFFER_TTL_MS, orphanTimers, pendingByParentCallId } from '../types'
 import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
 import { handleReplayAndStatusFrame } from './replay-and-status-frames'
@@ -304,6 +304,20 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       // it and keep appending instead of discarding these tokens.
       if (existing.closedBySteer && existing.turnId === frame.turn_id) {
         existing.closedBySteer = false
+      } else if (existing.turnId && existing.turnId === draft.activeTurnId) {
+        // Opus review round 3 item N5 (LOW-MEDIUM): a replay_message-
+        // reconstructed bubble is always created with status:'done' (it's
+        // reconstructing HISTORY — replay-and-status-frames.ts's own
+        // newMsg literal), even when it belongs to a turn session_state
+        // (which always precedes replay frames in a real attach, §4.1 A6)
+        // has just confirmed is STILL RUNNING. Design §6.3: "For the active
+        // turn from session_state.active_turn, the replayed bubble stays
+        // eligible to receive tokens." Without this, a full rebuild mid-way
+        // through a multi-step turn split the continuation into a second
+        // bubble. Distinct from F4's persisted-between-bind-and-read case
+        // (BE-DESIGN.md §4.2/§6.3, kept below): there session_state carries
+        // NO active_turn for the already-finished turn, so activeTurnId is
+        // null and this branch correctly does not apply.
       } else {
         // §4.2/§6.3 overlap rule: a bubble already finalized (status 'done',
         // not streaming) ignores any further token for its message_id
@@ -332,10 +346,13 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       if (m?.role !== 'assistant' || m.turnId !== turnId) continue
       if (frame.agent_id && m.agentId && m.agentId !== frame.agent_id) continue
       if (m.status === 'interrupted' || m.status === 'error') continue
-      // N2 (see Step 1's identical fix above for the full "why"): a bubble
-      // closed only by a mid-turn steer is not actually finished for its
-      // own turn — eligible to receive this turn's NEXT message_id too.
-      if (m.status === 'done' && !m.isStreaming && !m.closedBySteer) continue // closed by done(turn_id) — do not reopen
+      // N2/N5 (see Step 1's identical fixes above for the full "why"): a
+      // bubble closed only by a mid-turn steer, OR a replay_message-
+      // reconstructed bubble belonging to the server-confirmed active
+      // turn, is not actually finished for its own turn — eligible to
+      // receive this turn's NEXT message_id too.
+      const stillEligible = m.closedBySteer || (m.turnId === draft.activeTurnId && draft.activeTurnId != null)
+      if (m.status === 'done' && !m.isStreaming && !stillEligible) continue // closed by done(turn_id) — do not reopen
       turnBubbleId = id
       break
     }
@@ -426,7 +443,16 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
     turnId,
   }
   draft.messagesById[bubble.id] = bubble
-  draft.messageOrder.push(bubble.id)
+  // Opus review round 3 item N5 (LOW-MEDIUM): a brand new assistant bubble
+  // must land BEFORE the pending tail (unresolved queued/sending/failed
+  // sends), not blindly at the true end of messageOrder — same rule as
+  // replay_message's own history insertion (insertHistoryMessageId, item 2
+  // above), applied here too since a live token can mint a new bubble
+  // while a pending message is sitting at the tail (a full rebuild during
+  // a multi-step turn is the scenario that surfaced it: the turn's
+  // continuation must not render BELOW a pending message it was never
+  // actually sent after).
+  insertHistoryMessageId(draft.messageOrder, draft.messagesById, bubble.id)
   draft.isStreaming = true
 }
 
