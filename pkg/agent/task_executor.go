@@ -401,8 +401,15 @@ func (te *TaskExecutor) mintTaskLifecycleRecord(sessionID string, t *task.Task) 
 		ownerID = t.PlanID
 	}
 	rec := &session.LifecycleRecord{
-		SessionID:      sessionID,
-		Generation:     0,
+		SessionID: sessionID,
+		// Generation starts at 1 (LifecycleRecord.Generation's own doc
+		// comment, and what every other minter writes —
+		// steer_launcher.go's launchDirect and launchSteered both use 1).
+		// This was 0, which persistLocked rejects, so EVERY task dispatch
+		// silently failed to write its durable record: the Persist error is
+		// logged and deliberately not propagated, so the task ran on with no
+		// lifecycle record ever being born.
+		Generation:     1,
 		State:          session.LifecycleQueued,
 		OwnerScopeKind: ownerKind,
 		OwnerScopeID:   ownerID,

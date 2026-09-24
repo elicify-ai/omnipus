@@ -191,6 +191,23 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 		}
 		cur.State = nextState
 		cur.NeedsInput = nil
+		// A Stop marker is an INSTRUCTION ("do not run this generation"),
+		// and landing the terminal state here is that instruction being
+		// carried out — so it is spent and must be cleared. persistLocked
+		// rejects a terminal record that still carries a current-generation
+		// marker, and it is right to: the pair says "finished" and "still
+		// waiting to be stopped" at once. Before that validation existed
+		// this closure wrote exactly that shape to disk silently, which is
+		// why a queued child that never ran stayed `queued` for ever after
+		// a Stop instead of reaching `cancelled` (founder decision,
+		// 2026-09-24: clear the marker; who stopped it and when live in the
+		// event log, not on the record). An OLDER marker
+		// (Stop.Generation < Generation) is inert history a revival
+		// deliberately retains — Stopped()'s doc comment covers all four
+		// shapes — so only the current generation's marker is cleared.
+		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
+			cur.Stop = nil
+		}
 		if nextState == session.LifecycleFailed {
 			cur.FailedReason = failureReason
 		}
