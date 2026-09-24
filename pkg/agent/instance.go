@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -1036,14 +1037,14 @@ func findModelConfigForProvider(cfg *config.Config, providerName string) (*confi
 }
 
 // godModeAvailable is the process-level god-mode AVAILABILITY gate (O14). It is
-// set once at boot by SetAllowGodMode to ((--allow-god-mode OR
-// config.Sandbox.GodModeAllowed) AND sandbox.GodModeAvailable) — the gateway
-// boot path (pkg/gateway/gateway.go's resolveAllowGodMode) is the single place
-// that combines the CLI flag and the config-persisted authorization grant
-// before calling SetAllowGodMode, so this atomic always reflects one coherent
-// decision. The runtime ON/OFF state lives in config.Sandbox.GodMode; god mode
-// is only ACTIVE when both are true. Using a package atomic keeps the free
-// function agentToolsCfgToPolicy (which has no loop receiver) able to consult
+// set to ((--allow-god-mode OR config.Sandbox.GodModeAllowed) AND
+// sandbox.GodModeAvailable) — the gateway boot path
+// (pkg/gateway/gateway.go's resolveAllowGodMode) is the single place that
+// combines the CLI flag and the config-persisted authorization grant before
+// publishing it, so this atomic always reflects one coherent decision. The
+// runtime ON/OFF state lives in config.Sandbox.GodMode; god mode is only
+// ACTIVE when both are true. Using a package atomic keeps the free function
+// agentToolsCfgToPolicy (which has no loop receiver) able to consult
 // availability without threading the boot flag through every construction
 // path.
 //
@@ -1051,11 +1052,43 @@ func findModelConfigForProvider(cfg *config.Config, providerName string) (*confi
 // grant written AFTER boot (e.g. via the Settings UI toggle) does not flip
 // this atomic until the process restarts and re-reads config — see
 // pkg/gateway/rest_god_mode.go's restart_required response field.
+//
+// Boot-order fix (2026-09-25, godmode-policy-freeze): this used to be
+// published ONLY by AgentLoop.SetAllowGodMode, called from
+// pkg/gateway/gateway_boot.go deep inside setupAndStartServices — AFTER
+// agent.NewAgentLoop (pkg/gateway/gateway.go::initializeAgentLoop) had
+// already built every agent instance. Each instance's tool-policy snapshot
+// (agentToolsCfgToPolicy) and bash tool (wireExecToolDepsOn) read
+// GodModeActive(cfg) AT THAT CONSTRUCTION TIME, so even a persisted
+// sandbox.god_mode=true survived a restart with GodMode frozen OFF for
+// every already-built consumer until the next TriggerReload — reproducing
+// exactly the UAT evidence (a delete_task ask-only-globally call still
+// produced an approval card right after a God Mode restart). SetGodModeAvailable
+// below is now called from gateway.go's loadConfigAndProvider, BEFORE
+// initializeAgentLoop/NewAgentLoop runs — mirroring the same "must happen
+// before NewAgentLoop" requirement that function's own agent.SetWindowCatalog
+// call already documents for the provider-catalog boot sequence. AgentLoop.
+// SetAllowGodMode still publishes the same atomic (idempotent, safe to call
+// twice with the same value) so any caller that only has an AgentLoop
+// reference keeps working unchanged.
 var godModeAvailable atomic.Bool
 
 // setGodModeAvailable publishes the boot-time availability decision. Called by
-// SetAllowGodMode; safe for concurrent use.
+// SetGodModeAvailable and SetAllowGodMode; safe for concurrent use.
 func setGodModeAvailable(v bool) { godModeAvailable.Store(v) }
+
+// SetGodModeAvailable publishes the boot-time god-mode AVAILABILITY decision
+// to the package-level atomic that GodModeActive consults, WITHOUT requiring
+// an *AgentLoop to already exist. Must be called before agent.NewAgentLoop —
+// see godModeAvailable's doc comment above for why. allow is the same
+// combined boot decision AgentLoop.SetAllowGodMode expects
+// ((--allow-god-mode OR config.Sandbox.GodModeAllowed), before the
+// build-support AND): this function applies the sandbox.GodModeAvailable
+// build-support gate itself, so callers pass the raw authorization decision,
+// not a pre-ANDed value.
+func SetGodModeAvailable(allow bool) {
+	setGodModeAvailable(allow && sandbox.GodModeAvailable)
+}
 
 // GodModeActive reports whether the global god-mode override is currently in
 // effect: the runtime switch (cfg.Sandbox.GodMode) is on AND god mode is

@@ -110,9 +110,19 @@ func (al *AgentLoop) SetToolApprover(a PolicyApprover) {
 	al.mu.Unlock()
 }
 
-// SetAllowGodMode sets the god-mode opt-in flag (latch 2). Must be called
-// before WireTier13Deps so the coercion logic picks up the correct value. If
-// called after WireTier13Deps, the change takes effect on the next hot-reload.
+// SetAllowGodMode sets the god-mode opt-in flag (latch 2) on this loop
+// instance (al.allowGodMode) and re-publishes the package-level availability
+// atomic (idempotent with, and redundant after, SetGodModeAvailable below —
+// see godmode-policy-freeze fix). Historically this was the ONLY publisher of
+// that atomic, called from pkg/gateway/gateway_boot.go deep inside
+// setupAndStartServices — AFTER agent.NewAgentLoop had already built every
+// agent instance from a stale (still-false) availability read, freezing
+// GodMode off for every already-built consumer until the next hot-reload.
+// gateway.go's loadConfigAndProvider now calls the package-level
+// SetGodModeAvailable BEFORE NewAgentLoop runs, so every instance
+// agent.NewAgentLoop builds already observes the correct availability at
+// construction time; this method remains for callers that only hold an
+// AgentLoop reference (e.g. a later config reload) and for tests.
 //
 // allow is expected to already be the combined boot decision — the caller
 // (pkg/gateway/gateway.go's resolveAllowGodMode) ORs the --allow-god-mode CLI
