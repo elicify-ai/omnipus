@@ -18,12 +18,13 @@ import { expect, test, type Page } from '@playwright/test'
 // directory failed 16-of-18 against the dev server and passed 18-of-18
 // against `dist/storybook` -- the dev server compiles on demand and loses
 // the race under parallel load. A screenshot gate on a dev server would be
-// pure noise. `playwright.design-system.config.ts` only starts the dev-server
-// `webServer` when STORYBOOK_URL is unset; CI always sets it, pointed at a
-// static file server over `dist/storybook` (built by `npm run
-// build:storybook` immediately before `npm run test:design-system:browser`
-// in .github/workflows/pr.yml -- this suite runs in the same job, after the
-// same build, before that dev-server fallback could ever be reached).
+// pure noise. `playwright.design-system.config.ts` starts the dev-server
+// `webServer` only when neither STORYBOOK_STATIC_DIR nor STORYBOOK_URL is set,
+// and refuses that fallback outright under CI. In .github/workflows/pr.yml
+// both this suite and browser.spec.ts set STORYBOOK_STATIC_DIR=dist/storybook
+// (built by `npm run build:storybook` earlier in the same job). (This comment
+// previously claimed CI always set STORYBOOK_URL; it did not, and the browser
+// step ran on the dev server until 2026-09-23.)
 //
 // Decisions recorded here trace to issue #753 section 2. See
 // playwright.design-system.config.ts for the "which projects" and

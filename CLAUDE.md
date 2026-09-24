@@ -99,7 +99,9 @@ mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/inde
 skill (`.claude/skills/omnipus-design-system/SKILL.md`; `src/components/ui/CLAUDE.md`
 carries the two rules that bite hardest). The design-system CI gate teaches by red build
 — the skill states each rule with the script or test that fires if you skip it, so you
-catch it before CI does, not after.
+catch it before CI does, not after. A recurring UI job (tooltip, inline error banner,
+copy-to-clipboard, …) uses a catalogued component, preferring a ported shadcn/ui
+component over a new local one — skill rule 14.
 
 **Size budgets (founder ruling, 2026-09-15; file fail limit set to 3,000 on 2026-09-22):** one file, one job; one function, one job. A file warns over 2,000 lines and fails over 3,000; a function warns over 120 lines and fails over 240 — same numbers for production and test code, but a React component only warns, never fails. Grandfathered entries (`scripts/budgets/*.txt`) may only shrink — do not add to one, extract first. `make lint-budgets` runs both gates with their self-checks.
 

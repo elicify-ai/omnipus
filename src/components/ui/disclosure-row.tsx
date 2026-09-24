@@ -93,7 +93,20 @@ const DisclosureRow = React.forwardRef<HTMLButtonElement, DisclosureRowProps>(
           // does not cascade through an element that declares its own, so
           // this row re-declares the canonical tool-row size explicitly
           // rather than silently rendering larger than every other call site.
-          'h-auto min-w-0 flex-1 justify-start gap-[var(--space-2)] rounded-none px-0 py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)]',
+          //
+          // pointer-coarse:min-h grows the row's REAL box on a coarse pointer,
+          // the same pattern SegmentedControlItem uses (see its own comment)
+          // — not just the invisible [data-ds-action]::before hit-region
+          // expander, which is position:absolute and does not affect layout.
+          // Stacked rows sit a `gap-[var(--space-2)]` apart with a natural
+          // height well under the 44px touch minimum; growing only the
+          // pseudo-element left each row's expanded hit region overlapping
+          // its neighbour, and the later sibling wins that overlap (rule 12,
+          // omnipus-design-system skill) — a tap near the shared edge
+          // toggled the wrong tool-call row. Growing the real box instead
+          // pushes adjacent rows apart through normal flex-column layout, so
+          // the hit regions never overlap in the first place.
+          'h-auto min-w-0 flex-1 justify-start gap-[var(--space-2)] rounded-none px-0 py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)] pointer-coarse:min-h-[var(--target-touch-minimum)]',
           expandable
             ? 'cursor-pointer hover:bg-[var(--color-surface-2)]/60'
             : 'cursor-default hover:bg-transparent',

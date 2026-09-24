@@ -136,10 +136,12 @@ func TestCredentialStoreFileFormat(t *testing.T) {
 	assert.Contains(t, raw, "salt", "must have 'salt' key")
 	assert.Contains(t, raw, "credentials", "must have 'credentials' key")
 
-	// Check version is 1.
+	// Check version is 2 — the name-bound format. (Was 1 until the one-time
+	// migration landed: version 1 now means "pre-name-binding, nil AAD", and a
+	// store is only ever written at the current version. See store_migrate.go.)
 	var version int
 	require.NoError(t, json.Unmarshal(raw["version"], &version))
-	assert.Equal(t, 1, version, "version must be 1")
+	assert.Equal(t, 2, version, "version must be 2 (name-bound format)")
 
 	// Check credentials has the correct nested structure.
 	var creds map[string]map[string]string

@@ -8,7 +8,7 @@
 // Storage format (credentials.json):
 //
 //	{
-//	  "version": 1,
+//	  "version": 2,
 //	  "salt": "<base64>",
 //	  "credentials": {
 //	    "ANTHROPIC_API_KEY": {
@@ -34,11 +34,16 @@
 // what makes a future AAD change a deliberate, self-enforcing break rather
 // than something a stale read path could paper over.
 //
-// Breaking change, greenfield with no migration and no fallback read: entries
-// written before the name binding was introduced carry a nil AAD and no longer
-// decrypt. An existing install must re-enter its credentials. There is
-// deliberately no "open with the name, else try no AAD" path — it would
-// restore the vulnerability for every pre-existing entry.
+// Format versions and the one-time upgrade: a store written before the name
+// binding is at "version": 1 and its entries carry a nil AAD. Unlocking such a
+// store migrates it once, before any other read, to "version": 2 — every entry
+// opened the legacy way and re-sealed under its own name with the same key, in
+// one atomic write (store_migrate.go). After that the file is at version 2 and
+// loadFileInternal refuses every other version, so the legacy read is
+// unreachable for that store. There is deliberately no per-read "open with the
+// name, else try no AAD" fallback — it would restore the vulnerability for
+// every entry, forever. See store_migrate.go for what the migration refuses
+// and for the residual risk it cannot remove.
 package credentials
 
 import (
@@ -64,7 +69,10 @@ import (
 )
 
 const (
-	storeVersion = 1
+	// storeVersion is the name-bound format: every entry sealed with
+	// aadFor(name). The pre-binding format (legacyStoreVersion) is read only
+	// by the one-time migration in store_migrate.go.
+	storeVersion = 2
 	saltLen      = 32
 	nonceLen     = 12
 	keyLen       = 32
@@ -74,12 +82,14 @@ const (
 	argonMemory  = 64 * 1024 // 64 MB
 	argonThreads = 4
 
-	// credentialAADPrefix is the domain-separation tag prefixed to every
-	// credential name before it is used as AES-GCM additional authenticated
-	// data. Bump it whenever the AAD construction changes: ciphertexts sealed
-	// under one tag cannot be opened under another, so the bump is what makes
-	// an accidental back-compat read impossible rather than merely discouraged.
-	credentialAADPrefix = "omnipus-credential-v1:"
+	// aadDomainTag is the domain-separation label prefixed to every entry
+	// name before it is used as AES-GCM additional authenticated data. It is
+	// not a secret — it is a fixed, public tag that scopes this sealing
+	// context so it can never collide with any other use of the master key.
+	// Bump it whenever the AAD construction changes: ciphertexts sealed under
+	// one tag cannot be opened under another, so the bump is what makes an
+	// accidental back-compat read impossible rather than merely discouraged.
+	aadDomainTag = "omnipus-credential-v1:"
 )
 
 // ErrStoreLocked is returned when the credential store is not unlocked.
@@ -201,14 +211,30 @@ func (s *Store) Close() {
 //
 // The key is COPIED, never aliased: the store owns the array Close overwrites,
 // and the caller keeps ownership of the slice it passed in.
+//
+// A store still in the pre-upgrade format is migrated here, before the key is
+// installed and before anything else can read it (store_migrate.go). If the
+// migration is refused the error is returned, the file is unchanged, and the
+// store stays locked.
 func (s *Store) UnlockWithKey(key []byte) error {
 	if len(key) != keyLen {
 		return fmt.Errorf("credentials: key must be exactly %d bytes, got %d", keyLen, len(key))
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.key = make([]byte, keyLen)
-	copy(s.key, key)
+	return s.installKeyLocked(key)
+}
+
+// installKeyLocked migrates a pre-upgrade store under key and, only if that
+// succeeds, installs a private copy of key. Caller holds s.mu for writing.
+func (s *Store) installKeyLocked(key []byte) error {
+	k := make([]byte, keyLen)
+	copy(k, key)
+	if _, err := s.migrateLegacyLocked(k, k, nil); err != nil {
+		wipe(k)
+		return err
+	}
+	s.key = k
 	return nil
 }
 
@@ -232,11 +258,45 @@ func (s *Store) UnlockWithPassphrase(passphrase string) error {
 	// there is one this wipe cannot touch.
 	defer wipe(derived)
 
+	// A pre-upgrade store is migrated under a FRESH salt, so the key the
+	// passphrase derives afterwards no longer opens pre-upgrade entries (see
+	// store_migrate.go, "Residual risk"). The second Argon2id run is paid only
+	// when the lock-free probe sees a legacy file.
+	// A probe error is not reported here: the key is installed and
+	// loadFileInternal reports an unreadable file on first use.
+	if sf, present, probeErr := s.readStoreVersionFile(); probeErr != nil || !present || sf.Version != legacyStoreVersion {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.installKeyLocked(derived)
+	}
+	freshSalt := make([]byte, saltLen)
+	if _, saltErr := io.ReadFull(rand.Reader, freshSalt); saltErr != nil {
+		return fmt.Errorf("credentials: generate migration salt: %w", saltErr)
+	}
+	freshKey := argon2.IDKey([]byte(passphrase), freshSalt, argonTime, argonMemory, argonThreads, keyLen)
+	defer wipe(freshKey)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.key = make([]byte, keyLen)
-	copy(s.key, derived)
-	return nil
+	migrated, err := s.migrateLegacyLocked(derived, freshKey, freshSalt)
+	if err != nil {
+		return err
+	}
+	if migrated {
+		s.key = make([]byte, keyLen)
+		copy(s.key, freshKey)
+		return nil
+	}
+	// Another process migrated the store while this one waited for the lock,
+	// under ITS fresh salt, so neither key derived here is the right one.
+	// Derive again from the salt now on disk.
+	current, err := s.loadOrCreateSalt()
+	if err != nil {
+		return err
+	}
+	rederived := argon2.IDKey([]byte(passphrase), current, argonTime, argonMemory, argonThreads, keyLen)
+	defer wipe(rederived)
+	return s.installKeyLocked(rederived)
 }
 
 // DeriveSubkey derives a 32-byte subkey from the unlocked master key using
@@ -469,6 +529,10 @@ func (s *Store) rotateFull(newKey, newSalt []byte) error {
 
 // loadFileInternal reads the store file. Caller must hold s.mu (read or write).
 // If the file does not exist, returns an empty storeFile with a fresh salt.
+//
+// Only the current format version is returned. A pre-upgrade file yields
+// ErrLegacyStoreFormat — only unlock migrates it, so no read path ever opens a
+// nil-AAD entry and no write path stamps a legacy file with the new version.
 func (s *Store) loadFileInternal() (*storeFile, error) {
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -493,6 +557,13 @@ func (s *Store) loadFileInternal() (*storeFile, error) {
 		slog.Error("credentials: store file is corrupted — fix or delete it manually",
 			"path", s.path, "error", unmarshalErr)
 		return nil, fmt.Errorf("credentials: store file corrupted (manual fix required): %w", unmarshalErr)
+	}
+	switch sf.Version {
+	case storeVersion:
+	case legacyStoreVersion:
+		return nil, ErrLegacyStoreFormat
+	default:
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedStoreVersion, sf.Version)
 	}
 	if sf.Credentials == nil {
 		sf.Credentials = make(map[string]encEntry)
@@ -574,7 +645,7 @@ func (s *Store) loadOrCreateSalt() ([]byte, error) {
 // the name it is stored under. See the package doc for why the version tag is
 // part of the AAD.
 func aadFor(name string) []byte {
-	return []byte(credentialAADPrefix + name)
+	return []byte(aadDomainTag + name)
 }
 
 // encrypt seals plaintext with AES-256-GCM using key, binding the envelope to

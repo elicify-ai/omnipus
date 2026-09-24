@@ -304,7 +304,7 @@ func unlockFromDeliveredKey(store *Store, sourcePath, defaultKeyPath string) err
 	// silently cannot read the newer half. Fail before the removal, not after.
 	if verifyErr := verifyKeyOpensStore(store.Path(), key); verifyErr != nil {
 		emitMasterKeyAuditRule(sourcePath, false,
-			fmt.Sprintf("delivered key does not decrypt the existing store: %v", verifyErr),
+			"delivered key does not decrypt the existing store: "+auditVerifyCategory(verifyErr),
 			"master_key_wrong_key")
 		return fmt.Errorf(
 			"delivered key does not decrypt the existing credential store at %q (%w): refusing, and leaving %q in place so the correct key can be delivered",
@@ -377,6 +377,29 @@ func verifyKeyOpensStore(path string, key []byte) error {
 		return err
 	}
 	return nil
+}
+
+// auditVerifyCategory reduces a verifyKeyOpensStore failure to a category and
+// a count for the audit record. The error itself names the failing entries —
+// right for the operator reading the boot error, wrong for the audit trail,
+// which records counts, never entry names (store_migrate.go's audit shape).
+func auditVerifyCategory(err error) string {
+	var migErr *MigrationError
+	if errors.As(err, &migErr) {
+		return fmt.Sprintf("pre-upgrade store migration refused, %d of %d entries failed authentication",
+			len(migErr.Failed), migErr.Total)
+	}
+	var authErr *EntryAuthError
+	if errors.As(err, &authErr) {
+		return "an existing entry failed authentication"
+	}
+	switch {
+	case errors.Is(err, ErrLegacyStoreAfterMigration):
+		return "pre-upgrade store refused after a completed migration"
+	case errors.Is(err, ErrUnsupportedStoreVersion):
+		return "unsupported store format version"
+	}
+	return "the existing store could not be read"
 }
 
 // generateAndPersistMasterKey mints a fresh 256-bit AES-256 key using

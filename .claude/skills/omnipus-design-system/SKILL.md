@@ -297,7 +297,10 @@ depend on files earlier steps produce:
 6. `npm run build:storybook` — writes `dist/storybook` (rule 11).
 7. `npm run test:storybook`
 8. `npm run test:design-system:browser` — runs the manifest-generated Playwright checks
-   (rule 10).
+   (rule 10), with `STORYBOOK_STATIC_DIR=dist/storybook` (rule 11). Under `CI` the
+   Playwright config refuses to start the dev server and bounds the whole run with a
+   25-minute `globalTimeout`; `tests/design-system/ci-storybook-target.test.mjs` fails
+   if a workflow step drops the static target or its step budget.
 9. `npm run test:design-system:screenshot` — the appearance gate (issue #753): pixel
    screenshots of the static Storybook build, diffed against the committed darwin and
    linux baselines under `tests/design-system/screenshot.spec.ts-snapshots/`
@@ -318,6 +321,44 @@ files the executed checks produce.
 **Typecheck trap:** `tsconfig.json` is a project-references root with `"files": []` — a
 bare `tsc --noEmit` silently type-checks nothing and exits 0. Use `npm run typecheck`
 (`tsc -b --noEmit`).
+
+## 14. A recurring UI job uses a catalogued component — never a local one-off
+
+A UI job a screen needs is either already in the catalog, already exists upstream in
+shadcn/ui and just needs porting in (the pattern every current primitive already follows
+— Radix primitive + `forwardRef` + `cn`/`clsx`, re-tokenized to Sovereign Deep; see
+`popover.tsx`, `accordion.tsx`, `dialog.tsx`), or it is genuinely new. In that order:
+
+1. **Catalogued already?** Check `design-system/catalog.json` and `src/components/ui/`.
+   Use it.
+2. **shadcn/ui has it?** Port it in like every existing primitive was ported — Radix
+   underneath, tokens instead of shadcn's default Tailwind palette — then publish it
+   through the four-part contract (rule 9).
+3. **Neither?** Build a shared composite or primitive, still through the four-part
+   contract.
+4. **A local, one-off, unpublished implementation is the last resort**, and needs a
+   stated reason in the code (why this one screen's job doesn't generalize) — not
+   silence, and not a second copy of a job another file already solved.
+
+**How to tell a job is recurring, before you build another local copy of it:** grep for
+the shape of what you're about to write — a JSX attribute name (`title=`), a repeated
+class fragment (`border-\[var\(--color-error\)\]/`, `rounded-full.*w-2 h-2`), a repeated
+call (`navigator\.clipboard\.writeText`) — across `src/components/`. These are regular
+expressions (the Grep tool is ripgrep): escape `[ ] ( ) .` or the pattern silently matches
+nothing — unescaped `(--color-error)` is a capture group, not literal parentheses. Two or more files
+independently solving the same job is a catalogued-component candidate, not a
+coincidence; a code comment that says a pattern "mirrors" or "matches" another file's
+markup instead of importing it is the tell that someone already noticed and chose not to
+consolidate.
+
+**What is and isn't enforceable today.** `controls.mjs` (rule 1) catches a hand-built
+*control* (button/dialog/switch/tab). Nothing catches a locally re-declared
+`*EmptyState`/`*ErrorState`/`*Skeleton` — there is no name-based check for those, so grep
+for them yourself — and nothing catches a job with no catalogued component at all — a tooltip built from `title=` and
+`role="tooltip"`, an inline error banner assembled from `border`/`bg` utilities without
+ever being named or exported, a copy-to-clipboard handler re-typed in each file. Nothing
+currently scans for cross-file markup duplication; that gap is closed by the grep step
+above, done by whoever is about to add the Nth instance of a job, not by CI.
 
 ## Escape hatches, all of them
 

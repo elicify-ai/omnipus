@@ -346,13 +346,20 @@ describe('WsConnection — offline event disconnects immediately', () => {
   })
 })
 
-// ── B1.3(c) — persistent banner for non-1000/1001 close codes ─────────────────
+// ── #823: a transport drop must never reach the error channel ────────────────
+//
+// Was "persistent banner for non-1000/1001 close (B1.3c)": that spec (onError
+// with a message containing the close code, rendered by AppShell as a
+// technical banner — "Disconnected from gateway — code 1006 connection lost.
+// Reconnecting…") is the defect issue #823's follow-up comment reports as
+// still live on release/v0.1.1. It is superseded: an abnormal close (any
+// code, including 1006/1011) must route ONLY through onReconnectStateChange
+// into the phase-1 quiet UI (ConnectionStatus.tsx), never through
+// callbacks.onError / the AppShell banner. Updated honestly per the fix, not
+// weakened — the assertions below still fail if onError fires for a drop.
 
-describe('WsConnection — persistent banner for non-1000/1001 close (B1.3c)', () => {
-  // Traces to: B1.3(c) — non-1000/1001 close codes must call onError with a
-  // message containing the code, which AppShell renders as a persistent banner.
-
-  it('calls onError with code in message for 1006 close', () => {
+describe('WsConnection — no error-channel banner for an abnormal close (#823)', () => {
+  it('does NOT call onError for a 1006 close (was: banner with code 1006)', () => {
     const cbs = makeCallbacks()
     const conn = new WsConnection(cbs)
     conn.connect()
@@ -360,14 +367,12 @@ describe('WsConnection — persistent banner for non-1000/1001 close (B1.3c)', (
 
     lastWsInstance.onclose?.({ code: 1006, reason: '' })
 
-    expect(cbs.onError).toHaveBeenCalledWith(
-      expect.stringContaining('1006')
-    )
+    expect(cbs.onError).not.toHaveBeenCalled()
 
     conn.disconnect()
   })
 
-  it('calls onError with code in message for 1011 close', () => {
+  it('does NOT call onError for a 1011 close (was: banner with code 1011)', () => {
     const cbs = makeCallbacks()
     const conn = new WsConnection(cbs)
     conn.connect()
@@ -375,9 +380,7 @@ describe('WsConnection — persistent banner for non-1000/1001 close (B1.3c)', (
 
     lastWsInstance.onclose?.({ code: 1011, reason: 'server error' })
 
-    expect(cbs.onError).toHaveBeenCalledWith(
-      expect.stringContaining('1011')
-    )
+    expect(cbs.onError).not.toHaveBeenCalled()
 
     conn.disconnect()
   })
@@ -393,6 +396,62 @@ describe('WsConnection — persistent banner for non-1000/1001 close (B1.3c)', (
 
     // onError must not be called for a 1000 close initiated by the client
     expect(cbs.onError).not.toHaveBeenCalled()
+  })
+
+  it('never calls onError with "gateway", a close code, or "1006" for any abnormal close', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    for (const code of [1006, 1001, 1011, 1012, 4000]) {
+      lastWsInstance.onclose?.({ code, reason: 'abnormal' })
+      // Force a fresh socket synchronously (bypassing the real backoff timer)
+      // so the next close in this loop has a live onclose handler to call.
+      conn.connect()
+      lastWsInstance.onopen?.()
+    }
+
+    for (const call of cbs.onError.mock.calls as [string][]) {
+      const [message] = call
+      expect(message.toLowerCase()).not.toContain('gateway')
+      expect(message).not.toMatch(/\bcode 1\d{3}\b/)
+      expect(message).not.toContain('1006')
+    }
+
+    conn.disconnect()
+  })
+
+  it('drives the disconnected/reconnecting state via onDisconnected + onReconnectStateChange, not onError', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+    cbs.onError.mockClear()
+    cbs.onDisconnected.mockClear()
+    cbs.onReconnectStateChange.mockClear()
+
+    lastWsInstance.onclose?.({ code: 1006, reason: 'abnormal' })
+
+    expect(cbs.onDisconnected).toHaveBeenCalledTimes(1)
+    expect(cbs.onReconnectStateChange).toHaveBeenCalledWith('reconnecting', expect.any(Number))
+    expect(cbs.onError).not.toHaveBeenCalled()
+
+    conn.disconnect()
+  })
+
+  it('ws.onerror (transport-level) never calls callbacks.onError', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+    cbs.onError.mockClear()
+
+    lastWsInstance.onerror?.()
+
+    expect(cbs.onError).not.toHaveBeenCalled()
+
+    conn.disconnect()
   })
 })
 
@@ -1178,12 +1237,21 @@ describe('Fix 1: resilient reconnect schedule', () => {
     conn.disconnect()
   })
 
-  it('onError with give-up message only after ALL phases exhausted (10 fast + 20 slow)', () => {
+  // #823: was "onError with give-up message only after ALL phases exhausted"
+  // — the give-up case fed callbacks.onError with a "Click Reconnect now"
+  // banner message. That is the same error-channel-for-a-drop defect #823's
+  // follow-up comment reports: the "gave up" outcome must map to the quiet
+  // `unreachable` state (ChatConnectionStatusLine already renders its own
+  // "Try again" affordance for reconnectPhase === 'gave_up') and must NEVER
+  // reach callbacks.onError. Updated honestly per the fix, not weakened —
+  // still fails if the give-up path calls onError.
+  it('onReconnectStateChange fires "gave_up" only after ALL phases exhausted (10 fast + 20 slow) — never onError', () => {
     const cbs = makeCallbacks()
     const conn = new WsConnection(cbs)
     conn.connect()
     lastWsInstance.onopen?.()
     cbs.onError.mockClear()
+    cbs.onReconnectStateChange.mockClear()
 
     // ── Fast phase: 10 failures ────────────────────────────────────────────────
     for (let i = 0; i < 10; i++) {
@@ -1192,8 +1260,8 @@ describe('Fix 1: resilient reconnect schedule', () => {
     }
 
     // After fast phase — should NOT have given up yet.
-    const giveUpAfterFast = (cbs.onError.mock.calls as [string][]).filter(
-      ([msg]) => typeof msg === 'string' && msg.toLowerCase().includes('reconnect now')
+    const giveUpAfterFast = (cbs.onReconnectStateChange.mock.calls as [string | null, number][]).filter(
+      ([phase]) => phase === 'gave_up'
     )
     expect(giveUpAfterFast).toHaveLength(0)
 
@@ -1206,11 +1274,15 @@ describe('Fix 1: resilient reconnect schedule', () => {
     // One more close to trigger the give-up guard at the start of _scheduleReconnect.
     lastWsInstance.onclose?.({ code: 1006, reason: 'server down' })
 
-    // Now give-up message must have been emitted.
-    const giveUpCall = (cbs.onError.mock.calls as [string][]).find(
-      ([msg]) => typeof msg === 'string' && msg.toLowerCase().includes('reconnect now')
+    // Now the gave_up phase transition must have fired…
+    const giveUpCall = (cbs.onReconnectStateChange.mock.calls as [string | null, number][]).find(
+      ([phase]) => phase === 'gave_up'
     )
     expect(giveUpCall).toBeDefined()
+
+    // …and onError must NEVER have been called across the whole sequence —
+    // the give-up outcome is quiet-UI-only, no banner.
+    expect(cbs.onError).not.toHaveBeenCalled()
 
     conn.disconnect()
   })
