@@ -24,7 +24,7 @@
 
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, waitForConnected, startNewChat, assistantMessages } from './fixtures/selectors'
+import { chatInput, waitForConnected, startNewChat, assistantMessages, userMessages } from './fixtures/selectors'
 import { installFreezeProxy } from './helpers/freezeProxy'
 
 const stopButton = (page: Page) => page.locator('[data-testid="stop-btn"]')
@@ -112,6 +112,22 @@ const sidebarToggle = (page: Page) => page.getByRole('button', { name: 'Toggle n
 // dedicated testid per row, the title text IS the selector.
 const sessionRowByTitle = (page: Page, title: string) => page.getByRole('button', { name: title, exact: true })
 
+// Real-browser follow-up (orchestrator, scenario c): Sidebar.tsx's own
+// "click-outside overlay dismiss" backdrop (`aria-hidden="true"`,
+// `className="absolute inset-0 z-30"`, `onClick={close}`) is wrapped in
+// AnimatePresence with a 150ms exit fade — after close() fires (either the
+// hamburger's own toggle, or a session row's auto-close via onClose), this
+// element stays mounted and still intercepts pointer events for that
+// window. CI evidence: a composer click timed out with this exact element
+// ("<div aria-hidden=true class=absolute inset-0 z-30>") named as the
+// interceptor. Never `force` the composer (masks a real reachability
+// problem for an actual user) — wait for the backdrop to actually leave
+// the DOM instead, the same way a real click has to wait for it.
+const sidebarBackdrop = (page: Page) => page.locator('div[aria-hidden="true"].absolute.inset-0.z-30')
+async function waitForSidebarClosed(page: Page) {
+  await sidebarBackdrop(page).waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {})
+}
+
 // The currently-active row carries aria-current="page" (SidebarSessionRow).
 // Used to capture chat A's real, server-assigned title (which is a model-
 // generated summary of the first message, not the prompt text verbatim —
@@ -134,6 +150,7 @@ async function activeSidebarTitle(page: Page): Promise<string> {
   // the topmost element at that point — the standard, narrow answer to
   // "another element visually overlaps the one I actually want to click".
   await sidebarToggle(page).click({ force: true }) // close the drawer again
+  await waitForSidebarClosed(page)
   return title
 }
 
@@ -145,6 +162,7 @@ async function activeSidebarTitle(page: Page): Promise<string> {
 async function switchToSessionByTitle(page: Page, title: string) {
   await sidebarToggle(page).click()
   await sessionRowByTitle(page, title).click()
+  await waitForSidebarClosed(page)
 }
 
 // Round-3/round-4 open item (orchestrator, both rounds): the previous version
@@ -202,6 +220,13 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     test.setTimeout(420_000)
     const freeze = await installFreezeProxy(page)
     const before = await startLongTurn(page)
+    // Real-browser follow-up (orchestrator): a hard reload lands on the
+    // welcome/empty chat, not the previous session — the tab does not
+    // reopen the last session on its own (checked: this is release
+    // behaviour too, not something to change the product for). Capture
+    // chat A's real, server-assigned sidebar title BEFORE the reload, the
+    // same way scenario c already does, so it can be reopened afterward.
+    const titleA = await activeSidebarTitle(page)
     await freeze.freeze()
     await page.waitForTimeout(60_000)
     // The new connection (opened by a reload) attaches independently while
@@ -209,6 +234,10 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await page.reload()
     await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
     await waitForConnected(page)
+    // Reopen chat A via the sidebar — the same real navigation scenario c
+    // uses, not page.goto (a second reload would just repeat the same
+    // welcome-screen landing).
+    await switchToSessionByTitle(page, titleA)
     await waitTurnDoneAfterReload(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     const after = (await bubbleText(assistantMessages(page).first())).trim()
@@ -378,6 +407,22 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     // The user's own message is the pending tail (§4.7) — it must render at
     // the end of history, never duplicated, once user_message reconciles it.
-    await expect(page.getByText('typed while offline')).toHaveCount(1)
+    //
+    // Real-browser follow-up (orchestrator): an unscoped page.getByText
+    // resolved to 2 elements — investigated (Sidebar.tsx's isPinned
+    // defaults false, so the drawer isn't rendered at all without an
+    // explicit open, ruling out a stale sidebar row; the two sr-only
+    // aria-live announcers in ChatScreen.tsx don't echo user message text
+    // either) without being able to pin down the second match from CI
+    // evidence alone (the 382MB trace artifact did not finish downloading
+    // in time — noted honestly, not guessed past). Scoped to actual
+    // message bubbles specifically (userMessages — every real chat row
+    // carries data-message-id, which nothing else on the page does) rather
+    // than broad page text — this directly answers what this assertion is
+    // actually for ("is the message duplicated IN THE CHAT"), and does NOT
+    // mask a real duplicate: if both of CI's two matches turn out to be
+    // actual message bubbles, this scoped locator still finds both and
+    // still fails.
+    await expect(userMessages(page).filter({ hasText: 'typed while offline' })).toHaveCount(1)
   })
 })
