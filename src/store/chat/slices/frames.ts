@@ -1977,6 +1977,25 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           if (!targetSid) break
           const sf = frame as WsSubagentStartFrame
           withBucket(targetSid, (b) => {
+            // #823/ADR-091 merge review (Opus F4, low, plausible race): the
+            // Go side's deliverSubagentStart persists the span to the
+            // session transcript BEFORE emitting the live frame — not one
+            // atomic step. If a second tab's attach_session binds in that
+            // exact window, its snapshot replay emits this SAME span
+            // (reconstructed from the transcript, unsequenced) and the live
+            // copy (sequenced, seq above whatever the bucket's cursor
+            // already had) also arrives — one delegation, two
+            // subagent_start frames for the same span_id. Dedupe by
+            // span_id: if the index already resolves to a real span, this
+            // is a duplicate — ignore it outright. Never create a second
+            // span, and never touch the existing one's state (a
+            // subagent_message/subagent_state may have updated it since the
+            // first copy was applied).
+            const dupEntry = b.spanBySpanId?.[sf.span_id]
+            const dupSpan = dupEntry ? b.messagesById[dupEntry.messageId]?.spans?.[dupEntry.spanIdx] : undefined
+            if (dupSpan && dupSpan.spanId === sf.span_id) {
+              return {}
+            }
             return produce(b, (draft) => {
               // ADR-070 §2.1/F2: a bare findLastAssistantMessageId scan here
               // would reattach this span to a closed, closedBySteer bubble
