@@ -48,6 +48,55 @@ func (p *dispatchContextProvider) GetDefaultModel() string { return "dispatch-co
 // needs — newTestAgentLoop's minimal harness never calls
 // SetSessionMessagingStores (that happens later, at gateway boot), so
 // AgentLoop.GetSessionLifecycleStore() is nil by default.
+//
+// [D3, ADR-091 fix lane sq-leak] t.Cleanup(al.Close) closes a harness gap,
+// not a production one. newAL's own cleanup (turn_test.go) is a deliberate
+// no-op — most of this package's tests never leave anything running in the
+// background, so callers that DO are expected to Close() explicitly (see
+// ask_user_resume_through_bus_test.go's "caller is responsible for
+// al.Close()"). Every steer test built on this helper is the exception:
+// SteerLauncher.Dispatch's admitted turn, and the queue promotion it
+// triggers on the way out, run on a DETACHED goroutine
+// (admission.go::goSteeredTurn) that is correctly registered on the
+// admission gate's WaitGroup and correctly joined by AgentLoop.Close's
+// bounded drainSteeredTurns(30s) — the ADR-091 fix lane that added that join
+// (commit 6a05b3a69) verified it against tests/adr091's own harness, whose
+// newSteerFixture already calls t.Cleanup(al.Close). It was never wired into
+// THIS package's 60+ newSteerAL call sites, so the join it added was dead
+// code for every one of them: the WaitGroup counts the goroutine correctly,
+// but nothing ever calls Wait() on it before the test function returns and
+// t.TempDir's own t.Cleanup (registered earlier, inside newTestAgentLoop,
+// hence run LATER — t.Cleanup is LIFO) removes the directory the goroutine
+// is still writing into.
+//
+// TestDelegateSteer_RevivesStoppedQueuedChild (steering_test.go) is the
+// reproducer: releaseAll() frees the busy sibling's slot, which promotes the
+// revived, previously-queued child through drainSteerQueue -> goSteeredTurn
+// -> runDispatchedSteeredTurn on a THIRD detached goroutine. The test only
+// waits for that goroutine to REACH the provider (provider.entered), not for
+// it to FINISH — completeSteeredTurn's Load/Deliver/Mutate sequence keeps
+// running after the test function returns, racing TempDir's RemoveAll
+// ("TempDir RemoveAll cleanup: ... directory not empty", reproduced locally
+// at a rate of roughly 1-in-15 runs under -race, confirmed by re-running
+// this file's ORIGINAL two-line cleanup 15 times). Verified NOT the
+// dispatchDeferredGoalAdjudication goroutine steer_completion.go's own
+// header flags as unverified: this test sets no goal (rec.GoalRef == ""),
+// so disposeSteeredTurnResult takes the completeSteeredTurn branch directly,
+// never finishSteeredGoalTurn — confirmed by the failure's own WARN text
+// ("steer: complete turn failed", steer_launcher.go, emitted ONLY from that
+// branch) and by dispatchDeferredGoalAdjudication having zero callers in
+// this test's path.
+//
+// t.Cleanup (not `defer`, so it runs after each test's own `defer
+// cleanup()`, and — per the LIFO order above — before t.TempDir's own
+// removal) gives that goroutine a real join point: al.Close() ->
+// drainSteeredTurns blocks until it finishes (bounded 30s) before TempDir is
+// ever removed. Registered AFTER newAL's t.TempDir call but BEFORE any
+// caller's own installParkedProvider(t, al) (which registers its own
+// t.Cleanup(release) later still, so — again by LIFO — providers are
+// released and their parked turns unblocked BEFORE al.Close's drain runs,
+// not after; Close never blocks the full 30s budget waiting on a provider a
+// test's own cleanup was about to release anyway).
 func newSteerAL(t *testing.T) (*AgentLoop, func()) {
 	t.Helper()
 	al, cleanup := newAL(t)
@@ -55,6 +104,7 @@ func newSteerAL(t *testing.T) (*AgentLoop, func()) {
 	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
 	inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
 	al.SetSessionMessagingStores(inbox, lifecycle)
+	t.Cleanup(func() { al.Close() })
 	return al, cleanup
 }
 
