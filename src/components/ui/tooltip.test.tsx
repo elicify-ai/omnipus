@@ -86,6 +86,22 @@ describe('Tooltip — reveal/dismiss', () => {
     expect(screen.getByRole('tooltip')).not.toHaveClass('pointer-events-none')
   })
 
+  // A coarse (touch) pointer has no hover for WCAG 1.4.13 to protect — but the
+  // bubble (z-50, opened above the trigger) sits inside the trigger's own
+  // touch-target-minimum hit region, and the later sibling wins an overlap: left
+  // pointer-events:auto on touch, the open bubble would steal taps meant for the
+  // trigger's expanded 44px region. `pointer-coarse:` is a distinct class token
+  // from `pointer-events-none`, so this does not weaken the mouse-hoverable proof above.
+  it('the bubble drops pointer events on a coarse pointer, so it cannot steal a tap meant for the trigger', () => {
+    render(
+      <Tooltip content="Explanation text" data-testid="trigger">
+        <span>Auto → Ask</span>
+      </Tooltip>,
+    )
+    fireEvent.mouseEnter(screen.getByTestId('trigger'))
+    expect(screen.getByRole('tooltip')).toHaveClass('pointer-coarse:pointer-events-none')
+  })
+
   // A real tap synthesizes mouseenter + focus + click for the same gesture.
   // The bug: a click handler that TOGGLED closed what hover/focus had just
   // opened, in the same gesture — so the bubble could "never open on

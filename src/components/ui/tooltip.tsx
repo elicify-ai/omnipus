@@ -164,7 +164,24 @@ export function Tooltip({ content, label, children, side = 'top', className, ...
           onMouseEnter={openNow}
           onMouseLeave={scheduleClose}
           className={cn(
-            'absolute left-1/2 z-50 w-64 max-w-[calc(100vw-var(--space-4))] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-3)] px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] shadow-[var(--elevation-floating)]',
+            // pointer-coarse:pointer-events-none — a coarse (touch) pointer has no
+            // hover state for WCAG 1.4.13 to protect: this rule exists for a mouse
+            // that can travel from trigger to bubble. Left pointer-events:auto on
+            // touch, the bubble (z-50, painted above the trigger) sits inside the
+            // trigger's own touch-target-minimum hit region (`[data-ds-action]`'s
+            // 44px expansion reaches past the mb/mt-[--space-1] gap into the open
+            // bubble above it) and — the later sibling wins an overlap — steals
+            // taps meant for the trigger. Touch already opens on tap and closes on
+            // Escape/tap-away (see the trigger's onClick comment below), so nothing
+            // is lost by not receiving pointer events here on a coarse pointer.
+            'pointer-coarse:pointer-events-none',
+            // forced-colors: without an explicit system-color repaint, forced-colors
+            // mode's own default color substitution for an un-opted-out element does
+            // not reliably keep border/background/text distinguishable (precedent:
+            // 69d61f59d's WebKit finding of #ffffff-on-#c0c0c0, 1.81:1, from the same
+            // default-heuristic gap) — matches Button/Progress/Slider/Switch's own
+            // forced-color-adjust:none + explicit system-color pattern.
+            'absolute left-1/2 z-50 w-64 max-w-[calc(100vw-var(--space-4))] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-3)] px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] shadow-[var(--elevation-floating)] forced-colors:border-[CanvasText] forced-colors:bg-[Canvas] forced-colors:text-[CanvasText] forced-colors:[forced-color-adjust:none]',
             side === 'top' ? 'bottom-full mb-[var(--space-1)]' : 'top-full mt-[var(--space-1)]',
             className,
           )}
