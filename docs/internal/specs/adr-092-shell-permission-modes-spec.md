@@ -16,7 +16,7 @@ Testable requirements, BDD scenarios, test data, contract-first work, removal ta
 
 **In scope:** three presented states and their resolution (*[corrected 2026-09-23]* storage: a separate Auto-approve switch at global, per-agent and per-chat scope, see FR-001); Auto for tools other than `bash` (D9, §3.10); the filesystem pre-flight (D7) **and its data model** (`FSPolicy.PathGrants`, bash-scoped); the network pre-flight (D8, new); the unified rule format, decision order, and **grant-consultation reachability** (corrected — D3); resolve-and-verify binary binding (corrected from "rewrite argv0" — D3); the approval dialog redesign (`cancel` retained in the wire enum); God Mode; the platform predicate; audit events (routed via `emitAudit`, not `logDecision`); the status contract field (extends `SandboxStatus`, not a new schema); the global-mode write's password step-up; and the full removal inventory including four previously-missed live surfaces.
 
-**Out of scope:** per-website network approvals; a grants management surface; network egress changes to tools other than `bash`'s own child (unchanged); Windows kernel sandbox (still none — D1's existing Auto→Ask fallback is the mitigation, not new coverage). Full list in §11.
+**Out of scope:** per-website network approvals; a grants management surface; network egress changes to tools other than `bash`'s own child (unchanged); Windows kernel sandbox (still none). *[corrected 2026-09-24, founder decision — the original text here said "D1's existing Auto→Ask fallback is the mitigation, not new coverage"]* There is no longer an Auto→Ask fallback: since 2026-09-24, Auto applies on Windows exactly as elsewhere, mitigated only by the D7/D8 pre-flights and the surviving text-based guards — see ADR-092's 2026-09-24 revision note. Full list in §11.
 
 ---
 
@@ -59,7 +59,7 @@ Testable requirements, BDD scenarios, test data, contract-first work, removal ta
 
 ### 3.1 Modes, storage, and authorization
 
-**FR-001 — Three presented states, Auto-approve as a separate switch** *[corrected 2026-09-23]*. The chat is presented as Ask, Auto or God Mode (plus "Auto → Ask" when Auto is on without a kernel sandbox); this is not a stored mode. `bash` keeps an ordinary tool policy, shipped `ask`. Auto-approve is a separate boolean at three scopes: `sandbox.auto_approve` (global, seeded `true`), `AgentConfig.AutoApproveDisabled` / wire `auto_approve_disabled` (per agent, off-only), and the session-keyed per-chat modifier (may turn Auto on or off for that chat). Resolved by `sessionmode.go::ResolveAutoApprove`: chat modifier if set, else the global default turned off by the agent's switch. A call is in Auto only when its tool resolved to `ask`, Auto-approve is on, God Mode is off and a kernel sandbox is enforcing. God Mode is the existing separate global flag. `config.ReconcileToolPolicyCeiling`/`resolveEffectivePolicyWith` unchanged.
+**FR-001 — Three presented states, Auto-approve as a separate switch** *[corrected 2026-09-23; further corrected 2026-09-24, founder decision]*. The chat is presented as Ask, Auto or God Mode; this is not a stored mode. `bash` keeps an ordinary tool policy, shipped `ask`. Auto-approve is a separate boolean at three scopes: `sandbox.auto_approve` (global, seeded `true`), `AgentConfig.AutoApproveDisabled` / wire `auto_approve_disabled` (per agent, off-only), and the session-keyed per-chat modifier (may turn Auto on or off for that chat). Resolved by `sessionmode.go::ResolveAutoApprove`: chat modifier if set, else the global default turned off by the agent's switch. A call is in Auto only when its tool resolved to `ask`, Auto-approve is on, and God Mode is off. **As of 2026-09-24, an enforcing kernel sandbox is no longer part of this predicate** — the original text here required one and presented "Auto → Ask" when it was absent; that fourth condition and that presented state are both gone (see ADR-092's 2026-09-24 revision note; supersedes FR-008 below). God Mode is the existing separate global flag. `config.ReconcileToolPolicyCeiling`/`resolveEffectivePolicyWith` unchanged.
 
 **FR-002 — Three-level merge.** Global → per-agent → per-chat. *[corrected 2026-09-23]* The per-agent level can only turn Auto off. The per-chat level may loosen for its own chat (a human is present), but is never copied onto a delegate whose own `auto_approve_disabled` is set.
 
@@ -73,7 +73,7 @@ Testable requirements, BDD scenarios, test data, contract-first work, removal ta
 
 **FR-007 — Platform predicate, one derivation.** Linux: Landlock enforce, not degraded. macOS: Seatbelt backend active/enabled — **reads Seatbelt's own state directly, not `SandboxStatus.policy_applied`**, which reports gateway self-confinement and is documented false on macOS by design. Windows: never.
 
-**FR-008 — Auto→Ask fallback.** No active kernel sandbox ⇒ Auto behaves identically to Ask.
+**FR-008 — Auto→Ask fallback [SUPERSEDED 2026-09-24, founder decision].** Originally: no active kernel sandbox ⇒ Auto behaves identically to Ask. **This is no longer true.** Auto now applies with no active kernel sandbox exactly as it does with one; the D7 filesystem pre-flight, the D8 network pre-flight, and the surviving text-based guards (`guardCommand`, `substitutionGuard`, D3 rules) are the only checks in that case. See ADR-092's 2026-09-24 revision note for the accepted risk this ruling states plainly. This FR ID is retained (not renumbered) so cross-references and the removal-inventory grep stay stable; its content is the historical rule, corrected here.
 
 **FR-045 — Global mode write requires the password step-up.** Because global mode lives inside `cfg.Sandbox.*` (FR-001), its write MUST go through the existing `rest_sandbox_config.go` PUT handler, inheriting its `requireReAuth` gate — the same step-up God Mode and credential writes already use. No new auth mechanism; the requirement is routing through the existing gated handler. Per-agent/per-chat writes need no step-up (tighten-only). The agent-facing `set_config` tool already blocks the whole `sandbox.*` subtree by ancestor closure (`pkg/sysagent/tools/config.go::blockedConfigKeys`) — confirm the new mode field lives under `sandbox.*` so this coverage is automatic; if implementation places it elsewhere, `blockedConfigKeys` needs an explicit new entry. **Accepted, pre-existing, not fixed here:** on Windows, `config.json` is not kernel-denied to a spawned child, so an agent's own `bash` tool can write it directly, bypassing both `set_config` and the step-up — documented, Linux/macOS-only guarantee.
 
@@ -139,7 +139,7 @@ Testable requirements, BDD scenarios, test data, contract-first work, removal ta
 
 Source: [`adr-092-auto-for-other-tools-design.md`](adr-092-auto-for-other-tools-design.md) (revision 3) and the founder's `auto-approve-choices.json` (2026-09-23T14:20:18Z). Expected values in tests come from those two documents, never from the implementation.
 
-**FR-051 — One Auto predicate for every tool.** Auto is active for a call exactly when God Mode is off, `ResolveAutoApprove(cfg, agentID, chatModifier)` is true, and `sandbox.TurnPolicyBaseInstalled()` is true (J13). `bash` and every other tool read the same predicate (`autoApproveActive`, extracted from `ShellPermissionGate.liveMode`). No Auto on Windows, in God Mode, or without an enforcing kernel sandbox.
+**FR-051 — One Auto predicate for every tool** *[corrected 2026-09-24, founder decision — supersedes J13]*. Auto is active for a call exactly when God Mode is off and `ResolveAutoApprove(cfg, agentID, chatModifier)` is true. `sandbox.TurnPolicyBaseInstalled()` is **no longer** part of this predicate — see ADR-092's 2026-09-24 revision note. `bash` and every other tool read the same predicate (`autoApproveActive`, extracted from `ShellPermissionGate.liveMode`). No Auto in God Mode; Auto now applies on Windows and without an enforcing kernel sandbox, governed by the D7/D8 pre-flights and the surviving text-based guards instead.
 
 **FR-052 — Rule for non-bash tools.** A non-bash call whose effective execution-time policy is `ask` runs with no prompt and no grant when Auto is active (FR-051) and the classifier verdict is Run: the tool is RUNS; or RUNS-IF and its arguments meet the condition; or an MCP tool meeting FR-056. Any classifier error counts as "asks". Auto never changes an `allow` or `deny` result.
 
@@ -190,7 +190,7 @@ Source: [`adr-092-auto-for-other-tools-design.md`](adr-092-auto-for-other-tools-
 
 **FR-046 — Routed via `emitAudit`, not `logDecision`.** `PolicyAuditor.logDecision` is unexported, single-caller, and its `(event, agentID, tool, command string, d Decision)` signature has no room for mode/level/scope/path. The four FR-032 events are written via `ExecTool.emitAudit`'s existing `audit.Entry.Details map[string]any` (already used for `cwd`/`god_mode` today) — new `Details` keys per event type, not a `logDecision` signature change. **Redaction posture:** unchanged and deliberate — `audit.Entry.Command` already logs the full command text; the new events add paths/prefixes/ports at the same fidelity, no new redaction requirement.
 
-**FR-033 — Contract-defined status fields, extend `SandboxStatus` (resolves R-b/M-11).** *[corrected 2026-09-23]* There is no `effective_mode` field. `SandboxStatus` gained `auto_approve_effective` (the live global default only, not resolved per agent or chat), `kernel_sandbox_active` (`sandbox.TurnPolicyBaseInstalled()`; on macOS true when the Seatbelt boot profile is installed, not `policy_applied`) and `god_mode_active`. The badge folds these with the per-agent and per-chat layers client-side (`useResolvedAutoApprove`): God Mode, else Ask, else Auto, else Auto → Ask.
+**FR-033 — Contract-defined status fields, extend `SandboxStatus` (resolves R-b/M-11).** *[corrected 2026-09-23; further corrected 2026-09-24, founder decision]* There is no `effective_mode` field. `SandboxStatus` gained `auto_approve_effective` (the live global default only, not resolved per agent or chat), `kernel_sandbox_active` (`sandbox.TurnPolicyBaseInstalled()`; on macOS true when the Seatbelt boot profile is installed, not `policy_applied`) and `god_mode_active`. The badge folds these with the per-agent and per-chat layers client-side (`useResolvedAutoApprove`): God Mode, else Ask, else Auto. As of 2026-09-24, `kernel_sandbox_active` no longer changes whether the badge reads Ask or Auto — there is no more "Auto → Ask" state. When Auto is on and `kernel_sandbox_active` is false, the badge instead reads "Auto — no sandbox" with a warning tooltip (frontend lane owns the exact string).
 
 **FR-034 — God Mode banner is a relocation, not a build (resolves M-12).** `GodModeActiveBanner` (`GodModeControl.tsx`) already exists, already red, already has a fetch-failure-safe `god-mode-status-unknown-banner` variant, and is already rendered at `GatewaySection.tsx:298`. This FR is: **move it to `AppShell`, app-wide**; preserve the fetch-failure `isError` state exactly (a naive move risks dropping it); correct its body text, which today says the "shell guard" is disabled — stale even before D6, doubly stale after (D6/FR-031 already corrects the Go comment; this FR extends that correction to this UI string).
 
@@ -214,7 +214,7 @@ Grouped by FR; each carries `Traces to:`. Scenarios unchanged from the first dra
 - **Given** an operator session with no fresh re-auth token, **When** the global mode is changed to a looser value, **Then** the write is refused pending `requireReAuth`, identically to a God Mode toggle.
 - *Traces to:* FR-045.
 
-### 4.2 Platform predicate (S11–S14 unchanged, with S13 now citing FR-007's corrected macOS predicate wording)
+### 4.2 Platform predicate (S11–S14 unchanged, with S13 now citing FR-007's corrected macOS predicate wording). *[flagged 2026-09-24, founder decision]* Any of S11–S14 that asserted "no active kernel sandbox ⇒ Auto behaves like Ask" (FR-008) now assert the opposite — see FR-008's 2026-09-24 correction above and S57/S57b for the D9-side equivalent; whoever next touches this section should locate and rewrite that scenario's assertion, not merely its citation.
 
 ### 4.3 Filesystem pre-flight
 
@@ -281,8 +281,9 @@ Grouped by FR; each carries `Traces to:`. Scenarios unchanged from the first dra
 - **Given** the user approves the S50 escalation, **When** the same command runs again in the session, **Then** it runs without re-prompting (network grant recorded).
 - *Traces to:* FR-044.
 
-**S52 — Unclassified binary opening a raw socket is kernel-denied** *(Error Path — mandatory adversarial case)*
-- **Given** a custom binary not in the classifier's known set, that opens a raw TCP socket, **When** it runs in Auto with no prior grant, **Then** the kernel denies the `connect()` (empty `ConnectPortRules`) and the command fails with a clear error — not silently allowed.
+**S52 — Unclassified binary opening a raw socket is kernel-denied when a kernel sandbox is enforcing** *(Error Path — mandatory adversarial case)*
+- **Given** a custom binary not in the classifier's known set, that opens a raw TCP socket, and a kernel sandbox enforcing, **When** it runs in Auto with no prior grant, **Then** the kernel denies the `connect()` (empty `ConnectPortRules`) and the command fails with a clear error — not silently allowed.
+- **Given** the same setup with NO kernel sandbox enforcing (Windows, or a sandbox that failed to start) *[added 2026-09-24, founder decision]*, **When** the same binary runs, **Then** there is no kernel `connect()` to deny it — the command's raw socket connects with no further check. This is the accepted risk ADR-092's 2026-09-24 revision note states explicitly, not a defect in this scenario's coverage.
 - *Traces to:* FR-044 (honest gap).
 
 **S53 — `git push` prompts via D8, not a name check** *(Happy Path — regression for D2's removed pattern)*
@@ -302,9 +303,13 @@ Grouped by FR; each carries `Traces to:`. Scenarios unchanged from the first dra
 **S56 — Every ask-list tool still prompts** *(Error Path, table-driven over the 28 golden names)*
 - *Traces to:* FR-053. (Design T3.)
 
-**S57 — No Auto without a kernel sandbox, when Auto is off, or in God Mode** *(Alternate Path)*
-- **Given** `delegate`, `send_message`, `knowledge_edit` on `ask`, **When** Auto is off, or on with no enforcing kernel sandbox, or God Mode is on with an agent-level `ask`, **Then** each prompts.
+**S57 — No Auto when Auto is off or in God Mode** *(Alternate Path)* *[rewritten 2026-09-24, founder decision — the original title and scenario said "No Auto without a kernel sandbox"; that case is now the OPPOSITE outcome, see S57b]*
+- **Given** `delegate`, `send_message`, `knowledge_edit` on `ask`, **When** Auto is off, or God Mode is on with an agent-level `ask`, **Then** each prompts.
 - *Traces to:* FR-051. (Design T5, T14.)
+
+**S57b — Auto on with no kernel sandbox still runs RUNS tools without a prompt** *(Happy Path)* *[added 2026-09-24, founder decision — replaces S57's old "no kernel sandbox ⇒ prompts" coverage]*
+- **Given** `delegate`, `send_message`, `knowledge_edit` on `ask`, Auto on, and NO kernel sandbox enforcing (Windows, or a sandbox that failed to start), **When** each is called, **Then** each runs with zero approver calls, exactly as it would with a kernel sandbox enforcing — Auto no longer requires one.
+- *Traces to:* FR-051 (as corrected 2026-09-24). (Design T5b.)
 
 **S58 — Scheduled run follows the same rule** *(Happy + Error Path)*
 - **Given** a headless run with Auto on, **Then** a RUNS tool executes, an ASKS tool is auto-denied with `autoDenyHeadlessReason`, and `bash` under Auto executes.
@@ -556,7 +561,7 @@ Critical path: **L0 → {L1,L2,L3} → L4 → L5 → L7**. The genuine parallel 
 | FR-045 | S44 | E2E |
 | FR-048 | S45 | Integration |
 | FR-049 | (accepted-risk statement, no test) | — |
-| FR-051 | S57 | Unit |
+| FR-051 | S57, S57b | Unit |
 | FR-052, FR-054 | S54, S55 | Unit + integration |
 | FR-053, FR-062 | S56, drift-guard mutation checks | Unit |
 | FR-055 | S60 | Unit |

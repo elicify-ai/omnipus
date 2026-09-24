@@ -49,15 +49,26 @@ Below the switch, **Still asks every time** is a collapsed list — click it to 
 
 > Sending email · Deleting tasks, agents or workspaces · Installing skills, setting up an environment or publishing a web preview · Changing or testing settings, providers, channels, agents or skills · Running diagnostics · Adding or removing connected (MCP) servers, and MCP tools not marked safe · Browser scripts and uploads · Mounting a folder, or files outside your workspace
 
-And a small note underneath:
+And a small note underneath *(2026-09-24: the note's wording changed — see "Auto-approve and the kernel sandbox" below)*:
 
-> Needs the sandbox — not available on Windows.
+> Without a kernel sandbox (for example on Windows), shell commands are checked by reading the command text only.
+<!-- verify-ui-string -->
 
 That is a summary. The full list of tools that still ask, one row per tool, is under "What Auto-approve runs and what still asks" below.
 
 The chat switch is the one place that can turn Auto-approve **on** when the agent or the global default has it off, because you are present in that conversation. It has one limit: when the chat's agent hands work to another agent (a delegate), and that other agent has **Never auto-approve** ticked, the delegate's own switch wins. Your chat switch covers the agent you are talking to, not a delegate that was set to always ask.
 
-**Auto-approve needs an active kernel sandbox.** A kernel sandbox is protection enforced by the operating system itself: Landlock on Linux, Seatbelt on macOS, with the Process Sandbox set to **Enforce**. Without one, Auto-approve has no effect and every Ask tool prompts, the same as if it were off. There is no Auto-approve on Windows, because Windows has no kernel sandbox in Omnipus. God Mode also switches it off, because God Mode removes the sandbox (see "Limits and things to watch").
+### Auto-approve and the kernel sandbox (changed 2026-09-24)
+
+**Auto-approve no longer needs a kernel sandbox to work.** A kernel sandbox is protection enforced by the operating system itself: Landlock on Linux, Seatbelt on macOS, with the Process Sandbox set to **Enforce**. Until 2026-09-24, Auto-approve had no effect at all without one — every Ask tool prompted, the same as if Auto-approve were off, and there was no Auto-approve on Windows at all, because Windows has no kernel sandbox in Omnipus. That turned out to make Auto-approve effectively useless on Windows and on any machine where the sandbox failed to start or was deliberately left in Permissive or Off mode, so it was changed.
+
+**What Auto-approve does now, with and without a kernel sandbox:**
+
+- **Every tool except the shell (`bash`)** is unaffected by whether a kernel sandbox is active. The kernel sandbox was never what kept `write_file`, `read_file` and the rest inside your workspace — an application-level check inside Omnipus itself always did that (see "What Auto-approve runs and what still asks" below), and that check runs the same way with or without a kernel sandbox.
+- **The shell (`bash`) is different.** With a kernel sandbox active (Linux or macOS, Process Sandbox set to Enforce), a shell command that tries to reach outside the workspace or the network is caught two ways: Omnipus checks the command's text before running it, **and** the operating system itself blocks anything that check missed. Without a kernel sandbox — on Windows, or with the Process Sandbox set to Permissive or Off — only the first check runs. Omnipus still reads the command's text and still asks before anything that looks like it reaches outside the workspace or the network, but there is no second, operating-system-level check behind that first one.
+  - **Concrete risk:** a command that has been deliberately disguised so its text does not look like what it actually does — for example, splitting a program name across quotes, or using shell substitution to build the real command at run time — can slip past a text-based check. With a kernel sandbox, the operating system still blocks it regardless of how the text was disguised. Without one, nothing else is checking, and the command runs.
+
+This is a deliberate, founder-approved trade: Auto-approve being usable everywhere, in exchange for a real but scoped gap on machines with no kernel sandbox. If that risk matters for a given agent or workspace, keep the Process Sandbox set to **Enforce** where your platform supports it, or turn Auto-approve off for that agent.
 
 ### What the chat header shows
 
@@ -68,7 +79,10 @@ The badge at the top of a chat shows which state applies to that chat right now.
 | **God Mode** | God Mode is on. No approval prompts, no sandbox. |
 | **Ask** | Auto-approve is off for this chat. Every tool set to Ask prompts. |
 | **Auto** | Auto-approve is on and a kernel sandbox is active. Safe calls run; the rest ask. |
-| **Auto → Ask** | Auto-approve is on, but there is no active kernel sandbox, so it has no effect. Every tool set to Ask prompts. The badge's tooltip says so. |
+| **Auto — no sandbox** | Auto-approve is on, but there is no active kernel sandbox. Safe calls still run; the shell's checks are text-only (see above). The badge's tooltip explains this. |
+<!-- verify-ui-string: badge label "Auto — no sandbox" and its tooltip text -->
+
+*(Before 2026-09-24 this badge read "Auto → Ask" and Auto-approve had no effect at all in that state. That is no longer how it works — see "Auto-approve and the kernel sandbox" above.)*
 
 In an agent's **Tools & Permissions** panel and in **Tool Access — Global Policies**, each tool set to Ask carries a small marker showing what Auto-approve does with it:
 
@@ -110,7 +124,7 @@ This is stricter than the shell. Under Auto-approve, the shell command `cat /etc
 
 **Tools from connected servers (MCP) mostly still ask.** A connected server can label each of its tools. Under Auto-approve, a server tool runs only when its server labels it read-only or explicitly not destructive. Every other server tool asks, including one with no label at all. Most servers send no labels today, so in practice most server tools still ask. Omnipus trusts these labels because you chose to connect the server, and adding a server is on the always-ask list.
 
-**The shell tool, `bash`, has its own checks.** Under Auto-approve, a command runs without a prompt when the sandbox can contain it. It still asks when the command:
+**The shell tool, `bash`, has its own checks.** Under Auto-approve, a command runs without a prompt when Omnipus's own checks (see "Auto-approve and the kernel sandbox" above) find nothing that needs asking about, and — where a kernel sandbox is active — the sandbox could also contain it. It still asks when the command:
 
 - writes outside the workspace and its mounted folders. For example, `cp report.pdf /Users/you/Desktop/` asks; `cp report.pdf out/` runs;
 - may need the network. For example, `curl https://example.com`, `git push` or `npm install` ask. Omnipus recognises this from the program (such as `git`, `curl`, `wget`, `ssh`, `npm`, `pip`, `docker`, `gh` and the main cloud command-line tools) or from a web address in the command. Because it goes by the program, even `git status` asks the first time in a chat;
@@ -156,7 +170,7 @@ These controls answer different questions.
 | Filesystem model | What agents may read and run | You want open access or a confined list of locations |
 | Shell workspace limit | Whether a command may name paths outside the working folder | You want a command-text check that still applies even when the sandbox is off |
 
-The process sandbox offers three modes. **Enforce** blocks violations. **Permissive** records violations without blocking them. **Off** removes operating-system protection, but it does not disable the shell workspace limit. Only Enforce counts as an active kernel sandbox for Auto-approve; in Permissive or Off, the chat header shows **Auto → Ask** and every Ask tool prompts.
+The process sandbox offers three modes. **Enforce** blocks violations. **Permissive** records violations without blocking them. **Off** removes operating-system protection, but it does not disable the shell workspace limit. Only Enforce counts as an active kernel sandbox. *(Changed 2026-09-24 — see "Auto-approve and the kernel sandbox" above.)* In Permissive or Off, the chat header shows **Auto — no sandbox**: Auto-approve still runs, but shell commands are checked by their text only, with no operating-system check behind that.
 
 The **Confined** filesystem model limits reads and execution to listed locations. The **Open** model lets agents read and run anything your account can reach, apart from Omnipus secret files. Writes remain limited to the workspace and mounted folders. Changes to the filesystem model take effect after a gateway restart.
 
@@ -223,7 +237,7 @@ Worked example: with the `ask`-before-`npm publish` rule above and no rule at al
 
 ### How a rule interacts with Auto-approve and God Mode
 
-The columns below match the badge at the top of the chat. **Ask** also covers **Auto → Ask**, which behaves the same.
+The columns below match the badge at the top of the chat. **Auto** also covers **Auto — no sandbox**: a command rule's `allow`/`ask`/`deny` decision applies the same whether or not a kernel sandbox is active — it is a check on the command's text, not something the kernel sandbox does or does not add. *(Before 2026-09-24, this row said "Ask also covers Auto → Ask" — Auto-approve had no effect without a sandbox back then, so that state behaved like Ask. It no longer does.)*
 
 | Rule action | Ask | Auto | God Mode |
 |---|---|---|---|
@@ -339,7 +353,7 @@ The viewer refreshes every 30 seconds. The log includes security events, policy 
 - Secret filtering is best-effort and can be switched off. It only knows registered credential values. Rotate a secret if you think it was exposed.
 - Removing a credential is permanent. Services that refer to it may stop working.
 - Losing the master key makes the encrypted credential store permanently inaccessible.
-- **God-mode** under **Settings**, **Gateway** disables the kernel sandbox and outbound-network restrictions for every agent. For tools, it sets the **global** policy to Allow for every tool and removes the permission prompts that come from that global policy — including Auto-approve's, since there is no sandbox left for it to check anything against. It does **not** override an agent's own tool policy: a tool an agent denies itself stays denied, and a tool that agent asks about still asks. Audit logging, prompt protection, and rate limiting remain active. Enabling it requires your password and may require a gateway restart.
+- **God-mode** under **Settings**, **Gateway** disables the kernel sandbox and outbound-network restrictions for every agent. For tools, it sets the **global** policy to Allow for every tool and removes the permission prompts that come from that global policy — including Auto-approve's: Auto-approve only ever matters for a tool set to Ask, and God Mode leaves none set to Ask globally, and is also explicitly switched off in God Mode regardless *(as of 2026-09-24, this is no longer "because there is no sandbox left" — Auto-approve does not need a sandbox any more; God Mode turns it off by its own design, D1)*. It does **not** override an agent's own tool policy: a tool an agent denies itself stays denied, and a tool that agent asks about still asks. Audit logging, prompt protection, and rate limiting remain active. Enabling it requires your password and may require a gateway restart.
 
 ## Related pages
 
