@@ -412,3 +412,49 @@ describe('ActivityBar — Fix 1: the spinner only ever shows while running', () 
     expect(screen.getByText('1 running')).toBeInTheDocument()
   })
 })
+
+// ── Defect 1 (ADR-091 fix lane RX-FRONTEND): a queued-only child must still
+// surface the bar. Commit 8b8d6ef9d redefined `runningChildren` to count
+// ONLY `lifecycleState === 'running'` (useRunningActivity.ts::isRunningAgentChild)
+// but left ActivityBar's mount gate (`isRunning = runningChildren > 0`)
+// reading that same narrowed count. The launcher emits `subagent_start` then
+// `subagent_state(queued)` back-to-back at launch (verified against
+// pkg/agent/steer_launcher.go::publishSteeredLaunch) — `running` only
+// arrives later at Dispatch. Under a saturated admission gate a child can
+// stay `queued` indefinitely: `runningChildren` stays 0, nothing has
+// finished, so the OLD `shouldMount` computation never becomes true and the
+// delegation is completely invisible — no pill, no panel, no way to see it
+// exists — even though `ActivityPanel`'s queued dot (efc29991a) is fully
+// able to render it once mounted.
+describe('ActivityBar — Defect 1: a queued-only child must mount the bar', () => {
+  it('mounts the bar (and keeps it clickable) for a child stuck at lifecycleState "queued", with no other running/failed items', () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [
+          makeAssistantMessage([
+            runningSpan({ agentId: 'ray', lifecycleState: 'queued', taskLabel: 'saturated gate, still queued' }),
+          ]),
+        ],
+      })
+    })
+    renderBar()
+    expect(screen.getByTestId('activity-bar')).toBeInTheDocument()
+  })
+
+  it('opening the bar from a queued-only child reveals the delegation in the panel', async () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [
+          makeAssistantMessage([
+            runningSpan({ agentId: 'ray', lifecycleState: 'queued', taskLabel: 'saturated gate, still queued' }),
+          ]),
+        ],
+      })
+    })
+    renderBar()
+    fireEvent.click(screen.getByTestId('activity-bar'))
+    await waitFor(() => {
+      expect(screen.getByText('saturated gate, still queued')).toBeInTheDocument()
+    })
+  })
+})

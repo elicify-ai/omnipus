@@ -179,7 +179,6 @@ vi.mock('../historical-markdown', () => ({
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('../RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
-vi.mock('../SubagentBlock', () => ({ SubagentBlock: () => null }))
 // Every OTHER tool UI is mocked down to the stable contract (see
 // ChatScreen.tool-order.test.tsx) — `set_goal` is deliberately NOT among
 // them; ChatScreen.tsx's parts loop routes it through the real
