@@ -199,6 +199,121 @@ func TestEnforceShellPermissionMode_NetworkDenialLeavesRenderingEmpty(t *testing
 	assert.Equal(t, 1, requester.callCount())
 }
 
+// --- 2026-09-24 founder decision: Auto's D7/D8 pre-flights still govern with
+// NO kernel sandbox enforcing — the whole point of the change (Auto no
+// longer requires an enforcing kernel sandbox) is that these checks become
+// the ONLY thing standing between the agent and the host filesystem/network
+// in that case, so they must still fire exactly as they do with a sandbox. ---
+
+// permTestFixtureNoSandbox is permTestFixture with NO kernel policy base
+// registered — the no-sandbox counterpart (Windows, a sandbox that failed to
+// start, permissive mode).
+func permTestFixtureNoSandbox(t *testing.T, mode ShellMode, approve bool) (tool *ExecTool, ctx context.Context, requester *fakeShellApprovalRequester, workDir string) {
+	t.Helper()
+	sandbox.RegisterTurnPolicyBase(nil)
+	t.Cleanup(func() { sandbox.RegisterTurnPolicyBase(nil) })
+	require.False(t, sandbox.TurnPolicyBaseInstalled(), "setup: no kernel policy base must be registered")
+
+	workDir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+
+	tool, err = NewExecTool(workDir, true)
+	require.NoError(t, err)
+	tool.shellMode = fakeShellModeResolver{mode: mode}
+	requester = &fakeShellApprovalRequester{approve: approve, recordGrant: approve}
+	tool.approvalRequester = requester
+	tool.approvalGrants = security.NewApprovalGrantStore()
+
+	ctx = WithTranscriptSessionID(WithAgentID(context.Background(), "agent-1"), "session-1")
+	return tool, ctx, requester, workDir
+}
+
+// TestEnforceShellPermissionMode_NoKernelSandbox_ContainedCommandRunsWithoutPrompt
+// mirrors TestEnforceShellPermissionMode_AutoContainedCommandRunsWithoutPrompt
+// with no kernel sandbox: `echo hello` touches nothing outside the work dir,
+// so it must still auto-run with zero approver calls.
+func TestEnforceShellPermissionMode_NoKernelSandbox_ContainedCommandRunsWithoutPrompt(t *testing.T) {
+	tool, ctx, requester, _ := permTestFixtureNoSandbox(t, ShellModeAuto, true)
+
+	perm, result := tool.enforceShellPermissionMode(ctx, "echo hello")
+	require.Nil(t, result, "a fully-contained command must not be refused, sandbox or no sandbox")
+	require.NotNil(t, perm)
+	assert.Equal(t, ShellModeAuto, perm.mode, "mode must stay Auto with no kernel sandbox enforcing")
+	assert.Equal(t, 0, requester.callCount(), "a command touching nothing outside the work dir must never prompt")
+}
+
+// TestEnforceShellPermissionMode_NoKernelSandbox_EscalatesOutsideWorkDir is
+// the D7 filesystem pre-flight proof with no kernel sandbox: a write outside
+// the work dir (e.g. bash `touch /etc/x`-shaped) must still escalate to a
+// prompt — the pre-flight is the ONLY check here now, so it must not go
+// silent just because the kernel isn't confining the child.
+func TestEnforceShellPermissionMode_NoKernelSandbox_EscalatesOutsideWorkDir(t *testing.T) {
+	tool, ctx, requester, _ := permTestFixtureNoSandbox(t, ShellModeAuto, true)
+
+	outsideDir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	outsideFile := filepath.Join(outsideDir, "out.txt")
+	cmd := "echo hi > " + outsideFile
+
+	perm, result := tool.enforceShellPermissionMode(ctx, cmd)
+	require.Nil(t, result, "an APPROVED escalation must not refuse the command")
+	require.NotNil(t, perm)
+	assert.Equal(t, 1, requester.callCount(), "a write outside the work dir must escalate exactly once even with no kernel sandbox")
+	require.Len(t, perm.pathGrants, 1)
+	assert.Equal(t, outsideFile, perm.pathGrants[0].Path)
+}
+
+// TestEnforceShellPermissionMode_NoKernelSandbox_DeniedEscalationRefusesOutright
+// is FR-048 with no kernel sandbox: a denied D7 escalation must still refuse
+// the command outright — with no kernel to fall back on, this refusal is the
+// only thing stopping the write.
+func TestEnforceShellPermissionMode_NoKernelSandbox_DeniedEscalationRefusesOutright(t *testing.T) {
+	tool, ctx, requester, _ := permTestFixtureNoSandbox(t, ShellModeAuto, false)
+
+	outsideDir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	cmd := "echo hi > " + filepath.Join(outsideDir, "out.txt")
+
+	perm, result := tool.enforceShellPermissionMode(ctx, cmd)
+	require.Nil(t, perm, "a denied escalation must not return a usable permission result")
+	require.NotNil(t, result)
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "not approved")
+	assert.Equal(t, 1, requester.callCount())
+}
+
+// TestEnforceShellPermissionMode_NoKernelSandbox_NetworkDeniedByDefaultThenWidened
+// is the D8 network pre-flight proof with no kernel sandbox: outbound
+// network still denies by default and widens only on an approved escalation.
+func TestEnforceShellPermissionMode_NoKernelSandbox_NetworkDeniedByDefaultThenWidened(t *testing.T) {
+	tool, ctx, requester, _ := permTestFixtureNoSandbox(t, ShellModeAuto, true)
+
+	perm, result := tool.enforceShellPermissionMode(ctx, "curl https://example.com")
+	require.Nil(t, result)
+	require.NotNil(t, perm)
+	assert.True(t, perm.networkGranted, "an approved network escalation must widen this call's rendering even with no kernel sandbox")
+	assert.Equal(t, 1, requester.callCount())
+}
+
+// TestEnforceShellPermissionMode_NoKernelSandbox_BlindCommandEscalates proves
+// FR-020's blind-spot posture (a command the classifier cannot parse) still
+// escalates to a prompt with no kernel sandbox — the classifier's fail-closed
+// default must not depend on kernel enforcement being present. An unbalanced
+// quote defeats BOTH ClassifyPathOperations (D7's own blind spot) and
+// ClassifyNetworkNeed's tokenizer (which also fails closed to "flagged" when
+// it cannot tokenize a segment, preflight.go::ClassifyNetworkNeed), so this
+// escalates through both pre-flight layers independently — two prompts, not
+// a silent pass-through of either check.
+func TestEnforceShellPermissionMode_NoKernelSandbox_BlindCommandEscalates(t *testing.T) {
+	tool, ctx, requester, _ := permTestFixtureNoSandbox(t, ShellModeAuto, true)
+
+	perm, result := tool.enforceShellPermissionMode(ctx, `echo "unbalanced`)
+	require.Nil(t, result, "an approved blind-spot escalation must not refuse the command")
+	require.NotNil(t, perm)
+	assert.Equal(t, 2, requester.callCount(),
+		"a command neither pre-flight classifier can parse must escalate through D7 AND D8, sandbox or no sandbox")
+}
+
 // applyAutoNetworkPosture is D8's kernel-rendering half — proves the
 // mutation this file applies to an already-derived *sandbox.SandboxPolicy
 // matches the "empty means deny, DefaultConnectPorts means widened" contract
@@ -387,13 +502,21 @@ func TestResolveShellMode_UnwiredResolverFailsClosedToAsk(t *testing.T) {
 	assert.Equal(t, ShellModeAsk, got)
 }
 
-func TestResolveShellMode_AutoWithNoKernelSandboxFallsBackToAsk(t *testing.T) {
+// TestResolveShellMode_AutoWithNoKernelSandboxStaysAuto [2026-09-24, founder
+// decision] supersedes the old FR-008 fallback: Auto no longer requires an
+// enforcing kernel sandbox. resolveShellMode must return exactly what the
+// resolver said, whether or not sandbox.TurnPolicyBaseInstalled() is true —
+// the D7/D8 pre-flights below it are what govern in the no-sandbox case now,
+// not a silent downgrade to Ask.
+func TestResolveShellMode_AutoWithNoKernelSandboxStaysAuto(t *testing.T) {
 	sandbox.RegisterTurnPolicyBase(nil) // explicit: no kernel policy in force
+	t.Cleanup(func() { sandbox.RegisterTurnPolicyBase(nil) })
 	tool, err := NewExecTool(t.TempDir(), true)
 	require.NoError(t, err)
 	tool.shellMode = fakeShellModeResolver{mode: ShellModeAuto}
 	got := tool.resolveShellMode(context.Background())
-	assert.Equal(t, ShellModeAsk, got, "FR-008: Auto with no active kernel sandbox behaves like Ask")
+	assert.Equal(t, ShellModeAuto, got,
+		"Auto applies with no kernel sandbox enforcing — 2026-09-24 founder decision, ADR-092 D1/J13 revised")
 }
 
 // D-65: every guard refusal names what tripped it, not a bare "blocked".

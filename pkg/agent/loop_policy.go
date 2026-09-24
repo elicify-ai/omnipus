@@ -585,13 +585,18 @@ func (g *ShellPermissionGate) ResolveShellMode(ctx context.Context, agentID, ses
 //	                                            execution at all.
 //	"ask" + Auto not active                  -> Ask (the loop prompts first)
 //	"ask" + Auto active                      -> Auto (no upfront prompt; the
-//	                                            tool's pre-flights ask only
-//	                                            for what the sandbox cannot
-//	                                            confine)
+//	                                            tool's D7/D8 pre-flights ask
+//	                                            for what they cannot clear;
+//	                                            a kernel sandbox, where one is
+//	                                            enforcing, confines whatever
+//	                                            those pre-flights miss)
 //
 // "Auto active" is AgentLoop.autoApproveActive — the one check every tool
-// shares (auto_approve_gate.go): Auto-approve resolved on and a kernel
-// sandbox enforcing (FR-008). Every missing dependency fails closed to Ask.
+// shares (auto_approve_gate.go): God Mode off, and Auto-approve resolved on.
+// [2026-09-24, founder decision] Auto no longer additionally requires an
+// enforcing kernel sandbox (ADR-092 D1/J13, revised) — see
+// autoApproveActive's own doc comment for the accepted risk. Every missing
+// dependency still fails closed to Ask.
 func (g *ShellPermissionGate) liveMode(agentID, sessionID string, delegated bool) tools.ShellMode {
 	if g == nil || g.Loop == nil {
 		return tools.ShellModeAsk

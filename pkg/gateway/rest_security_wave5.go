@@ -61,12 +61,15 @@ func (a *restAPI) HandleSandboxStatus(w http.ResponseWriter, r *http.Request) {
 	resp := sandboxStatusToWire(status, bindCount)
 
 	// ADR-092 (review finding A): the three inputs the chat badge and the
-	// composer's Auto switch read. kernel_sandbox_active is the very
-	// predicate the agent loop uses to choose Auto vs Ask
-	// (ShellPermissionGate.liveMode -> sandbox.TurnPolicyBaseInstalled);
-	// auto_approve_effective is the raw global default, deliberately NOT
-	// ANDed with it (the SPA renders "Auto -> Ask" from the pair);
-	// god_mode_active mirrors GodModeStatus.enabled.
+	// composer's Auto switch read. [2026-09-24, founder decision]
+	// kernel_sandbox_active is no longer the predicate the agent loop uses to
+	// choose Auto vs Ask — Auto applies whether or not it is true (see
+	// pkg/agent/auto_approve_gate.go::autoApproveActive). It stays here as
+	// the informational value the SPA uses to show the "Auto — no sandbox"
+	// warning; auto_approve_effective is the raw global default, deliberately
+	// NOT ANDed with it (the SPA renders "Auto" or "Auto — no sandbox" from
+	// the pair — never a silent "Ask"); god_mode_active mirrors
+	// GodModeStatus.enabled.
 	cfg := a.agentLoop.GetConfig()
 	kernelActive := sandbox.TurnPolicyBaseInstalled()
 	autoApprove := cfg != nil && cfg.Sandbox.AutoApprove

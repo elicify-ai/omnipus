@@ -49,7 +49,7 @@ func TestEmitToolAutoApproved_WritesOneEntryWithRequiredFields(t *testing.T) {
 
 	audit.EmitToolAutoApproved(context.Background(), logger,
 		"general-assistant", "sess-abc123", "read_file", "runs_if_args",
-		"path resolved inside the workspace", []string{"/home/user/workspace/notes.md"})
+		"path resolved inside the workspace", []string{"/home/user/workspace/notes.md"}, true)
 
 	require.NoError(t, logger.Close())
 
@@ -75,6 +75,44 @@ func TestEmitToolAutoApproved_WritesOneEntryWithRequiredFields(t *testing.T) {
 	assert.Equal(t, "runs_if_args", details["class"])
 	assert.Equal(t, "path resolved inside the workspace", details["reason"])
 	assert.Equal(t, []any{"/home/user/workspace/notes.md"}, details["paths"])
+	assert.Equal(t, true, details["kernel_sandbox"],
+		"kernel_sandbox must record whether a kernel sandbox was enforcing at approval time (2026-09-24 founder decision)")
+}
+
+// TestEmitToolAutoApproved_KernelSandboxFalse is the sibling case: an
+// auto-approval recorded while no kernel sandbox was enforcing must say so
+// on the row, not omit the field or default it true — this is the whole
+// point of recording it (2026-09-24 founder decision: Auto no longer
+// requires an enforcing kernel sandbox, so an operator needs to be able to
+// find the unconfined approvals after the fact).
+func TestEmitToolAutoApproved_KernelSandboxFalse(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	logger, err := audit.NewLogger(audit.LoggerConfig{
+		Dir:           dir,
+		MaxSizeBytes:  1024 * 1024,
+		RetentionDays: 1,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if closeErr := logger.Close(); closeErr != nil {
+			_ = closeErr
+		}
+	})
+
+	audit.EmitToolAutoApproved(context.Background(), logger,
+		"general-assistant", "sess-abc123", "read_file", "runs_if_args",
+		"path resolved inside the workspace", []string{"/home/user/workspace/notes.md"}, false)
+
+	require.NoError(t, logger.Close())
+
+	data, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
+	require.NoError(t, err)
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(string(data))), &parsed))
+	details, ok := parsed["details"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, details["kernel_sandbox"])
 }
 
 // TestEmitToolAutoApproved_OptionalFieldsOmittedWhenEmpty covers a call with
@@ -98,7 +136,7 @@ func TestEmitToolAutoApproved_OptionalFieldsOmittedWhenEmpty(t *testing.T) {
 	})
 
 	audit.EmitToolAutoApproved(context.Background(), logger,
-		"general-assistant", "sess-abc123", "list_agents", "runs", "", nil)
+		"general-assistant", "sess-abc123", "list_agents", "runs", "", nil, true)
 
 	require.NoError(t, logger.Close())
 
@@ -130,5 +168,5 @@ func TestEmitToolAutoApproved_NilLoggerIsNoOp(t *testing.T) {
 		}
 	}()
 	audit.EmitToolAutoApproved(context.Background(), nil,
-		"general-assistant", "sess-abc123", "read_file", "runs_if_args", "reason", []string{"/tmp/x"})
+		"general-assistant", "sess-abc123", "read_file", "runs_if_args", "reason", []string{"/tmp/x"}, true)
 }

@@ -21,14 +21,24 @@ import (
 // autoApproveActive reports whether Auto-approve is in force for agentID's
 // calls in sessionID. All of the following must hold:
 //
-//   - a config is loaded and God Mode is off (God Mode has no sandbox, and
-//     Auto needs one);
+//   - a config is loaded and God Mode is off (God Mode floors the ceiling at
+//     allow and has no Auto machinery of its own);
 //   - a delegated turn's own agent does not carry AutoApproveDisabled — a
 //     delegate's own off-switch always wins over anything inherited from the
 //     parent's chat, including a per-chat modifier set on its session;
 //   - ResolveAutoApprove is on: the global default, then the agent's own
-//     off-switch, then the chat's per-session modifier;
-//   - a kernel sandbox is enforcing (ruling J13: one rule for every tool).
+//     off-switch, then the chat's per-session modifier.
+//
+// [2026-09-24, founder decision] Auto no longer requires an enforcing kernel
+// sandbox (ADR-092 D1/J13, revised). It applies to every tool, bash
+// included, whether or not Landlock/Seatbelt is enforcing — that covers
+// Windows, a sandbox that failed to start, and permissive mode. Without a
+// kernel sandbox, bash's D7/D8 pre-flights and the text-based guards are the
+// only checks on what a command touches; see ADR-092's 2026-09-24 revision
+// note for the accepted risk. Whether a kernel sandbox was enforcing at call
+// time is still recorded on the tool.auto_approved audit row
+// (emitToolAutoApprovedAudit below) so an operator can find every
+// auto-approval that ran unconfined.
 func (al *AgentLoop) autoApproveActive(agentID, sessionID string, delegated bool) bool {
 	if al == nil {
 		return false
@@ -40,10 +50,7 @@ func (al *AgentLoop) autoApproveActive(agentID, sessionID string, delegated bool
 	if delegated && agentAutoApproveDisabledIn(cfg, agentID) {
 		return false
 	}
-	if !al.SessionAutoApprove(agentID, sessionID) {
-		return false
-	}
-	return sandbox.TurnPolicyBaseInstalled()
+	return al.SessionAutoApprove(agentID, sessionID)
 }
 
 // autoApproveActiveFor is autoApproveActive for the calling turn: its own
@@ -99,7 +106,11 @@ func (ex *agentLoopRunTurnToolsExecute) autoApproveFor() tools.AutoVerdict {
 }
 
 // emitToolAutoApprovedAudit writes the §5.5 tool.auto_approved row for a
-// call Auto is about to run without a prompt.
+// call Auto is about to run without a prompt. kernel_sandbox on the row
+// records sandbox.TurnPolicyBaseInstalled() at this exact moment
+// [2026-09-24, founder decision]: since Auto no longer requires an
+// enforcing kernel sandbox, this is the only place that records whether THIS
+// particular auto-approval ran confined or not.
 func (al *AgentLoop) emitToolAutoApprovedAudit(ctx context.Context, ts *turnState, toolName string, verdict tools.AutoVerdict) {
 	if ts == nil {
 		return
@@ -108,5 +119,6 @@ func (al *AgentLoop) emitToolAutoApprovedAudit(ctx context.Context, ts *turnStat
 	for _, p := range verdict.Paths {
 		paths = append(paths, p.Real)
 	}
-	audit.EmitToolAutoApproved(ctx, al.auditLogger, ts.agentID, ts.sessionKey, toolName, verdict.Class, verdict.Reason, paths)
+	audit.EmitToolAutoApproved(ctx, al.auditLogger, ts.agentID, ts.sessionKey, toolName, verdict.Class, verdict.Reason, paths,
+		sandbox.TurnPolicyBaseInstalled())
 }

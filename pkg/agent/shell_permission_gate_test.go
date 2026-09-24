@@ -70,10 +70,13 @@ func TestShellPermissionGate_LiveMode(t *testing.T) {
 		al := newGateTestLoop(t, "ask", true)
 		assert.Equal(t, tools.ShellModeAuto, al.shellGate.ResolveShellMode(ctx, testDefaultAgentID, "sess"))
 	})
-	t.Run("no kernel sandbox degrades Auto to Ask (FR-008)", func(t *testing.T) {
+	t.Run("no kernel sandbox no longer degrades Auto to Ask (2026-09-24 founder decision, supersedes FR-008)", func(t *testing.T) {
 		sandbox.RegisterTurnPolicyBase(nil)
 		al := newGateTestLoop(t, "ask", true)
-		assert.Equal(t, tools.ShellModeAsk, al.shellGate.ResolveShellMode(ctx, testDefaultAgentID, "sess"))
+		assert.Equal(t, tools.ShellModeAuto, al.shellGate.ResolveShellMode(ctx, testDefaultAgentID, "sess"),
+			"Auto applies to bash whether or not a kernel sandbox is enforcing — Windows, a failed sandbox start, "+
+				"and permissive mode all resolve Auto now; the D7/D8 pre-flights and text-based guards are the "+
+				"only checks in that case (accepted risk, ADR-092 2026-09-24 revision)")
 	})
 	t.Run("global Auto-approve off resolves Ask", func(t *testing.T) {
 		withKernelSandbox(t)
