@@ -253,6 +253,65 @@ Context handling is the normal path: window per ADR-066 D2; emptying on the real
 - `replay.go::emitNestedToolCalls`, and the field `producing_session_id` from all seven contract files, the three Go payloads and their readers (WP-B, WP-E).
 - `turn.go::registerActiveTurn`'s plain store, replaced by the compare-and-set registration (WP-A).
 
+### D12 — Interruption recovery is decided by the durable record, never by an in-memory pointer to another turn
+
+Work is interrupted in three ways, and rev 2 addressed only the first.
+
+| Class | What goes away | Who recovers it |
+|---|---|---|
+| **Server restart** | the process running the turn | boot sweep: re-wake once, or terminalise and report upward (§7) |
+| **Client disconnect** | the operator's *view* only | nothing. The turn runs server-side; the UI re-reads the record on reconnect |
+| **Provider failure** | the model call *inside* a live turn | the turn itself: retry a transient failure, terminalise a permanent one |
+
+The second needs stating because it is easy to get wrong in the other direction: a
+steered session must **not** be bound to the life of any client connection. Closing
+a browser is not a cancellation, and a session whose operator went offline continues
+and reports on completion exactly as if they had stayed.
+
+The third is the one rev 2 left undefined, and the omission had teeth:
+
+> **A steered session's turn must derive its retry and exit decisions from its own
+> durable record — `rec.SteeredBy`, `rec.Generation`, `rec.Stop` — and never from a
+> pointer to another turn's in-memory state.**
+
+The deleted sub-turn mechanism held a child's turn in memory next to its parent's,
+so "am I delegated?" could be answered by a pointer (`turnState.parentTurnState`).
+D2 replaced that with a durable edge precisely because the in-memory relationship
+does not survive a restart, a re-entry, or a wake. Any behaviour still gated on the
+old pointer is therefore **permanently disabled** once the mechanism that set it is
+deleted — silently, with its tests still green, because a test can assign the
+pointer that production no longer assigns.
+
+Two behaviours were lost exactly this way (issue #857, found while writing the UAT
+plan, not by any test):
+
+| Lost behaviour | Effect |
+|---|---|
+| retry of a transient provider rate limit for delegated work | a worker fails on a 429 instead of backing off and continuing |
+| the "my parent's turn ended" graceful exit | a worker keeps spending tokens on a result nobody awaits |
+
+The correct dispositions differ, and D12 fixes the second by **deleting** it:
+
+1. **Rate-limit retry is kept and re-gated.** A steered session is *more* exposed to
+   provider throttling than a human-facing one, because several run at once under
+   D9's concurrency cap. The gate becomes `rec.SteeredBy != nil`, which is durable
+   and true on every entry path — wake, follow-up, boot — not just the one that
+   happened to build an in-memory parent link. A permanent failure terminalises and
+   reports upward through D3's single operation; it never leaves the record
+   `running`.
+2. **The parent-ended exit is removed, not repaired.** Under D2 a steered session's
+   life is bounded by its own record, its own `Stop` marker and D9's timeout — not
+   by whether some other turn is still in memory. D8's cascade already stops a child
+   when its parent is cancelled. A parent that merely *finishes* while its child
+   still runs is a completion question (D6), not an exit condition, and the child's
+   result is still delivered to the durable edge. Keeping a second, in-memory notion
+   of "should I stop" alongside the durable one is how the two drift apart.
+
+**Test obligation.** A test may not construct the state that authorises a retry. It
+must launch a real steered session and assert the retry gate is satisfied from the
+persisted record — otherwise it re-creates the exact false green that hid #857 for
+the whole of rev 2.
+
 ### D11 — Interim containment, if any, before this lands
 
 Three interim containments are **proposed, not landed** at the evidence baseline (`364290cb5`: `deliverToolOutput` still sends media whenever it is present; `processSystemMessage` still builds `SendResponse: true` by hand and restores no root): gate media in `deliverToolOutput` by the text path's predicate; deny `SendResponse` for a re-entered `delegate`-type session in `processSystemMessage`; and restore `routingSessionID` in the same function **from the walked root**, not from `ParentDurableKey` (rev 1's direct-parent restore left grandchildren unreachable). Whether to land them ahead of this ADR is the founder's call; a second session has offered the first two. Whatever lands is deleted by this delivery (D10) — audience (D3) and reconstruction (D2) are the permanent form of all three, and AC-3 and AC-8 prove those at depth three.
@@ -274,6 +333,16 @@ Greenfield (ADR-057 operator decision 1). The 80 existing delegate sessions stay
 ## 7. Restart and recovery
 
 Durable history did not imply durable notification in rev 1. Now: a completion or failure is written before the wake as an inbox entry whose `message_id` is the delivery identity, the wake carries that id and the recipient's generation, the parent's turn writes a consumed marker before executing, an entry still unacknowledged and unconsumed at boot is re-woken once, a re-wake for an id already consumed is acknowledged without a turn, and a wake for an older generation is refused as stale (D3, D8); boot classifies every record first (landing order I-8) and never resumes a legacy delegate or a child whose record was lost; a parked session is recoverable from its `NeedsInput` record without requiring a checkpoint (`boot_sweep.go::isNeedsInputReconstructable` today requires one that `parkNeedsInput` does not create — corrected); a session failed by the boot sweep wakes its steering session through D3's operation instead of only logging (`gateway_boot.go` hook); a stopped session stays stopped unless a newer instruction revives it. Stranded deliveries and unreadable records (`lifecycle_index.go::ensureWarm`'s report, I-9) are surfaced to the operator.
+
+**Beyond restart (D12).** A *client* disconnect recovers nothing because nothing was
+lost: the turn is server-side, and the UI re-reads the record when it reconnects — a
+closed browser is not a cancellation. A *provider* failure is handled inside the live
+turn: a transient one (rate limit, timeout) is retried with bounded backoff, gated on
+the durable `rec.SteeredBy` rather than on any in-memory link to the steering turn; a
+permanent one terminalises the record and reports upward through D3's operation, so
+no record is left `running` behind a dead call. The failure mode D12 exists to prevent
+is a gate that silently evaluates false for every real delegated session while its
+tests, which assign the gate's condition by hand, stay green.
 
 ## 8. Risks
 
@@ -320,6 +389,7 @@ Production and test ownership are separate. Shared files have one named owner; o
 | AC-11 | (D11) Any interim containment that landed before this ADR is gone after it (`loop_inbound.go` contains no hand-built `SendResponse` or `routingSessionID`; the media path asks the injected `steer.AudienceResolver`), and the three properties they protected — media contained, re-entered final reply contained, root Stop reaching a re-entered child — hold at depth three through AC-3 and AC-8. |
 | AC-12 | Reachability (Definition of Done): an operator finds a running steered session in the side panel, opens it in the real UI and watches it work; a three-level delegation started in one agent's chat adds **nothing to that chat beyond the `delegate` tool line** and the parent's own replies. |
 | AC-13 | Closure: #658, #614, #670, #755, #763, #764, #765 are closed by hand with a comment citing the merging PR or commit (release-branch PRs do not auto-close); #784 and #803 stay open, each with a one-line comment naming the ADR section that says why. |
+| AC-14 | (D12) **Restart:** a steered session running at shutdown is re-woken once or terminalised and reported upward; none is left `running` with no turn behind it. **Client disconnect:** a steered session whose operator's connection drops continues to completion and its result is readable when the operator returns; a closed connection is never treated as a cancellation. **Provider failure:** a transient failure inside a steered turn is retried with bounded backoff, and the retry gate is satisfied **from the persisted record on a session launched by the real launcher** — a test that assigns the gate's condition by hand does not satisfy this criterion; a permanent failure terminalises and reports upward, leaving no `running` record. **Regression guard:** a test asserts that some production path *assigns* every field a run-time gate reads, so a deleted writer fails the suite instead of silently disabling the feature. |
 
 Delivery is stated in two lines, never merged: *code correct and tested*; *reachable by a user/agent*.
 
@@ -362,6 +432,32 @@ Delivery is stated in two lines, never merged: *code correct and tested*; *reach
 | Q33 | What does the concurrency cap count? | **Executing turns; a parent waiting for children holds no slot** (D6, D9) |
 | Q34 | What is an empty final answer? | **A failure — persisted `failed`, delivered as `error empty_answer:`** (D3, D6) |
 | Q35 | How does a Judge verdict reach the parent? | **The existing `goal_status` kind, extended minimally: parent-bound direction, `not_met`, evidence** (D3, WP-E) |
+
+## 11a. Acceptance testing by a person (UAT)
+
+The machine criteria above are necessary and not sufficient: every defect this ADR
+shipped and then fixed was invisible to a green suite. The human-facing plan lives
+at `docs/internal/testing/adr-091-uat-plan.md` (issue #856) and is written so
+parallel browser agents run one lane each, with expected values taken from
+`docs/settings.md` and the wire contract rather than from the implementation.
+
+| Decision | UAT scenario |
+|---|---|
+| D1, D3 | A1 delegation returns a real answer; A2 the worker's chatter stays out of the human's chat |
+| D2 | B1 three levels complete and the answer reaches the top |
+| D9 | B2 over-cap depth is refused before any work starts; E1/E2 over-cap concurrency queues with a visible position and never refuses |
+| D4, D6 | D2(uat) a worker out of tool steps reports back instead of hanging |
+| D8 | C1 Stop reaches a running worker and its children; C2 Stop terminalises a worker that never started |
+| D5 | D1(uat) a revived worker runs the NEW instruction, not the original |
+| D7 | F1 a queued worker is visible immediately; F2 rows survive a reload; F3 a long label still yields a row |
+| D3 | H1/H2 no cross-account leak of prompts or worker rows |
+| **D12** | **I1 restart; I2 client disconnect; I4 interruption two levels deep** |
+
+**I3 — provider failure — is deliberately excluded from the first run.** It cannot
+pass until #857 restores a retry gate that production actually satisfies, and a FAIL
+there would read as an ADR-091 regression rather than the separate defect it is.
+Restore it when #857 lands; D12 is written so the restored scenario has something
+real to test.
 
 ## 12. Relationship to other decisions
 
