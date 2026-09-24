@@ -28,11 +28,33 @@ import { chatInput, waitForConnected, startNewChat, assistantMessages } from './
 import { installFreezeProxy } from './helpers/freezeProxy'
 
 const stopButton = (page: Page) => page.locator('[data-testid="stop-btn"]')
-const connectionStatusLine = (page: Page) => page.getByTestId('connection-status-line')
 const assistantConnectionStatus = (page: Page) => page.getByTestId('assistant-connection-status')
 
 const LONG_PROMPT =
   'Do NOT use any tools. Plain prose only. Write eight short paragraphs about the tide, about 600 words total.'
+
+// Real-browser follow-up (orchestrator): assertNoDuplicateOrGapText compared
+// the whole bubble's innerText, which includes bubble CHROME (the model
+// footer, `[data-testid="message-model"]`, rendered via ModelFooter.tsx —
+// only when `message.model` is a non-empty string). That field is populated
+// once the turn is persisted, so a live-streaming bubble legitimately has no
+// model label yet while the SAME bubble read after a reload does — that
+// difference exists in the release build too (ModelFooter's own doc
+// comment: it's deliberately rendered identically by both the live
+// MessageItem.tsx path and the replay VirtualAssistantMessageRow path, from
+// the same `message.model` field, which is what differs, not the rendering
+// logic) and is not a product regression to fix. The design's own pass
+// criteria (§8.3) is about message CONTENT ("the final answer is complete
+// and matches the transcript"), not bubble chrome — so every content
+// comparison in this file reads through this helper, which excludes any
+// `[data-testid="message-model"]` subtree from the extracted text.
+async function bubbleText(row: import('@playwright/test').Locator): Promise<string> {
+  return row.evaluate((el) => {
+    const clone = el.cloneNode(true) as HTMLElement
+    clone.querySelectorAll('[data-testid="message-model"]').forEach((n) => n.remove())
+    return (clone as HTMLElement).innerText
+  })
+}
 
 async function startLongTurn(page: Page): Promise<string> {
   const input = chatInput(page)
@@ -44,12 +66,74 @@ async function startLongTurn(page: Page): Promise<string> {
   await input.press('Enter')
   await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
   const row = assistantMessages(page).first()
-  await expect.poll(async () => (await row.innerText().catch(() => '')).trim().length, { timeout: 60_000 }).toBeGreaterThan(80)
-  return (await row.innerText()).trim()
+  await expect.poll(async () => (await bubbleText(row).catch(() => '')).trim().length, { timeout: 60_000 }).toBeGreaterThan(80)
+  return (await bubbleText(row)).trim()
 }
 
 async function waitTurnDone(page: Page) {
   await expect(stopButton(page)).toBeHidden({ timeout: 240_000 })
+}
+
+// Real-browser follow-up (orchestrator, scenario b): `waitTurnDone`'s "stop
+// button hidden" check is only a genuine "the turn finished" signal once
+// something has established a baseline of the button actually having been
+// VISIBLE for THIS render tree. Right after a fresh page.reload() (or a
+// switch to a different session, scenario c's own fix above), the button
+// has never appeared at all in the new DOM — "hidden" is trivially,
+// immediately true regardless of whether the turn is still genuinely
+// streaming server-side, which is exactly what produced scenario b's
+// `toHaveCount(1)` / received 0: the count check fired before the
+// reconnect's catch-up rebuild had time to reconstruct anything at all.
+// Give the rebuild a real chance to show the turn as still running first
+// (if it genuinely still is) before treating "hidden" as meaningful.
+async function waitTurnDoneAfterReload(page: Page) {
+  const appeared = await stopButton(page)
+    .waitFor({ state: 'visible', timeout: 20_000 })
+    .then(() => true)
+    .catch(() => false)
+  if (!appeared) {
+    // The turn may have genuinely finished during the freeze/reload gap —
+    // wait for the reconstructed answer to actually exist before deciding
+    // there's nothing left to wait for.
+    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 60_000 })
+    return
+  }
+  await waitTurnDone(page)
+}
+
+// Sidebar toggle: ScreenHeader.tsx's hamburger, aria-label="Toggle
+// navigation sidebar" (NOT the "sidebar-toggle" testid the previous draft
+// of this scenario guessed at and silently swallowed the failure of via
+// `.catch(() => {})` — that selector does not exist in the app).
+const sidebarToggle = (page: Page) => page.getByRole('button', { name: 'Toggle navigation sidebar' })
+
+// A session's sidebar row (Sidebar.tsx's SidebarSessionRow) is a ghost
+// Button whose accessible name is the session's title — there is no
+// dedicated testid per row, the title text IS the selector.
+const sessionRowByTitle = (page: Page, title: string) => page.getByRole('button', { name: title, exact: true })
+
+// The currently-active row carries aria-current="page" (SidebarSessionRow).
+// Used to capture chat A's real, server-assigned title (which is a model-
+// generated summary of the first message, not the prompt text verbatim —
+// reading it back from the DOM, rather than guessing what the title will
+// be, is what makes re-selecting the row later reliable).
+async function activeSidebarTitle(page: Page): Promise<string> {
+  await sidebarToggle(page).click()
+  const row = page.locator('button[aria-current="page"]').first()
+  await expect(row).toBeVisible({ timeout: 10_000 })
+  const title = (await row.innerText()).trim()
+  await sidebarToggle(page).click() // close the drawer again
+  return title
+}
+
+// Real sidebar navigation (orchestrator follow-up — the previous draft left
+// this "for the orchestrator to wire once runnable"): open the drawer,
+// click the session's OWN row by its title. Escape is never used here — it
+// cancels the running turn (ADR-057's cancel state machine), which would
+// defeat the entire point of this scenario.
+async function switchToSessionByTitle(page: Page, title: string) {
+  await sidebarToggle(page).click()
+  await sessionRowByTitle(page, title).click()
 }
 
 // Round-3/round-4 open item (orchestrator, both rounds): the previous version
@@ -78,7 +162,7 @@ async function assertNoDuplicateOrGapText(page: Page, before: string, after: str
   await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
   await waitForConnected(page)
   await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-  const reloaded = (await assistantMessages(page).first().innerText()).trim()
+  const reloaded = (await bubbleText(assistantMessages(page).first())).trim()
   expect(norm(reloaded)).toBe(norm(after))
 }
 
@@ -95,7 +179,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await context.setOffline(false)
     await waitTurnDone(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    const after = (await assistantMessages(page).first().innerText()).trim()
+    const after = (await bubbleText(assistantMessages(page).first())).trim()
     await assertNoDuplicateOrGapText(page, before, after)
     // Server log/diagnostic surfaced client-side would confirm
     // "catch_up mode=incremental" — the design leaves the exact
@@ -114,26 +198,37 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await page.reload()
     await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
     await waitForConnected(page)
-    await waitTurnDone(page)
+    await waitTurnDoneAfterReload(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    const after = (await assistantMessages(page).first().innerText()).trim()
+    const after = (await bubbleText(assistantMessages(page).first())).trim()
     await assertNoDuplicateOrGapText(page, before, after)
   })
 
   test('c: tab switched to another chat while the turn finishes — incremental on return', async ({ page }) => {
     test.setTimeout(420_000)
     const before = await startLongTurn(page)
-    // Switch to a fresh chat B at the first token.
+    // Capture chat A's real, server-assigned sidebar title BEFORE switching
+    // away — this is what makes finding it again reliable (see
+    // activeSidebarTitle's own comment on why this beats guessing).
+    const titleA = await activeSidebarTitle(page)
+    // Switch to a fresh chat B while chat A's turn is still running
+    // server-side (the turn never depends on a UI connection, ADR-082 P1 —
+    // switching the VIEW away changes nothing about it).
     await startNewChat(page)
-    await waitTurnDone(page) // the ORIGINAL turn (chat A) still finishes server-side
+    await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
     // Switch back to chat A via the sidebar (not page.goto — a reload would
-    // clear the in-memory cursor and defeat the point of this scenario;
-    // see reconnect-mid-turn.spec.ts's own S-11 note on the same trap).
-    await page.getByTestId('sidebar-toggle').click().catch(() => {})
-    // The exact sidebar navigation selector is app-specific and intentionally
-    // left for the orchestrator to wire against the live UI once runnable.
+    // clear the in-memory cursor and defeat the point of this scenario; see
+    // reconnect-mid-turn.spec.ts's own S-11 note on the same trap). Escape
+    // is never pressed — it cancels the running turn.
+    await switchToSessionByTitle(page, titleA)
+    // Only NOW does the DOM reflect chat A again, so only now does
+    // waitTurnDone's stop-button check actually observe chat A's own
+    // state — checking it while chat B was active (the previous draft's
+    // sequencing) would have passed immediately regardless of whether A's
+    // turn had genuinely finished, since chat B never shows a stop button.
+    await waitTurnDone(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    const after = (await assistantMessages(page).first().innerText()).trim()
+    const after = (await bubbleText(assistantMessages(page).first())).trim()
     await assertNoDuplicateOrGapText(page, before, after)
   })
 
@@ -145,9 +240,14 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await page2.goto('/')
     await expect(chatInput(page2)).toBeVisible({ timeout: 15_000 })
     await waitForConnected(page2)
-    await waitTurnDone(page2)
+    // page2 has never shown its own stop button (it is a brand-new page,
+    // never having rendered chat A live) — the same reload-baseline issue
+    // as scenario b's fix above (waitTurnDone's "hidden" check would be
+    // trivially, immediately true here regardless of whether the turn had
+    // actually finished server-side during the tab close).
+    await waitTurnDoneAfterReload(page2)
     await expect(assistantMessages(page2)).toHaveCount(1, { timeout: 30_000 })
-    const after = (await assistantMessages(page2).first().innerText()).trim()
+    const after = (await bubbleText(assistantMessages(page2).first())).trim()
     await assertNoDuplicateOrGapText(page2, before, after)
   })
 
@@ -162,8 +262,8 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await waitTurnDone(page2)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     await expect(assistantMessages(page2)).toHaveCount(1, { timeout: 30_000 })
-    const t1 = (await assistantMessages(page).first().innerText()).replace(/\s+/g, ' ').trim()
-    const t2 = (await assistantMessages(page2).first().innerText()).replace(/\s+/g, ' ').trim()
+    const t1 = (await bubbleText(assistantMessages(page).first())).replace(/\s+/g, ' ').trim()
+    const t2 = (await bubbleText(assistantMessages(page2).first())).replace(/\s+/g, ' ').trim()
     expect(t2).toBe(t1)
     await page2.close()
   })
@@ -178,7 +278,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await context.setOffline(false)
     await waitTurnDone(page) // chat B, currently foreground
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    const afterB = (await assistantMessages(page).first().innerText()).trim()
+    const afterB = (await bubbleText(assistantMessages(page).first())).trim()
     await assertNoDuplicateOrGapText(page, beforeB, afterB)
     void beforeA // chat A's own convergence is scenario c's concern; this
     // scenario's unique assertion is B's incremental catch-up under outage.
@@ -207,7 +307,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
     await waitTurnDone(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    expect((await assistantMessages(page).first().innerText()).trim().length).toBeGreaterThan(0)
+    expect((await bubbleText(assistantMessages(page).first())).trim().length).toBeGreaterThan(0)
   })
 
   // Skipped (not un-skipped like the rest of this file, pass 2 item 6):
@@ -236,10 +336,24 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await page.evaluate(() => window.dispatchEvent(new Event('offline')))
     await input.fill('typed while offline')
     await input.press('Enter')
-    await expect(connectionStatusLine(page)).toBeVisible({ timeout: 20_000 })
+    // Real-browser follow-up (orchestrator): the previous version of this
+    // scenario asserted the CONNECTION banner (`connection-status-line`)
+    // within 20s of going offline. That contradicts the quiet-disconnect
+    // design on purpose (ConnectionStatus.tsx's own CHAT_NOTICE_MS = 120s —
+    // no chat-connection indicator is SUPPOSED to appear for a drop this
+    // short, to avoid flickering a banner for a brief blip; #833/ADR-082).
+    // Not a product regression — a test asserting behaviour the design
+    // deliberately prevents. The scenario's OWN title names the real
+    // signal: the per-message delivery ticks
+    // (`user-message-delivery-status`, ConnectionStatus.tsx's
+    // UserMessageDeliveryStatus) — 'queued' while offline ("Not sent yet,
+    // will be sent automatically"), transitioning to 'working' once the
+    // agent picks it up after the reconnect delivers it.
+    const deliveryStatus = page.getByTestId('user-message-delivery-status')
+    await expect(deliveryStatus).toHaveText(/not sent yet/i, { timeout: 15_000 })
     await context.setOffline(false)
     await page.evaluate(() => window.dispatchEvent(new Event('online')))
-    await expect(connectionStatusLine(page)).toHaveText('Up to date', { timeout: 30_000 })
+    await expect(deliveryStatus).toHaveText(/is working on it/i, { timeout: 30_000 })
     await waitTurnDone(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     // The user's own message is the pending tail (§4.7) — it must render at
