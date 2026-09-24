@@ -281,3 +281,83 @@ describe('BE-DESIGN.md §4.7/founder Q1 — pending tail ordering and replay ded
     expect(bucket.messagesById['client-abc']).toBeUndefined()
   })
 })
+
+// Round 4 — orchestrator real-browser rerun on 51a9376f6, scenario c: a
+// session S is mid-turn (t008 so far). User clicks sidebar "New chat" — NO
+// network outage, the SAME socket keeps receiving S's frames (S's turn
+// never depended on which session the UI happens to show). S's tokens
+// t010..t060 (SAME message_id) and its `done` arrive while a DIFFERENT
+// session is foreground. User then clicks S in the sidebar — the SPA sends
+// attach_session{since_seq: <head>} and the gateway correctly replies
+// catch_up_complete{mode:incremental, seq:<head>} (nothing was missed
+// server-side). Captured DOM result: the bubble stops at t013 and shows
+// "(interrupted)" — i.e. S's cursor advanced to the head while the tab
+// wasn't viewing it, but the tokens/done that earned that advance were
+// never actually applied to S's own bucket.
+describe('BE-DESIGN.md §6.2/§6.3 — frames for a NON-VIEWED session must still apply to its own bucket', () => {
+  const OTHER_SID = 'sess-regress-other'
+
+  it('a turn that keeps streaming in a background session while a different session is foreground is NOT lost, and is NOT marked interrupted', () => {
+    // S is foreground, streams t001..t008.
+    for (let i = 1; i <= 8; i++) {
+      useChatStore.getState().handleFrame(token(324 + i, `t${String(i).padStart(3, '0')} `))
+    }
+    expect(assistantBubbles()).toHaveLength(1)
+
+    // User clicks "New chat" — activeSessionId changes; the socket does
+    // NOT drop (no clearStreamingState call at all in this scenario).
+    useSessionStore.setState({ activeSessionId: OTHER_SID })
+
+    // S's turn keeps streaming server-side and the SAME socket keeps
+    // delivering S's frames, still carrying session_id: SID explicitly —
+    // t010..t060 (SAME message_id) and the turn's own done. seq is a
+    // monotonic per-session frame counter, unrelated to the "tNNN" text
+    // label numbering (the orchestrator's real capture likewise skips
+    // straight from t008 to t010 — seq must still be gap-free).
+    let seq = 332
+    for (let i = 10; i <= 60; i++) {
+      seq += 1
+      useChatStore.getState().handleFrame(token(seq, `t${String(i).padStart(3, '0')} `))
+    }
+    seq += 1
+    useChatStore.getState().handleFrame({
+      type: 'done', session_id: SID, message_id: MSG_ID, turn_id: TURN_ID, seq, stats: { tokens: 59, cost: 0.01 },
+    } as WsReceiveFrame)
+
+    // These frames must have applied to S's OWN bucket even though S was
+    // never the foreground/active session while they arrived.
+    let sBucket = useChatStore.getState().sessionsById[SID]!
+    let sAsst = sBucket.messageOrder.map((id) => sBucket.messagesById[id]).filter((m) => m.role === 'assistant')
+    expect(sAsst).toHaveLength(1)
+    expect(sAsst[0].content).toContain('t060')
+    expect(sAsst[0].status).toBe('done')
+    expect(sAsst[0].status).not.toBe('interrupted')
+
+    // User clicks S in the sidebar: attach_session{since_seq: head} ->
+    // gateway replies session_state + catch_up_complete{incremental,
+    // seq: head} — correctly reporting nothing was missed, since S's own
+    // bucket cursor is genuinely caught up (the frames above DID apply).
+    useSessionStore.setState({ activeSessionId: SID })
+    useChatStore.getState().handleFrame({
+      type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-09-24T00:01:00Z',
+    } as WsReceiveFrame)
+    const headSeq = sBucket.cursor?.seq ?? 0
+    useChatStore.getState().handleFrame({
+      type: 'catch_up_complete', session_id: SID, seq: headSeq, boot_id: sBucket.cursor?.bootId ?? 'boot-1', mode: 'incremental',
+    } as WsReceiveFrame)
+
+    sBucket = useChatStore.getState().sessionsById[SID]!
+    sAsst = sBucket.messageOrder.map((id) => sBucket.messagesById[id]).filter((m) => m.role === 'assistant')
+    // Still ONE bubble, still the FULL text, still done — switching away
+    // and back must not have reset the bucket, re-applied anything twice,
+    // or appended a second "(interrupted)" bubble. t009 is intentionally
+    // absent (never sent, mirroring the real capture's t008 -> t010 jump).
+    expect(sAsst).toHaveLength(1)
+    const expected = Array.from({ length: 60 }, (_, i) => i + 1)
+      .filter((n) => n !== 9)
+      .map((n) => `t${String(n).padStart(3, '0')} `)
+      .join('')
+    expect(sAsst[0].content).toBe(expected)
+    expect(sAsst[0].status).toBe('done')
+  })
+})

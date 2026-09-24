@@ -62,6 +62,24 @@ export function handleCatchUpFrame({ frame, targetSid, withBucket }: CatchUpFram
         cursor: cursorFromTerminalFrame(completeFrame, b.cursor?.bootId),
         awaitingCatchUp: false,
         isReplaying: false,
+        // Real-browser regression (orchestrator round 4, scenarios c/e/f):
+        // `replayCompletedForSession` (ChatScreen.tsx's own REST-fallback
+        // "was replay finished for this session" flag — see its doc comment
+        // there) was previously only ever set by the live `done` handler's
+        // frames.ts terminal-sweep, never by this frame — even though
+        // `catch_up_complete` is now THE definitive "catch-up is over"
+        // signal for an attach (this file's own doc comment above). A
+        // session whose turn already finished streaming into its bucket
+        // BEFORE the user reattached (so `done` never re-fires during this
+        // attach cycle) reattaches with this flag still stale/unset for it.
+        // ChatScreen.tsx's own REST-overwrite effect is separately guarded
+        // by `storeMessageCount > 0`, but the sibling judge-verdict-merge
+        // effect is not — it gates ONLY on `isReplaying || storeMessageCount
+        // === 0`, so a stale `replayCompletedForSession` lets a REST
+        // snapshot that resolved out of order (a real, live-verified race —
+        // see that effect's own doc comment) merge against a session this
+        // client's WS-driven state had already fully reconstructed.
+        replayCompletedForSession: targetSid,
       }))
       return true
     }

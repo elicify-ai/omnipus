@@ -118,6 +118,14 @@ describe('catch_up_complete (§4.1/§6.2)', () => {
     expect(b.cursor).toEqual({ bootId: 'boot-A', seq: 50 })
     expect(b.isReplaying).toBe(false)
     expect(b.awaitingCatchUp).toBe(false)
+    // Real-browser regression, orchestrator round 4 (scenarios c/e/f):
+    // catch_up_complete IS the definitive "catch-up is over" signal for
+    // this attach (this describe block's own §4.1/§6.2 reference) — it
+    // must set ChatScreen.tsx's replayCompletedForSession flag exactly like
+    // the live `done` handler does, or a REST history fetch that resolves
+    // out of order after this reattach can merge stale data against a
+    // session the WS-driven store state already fully reconstructed.
+    expect(b.replayCompletedForSession).toBe(SID)
   })
 })
 
