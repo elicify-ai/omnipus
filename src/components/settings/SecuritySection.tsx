@@ -173,7 +173,11 @@ function GlobalToolPoliciesSection() {
 // Lives on the same SandboxConfig the Process Sandbox (Advanced) section
 // already manages, and goes through the same re-auth-gated
 // PUT /security/sandbox-config handler — no separate auth path to build.
-function AutoApproveControl() {
+//
+// Exported (not just used locally) so AutoApproveControl.stories.tsx can
+// mount this one card in isolation for a visual check, without seeding
+// every query the rest of SecuritySection needs.
+export function AutoApproveControl() {
   const { addToast } = useUiStore()
   const stepUp = useStepUp()
   const queryClient = useQueryClient()
