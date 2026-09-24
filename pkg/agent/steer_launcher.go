@@ -806,6 +806,16 @@ func commitSteeredDispatchState(
 // the state write deterministically, instead of relying on scheduling luck.
 var dispatchStateWriteTestHook func(sessionID string, gen int)
 
+// turnRegisteredTestHook is a test-only synchronization seam, fired from both
+// entry paths immediately after registerTurnIfAbsent admits a turn: Dispatch
+// (below) and the wake (loop_inbound.go::processSteeredSystemWake). Always
+// nil in production; never set outside a _test.go file. Where
+// dispatchStateWriteTestHook pins the state-write window, this one pins the
+// registration instant itself and hands over the turnState: a promoted turn
+// can run to completion and deregister within one poll interval, so a test
+// that samples getActiveTurnState afterwards can miss it entirely.
+var turnRegisteredTestHook func(sessionID string, ts *turnState)
+
 // dispatchSteeredSession is I-2/I-3's authoritative admission decision.
 // Reserves via I-6's live reserveDispatch guard,
 // then decides running/queued atomically against the turn-counting
@@ -899,6 +909,10 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 		// takes no turn and releases the admission slot it just claimed.
 		al.drainSteerQueue(sessionID, gen)
 		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: concurrent dispatch already registered a turn", steer.ErrStaleGeneration)
+	}
+
+	if turnRegisteredTestHook != nil {
+		turnRegisteredTestHook(sessionID, ts)
 	}
 
 	if dispatchStateWriteTestHook != nil {
