@@ -81,9 +81,11 @@ type projItem struct {
 
 // activeTurnProjection is guarded by sessionHub.mu.
 type activeTurnProjection struct {
-	order     []string
-	items     map[string]*projItem
-	bytes     int
+	order []string
+	items map[string]*projItem
+	bytes int
+	// truncated: items were evicted this turn to stay within budget (the
+	// warning is logged once per turn).
 	truncated bool
 }
 
@@ -123,6 +125,7 @@ func (p *activeTurnProjection) item(key, id string, kind hubFrameKind) *projItem
 // update applies one published frame (unsequenced bytes) to the projection.
 // Caller holds sessionHub.mu.
 func (p *activeTurnProjection) update(meta hubFrameMeta, frame []byte, sessionID string) {
+	var touched string
 	switch meta.kind {
 	case hubKindToken:
 		key := "msg:" + meta.messageID
@@ -134,33 +137,36 @@ func (p *activeTurnProjection) update(meta hubFrameMeta, frame []byte, sessionID
 		if meta.agentID != "" {
 			it.agentID = meta.agentID
 		}
-		if p.truncated {
-			return
-		}
 		it.text = append(it.text, meta.content...)
 		p.bytes += len(meta.content)
+		touched = key
 	case hubKindToolStart:
 		it := p.item("tool:"+meta.key, meta.key, hubKindToolStart)
 		p.bytes += len(frame) - len(it.start)
 		it.start = frame
+		touched = "tool:" + meta.key
 	case hubKindToolResult:
 		it := p.item("tool:"+meta.key, meta.key, hubKindToolStart)
 		p.bytes += len(frame) - len(it.end)
 		it.end = frame
+		touched = "tool:" + meta.key
 	case hubKindSpanStart:
 		it := p.item("span:"+meta.key, meta.key, hubKindSpanStart)
 		p.bytes += len(frame) - len(it.start)
 		it.start = frame
 		it.spanOpen = true
+		touched = "span:" + meta.key
 	case hubKindSpanEnd:
 		it := p.item("span:"+meta.key, meta.key, hubKindSpanStart)
 		p.bytes += len(frame) - len(it.end)
 		it.end = frame
 		it.spanOpen = false
+		touched = "span:" + meta.key
 	case hubKindItem:
 		it := p.item("item:"+meta.key, meta.key, hubKindItem)
 		p.bytes += len(frame) - len(it.start)
 		it.start = frame
+		touched = "item:" + meta.key
 	case hubKindDone:
 		// done(T) is published only after T's final answer was persisted
 		// (persist-before-done, §4.3), and every earlier round and tool call
@@ -172,11 +178,56 @@ func (p *activeTurnProjection) update(meta hubFrameMeta, frame []byte, sessionID
 	default:
 		return
 	}
-	if !p.truncated && p.bytes > hubProjectionMaxBytes {
-		p.truncated = true
-		slog.Warn("ws: active-turn projection exceeded its budget — a snapshot now shows only the transcript plus the current open message",
-			"event", "hub_projection_truncated", "session_id", sessionID, "bytes", p.bytes)
+	if p.bytes > hubProjectionMaxBytes {
+		evicted := p.evictOlder(touched)
+		if evicted > 0 && !p.truncated {
+			p.truncated = true
+			slog.Warn("ws: active-turn projection exceeded its budget — evicting its oldest items; a snapshot now "+
+				"shows the transcript plus the newest in-progress items",
+				"event", "hub_projection_truncated", "session_id", sessionID, "bytes", p.bytes, "evicted", evicted)
+		}
 	}
+}
+
+// evictOlder drops the oldest items, never the one just updated (keep),
+// until the projection is back within hubProjectionMaxBytes or keep is the
+// only item left. The item being written — typically the answer still
+// streaming — therefore always stays whole (#823 review finding 4: the first
+// version froze every message's text at the cap instead). An evicted item
+// was published but not yet persisted, so a snapshot taken meanwhile no
+// longer shows it; that is the budget's accepted cost, logged once per turn.
+func (p *activeTurnProjection) evictOlder(keep string) int {
+	evicted := 0
+	for p.bytes > hubProjectionMaxBytes {
+		// Oldest first, sparing still-open delegate spans (small, and the
+		// only record that a delegate is running) until nothing else is left.
+		victim := -1
+		for i, key := range p.order {
+			if it := p.items[key]; key != keep && (it == nil || !it.spanOpen) {
+				victim = i
+				break
+			}
+		}
+		if victim < 0 {
+			for i, key := range p.order {
+				if key != keep {
+					victim = i
+					break
+				}
+			}
+		}
+		if victim < 0 {
+			break
+		}
+		key := p.order[victim]
+		if it := p.items[key]; it != nil {
+			p.bytes -= len(it.text) + len(it.start) + len(it.end)
+		}
+		delete(p.items, key)
+		p.order = append(p.order[:victim], p.order[victim+1:]...)
+		evicted++
+	}
+	return evicted
 }
 
 // forgetTurnText drops the streamed text of turnID's messages. Used only
@@ -216,8 +267,6 @@ func (p *activeTurnProjection) clearExceptOpenSpans() {
 }
 
 // snapshot copies the projection out for use after the hub lock is released.
-// A truncated projection yields only its most recent message (§3.1: the
-// snapshot falls back to the transcript plus the current open message).
 func (p *activeTurnProjection) snapshot() []projSnapshotItem {
 	out := make([]projSnapshotItem, 0, len(p.order))
 	for _, key := range p.order {
@@ -229,14 +278,6 @@ func (p *activeTurnProjection) snapshot() []projSnapshotItem {
 			kind: it.kind, key: it.key, id: it.id, turnID: it.turnID, messageID: it.messageID,
 			agentID: it.agentID, text: string(it.text), start: it.start, end: it.end,
 		})
-	}
-	if p.truncated {
-		for i := len(out) - 1; i >= 0; i-- {
-			if out[i].kind == hubKindToken {
-				return out[i : i+1]
-			}
-		}
-		return nil
 	}
 	return out
 }

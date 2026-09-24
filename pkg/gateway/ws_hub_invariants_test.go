@@ -96,22 +96,38 @@ func TestHub_H14_DelegationRouting(t *testing.T) {
 	assert.Empty(t, journalFramesOfType(t, parent, "token"), "a delegated child's own tokens are never published")
 }
 
-// TestHub_H15_ProjectionTruncatesAtBudget pins §3.1's projection bound: past
-// 2 MiB the projection is marked truncated and a snapshot falls back to the
-// current open message only.
-func TestHub_H15_ProjectionTruncatesAtBudget(t *testing.T) {
+// TestHub_H15_ProjectionOverBudget_KeepsTheCurrentAnswerWhole pins §3.1's
+// projection bound as corrected after the #823 review (finding 4): once the
+// 2 MiB budget is exceeded, the projection keeps recording the message still
+// being written and evicts OLDER items instead. The first version stopped
+// appending text for every message at the cap while snapshot() kept
+// returning the stale text — a rebuild late in a long, tool-heavy turn showed
+// an answer missing everything written after the cap was hit.
+func TestHub_H15_ProjectionOverBudget_KeepsTheCurrentAnswerWhole(t *testing.T) {
 	var p activeTurnProjection
-	chunk := strings.Repeat("a", 256<<10)
-	p.update(hubFrameMeta{kind: hubKindToolStart, key: "c1"}, []byte(`{"type":"tool_call_start"}`), "s")
-	for i := 0; i < 10; i++ {
-		p.update(hubFrameMeta{kind: hubKindToken, messageID: "m1", turnID: "t", content: chunk}, nil, "s")
+	bigResult := []byte(`{"type":"tool_call_result","result":"` + strings.Repeat("r", 600<<10) + `"}`)
+	for i := 0; i < 4; i++ { // ~2.4 MiB of finished tool calls
+		key := "call-" + string(rune('a'+i))
+		p.update(hubFrameMeta{kind: hubKindToolStart, key: key}, []byte(`{"type":"tool_call_start"}`), "s")
+		p.update(hubFrameMeta{kind: hubKindToolResult, key: key}, bigResult, "s")
 	}
-	require.True(t, p.truncated, "the projection must mark itself truncated past its budget")
+	var want strings.Builder
+	for i := 0; i < 8; i++ { // the answer keeps streaming well past the cap
+		chunk := "part" + string(rune('0'+i)) + " " + strings.Repeat("a", 64<<10)
+		want.WriteString(chunk)
+		p.update(hubFrameMeta{kind: hubKindToken, messageID: "m-current", turnID: "t", content: chunk}, nil, "s")
+	}
 	snap := p.snapshot()
-	require.Len(t, snap, 1, "a truncated projection yields only the current open message")
-	assert.Equal(t, "m1", snap[0].messageID)
+	require.NotEmpty(t, snap)
+	last := snap[len(snap)-1]
+	require.Equal(t, "m-current", last.messageID, "the message being written must survive the budget")
+	assert.Equal(t, want.String(), last.text,
+		"the current answer must be complete — start, middle and end — not frozen at the cap")
+	assert.LessOrEqual(t, p.bytes, hubProjectionMaxBytes+want.Len(),
+		"older items are evicted so the projection stays within budget (plus the current answer)")
+	assert.Less(t, len(snap), 5, "older finished tool calls were evicted to make room")
+
 	p.update(hubFrameMeta{kind: hubKindDone}, nil, "s")
-	assert.False(t, p.truncated)
 	assert.False(t, p.active())
 }
 
