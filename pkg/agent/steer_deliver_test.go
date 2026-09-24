@@ -295,8 +295,8 @@ func TestDeliver_RepeatWake_SameDeterministicID_OneEntry(t *testing.T) {
 
 	// Once the entry is genuinely ACKED the same delivery is a true
 	// duplicate and must repeat no effect.
-	if err := inbox.Ack(parentID, []string{messageIDOf(msgs[0])}); err != nil {
-		t.Fatalf("Ack the delivered entry: %v", err)
+	if ackErr := inbox.Ack(parentID, []string{messageIDOf(msgs[0])}); ackErr != nil {
+		t.Fatalf("Ack the delivered entry: %v", ackErr)
 	}
 	third, err := deliverer.Deliver(ctx, handbackEvent(childID, "third-attempt-after-ack"))
 	if err != nil {

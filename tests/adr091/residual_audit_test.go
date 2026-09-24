@@ -2,6 +2,7 @@ package adr091
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -334,7 +335,8 @@ func runGrepCmd(t *testing.T, cmd *exec.Cmd) (int, string) {
 	err := cmd.Run()
 	exitCode := 0
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		} else {
 			t.Fatalf("Command failed unexpectedly: %v\nStdout: %s\nStderr: %s", err, stdout.String(), stderr.String())
@@ -357,7 +359,8 @@ func runGrepCmd(t *testing.T, cmd *exec.Cmd) (int, string) {
 }
 
 func buildGrep(repoRoot string, dirs []string, patterns []string, includes []string, excludes []string) *exec.Cmd {
-	args := []string{"grep", "-rn"}
+	args := make([]string, 0, 2+2*len(patterns)+len(dirs)+len(includes)+len(excludes))
+	args = append(args, "grep", "-rn")
 
 	// Add patterns with -e flags
 	for _, pattern := range patterns {
@@ -395,7 +398,8 @@ func buildGrepFileExtended(repoRoot string, filePath string, pattern string) *ex
 }
 
 func buildGrepFilesScoped(repoRoot string, filePaths []string, patterns []string, _ []string, _ []string) *exec.Cmd {
-	args := []string{"grep", "-n"}
+	args := make([]string, 0, 2+2*len(patterns)+len(filePaths))
+	args = append(args, "grep", "-n")
 
 	// Add patterns with -e flags
 	for _, pattern := range patterns {
@@ -411,7 +415,8 @@ func buildGrepFilesScoped(repoRoot string, filePaths []string, patterns []string
 }
 
 func buildGrepExcludeFile(repoRoot string, dirs []string, patterns []string, includes []string, excludes []string) *exec.Cmd {
-	args := []string{"grep", "-rn"}
+	args := make([]string, 0, 2+2*len(patterns)+len(dirs)+len(includes)+len(excludes))
+	args = append(args, "grep", "-rn")
 
 	// Add patterns with -e flags
 	for _, pattern := range patterns {

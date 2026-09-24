@@ -24,15 +24,25 @@ func TestCascade_PartialReported_FrameAndChannel(t *testing.T) {
 	if len(wc.sendCh) != 2 {
 		t.Fatalf("frames sent = %d, want report + exactly one channel line", len(wc.sendCh))
 	}
+	// Unreachable is decoded into an inline id/reason-tagged struct, not
+	// steer.UnreachableSession directly: that internal domain type is never
+	// itself a wire type (CLAUDE.md contract-first rule) — production code
+	// (sendCancelReportFrame) explicitly converts each entry into this same
+	// tagged shape before marshaling, so the test decodes the real wire
+	// format instead of relying on encoding/json's case-insensitive
+	// fallback matching against an untagged struct.
 	var frame struct {
-		Type                   string                     `json:"type"`
-		SessionID              string                     `json:"session_id"`
-		Stage                  string                     `json:"stage"`
-		Reached                []string                   `json:"reached"`
-		Unreachable            []steer.UnreachableSession `json:"unreachable"`
-		SkippedNewerGeneration []string                   `json:"skipped_newer_generation"`
-		SkippedTerminal        []string                   `json:"skipped_terminal"`
-		Partial                bool                       `json:"partial"`
+		Type        string   `json:"type"`
+		SessionID   string   `json:"session_id"`
+		Stage       string   `json:"stage"`
+		Reached     []string `json:"reached"`
+		Unreachable []struct {
+			ID     string `json:"id"`
+			Reason string `json:"reason"`
+		} `json:"unreachable"`
+		SkippedNewerGeneration []string `json:"skipped_newer_generation"`
+		SkippedTerminal        []string `json:"skipped_terminal"`
+		Partial                bool     `json:"partial"`
 	}
 	if err := json.Unmarshal(<-wc.sendCh, &frame); err != nil {
 		t.Fatalf("decode cancel report: %v", err)

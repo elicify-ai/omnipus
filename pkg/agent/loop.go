@@ -95,14 +95,14 @@ type AgentLoop struct {
 	// set by recall_conversation, read/dropped by windowTrim + assembly.
 	recallSpans      sync.Map // key: sessionKey (string), value: *RecallSpan
 	activeTurnStates sync.Map // key: sessionKey (string), value: *turnState
-	// openSubTurnSpans counts, per parentSpawnCallID, the sub-turn spans whose
-	// EventKindSubTurnSpawn has been emitted and whose EventKindSubTurnEnd has
-	// not been emitted yet. Guarded by subTurnSpansMu, allocated lazily. See
-	// markSubTurnSpanOpen (steering.go) for why liveness needs it.
-	subTurnSpansMu     sync.Mutex
-	openSubTurnSpans   map[string]int
-	subTurnCounter     atomic.Int64 // Counter for generating unique SubTurn IDs
-	sessionActiveAgent sync.Map     // key: "session:"+sessionID (string), value: agentID (string); set by handoff, cleared on agent deletion
+	// subTurnSpansMu/openSubTurnSpans/subTurnCounter (the sub-turn span
+	// liveness tracker guarded by subTurnSpansMu, and its id counter) were
+	// deleted 2026-09-24 as unreachable ADR-091 leftovers (golangci
+	// unused): their only writer, steering.go's markSubTurnSpanOpen, was
+	// already deleted (see websocket_replay.go's replay-derived liveness
+	// comment near streamReplay) — these fields had no reader or writer
+	// left anywhere in the repo.
+	sessionActiveAgent sync.Map // key: "session:"+sessionID (string), value: agentID (string); set by handoff, cleared on agent deletion
 	// lastSwitchToDefault records, per session, whether the most recent
 	// switch_agent call was a return-to-default (tools.HandoffEvent.ToDefault)
 	// rather than a named-agent hand-off. It exists so the WS agent_switched

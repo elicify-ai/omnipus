@@ -265,8 +265,9 @@ func TestBoot_RenudgesUnconsumedEntriesOnce_EligibleOnly(t *testing.T) {
 	if err := h.recovery().Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	var got []string
-	for _, event := range h.deliverer.snapshot() {
+	snapshot := h.deliverer.snapshot()
+	got := make([]string, 0, len(snapshot))
+	for _, event := range snapshot {
 		got = append(got, bootEnvelope(t, event.Message).MessageID)
 	}
 	slices.Sort(got)

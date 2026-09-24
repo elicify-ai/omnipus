@@ -17,7 +17,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/google/uuid"
 )
 
@@ -122,21 +121,9 @@ func (sq *steeringQueue) dequeueScope(scope string) []providers.Message {
 	return steeringMessages(sq.dequeueItemsLocked(normalizeSteeringScope(scope)))
 }
 
-// dequeueScopeWithFallback drains the scoped queue first and falls back to the
-// legacy manual scope for backwards compatibility.
-func (sq *steeringQueue) dequeueScopeWithFallback(scope string) []providers.Message {
-	sq.mu.Lock()
-	defer sq.mu.Unlock()
-
-	scope = strings.TrimSpace(scope)
-	if scope != "" {
-		if items := sq.dequeueItemsLocked(scope); len(items) > 0 {
-			return steeringMessages(items)
-		}
-	}
-
-	return steeringMessages(sq.dequeueItemsLocked(manualSteeringScope))
-}
+// dequeueScopeWithFallback was deleted 2026-09-24 as an unreachable
+// ADR-091 leftover (golangci unused): grep found no caller anywhere in
+// the repo — dequeueScope (above) is the one actually wired in.
 
 func (sq *steeringQueue) dequeueItemsLocked(scope string) []steeringQueueItem {
 	queue := sq.queues[scope]
@@ -1172,32 +1159,10 @@ func (al *AgentLoop) InterruptHard() error {
 }
 
 // ====================== SubTurn Result Polling ======================
-
-// dequeuePendingSubTurnResults polls the SubTurn result channel for the given
-// session and returns all available results without blocking.
-// Returns nil if no active turn state exists for this session.
-func (al *AgentLoop) dequeuePendingSubTurnResults(sessionKey string) []*tools.ToolResult {
-	tsInterface, ok := al.activeTurnStates.Load(sessionKey)
-	if !ok {
-		return nil
-	}
-	ts, ok := tsInterface.(*turnState)
-	if !ok {
-		return nil
-	}
-
-	var results []*tools.ToolResult
-	for {
-		select {
-		case result := <-ts.pendingResults:
-			if result != nil {
-				results = append(results, result)
-			}
-		default:
-			return results
-		}
-	}
-}
+//
+// dequeuePendingSubTurnResults was deleted 2026-09-24 as an unreachable
+// ADR-091 leftover (golangci unused): grep found no caller anywhere in the
+// repo.
 
 // ====================== Hard Abort ======================
 

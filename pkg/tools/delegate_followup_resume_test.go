@@ -122,19 +122,19 @@ func TestDelegateTool_FollowUp_NativeBumpsGenerationThenDispatches(t *testing.T)
 	if err != nil {
 		t.Fatalf("create steering session: %v", err)
 	}
-	if _, err := sessions.CreateSessionWithID("child-followup-resume-native", parentMeta.ID, session.SessionTypeDelegate, "webchat", "worker"); err != nil {
-		t.Fatalf("create native child session: %v", err)
+	if _, createErr := sessions.CreateSessionWithID("child-followup-resume-native", parentMeta.ID, session.SessionTypeDelegate, "webchat", "worker"); createErr != nil {
+		t.Fatalf("create native child session: %v", createErr)
 	}
 	tool.SetSessionStore(sessions)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
-	if err := lc.Persist(&session.LifecycleRecord{
+	if persistErr := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-followup-resume-native", Generation: 1, State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman,
 		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID:    "ws-1", AgentID: "worker",
 		Is3P: false,
-	}); err != nil {
-		t.Fatalf("seed failed: %v", err)
+	}); persistErr != nil {
+		t.Fatalf("seed failed: %v", persistErr)
 	}
 
 	result := tool.Execute(ctx, map[string]any{
@@ -170,23 +170,23 @@ func TestDelegateTool_FollowUp_3PDispatchesNewCorrectiveSession(t *testing.T) {
 		t.Fatalf("create steering session: %v", err)
 	}
 	parentID := parentMeta.ID
-	if _, err := sessions.CreateSessionWithID("child-followup-resume-3p", parentID, session.SessionTypeDelegate, "webchat", "claude-code"); err != nil {
-		t.Fatalf("create original external session: %v", err)
+	if _, createErr := sessions.CreateSessionWithID("child-followup-resume-3p", parentID, session.SessionTypeDelegate, "webchat", "claude-code"); createErr != nil {
+		t.Fatalf("create original external session: %v", createErr)
 	}
 	title, workspace := "External checkout audit", "ws-1"
-	if err := sessions.SetMeta("child-followup-resume-3p", session.MetaPatch{Title: &title, WorkspaceID: &workspace}); err != nil {
-		t.Fatalf("stamp original external session: %v", err)
+	if setMetaErr := sessions.SetMeta("child-followup-resume-3p", session.MetaPatch{Title: &title, WorkspaceID: &workspace}); setMetaErr != nil {
+		t.Fatalf("stamp original external session: %v", setMetaErr)
 	}
 	tool.SetSessionStore(sessions)
 	ctx := WithTranscriptSessionID(context.Background(), parentID)
-	if err := lc.Persist(&session.LifecycleRecord{
+	if persistErr := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-followup-resume-3p", Generation: 1, State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman,
 		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentID, RootSessionID: parentID},
 		WorkspaceID:    "ws-1", AgentID: "claude-code",
 		Is3P: true,
-	}); err != nil {
-		t.Fatalf("seed failed: %v", err)
+	}); persistErr != nil {
+		t.Fatalf("seed failed: %v", persistErr)
 	}
 
 	result := tool.Execute(ctx, map[string]any{

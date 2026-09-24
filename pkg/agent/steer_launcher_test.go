@@ -411,8 +411,8 @@ func TestLaunch_SteeredPersistsRequiredMetadataAndActiveGoal(t *testing.T) {
 		t.Fatalf("NewChannelSession(steerer): %v", err)
 	}
 	workspaceID := "ws-1"
-	if err := al.GetSessionStore().SetMeta(steererMeta.ID, session.MetaPatch{WorkspaceID: &workspaceID}); err != nil {
-		t.Fatalf("SetMeta(steerer).WorkspaceID: %v", err)
+	if setMetaErr := al.GetSessionStore().SetMeta(steererMeta.ID, session.MetaPatch{WorkspaceID: &workspaceID}); setMetaErr != nil {
+		t.Fatalf("SetMeta(steerer).WorkspaceID: %v", setMetaErr)
 	}
 
 	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
@@ -798,7 +798,7 @@ func TestDispatch_AtCap_Queued(t *testing.T) {
 
 	// Saturate the gate directly (unit-level control over the admission
 	// primitive, isolated from turn execution).
-	al.steerAdmission().tryAdmit("occupying-session", 1) //nolint:dogsled // only the reservation side effect matters
+	al.steerAdmission().tryAdmit("occupying-session", 1)
 
 	res, err := l.Launch(context.Background(), steer.LaunchRequest{
 		TargetAgentID: testDefaultAgentID, Task: "queued task",

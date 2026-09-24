@@ -557,19 +557,8 @@ func (te *TaskExecutor) advanceBlockedTasks(ctx context.Context, completedTaskID
 	}
 }
 
-// buildChildSummary produces a markdown summary of all child task results.
-func (te *TaskExecutor) buildChildSummary(children []task.Task) string {
-	var sb strings.Builder
-	sb.WriteString("## Child Task Results\n\n")
-	for _, c := range children {
-		fmt.Fprintf(&sb, "- **%s** (status: %s)", c.Title, c.Status)
-		if c.Result != "" {
-			fmt.Fprintf(&sb, ": %s", c.Result)
-		}
-		sb.WriteString("\n")
-	}
-	return sb.String()
-}
+// buildChildSummary was deleted 2026-09-24 as an unreachable ADR-091
+// leftover (golangci unused): grep found no caller anywhere in the repo.
 
 // failTask marks a task as failed with the given reason.
 func (te *TaskExecutor) failTask(taskID, reason string) {

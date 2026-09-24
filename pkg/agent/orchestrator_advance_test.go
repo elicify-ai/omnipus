@@ -215,58 +215,8 @@ func TestOrchestratorAdvance_MultipleDownstreamTasks(t *testing.T) {
 	}
 }
 
-// createChild creates a child task with the given parent and status.
-func createChild(t *testing.T, store *task.Store, parentID, status string) *task.Task {
-	t.Helper()
-	e := &task.Task{
-		Title:        "child",
-		Prompt:       "do thing",
-		AgentID:      "jim",
-		Priority:     3,
-		Action:       task.ActionLLM,
-		Status:       task.StatusNext,
-		WorkspaceID:  "default",
-		ParentTaskID: parentID,
-	}
-	if err := store.Create(e); err != nil {
-		t.Fatalf("create child: %v", err)
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	switch status {
-	case "running", "in_progress":
-		got, err := store.Update(e.ID, task.Patch{Status: ptrStatus(task.StatusInProgress), StartedAt: &now})
-		if err != nil {
-			t.Fatalf("child→in_progress: %v", err)
-		}
-		return got
-	case "completed", "done":
-		// Transition: next → in_progress → done (no state machine, but use two
-		// steps to stamp both StartedAt and CompletedAt realistically).
-		if _, err := store.Update(
-			e.ID,
-			task.Patch{Status: ptrStatus(task.StatusInProgress), StartedAt: &now},
-		); err != nil {
-			t.Fatalf("child→in_progress: %v", err)
-		}
-		got, err := store.Update(e.ID, task.Patch{Status: ptrStatus(task.StatusDone), CompletedAt: &now})
-		if err != nil {
-			t.Fatalf("child→done: %v", err)
-		}
-		return got
-	case "failed":
-		got, err := store.Update(e.ID, task.Patch{Status: ptrStatus(task.StatusFailed), CompletedAt: &now})
-		if err != nil {
-			t.Fatalf("child→failed: %v", err)
-		}
-		return got
-	}
-	// "queued" / "next" / default — leave as StatusNext.
-	got, err := store.Get(e.ID)
-	if err != nil {
-		t.Fatalf("get child: %v", err)
-	}
-	return got
-}
+// createChild was deleted 2026-09-24 as an unreachable ADR-091 leftover
+// (golangci unused): grep found no caller anywhere in the repo.
 
 // notifyParentIfAllSiblingsDone — and the "wait for every sibling to be
 // terminal before waking the parent" behavior its two former regression

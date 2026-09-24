@@ -2121,8 +2121,8 @@ func TestDelegateSteer_RevivesStoppedQueuedChild(t *testing.T) {
 
 	// Stop the queued child directly, mirroring a human Stop click on it.
 	canceller := al.steerCanceller()
-	if _, err := canceller.CancelSubtree(context.Background(), queuedID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"}); err != nil {
-		t.Fatalf("CancelSubtree(queued): %v", err)
+	if _, cancelErr := canceller.CancelSubtree(context.Background(), queuedID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"}); cancelErr != nil {
+		t.Fatalf("CancelSubtree(queued): %v", cancelErr)
 	}
 	stopped, err := al.GetSessionLifecycleStore().Load(queuedID)
 	if err != nil {

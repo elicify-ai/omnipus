@@ -571,7 +571,15 @@ var errCascadeTerminal = errors.New("steer: cancel subtree: terminal record")
 
 func (c *SteerCanceller) cascadeLock(sessionID string) *sync.Mutex {
 	lock, _ := c.locks.LoadOrStore(sessionID, &sync.Mutex{})
-	return lock.(*sync.Mutex)
+	m, ok := lock.(*sync.Mutex)
+	if !ok {
+		// c.locks is private to this file and every value ever stored under
+		// any key is a *sync.Mutex (the LoadOrStore above is the map's only
+		// writer) — unreachable in practice. Guard rather than panic on a
+		// hypothetically corrupt map instead of trusting that invariant blindly.
+		return &sync.Mutex{}
+	}
+	return m
 }
 
 func (c *SteerCanceller) stampStop(sessionID string, at time.Time, by steer.Principal) (int, stopStampOutcome, error) {

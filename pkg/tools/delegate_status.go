@@ -115,7 +115,7 @@ func (t *DelegateTool) executeDurableStatus(ctx context.Context, sessionID strin
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("No subagent found with session ID: %s", sessionID))
 	}
-	if err := t.verifyCallerOwnsSession(ctx, rec); err != nil {
+	if ownErr := t.verifyCallerOwnsSession(ctx, rec); ownErr != nil {
 		return ErrorResult(fmt.Sprintf("No subagent found with session ID: %s", sessionID))
 	}
 

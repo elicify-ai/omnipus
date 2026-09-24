@@ -952,17 +952,17 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	// The consumed marker and the acknowledgement are written only once the
 	// turn is certain to run: a wake refused above must leave its entry
 	// pending for I-6's Revive (FR-B-013), never swallow it.
-	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
+	if appendErr := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
 		ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system",
 		Content: marker, AgentID: rec.AgentID, Timestamp: time.Now().UTC(),
-	}); err != nil {
+	}); appendErr != nil {
 		abort()
-		return "", fmt.Errorf("steer: wake: append consumed marker: %w", err)
+		return "", fmt.Errorf("steer: wake: append consumed marker: %w", appendErr)
 	}
 	if inbox := al.GetMessageInboxStore(); inbox != nil {
-		if err := inbox.Ack(sessionID, []string{messageID}); err != nil {
+		if ackErr := inbox.Ack(sessionID, []string{messageID}); ackErr != nil {
 			abort()
-			return "", fmt.Errorf("steer: wake: acknowledge %q: %w", messageID, err)
+			return "", fmt.Errorf("steer: wake: acknowledge %q: %w", messageID, ackErr)
 		}
 	}
 	defer release()

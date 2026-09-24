@@ -101,8 +101,8 @@ func TestDelegationTree_BuildsValidEdges_AndRootRecord(t *testing.T) {
 		}
 	}
 
-	if err := tree.Crash(); err != nil {
-		t.Fatalf("crash sessions: %v", err)
+	if crashErr := tree.Crash(); crashErr != nil {
+		t.Fatalf("crash sessions: %v", crashErr)
 	}
 	reopened, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
 	if err != nil {

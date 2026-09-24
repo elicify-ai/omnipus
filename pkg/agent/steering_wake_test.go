@@ -25,14 +25,14 @@ func TestSteeringDrain_WritesConsumedMarkerForWake(t *testing.T) {
 		sharedSessionStore: store,
 	}
 
-	if err := al.EnqueueSteeringWake(
+	if enqErr := al.EnqueueSteeringWake(
 		"agent:agent-1:session:"+meta.ID,
 		"agent-1",
 		meta.ID,
 		"wake-message-1",
 		providers.Message{Role: "user", Content: "child completed"},
-	); err != nil {
-		t.Fatalf("EnqueueSteeringWake: %v", err)
+	); enqErr != nil {
+		t.Fatalf("EnqueueSteeringWake: %v", enqErr)
 	}
 
 	msgs := al.dequeueSteeringMessagesForScopeWithFallback("agent:agent-1:session:" + meta.ID)
@@ -82,17 +82,17 @@ func TestProcessSystemMessage_ConsumedSteeredWakeDoesNotRunTurnAgain(t *testing.
 		t.Fatalf("NewSession: %v", err)
 	}
 	lifecycle := session.NewLifecycleStore(filepath.Join(t.TempDir(), "lifecycle"))
-	if err := lifecycle.Persist(&session.LifecycleRecord{
+	if persistErr := lifecycle.Persist(&session.LifecycleRecord{
 		SessionID: meta.ID, Generation: 2, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, AgentID: "agent-1",
 		Origin: &session.Origin{Kind: session.OriginKindChat},
-	}); err != nil {
-		t.Fatalf("Persist: %v", err)
+	}); persistErr != nil {
+		t.Fatalf("Persist: %v", persistErr)
 	}
-	if err := store.AppendTranscriptStrict(meta.ID, session.TranscriptEntry{
+	if appendErr := store.AppendTranscriptStrict(meta.ID, session.TranscriptEntry{
 		ID: "consumed-wake-1", Type: session.EntryTypeSystem, Role: "system", Content: "consumed wake-1",
-	}); err != nil {
-		t.Fatalf("AppendTranscriptStrict: %v", err)
+	}); appendErr != nil {
+		t.Fatalf("AppendTranscriptStrict: %v", appendErr)
 	}
 	al := &AgentLoop{sharedSessionStore: store}
 	al.SetSessionMessagingStores(nil, lifecycle)

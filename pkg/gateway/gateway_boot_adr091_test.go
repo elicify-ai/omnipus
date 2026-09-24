@@ -11,7 +11,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -85,7 +84,11 @@ func TestWireSteerDeps_InstallsEveryProductionDependency(t *testing.T) {
 	if got := gatewaySteerCanceller(al); got != stg.runningServices.SteerDeps.Canceller {
 		t.Fatal("gateway Stop surfaces did not receive the composition-root Canceller")
 	}
-	if _, ok := stg.runningServices.SteerDeps.Deliverer.(steer.UpwardDeliverer); !ok {
+	// Deliverer is already statically typed steer.UpwardDeliverer (the
+	// interface field), so asserting to that same interface would check
+	// nothing (staticcheck S1040) — assert the real concrete production
+	// type wireSteerDeps installs instead (agent.NewSteerUpwardDeliverer).
+	if _, ok := stg.runningServices.SteerDeps.Deliverer.(*agent.SteerUpwardDeliverer); !ok {
 		t.Fatalf("deliverer has unexpected type %T", stg.runningServices.SteerDeps.Deliverer)
 	}
 }
