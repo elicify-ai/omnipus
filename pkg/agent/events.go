@@ -284,11 +284,13 @@ type TurnStartPayload struct {
 	UserMessage string
 	MediaCount  int
 	// IsRoot is true when this turn has no parent (parentTurnID == "").
-	// The WS forwarder uses it to reset its root-turn-ended latch so that
-	// spans spawned by a NEW root turn are not spuriously armed at
-	// registration (#605); only a root turn's start may reset the latch,
-	// otherwise a child's own turn-start would reopen the arming hole for
-	// later-arriving sibling spawn events.
+	// It has NO consumer today: the WS forwarder's root-turn-ended latch,
+	// which this used to reset (#605), was removed together with the
+	// orphan watchdog under ADR-091 D1, and EventKindTurnStart now sits in
+	// the forwarder's ignored list (websocket_forward.go). The field is
+	// still populated because it is cheap, honest and the natural place to
+	// reattach a root/child distinction if one is needed again — but do
+	// not assume a reader exists; check before relying on it.
 	IsRoot bool
 }
 
@@ -298,15 +300,21 @@ type TurnEndPayload struct {
 	Iterations      int
 	Duration        time.Duration
 	FinalContentLen int
-	// ChatID is the chat session this turn belongs to.
-	// Populated so the WS watchdog can scope orphan detection to the correct connection.
+	// ChatID is the chat session this turn belongs to. It was populated so
+	// the WS watchdog could scope orphan detection to the correct
+	// connection; that watchdog is gone (ADR-091 D1), so nothing in
+	// pkg/gateway reads it today.
 	ChatID string
-	// SessionID is the transcript-store session ID for this turn.
-	// Carried end-to-end so the WS forwarder can avoid the sessionIDs reverse-lookup.
+	// SessionID is the transcript-store session ID for this turn, carried
+	// end-to-end so a consumer need not do the sessionIDs reverse-lookup.
+	// No non-test consumer reads it at present.
 	SessionID string
 	// IsRoot is true when this turn has no parent (parentTurnID == "").
-	// The orphan watchdog only arms on root turn-end to avoid spurious interrupts
-	// from sibling sub-turn completions.
+	// It armed the orphan watchdog on root turn-end only, to avoid spurious
+	// interrupts from sibling sub-turn completions. That watchdog was
+	// retired under ADR-091 D1 — a delegated child is a session of its own
+	// and is designed to outlive its parent's turn — so this field has no
+	// reader today.
 	IsRoot bool
 }
 
