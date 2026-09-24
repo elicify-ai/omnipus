@@ -442,7 +442,7 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     fireEvent.click(trigger)
 
     const content = await screen.findByTestId('auto-approve-ask-list-content')
-    // Every one of the seven founder-approved groups must appear once expanded.
+    // Every one of the eight founder-approved groups must appear once expanded.
     expect(within(content).getByText('Sending email')).toBeInTheDocument()
     expect(within(content).getByText('Deleting tasks, agents or workspaces')).toBeInTheDocument()
     expect(

@@ -329,8 +329,8 @@ export function updatePromptGuardLevel(level: PromptInjectionLevel): Promise<Pro
   }, PromptGuardUpdateResponseSchema)
 }
 
-// Sandbox config — mode, allowed paths, SSRF controls, and the global
-// shell_deny_patterns default.
+// Sandbox config — mode, filesystem model, allowed paths, SSRF controls,
+// God Mode, the workspace path guard, and the global Auto-approve default.
 // SandboxConfig — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/SandboxConfig.yaml.
 // SandboxConfigUpdate — re-exported from generated openapi-types (contract-first #8).

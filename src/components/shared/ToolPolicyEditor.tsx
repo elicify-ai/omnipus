@@ -136,6 +136,25 @@ function isPolicyLocked(p: ToolPolicy, floor: GlobalFloor): boolean {
   return POLICY_RANK[p] < POLICY_RANK[floor]
 }
 
+/**
+ * The TRUE effective policy for a row — the runtime merge's own contract
+ * (strictest of the global floor and the per-agent value, deny > ask >
+ * allow; see `lockTitle` below), not the raw per-agent value alone.
+ *
+ * A per-agent value can be stored MORE PERMISSIVE than a floor that was
+ * raised after the fact (the control that would set it is disabled, but the
+ * already-stored value doesn't retroactively change) — `agentPolicy` alone
+ * would then read e.g. "ask" while the tool actually always resolves to the
+ * floor's "deny" at runtime. `'unconfigured'` imposes no additional floor
+ * (it's a surfaced anomaly, not a restriction — see `GlobalFloor`), so it
+ * falls through to the per-agent value unchanged.
+ */
+function trueEffectivePolicy(agentPolicy: ToolPolicy | undefined, floor: GlobalFloor): ToolPolicy | undefined {
+  if (agentPolicy === undefined) return undefined
+  if (!floor || floor === 'unconfigured') return agentPolicy
+  return POLICY_RANK[floor] > POLICY_RANK[agentPolicy] ? floor : agentPolicy
+}
+
 // ── ADR-052 FR-021/F6 — execute_plan grant security affordance ─────────────
 //
 // "Holding execute_plan IS the approval" for autonomous multi-task plan
@@ -330,6 +349,11 @@ function CategoryToolRow({
 }) {
   const effective = resolvePolicy(tool.name, policies)
   const floor = globalOverrideFor(tool.name, globalPolicies)
+  // The marker (below) must reflect what actually happens at runtime, which
+  // is the strictest of the floor and this per-agent value — not the raw
+  // per-agent value alone (J14 fix: a global "Deny" floor with a per-agent
+  // "Ask" used to show BOTH "Global: Deny" and "Auto: runs" on the same row).
+  const runtimeEffective = trueEffectivePolicy(effective, floor)
   const isUnconfigured = floor === 'unconfigured'
   const floorLabel = floor === 'deny' ? 'Deny' : floor === 'ask' ? 'Ask' : isUnconfigured ? 'Unset' : ''
   const lockTitle = isUnconfigured
@@ -369,10 +393,16 @@ function CategoryToolRow({
           </a>
         )}
         {/* ADR-092 J14: read-only "Under Auto" marker — only on a row whose
-            EFFECTIVE policy is "ask", and only when the registry actually
-            classified this tool (absent for `bash` and any unclassified
-            tool — see AUTO_APPROVE_MARKER_LABEL's own note). */}
-        {!isDiscovery && effective === 'ask' && tool.auto_approve && (
+            TRUE EFFECTIVE policy (strictest of the global floor and the
+            per-agent value, not the per-agent value alone) is "ask", and
+            only when the registry actually classified this tool (absent for
+            `bash` and any unclassified tool — see AUTO_APPROVE_MARKER_LABEL's
+            own note). A global deny/ask floor makes the marker misleading at
+            "ask" per-agent (the tool never actually reaches "ask" at
+            runtime) exactly as it does at "allow" per-agent — both are
+            excluded the same way, via runtimeEffective rather than
+            effective. */}
+        {!isDiscovery && runtimeEffective === 'ask' && tool.auto_approve && (
           <span
             data-testid={`auto-approve-marker-${tool.name}`}
             className="inline-flex items-center shrink-0 px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold border border-[var(--color-border)] text-[var(--color-muted)]"

@@ -276,17 +276,26 @@ export function registerChatResetForReplay(fn: (sessionId: string) => void): voi
 }
 
 // ADR-092 UX fix: same cycle-break pattern as _chatSetReplaying above.
-// startNewSession/attachToSession below clear this so a per-chat
-// Auto-approve choice made in a chat that was then abandoned (no message
-// ever sent, so the choice was never consumed by session_started) does not
-// silently leak onto a LATER, unrelated chat. Deliberately NOT wired into
-// setActiveSession itself — sendMessage's own pending-session mint (session
-// id '__pending') and sendWorkspaceSetupKickoff both call setActiveSession
-// too, and clearing there would erase the very choice this fix exists to
-// carry through to session_started. attachToSession folds the clear into
-// resetChatBucketForReplay (its only caller) below, at no extra line cost
-// inside create()'s grandfathered body (scripts/budgets/functions.txt);
-// startNewSession calls clearPendingAutoApproveOnSessionChange directly.
+// startNewSession, attachToSession, and enterWorkspaceChat below all clear
+// this so a per-chat Auto-approve choice made in a chat that was then
+// abandoned (no message ever sent, so the choice was never consumed by
+// session_started) does not silently leak onto a LATER, unrelated chat,
+// whether that chat is reached by attaching to a session, starting fresh, or
+// switching workspaces (even into a workspace that itself resolves to no
+// session at all). startNewSession and enterWorkspaceChat call this
+// unconditionally, as the very first thing each does — every branch of
+// either is a genuine chat/workspace change. attachToSession is the one
+// exception: its failed-send branch (`!sent`) deliberately does NOT clear —
+// Wave-1 Bug 2's contract is that a failed send leaves ALL store state
+// untouched (the attach never happened, so whatever chat the user was
+// already on, pending choice included, is unchanged) — so the clear call
+// there is scoped to its two branches that DO change state: the
+// connected+sent branch (via resetChatBucketForReplay below) and the
+// offline/no-connection branch (its own explicit call). Deliberately NOT
+// wired into setActiveSession itself — sendMessage's own pending-session
+// mint (session id '__pending') and sendWorkspaceSetupKickoff both call
+// setActiveSession too, and clearing there would erase the very choice this
+// fix exists to carry through to session_started.
 let _chatClearPendingAutoApprove: (() => void) | null = null
 
 /** Called once by chat.ts after it creates useChatStore. */
@@ -294,7 +303,11 @@ export function registerChatClearPendingAutoApprove(fn: () => void): void {
   _chatClearPendingAutoApprove = fn
 }
 
-/** startNewSession's call site — see the doc comment above. */
+/**
+ * The clear point called by startNewSession, enterWorkspaceChat, and (on its
+ * two state-changing branches only) attachToSession — see the doc comment
+ * above.
+ */
 function clearPendingAutoApproveOnSessionChange(): void {
   _chatClearPendingAutoApprove?.()
 }
@@ -447,6 +460,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     if (connection) {
       const sent = connection.send({ type: 'attach_session', session_id: sessionId })
       if (!sent) {
+        // Wave-1 Bug 2 contract: a failed send leaves ALL store state
+        // untouched, including any pending Auto choice — the attach never
+        // happened, so the chat the user is still looking at (whatever it
+        // was) has not changed, and its pending choice (if any) is still
+        // legitimately theirs. Clearing here would be its own regression.
         useConnectionStore.getState().setConnectionError(
           'Could not attach to session — connection dropped. Please reconnect and try again.'
         )
@@ -486,6 +504,17 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       setChatReplaying(true)
       return true
     } else {
+      // Single clear point for this branch: unlike the failed-send path
+      // above, this branch DOES change state below (activeSessionId,
+      // sessionByWorkspace, …) — it's a genuine attach, just a locally
+      // recorded one pending the reconnect that finishes the job
+      // (WsLifecycle.onConnected -> reattachActiveSession). Previously only
+      // the connected/success branch's resetChatBucketForReplay call cleared
+      // a pending Auto choice, so an offline attach (or a page that never
+      // reconnects before the user's next message) leaked it into this
+      // session — clear it here too, unconditionally, before any of the
+      // state below is written.
+      clearPendingAutoApproveOnSessionChange()
       console.warn('[session] attachToSession: no connection — attach_session not sent')
       logDiagnostic('sessionAttachToSessionNoConnection', { sessionId, type })
       // The click otherwise looks like it "succeeded" (activeSessionId updates,
@@ -608,6 +637,18 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   // (resolveRememberedSessionFromServer) — see the "D4 fix, revised" note
   // further down this file.
   enterWorkspaceChat: async (workspaceId: string) => {
+    // Single clear point for EVERY workspace switch, whatever branch below
+    // ends up taken — including the branches that never mint or attach a
+    // session at all (a brand-new/never-decided workspace, or a workspace
+    // whose descriptor is explicitly null with no active session to walk
+    // away from). Those branches used to rely on startNewSession()'s own
+    // clear, which is gated on `activeSessionId !== null` — so switching
+    // FROM a session-less unsent chat (activeSessionId already null) INTO a
+    // workspace that also resolves to no session skipped the clear
+    // entirely, leaking a pending Auto choice from the OLD workspace's chat
+    // into the new one's first message. Unconditional and first, so no
+    // branch below needs its own copy of this call.
+    clearPendingAutoApproveOnSessionChange()
     // Precedence rule 2 is scoped to the workspace the pick was made in.
     // Every workspace has its own team roster, so carrying a pick from
     // workspace A into workspace B would leave the composer routing to an

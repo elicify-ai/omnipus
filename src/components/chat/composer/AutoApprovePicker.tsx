@@ -13,9 +13,12 @@ import { cn } from '@/lib/utils'
  * the only caller of.
  *
  * Reads its checked state from `useResolvedAutoApprove` (shared with the
- * chat-header mode badge, so the two can never disagree) — which already
- * folds in a pending pre-session choice (see below), so this component never
- * needs to compute that fallback itself. Toggling always records an explicit
+ * chat-header mode badge, ChatModeBadge) — which already folds in a pending
+ * pre-session choice (see below), so this component never needs to compute
+ * that fallback itself. Sharing the hook is not enough on its own to agree
+ * with ChatModeBadge, though: `godModeActive` is a stronger floor than
+ * `resolved` and must be checked explicitly (see below) — see the hook's own
+ * doc comment. Toggling always records an explicit
  * true/false for this chat — this is the ONE scope in the whole contract
  * allowed to LOOSEN past the agent/global default, because a human is
  * present in this session to accept that.
@@ -64,8 +67,19 @@ import { cn } from '@/lib/utils'
  * showing an approval prompt is not retroactively resolved — it has already
  * asked, and stays open until the human answers it.
  *
- * Disabled only when there is truly no active agent to run tools at all —
- * never because the chat has no session yet, and never while streaming.
+ * Disabled when there is truly no active agent to run tools at all — never
+ * because the chat has no session yet, and never while streaming — AND
+ * disabled under God Mode (see below), which is the one other case.
+ *
+ * God Mode is a STRONGER floor than Auto (`useResolvedAutoApprove`'s own
+ * doc), not the absence of it — ChatModeBadge already checks
+ * `godModeActive` first and renders "God Mode" whatever `resolved` says.
+ * This switch must agree: under God Mode every tool call runs without
+ * asking regardless of this chat's own Auto choice, so the switch shows
+ * on-and-disabled (flipping it would change nothing real) with a tooltip
+ * saying so, rather than showing `resolved` (possibly off) next to a badge
+ * that says "God Mode" — the exact disagreement this component used to
+ * allow by never reading `godModeActive` at all.
  */
 export function AutoApprovePicker({
   className,
@@ -78,9 +92,9 @@ export function AutoApprovePicker({
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const sendSessionModeUpdate = useChatStore((s) => s.sendSessionModeUpdate)
   const setPendingAutoApproveChoice = useChatStore((s) => s.setPendingAutoApproveChoice)
-  const { resolved, hasRealSession, kernelSandboxActive } = useResolvedAutoApprove()
+  const { resolved, hasRealSession, kernelSandboxActive, godModeActive } = useResolvedAutoApprove()
 
-  const isDisabled = disabled || !activeAgentId
+  const isDisabled = disabled || !activeAgentId || godModeActive
 
   function handleToggle(next: boolean) {
     if (hasRealSession && activeSessionId) {
@@ -110,9 +124,16 @@ export function AutoApprovePicker({
   // sandbox, but it's still worth a calm caution — appended to the same
   // tooltip rather than a second visual element, matching ChatModeBadge's
   // "Auto — no sandbox" wording so the two never disagree.
-  const tooltipContent = resolved && !kernelSandboxActive
+  const autoTooltipContent = resolved && !kernelSandboxActive
     ? `${baseTooltipContent}. No kernel sandbox is enforcing — shell commands are checked by reading the command text only.`
     : baseTooltipContent
+
+  // God Mode is a stronger floor than this chat's own Auto choice — it runs
+  // every tool without asking regardless of what `resolved` says, so the
+  // switch's own explanation must say that, not the ordinary Auto copy above.
+  const tooltipContent = godModeActive
+    ? 'God Mode is on — every tool runs without asking. This chat’s Auto-approve choice does not apply.'
+    : autoTooltipContent
 
   return (
     <Tooltip
@@ -127,7 +148,7 @@ export function AutoApprovePicker({
         )}
       >
         <Switch
-          checked={resolved}
+          checked={godModeActive ? true : resolved}
           disabled={isDisabled}
           onCheckedChange={handleToggle}
           aria-label="Auto-approve for this chat"
