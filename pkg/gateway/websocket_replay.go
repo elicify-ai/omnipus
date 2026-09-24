@@ -36,6 +36,12 @@ type wsHandlerHandleAttachSession struct {
 	failed   bool // the catch-up failed; nothing else of this attach runs
 }
 
+// attachReadTranscript reads a session's history for a snapshot. A var only
+// so a test can make the read fail; never reassigned in production.
+var attachReadTranscript = func(store *session.UnifiedStore, sessionID string) ([]session.TranscriptEntry, error) {
+	return store.ReadTranscript(sessionID)
+}
+
 // attachAfterBindHook, when set, runs right after an attach has bound the
 // connection and before it sends any catch-up — the window in which a turn
 // can publish or persist concurrently with the catch-up (BE-DESIGN.md §4.2,
@@ -155,6 +161,18 @@ func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
 	slog.Info("ws: catch_up",
 		"event", "catch_up", "mode", "snapshot", "reason", wh.res.Reason,
 		"session_id", wh.attachID, "chat_id", wh.chatID, "head", wh.res.Head)
+	// Read the transcript AFTER the bind (§4.2): everything persisted up to
+	// now is in it; whatever was published at or before W but not yet
+	// persisted is in the projection; whatever is published after W is held.
+	// And read it BEFORE session_snapshot (final-review N4): that frame
+	// tells the client to wipe its history for this session, so a read
+	// failure must be answered while the client's current view is intact.
+	entries, err := attachReadTranscript(wh.store, wh.attachID)
+	if err != nil {
+		slog.Warn("ws: attach_session: could not read transcript", "session_id", wh.attachID, "error", err)
+		wh.failCatchUp("could not read session transcript")
+		return
+	}
 	bootID := wh.h.hubs.bootID
 	reason := wh.res.Reason
 	wh.directFrame(generated.SessionSnapshotFrame{
@@ -169,15 +187,6 @@ func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
 	// turn or goal state (§4.6, review finding 2).
 	wh.direct(wh.h.sessionStateBytes(wh.wc, wh.attachID))
 
-	// Read the transcript AFTER the bind (§4.2): everything persisted up to
-	// now is in it; whatever was published at or before W but not yet
-	// persisted is in the projection; whatever is published after W is held.
-	entries, err := wh.store.ReadTranscript(wh.attachID)
-	if err != nil {
-		slog.Warn("ws: attach_session: could not read transcript", "session_id", wh.attachID, "error", err)
-		wh.failCatchUp("could not read session transcript")
-		return
-	}
 	emitted, ok := wh.replayTranscript(entries)
 	if !ok {
 		return

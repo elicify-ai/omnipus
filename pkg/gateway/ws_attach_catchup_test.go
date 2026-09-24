@@ -551,3 +551,24 @@ func drainWire(t *testing.T, wc *wsConn) []wireFrame {
 		}
 	}
 }
+
+// TestAttach_N4_UnreadableHistory_NeverWipesTheClient pins the gateway half
+// of final-review N4: session_snapshot tells the client to wipe its history
+// for the session, so it must only be sent once the history it is about to
+// be rebuilt from has actually been read. A read failure is answered with
+// the error alone and the client's current view is left untouched.
+func TestAttach_N4_UnreadableHistory_NeverWipesTheClient(t *testing.T) {
+	f := newAttachFixture(t, "turn-n4", "msg-n4")
+	orig := attachReadTranscript
+	attachReadTranscript = func(*session.UnifiedStore, string) ([]session.TranscriptEntry, error) {
+		return nil, assert.AnError
+	}
+	t.Cleanup(func() { attachReadTranscript = orig })
+	wc := f.newConn("chat-n4")
+	f.h.handleAttachSession(context.Background(), "chat-n4", f.sid, nil, wc)
+	frames := drainWire(t, wc)
+	assert.Equal(t, -1, indexOfType(frames, "session_snapshot"),
+		"a history read failure must never send the wipe: %v", typesOf(frames))
+	assert.Equal(t, -1, indexOfType(frames, "catch_up_complete"))
+	assert.GreaterOrEqual(t, indexOfType(frames, "error"), 0)
+}
