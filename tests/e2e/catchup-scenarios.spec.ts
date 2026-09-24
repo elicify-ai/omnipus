@@ -15,23 +15,52 @@
  * states appear as specified.
  *
  * Per the squad brief's item 6: verified with `npx playwright test --list`
- * only — the harness itself was NOT run (it needs a real provider key and
- * the operator's data folder, neither available in this environment). One
- * scenario, `h` (gateway restart), stays individually `test.skip`-ed — it
- * needs a human to restart the actual binary mid-test, which this spec file
- * has no process control to do unattended; see that test's own comment.
+ * only — the harness itself was NOT run for scenarios a-g/i in this pass
+ * (they need a real provider key and the operator's data folder, neither
+ * available in every environment).
+ *
+ * STATUS (pass 3): scenario `h` (gateway restart) drives its OWN isolated,
+ * killable/restartable gateway process via `fixtures/gateway-process.ts`'s
+ * `GatewayProcess` (own port, own mkdtemp'd OMNIPUS_HOME, real SIGKILL +
+ * re-spawn), entirely separate from the shared gateway the rest of this
+ * file's `page` fixture points at — that mechanism was run and confirmed
+ * working end-to-end against a real built binary: login, turn start,
+ * SIGKILL, restart, and WS auto-reconnect/reattach to the SAME session all
+ * verified. It is back to `test.skip` (orchestrator, founder "no flaky
+ * tests" rule) because the one remaining piece — killing at the exact
+ * moment a turn is genuinely mid-answer, so a real "couldn't be finished"
+ * shows — is not reliably reproducible against a real, fast model; three
+ * different timing strategies produced three different outcomes across
+ * runs. See `h`'s own comment for the fix this uncovered along the way
+ * (`restart({relogin:false})`, a real harness bug) and the pending test-only
+ * streaming-delay knob this is waiting on before it can be un-skipped again.
  */
 
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, waitForConnected, startNewChat, assistantMessages, userMessages } from './fixtures/selectors'
 import { installFreezeProxy } from './helpers/freezeProxy'
+import { GatewayProcess } from './fixtures/gateway-process'
 
 const stopButton = (page: Page) => page.locator('[data-testid="stop-btn"]')
 const assistantConnectionStatus = (page: Page) => page.getByTestId('assistant-connection-status')
 
 const LONG_PROMPT =
   'Do NOT use any tools. Plain prose only. Write eight short paragraphs about the tide, about 600 words total.'
+
+// Scenario h only: real-browser follow-up (orchestrator) — the ordinary
+// LONG_PROMPT above genuinely raced kill9() in practice against a fast
+// model (z-ai/glm-5.2 completed the full ~600-word answer, `done` and all,
+// before this test's kill9()/restart() cycle finished — confirmed by a
+// local run whose failure screenshot showed a COMPLETE, model-footer-
+// stamped answer with no "Generate again", i.e. nothing was actually
+// interrupted, not a real product bug). Item h's whole premise is a turn
+// that is GENUINELY still in flight at the moment of the crash, so this
+// scenario alone asks for a much longer answer to widen that window well
+// past kill9()'s own real-world latency (SIGKILL + wait-for-exit + re-spawn
+// + health-check).
+const VERY_LONG_PROMPT =
+  'Do NOT use any tools. Plain prose only. Write twenty long, detailed paragraphs about the history and science of tides, at least 3000 words total.'
 
 // Real-browser follow-up (orchestrator): assertNoDuplicateOrGapText compared
 // the whole bubble's innerText, which includes bubble CHROME (the model
@@ -56,13 +85,13 @@ async function bubbleText(row: import('@playwright/test').Locator): Promise<stri
   })
 }
 
-async function startLongTurn(page: Page): Promise<string> {
+async function startLongTurn(page: Page, prompt: string = LONG_PROMPT): Promise<string> {
   const input = chatInput(page)
   await expect(input).toBeVisible({ timeout: 15_000 })
   await waitForConnected(page)
   await startNewChat(page)
   await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-  await input.fill(LONG_PROMPT)
+  await input.fill(prompt)
   await input.press('Enter')
   await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
   const row = assistantMessages(page).first()
@@ -402,20 +431,149 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     expect((await bubbleText(assistantMessages(page).first())).trim().length).toBeGreaterThan(0)
   })
 
-  // Skipped (not un-skipped like the rest of this file, pass 2 item 6):
-  // restarting the actual embedded binary process mid-test is an
-  // orchestrator-level, human-in-the-loop operation this spec file has no
-  // process control to perform unattended — `npx playwright test --list`
-  // still registers it (proving it's syntactically valid and reachable),
-  // but running the suite normally would hang waiting for a restart that
-  // never happens. The orchestrator removes `.skip` when running this ONE
-  // scenario manually, restarting the gateway at the marked point.
+  // Un-skipped (pass 3, orchestrator): the earlier `.skip` reasoning ("this
+  // spec file has no process control to restart the binary unattended") no
+  // longer holds — `tests/e2e/fixtures/gateway-process.ts`'s `GatewayProcess`
+  // was purpose-built for exactly this (its own doc comment: "needs to
+  // `kill -9` a REAL gateway process mid-task and restart it"), already
+  // proven out by `conformance-design-exec-e2e.spec.ts`'s E.1 boot-sweep
+  // test. It owns its OWN ephemeral port and its OWN mkdtemp'd OMNIPUS_HOME
+  // (never the shared worker's OMNIPUS_HOME/port the rest of this file's
+  // `page` fixture is wired to via playwright.config.ts's `baseURL`) — so
+  // this test drives a SEPARATE browser navigation (`page.goto(gw.baseURL)`,
+  // an absolute URL, which overrides the configured relative baseURL) and a
+  // real UI login against its own isolated process, entirely independent of
+  // the shared gateway every other scenario in this file uses. `kill9()`
+  // sends a real SIGKILL and waits for the OS to actually reap the process
+  // (no `--allow-empty`/graceful-shutdown path involved — this is a genuine
+  // crash, matching item h's "gateway restart" framing), and `restart()`
+  // re-spawns the SAME binary against the SAME OMNIPUS_HOME/port, which
+  // mints a fresh in-process boot id (§3.4) while the on-disk session/
+  // transcript state survives — exactly the `boot_mismatch` precondition.
+  //
+  // Deliberately NOT `page.reload()`d after the restart: item h is "tab
+  // OPEN" (still-live tab), not "tab reloaded" — the existing WS client
+  // (`src/lib/ws.ts`) already owns exponential-backoff auto-reconnect
+  // (`_scheduleReconnect`) once the SIGKILL surfaces as a socket close, so
+  // the live tab reconnects to the restarted process on its own, sends its
+  // stale (pre-restart) `{since_seq, boot_id}` on `attach_session`, and the
+  // new process's differing boot id is what actually drives the
+  // `boot_mismatch` snapshot path — reloading first would discard that
+  // stale cursor and prove a different (if related) code path instead.
+  // RE-SKIPPED (orchestrator, founder rule: no flaky tests — option A/"accept
+  // as racy" is out). The restart/reattach mechanism below is real and
+  // proven (see the investigation notes throughout this test, including the
+  // restart({relogin:false}) harness-bug fix, which stays regardless of this
+  // skip). What's not reliably reproducible against a REAL model is the
+  // "still mid-answer when killed" window: z-ai/glm-5.2 answers fast enough
+  // in this environment that three different timing strategies produced
+  // three different outcomes (full completion / no session yet / no
+  // assistant content yet) — see the comments below the `try` block for the
+  // blow-by-blow. Waiting on a test-only knob (backend, Go side) to slow
+  // streaming deliberately so a kill reliably lands mid-answer — same
+  // pattern as scenario g's `OMNIPUS_TEST_ONLY_HUB_IDLE_EVICT_SECONDS`. Once
+  // that knob exists, wire it onto THIS test's `GatewayProcess.start()` call
+  // only (never the shared gateway the rest of this file uses) and remove
+  // this skip.
   test.skip('h: gateway restart with tab open — snapshot boot_mismatch, "couldn\'t be finished · Generate again"', async ({ page }) => {
     test.setTimeout(420_000)
-    await startLongTurn(page)
-    // >>> ORCHESTRATOR: restart the gateway binary here, then resume. <<<
-    await expect(page.getByRole('button', { name: /Generate again/i })).toBeVisible({ timeout: 60_000 })
-    await expect(assistantConnectionStatus(page)).toContainText('couldn\'t be finished')
+    const gw = await GatewayProcess.start()
+    try {
+      // Real UI login against the isolated process — GatewayProcess.start()
+      // onboarded the admin/provider via REST (its own APIRequestContext),
+      // which does NOT extend to this test's separate browser `page`
+      // context, so a genuine login-form submission is required here (mirrors
+      // `fixtures/login.ts`'s `completeLoginForm`, inlined because that
+      // helper's own `loginAs` hardcodes `page.goto('/')` — relative to the
+      // SHARED gateway's configured baseURL, not this isolated one).
+      await page.goto(gw.baseURL)
+      await expect(page.locator('#login-username')).toBeVisible({ timeout: 15_000 })
+      await page.locator('#login-username').pressSequentially(gw.adminUsername)
+      await page.locator('#login-password').pressSequentially(gw.adminPassword)
+      await page.getByRole('button', { name: 'Sign in' }).click()
+      await expect(page).not.toHaveURL(/\/#\/login/, { timeout: 15_000 })
+
+      // Deliberately NOT `startLongTurn()` here: that helper polls for
+      // >80 characters of streamed bubble text before returning, which two
+      // local runs proved fatal for this scenario specifically — the
+      // configured model (z-ai/glm-5.2, per GatewayProcess's own default)
+      // answered BOTH the original 600-word LONG_PROMPT and a 3000-word
+      // VERY_LONG_PROMPT so fast (screenshots showed the COMPLETE,
+      // model-footer-stamped answer, 16-20k tokens, already rendered) that
+      // by the time that poll resolved, the turn had already finished —
+      // nothing was left to interrupt. Minimizing latency between "the turn
+      // starts" and "the process dies" is what actually matters for item
+      // h's premise, not prompt length — so this sends the message and
+      // kills the instant the stop button confirms the turn is dispatched,
+      // without waiting for any streamed content at all.
+      const input = chatInput(page)
+      await expect(input).toBeVisible({ timeout: 15_000 })
+      await waitForConnected(page)
+      await startNewChat(page)
+      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
+      await input.fill(VERY_LONG_PROMPT)
+      await input.press('Enter')
+      // Precondition, asserted explicitly rather than assumed: the turn
+      // must still be genuinely in flight the instant before the crash —
+      // this is item h's whole premise. If the model somehow answers before
+      // even THIS appears, this fails here with a clear, honest reason,
+      // instead of silently proceeding to kill a process with nothing left
+      // to interrupt and producing a confusing "Generate again never
+      // appeared" failure three steps later.
+      await expect(stopButton(page)).toBeVisible({ timeout: 15_000 })
+      // Real-browser follow-up (orchestrator, this scenario, two rounds):
+      // round 1 killed THIS early (immediately on the stop button, no wait
+      // for any content) — too early: it landed on the blank "Welcome to
+      // omnipus.ai" screen after reconnecting, because the client's own
+      // pre-turn assistant placeholder (a LOCAL `generateId()`, never
+      // anything the server echoes) had captured NO real content and NO
+      // real message_id yet, so `ConnectionStatus.tsx::AssistantMessage
+      // ConnectionStatus`'s `disconnectedAssistantMessageId === messageId`
+      // gate could never match anything the post-restart snapshot rebuild
+      // reconstructs — a wiped, orphaned local id, not the turn's real one.
+      // Round 2 waited for the bubble to merely EXIST (any `[data-message-
+      // id]`, not `assistantMessages()`'s completion-only definition) —
+      // still too early for the SAME reason: existing is not the same as
+      // having received real content, i.e. the point at which
+      // `resolveTokenBubbleByMessageId` (slices/frames.ts) registers the
+      // server's own `message_id` onto this bubble — before that, it is
+      // still the orphaned local placeholder id. Waiting for the bubble to
+      // hold actual TEXT (any non-empty content, not any particular
+      // amount — that's what raced full completion in an earlier pass) is
+      // the minimum signal that at least one real token — and therefore
+      // the server's real message_id — has been applied to it.
+      const anyAssistantBubble = page.locator('[data-message-id]:not(.flex-row-reverse)')
+      await expect(anyAssistantBubble).toHaveCount(1, { timeout: 15_000 })
+      await expect.poll(
+        async () => (await bubbleText(anyAssistantBubble.first()).catch(() => '')).trim().length,
+        { timeout: 15_000 },
+      ).toBeGreaterThan(0)
+
+      // A real crash, not a graceful shutdown — SIGKILL, waited out to a
+      // genuine 'exit', then the SAME binary re-spawned against the SAME
+      // OMNIPUS_HOME/port (see gateway-process.ts's own doc comments on
+      // kill9()/restart() for why both steps must be awaited in full before
+      // proceeding, not just fired-and-forgotten).
+      //
+      // `relogin: false` — restart()'s own default re-login (a second
+      // `POST /api/v1/auth/login` for the SAME `admin` account this test's
+      // `page` already logged in as, above) would overwrite `admin`'s
+      // single-slot session-token hash and silently sign THIS page out from
+      // under itself (`src/lib/authLogout.ts`'s 'elsewhere' banner — this is
+      // exactly what a first pass of this test hit, traced to this race, not
+      // a real product bug: see gateway-process.ts's own corrected doc
+      // comment on `restart()`). This test only needs the process back up,
+      // never `gw.apiFetch()`, so skipping the internal re-login is correct.
+      await gw.kill9()
+      await gw.restart({ relogin: false })
+
+      await expect(page.getByRole('button', { name: /Generate again/i })).toBeVisible({ timeout: 60_000 })
+      await expect(assistantConnectionStatus(page)).toContainText('couldn\'t be finished')
+    } finally {
+      // Always tear down the isolated process/home, pass or fail — never
+      // leaves an orphaned gateway or a leaked mkdtemp directory behind.
+      await gw.stop()
+    }
   })
 
   test('i: message typed while offline — appears at the end, then its answer; no duplicate; ticks received → working', async ({ page, context }) => {
