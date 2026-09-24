@@ -114,7 +114,7 @@ func TestVerify_Reresolution(t *testing.T) {
 
 	// Simulate a swap: remove the original and put a different binary at
 	// the same PATH-searched name.
-	if err := os.Remove(binPath); err != nil {
+	if err = os.Remove(binPath); err != nil {
 		t.Fatalf("os.Remove: %v", err)
 	}
 	writeFakeExecutable(t, dir, "git")

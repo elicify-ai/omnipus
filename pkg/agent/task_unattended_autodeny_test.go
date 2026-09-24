@@ -75,7 +75,7 @@ func TestTaskTrigger_RunScheduled_StampsAutoDenyAsk(t *testing.T) {
 	var capturedCtx context.Context
 	var callCount int
 	sched.dispatch = func(ctx context.Context, taskID string, occurrenceMs *int64) error {
-		capturedCtx = ctx
+		capturedCtx = ctx //nolint:fatcontext // Retains an original context for ownership or observation; it does not derive a context from an earlier iteration.
 		callCount++
 		return nil
 	}

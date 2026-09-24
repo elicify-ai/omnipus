@@ -30,15 +30,15 @@ func startLoopbackUpstream(t *testing.T) string {
 	t.Helper()
 	upstream := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write([]byte("upstream-ok"))
+			_, _ = w.Write([]byte("upstream-ok")) //nolint:errcheck
 		}),
 	}
 	listener, err := listenLoopback(t)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	go func() { _ = upstream.Serve(listener) }()
-	t.Cleanup(func() { _ = upstream.Close() })
+	go func() { _ = upstream.Serve(listener) }() //nolint:errcheck
+	t.Cleanup(func() { _ = upstream.Close() })   //nolint:errcheck
 	return listener.Addr().String()
 }
 
@@ -78,7 +78,7 @@ func TestEgressProxy_GrantRunHosts_TokenScopedAllow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEgressProxy: %v", err)
 	}
-	t.Cleanup(func() { _ = p.Close() })
+	t.Cleanup(func() { _ = p.Close() }) //nolint:errcheck
 
 	const token = "test-token-abc123"
 	p.GrantRunHosts(token, []string{upstreamHost})
@@ -88,8 +88,8 @@ func TestEgressProxy_GrantRunHosts_TokenScopedAllow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tokenised client.Get: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(resp.Body)
+	defer func() { _ = resp.Body.Close() }() //nolint:errcheck
+	body, _ := io.ReadAll(resp.Body)         //nolint:errcheck
 	if string(body) != "upstream-ok" {
 		t.Errorf("tokenised request body = %q, want upstream-ok (status %d)", body, resp.StatusCode)
 	}
@@ -100,7 +100,7 @@ func TestEgressProxy_GrantRunHosts_TokenScopedAllow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("untokenised client.Get: %v", err)
 	}
-	defer func() { _ = resp2.Body.Close() }()
+	defer func() { _ = resp2.Body.Close() }() //nolint:errcheck
 	if resp2.StatusCode != http.StatusForbidden {
 		t.Errorf("untokenised request status = %d, want 403 (D-13 grant must not leak to an untokenised caller)", resp2.StatusCode)
 	}
@@ -112,7 +112,7 @@ func TestEgressProxy_GrantRunHosts_TokenScopedAllow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wrong-token client.Get: %v", err)
 	}
-	defer func() { _ = resp3.Body.Close() }()
+	defer func() { _ = resp3.Body.Close() }() //nolint:errcheck
 	if resp3.StatusCode != http.StatusForbidden {
 		t.Errorf("wrong-token request status = %d, want 403", resp3.StatusCode)
 	}
@@ -133,7 +133,7 @@ func TestEgressProxy_RevokeRunToken_RemovesGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEgressProxy: %v", err)
 	}
-	t.Cleanup(func() { _ = p.Close() })
+	t.Cleanup(func() { _ = p.Close() }) //nolint:errcheck
 
 	const token = "revoke-me-token"
 	p.GrantRunHosts(token, []string{upstreamHost})
@@ -142,7 +142,7 @@ func TestEgressProxy_RevokeRunToken_RemovesGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pre-revoke client.Get: %v", err)
 	}
-	_ = resp.Body.Close()
+	_ = resp.Body.Close() //nolint:errcheck
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("pre-revoke status = %d, want 200 (setup failed)", resp.StatusCode)
 	}
@@ -153,7 +153,7 @@ func TestEgressProxy_RevokeRunToken_RemovesGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post-revoke client.Get: %v", err)
 	}
-	defer func() { _ = resp2.Body.Close() }()
+	defer func() { _ = resp2.Body.Close() }() //nolint:errcheck
 	if resp2.StatusCode != http.StatusForbidden {
 		t.Errorf("post-revoke status = %d, want 403 — RevokeRunToken must remove the grant", resp2.StatusCode)
 	}

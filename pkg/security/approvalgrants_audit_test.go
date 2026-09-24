@@ -42,7 +42,7 @@ type grantAuditRow struct {
 }
 
 func (r grantAuditRow) detail(key string) string {
-	v, _ := r.Details[key].(string)
+	v, _ := r.Details[key].(string) //nolint:errcheck
 	return v
 }
 

@@ -771,17 +771,17 @@ func (t *ScreenshotTool) writeScreenshot(ctx context.Context, buf []byte) (strin
 	}
 	defer handle.Close()
 
-	real, err := handle.RealPath()
+	realPath, err := handle.RealPath()
 	if err != nil {
 		return "", tools.ErrorResult(fmt.Sprintf("browser_screenshot: failed to resolve destination path: %s", err))
 	}
-	if recheckErr := tools.RecheckAutoPin(ctx, t.Name(), policy, real, fspolicy.PathGrantAccessWrite); recheckErr != nil {
+	if recheckErr := tools.RecheckAutoPin(ctx, t.Name(), policy, realPath, fspolicy.PathGrantAccessWrite); recheckErr != nil {
 		return "", tools.PermissionDeniedResult("browser_screenshot", recheckErr, recheckErr.Error())
 	}
 	if err = handle.WriteFile(buf); err != nil {
 		return "", tools.ErrorResult(fmt.Sprintf("browser_screenshot: failed to save: %s", err))
 	}
-	return real, nil
+	return realPath, nil
 }
 
 // waitForPageSettle polls document.readyState until it reports "complete"

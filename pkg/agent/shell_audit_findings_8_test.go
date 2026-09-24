@@ -26,7 +26,7 @@ import (
 // left NO audit trail at all before this fix — indistinguishable in the
 // log from an ordinary unprompted "allow"-ceiling execution.
 func TestEmitShellRuleSettledAudit_WritesApprovalDecision(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	dir := t.TempDir()
@@ -65,7 +65,7 @@ func TestEmitShellRuleSettledAudit_WritesApprovalDecision(t *testing.T) {
 // emitted shell.approval_decision before this fix — only the NEW ADR-092
 // D3/D7/D8 call sites inside pkg/tools did.
 func TestEmitShellClassicAskDecisionAudit_WritesApprovalDecision(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	dir := t.TempDir()
@@ -143,7 +143,7 @@ func TestApprovalGrants_AuditLoggerWiredAtConstruction(t *testing.T) {
 	var auditPath string
 	require.NoError(t, filepath.WalkDir(al.homePath, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
-			return nil
+			return nil //nolint:nilerr // best-effort search
 		}
 		if d.Name() == "audit.jsonl" {
 			auditPath = path

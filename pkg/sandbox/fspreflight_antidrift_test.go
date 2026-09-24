@@ -172,7 +172,7 @@ func fixedTestPolicy(t *testing.T) (home string, policy fspolicy.FSPolicy, allow
 	base.PathGrants = []fspolicy.PathGrant{
 		{Path: grantPath, Access: fspolicy.PathGrantAccessRead | fspolicy.PathGrantAccessWrite},
 	}
-	if err := base.Validate(); err != nil {
+	if err = base.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 

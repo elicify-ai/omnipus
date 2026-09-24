@@ -197,24 +197,16 @@ func unwrapWrappers(seg, head string, args []string, resolve HeadResolver) (fina
 	return "", "", nil, true, true, blindNoResolvableHead
 }
 
-// interpreterHeads names the ADR-092 R3 "interpreter or eval form" set
-// (founder decision, 2026-09-24) whose real, executed command the D3 rule
-// engine cannot see at all: bash/sh/zsh only in their `-c SCRIPT` shape,
-// perl/ruby/node only in their `-e SCRIPT` shape, and eval/source (which
-// take the rest of the line as their script/file with no such flag).
-// python*/python2/python3/... is matched by prefix, not exact membership —
-// see detectInterpreterForm.
-var interpreterHeads = map[string]bool{
-	"bash": true, "sh": true, "zsh": true,
-	"eval": true, "source": true,
-	"perl": true, "ruby": true, "node": true,
-}
-
-// detectInterpreterForm reports whether (head, args) is one of the R3
-// interpreter/eval shapes, and if so returns the literal text of the
-// argument the shell will actually execute — the ONE thing
-// findDenyBinaryWordIn/hasAskOrDenyRules can inspect, since no head
-// resolution can ever recover the real command from it.
+// detectInterpreterForm reports whether (head, args) is one of the ADR-092
+// R3 "interpreter or eval form" shapes (founder decision, 2026-09-24) whose
+// real, executed command the D3 rule engine cannot see at all: bash/sh/zsh
+// only in their `-c SCRIPT` shape, perl/ruby/node only in their `-e SCRIPT`
+// shape, eval/source (which take the rest of the line as their script/file
+// with no such flag), and python*/python2/python3/... matched by prefix.
+// If so, it returns the literal text of the argument the shell will
+// actually execute — the ONE thing findDenyBinaryWordIn/hasAskOrDenyRules
+// can inspect, since no head resolution can ever recover the real command
+// from it.
 func detectInterpreterForm(head string, args []string) (scriptText string, ok bool) {
 	switch {
 	case head == "bash" || head == "sh" || head == "zsh":

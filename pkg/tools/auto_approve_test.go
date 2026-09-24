@@ -582,19 +582,19 @@ func TestRecheckAutoPin_ScopeOfThePin(t *testing.T) {
 	inside := filepath.Join(realDir(t, f.work), "x.md")
 	w := fspolicy.PathGrantAccessWrite
 
-	if err := RecheckAutoPin(f.ctx, "write_file", policy, outside, w); err != nil {
+	if err = RecheckAutoPin(f.ctx, "write_file", policy, outside, w); err != nil {
 		t.Errorf("no pin: the re-check must be a no-op, got %v", err)
 	}
 	otherTool := WithAutoApproved(f.ctx, AutoPin{Tool: "read_file"})
-	if err := RecheckAutoPin(otherTool, "write_file", policy, outside, w); err != nil {
+	if err = RecheckAutoPin(otherTool, "write_file", policy, outside, w); err != nil {
 		t.Errorf("a pin for another tool must not apply, got %v", err)
 	}
 	readOnly := WithAutoApproved(f.ctx, AutoPin{Tool: "write_file", Paths: []PinnedPath{{Real: inside, Access: fspolicy.PathGrantAccessRead}}})
-	if err := RecheckAutoPin(readOnly, "write_file", policy, inside, w); !errors.Is(err, ErrAutoPinMoved) {
+	if err = RecheckAutoPin(readOnly, "write_file", policy, inside, w); !errors.Is(err, ErrAutoPinMoved) {
 		t.Errorf("access beyond the pinned access must be refused, got %v", err)
 	}
 	full := WithAutoApproved(f.ctx, AutoPin{Tool: "write_file", Paths: []PinnedPath{{Real: inside, Access: w}}})
-	if err := RecheckAutoPin(full, "write_file", policy, inside, w); err != nil {
+	if err = RecheckAutoPin(full, "write_file", policy, inside, w); err != nil {
 		t.Errorf("an in-workspace path under a matching pin must pass, got %v", err)
 	}
 	err = RecheckAutoPin(full, "write_file", policy, outside, w)

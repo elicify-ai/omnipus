@@ -31,10 +31,10 @@ func TestApprovalGrantStore_RecordNetworkHosts_SessionScoped(t *testing.T) {
 	// A DIFFERENT agent in the same session, and a DIFFERENT session for
 	// the same agent, must not see this host — "the grant is scoped to the
 	// session" (founder decision B).
-	if got := s.NetworkHostsFor("session-1", "agent-b"); got != nil {
+	if got = s.NetworkHostsFor("session-1", "agent-b"); got != nil {
 		t.Errorf("a different agent in the same session saw %v, want nil", got)
 	}
-	if got := s.NetworkHostsFor("session-2", "agent-a"); got != nil {
+	if got = s.NetworkHostsFor("session-2", "agent-a"); got != nil {
 		t.Errorf("a different session for the same agent saw %v, want nil", got)
 	}
 

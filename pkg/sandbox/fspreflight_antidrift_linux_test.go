@@ -131,8 +131,8 @@ w %q SECRET_WRITE
 
 	// Relay the grandchild's report lines verbatim — the outer parent parses
 	// GRANT_WRITE=/VICTIM_WRITE=/SECRET_WRITE= from combined output.
-	os.Stdout.Write(res.Stdout)
-	os.Stderr.Write(res.Stderr)
+	os.Stdout.Write(res.Stdout) //nolint:errcheck
+	os.Stderr.Write(res.Stderr) //nolint:errcheck
 	os.Exit(0)
 }
 

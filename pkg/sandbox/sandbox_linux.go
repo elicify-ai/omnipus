@@ -189,7 +189,7 @@ func rulesetAttrWellFormed() bool {
 	if errno != 0 {
 		return false
 	}
-	_ = unix.Close(int(fd)) // #nosec G115 -- fd is a file descriptor from the success path (errno checked above), bounded by RLIMIT_NOFILE.
+	_ = unix.Close(int(fd)) // #nosec G115 -- fd is a file descriptor from the success path (errno checked above), bounded by RLIMIT_NOFILE. //nolint:errcheck
 	return true
 }
 

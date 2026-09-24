@@ -384,17 +384,17 @@ func AutoWorkspacePath(
 	if err != nil {
 		return PinnedPath{}, false, fmt.Sprintf("path %q could not be resolved: %v", raw, err)
 	}
-	real, realErr := handle.RealPath()
+	realPath, realErr := handle.RealPath()
 	if closeErr := handle.Close(); closeErr != nil {
 		slog.Warn("auto-approve: closing classifier path handle failed", "tool", toolName, "error", closeErr)
 	}
 	if realErr != nil {
 		return PinnedPath{}, false, fmt.Sprintf("path %q has no resolved location: %v", raw, realErr)
 	}
-	if ok, reason := autoPathCovered(policy, real); !ok {
+	if ok, reason := autoPathCovered(policy, realPath); !ok {
 		return PinnedPath{}, false, reason
 	}
-	return PinnedPath{Real: real, Access: access}, true, ""
+	return PinnedPath{Real: realPath, Access: access}, true, ""
 }
 
 // autoPathCovered is the J2 containment test on an already-resolved path:
@@ -402,19 +402,19 @@ func AutoWorkspacePath(
 // AllowedRoots — never an allow-pattern grant ResolvePathAllowingPatterns
 // may add for a single call — so the operator's regex axis does not widen
 // what Auto runs.
-func autoPathCovered(policy fspolicy.FSPolicy, real string) (bool, string) {
-	if fspolicy.IsCarveOut(real, policy) {
-		return false, fmt.Sprintf("%q is in the protected secret set", real)
+func autoPathCovered(policy fspolicy.FSPolicy, realPath string) (bool, string) {
+	if fspolicy.IsCarveOut(realPath, policy) {
+		return false, fmt.Sprintf("%q is in the protected secret set", realPath)
 	}
-	if policy.WorkDir != "" && fspolicy.CoversForGrant(policy.WorkDir, real) {
+	if policy.WorkDir != "" && fspolicy.CoversForGrant(policy.WorkDir, realPath) {
 		return true, ""
 	}
 	for _, root := range policy.AllowedRoots {
-		if fspolicy.CoversForGrant(root, real) {
+		if fspolicy.CoversForGrant(root, realPath) {
 			return true, ""
 		}
 	}
-	return false, fmt.Sprintf("%q is outside the workspace and its mounts", real)
+	return false, fmt.Sprintf("%q is outside the workspace and its mounts", realPath)
 }
 
 // autoWorkspaceVerdict is the whole classifier for a single-path RUNS-IF
@@ -519,9 +519,9 @@ func resolveAutoCheckedPath(
 	if _, pinned := AutoPinFrom(ctx); !pinned {
 		return handle, nil
 	}
-	real, err := handle.RealPath()
+	realPath, err := handle.RealPath()
 	if err == nil {
-		err = RecheckAutoPin(ctx, toolName, policy, real, access)
+		err = RecheckAutoPin(ctx, toolName, policy, realPath, access)
 	}
 	if err != nil {
 		if closeErr := handle.Close(); closeErr != nil {

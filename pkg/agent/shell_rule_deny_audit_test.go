@@ -51,7 +51,7 @@ func TestRunTurn_DenyRule_WritesNoFalseAllowDecision(t *testing.T) {
 	var auditPath string
 	require.NoError(t, filepath.WalkDir(al.homePath, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
-			return nil
+			return nil //nolint:nilerr // best-effort search
 		}
 		if d.Name() == "audit.jsonl" {
 			auditPath = path
