@@ -90,6 +90,11 @@ function validateManifest(manifest, manifestFile) {
 function executionContract(kind) {
   if (kind === 'unit') return { runner: 'vitest', projects: [] }
   if (kind === 'interaction') return { runner: 'vitest', projects: STORYBOOK_PROJECTS }
+  // Issue #865 (founder-approved 2026-09-25): forced-colors checks run only on
+  // engines that implement forced colors. WebKit implements none - Playwright merely
+  // flips the media flag - so browser.spec.ts skips the check there and no WebKit
+  // evidence is required. chromium-coarse-pointer stays required: it is Chromium.
+  if (kind === 'forced-colors') return { runner: 'playwright', projects: PLAYWRIGHT_PROJECTS.filter((project) => project !== 'webkit') }
   return { runner: 'playwright', projects: PLAYWRIGHT_PROJECTS }
 }
 
@@ -143,11 +148,14 @@ export async function verifyCoverage({ manifestDir, storybookIndex, evidenceFile
       }
       const matches = evidence.filter((result) => pathMatches(result.file, check.file) && result.test === check.test)
       if (matches.length === 0) { errors.push(`${manifest.component}/${check.id}: no exact executed evidence for ${check.file}::${check.test}`); continue }
-      if (matches.some((result) => !result.pass)) errors.push(`${manifest.component}/${check.id}: evidence contains a failed or retried-failure result`)
       const contract = executionContract(check.kind)
+      const compatibleMatches = matches.filter((result) => result.runner === contract.runner)
+      // Which engines must verify a kind is defined by executionContract(kind); results from
+      // engines outside the contract are not evidence - browser.spec.ts skips forced-colors
+      // on WebKit (issue #865), and an authorized skip must not be misread as failure evidence.
+      if (compatibleMatches.filter((result) => contract.projects.includes(result.project)).some((result) => !result.pass)) errors.push(`${manifest.component}/${check.id}: evidence contains a failed or retried-failure result`)
       const incompatibleRunners = [...new Set(matches.filter((result) => result.runner !== contract.runner).map((result) => result.runner))]
       for (const runner of incompatibleRunners) errors.push(`${manifest.component}/${check.id}: evidence runner ${runner} is incompatible with ${check.kind === 'interaction' ? 'interaction' : check.kind === 'unit' ? 'unit' : 'browser-family'} check; expected ${contract.runner}`)
-      const compatibleMatches = matches.filter((result) => result.runner === contract.runner)
       for (const project of contract.projects) {
         const projectResults = compatibleMatches.filter((result) => result.project === project)
         if (projectResults.length === 0) errors.push(`${manifest.component}/${check.id}: missing required project ${project}`)

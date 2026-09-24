@@ -445,6 +445,16 @@ for (const manifest of manifests) {
       // cross-browser matrix. Reserve 30s for its terminal event and 15s for the
       // component assertion; exact story/status/reporter checks remain fail-closed.
       testInfo.setTimeout(45_000)
+      if (check.kind === 'forced-colors' && testInfo.project.use.browserName === 'webkit') {
+        // Issue #865 (engine artefact): WebKit implements no forced-colors mode —
+        // Playwright only flips the media flag, so this check would measure WebKit's
+        // default system palette (Linux WebKit pairs ButtonFace=silver with
+        // ButtonText=white; axe color-contrast #ffffff on #c0c0c0, 1.81:1) rather than
+        // our styling. Chromium and Firefox implement forced colors and keep running
+        // the check; the coverage contract in scripts/design-system/verification.mjs
+        // does not require WebKit evidence for forced-colors checks.
+        testInfo.skip(true, 'WebKit does not implement forced-colors; Playwright only flips the media flag, so the check measures an engine artefact rather than our styling (issue #865)')
+      }
       if (check.kind === 'forced-colors') await page.emulateMedia({ forcedColors: 'active' })
       const metadata = await openStory(page, manifest, check)
 
