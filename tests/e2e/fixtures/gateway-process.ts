@@ -59,6 +59,20 @@ export interface GatewayProcessOptions {
    * one, so a permissive sandbox is safe and keeps the boot-sweep proof
    * focused on lifecycle reconciliation rather than sandbox mechanics). */
   extraArgs?: string[];
+  /**
+   * Extra environment variables for the spawned process — e.g. #823
+   * scenario h's `OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS` (read once at
+   * gateway start, `pkg/gateway/ws_session_hub.go`'s
+   * `streamTokenDelayEnvOverrideVar`), which pauses the web streamer that
+   * long after each published token so a kill reliably lands mid-answer
+   * instead of racing a fast model to completion. Stored on the instance
+   * (below) so `restart()` — which re-spawns via the SAME `spawnProcess()`
+   * this env is read in — keeps it automatically; never needs to be passed
+   * again. Test-only knobs like this exist specifically so an isolated
+   * `GatewayProcess` can opt in without touching the shared gateway any
+   * other scenario in a spec file uses.
+   */
+  env?: Record<string, string>;
 }
 
 /**
@@ -75,13 +89,14 @@ export class GatewayProcess {
 
   private readonly binary: string;
   private readonly extraArgs: string[];
+  private readonly extraEnv: Record<string, string>;
   private readonly model: string;
   private proc: ChildProcess | null = null;
   private ctx: APIRequestContext | null = null;
   private csrfToken = '';
 
   private constructor(
-    opts: { binary: string; adminUsername: string; adminPassword: string; model: string; extraArgs: string[] },
+    opts: { binary: string; adminUsername: string; adminPassword: string; model: string; extraArgs: string[]; extraEnv: Record<string, string> },
     homeDir: string,
     port: number,
   ) {
@@ -90,6 +105,7 @@ export class GatewayProcess {
     this.adminPassword = opts.adminPassword;
     this.model = opts.model;
     this.extraArgs = opts.extraArgs;
+    this.extraEnv = opts.extraEnv;
     this.homeDir = homeDir;
     this.port = port;
     this.baseURL = `http://localhost:${port}`;
@@ -121,6 +137,7 @@ export class GatewayProcess {
         adminPassword: opts.adminPassword ?? 'admin1234',
         model: opts.model ?? DEFAULT_MODEL,
         extraArgs: opts.extraArgs ?? ['--sandbox=off'],
+        extraEnv: opts.env ?? {},
       },
       homeDir,
       port,
@@ -143,6 +160,7 @@ export class GatewayProcess {
           ...process.env,
           OMNIPUS_HOME: this.homeDir,
           OMNIPUS_BEARER_TOKEN: '',
+          ...this.extraEnv,
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });

@@ -19,21 +19,26 @@
  * (they need a real provider key and the operator's data folder, neither
  * available in every environment).
  *
- * STATUS (pass 3): scenario `h` (gateway restart) drives its OWN isolated,
- * killable/restartable gateway process via `fixtures/gateway-process.ts`'s
- * `GatewayProcess` (own port, own mkdtemp'd OMNIPUS_HOME, real SIGKILL +
- * re-spawn), entirely separate from the shared gateway the rest of this
- * file's `page` fixture points at — that mechanism was run and confirmed
- * working end-to-end against a real built binary: login, turn start,
- * SIGKILL, restart, and WS auto-reconnect/reattach to the SAME session all
- * verified. It is back to `test.skip` (orchestrator, founder "no flaky
- * tests" rule) because the one remaining piece — killing at the exact
- * moment a turn is genuinely mid-answer, so a real "couldn't be finished"
- * shows — is not reliably reproducible against a real, fast model; three
- * different timing strategies produced three different outcomes across
- * runs. See `h`'s own comment for the fix this uncovered along the way
- * (`restart({relogin:false})`, a real harness bug) and the pending test-only
- * streaming-delay knob this is waiting on before it can be un-skipped again.
+ * STATUS (pass 4): scenario `h` (gateway restart) is un-skipped. It drives
+ * its OWN isolated, killable/restartable gateway process via
+ * `fixtures/gateway-process.ts`'s `GatewayProcess` (own port, own
+ * mkdtemp'd OMNIPUS_HOME, real SIGKILL + re-spawn), entirely separate from
+ * the shared gateway the rest of this file's `page` fixture points at —
+ * that mechanism was run and confirmed working end-to-end against a real
+ * built binary in pass 3: login, turn start, SIGKILL, restart, and WS
+ * auto-reconnect/reattach to the SAME session all verified (see `h`'s own
+ * comment for the `restart({relogin:false})` harness-bug fix that came out
+ * of that pass). Pass 3 still could not reliably catch a turn genuinely
+ * mid-answer at kill time — z-ai/glm-5.2 answers fast enough in this
+ * environment that three different timing strategies produced three
+ * different outcomes. Pass 4 closes that gap with the backend's new
+ * test-only knob, `OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS`
+ * (`pkg/gateway/ws_session_hub.go`'s `streamTokenDelayEnvOverrideVar`,
+ * read once at gateway start): set to 300ms on `h`'s OWN `GatewayProcess`
+ * only (never the shared gateway), it pauses the web streamer that long
+ * after each published token, so the turn now stays genuinely mid-stream
+ * for many seconds — plenty of margin for kill9()/restart() and a
+ * Playwright poll, without touching the assertion itself.
  */
 
 import { expect, type Page } from '@playwright/test'
@@ -460,24 +465,29 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
   // new process's differing boot id is what actually drives the
   // `boot_mismatch` snapshot path — reloading first would discard that
   // stale cursor and prove a different (if related) code path instead.
-  // RE-SKIPPED (orchestrator, founder rule: no flaky tests — option A/"accept
-  // as racy" is out). The restart/reattach mechanism below is real and
-  // proven (see the investigation notes throughout this test, including the
-  // restart({relogin:false}) harness-bug fix, which stays regardless of this
-  // skip). What's not reliably reproducible against a REAL model is the
-  // "still mid-answer when killed" window: z-ai/glm-5.2 answers fast enough
-  // in this environment that three different timing strategies produced
-  // three different outcomes (full completion / no session yet / no
-  // assistant content yet) — see the comments below the `try` block for the
-  // blow-by-blow. Waiting on a test-only knob (backend, Go side) to slow
-  // streaming deliberately so a kill reliably lands mid-answer — same
-  // pattern as scenario g's `OMNIPUS_TEST_ONLY_HUB_IDLE_EVICT_SECONDS`. Once
-  // that knob exists, wire it onto THIS test's `GatewayProcess.start()` call
-  // only (never the shared gateway the rest of this file uses) and remove
-  // this skip.
-  test.skip('h: gateway restart with tab open — snapshot boot_mismatch, "couldn\'t be finished · Generate again"', async ({ page }) => {
+  // RE-UN-SKIPPED (pass 4, orchestrator): pass 3's `test.skip` reasoning
+  // ("no flaky tests" — the mid-answer kill window wasn't reliably
+  // reproducible against a real, fast model) no longer applies now that the
+  // backend's test-only `OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS` knob
+  // exists (`pkg/gateway/ws_session_hub.go`'s
+  // `streamTokenDelayEnvOverrideVar` — read once at gateway start; the web
+  // streamer pauses that long after each published token; unset/0/invalid
+  // = no pause, same pattern as scenario g's
+  // `OMNIPUS_TEST_ONLY_HUB_IDLE_EVICT_SECONDS`). Set to 300ms below, ONLY
+  // on THIS test's own isolated `GatewayProcess` (never the shared gateway
+  // every other scenario in this file uses), via `GatewayProcess.start({
+  // env })` — `restart()` re-spawns through the SAME `spawnProcess()` that
+  // reads this env, so the respawned process after SIGKILL keeps the exact
+  // same pause without anything extra needed here. With a 300ms pause per
+  // token, the turn now stays genuinely mid-stream for many seconds, so
+  // the kill point below (first token visibly landed — a non-empty answer
+  // bubble) reliably lands well before the answer completes; see the
+  // comments below the `try` block for the pass-3 investigation that found
+  // this precise kill point (too early = no session/no content yet; too
+  // late used to race full completion, no longer a risk with the knob).
+  test('h: gateway restart with tab open — snapshot boot_mismatch, "couldn\'t be finished · Generate again"', async ({ page }) => {
     test.setTimeout(420_000)
-    const gw = await GatewayProcess.start()
+    const gw = await GatewayProcess.start({ env: { OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '300' } })
     try {
       // Real UI login against the isolated process — GatewayProcess.start()
       // onboarded the admin/provider via REST (its own APIRequestContext),
@@ -495,17 +505,18 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
 
       // Deliberately NOT `startLongTurn()` here: that helper polls for
       // >80 characters of streamed bubble text before returning, which two
-      // local runs proved fatal for this scenario specifically — the
-      // configured model (z-ai/glm-5.2, per GatewayProcess's own default)
-      // answered BOTH the original 600-word LONG_PROMPT and a 3000-word
-      // VERY_LONG_PROMPT so fast (screenshots showed the COMPLETE,
-      // model-footer-stamped answer, 16-20k tokens, already rendered) that
-      // by the time that poll resolved, the turn had already finished —
-      // nothing was left to interrupt. Minimizing latency between "the turn
-      // starts" and "the process dies" is what actually matters for item
-      // h's premise, not prompt length — so this sends the message and
-      // kills the instant the stop button confirms the turn is dispatched,
-      // without waiting for any streamed content at all.
+      // pass-3 runs proved fatal for this scenario specifically (before the
+      // stream-delay knob existed) — the configured model (z-ai/glm-5.2,
+      // per GatewayProcess's own default) answered BOTH the original
+      // 600-word LONG_PROMPT and a 3000-word VERY_LONG_PROMPT so fast
+      // (screenshots showed the COMPLETE, model-footer-stamped answer,
+      // 16-20k tokens, already rendered) that by the time that poll
+      // resolved, the turn had already finished — nothing was left to
+      // interrupt. Pass 4's `OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '300'`
+      // (above) removes that race at the source (300ms per token keeps the
+      // turn mid-stream for many seconds), but the kill point below still
+      // waits for the minimum real signal rather than any particular amount
+      // of content — see the "two rounds" comment just below for why.
       const input = chatInput(page)
       await expect(input).toBeVisible({ timeout: 15_000 })
       await waitForConnected(page)
