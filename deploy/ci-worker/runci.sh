@@ -903,7 +903,7 @@ _e2e_run_shard() {
   #
   # C1 fix (ADR-067 FR-034): providers[] rows are keyed by the EXACT (provider, model)
   # pair — `provider` is the catalog id ("openrouter"), `model` is the BARE catalog
-  # model id ("z-ai/glm-5.2"). The old "<protocol>/<model>" prefix-splitting migration
+  # model id ("deepseek/deepseek-v4.1-flash"). The old "<protocol>/<model>" prefix-splitting migration
   # was deleted deliberately (it silently mis-routed vendors), so a row with an empty
   # `provider` now fails ModelConfig.Validate ("provider is required") instead of being
   # guessed. agents.defaults.default_model is the (provider, model) pair — the retired
@@ -913,7 +913,7 @@ _e2e_run_shard() {
   "version": 1,
   "gateway": { "port": $port, "dev_mode_bypass": true },
   "sandbox": { "audit_log": true, "tool_policies": { "spawn": "allow" } },
-  "agents": { "defaults": { "default_model": { "provider": "openrouter", "model": "z-ai/glm-5.2" }, "auto_recap_enabled": true } },
+  "agents": { "defaults": { "default_model": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash" }, "auto_recap_enabled": true } },
   "providers": [
     {
       "provider": "openrouter",
