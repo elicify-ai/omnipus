@@ -49,9 +49,9 @@ Below the switch, **Still asks every time** is a collapsed list — click it to 
 
 > Sending email · Deleting tasks, agents or workspaces · Installing skills, setting up an environment or publishing a web preview · Changing or testing settings, providers, channels, agents or skills · Running diagnostics · Adding or removing connected (MCP) servers, and MCP tools not marked safe · Browser scripts and uploads · Mounting a folder, or files outside your workspace
 
-And a small note underneath *(2026-09-24: the note's wording changed — see "Auto-approve and the kernel sandbox" below)*:
+And a small note underneath *(2026-09-24: the note's wording changed twice — see "Auto-approve and the kernel sandbox" below)*:
 
-> Without a kernel sandbox (for example on Windows), shell commands are checked by reading the command text only.
+> Without a kernel sandbox (for example on Windows), most shell commands ask first. A short list of read-only commands, and any command an operator explicitly allowed, still run without a prompt.
 <!-- verify-ui-string -->
 
 That is a summary. The full list of tools that still ask, one row per tool, is under "What Auto-approve runs and what still asks" below.
@@ -65,10 +65,11 @@ The chat switch is the one place that can turn Auto-approve **on** when the agen
 **What Auto-approve does now, with and without a kernel sandbox:**
 
 - **Every tool except the shell (`bash`)** is unaffected by whether a kernel sandbox is active. The kernel sandbox was never what kept `write_file`, `read_file` and the rest inside your workspace — an application-level check inside Omnipus itself always did that (see "What Auto-approve runs and what still asks" below), and that check runs the same way with or without a kernel sandbox.
-- **The shell (`bash`) is different.** With a kernel sandbox active (Linux or macOS, Process Sandbox set to Enforce), a shell command that tries to reach outside the workspace or the network is caught two ways: Omnipus checks the command's text before running it, **and** the operating system itself blocks anything that check missed. Without a kernel sandbox — on Windows, or with the Process Sandbox set to Permissive or Off — only the first check runs. Omnipus still reads the command's text and still asks before anything that looks like it reaches outside the workspace or the network, but there is no second, operating-system-level check behind that first one.
-  - **Concrete risk:** a command that has been deliberately disguised so its text does not look like what it actually does — for example, splitting a program name across quotes, or using shell substitution to build the real command at run time — can slip past a text-based check. With a kernel sandbox, the operating system still blocks it regardless of how the text was disguised. Without one, nothing else is checking, and the command runs.
+- **The shell (`bash`) is different.** With a kernel sandbox active (Linux or macOS, Process Sandbox set to Enforce), a shell command that tries to reach outside the workspace or the network is caught two ways: Omnipus checks the command's text before running it, **and** the operating system itself blocks anything that check missed. Without a kernel sandbox — on Windows, or with the Process Sandbox set to Permissive or Off — only the first, text-based check exists, so *(changed again 2026-09-24, "like a coding assistant's own default")* Omnipus is stricter about what it will run without asking: a command runs without a prompt only if it is one of a short list of commands that can only read (listing files, printing a file's contents, `git status`/`log`/`diff`/`show`, and a few more — see the list under "What Auto-approve runs and what still asks" below), or an operator has explicitly written a rule allowing it. Every other shell command asks first, even one that only touches files already inside your workspace — the approval card explains why: *"No kernel sandbox is enforcing, so shell commands that could change files or reach the network ask first."*
+<!-- verify-ui-string -->
+  - **Concrete risk this still leaves open:** a command that has been deliberately disguised so its text does not look like what it actually does — for example, splitting a program name across quotes, or using shell substitution to build the real command at run time — can slip past a text-based check, INCLUDING the read-only allowlist above (which only recognizes a command by its literal, un-disguised name). With a kernel sandbox, the operating system still blocks it regardless of how the text was disguised. Without one, asking first for every non-read-only command is the remaining protection — there is no second, operating-system-level check behind it, and an unattended/scheduled run has nobody to answer, so it refuses rather than guessing.
 
-This is a deliberate, founder-approved trade: Auto-approve being usable everywhere, in exchange for a real but scoped gap on machines with no kernel sandbox. If that risk matters for a given agent or workspace, keep the Process Sandbox set to **Enforce** where your platform supports it, or turn Auto-approve off for that agent.
+This is a deliberate, founder-approved trade: Auto-approve being usable everywhere, in exchange for asking more often on a machine with no kernel sandbox. If that trade does not suit a given agent or workspace, keep the Process Sandbox set to **Enforce** where your platform supports it, or turn Auto-approve off for that agent.
 
 ### What the chat header shows
 
@@ -79,8 +80,8 @@ The badge at the top of a chat shows which state applies to that chat right now.
 | **God Mode** | God Mode is on. No sandbox, and tools set to Ask in the global policies run without a prompt. A tool that an agent itself sets to Ask still asks, and Auto-approve is off. |
 | **Ask** | Auto-approve is off for this chat. Every tool set to Ask prompts. |
 | **Auto** | Auto-approve is on and a kernel sandbox is active. Safe calls run; the rest ask. |
-| **Auto — no sandbox** | Auto-approve is on, but there is no active kernel sandbox. Safe calls still run; the shell's checks are text-only (see above). The badge's tooltip explains this. |
-<!-- verify-ui-string: badge label "Auto — no sandbox" and its tooltip text -->
+| **Auto — shell asks (no sandbox)** | Auto-approve is on, but there is no active kernel sandbox. Every other tool's safe calls still run as usual; the shell only auto-runs a read-only command or one an operator's rule explicitly allows — everything else asks first (see above). The badge's tooltip explains this. |
+<!-- verify-ui-string: badge label "Auto — shell asks (no sandbox)" and its tooltip text (2026-09-24 rewording — was "Auto — no sandbox") -->
 
 *(Before 2026-09-24 this badge read "Auto → Ask" and Auto-approve had no effect at all in that state. That is no longer how it works — see "Auto-approve and the kernel sandbox" above.)*
 
@@ -170,7 +171,7 @@ These controls answer different questions.
 | Filesystem model | What agents may read and run | You want open access or a confined list of locations |
 | Shell workspace limit | Whether a command may name paths outside the working folder | You want a command-text check that still applies even when the sandbox is off |
 
-The process sandbox offers three modes. **Enforce** blocks violations. **Permissive** records violations without blocking them. **Off** removes operating-system protection, but it does not disable the shell workspace limit. Only Enforce counts as an active kernel sandbox. *(Changed 2026-09-24 — see "Auto-approve and the kernel sandbox" above.)* In Permissive or Off, the chat header shows **Auto — no sandbox**: Auto-approve still runs, but shell commands are checked by their text only, with no operating-system check behind that.
+The process sandbox offers three modes. **Enforce** blocks violations. **Permissive** records violations without blocking them. **Off** removes operating-system protection, but it does not disable the shell workspace limit. Only Enforce counts as an active kernel sandbox. *(Changed 2026-09-24 — see "Auto-approve and the kernel sandbox" above.)* In Permissive or Off, the chat header shows **Auto — shell asks (no sandbox)**: Auto-approve still runs for every other tool, but the shell only auto-runs a read-only command or one an operator's rule explicitly allows — every other shell command asks first, with no operating-system check behind the text-based one.
 
 The **Confined** filesystem model limits reads and execution to listed locations. The **Open** model lets agents read and run anything your account can reach, apart from Omnipus secret files. Writes remain limited to the workspace and mounted folders. Changes to the filesystem model take effect after a gateway restart.
 
@@ -237,7 +238,7 @@ Worked example: with the `ask`-before-`npm publish` rule above and no rule at al
 
 ### How a rule interacts with Auto-approve and God Mode
 
-The columns below match the badge at the top of the chat. **Auto** also covers **Auto — no sandbox**: a command rule's `allow`/`ask`/`deny` decision applies the same whether or not a kernel sandbox is active — it is a check on the command's text, not something the kernel sandbox does or does not add. *(Before 2026-09-24, this row said "Ask also covers Auto → Ask" — Auto-approve had no effect without a sandbox back then, so that state behaved like Ask. It no longer does.)*
+The columns below match the badge at the top of the chat. **Auto** also covers **Auto — shell asks (no sandbox)**: a command rule's `allow`/`ask`/`deny` decision applies the same whether or not a kernel sandbox is active — it is a check on the command's text, not something the kernel sandbox does or does not add. *(Before 2026-09-24, this row said "Ask also covers Auto → Ask" — Auto-approve had no effect without a sandbox back then, so that state behaved like Ask. It no longer does. The badge's own name changed again later the same day — see "Auto-approve and the kernel sandbox" above — when Auto-approve with no sandbox became stricter about which shell commands still skip the prompt.)*
 
 | Rule action | Ask | Auto | God Mode |
 |---|---|---|---|
@@ -267,6 +268,12 @@ Any of these means the card appears as normal. A chained command skips the card 
 A part Omnipus cannot read reliably, such as a program name built from a variable (`$X -rf /`), a brace expansion (`{cat,/etc/passwd}`) or a program that does not exist on the agent's path, can never satisfy an allow rule.
 
 Rules match the program by where it really is on disk, not by the word typed. A rule for `rm` also catches `/bin/rm -rf build` for `deny` and `ask`. An `allow` rule for `git` does not approve a different program that happens to be named `git` earlier on the agent's path.
+
+**A deny or ask rule also catches the program run through a wrapper.** *(Changed 2026-09-24 — before this date, a rule for `rm` did not catch `env rm -rf x`, `sudo rm -rf x`, `nice -n 10 rm -rf x`, `command rm -rf x`, `timeout 5 rm -rf x` or `xargs rm`, because Omnipus only looked at the very first word.)* Omnipus now looks through `env`, `sudo`, `doas`, `nice`, `ionice`, `nohup`, `setsid`, `timeout`, `stdbuf`, `time`, `command`, `builtin`, `exec` and `xargs` to the program they go on to run, including one wrapper inside another (`env sudo rm -rf x`). A rule for `rm` catches every one of the examples above the same as it catches plain `rm -rf x`.
+
+**A command that runs another program through an interpreter is treated with extra caution**, because Omnipus cannot see inside the text it hands that interpreter: `bash -c "…"`, `sh -c "…"`, `zsh -c "…"`, `eval …`, `source …`, `python -c "…"` (and `python3`, and other Python versions), `perl -e "…"`, `ruby -e "…"`, and `node -e "…"`. When any of your deny rules names a program whose name appears as a whole word inside that text — for example a `deny` rule for `rm` and a command `bash -c "rm -rf x"` — Omnipus refuses it, the same as it would refuse plain `rm -rf x`. If none of your deny rules' names appear that way, but you have written **any** `ask` or `deny` rule at all, Omnipus asks before running the interpreter command rather than silently letting it through — an interpreter is exactly the shape that could be hiding something a rule would otherwise have caught. With no rules written at all, an interpreter command is treated exactly as before: the shell's own Ask/Auto/God Mode handling decides.
+
+**What this still cannot catch.** A wrapper Omnipus does not recognize (something other than the list above) is not looked through — if your denied program's name later appears as one of that unrecognized command's own words, Omnipus asks rather than silently allowing it (so you still see it), but it cannot always tell you that word is really about to run as a command. And inside an interpreter's text, only a whole-word name match is checked — a program built at run time from pieces, or referred to indirectly, can still slip past. The kernel sandbox (Enforce mode), not this text-based check, is what actually stops a command from reaching outside your workspace or the network regardless of how its text was written.
 
 On Windows, a command is always judged as one unit, and `arg_prefix` must match the whole argument list exactly, not just its start.
 

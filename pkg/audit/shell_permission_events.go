@@ -78,13 +78,17 @@ const (
 	ShellModeActorSystem ShellModeActor = "system"
 )
 
-// ShellPreflightKind is the FR-032(b) escalation family: filesystem (D7) or
-// network (D8).
+// ShellPreflightKind is the FR-032(b) escalation family: filesystem (D7),
+// network (D8), or no_sandbox — the 2026-09-24 founder decision's Auto-mode
+// gate for a bash call with no kernel sandbox enforcing (pkg/tools/
+// shell_permission_mode.go::requestNoSandboxApproval): neither on the fixed
+// read-only allowlist nor fully covered by an operator allow rule.
 type ShellPreflightKind string
 
 const (
 	ShellPreflightFilesystem ShellPreflightKind = "filesystem"
 	ShellPreflightNetwork    ShellPreflightKind = "network"
+	ShellPreflightNoSandbox  ShellPreflightKind = "no_sandbox"
 )
 
 // ShellGrantScope is the FR-032(c) grant scope taxonomy.

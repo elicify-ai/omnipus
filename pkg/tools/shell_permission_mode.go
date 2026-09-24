@@ -670,6 +670,42 @@ func (t *ExecTool) enforceShellPermissionMode(ctx context.Context, command strin
 		return result, nil
 	}
 
+	// Founder decision A (2026-09-24, "like Claude Code default"): with NO
+	// kernel sandbox enforcing, Auto must not auto-run an arbitrary command
+	// just because the tool-policy ceiling resolved to "allow". With a
+	// kernel sandbox enforcing, this whole block is skipped — behaviour is
+	// byte-for-byte unchanged (D7/D8 below run exactly as before).
+	//
+	// (a) A command entirely made of segments on the fixed read-only
+	// allowlist (commandIsNoSandboxReadOnly) bypasses BOTH this gate AND
+	// the D7/D8 pre-flights below outright: the allowlist's own membership
+	// criterion (a binary with no flag that writes a path on its command
+	// line — shell_path_guard.go's readOnlyShellCommands — plus git's
+	// network-free read subcommands) makes both pre-flights structurally
+	// inapplicable, so there is nothing left for them to check.
+	//
+	// (b) Otherwise, unless the command is fully covered by an operator D3
+	// allow rule (verdict.FullyAllowed() — an allow rule does NOT bypass
+	// D7/D8, matching TestAllowRule_DoesNotSuppressFSPreflightUnderAuto's
+	// existing precedent) AND commandTriggersExistingPreflight reports that
+	// D7 or D8 will ALSO need to ask (or refuse) on their own, this new
+	// no_sandbox_ask gate is mutually exclusive with them (see that
+	// function's own doc comment for why) — it fires only for the gap they
+	// do not cover (a write via a relative path, or a command with no
+	// filesystem/network signature at all), so a qualifying command asks
+	// exactly once, never twice.
+	if !sandbox.TurnPolicyBaseInstalled() {
+		if commandIsNoSandboxReadOnly(command) {
+			return result, nil
+		}
+		if !verdict.FullyAllowed() && !t.commandTriggersExistingPreflight(ctx, command, sessionID, agentID) {
+			approved, reason := t.requestNoSandboxApproval(ctx, sessionID, agentID, toolCallID, command)
+			if !approved {
+				return nil, ErrorResult(noSandboxDenialMessage(reason))
+			}
+		}
+	}
+
 	pathGrants, fsErr := t.enforceFSPreflight(ctx, command, sessionID, agentID, toolCallID)
 	if fsErr != nil {
 		return nil, fsErr
