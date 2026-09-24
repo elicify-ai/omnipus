@@ -923,7 +923,10 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 	// delegate tool returns as soon as Launch+Dispatch have returned; there
 	// is no ordering hook between the parent's tool result and the child's
 	// start.
-	go al.runDispatchedSteeredTurn(rec, ts, gen)
+	// Detached, but JOINABLE: goSteeredTurn (admission.go) registers it with
+	// the gate's WaitGroup so AgentLoop.Close drains it before the stores it
+	// writes through are torn down.
+	al.goSteeredTurn(func() { al.runDispatchedSteeredTurn(rec, ts, gen) })
 
 	return steer.DispatchResult{State: steer.DispatchRunning, Generation: gen}, nil
 }
