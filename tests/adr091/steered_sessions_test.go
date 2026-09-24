@@ -404,10 +404,40 @@ func TestE2E_ThreeLevelDelegation_NoLeak(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
+	// Only a STEERED CHILD reaching the human is a leak. The ROOT is the
+	// human's own chat, so its own publications are the correct behaviour,
+	// not a breach — and the root does publish here: the hand-back arrives
+	// through processSystemMessage, the root runs a further turn, and
+	// e2eBoundaryProbe.Execute returns Media on EVERY call including the
+	// root's. Recording every outbound message as a leak therefore made
+	// both drains race the root's hand-back turn: green when the drain won,
+	// red with `forbidden address "human"` when the root's turn published
+	// first. It failed exactly that way on release 72bb9646e (CI job
+	// 107839025045) while passing locally, which reads like a containment
+	// regression and is not one.
+	//
+	// The assertion below stays strict — the defect was that it could not
+	// tell a child from the root, never that it demanded too much.
+	steeredChildren := map[string]struct{}{
+		h.tree.A.SessionID: {},
+		h.tree.B.SessionID: {},
+		h.tree.C.SessionID: {},
+	}
+	// Give the root's hand-back turn time to publish BEFORE draining, so
+	// every run exercises the interleaving that used to fail rather than
+	// reaching the assertion only when the drain happens to win the race.
+	// A leak from a child would be caught in this window too.
+	settle := time.Now().Add(2 * time.Second)
+	for time.Now().Before(settle) {
+		time.Sleep(20 * time.Millisecond)
+	}
+
 	for {
 		select {
 		case outbound := <-h.msgBus.OutboundChan():
-			h.recorder.Record(steer.BoundaryFinalReply, outbound.SessionID, "human", "leak")
+			if _, isChild := steeredChildren[outbound.SessionID]; isChild {
+				h.recorder.Record(steer.BoundaryFinalReply, outbound.SessionID, "human", "leak")
+			}
 		default:
 			goto textDrained
 		}
@@ -421,7 +451,12 @@ textDrained:
 	for {
 		select {
 		case outboundMedia := <-h.msgBus.OutboundMediaChan():
-			h.recorder.Record(steer.BoundaryMedia, outboundMedia.SessionID, "human", "media-leak")
+			// Same child-only rule as the text drain above: the root's own
+			// media is legitimate, a steered child's is the leak this
+			// catches.
+			if _, isChild := steeredChildren[outboundMedia.SessionID]; isChild {
+				h.recorder.Record(steer.BoundaryMedia, outboundMedia.SessionID, "human", "media-leak")
+			}
 		default:
 			goto mediaDrained
 		}
