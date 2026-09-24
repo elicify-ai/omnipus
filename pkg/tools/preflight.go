@@ -301,6 +301,27 @@ func writeOutputFlagOps(args []string, redirectTargets map[int]struct{}, shortFl
 // double quotes (no expansion). Returns ok=false on an unbalanced quote or
 // on any $ or ` byte outside single quotes — a command/parameter
 // substitution this extractor refuses to guess through.
+//
+// The ONE exception is a bare, standalone `$?` word (bash's last-exit-status
+// special parameter, 2026-09-24 fix) — unquoted, not glued to any other
+// character on either side (so `$?` alone is accepted; `/etc/passwd$?`,
+// `$?x`, and `"$?"` are NOT — they still disqualify below, same as before).
+// That narrow shape matters: this classifier's callers (D7/D8, below) use
+// the RETURNED TEXT as the literal path/host they check permissions
+// against, so accepting `$?` glued onto a larger token would let a
+// classification run against a fake literal string ("/etc/passwd$?") while
+// the real shell resolves a DIFFERENT path at run time ("/etc/passwd0",
+// once `$?` actually expands) — a check/enforce mismatch this fix must not
+// introduce. A bare `$?` word carries no such risk: unlike `$(...)`/
+// backtick substitution or a `${...}`/`$VAR`/`$1` variable or
+// positional-parameter expansion, its value is always a small integer the
+// shell itself just set, never attacker- or file-path-influenced, and by
+// itself it can never resolve to a path or a host. Refusing to tokenize it
+// made a command as ordinary as `true; echo $?` (exactly the idiom this
+// classifier's own D7/D8 callers are asked to run — see
+// conformance-design-chat-e2e.spec.ts's t0 goal-claim steer) an unparseable
+// FR-020 blind spot, escalating to a live "could not be classified"
+// approval card with no operator present to answer it.
 func tokenizeShellWords(s string) ([]string, bool) {
 	var words []string
 	var cur strings.Builder
@@ -326,6 +347,12 @@ func tokenizeShellWords(s string) ([]string, bool) {
 		case c == '\\' && !inSingle && i+1 < len(s):
 			cur.WriteByte(s[i+1])
 			hasWord = true
+			i++
+		case c == '$' && !inSingle && !inDouble && !hasWord && i+1 < len(s) && s[i+1] == '?' &&
+			(i+2 == len(s) || s[i+2] == ' ' || s[i+2] == '\t'):
+			// Bare standalone `$?` — see the doc comment above for exactly
+			// why this is the one safe shape to accept.
+			words = append(words, "$?")
 			i++
 		case (c == '$' || c == '`') && !inSingle:
 			return nil, false
