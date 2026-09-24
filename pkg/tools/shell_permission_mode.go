@@ -370,7 +370,7 @@ func (t *ExecTool) requestRuleApproval(
 	// records a grant of its own regardless of what the human clicked (see
 	// the comment below) — the D7/D8 call sites below are the ones that
 	// consume it.
-	approved, reason, _ := t.approvalRequester.RequestShellApproval(ctx, sessionID, agentID, t.Name(), toolCallID, "", args)
+	approved, reason, _ := t.approvalRequester.RequestShellApproval(ctx, sessionID, agentID, t.Name(), toolCallID, ToolTurnID(ctx), args)
 	// willRecordGrant=false: an approved D3 ask-rule verdict records no
 	// grant from THIS call site. RecordPrefixGrant does have a live caller
 	// (pkg/gateway/rest_tool_registry.go::approvalGrantRecorder, reached
@@ -435,7 +435,7 @@ func (t *ExecTool) requestPreflightApproval(ctx context.Context, sessionID, agen
 		"adr092_kind": kind,
 		"note":        note,
 	}
-	return t.approvalRequester.RequestShellApproval(ctx, sessionID, agentID, t.Name(), toolCallID, "", args)
+	return t.approvalRequester.RequestShellApproval(ctx, sessionID, agentID, t.Name(), toolCallID, ToolTurnID(ctx), args)
 }
 
 // resolvePreflightPath resolves a D7 classifier candidate (raw command text,

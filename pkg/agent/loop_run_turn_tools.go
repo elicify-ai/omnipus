@@ -1439,6 +1439,17 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	// the correlation anchor a spawned child sub-turn's transcript
 	// entries will carry back as ParentSpawnCallID.
 	execCtx = tools.WithToolCallID(execCtx, tc.ID)
+	// Stamp the turn's own ID (D-03 fix, UAT tester t5, 2026-09-24): a tool
+	// that raises its OWN interactive escalation — ADR-092's D3/D7/D8
+	// ShellApprovalRequester.RequestShellApproval call sites in
+	// pkg/tools/shell_permission_mode.go — has no other way to reach the
+	// calling turn's ID, unlike the classic ask-policy path
+	// (requestAskApproval, above) which already has rt.ts.turnID in hand
+	// directly. Before this stamp existed those call sites hardcoded turnID
+	// as "", which contracts/components/schemas/ToolApprovalRequiredFrame.yaml's
+	// minLength:1 on turn_id causes the SPA to silently drop on arrival —
+	// see tools.WithTurnID's doc comment for the full chain.
+	execCtx = tools.WithTurnID(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.turnID)
 	// Carry the turn's EXISTING AutoDenyAsk onto the tool context.
 	// The loop already uses it to auto-deny `ask`-policy calls; a
 	// tool that must refuse one ARGUMENT rather than the whole call

@@ -96,6 +96,13 @@ func permTestFixture(t *testing.T, mode ShellMode, approve bool) (tool *ExecTool
 	tool.approvalGrants = security.NewApprovalGrantStore()
 
 	ctx = WithTranscriptSessionID(WithAgentID(context.Background(), "agent-1"), "session-1")
+	// D-03 fix (2026-09-24): mirror pkg/agent/loop_run_turn_tools.go's
+	// executeTool, which stamps WithTurnID onto every tool's execCtx
+	// immediately alongside WithToolCallID — this fixture stands in for
+	// that dispatch path, so it must carry the same fact real production
+	// tool execution now does, or the D3/D7/D8 turnID assertions below
+	// would fail against a ctx no real call site would ever produce.
+	ctx = WithTurnID(ctx, "turn-1")
 	return tool, ctx, requester, workDir
 }
 
@@ -225,6 +232,8 @@ func permTestFixtureNoSandbox(t *testing.T, mode ShellMode, approve bool) (tool 
 	tool.approvalGrants = security.NewApprovalGrantStore()
 
 	ctx = WithTranscriptSessionID(WithAgentID(context.Background(), "agent-1"), "session-1")
+	// D-03 fix: see permTestFixture's identical comment above.
+	ctx = WithTurnID(ctx, "turn-1")
 	return tool, ctx, requester, workDir
 }
 
