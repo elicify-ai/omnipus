@@ -86,6 +86,17 @@
  *    fixture's seeding strategy makes that click structurally unreachable no
  *    matter what the test does downstream of it.
  *
+ * UPDATE (2026-09-24, lane FX-E2E) — the spec HAS now been observed, and it
+ * failed 4/4 in CI (shard ui-4) at the second `activity-bar` click, not at
+ * any of the assertions above. Root cause was a third defect in this file,
+ * NOT in production code: the Activity panel stays open across the spec's
+ * hash-only session navigations, and its Radix modal blocks every later
+ * click on the bar behind it. See `openActivityPanel` below for the full
+ * writeup and for the CI evidence that the product side (mount gate, store
+ * routing, stopped-child span) was already behaving correctly. The
+ * assertions from `rowAfterStop` onwards were never reached in that run and
+ * therefore remain unverified by an observed pass.
+ *
  * IMPORTANT — still not verified by an observed pass. This lane (RX-FRONTEND,
  * frontend-only: src/** and tests/e2e/** ownership, no Go edits, no live
  * gateway) confirmed `tests/e2e/global-setup.ts::preflightCheck` hard-fails
@@ -279,6 +290,45 @@ async function sendCancelFrame(page: Page, sessionId: string): Promise<void> {
   }, sessionId)
 }
 
+/**
+ * Open the Activity panel, tolerating the fact that it may ALREADY be open.
+ *
+ * Defect 3 (CI run 2026-09-24, shard ui-4 — the failure this helper fixes):
+ * `ActivityBar`'s `panelOpen` is component-local React state
+ * (src/components/chat/ActivityBar.tsx), and `openSessionByDeepLink` drives
+ * `page.goto('/#/sessions/<id>')` — a HASH-only change, i.e. a same-document
+ * navigation. The bar is never unmounted, so an already-open panel stays
+ * open across every session switch this spec makes. `ActivityPanel` is a
+ * Radix `Dialog` with `modal` defaulting to true (src/components/ui/sheet.tsx),
+ * which sets `pointer-events: none` on the document while open — so a second,
+ * unconditional `activityBar.click()` can never land: Playwright reports
+ * `<html lang="en"> intercepts pointer events` and retries until the test
+ * times out. That is exactly what CI saw (167 retries, then a 90s timeout at
+ * the click after the return-to-root navigation).
+ *
+ * Note what the SAME CI log proves about the product, so nobody re-opens
+ * this as a product bug: at the moment of that failed click the bar had
+ * already rendered, visible and enabled, with
+ * `aria-label="Activity — 1 failed"` — i.e. the stopped child's span WAS in
+ * the root session's store, in a failed/interrupted state, after the
+ * navigation back. The mount gate and the store routing were both fine; only
+ * this spec's assumption that the panel closes on navigation was wrong.
+ *
+ * Clicking is still exercised on every path where the panel is genuinely
+ * closed (first open, and after the full `page.reload()` below, which resets
+ * the component state) — this only skips the click that cannot succeed.
+ */
+async function openActivityPanel(page: Page): Promise<void> {
+  const bar = page.locator('[data-testid="activity-bar"]')
+  await expect(bar).toBeVisible({ timeout: 15_000 })
+  if ((await bar.getAttribute('aria-expanded')) !== 'true') {
+    await bar.click()
+  }
+  // `aria-expanded` is bound directly to `panelOpen` (ActivityBar.tsx), so
+  // this is the panel's own open signal, not a proxy for it.
+  await expect(bar).toHaveAttribute('aria-expanded', 'true', { timeout: 15_000 })
+}
+
 test(
   'stopping a steered session row from the activity panel reaches a stopped state and survives reload',
   async ({ page }) => {
@@ -300,9 +350,7 @@ test(
     await openSessionByDeepLink(page, rootId)
 
     // Open the activity panel and find the seeded worker's row.
-    const activityBar = page.locator('[data-testid="activity-bar"]')
-    await expect(activityBar).toBeVisible({ timeout: 15_000 })
-    await activityBar.click()
+    await openActivityPanel(page)
 
     const row = page.locator('[data-testid="activity-row"]', { hasText: taskLabel })
     await expect(row).toBeVisible({ timeout: 15_000 })
@@ -321,9 +369,11 @@ test(
     await row.locator('[data-testid="activity-row-open"]').click()
     await sendCancelFrame(page, childId)
 
-    // Back to the root and re-open the panel to read the row's settled status.
+    // Back to the root and re-open the panel to read the row's settled
+    // status. The panel is still open here (the hash-only navigation above
+    // never unmounted ActivityBar) — see openActivityPanel's doc comment.
     await openSessionByDeepLink(page, rootId)
-    await activityBar.click()
+    await openActivityPanel(page)
     const rowAfterStop = page.locator('[data-testid="activity-row"]', { hasText: taskLabel })
 
     // `data-status` is `ActivityRow`'s SPAN axis (`item.status`, from
@@ -337,7 +387,13 @@ test(
     // explicitly rule out the states an interrupted-but-mishandled Stop
     // most often gets confused with.
     await expect(rowAfterStop).toHaveAttribute('data-status', 'interrupted', { timeout: 15_000 })
-    await expect(rowAfterStop).not.toHaveAttribute('data-status', 'failed')
+    // 'cancelled' (not 'failed') is the confusion this rules out: it is a
+    // REAL `ActivityStatus` member that the OTHER axis (lifecycleState) does
+    // carry for this exact Stop, so stamping it on `data-status` is the
+    // plausible mistake. ('failed' is not in the `ActivityStatus` union at
+    // all — src/hooks/useRunningActivity.ts — so asserting its absence was
+    // vacuous.)
+    await expect(rowAfterStop).not.toHaveAttribute('data-status', 'cancelled')
     await expect(rowAfterStop).not.toHaveAttribute('data-status', 'running')
     await expect(rowAfterStop.getByText('cancelled', { exact: true })).toBeVisible()
 
@@ -346,7 +402,11 @@ test(
     await page.reload()
     await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 })
     await waitForConnected(page, { timeout: 15_000 })
-    await activityBar.click()
+    // A full reload DOES reset ActivityBar's `panelOpen`, so this is the one
+    // place the click genuinely has to happen — and the bar only mounts at
+    // all if the stopped child's span came back from replay (ActivityBar's
+    // `hasFailedRecent` gate), which is precisely this assertion's point.
+    await openActivityPanel(page)
     const rowAfterReload = page.locator('[data-testid="activity-row"]', { hasText: taskLabel })
     await expect(rowAfterReload).toHaveAttribute('data-status', 'interrupted', { timeout: 15_000 })
     await expect(rowAfterReload.getByText('cancelled', { exact: true })).toBeVisible()
