@@ -251,7 +251,7 @@ User message → Agent turn → wants tool X
 - **Sandbox** is “containment if the agent (or a binary it runs) tries to leave the box.”  
 You can Allow `bash` and still have Landlock block `/etc/shadow`. You can Deny `bash` and never reach the sandbox for shell.
 
-**God mode** is the exception that collapses layers 1–4 (not audit / prompt-guard / rate limits). It lives under **Settings → Gateway**, which is easy to miss when you’re staring at Security.
+**God mode** is the exception that collapses layers 1–4 (not audit / prompt-guard / rate limits). It lives under **Settings → Gateway**, which is easy to miss when you’re staring at Security. *(Corrected 2026-09-25: not layer 2's guard — God Mode does not switch off the shell's outside-workspace write refusal or the deny rules; see docs/security.md.)*
 
 ---
 
@@ -316,7 +316,7 @@ Under Advanced you get:
 
 ### C. God mode is the nuclear option, off-tab
 
-God mode disables kernel sandbox, floors tool policies to allow, opens egress, kills shell-guard—while Security still shows “Must ask first” and a green-ish health story until doctor re-runs. Split surface = false confidence.
+God mode disables kernel sandbox, floors tool policies to allow, opens egress, kills shell-guard—while Security still shows “Must ask first” and a green-ish health story until doctor re-runs. Split surface = false confidence. *(Corrected 2026-09-25: “kills shell-guard” is wrong — God Mode does not switch off the shell guard or the deny rules; see docs/security.md.)*
 
 ### D. Restart semantics are uneven
 
