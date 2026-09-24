@@ -486,8 +486,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const { connection } = useConnectionStore.getState()
 
     if (connection) {
-      // #823 (§6.1): send the bucket's cursor for incremental catch-up; no
-      // longer wiped here — only session_snapshot wipes now (Q3).
+      // #823 §6.1: send the bucket's cursor; only session_snapshot wipes now (Q3).
       const sent = connection.send({ type: 'attach_session', session_id: sessionId, ...attachSessionCursorFields(sessionId) })
       if (!sent) {
         // Wave-1 Bug 2: leave ALL state, pending Auto choice included, untouched.
@@ -496,11 +495,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         )
         return false
       }
-      // ADR-092 UX fix: the attach frame is confirmed sent, so this IS a
-      // chat change — clear a pending Auto-approve choice here. (Release did
-      // this through resetChatBucketForReplay; #823 no longer wipes the
-      // bucket on attach, so the clear is called directly.)
-      clearPendingAutoApproveOnSessionChange()
+      clearPendingAutoApproveOnSessionChange() // ADR-092: a sent attach IS a chat change (see the doc above)
       set((state) => ({
         activeSessionId: sessionId,
         attachedSessionType: type,

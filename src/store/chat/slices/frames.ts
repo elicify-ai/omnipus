@@ -161,6 +161,64 @@ function applySeqGate(
   return 'drop-or-gap'
 }
 
+// ADR-091 D7/D10 + #823 Opus review round 2 item 1 ("update moved tools by
+// call_id"): applies a tool_call_result to this session's own flat tool
+// call. The live entry can be gone not because this result is genuinely
+// unmatched, but because §6.3's disconnect handling (clearStreamingState)
+// already BAKED it into its owning message's tool_calls array — a
+// disconnect no longer cancels a running tool call, so the real result can
+// still legitimately arrive afterward (catch-up, or a late live frame).
+// Before falling back to "unmatched" (which renders a scary standalone
+// error notice for a tool that's actually fine), check every message's own
+// baked tool_calls for this call_id and update it in place. Extracted from
+// handleFrame to keep it under its grandfathered line budget
+// (scripts/budgets/functions.txt) — no behaviour change.
+function applyToolCallResultFrame(
+  b: SessionChatState,
+  frame: ToolCallResultFrame,
+  clampedResult: ReturnType<typeof clampToolResult>,
+): Partial<SessionChatState> {
+  if (!b.toolCalls[frame.call_id]) {
+    for (const id of b.messageOrder) {
+      const msg = b.messagesById[id]
+      const idx = msg?.tool_calls?.findIndex((tc) => tc.id === frame.call_id) ?? -1
+      if (idx === -1) continue
+      return produce(b, (draft) => {
+        const tc = draft.messagesById[id].tool_calls![idx]
+        tc.result = clampedResult
+        tc.status = frame.status ?? 'success'
+        tc.duration_ms = frame.duration_ms
+        tc.error = frame.error
+      }) as Partial<SessionChatState>
+    }
+    return appendUnmatchedToolError(b, frame, clampedResult)
+  }
+  return produce(b, (draft) => {
+    const tc = draft.toolCalls[frame.call_id]
+    tc.result = clampedResult
+    tc.status = frame.status ?? 'success'
+    tc.duration_ms = frame.duration_ms
+    tc.error = frame.error
+  }) as Partial<SessionChatState>
+}
+
+// #823/ADR-091 merge review (Opus F4, low, plausible race): the Go side's
+// deliverSubagentStart persists the span to the session transcript BEFORE
+// emitting the live frame — not one atomic step. If a second tab's
+// attach_session binds in that exact window, its snapshot replay emits this
+// SAME span (reconstructed from the transcript, unsequenced) and the live
+// copy (sequenced, seq above whatever the bucket's cursor already had) also
+// arrives — one delegation, two subagent_start frames for the same span_id.
+// The subagent_start case ignores a frame whose span_id this reports as
+// already present: it never creates a second span and never touches the
+// existing one's state (a subagent_message/subagent_state may have updated
+// it since the first copy was applied).
+function bucketHasSpan(b: SessionChatState, spanId: string): boolean {
+  const entry = b.spanBySpanId?.[spanId]
+  const span = entry ? b.messagesById[entry.messageId]?.spans?.[entry.spanIdx] : undefined
+  return !!span && span.spanId === spanId
+}
+
 function appendUnmatchedToolError(
   bucket: SessionChatState,
   frame: ToolCallResultFrame,
@@ -1935,41 +1993,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           const clampedResult = clampToolResult(frame.result)
           // ADR-091 D7/D10: see case 'tool_call_start' — every result here
           // is for this session's own flat tool call; no span-nesting path.
-          withBucket(targetSid, (b) => {
-            if (!b.toolCalls[frame.call_id]) {
-              // #823 Opus review round 2 item 1 ("update moved tools by
-              // call_id"): the live entry can be gone not because this
-              // result is genuinely unmatched, but because §6.3's
-              // disconnect handling (clearStreamingState) already BAKED it
-              // into its owning message's tool_calls array — a disconnect
-              // no longer cancels a running tool call, so the real result
-              // can still legitimately arrive afterward (catch-up, or a
-              // late live frame). Before falling back to "unmatched" (which
-              // renders a scary standalone error notice for a tool that's
-              // actually fine), check every message's own baked tool_calls
-              // for this call_id and update it in place.
-              for (const id of b.messageOrder) {
-                const msg = b.messagesById[id]
-                const idx = msg?.tool_calls?.findIndex((tc) => tc.id === frame.call_id) ?? -1
-                if (idx === -1) continue
-                return produce(b, (draft) => {
-                  const tc = draft.messagesById[id].tool_calls![idx]
-                  tc.result = clampedResult
-                  tc.status = frame.status ?? 'success'
-                  tc.duration_ms = frame.duration_ms
-                  tc.error = frame.error
-                }) as Partial<SessionChatState>
-              }
-              return appendUnmatchedToolError(b, frame, clampedResult)
-            }
-            return produce(b, (draft) => {
-              const tc = draft.toolCalls[frame.call_id]
-              tc.result = clampedResult
-              tc.status = frame.status ?? 'success'
-              tc.duration_ms = frame.duration_ms
-              tc.error = frame.error
-            }) as Partial<SessionChatState>
-          })
+          withBucket(targetSid, (b) => applyToolCallResultFrame(b, frame, clampedResult))
           break
         }
 
@@ -1977,25 +2001,8 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           if (!targetSid) break
           const sf = frame as WsSubagentStartFrame
           withBucket(targetSid, (b) => {
-            // #823/ADR-091 merge review (Opus F4, low, plausible race): the
-            // Go side's deliverSubagentStart persists the span to the
-            // session transcript BEFORE emitting the live frame — not one
-            // atomic step. If a second tab's attach_session binds in that
-            // exact window, its snapshot replay emits this SAME span
-            // (reconstructed from the transcript, unsequenced) and the live
-            // copy (sequenced, seq above whatever the bucket's cursor
-            // already had) also arrives — one delegation, two
-            // subagent_start frames for the same span_id. Dedupe by
-            // span_id: if the index already resolves to a real span, this
-            // is a duplicate — ignore it outright. Never create a second
-            // span, and never touch the existing one's state (a
-            // subagent_message/subagent_state may have updated it since the
-            // first copy was applied).
-            const dupEntry = b.spanBySpanId?.[sf.span_id]
-            const dupSpan = dupEntry ? b.messagesById[dupEntry.messageId]?.spans?.[dupEntry.spanIdx] : undefined
-            if (dupSpan && dupSpan.spanId === sf.span_id) {
-              return {}
-            }
+            // Opus F4 — see bucketHasSpan's own doc comment.
+            if (bucketHasSpan(b, sf.span_id)) return {}
             return produce(b, (draft) => {
               // ADR-070 §2.1/F2: a bare findLastAssistantMessageId scan here
               // would reattach this span to a closed, closedBySteer bubble

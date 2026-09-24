@@ -180,6 +180,25 @@ interface OutboundLifecycleContext {
   runtime: { agentIdAtLastMintSend: string | null }
 }
 
+// #823: called when the connection drops. Extracted from
+// createOutboundLifecycleSlice to keep it under its grandfathered line budget
+// (scripts/budgets/functions.txt) — no behaviour change.
+//   - Opus review round 2 item 7: any gap re-attach in flight for this
+//     connection is moot the instant it drops — reconnecting goes through the
+//     normal attach_session path (session.ts::attachToSession), not this
+//     guard, so a stale entry would just block the NEXT gap's re-attach
+//     forever after a future reconnect.
+//   - N4: any replay_error retry timer scheduled for a PREVIOUS connection
+//     would send its eventual attach_session over a connection that no
+//     longer exists — same "reconnect goes through the normal path" reasoning.
+function clearCatchUpSideChannelsOnDisconnect(): void {
+  inFlightReattachSids.clear()
+  for (const sid of Object.keys(replayErrorRetryTimers)) {
+    clearTimeout(replayErrorRetryTimers[sid])
+    delete replayErrorRetryTimers[sid]
+  }
+}
+
 export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, abandonPendingKickoffInternal, maybeDrainNext, runtime }: OutboundLifecycleContext): OutboundLifecycleSlice {
   return {
     enqueueOutboundMessage: (content, queuedMessage) => {
@@ -906,20 +925,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // outstanding cancel — stale entries here would otherwise persist across
       // reconnects and could misattribute an unrelated later frame.
       pendingCancelAckSids.clear()
-      // Opus review round 2 item 7: any gap re-attach in flight for this
-      // connection is moot the instant it drops — reconnecting goes through
-      // the normal attach_session path (session.ts::attachToSession), not
-      // this guard, so a stale entry here would just block the NEXT gap's
-      // re-attach forever after a future reconnect.
-      inFlightReattachSids.clear()
-      // N4: any replay_error retry timer scheduled for a PREVIOUS connection
-      // would send its eventual attach_session over a connection that no
-      // longer exists — the SAME "reconnect goes through the normal path,
-      // not this side channel" reasoning as inFlightReattachSids just above.
-      for (const sid of Object.keys(replayErrorRetryTimers)) {
-        clearTimeout(replayErrorRetryTimers[sid])
-        delete replayErrorRetryTimers[sid]
-      }
+      clearCatchUpSideChannelsOnDisconnect()
       // S6: a socket drop means no more frames — done, error, or otherwise —
       // are coming on THIS connection for any outstanding replay either. A
       // bucket that is mid-replay (isReplaying:true) but not yet
