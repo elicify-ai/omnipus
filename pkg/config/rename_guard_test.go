@@ -175,7 +175,7 @@ func TestNoAgentConfigWorkspaceIdentifier(t *testing.T) {
 //     declared later in the SAME file are a package-private staging format
 //     used only to shuttle data between the two schemas before
 //     ToStandardConfig() writes the REAL config.AgentConfig/AgentDefaults —
-//     which correctly uses .Home (openclaw_config.go:889,916 — NOT
+//     which correctly uses .Home (openclaw_config.go:884,919 — NOT
 //     allowlisted, and must never be added here).
 //   - (retired) pkg/sandbox/sandbox.go's comment heading ("// Workspace: full
 //     RWX ...", a prose label), not a struct field or composite literal.
@@ -252,10 +252,22 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	"pkg/migrate/sources/openclaw/openclaw_config.go:374": true,
 	"pkg/migrate/sources/openclaw/openclaw_config.go:377": true,
 	"pkg/migrate/sources/openclaw/openclaw_config.go:416": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:863": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:864": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:890": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:925": true,
+	// (Re-pointed 2026-09-24: the ADR-092 removal-lane retirement of
+	// OpenClaw's Exec/ExecConfig deny-pattern migration (dead exports —
+	// ADR-036's config.ExecConfig is gone) removed 6 lines above these four
+	// entries (863/864/890/925 -> 857/858/884/919); per the fragility note
+	// above, a reviewed shift means re-pointing, not a regression. Same
+	// four call sites as before: entry.Workspace/agentCfg.Workspace is the
+	// package-private staging AgentConfig (this file's own type, not
+	// config.AgentConfig), and the two `.Workspace` reads on the right of
+	// a `.Home =`/`Home:` assignment are OpenClawAgentDefaults.Workspace /
+	// the same staging AgentConfig.Workspace being translated INTO the
+	// real config.AgentConfig/AgentDefaults .Home field, not reintroducing
+	// the renamed identifier.)
+	"pkg/migrate/sources/openclaw/openclaw_config.go:857": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:858": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:884": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:919": true,
 
 	"pkg/migrate/sources/openclaw/openclaw_config_test.go:250": true,
 	"pkg/migrate/sources/openclaw/openclaw_config_test.go:251": true,
