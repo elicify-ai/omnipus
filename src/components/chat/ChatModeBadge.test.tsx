@@ -9,7 +9,10 @@
  * sandbox -> "Auto — no sandbox" (still Auto, a caution) with an explanatory
  * tooltip (the Tooltip primitive's actual production use case). The old
  * "Auto → Ask" text (Auto silently falling back to Ask with no sandbox) is
- * gone.
+ * gone. The tooltip itself was reworded again the same day
+ * (pkg/tools/shell_no_sandbox_gate.go): shell commands with no kernel
+ * sandbox now ASK FIRST unless read-only or operator-allowed, not "checked
+ * by reading the command text only".
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -106,8 +109,14 @@ describe('ChatModeBadge — three states', () => {
     await waitFor(() => {
       const tooltip = screen.getByRole('tooltip')
       expect(tooltip).toHaveTextContent(
-        'No kernel sandbox is enforcing. Safe tool calls still run without asking, but shell commands are checked by reading the command text only.',
+        'No kernel sandbox is enforcing. Safe tool calls still run without asking; shell commands ask first, except read-only ones and commands an operator rule allows.',
       )
+      // 2026-09-24 shell-no-sandbox-gate rewording (founder decision A):
+      // shell commands under Auto with no kernel sandbox now ASK FIRST
+      // unless read-only or operator-allowed — the old "checked by reading
+      // the command text only" wording described stale behaviour and must
+      // never reappear.
+      expect(tooltip).not.toHaveTextContent('checked by reading the command text only')
     })
   })
 

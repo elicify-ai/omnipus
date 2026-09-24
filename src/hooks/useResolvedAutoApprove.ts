@@ -58,9 +58,9 @@ export interface ResolvedAutoApprove {
  * enforcing kernel sandbox — it is effective for every tool on every
  * platform regardless of `kernel_sandbox_active`. `kernelSandboxActive` is
  * exposed purely so a caller can WARN ("no kernel sandbox — shell commands
- * are checked by reading the command text only"); it must never be folded
- * into `resolved`. `godModeActive` remains a separate, stronger floor a
- * caller must check ahead of `resolved`.
+ * ask first, except read-only ones and commands an operator rule allows");
+ * it must never be folded into `resolved`. `godModeActive` remains a
+ * separate, stronger floor a caller must check ahead of `resolved`.
  */
 export function useResolvedAutoApprove(): ResolvedAutoApprove {
   const activeAgentId = useSessionStore((s) => s.activeAgentId)

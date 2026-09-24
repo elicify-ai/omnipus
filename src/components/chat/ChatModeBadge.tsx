@@ -23,8 +23,11 @@ import { useResolvedAutoApprove } from '@/hooks/useResolvedAutoApprove'
  *                                               safe tool calls still run
  *                                               without asking), with a
  *                                               tooltip explaining that shell
- *                                               commands are checked by
- *                                               reading the command text only.
+ *                                               commands now ask first unless
+ *                                               they are read-only or covered
+ *                                               by an operator allow rule
+ *                                               (2026-09-24 founder decision A,
+ *                                               pkg/tools/shell_no_sandbox_gate.go).
  *
  * Reads the same `useResolvedAutoApprove` the composer's AutoApprovePicker
  * does, so the two can never disagree about the chat's current state.
@@ -62,7 +65,7 @@ export function ChatModeBadge({ className }: { className?: string }) {
   return (
     <Tooltip
       data-testid="chat-mode-badge-trigger"
-      content="No kernel sandbox is enforcing. Safe tool calls still run without asking, but shell commands are checked by reading the command text only."
+      content="No kernel sandbox is enforcing. Safe tool calls still run without asking; shell commands ask first, except read-only ones and commands an operator rule allows."
     >
       <Badge variant="warning" className={className} data-testid="chat-mode-badge">
         Auto — no sandbox

@@ -17,7 +17,7 @@ const meta = {
   title: 'Design System/Tooltip',
   component: Tooltip,
   args: {
-    content: 'No kernel sandbox is enforcing. Safe tool calls still run without asking, but shell commands are checked by reading the command text only.',
+    content: 'No kernel sandbox is enforcing. Safe tool calls still run without asking; shell commands ask first, except read-only ones and commands an operator rule allows.',
     // Satisfies TooltipProps' required `children` for CSF3's story-arg
     // typing — the render below supplies the actual trigger JSX directly
     // and never reads `args.children`.

@@ -51,7 +51,7 @@ Below the switch, **Always asks when set to Ask** is a collapsed list — click 
 
 And a small note underneath *(2026-09-24: the note's wording changed twice — see "Auto-approve and the kernel sandbox" below)*:
 
-> Without a kernel sandbox (for example on Windows), most shell commands ask first. A short list of read-only commands, and any command an operator explicitly allowed, still run without a prompt.
+> Without a kernel sandbox (for example on Windows), shell commands ask first, except read-only ones and commands an operator rule allows.
 <!-- verify-ui-string -->
 
 That is a summary. The full list of tools that still ask, one row per tool, is under "What Auto-approve runs and what still asks" below.
@@ -80,8 +80,8 @@ The badge at the top of a chat shows which state applies to that chat right now.
 | **God Mode** | God Mode is on. No sandbox, and tools set to Ask in the global policies run without a prompt. A tool that an agent itself sets to Ask still asks, and Auto-approve is off. |
 | **Ask** | Auto-approve is off for this chat. Every tool set to Ask prompts. |
 | **Auto** | Auto-approve is on and a kernel sandbox is active. Safe calls run; the rest ask. |
-| **Auto — shell asks (no sandbox)** | Auto-approve is on, but there is no active kernel sandbox. Every other tool's safe calls still run as usual; the shell only auto-runs a read-only command or one an operator's rule explicitly allows — everything else asks first (see above). The badge's tooltip explains this. |
-<!-- verify-ui-string: badge label "Auto — shell asks (no sandbox)" and its tooltip text (2026-09-24 rewording — was "Auto — no sandbox") -->
+| **Auto — no sandbox** | Auto-approve is on, but there is no active kernel sandbox. Every other tool's safe calls still run as usual; the shell only auto-runs a read-only command or one an operator's rule explicitly allows — everything else asks first (see above). The badge's tooltip explains this. |
+<!-- verify-ui-string: badge label "Auto — no sandbox" and its tooltip text (2026-09-24 rewording of the tooltip only — the label itself never changed) -->
 
 *(Before 2026-09-24 this badge read "Auto → Ask" and Auto-approve had no effect at all in that state. That is no longer how it works — see "Auto-approve and the kernel sandbox" above.)*
 
@@ -188,7 +188,7 @@ These controls answer different questions.
 | Filesystem model | What agents may read and run | You want open access or a confined list of locations |
 | Shell workspace limit | Whether a command may name paths outside the working folder | You want a command-text check that still applies even when the sandbox is off |
 
-The process sandbox offers three modes. **Enforce** blocks violations. **Permissive** records violations without blocking them. **Off** removes operating-system protection, but it does not disable the shell workspace limit. Only Enforce counts as an active kernel sandbox. *(Changed 2026-09-24 — see "Auto-approve and the kernel sandbox" above.)* In Permissive or Off, the chat header shows **Auto — shell asks (no sandbox)**: Auto-approve still runs for every other tool, but the shell only auto-runs a read-only command or one an operator's rule explicitly allows — every other shell command asks first, with no operating-system check behind the text-based one.
+The process sandbox offers three modes. **Enforce** blocks violations. **Permissive** records violations without blocking them. **Off** removes operating-system protection, but it does not disable the shell workspace limit. Only Enforce counts as an active kernel sandbox. *(Changed 2026-09-24 — see "Auto-approve and the kernel sandbox" above.)* In Permissive or Off, the chat header shows **Auto — no sandbox**: Auto-approve still runs for every other tool, but the shell only auto-runs a read-only command or one an operator's rule explicitly allows — every other shell command asks first, with no operating-system check behind the text-based one.
 
 The **Confined** filesystem model limits reads and execution to listed locations. The **Open** model lets agents read and run anything your account can reach, apart from Omnipus secret files. Writes remain limited to the workspace and mounted folders. Changes to the filesystem model take effect after a gateway restart.
 
@@ -255,7 +255,7 @@ Worked example: with the `ask`-before-`npm publish` rule above and no rule at al
 
 ### How a rule interacts with Auto-approve and God Mode
 
-The columns below match the badge at the top of the chat. **Auto** also covers **Auto — shell asks (no sandbox)**: a command rule's `allow`/`ask`/`deny` decision applies the same whether or not a kernel sandbox is active — it is a check on the command's text, not something the kernel sandbox does or does not add. *(Before 2026-09-24, this row said "Ask also covers Auto → Ask" — Auto-approve had no effect without a sandbox back then, so that state behaved like Ask. It no longer does. The badge's own name changed again later the same day — see "Auto-approve and the kernel sandbox" above — when Auto-approve with no sandbox became stricter about which shell commands still skip the prompt.)*
+The columns below match the badge at the top of the chat. **Auto** also covers **Auto — no sandbox**: a command rule's `allow`/`ask`/`deny` decision applies the same whether or not a kernel sandbox is active — it is a check on the command's text, not something the kernel sandbox does or does not add. *(Before 2026-09-24, this row said "Ask also covers Auto → Ask" — Auto-approve had no effect without a sandbox back then, so that state behaved like Ask. It no longer does. What "Auto — no sandbox" means changed again later the same day — see "Auto-approve and the kernel sandbox" above — when Auto-approve with no sandbox became stricter about which shell commands still skip the prompt.)*
 
 | Rule action | Ask | Auto | God Mode |
 |---|---|---|---|

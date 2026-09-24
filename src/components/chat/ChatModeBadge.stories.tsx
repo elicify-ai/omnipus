@@ -99,7 +99,7 @@ export const AutoNoSandbox: Story = {
     await userEvent.hover(trigger)
     await expect(canvas.getByRole('tooltip')).toBeVisible()
     await expect(canvas.getByRole('tooltip')).toHaveTextContent(
-      'No kernel sandbox is enforcing. Safe tool calls still run without asking, but shell commands are checked by reading the command text only.',
+      'No kernel sandbox is enforcing. Safe tool calls still run without asking; shell commands ask first, except read-only ones and commands an operator rule allows.',
     )
   },
 }

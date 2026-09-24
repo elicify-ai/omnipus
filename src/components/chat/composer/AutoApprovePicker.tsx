@@ -125,7 +125,7 @@ export function AutoApprovePicker({
   // tooltip rather than a second visual element, matching ChatModeBadge's
   // "Auto — no sandbox" wording so the two never disagree.
   const autoTooltipContent = resolved && !kernelSandboxActive
-    ? `${baseTooltipContent}. No kernel sandbox is enforcing — shell commands are checked by reading the command text only.`
+    ? `${baseTooltipContent}. No kernel sandbox — shell commands ask first unless read-only or operator-allowed.`
     : baseTooltipContent
 
   // God Mode is a stronger floor than this chat's own Auto choice — it runs
