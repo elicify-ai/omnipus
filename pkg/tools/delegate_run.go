@@ -356,7 +356,7 @@ func (dt *delegateToolExecuteRun) validateRequest() (*ToolResult, bool) {
 			dt.snap.Notes = s
 		}
 	}
-	if err := ValidateContextSnapshot(dt.snap, dt.t.snapshotMaxBytes, dt.t.snapshotMaxRefs); err != nil {
+	if err := ValidateContextSnapshot(dt.snap, defaultSnapshotMaxBytes, defaultSnapshotMaxRefs); err != nil {
 		return ErrorResult(err.Error()).WithError(err), true
 	}
 	goal, err := parseDelegateGoal(dt.args["criteria"], dt.args["dod"])

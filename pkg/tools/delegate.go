@@ -292,9 +292,6 @@ type DelegateTool struct {
 	// anything new on this field — read the config key directly instead.
 	requireParentAgentID func() bool
 
-	snapshotMaxBytes int
-	snapshotMaxRefs  int
-
 	// steerRateMu/steerRateWindows back the steer/respond rate cap (ADR-053
 	// §Contract Surface "Caps": 6/min, 16 KiB — session_messaging.steer_rate/
 	// steer_body), keyed by target session_id. Mirrors
@@ -460,15 +457,6 @@ func (t *DelegateTool) SetCancelGrace(d time.Duration) {
 	if d > 0 {
 		t.cancelGrace = d
 	}
-}
-
-// SetSnapshotCaps overrides the curated context snapshot's discretionary-
-// portion caps (session_messaging config — snapshot_max_bytes/
-// snapshot_max_refs, R§8.5). Zero/negative values fall back to the ADR
-// §Contract Surface defaults.
-func (t *DelegateTool) SetSnapshotCaps(maxBytes, maxRefs int) {
-	t.snapshotMaxBytes = maxBytes
-	t.snapshotMaxRefs = maxRefs
 }
 
 // SetClock overrides the tool's time source for deterministic tests.
