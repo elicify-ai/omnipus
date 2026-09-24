@@ -35,6 +35,8 @@ import (
 // per-connection eventForwarder path.
 func (h *WSHandler) hubSyncTap(evt agent.Event) {
 	switch evt.Kind {
+	case agent.EventKindTurnEnd:
+		h.hubTurnEnd(evt)
 	case agent.EventKindSubTurnSpawn:
 		h.hubSubTurnSpawn(evt)
 	case agent.EventKindSubTurnEnd:
@@ -113,6 +115,12 @@ func (h *WSHandler) hubPublishMetaAlsoTo(sessionID, frameType string, meta hubFr
 		return
 	}
 	h.hubs.getOrCreate(sessionID).publishMeta(meta, frame)
+	if meta.turnID != "" && meta.kind != hubKindToken {
+		// Token items come only from a web streamer, whose own done (or
+		// abandoned-turn release) clears them; the rest may belong to a turn
+		// with no streamer at all — see hubTurnEnd.
+		h.hubs.noteTurnSession(meta.turnID, sessionID)
+	}
 	if alsoTo != nil && !h.connBoundToSession(alsoTo, sessionID) {
 		sendRawFrameBytes(alsoTo, frameType, frame)
 	}
@@ -557,4 +565,32 @@ func (h *WSHandler) hubLoopStatusChanged(evt agent.Event) {
 		return
 	}
 	h.hubBroadcastWithSequencedCopy(p.SessionID, string(generated.WsFrameTypeLoopStatus), data)
+}
+
+// hubTurnEnd forgets a finished turn's projection items in every hub it left
+// them in, unless a web streamer holds that session's live-stream claim for
+// the turn — that turn is closed by its own `done`, published after TurnEnd
+// once its answer is persisted (merge-review F1). A turn with no web
+// streamer (an ADR-091 steered child — the launcher gives it no channel — or
+// a Telegram/system task session) never publishes a done, so without this
+// its tool cards stayed in the projection forever and pinned the hub against
+// idle eviction. Everything it published is already persisted by the time
+// the turn ends (tool calls on completion, errors and media as transcript
+// entries), so a later snapshot's transcript read covers it. Emits no frame
+// and never touches spans (ADR-091: a child outlives its parent's turn).
+func (h *WSHandler) hubTurnEnd(evt agent.Event) {
+	turnID := evt.Meta.TurnID
+	if turnID == "" || h.hubs == nil {
+		return
+	}
+	for _, sid := range h.hubs.takeTurnSessions(turnID) {
+		if v, ok := h.streamOwners.Load(sid); ok {
+			if claim, ok := v.(streamOwnerClaim); ok && claim.turnID == turnID {
+				continue
+			}
+		}
+		if hub := h.hubs.lookup(sid); hub != nil {
+			hub.forgetTurn(turnID)
+		}
+	}
 }

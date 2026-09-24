@@ -186,8 +186,10 @@ func (h *WSHandler) eventForwarder(wc *wsConn, _ string, sub agent.EventSubscrip
 			// Not part of the live WS wire protocol — this forwarder only
 			// translates the kinds handled above into browser frames.
 			// EventKindTurnStart/TurnEnd joined this ignored list with the
-			// ADR-091 UAT defect 2 fix: their only consumer was the retired
-			// orphan watchdog (see this file's top-of-file comment).
+			// ADR-091 UAT defect 2 fix: their only consumer here was the
+			// retired orphan watchdog (see this file's top-of-file comment).
+			// TurnEnd is consumed once per event by the hub sync tap instead
+			// (websocket_forward_hub.go's hubTurnEnd), which emits no frame.
 			// Behavior-preserving for every other kind here: previously
 			// these fell through the switch unmatched (no default case
 			// existed), which is a silent no-op identical to this explicit,

@@ -154,6 +154,49 @@ type hubRegistry struct {
 	// its own goroutine (evictIdle can run under a publisher's locks), so
 	// per-session state kept outside the hub can be released too.
 	onEvict func(sessionIDs []string)
+
+	// turnMu guards turnSessions: for each turn that published a tool call,
+	// media or error item (the projection items keyed by turn id), the
+	// sessions whose hubs hold them. hubTurnEnd pops the turn's entry so it
+	// can forget a turn that will never publish a `done` (a steered child
+	// or a non-web session has no web streamer) — TurnEndPayload.SessionID
+	// is the ROUTING (root) session, not where a steered child's own items
+	// live (merge-review F1).
+	turnMu       sync.Mutex
+	turnSessions map[string]map[string]struct{}
+}
+
+// noteTurnSession records that turnID left projection items in sessionID's
+// hub (see hubRegistry.turnSessions).
+func (r *hubRegistry) noteTurnSession(turnID, sessionID string) {
+	if turnID == "" || sessionID == "" {
+		return
+	}
+	r.turnMu.Lock()
+	defer r.turnMu.Unlock()
+	if r.turnSessions == nil {
+		r.turnSessions = make(map[string]map[string]struct{})
+	}
+	set := r.turnSessions[turnID]
+	if set == nil {
+		set = make(map[string]struct{}, 1)
+		r.turnSessions[turnID] = set
+	}
+	set[sessionID] = struct{}{}
+}
+
+// takeTurnSessions returns and forgets the sessions noteTurnSession recorded
+// for turnID.
+func (r *hubRegistry) takeTurnSessions(turnID string) []string {
+	r.turnMu.Lock()
+	defer r.turnMu.Unlock()
+	set := r.turnSessions[turnID]
+	delete(r.turnSessions, turnID)
+	out := make([]string, 0, len(set))
+	for sid := range set {
+		out = append(out, sid)
+	}
+	return out
 }
 
 // hubIdleSweepInterval bounds how often submit's piggybacked sweep actually
