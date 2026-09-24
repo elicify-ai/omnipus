@@ -157,7 +157,7 @@ global default (ON) and the tool named is on "Ask" for your agent.
 | T4-10 | Same identical call as T4-09 in a **new chat**. | A card appears (grants are per chat). | FR-017, FR-058 | Neg |
 | T4-11 | Same tool, different arguments, in the T4-09 chat. | A card appears (grant is exact-arguments). | FR-058 | Neg |
 | T4-12 | Let a card time out without clicking. | The call is refused when the countdown ends; the agent is told. | FR-023 | Neg |
-| T4-13 | Agent → Tools & Permissions → tick "Never auto-approve for this agent". New chat, Auto switch ON, `write_file notes/t4.md`. | A card appears — the agent's own off-switch wins. | FR-002 | Neg |
+| T4-13 | Agent → Tools & Permissions → tick "Never auto-approve for this agent". New chat, Auto switch ON, `write_file notes/t4.md`. | **No card** — the chat switch may turn Auto on for its own chat even when the agent has it off (a person is present). The agent box only wins for a delegated agent (T6-08). | FR-002 (corrected 2026-09-23); docs/security.md | Neg |
 | T4-14 | Untick it again; repeat in a new chat. | No card. | FR-002 | |
 | T4-15 | Look for a list of your "Always Allow" grants anywhere in the UI. | There is none (by design; the audit log is the record). | FR-028 | |
 
