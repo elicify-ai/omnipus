@@ -321,8 +321,16 @@ func newE2EHarnessCustom(
 	// grandchild's follow-up sat in the queue for ever and its ancestors
 	// never re-entered, so every level above the deepest stayed `running`.
 	runCtx, stopLoop := context.WithCancel(context.Background())
-	go func() { _ = al.Run(runCtx) }()
-	t.Cleanup(stopLoop)
+	loopDone := make(chan struct{})
+	go func() { defer close(loopDone); _ = al.Run(runCtx) }()
+	// Cancel AND WAIT. t.Cleanup runs BEFORE t.TempDir's own removal, so a
+	// loop still draining its inbox keeps writing into a directory Go is
+	// deleting: "TempDir RemoveAll cleanup: directory not empty" fails the
+	// test for a reason unrelated to anything it asserts.
+	t.Cleanup(func() {
+		stopLoop()
+		<-loopDone
+	})
 
 	harness := &e2eHarness{
 		al:   al,

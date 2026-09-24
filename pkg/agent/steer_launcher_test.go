@@ -1058,8 +1058,12 @@ func TestLaunch_RequestedSkillGranted_Proceeds(t *testing.T) {
 	l := NewSteerLauncher(al)
 
 	res, err := l.Launch(context.Background(), steer.LaunchRequest{
-		TargetAgentID:  testDefaultAgentID,
-		Task:           "pull the latest finance headlines",
+		TargetAgentID: testDefaultAgentID,
+		Task:          "pull the latest finance headlines",
+		// Origin is REQUIRED: persistLocked rejects an empty kind, and both
+		// production callers always set one (delegate_run.go -> delegate,
+		// task_executor.go -> task). This test predated that validation.
+		Origin:         steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-skill-granted"},
 		RequestedSkill: "finance-news",
 	})
 	if err != nil {
