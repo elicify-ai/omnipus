@@ -11,6 +11,7 @@
 package tools
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -64,6 +65,13 @@ func TestEnforceShellPermissionMode_R4_CurlWgetOutputEscalatesUnderAuto(t *testi
 		"wget -O /etc/x https://a",
 		"curl --output /etc/x https://a",
 	}
+	// Grants are recorded against the real path, the same way the fixture
+	// resolves its own directories. On macOS /etc is a link to /private/etc,
+	// so the grant for /etc/x is /private/etc/x there and /etc/x elsewhere.
+	wantPath := "/etc/x"
+	if realEtc, err := filepath.EvalSymlinks("/etc"); err == nil {
+		wantPath = filepath.Join(realEtc, "x")
+	}
 	for _, cmd := range cases {
 		t.Run(cmd, func(t *testing.T) {
 			tool, ctx, _, _ := permTestFixture(t, ShellModeAuto, true)
@@ -75,11 +83,11 @@ func TestEnforceShellPermissionMode_R4_CurlWgetOutputEscalatesUnderAuto(t *testi
 
 			found := false
 			for _, g := range perm.pathGrants {
-				if g.Path == "/etc/x" && g.Access&fspolicy.PathGrantAccessWrite != 0 {
+				if g.Path == wantPath && g.Access&fspolicy.PathGrantAccessWrite != 0 {
 					found = true
 				}
 			}
-			assert.True(t, found, "%q: expected a WRITE grant for /etc/x, got %v", cmd, perm.pathGrants)
+			assert.True(t, found, "%q: expected a WRITE grant for %s, got %v", cmd, wantPath, perm.pathGrants)
 		})
 	}
 }
