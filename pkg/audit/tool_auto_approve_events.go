@@ -10,7 +10,11 @@
 // reason, paths}`. Emitted once for each call Auto ran without a prompt,
 // through `audit.EmitEntry`, so a failed write shows up in the degraded
 // count. Calls that were prompted or denied keep their existing
-// `tool.policy.ask.*` rows."
+// `tool.policy.ask.*` rows." Details gained a `kernel_sandbox` bool
+// [2026-09-24, founder decision]: once Auto stopped requiring an enforcing
+// kernel sandbox (ADR-092 D1/J13, revised), this is the only per-call record
+// of whether the kernel was actually confining the process this call ran
+// (or spawned) under.
 //
 // This file supplies the constant and the Emit* helper. The call sites
 // (the Auto verdict path in pkg/agent's loop_policy.go /
@@ -46,6 +50,13 @@ const EventToolAutoApproved = "tool.auto_approved"
 //     omitted from Details when empty. Never includes file CONTENTS or any
 //     other argument value: this event records what was approved and why,
 //     not the payload the tool then acted on.
+//   - kernelSandbox records whether a kernel sandbox (Landlock/Seatbelt) was
+//     enforcing for spawned children at the moment this call was
+//     auto-approved [2026-09-24, founder decision]: Auto no longer requires
+//     an enforcing kernel sandbox (ADR-092 D1/J13, revised), so this call may
+//     have run unconfined by the kernel. Recording it here — regardless of
+//     that outcome — is how an operator finds every auto-approval that ran
+//     without kernel confinement, after the fact.
 //
 // Decision is always DecisionAllow: this event exists only for calls Auto
 // let through. A denial or a prompted call is recorded by the existing
@@ -55,11 +66,13 @@ func EmitToolAutoApproved(
 	logger *Logger,
 	agentID, sessionID, tool, class, reason string,
 	paths []string,
+	kernelSandbox bool,
 ) {
 	_ = ctx
 	details := map[string]any{
-		"tool":  tool,
-		"class": class,
+		"tool":           tool,
+		"class":          class,
+		"kernel_sandbox": kernelSandbox,
 	}
 	if reason != "" {
 		details["reason"] = reason

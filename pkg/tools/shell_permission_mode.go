@@ -91,8 +91,12 @@ type ShellMode string
 const (
 	// ShellModeAsk is the tightest mode: every shell command needs approval.
 	ShellModeAsk ShellMode = "ask"
-	// ShellModeAuto runs a command while the kernel sandbox confines it;
-	// anything the sandbox does not already cover asks first (D7/D8).
+	// ShellModeAuto runs a command whose D7 filesystem and D8 network
+	// pre-flights clear; anything they flag asks first. When a kernel
+	// sandbox is enforcing, it confines whatever the pre-flights and the
+	// text-based guards miss. [2026-09-24, founder decision] Auto no longer
+	// requires an enforcing kernel sandbox — without one, the pre-flights and
+	// guards are the only checks (see resolveShellMode's doc comment).
 	ShellModeAuto ShellMode = "auto"
 	// ShellModeGod is the loosest mode: no approvals, no kernel sandbox.
 	// D3 deny rules are the one thing that still applies (D1).
@@ -106,11 +110,18 @@ const (
 // ShellPermissionGate (loop_policy.go), whose liveMode resolves: God Mode
 // active -> God; bash's own tool policy not resolving to "ask" -> Ask;
 // "ask" + Auto-approve (cfg.Sandbox.AutoApprove, the agent's
-// AutoApproveDisabled, and the chat's SessionModeStore modifier) off, or on
-// but no kernel sandbox installed, -> Ask; "ask" + Auto-approve on + a
-// kernel sandbox installed -> Auto. Auto is a switch that only matters once
+// AutoApproveDisabled, and the chat's SessionModeStore modifier) off -> Ask;
+// "ask" + Auto-approve on -> Auto. Auto is a switch that only matters once
 // bash's tool policy has already resolved to "ask" — it is not a third mode
 // selected independently of Ask/God.
+//
+// [2026-09-24, founder decision] Auto no longer additionally requires an
+// enforcing kernel sandbox: liveMode used to fold in
+// sandbox.TurnPolicyBaseInstalled() as a fourth condition (folding to Ask
+// when no kernel sandbox was enforcing); that fold is gone. Auto now applies
+// on Windows, when a sandbox failed to start, and in permissive mode, same
+// as everywhere else — governed only by the D7/D8 pre-flights and the
+// text-based guards where no kernel sandbox exists to confine the child.
 type ShellModeResolver interface {
 	ResolveShellMode(ctx context.Context, agentID, sessionID string) ShellMode
 }
@@ -159,11 +170,19 @@ func (r *shellPermissionResult) grants() []fspolicy.PathGrant {
 	return r.pathGrants
 }
 
-// resolveShellMode resolves the effective ADR-092 mode for this call,
-// folding in FR-008's Auto->Ask kernel-sandbox fallback: "Where no active
-// kernel sandbox is active, Auto behaves like Ask" — sandbox.
-// TurnPolicyBaseInstalled() is the same predicate turnKernelPolicy already
-// uses to decide whether a kernel policy is in force at all.
+// resolveShellMode resolves the effective ADR-092 mode for this call.
+//
+// [2026-09-24, founder decision] FR-008's original Auto->Ask kernel-sandbox
+// fallback is REMOVED: Auto no longer requires an enforcing kernel sandbox.
+// t.shellMode.ResolveShellMode's own verdict (ShellPermissionGate.liveMode,
+// which reads the single shared autoApproveActive predicate in
+// pkg/agent/auto_approve_gate.go) is returned as-is. Whether or not a kernel
+// sandbox is actually enforcing, Auto mode still runs the D7 filesystem and
+// D8 network pre-flights below (enforceShellPermissionMode) — without a
+// kernel sandbox those pre-flights, plus the text-based guards
+// (guardCommand, substitutionGuard, D3 rules), are the ONLY checks on what
+// the command touches; see ADR-092's 2026-09-24 revision note for the
+// accepted risk the founder was told and chose.
 //
 // A nil resolver (unwired dependency — a test that constructs ExecTool
 // directly, or a build that has not yet wired ExecToolDeps.ShellMode) fails
@@ -176,11 +195,7 @@ func (t *ExecTool) resolveShellMode(ctx context.Context) ShellMode {
 	if t.shellMode == nil {
 		return ShellModeAsk
 	}
-	mode := t.shellMode.ResolveShellMode(ctx, ToolAgentID(ctx), ToolTranscriptSessionID(ctx))
-	if mode == ShellModeAuto && !sandbox.TurnPolicyBaseInstalled() {
-		return ShellModeAsk
-	}
-	return mode
+	return t.shellMode.ResolveShellMode(ctx, ToolAgentID(ctx), ToolTranscriptSessionID(ctx))
 }
 
 // shellRuleOptions builds the shellrule.Options every D3 evaluation in this

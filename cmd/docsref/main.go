@@ -87,11 +87,14 @@ func renderTools(groups []toolGroup) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "%s\n\n# Built-in tools\n\n", generatedHeader)
 	out.WriteString("The \"Under Auto\" column is ADR-092 D9's Auto-approve verdict — what happens " +
-		"to a call to this tool, on Ask, when Auto-approve is on and the kernel sandbox is enforcing. " +
+		"to a call to this tool, on Ask, when Auto-approve is on. As of 2026-09-24 (founder decision), " +
+		"this no longer additionally requires an enforcing kernel sandbox for non-bash tools either — the " +
+		"kernel sandbox was never what confined them; the app-level check below always was. " +
 		"\"Runs\" never prompts. \"Runs if inside workspace\" prompts only when the call's file argument " +
 		"resolves outside the workspace and its mounts. \"Asks\" always prompts (and is auto-denied in an " +
 		"unattended run). `bash` keeps its own shell-permission mechanism (D3/D7/D8) and is not on this " +
-		"scale.\n\n")
+		"scale; without a kernel sandbox, bash's Auto is governed by D7/D8 and the surviving text-based " +
+		"guards only — see docs/security.md.\n\n")
 	for _, group := range groups {
 		fmt.Fprintf(&out, "## %s\n\n| Tool | Description | Under Auto |\n|---|---|---|\n", group.Name)
 		rows := append([]toolRow(nil), group.Tools...)

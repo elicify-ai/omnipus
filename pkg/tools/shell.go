@@ -93,12 +93,19 @@ type ExecToolDeps struct {
 	// (loop_policy.go), whose liveMode resolves: God Mode active -> God;
 	// bash's tool policy resolving to anything but "ask" -> Ask (an "allow"
 	// tool policy runs without the Auto machinery, a "deny" never reaches
-	// execution); "ask" with Auto-approve off, or Auto-approve on but no
-	// active kernel sandbox, -> Ask; "ask" + Auto-approve on + a kernel
-	// sandbox installed -> Auto. Auto is therefore not an independent
-	// third mode an operator picks directly — it is a narrower behavior
-	// that only ever applies when bash's own tool policy has already
-	// resolved to "ask".
+	// execution); "ask" with Auto-approve off -> Ask; "ask" + Auto-approve on
+	// -> Auto. Auto is therefore not an independent third mode an operator
+	// picks directly — it is a narrower behavior that only ever applies when
+	// bash's own tool policy has already resolved to "ask".
+	//
+	// [2026-09-24, founder decision] Auto no longer additionally requires an
+	// enforcing kernel sandbox: it now applies to bash whether or not
+	// Landlock/Seatbelt is enforcing (Windows, a sandbox that failed to
+	// start, permissive mode included). Without a kernel sandbox, the D7/D8
+	// pre-flights and the surviving text-based guards (guardCommand,
+	// substitutionGuard, D3 rules) are the only checks on what the command
+	// touches — see ADR-092's 2026-09-24 revision note for the accepted
+	// risk.
 	ShellMode ShellModeResolver
 
 	// ApprovalRequester is the interactive escalation fallback for the D3
@@ -523,7 +530,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	}
 
 	// FR-B7: audit-log write failure fails CLOSED.
-	if auditResult := t.emitAuditOrDeny(ctx, command, cwd); auditResult != nil {
+	if auditResult := t.emitAuditOrDeny(ctx, command, cwd, perm); auditResult != nil {
 		return auditResult
 	}
 
@@ -855,21 +862,35 @@ func (t *ExecTool) resolveCWD(ctx context.Context, args map[string]any, baseDir 
 // emitAuditOrDeny writes an allow-decision audit.Entry before spawning. When
 // the write fails and auditFailClosed is true, it returns a ToolResult that
 // aborts execution (FR-B7). Returns nil to mean "continue".
-func (t *ExecTool) emitAuditOrDeny(ctx context.Context, command, cwd string) *ToolResult {
+//
+// perm carries this call's resolved ADR-092 mode (nil for the document
+// probe, which bypasses D1 entirely — see executeRun). Details records
+// "mode" and "kernel_sandbox" [2026-09-24, founder decision]: since Auto no
+// longer requires an enforcing kernel sandbox, this row is how an operator
+// finds every bash call that ran under Auto without kernel confinement.
+// kernel_sandbox reflects sandbox.TurnPolicyBaseInstalled() at the moment of
+// this call, independent of perm.mode (God Mode and Ask calls may also run
+// with or without a kernel sandbox, and the field is informative there too).
+func (t *ExecTool) emitAuditOrDeny(ctx context.Context, command, cwd string, perm *shellPermissionResult) *ToolResult {
 	if t.auditLogger == nil {
 		return nil
 	}
 	agentID := ToolAgentID(ctx)
+	details := map[string]any{
+		"cwd":            cwd,
+		"god_mode":       t.godMode,
+		"kernel_sandbox": sandbox.TurnPolicyBaseInstalled(),
+	}
+	if perm != nil {
+		details["mode"] = string(perm.mode)
+	}
 	logErr := t.auditLogger.Log(&audit.Entry{
 		Event:    audit.EventExec,
 		Decision: audit.DecisionAllow,
 		AgentID:  agentID,
 		Tool:     t.Name(),
 		Command:  command,
-		Details: map[string]any{
-			"cwd":      cwd,
-			"god_mode": t.godMode,
-		},
+		Details:  details,
 	})
 	if logErr == nil {
 		return nil

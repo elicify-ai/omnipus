@@ -31,8 +31,9 @@ properties:
       clearing) the modifier — the true per-session resolution that
       SandboxStatus.auto_approve_effective cannot provide (that field is
       the gateway-wide default only, with no session or agent context).
-      Combine with SandboxStatus.kernel_sandbox_active for the same
-      "Auto → Ask" degradation rendering described on that field: true
-      here with no active kernel sandbox still means every "ask" tool call
-      in this session prompts.
+      [2026-09-24, founder decision] true here means Auto is genuinely
+      active for this session's "ask" tool calls, whether or not a kernel
+      sandbox is enforcing — combine with SandboxStatus.kernel_sandbox_active
+      only to decide the badge's "Auto" vs "Auto — no sandbox" (warning)
+      rendering, not to predict whether calls still prompt: they do not.
     example: true

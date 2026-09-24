@@ -111,16 +111,22 @@ func TestAutoApprove_T4_T11_T12_RunsToolsRunWithoutPrompt(t *testing.T) {
 		"T11: a prompted call writes no tool.auto_approved row")
 }
 
-// T5 (J13): with Auto off, or Auto on but no kernel sandbox enforcing, T4's
-// RUNS tools prompt once each.
+// T5 (rewritten 2026-09-24, founder decision — supersedes J13): Auto is now
+// active regardless of kernel-sandbox enforcement (ADR-092 D1/J13 revised).
+// With Auto OFF, T4's RUNS tools still prompt once each, sandbox or no
+// sandbox — Auto's own on/off switch, not the kernel predicate, is what
+// gates the prompt now. This rewrite keeps T5's original coverage of
+// "Auto not active still prompts"; the "Auto on but no kernel sandbox"
+// case, which T5 used to assert prompted, is now covered by
+// TestAutoApprove_T5b_AutoOnNoKernelSandboxStillRuns below, which asserts
+// the OPPOSITE (no prompt) — the behavior this ADR revision requires.
 func TestAutoApprove_T5_InactiveAutoPrompts(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
-		autoApprove bool
-		sandbox     bool
+		name    string
+		sandbox bool
 	}{
-		{"auto off, sandbox enforcing", false, true},
-		{"auto on, no kernel sandbox", true, false},
+		{"auto off, sandbox enforcing", true},
+		{"auto off, no kernel sandbox", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.sandbox {
@@ -128,12 +134,49 @@ func TestAutoApprove_T5_InactiveAutoPrompts(t *testing.T) {
 			} else {
 				sandbox.RegisterTurnPolicyBase(nil)
 			}
-			approver, stubs, _ := runStubTurn(t, tc.autoApprove, autoRunsSample)
+			approver, stubs, _ := runStubTurn(t, false, autoRunsSample)
 			for _, name := range autoRunsSample {
-				assert.Equal(t, 1, approver.countFor(name), "%s must prompt when Auto is not active", name)
+				assert.Equal(t, 1, approver.countFor(name), "%s must prompt when Auto is off", name)
 				assert.False(t, stubs[name].pinned.Load(), "%s must carry no Auto pin", name)
 			}
 		})
+	}
+}
+
+// T5b [2026-09-24, founder decision]: Auto ON with NO kernel sandbox
+// enforcing now runs T4's RUNS tools with zero approver calls — the exact
+// behavior the old FR-008/J13 fallback used to forbid. This is the positive
+// proof that the founder's decision (Auto no longer requires an enforcing
+// kernel sandbox) actually took effect in the loop, not only in a unit-level
+// predicate test. The audit row for each call must also record
+// kernel_sandbox=false, so an operator can find every auto-approval that ran
+// unconfined by the kernel.
+func TestAutoApprove_T5b_AutoOnNoKernelSandboxStillRuns(t *testing.T) {
+	sandbox.RegisterTurnPolicyBase(nil)
+	names := append([]string(nil), autoRunsSample...)
+	provider := testutil.NewScenario().WithToolCalls(stubToolCalls(names)).WithText("done")
+	al := newAutoTestLoop(t, provider, true, nil)
+	stubs := installAutoStubs(t, al, "mia", names)
+	approver := &autoRecordingApprover{approve: true}
+	al.SetToolApprover(approver)
+	readAudit := swapAuditLogger(t, al)
+
+	_, err := al.ProcessDirect(context.Background(), "use the tools", "auto-nosandbox-turn")
+	require.NoError(t, err)
+
+	for _, name := range autoRunsSample {
+		assert.Zero(t, approver.countFor(name), "%s is RUNS and must not prompt under Auto, even with no kernel sandbox", name)
+		assert.Equal(t, int32(1), stubs[name].calls.Load(), "%s must run", name)
+		assert.True(t, stubs[name].pinned.Load(), "%s must still carry the Auto pin", name)
+	}
+
+	rows := readAudit()
+	for _, name := range autoRunsSample {
+		got := auditRowsFor(rows, audit.EventToolAutoApproved, name)
+		require.Len(t, got, 1, "exactly one tool.auto_approved row for %s", name)
+		details, _ := got[0]["details"].(map[string]any)
+		assert.Equal(t, false, details["kernel_sandbox"],
+			"%s's auto_approved row must record kernel_sandbox=false when no kernel sandbox is enforcing", name)
 	}
 }
 
@@ -176,7 +219,47 @@ func TestAutoApprove_T1_WriteFileInsideRunsOutsidePrompts(t *testing.T) {
 	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the denied outside write must not happen")
 }
 
-// T14: God Mode is on, so Auto is inactive (no sandbox): an agent-level Ask
+// T1b [2026-09-24, founder decision]: T1's exact scenario with NO kernel
+// sandbox enforcing. write_file is not bash — its Auto boundary is the J2
+// app-level workspace check, which never depended on a kernel sandbox — so
+// this must behave IDENTICALLY to T1: the in-workspace path runs unprompted,
+// the outside path prompts exactly once. This is the direct brief proof that
+// "no sandbox + Auto on: an in-workspace write_file auto-runs with zero
+// approver calls" holds in the real loop, not just in the predicate.
+func TestAutoApprove_T1b_NoKernelSandbox_WriteFileInsideRunsOutsidePrompts(t *testing.T) {
+	sandbox.RegisterTurnPolicyBase(nil)
+	t.Cleanup(func() { sandbox.RegisterTurnPolicyBase(nil) })
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	approver, provider := writeFileTurn(t, true, nil,
+		autoToolCall("wf-inside", "write_file", `{"path":"notes/t1b.md","content":"inside"}`),
+		autoToolCall("wf-outside", "write_file", `{"path":"`+outside+`","content":"outside"}`),
+	)
+	reqs := approver.requests()
+	require.Len(t, reqs, 1, "only the outside path prompts, sandbox or no sandbox")
+	assert.Equal(t, outside, reqs[0].Args["path"])
+	inside := toolResultText(t, provider, "wf-inside")
+	assert.Contains(t, inside, "File written: notes/t1b.md", "the inside write must run with no kernel sandbox enforcing")
+	assert.Contains(t, toolResultText(t, provider, "wf-outside"), "permission_denied")
+	_, statErr := os.Stat(outside)
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the denied outside write must not happen")
+}
+
+// T1c [2026-09-24, founder decision]: the brief's "delete_task still prompts
+// once" proof under Auto with NO kernel sandbox — delete_task is on the
+// ask-list (goldenAutoAskList), so Auto never runs it regardless of kernel
+// enforcement.
+func TestAutoApprove_T1c_NoKernelSandbox_DeleteTaskStillPromptsOnce(t *testing.T) {
+	sandbox.RegisterTurnPolicyBase(nil)
+	t.Cleanup(func() { sandbox.RegisterTurnPolicyBase(nil) })
+	approver, stubs, _ := runStubTurn(t, true, []string{"delete_task"})
+	assert.Equal(t, 1, approver.countFor("delete_task"), "delete_task is on the ask-list and must still prompt, sandbox or no sandbox")
+	assert.Equal(t, int32(1), stubs["delete_task"].calls.Load(), "delete_task runs only after the human approved it")
+}
+
+// T14: God Mode is on, so Auto is inactive (autoApproveActive's own
+// GodModeActive check — not "no kernel sandbox": since 2026-09-24 a missing
+// kernel sandbox no longer disables Auto anywhere else, so God Mode's
+// explicit check is the only thing doing this work here): an agent-level Ask
 // on write_file still prompts for a path inside the work folder.
 func TestAutoApprove_T14_GodModeStillPrompts(t *testing.T) {
 	withKernelSandbox(t)

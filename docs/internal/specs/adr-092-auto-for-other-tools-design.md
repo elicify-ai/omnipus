@@ -1,6 +1,7 @@
 # ADR-092 addendum — Auto-approve for tools other than `bash` (design, founder-ruled)
 
 - **Status:** Founder-ruled 2026-09-23 (revision 3). Every open point is decided; nothing is left for the founder. Becomes ADR-092 **D9**.
+- **Superseding decision (2026-09-24, founder, made with the risk stated to him):** ruling **J13 below is reversed**. Auto no longer requires an enforcing kernel sandbox for any tool, `bash` included — it now applies on Windows, when a sandbox failed to start, or in permissive mode, the same as everywhere else. Reason: the founder judged the old fallback a design flaw that made Auto effectively unusable on Windows and on any host without an enforcing sandbox. Accepted risk: without a kernel sandbox, `bash` under Auto is checked only by the D7/D8 pre-flights and the text-based guards — a disguised command can slip past a text-based check. See `docs/internal/architecture/ADR-092-shell-permission-modes.md`'s 2026-09-24 revision note for the full statement; every inline reference to J13 below is marked `[superseded 2026-09-24]` rather than rewritten in place, so this document's historical founder-ruling record stays intact.
 - **Date:** 2026-09-23
 - **Author:** architect
 - **Baseline read:** `feat/adr-092-shell-permissions` @ `b7dc66acf`, plus `origin/adr092/fix-backend` @ `6bf3602b1` (the security-fix lane now editing `pkg/agent/loop_policy.go` and `pkg/agent/loop_run_turn_tools.go`). Every citation of those two files refers to the fix-backend version.
@@ -42,9 +43,9 @@ A call to any tool except `bash` **runs without a prompt**, and no approval gran
 
 1. The effective policy at execution time is `ask` (`resolveToolPolicyAtExec`). Auto never changes an `allow` or a `deny` result.
 2. **Auto is active.** This is the same shared check `bash` uses:
-   - God Mode is off,
-   - `ResolveAutoApprove(cfg, agentID, chatModifier)` is true, and
-   - `sandbox.TurnPolicyBaseInstalled()` is true, meaning a kernel sandbox is enforcing (ruling J13).
+   - God Mode is off, and
+   - `ResolveAutoApprove(cfg, agentID, chatModifier)` is true.
+   - *[superseded 2026-09-24, founder decision]* `sandbox.TurnPolicyBaseInstalled()` is **no longer** a third condition here — ruling J13 below is reversed; Auto no longer requires an enforcing kernel sandbox.
 3. The tool's classification (§3) is **RUNS**, or it is **RUNS-IF** and this call's arguments meet the condition. For MCP tools, the tool is not marked destructive (§4).
 4. The classifier ran without error. Any error (an unresolvable path, a bad argument, a nil dependency) counts as "asks". The classifier never refuses a call itself.
 
@@ -303,11 +304,13 @@ if toctouPolicy == "ask" {
 }
 ```
 
-### 5.2 Kernel sandbox requirement (ruling J13)
+### 5.2 Kernel sandbox requirement (ruling J13) — SUPERSEDED 2026-09-24
 
-Auto requires an enforcing kernel sandbox for **every** tool. That gives one rule and one badge. There is no Auto on Windows, in God Mode, or wherever the sandbox is not enforcing.
+*Original ruling (2026-09-23), kept for the record:* Auto requires an enforcing kernel sandbox for **every** tool. That gives one rule and one badge. There is no Auto on Windows, in God Mode, or wherever the sandbox is not enforcing.
 
 To state honestly in the ADR: non-bash tools run **inside the gateway process**. For them, the real boundary is the app-level check (the J2 path rule plus `ResolvePath`'s `os.Root` rooting). The kernel sandbox is the precondition for Auto, not what confines `write_file`.
+
+**2026-09-24, founder decision:** this ruling is reversed. Auto no longer requires an enforcing kernel sandbox for any tool. There is Auto on Windows now, and wherever the sandbox is not enforcing — God Mode is still the one thing that turns Auto off, because it has no Auto machinery of its own. For non-bash tools this changes nothing about what confines them: the kernel sandbox was never their boundary (the J2 app-level check always was), so removing it as a precondition removes a gate that was never doing containment work for them in the first place. For `bash`, the consequence is real: without a kernel sandbox, the D7/D8 pre-flights and the text-based guards are the only checks. See `docs/internal/architecture/ADR-092-shell-permission-modes.md`'s 2026-09-24 revision note for the full statement of the accepted risk.
 
 ### 5.3 Pinning (one decision per call)
 
@@ -326,7 +329,7 @@ To state honestly in the ADR: non-bash tools run **inside the gateway process**.
 
 New event `tool.auto_approved`:
 - A typed constant in `pkg/audit`, added to the event set in `audit.go`.
-- Details: `{tool, agent_id, session_id, class, reason, paths}`.
+- Details: `{tool, agent_id, session_id, class, reason, paths, kernel_sandbox}`. `kernel_sandbox` *[added 2026-09-24, founder decision]* records `sandbox.TurnPolicyBaseInstalled()` at the moment of this call — since Auto no longer requires an enforcing kernel sandbox (§5.2), this is how an operator finds every auto-approval that ran unconfined by the kernel.
 - Emitted once for each call Auto ran without a prompt, through `audit.EmitEntry`, so a failed write shows up in the degraded count.
 - Calls that were prompted or denied keep their existing `tool.policy.ask.*` rows.
 
@@ -342,7 +345,7 @@ New event `tool.auto_approved`:
 ### 5.7 Known interaction: two dialogs for one `bash` call (fixed in L3)
 
 **What happens after fix-backend lands:**
-- The `bash` policy resolves to plain `ask` (Auto off, or no kernel sandbox, so the mode is Ask), and the command matches an operator D3 `{action: ask}` rule.
+- The `bash` policy resolves to plain `ask` (Auto off, so the mode is Ask — *[superseded 2026-09-24]* "or no kernel sandbox" no longer applies; a missing kernel sandbox no longer forces Ask), and the command matches an operator D3 `{action: ask}` rule.
 - The user sees **two approval dialogs for one call**:
   1. `resolveAskPolicy` shows the generic upfront prompt, because `bashRulesSettlePrompt` returns false for an ask verdict.
   2. After approval, the tool's own `pkg/tools/shell_permission_mode.go::enforceShellPermissionMode` sees `verdictHasGenuineAskRuleMatch` in a non-God mode and calls `requestRuleApproval`, which prompts again.
@@ -375,11 +378,11 @@ New test `pkg/gateway/auto_approve_classification_test.go`, run against the same
 
 | Surface | Change |
 |---|---|
-| `SecuritySection.tsx::AutoApproveControl` confirmation text | "With Auto-approve on, agents run tools set to "ask" without prompting — except changes to settings, agents, channels, providers, skills and MCP servers, deletions, installs, email, browser scripts and uploads, publishing a web preview, and connected-server tools whose server has not labelled them read-only or not destructive, which still ask. File reads and writes run only inside the workspace and its mounts. Needs an active kernel sandbox." |
-| `ChatModeBadge.tsx` "Auto → Ask" tooltip | "No enforcing kernel sandbox: every tool set to "ask" prompts." |
+| `SecuritySection.tsx::AutoApproveControl` confirmation text | *[superseded 2026-09-24, founder decision]* Original text (2026-09-23): "...Needs an active kernel sandbox." This sentence is no longer true — Auto no longer needs one. Per the 2026-09-24 brief, the Security card instead says: "Without a kernel sandbox (for example on Windows), shell commands are checked by reading the command text only." <!-- verify-ui-string --> (frontend lane owns the exact final copy) |
+| `ChatModeBadge.tsx` "Auto — no sandbox" tooltip | *[superseded 2026-09-24, founder decision — the original row here was the "Auto → Ask" tooltip, "No enforcing kernel sandbox: every tool set to "ask" prompts", which is no longer true]* The badge no longer degrades to Ask; instead it reads "Auto — no sandbox" with a tooltip warning that shell commands are checked by text only, per the Security-card copy above. Frontend lane owns the exact final copy. |
 | `ToolsAndPermissions.tsx` and the global tool-policy table | A small read-only "Under Auto: runs / runs if inside workspace / asks" marker on rows set to Ask. **Contract first:** `auto_approve: enum[runs, runs_if_args, asks]` on `contracts/components/schemas/ToolRegistryEntry.yaml`; regenerate; fill it from `tools.AutoApproveClassOf` in `rest_tool_registry.go`. MCP rows show `runs` or `asks` from the annotation (J14) |
 | `ToolApprovalModal.tsx` | Hide the scope radio for tools other than `bash` |
-| `docs/security.md` | Rewrite "What 'safe' means" as "What Auto skips and what still asks": the ask-list in plain groups; the file-path rule and its difference from shell commands (`cat /etc/hosts` runs in the shell, `read_file /etc/hosts` asks); **messages and files sent to chat channels go out with no prompt**; the MCP destructive rule; unattended runs follow the same rule (fix the paragraph that says otherwise); no Auto on Windows or without an enforcing sandbox |
+| `docs/security.md` | Rewrite "What 'safe' means" as "What Auto skips and what still asks": the ask-list in plain groups; the file-path rule and its difference from shell commands (`cat /etc/hosts` runs in the shell, `read_file /etc/hosts` asks); **messages and files sent to chat channels go out with no prompt**; the MCP destructive rule; unattended runs follow the same rule (fix the paragraph that says otherwise); *[superseded 2026-09-24, founder decision — the original row here said "no Auto on Windows or without an enforcing sandbox"]* Auto now applies on Windows and without an enforcing sandbox too — state plainly what Auto checks in that case (D7/D8 pre-flights + text-based guards, no kernel boundary) and the concrete risk example (a disguised command can slip past a text-based check) |
 | `docs/tools.md` | One paragraph that points to the per-tool column in the reference |
 | `docs/reference/built-in-tools.md` (generated by `cmd/docsref`) | Add an "Under Auto" column generated from the table, so the docs cannot drift |
 | ADR-092 | Add **D9** (this rule, table reference, mechanism, the founder decision on `send_message`/`send_file`, the J2 asymmetry with `bash`). Change D1's Auto sentence to cover every tool |
@@ -403,7 +406,7 @@ New test `pkg/gateway/auto_approve_classification_test.go`, run against the same
 | J10 | Memory | **Runs**, all scopes |
 | J11 | Knowledge-writing tools | **Run** (the fresh-install Ask seeds for Mia, Jim and General Purpose stop prompting under Auto) |
 | J12 | Browser | **Runs**, except `browser_evaluate` and `browser_upload_file`, which **ask** |
-| J13 | Kernel sandbox required for every tool? | **Yes.** One rule, one badge. No Auto on Windows or where the sandbox is not enforcing |
+| J13 | Kernel sandbox required for every tool? | *[superseded 2026-09-24, founder decision]* Originally: **Yes.** One rule, one badge. No Auto on Windows or where the sandbox is not enforcing. **Now: No, as of 2026-09-24.** Auto applies on Windows and wherever the sandbox is not enforcing; only God Mode still turns it off |
 | J14 | Show each tool's Auto verdict in the UI | **In (founder decision 2026-09-23).** Contract field `auto_approve` on `ToolRegistryEntry` (L5); a per-row marker in the settings screens (L6) |
 | J15 | MCP | **Founder decision 2026-09-23: follow the MCP specification.** A tool runs only when marked read-only or explicitly not destructive; unlabelled tools count as destructive and ask. No operator override ships; it is future work only |
 | — | `browser_screenshot`, `send_file` path condition | **Kept (founder decision 2026-09-23).** Each runs only when the file resolves inside the workspace or a mount; otherwise it asks |
@@ -434,7 +437,8 @@ Expected values come from this document and the founder file, never from the imp
 | T2 | `read_file`: inside the work folder or a mount runs; `/etc/hosts` prompts (J2); a secret-set path prompts and the tool then refuses | L1 |
 | T3 | Every ASKS tool on Ask with Auto on still prompts. Table-driven over the 28 golden names, with a recording approver | L3 |
 | T4 | A sample of unconditional RUNS tools (`delegate`, `browser_navigate`, `send_message`, `knowledge_edit`, `get_config`) on Ask run with zero approver calls | L3 |
-| T5 | Auto off, and Auto on without a kernel sandbox: T4's tools prompt (J13) | L3 |
+| T5 | Auto off: T4's tools prompt. *[superseded 2026-09-24, founder decision — the original row also covered "Auto on without a kernel sandbox: T4's tools prompt (J13)"; that is now T5b, with the OPPOSITE assertion]* | L3 |
+| T5b | *[added 2026-09-24, founder decision]* Auto ON with no kernel sandbox: T4's tools run with zero approver calls, exactly as with a kernel sandbox enforcing | L3 |
 | T6 | Pin re-check: the classifier approves `a.md`; before dispatch it is swapped to a symlink pointing outside; the tool refuses and nothing is written | L1 |
 | T7 | A `bash` path grant does not make `write_file` to that path run | L1 |
 | T8 | Unattended run: a RUNS tool executes; an ASKS tool is auto-denied with `autoDenyHeadlessReason` and its audit rows; **`bash` under Auto executes** (a J1 regression, which fails today by the §1 analysis) | L3 |
