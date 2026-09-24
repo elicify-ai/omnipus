@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -752,9 +753,26 @@ func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
 	}
 
 	// The wake itself (eligibility, identity, debounce bypass) already
-	// happened inside Deliver, called from Execute above — nothing left to
-	// do here. mt.delivery.Outcome is available for callers that want it
-	// (none today; kept on the struct for parity with Deliver's contract).
+	// happened inside Deliver, called from Execute above.
+	//
+	// [ADR-091 fix lane RX-OUTCOME, HIGH] mt.delivery.Outcome is no longer
+	// merely "available for callers that want it (none today)" — this is a
+	// caller that wants it. A stored_not_woken outcome on a WAKE-ELIGIBLE
+	// kind (blocker, question, a final handback) means the entry is durable
+	// but the parent was not woken, so nothing will read it until boot
+	// recovery; for a question with wait=true the child has just parked
+	// itself on an answer that will never arrive. Wake-eligibility is read
+	// from the encoded message via the SAME authority Deliver used
+	// (session.ClassifySessionMessage), so progress/checkpoint/non-fatal
+	// error — for which stored_not_woken IS the contract (FR-B-010) — stay
+	// silent instead of flooding the log with non-events.
+	//
+	// It is logged, never turned into a tool error: the entry IS durable, so
+	// telling the child "message_parent failed" would be a false negative
+	// that invites it to send the same message again. Mirrors
+	// pkg/agent/steer_cancel.go::deliverTerminalReport and
+	// pkg/agent/steer_completion.go::reportUndeliveredWake.
+	mt.reportUndeliveredWake()
 
 	resp := generated.MessageParentResponse{Accepted: true, MessageId: &mt.delivery.MessageID}
 	if mt.correlationID != "" {
@@ -778,6 +796,35 @@ func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
 		result.ParksTurn = true
 	}
 	return result
+}
+
+// reportUndeliveredWake logs, at ERROR, a delivery whose inbox entry was
+// stored but whose recipient was NOT woken, for a message kind that was
+// supposed to wake it. See finishDelivery's call site for the full rationale
+// (and for why this only ever logs). Silent for every other outcome and for
+// the kinds whose contract IS stored-not-woken.
+func (mt *messageParentToolExecute) reportUndeliveredWake() {
+	if mt.delivery.Outcome != steer.DeliveryStoredNotWoken {
+		return
+	}
+	if class, err := session.ClassifySessionMessage(mt.sm); err == nil && !class.WakeEligible {
+		return
+	}
+	parentSessionID := "(unknown)"
+	if mt.parentSessionID != nil && *mt.parentSessionID != "" {
+		parentSessionID = *mt.parentSessionID
+	}
+	generation := 0
+	if mt.rec != nil {
+		generation = mt.rec.Generation
+	}
+	slog.Error("message_parent: entry stored but the parent was NOT woken — it learns nothing until boot recovery re-nudges it",
+		"session_id", mt.childSessionID,
+		"parent_session_id", parentSessionID,
+		"message_id", mt.delivery.MessageID,
+		"generation", generation,
+		"kind", mt.kind,
+		"delivery_outcome", string(mt.delivery.Outcome))
 }
 
 // parkNeedsInput transitions the calling child's own durable record to

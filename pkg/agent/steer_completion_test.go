@@ -15,6 +15,7 @@ import (
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -119,20 +120,22 @@ func launchRunningChild(t *testing.T, al *AgentLoop, parentID, callID string) *s
 	return rec
 }
 
-// launchRunningTaskOriginChild is launchRunningChild's task-origin twin
-// (ADR-091 fix lane RX-HANG, round-2 correctness fix). It deliberately
-// reproduces the EXACT real-world gap hasRunningOrQueuedDescendant's
-// task-origin branch guards against: a LifecycleRecord genuinely at
-// `running`, launched with Origin.Kind == session.OriginKindTask, with NO
-// entry ever registered in al.activeTurnStates under its own SessionID —
-// matching steer_launcher.go::dispatchSteeredSessionWithReservation's
-// task-origin branch, which hands off to TaskExecutor.dispatchLaunchedTask
-// and never calls registerTurnIfAbsent at all (the real turn, if one were
-// actually running, would be registered under
-// fmt.Sprintf("agent:%s:task:%s", t.AgentID, t.ID) by
-// task_executor_run.go instead — a different key this test never touches,
-// exactly so it proves the child-SessionID lookup alone cannot be trusted
-// for this origin kind).
+// launchRunningTaskOriginChild is launchRunningChild's task-origin twin. It
+// deliberately reproduces the EXACT real-world gap the task-origin liveness
+// rule exists for: a LifecycleRecord genuinely at `running`, launched with
+// Origin.Kind == session.OriginKindTask, with NO entry ever registered in
+// al.activeTurnStates under its own SessionID — matching
+// steer_launcher.go::dispatchSteeredSessionWithReservation's task-origin
+// branch, which hands off to TaskExecutor.dispatchLaunchedTask and never
+// calls registerTurnIfAbsent at all (the real turn, if one were actually
+// running, would be registered under task_executor_run.go::
+// taskTurnSessionKey instead — a different key this helper never touches,
+// exactly so it proves the child-SessionID lookup alone cannot answer
+// "is this child alive?" for this origin kind).
+//
+// Whether the child counts as WORKING is therefore decided by the task
+// executor's dispatch slot, not by this helper: use holdTaskDispatchSlot to
+// make a run in flight, and leave it alone for a run that is over.
 func launchRunningTaskOriginChild(t *testing.T, al *AgentLoop, parentID, callID, taskID string) *session.LifecycleRecord {
 	t.Helper()
 	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
@@ -587,33 +590,46 @@ func TestCompletion_ToolIterationLimit_WakesAndUnblocksParent(t *testing.T) {
 	}
 }
 
-// TestHasRunningOrQueuedDescendant_TaskOriginRunningChildAlwaysBlocks is
-// ADR-091 fix lane RX-HANG's round-2 correctness fix, closing the hole the
-// coordinator caught in the first round: al.getActiveTurnState is keyed by
-// turnState.sessionKey, which for a task-origin child is
-// fmt.Sprintf("agent:%s:task:%s", AgentID, TaskID)
-// (task_executor_run.go) — NEVER the child's own LifecycleRecord.SessionID
-// that hasRunningOrQueuedDescendant looks it up under. Before this fix, a
-// task-origin child genuinely mid-execution (State: running, real turn
-// registered under that OTHER key, so getActiveTurnState(child.SessionID)
-// returns nil regardless) would have been misread as idle and stopped
-// blocking its parent — a silently wrong/premature parent answer while its
-// task child is still working, strictly worse than the hang this lane
-// fixes. This test never registers ANY activeTurnStates entry for the
-// child — reproducing that permanent mismatch directly — and proves the
-// task-origin branch blocks anyway, unconditionally, exactly as
-// hasRunningOrQueuedDescendant did before the (correct, but
-// origin-blind) liveness optimization was added.
-func TestHasRunningOrQueuedDescendant_TaskOriginRunningChildAlwaysBlocks(t *testing.T) {
+// holdTaskDispatchSlot makes the executor hold taskID's run for the duration
+// of the test — the SAME te.running entry ExecuteTask / StartTaskNow /
+// dispatchLaunchedTask insert under te.mu before launching the run goroutine,
+// and the authority task_executor_run.go::taskRunInFlight reads. Released on
+// cleanup so one test's held slot can never leak into another's.
+func holdTaskDispatchSlot(t *testing.T, al *AgentLoop, taskID string) {
+	t.Helper()
+	te := al.taskExecutor
+	if te == nil {
+		t.Fatal("test setup invalid: al.taskExecutor is not wired — taskRunInFlight would fail closed and the test would prove nothing")
+	}
+	te.mu.Lock()
+	te.running[taskID] = &taskSlot{reserved: true}
+	te.mu.Unlock()
+	t.Cleanup(func() {
+		te.mu.Lock()
+		delete(te.running, taskID)
+		te.mu.Unlock()
+	})
+}
+
+// TestHasRunningOrQueuedDescendant_TaskOriginRunInFlightBlocks is the
+// correctness half of the task-origin rule: while the executor genuinely
+// holds the child's task run, the parent must NOT be allowed to complete,
+// even though no turnState is registered under the child's own SessionID
+// (the task path registers under task_executor_run.go::taskTurnSessionKey
+// instead, so al.getActiveTurnState(child.SessionID) is nil for the entire
+// run — a permanent mismatch, not a race window). Letting the parent
+// complete here would produce a silently premature answer while its task
+// child is still working, which is strictly worse than any hang.
+func TestHasRunningOrQueuedDescendant_TaskOriginRunInFlightBlocks(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-1")
 	child := launchRunningTaskOriginChild(t, al, parentID, "call-task-child", "task-1")
+	holdTaskDispatchSlot(t, al, "task-1")
 
 	// Sanity: no turnState was ever registered under the child's own
-	// SessionID (nor under any key) — this is the exact real-world gap,
-	// not a contrived one.
+	// SessionID — this is the exact real-world gap, not a contrived one.
 	if ts := al.getActiveTurnState(child.SessionID); ts != nil {
 		t.Fatalf("test setup invalid: a turnState is registered under child.SessionID (%q) — this must be empty to reproduce the task-origin key mismatch", child.SessionID)
 	}
@@ -623,7 +639,48 @@ func TestHasRunningOrQueuedDescendant_TaskOriginRunningChildAlwaysBlocks(t *test
 		t.Fatalf("hasRunningOrQueuedDescendant: %v", err)
 	}
 	if !blocked {
-		t.Fatal("a running task-origin child must always block its parent (no reliable liveness signal exists for this origin kind) — got not blocked, which would let the parent complete while the task child is genuinely still executing")
+		t.Fatal("a task-origin child whose run the executor still holds must block its parent — got not blocked, which would let the parent answer while its task child is genuinely still executing")
+	}
+}
+
+// TestHasRunningOrQueuedDescendant_TaskOriginIdleDoesNotBlock is ADR-091 fix
+// lane RX-OUTCOME's Task 3: the residual hang RX-HANG's unconditional
+// task-origin exclusion left behind.
+//
+// A task-origin child that stopped at its tool-iteration ceiling is kept at
+// LifecycleRunning on purpose (completionDisposition's
+// steer.OutcomeLifecycleNotice case — it is resumable, not dead), but its
+// run is over: the executor released the dispatch slot and no turn is
+// registered anywhere. Before this lane, the `running` state alone made it
+// block its parent FOR EVER — the parent was correctly woken and still could
+// never complete past that child. This asserts the parent is free again.
+//
+// Deliberately identical setup to the blocking test above except that NO
+// dispatch slot is held: the run-in-flight fact is the ONLY thing separating
+// the two outcomes, so the assertion cannot pass for any other reason.
+func TestHasRunningOrQueuedDescendant_TaskOriginIdleDoesNotBlock(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	wireSteerCompletionDeps(t, al)
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	child := launchRunningTaskOriginChild(t, al, parentID, "call-task-child", "task-1")
+
+	if ts := al.getActiveTurnState(child.SessionID); ts != nil {
+		t.Fatalf("test setup invalid: a turnState is registered under child.SessionID (%q)", child.SessionID)
+	}
+	if al.taskExecutor == nil {
+		t.Fatal("test setup invalid: al.taskExecutor is not wired — taskRunInFlight fails closed and this test would prove nothing")
+	}
+	if holds := taskExecutorHoldsDispatchSlot(al.taskExecutor, "task-1"); holds {
+		t.Fatal("test setup invalid: the executor holds task-1's dispatch slot — this test needs a finished run")
+	}
+
+	blocked, err := al.hasRunningOrQueuedDescendant(parentID)
+	if err != nil {
+		t.Fatalf("hasRunningOrQueuedDescendant: %v", err)
+	}
+	if blocked {
+		t.Fatal("a task-origin child left `running` by its own tool-iteration notice, with its run long finished, still blocks its parent — the parent can never complete past it (ADR-091 RX-OUTCOME Task 3)")
 	}
 }
 
@@ -632,8 +689,9 @@ func TestHasRunningOrQueuedDescendant_TaskOriginRunningChildAlwaysBlocks(t *test
 // SAME real completeSteeredTurn path TestCompletion_Disposition_
 // PersistedAndValidated's "non-empty queued descendant" case already
 // covers for a `queued` descendant, but for a `running` task-origin
-// descendant instead — proving the parent's own completion is refused,
-// not just that the lower-level predicate returns true in isolation.
+// descendant whose run is genuinely in flight — proving the parent's own
+// completion is refused, not just that the lower-level predicate returns
+// true in isolation.
 func TestCompletion_TaskOriginRunningChild_ParentDoesNotComplete(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -641,6 +699,7 @@ func TestCompletion_TaskOriginRunningChild_ParentDoesNotComplete(t *testing.T) {
 	parentID := newTestSteeringSession(t, al, "ws-1")
 	rec := launchRunningChild(t, al, parentID, "call-parent-of-task-child")
 	taskChild := launchRunningTaskOriginChild(t, al, rec.SessionID, "call-task-child", "task-1")
+	holdTaskDispatchSlot(t, al, "task-1")
 
 	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{finalContent: "parent answer"}, nil); err != nil {
 		t.Fatalf("completeSteeredTurn: %v", err)
@@ -674,6 +733,140 @@ func TestCompletion_TaskOriginRunningChild_ParentDoesNotComplete(t *testing.T) {
 	}
 	if len(msgs) != 0 {
 		t.Fatalf("parent inbox messages = %d, want 0 (rec must not have delivered anything while blocked)", len(msgs))
+	}
+}
+
+// TestCompletion_TaskOriginIdleChild_ParentCompletes is the Task 3 exit
+// proof at the completeSteeredTurn level: the same three-session shape as
+// the test above, with the ONLY difference that the task child's run is
+// over (no dispatch slot held). The parent must now land terminal and its
+// handback must actually reach the root's inbox.
+func TestCompletion_TaskOriginIdleChild_ParentCompletes(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	wireSteerCompletionDeps(t, al)
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	rec := launchRunningChild(t, al, parentID, "call-parent-of-task-child")
+	taskChild := launchRunningTaskOriginChild(t, al, rec.SessionID, "call-task-child", "task-1")
+
+	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{finalContent: "parent answer"}, nil); err != nil {
+		t.Fatalf("completeSteeredTurn: %v", err)
+	}
+
+	got, err := al.GetSessionLifecycleStore().Load(rec.SessionID)
+	if err != nil {
+		t.Fatalf("Load(rec after completion): %v", err)
+	}
+	if got.State != session.LifecycleCompleted {
+		t.Fatalf("parent state = %q, want completed — its task-origin child (%q) is `running` but its run is over, so it must not block for ever", got.State, taskChild.SessionID)
+	}
+
+	msgs, _, _, err := al.GetMessageInboxStore().Drain(parentID, rec.SessionID, "", 10)
+	if err != nil {
+		t.Fatalf("Drain(parent): %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("root inbox messages = %d, want 1 — the parent's answer must actually reach its own steering session", len(msgs))
+	}
+	if kind, kerr := msgs[0].Discriminator(); kerr != nil || kind != "handback" {
+		t.Fatalf("root message kind = %q (%v), want handback", kind, kerr)
+	}
+}
+
+// TestCompletion_StoredNotWoken_LoggedAtError is ADR-091 fix lane
+// RX-OUTCOME's Task 1 exit proof for THE normal completion path.
+//
+// steer.Delivery.Outcome carries the one fact separating "the parent knows"
+// (DeliveryWoke / DeliveryQueuedIntoLiveTurn) from "the parent will never
+// know" (DeliveryStoredNotWoken). completeSteeredTurn discarded it with
+// `_, err := deliverer.Deliver(...)`, so a child that finished and whose
+// parent was never woken produced total silence — no log line, no operator
+// signal, nothing until a gateway restart ran boot recovery. This is the
+// class of stall that cost hours to chase.
+func TestCompletion_StoredNotWoken_LoggedAtError(t *testing.T) {
+	readLog := captureLogFile(t, logger.ERROR)
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	rec := launchRunningChild(t, al, parentID, "call-stored-not-woken")
+	messageID := rec.SessionID + ":1:final"
+	wireTerminalReportDeliverer(al, &recordingUpwardDeliverer{
+		delivery: steer.Delivery{MessageID: messageID, Outcome: steer.DeliveryStoredNotWoken},
+	})
+
+	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{finalContent: "child answer"}, nil); err != nil {
+		t.Fatalf("completeSteeredTurn: %v", err)
+	}
+
+	captured := readLog()
+	if !strings.Contains(captured, `"level":"error"`) {
+		t.Fatalf("a completion whose parent was never woken produced no ERROR line — the stall is invisible; captured log:\n%s", captured)
+	}
+	for _, want := range []string{rec.SessionID, parentID, messageID, string(steer.DeliveryStoredNotWoken)} {
+		if !strings.Contains(captured, want) {
+			t.Errorf("captured ERROR log does not name %q; captured log:\n%s", want, captured)
+		}
+	}
+	if !strings.Contains(captured, `"generation":`) {
+		t.Errorf("captured ERROR log does not carry the generation; captured log:\n%s", captured)
+	}
+}
+
+// TestCompletion_WokenDeliveryStaysQuiet is the negative half of the test
+// above: a completion the parent WAS woken for must produce no ERROR line,
+// so the new signal stays worth reading. Without this, a helper that logged
+// unconditionally would pass the positive test and be useless in production.
+func TestCompletion_WokenDeliveryStaysQuiet(t *testing.T) {
+	readLog := captureLogFile(t, logger.ERROR)
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	rec := launchRunningChild(t, al, parentID, "call-woken")
+	wireTerminalReportDeliverer(al, &recordingUpwardDeliverer{
+		delivery: steer.Delivery{MessageID: rec.SessionID + ":1:final", Outcome: steer.DeliveryWoke},
+	})
+
+	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{finalContent: "child answer"}, nil); err != nil {
+		t.Fatalf("completeSteeredTurn: %v", err)
+	}
+
+	if captured := readLog(); strings.Contains(captured, `"level":"error"`) {
+		t.Fatalf("a completion the parent WAS woken for produced an ERROR line; captured log:\n%s", captured)
+	}
+}
+
+// TestCompletion_ProgressStoredNotWokenStaysQuiet proves the report is gated
+// on WAKE-ELIGIBILITY, not on the outcome kind. A non-fatal lifecycle notice
+// that is not wake-eligible returning stored_not_woken is the CONTRACT
+// (FR-B-010), not a failure, and must stay silent — otherwise the ERROR
+// stream fills with non-events and stops being read.
+func TestCompletion_NonWakeEligibleStoredNotWokenStaysQuiet(t *testing.T) {
+	readLog := captureLogFile(t, logger.ERROR)
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	rec := launchRunningChild(t, al, parentID, "call-progress")
+
+	var progress generated.SessionMessage
+	if err := progress.FromSessionMessageProgress(generated.SessionMessageProgress{
+		MessageId:      rec.SessionID + ":progress",
+		SessionId:      rec.SessionID,
+		CreatedAt:      time.Now().UTC(),
+		Depth:          1,
+		SenderIdentity: rec.AgentID,
+		Text:           "still working",
+	}); err != nil {
+		t.Fatalf("encode progress: %v", err)
+	}
+
+	reportUndeliveredWake("steer: complete", steer.UpwardEvent{
+		ChildSessionID: rec.SessionID,
+		Outcome:        steer.OutcomeProgress,
+		Message:        progress,
+	}, parentID, rec.Generation, steer.Delivery{MessageID: rec.SessionID + ":progress", Outcome: steer.DeliveryStoredNotWoken})
+
+	if captured := readLog(); strings.Contains(captured, `"level":"error"`) {
+		t.Fatalf("a non-wake-eligible progress entry stored without a wake produced an ERROR line — that outcome is its contract, not a failure; captured log:\n%s", captured)
 	}
 }
 

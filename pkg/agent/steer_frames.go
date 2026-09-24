@@ -337,10 +337,17 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "error": err.Error()})
 		return
 	}
-	if _, err := deliverer.Deliver(ctx, steer.UpwardEvent{
-		ChildSessionID: sessionID, Outcome: steer.OutcomeGoalVerdict, Message: sm,
-	}); err != nil {
+	event := steer.UpwardEvent{ChildSessionID: sessionID, Outcome: steer.OutcomeGoalVerdict, Message: sm}
+	delivery, err := deliverer.Deliver(ctx, event)
+	if err != nil {
 		logger.WarnCF("agent", "goal-status upward delivery failed",
 			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "error": err.Error()})
+		return
 	}
+	// [ADR-091 fix lane RX-OUTCOME, HIGH] A goal verdict is wake-eligible
+	// (`goal_status`, I-5), and it is the only way a parent learns the Judge
+	// ruled on its child's claim. Stored-not-woken means the parent sits on
+	// an un-adjudicated child indefinitely — reported, never discarded.
+	parentSessionID, generation := steerDeliveryEdge(al.GetSessionLifecycleStore(), sessionID)
+	reportUndeliveredWake("steer: goal verdict", event, parentSessionID, generation, delivery)
 }

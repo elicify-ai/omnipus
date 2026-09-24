@@ -352,8 +352,29 @@ func (r *SteerBootRecovery) deliver(ctx context.Context, rec *session.LifecycleR
 		notice("deliver:"+envelope.MessageID, fmt.Sprintf("session %s wake %s not delivered: upward deliverer is not configured", rec.SessionID, envelope.MessageID))
 		return
 	}
-	if _, err := r.Deliverer.Deliver(ctx, steer.UpwardEvent{ChildSessionID: rec.SessionID, Outcome: outcome, Message: message}); err != nil {
+	event := steer.UpwardEvent{ChildSessionID: rec.SessionID, Outcome: outcome, Message: message}
+	delivery, err := r.Deliverer.Deliver(ctx, event)
+	if err != nil {
 		notice("deliver:"+envelope.MessageID, fmt.Sprintf("session %s wake %s not delivered: %v", rec.SessionID, envelope.MessageID, err))
+		return
+	}
+	// [ADR-091 fix lane RX-OUTCOME, HIGH] Boot recovery IS the last-resort
+	// re-nudge every other Deliver call site relies on ("the boot re-nudge
+	// covers it"). A wake-eligible entry that comes back stored_not_woken
+	// HERE therefore has nothing left behind it: the parent will not be
+	// woken by this boot either, and the next restart will find the same
+	// unacknowledged entry and fail the same way. That makes it an
+	// undeliverable entry in FR-B-004's sense, so it takes BOTH the ERROR
+	// line every call site now emits AND the operator notice this sweep
+	// already reports its other failures through — a silent no-op was the
+	// one thing it must not be.
+	reportUndeliveredWake("steer: boot recovery", event, steerParentSessionID(rec), rec.Generation, delivery)
+	if delivery.Outcome == steer.DeliveryStoredNotWoken {
+		if class, cerr := session.ClassifySessionMessage(message); cerr != nil || class.WakeEligible {
+			notice("deliver:"+envelope.MessageID, fmt.Sprintf(
+				"session %s wake %s was stored but its steering session was NOT woken — it will not learn of this outcome until it is nudged by hand",
+				rec.SessionID, envelope.MessageID))
+		}
 	}
 }
 

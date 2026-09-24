@@ -560,3 +560,97 @@ func TestToIntArg_RejectsFractionalFloat(t *testing.T) {
 		})
 	}
 }
+
+// --- ADR-091 fix lane RX-OUTCOME, Task 1 ---
+
+// storedNotWokenDeliverer is a steer.UpwardDeliverer that appends to a real
+// inbox and then reports the entry as STORED BUT NOT WOKEN — the outcome
+// message_parent used to discard with "mt.delivery.Outcome is available for
+// callers that want it (none today)".
+type storedNotWokenDeliverer struct {
+	inbox     *session.MessageInboxStore
+	ownerKey  string
+	messageID string
+}
+
+func (d *storedNotWokenDeliverer) Deliver(_ context.Context, event steer.UpwardEvent) (steer.Delivery, error) {
+	res, err := d.inbox.Append(d.ownerKey, event.Message)
+	if err != nil {
+		return steer.Delivery{}, err
+	}
+	d.messageID = res.MessageID
+	return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+}
+
+// newStoredNotWokenSetup builds message_parent over a deliverer that always
+// reports stored_not_woken. It seeds its OWN lifecycle record rather than
+// reusing newMessageParentTestSetup: that helper's seed predates commit
+// 21edbad7e's durable-field validation and no longer persists (see this
+// lane's report), and these two tests must not depend on that being fixed.
+func newStoredNotWokenSetup(t *testing.T) (*MessageParentTool, *storedNotWokenDeliverer) {
+	t.Helper()
+	lc := session.NewLifecycleStore(t.TempDir())
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	deliverer := &storedNotWokenDeliverer{inbox: inbox, ownerKey: "parent-1"}
+	tool := NewMessageParentTool(deliverer, lc)
+	tool.SetSessionMessagingEnabled(func() bool { return true })
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-not-woken", Generation: 3, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: "parent-1",
+		SteeredBy:   &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
+		WorkspaceID: "ws-1", AgentID: "worker",
+	}); err != nil {
+		t.Fatalf("seed lifecycle record failed: %v", err)
+	}
+	return tool, deliverer
+}
+
+// TestMessageParent_StoredNotWoken_LoggedAtError proves message_parent now
+// ACTS on steer.Delivery.Outcome for a wake-eligible kind. A `blocker` the
+// parent was never woken for is an entry nothing will read until boot
+// recovery — previously completely silent.
+func TestMessageParent_StoredNotWoken_LoggedAtError(t *testing.T) {
+	logs := captureSlogInfo(t)
+	tool, deliverer := newStoredNotWokenSetup(t)
+
+	result := tool.Execute(withChildContext("child-not-woken"), map[string]any{
+		"kind": "blocker", "text": "the deploy key is missing", "severity": "high",
+	})
+	if result.IsError {
+		t.Fatalf("message_parent(blocker) failed: %s", result.ForLLM)
+	}
+
+	captured := logs.String()
+	if !strings.Contains(captured, `"level":"ERROR"`) {
+		t.Fatalf("a blocker the parent was never woken for produced no ERROR line — the stall is invisible; captured log:\n%s", captured)
+	}
+	for _, want := range []string{"child-not-woken", "parent-1", deliverer.messageID, string(steer.DeliveryStoredNotWoken)} {
+		if !strings.Contains(captured, want) {
+			t.Errorf("captured ERROR log does not name %q; captured log:\n%s", want, captured)
+		}
+	}
+	if !strings.Contains(captured, `"generation":3`) {
+		t.Errorf("captured ERROR log does not carry the child's generation; captured log:\n%s", captured)
+	}
+}
+
+// TestMessageParent_ProgressStoredNotWokenStaysQuiet is the gate half: for
+// `progress` (never wake-eligible, FR-B-010) stored_not_woken IS the
+// contract, so it must produce no ERROR line. Without this, a report that
+// fired on every stored_not_woken would pass the test above and drown the
+// real signal in production.
+func TestMessageParent_ProgressStoredNotWokenStaysQuiet(t *testing.T) {
+	logs := captureSlogInfo(t)
+	tool, _ := newStoredNotWokenSetup(t)
+
+	result := tool.Execute(withChildContext("child-not-woken"), map[string]any{
+		"kind": "progress", "text": "still checking the checkout page",
+	})
+	if result.IsError {
+		t.Fatalf("message_parent(progress) failed: %s", result.ForLLM)
+	}
+
+	if captured := logs.String(); strings.Contains(captured, `"level":"ERROR"`) {
+		t.Fatalf("a progress entry stored without a wake produced an ERROR line — that outcome is its contract, not a failure; captured log:\n%s", captured)
+	}
+}

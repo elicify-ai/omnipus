@@ -39,7 +39,7 @@ A steered session must never speak to a human directly. Today that rule is a swi
 | `pkg/tools/message_parent.go::MessageParentWaker` | the tools-side injected wake interface | replaced by `steer.UpwardDeliverer` (I-5); the tool keeps calling an injected interface |
 | audience at every boundary | each site decides alone (`SendResponse`, depth, `parentSpawnCallID`) | each site calls the injected `steer.AudienceResolver`, then `steer.BoundaryObserver.Observe`, then acts; the resolver is wired into `pkg/agent`, `pkg/tools`, `pkg/channels`, `pkg/gateway`, `pkg/askuser` at boot (R03) |
 | `pkg/agent/async_notifier.go::WakeParent`, `wakeableSessionMessageKinds` (`question`, `blocker`, `error`, `handback`) | wakes with the **child's** `AgentID` as sender identity | wakes with the **parent's** identity resolved from the edge; the one wake-eligibility table (I-5) = today's set plus `goal_status`, minus non-fatal `error`; used by initial delivery and by boot alike (R09) |
-| `pkg/agent/async_notifier.go::allowWake` | 15-second debounce and hourly cap on every wake; suppression returns success | wake-eligible kinds bypass it; suppression of the rest is reported as `suppressed`, never as delivered |
+| `pkg/agent/async_notifier.go::allowWake` | 15-second debounce and hourly cap on every wake; suppression returns success | wake-eligible kinds bypass it entirely (`WakeParentAlways` never consults `allowWake`), so a completion can never be throttled away; the rest never reach a wake at all and are reported `stored_not_woken` |
 | `pkg/session/message_inbox.go::Append` | unacknowledged cap and per-minute rate on every kind; ids assigned by the inbox | wake-eligible kinds always admitted; cap and rate apply to `progress` / `checkpoint` / non-fatal `error`; terminal entries carry deterministic ids (`<child>:<gen>:final`), so a recreated entry is the same entry (R10) |
 | write order of a terminal outcome | — | inbox entry first, terminal lifecycle write second; boot repairs either half (WP-D) |
 | `pkg/agent/task_executor_judge.go::notifyParentIfAllSiblingsDone` | wakes at `"task:" + parent.ID`; fires only when all siblings are terminal | **deleted**; completion goes through `Deliver`, per child |
@@ -174,7 +174,7 @@ Conventions: landing order §5 item 6.
 | Durable | restart between persist and wake → 1 turn; restart between consume and ack → 0 additional turns |
 | Live turn | recipient turn active → `Delivery.Outcome == queued_into_live_turn`; `activeTurnStates` gains no entry |
 | Terminal admission | inbox at cap and over rate → `handback` stored, `Delivery.Outcome == woke`; `progress` → dropped as today |
-| Wake-eligible bypasses debounce | 10 completions in 1 s → 10 `woke`/`queued_into_live_turn`, 0 `suppressed` |
+| Wake-eligible bypasses debounce | 10 completions in 1 s → 10 `woke`/`queued_into_live_turn`, 0 `stored_not_woken` |
 | Progress no wake | `progress` / `checkpoint` / non-fatal `error` → `stored_not_woken`; at boot, none of them is woken; `blocker` → `woke` |
 | Verdict encoding | a `not_met` verdict with evidence validates against the regenerated `SessionMessageGoalStatus` and appears as a `subagent_message` of kind `goal_status` |
 | External channels | Telegram/WeCom stream adapter receives 0 chunks from a steered session |
@@ -189,7 +189,7 @@ Conventions: landing order §5 item 6.
 |---|---|---|---|
 | Lifecycle store + classification (WP-A) | reads the class for audience | I-1, I-8 | not runnable → `AudienceNone` |
 | Message inbox | every upward entry | `MessageInboxStore.Append(ownerKey, generated.SessionMessage)` | terminal always admitted; others rate-limited and surfaced |
-| Async notifier | the wake transport | `WakeParent` with terminal bypass | suppression reported |
+| Async notifier | the wake transport | `WakeParentAlways` — the terminal bypass, no debounce or hourly cap | a failed wake yields `stored_not_woken`, reported at ERROR by the caller |
 | Steering queue | live-turn enqueue | `steering.go::enqueueSteeringMessage` | existing behaviour |
 | Channel adapters | receive nothing from steered sessions | audience = none | n/a |
 | Gateway WS | frames, replay | I-4 | reconnect replays per session |
@@ -295,7 +295,7 @@ Feature: Audience and upward delivery
     And nine other children of B completed in the last second
     When C completes
     Then C's handback is stored and B is woken or enqueued
-    And no delivery outcome is "suppressed"
+    And every delivery outcome is "woke" or "queued_into_live_turn"
 
   # Alternate Path — Traces to: US-2 / AS-10
   Scenario: Progress is stored, not woken — not even at boot
@@ -440,7 +440,7 @@ Implementers load the `test-driven-development` skill first.
 |---|---|---|---|
 | B-1 | depth 1 / 2 / 3 exercising each of the 12 boundaries | 0 user deliveries; boundary invoked; transcript has it | US-1 |
 | B-2 | re-entry after 1 / 2 child completions | contained | US-1/AS-3 |
-| B-3 | children 1 / 2 / 5 / 10 completing in any order, within 1 s | one `handback` each; 0 suppressed | US-2 |
+| B-3 | children 1 / 2 / 5 / 10 completing in any order, within 1 s | one `handback` each; 0 `stored_not_woken` | US-2 |
 | B-4 | crash points: before persist / after persist before wake / after wake before consume / after consume before ack | one turn in every case (the first re-runs the child's finish) | US-2/AS-5,6 |
 | B-5 | 1,000 progress entries in 1 s, then completion | progress rate-limited, 0 wakes; `handback` admitted and woken | US-2/AS-8,10 |
 | B-6 | steering session deleted | undeliverable recorded and surfaced | edge |
@@ -465,7 +465,7 @@ Preserved: the assertions and controls of `pkg/agent/system_turn_tool_output_tes
 | FR-B-007 | The system MUST delete delegation-specific stream shadowing and `replay.go::emitNestedToolCalls`, and MUST keep same-session stream ownership. |
 | FR-B-008 | Tool errors from a steered session MUST be visible in its own view and, as an `error` inbox entry, as a line in the parent's side panel. |
 | FR-B-009 | A steered session's `message` tool MUST accept only its own session's conversation as target and MUST refuse every other target with `steered_session_own_chat_only`; proven with real channel ownership, never a nil ownership stub. |
-| FR-B-010 | One wake-eligibility table MUST govern initial delivery and boot alike: `handback`, `question`, `blocker`, fatal `error` and `goal_status` wake, are always admitted and bypass `allowWake`; `progress`, `checkpoint` and non-fatal `error` never wake (not at boot either) and remain subject to the cap and the rate; a suppressed wake MUST be reported as `suppressed`, never as delivered. |
+| FR-B-010 | One wake-eligibility table MUST govern initial delivery and boot alike: `handback`, `question`, `blocker`, fatal `error` and `goal_status` wake, are always admitted and bypass `allowWake`; `progress`, `checkpoint` and non-fatal `error` never wake (not at boot either) and remain subject to the cap and the rate and MUST be reported `stored_not_woken`, never as woken. Because a wake-eligible kind bypasses `allowWake` outright, a wake the debounce or the hourly cap threw away is not a reachable outcome for it and there is no separate `suppressed` result: `DeliveryOutcome` has exactly three values — `woke`, `queued_into_live_turn`, `stored_not_woken`. |
 | FR-B-011 | When the recipient has a live turn, the wake MUST be enqueued into it as a steering message and MUST NOT start a second turn; the drain MUST write the consumed marker when it dequeues it. |
 | FR-B-012 | A steered session's question MUST be relayed as a `question` entry to its steering session and MUST NOT be broadcast as the parent's own card. |
 | FR-B-013 | When the recipient carries a Stop marker for its current generation, a terminal entry MUST be stored and MUST NOT wake it; it is acknowledged at revival. |
@@ -479,7 +479,7 @@ Preserved: the assertions and controls of `pkg/agent/system_turn_tool_output_tes
 | ID | Criterion |
 |---|---|
 | SC-B-1 | 0 user-address deliveries across 12 boundaries × 3 depths × 2 entry kinds in the fixture; 12 of 12 boundaries invoked. |
-| SC-B-2 | exactly 1 consumption (a new turn or one live-turn injection, never both, never neither) per completion across 100 randomized completion orders and 5 crash points; 0 `suppressed` outcomes for wake-eligible kinds across 1,000 randomized bursts. |
+| SC-B-2 | exactly 1 consumption (a new turn or one live-turn injection, never both, never neither) per completion across 100 randomized completion orders and 5 crash points; 0 `stored_not_woken` outcomes for wake-eligible kinds across 1,000 randomized bursts of an un-stopped recipient — burst rate alone never costs a wake (a `stored_not_woken` for a wake-eligible kind is only ever the Stop marker of FR-B-013, a missing recipient record or a failed wake, never throttling). |
 | SC-B-3 | 100% of frames from a steered session carry it as `session_id`; `ProducingSessionID` absent from `pkg/agent/events.go`. |
 | SC-B-4 | After restart, `loadReplay` returns 100% of persisted lifecycle events for a delegate child and a task child. |
 
