@@ -110,7 +110,21 @@ const sidebarToggle = (page: Page) => page.getByRole('button', { name: 'Toggle n
 // A session's sidebar row (Sidebar.tsx's SidebarSessionRow) is a ghost
 // Button whose accessible name is the session's title — there is no
 // dedicated testid per row, the title text IS the selector.
-const sessionRowByTitle = (page: Page, title: string) => page.getByRole('button', { name: title, exact: true })
+// Real-browser follow-up (orchestrator, scenarios b and c — traced from the
+// actual trace.zip execution log, not guessed): scoping the row lookup to
+// the WHOLE page matched the WRONG element. The header's "My Workspace"
+// workspace tab apparently ALSO carries aria-current="page" (the tablist's
+// own "currently selected view" semantics) and, being earlier in the DOM
+// than the sidebar drawer, `.first()` picked IT — so a captured "title"
+// was literally the string "My Workspace", and clicking it again later hit
+// the SAME header tab, never a real session row. That explains both bugs
+// from one root cause: the drawer's onClose (wired only to an actual
+// session row's own click handler) never fired, so its backdrop stayed
+// open indefinitely — not a transient fade, exactly what was observed.
+// Scoped to the drawer panel specifically (`#sidebar-overlay-panel`,
+// Sidebar.tsx) so nothing outside it can ever match.
+const sidebarPanel = (page: Page) => page.locator('#sidebar-overlay-panel')
+const sessionRowByTitle = (page: Page, title: string) => sidebarPanel(page).getByRole('button', { name: title, exact: true })
 
 // Real-browser follow-up (orchestrator, scenario c): Sidebar.tsx's own
 // "click-outside overlay dismiss" backdrop (`aria-hidden="true"`,
@@ -124,8 +138,14 @@ const sessionRowByTitle = (page: Page, title: string) => page.getByRole('button'
 // problem for an actual user) — wait for the backdrop to actually leave
 // the DOM instead, the same way a real click has to wait for it.
 const sidebarBackdrop = (page: Page) => page.locator('div[aria-hidden="true"].absolute.inset-0.z-30')
+// Real-browser follow-up (orchestrator): a silently-swallowed timeout here
+// masked the real bug for two whole debugging rounds — the drawer failing
+// to close surfaced as a much more confusing failure much later (a
+// composer click blocked by the same backdrop, in an unrelated helper).
+// Never weaken this to a soft catch again: if the drawer doesn't actually
+// close, this must fail HERE, loudly, at the point that is actually wrong.
 async function waitForSidebarClosed(page: Page) {
-  await sidebarBackdrop(page).waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {})
+  await sidebarBackdrop(page).waitFor({ state: 'hidden', timeout: 10_000 })
 }
 
 // The currently-active row carries aria-current="page" (SidebarSessionRow).
@@ -135,21 +155,40 @@ async function waitForSidebarClosed(page: Page) {
 // be, is what makes re-selecting the row later reliable).
 async function activeSidebarTitle(page: Page): Promise<string> {
   await sidebarToggle(page).click()
-  const row = page.locator('button[aria-current="page"]').first()
+  // Real-browser follow-up (orchestrator, traced from the actual trace.zip
+  // execution log): even scoped to the sidebar panel, `aria-current="page"`
+  // ALSO matches the workspace accordion header (Sidebar.tsx's own
+  // per-project button — "you're currently in this workspace"), which
+  // renders BEFORE its session tree in DOM order. `.first()` picked that
+  // header, not the actual active session row (SidebarSessionRow, line
+  // ~987 of that file) — captured title was literally "My Workspace",
+  // which later matched the SAME header again, never a real session,
+  // leaving the drawer's onClose never triggered (explains scenario c's
+  // "not a 150ms fade, the layer stays" too — same root cause). The
+  // active SESSION row renders AFTER the workspace header within its
+  // expanded accordion section, so `.last()` is the real one.
+  const row = sidebarPanel(page).locator('button[aria-current="page"]').last()
   await expect(row).toBeVisible({ timeout: 10_000 })
   const title = (await row.innerText()).trim()
-  // Real-browser follow-up (orchestrator): the drawer overlay
-  // (`#sidebar-overlay-panel`, Sidebar.tsx — "absolute left-0 top-0 h-full")
-  // sits visually on top of the header while open, including the hamburger
-  // button itself — a plain second click on it timed out for the full 420s
-  // (CI: "subtree intercepts pointer events", retried 826+ times). Escape
-  // IS the sidebar's own designed close key (Sidebar.tsx's own keydown
-  // handler), but is off-limits here regardless — it also cancels a
-  // running turn, which this scenario cannot risk. `force: true` reaches
-  // the hamburger's own click handler directly without relying on it being
-  // the topmost element at that point — the standard, narrow answer to
-  // "another element visually overlaps the one I actually want to click".
-  await sidebarToggle(page).click({ force: true }) // close the drawer again
+  // Real-browser follow-up (orchestrator, corrected after a live-traced
+  // misdiagnosis): the drawer panel (#sidebar-overlay-panel, z-40) and its
+  // own click-outside backdrop (z-30) both sit ON TOP of the header while
+  // open — including the hamburger's own screen position, which the panel
+  // visually covers. A `force: true` click still resolves via real
+  // coordinate-based input (Playwright dispatches at the element's
+  // bounding box, but the browser's own hit-testing still delivers it to
+  // whatever is topmost AT THAT SCREEN POINT), so it was actually landing
+  // on the drawer/backdrop rather than the hamburger underneath — the
+  // drawer never genuinely closed (confirmed against the real gateway:
+  // the backdrop stayed for the ENTIRE remainder of the test, not a 150ms
+  // fade). Escape is the sidebar's own designed close key but stays
+  // off-limits regardless — it also cancels a running turn. Fixed per the
+  // orchestrator's own working harness: click the backdrop directly, at a
+  // point clearly OUTSIDE the drawer panel's own width (the right edge of
+  // the viewport) so there is no coordinate ambiguity about which layer
+  // receives the click.
+  const viewport = page.viewportSize() ?? { width: 1280, height: 720 }
+  await sidebarBackdrop(page).click({ position: { x: viewport.width - 20, y: viewport.height / 2 } })
   await waitForSidebarClosed(page)
   return title
 }
@@ -161,7 +200,20 @@ async function activeSidebarTitle(page: Page): Promise<string> {
 // defeat the entire point of this scenario.
 async function switchToSessionByTitle(page: Page, title: string) {
   await sidebarToggle(page).click()
-  await sessionRowByTitle(page, title).click()
+  // Real-browser follow-up (orchestrator, traced locally against a real
+  // gateway): the sidebar title is a plain 60-char truncation of the first
+  // message (confirmed: a captured title's own .length was exactly 60,
+  // ending in a literal "..." baked into the text, not a CSS-only
+  // truncation). Every scenario in this file that calls startLongTurn uses
+  // the SAME hardcoded LONG_PROMPT, so once more than one of them has run
+  // against the SAME gateway process (true for CI too — the whole spec
+  // file runs sequentially against one worker's gateway, not just this
+  // isolated local run) their titles collide exactly, and getByRole's
+  // {exact: true} — needing a single match to click — hangs against the
+  // resulting ambiguity instead of erroring cleanly. `.first()` is the most
+  // recently created matching session (the sidebar lists newest-first),
+  // which is always the one THIS test just made.
+  await sessionRowByTitle(page, title).first().click()
   await waitForSidebarClosed(page)
 }
 
