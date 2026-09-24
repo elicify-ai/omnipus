@@ -844,6 +844,18 @@ func TestResolvePath_MidStringDotDotReentry_Read_NowOpen(t *testing.T) {
 // silently changes read_file's FSOp from FSOpRead to something else (or
 // merges two call sites incorrectly) fails this test immediately rather
 // than only surfacing once the P2 ask-flow starts keying off op for real.
+//
+// Re-pointed 2026-09-24 (ADR-092 D9 Auto path check): read_file, write_file,
+// list_directory, edit_file/append_file and send_file no longer call
+// ResolvePathAllowingPatterns directly — they now go through
+// resolveAutoCheckedPath (auto_approve.go), which wraps that same
+// ResolvePathAllowingPatterns call with the post-resolution RecheckAutoPin
+// step and passes the identical, still-correct FSOp value straight through.
+// browser_screenshot's own call site was reworded from a literal
+// "browser_screenshot" tool name and a `filename` parameter to t.Name() and
+// screenshotFilename() in the same lane (still FSOpWrite, unchanged
+// semantics) — see 8c4e33e07/88df6af3a. These snippets are re-pointed to
+// that new, equally strict form; none of the pinned FSOp values changed.
 func TestGenericTools_PassDocumentedFSOp(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -866,25 +878,26 @@ func TestGenericTools_PassDocumentedFSOp(t *testing.T) {
 			dir:     toolsDir,
 			file:    "filesystem.go",
 			tool:    "read_file",
-			snippet: `ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpRead, path, t.patterns)`,
+			snippet: `resolveAutoCheckedPath(ctx, policy, t.Name(), FSOpRead, path, t.patterns, fspolicy.PathGrantAccessRead)`,
 		},
 		{
 			dir:     toolsDir,
 			file:    "filesystem.go",
 			tool:    "write_file",
-			snippet: `ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)`,
+			snippet: `resolveAutoCheckedPath(ctx, policy, t.Name(), FSOpWrite, path, t.patterns, fspolicy.PathGrantAccessWrite)`,
 		},
 		{
 			dir:     toolsDir,
 			file:    "filesystem.go",
 			tool:    "list_directory",
-			snippet: `ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpList, path, t.patterns)`,
+			snippet: `resolveAutoCheckedPath(ctx, policy, t.Name(), FSOpList, path, t.patterns, fspolicy.PathGrantAccessRead)`,
 		},
 		{
-			dir:     toolsDir,
-			file:    "edit.go",
-			tool:    "edit_file / append_file",
-			snippet: `ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)`,
+			dir:  toolsDir,
+			file: "edit.go",
+			tool: "edit_file / append_file",
+			snippet: "resolveAutoCheckedPath(ctx, policy, t.Name(), FSOpWrite, path, t.patterns,\n" +
+				"\t\tfspolicy.PathGrantAccessRead|fspolicy.PathGrantAccessWrite)",
 		},
 		{
 			// FR-2.3a (ADR-063 / spec unified-file-access-and-mounts):
@@ -894,7 +907,7 @@ func TestGenericTools_PassDocumentedFSOp(t *testing.T) {
 			dir:     toolsDir,
 			file:    "send_file.go",
 			tool:    "send_file",
-			snippet: `ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpSend, path, t.allowPaths)`,
+			snippet: `resolveAutoCheckedPath(ctx, policy, t.Name(), FSOpSend, path, t.allowPaths, fspolicy.PathGrantAccessRead)`,
 		},
 		{
 			dir:     toolsDir,
@@ -913,7 +926,7 @@ func TestGenericTools_PassDocumentedFSOp(t *testing.T) {
 			dir:     browserDir,
 			file:    "tools.go",
 			tool:    "browser_screenshot",
-			snippet: `tools.ResolvePath(ctx, policy, "browser_screenshot", "", tools.FSOpWrite, filename)`,
+			snippet: `tools.ResolvePath(ctx, policy, t.Name(), "", tools.FSOpWrite, screenshotFilename())`,
 		},
 		// "workspace_read (REST handler)" (pkg/gateway/rest_workspace.go
 		// HandleWorkspace, FR-2.3c) is deliberately NOT pinned here anymore.
