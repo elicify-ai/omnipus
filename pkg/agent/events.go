@@ -130,6 +130,20 @@ const (
 	// Verbose-chat-gated card in that specific chat thread, not just the
 	// GLOBAL ActivityPanel.
 	EventKindJudgeVerdict
+	// EventKindSubagentMessage is emitted when a steered child reports
+	// progress/checkpoint/blocker/question/goal_status to its steering
+	// session (ADR-091 D7/I-4 — the ADR-053 subagent_message contract,
+	// wired at last: "no emitter in Go and no consumer in the SPA today").
+	// The WS forwarder turns it into a subagent_message frame
+	// (generated.SubagentMessageFrame); the SAME event, persisted first,
+	// is what the since-cursor replay returns after a reload.
+	EventKindSubagentMessage
+	// EventKindSubagentState is emitted on every lifecycle transition of a
+	// steered child (queued -> running -> needs_input -> running ->
+	// completed, etc. — ADR-091 D7/I-4). The WS forwarder turns it into a
+	// subagent_state frame (generated.SubagentStateFrame); persisted first,
+	// exactly like EventKindSubagentMessage.
+	EventKindSubagentState
 
 	eventKindCount
 )
@@ -171,6 +185,8 @@ var eventKindNames = [...]string{
 	"tool_result_projection",
 	"goal_outcome",
 	"judge_verdict",
+	"subagent_message",
+	"subagent_state",
 }
 
 // String returns the stable string form of an EventKind.
@@ -274,12 +290,6 @@ type TurnStartPayload struct {
 	// otherwise a child's own turn-start would reopen the arming hole for
 	// later-arriving sibling spawn events.
 	IsRoot bool
-	// SessionID is the ROUTING session id — the same value TurnEndPayload
-	// and the sub-agent span payloads carry (ADR-057 FR-011). The WS session
-	// hub keys the root-turn-ended latch by it; without it a background turn
-	// (keeper, goal loop, scheduled run) whose chat id is bound to no browser
-	// connection could never reset the latch (#823 review item 8).
-	SessionID string
 }
 
 // TurnEndPayload describes the completion of a turn.
@@ -351,23 +361,15 @@ type ContextCompressPayload struct {
 // ToolExecStartPayload describes a tool execution request.
 //
 // tool_call_start is class (a) per the ADR-057 W5 audit (FR-089, BDD-16): a
-// child turn genuinely emits it, so the wire frame carries both ids. See
-// SessionID and ProducingSessionID below for which is which.
+// child turn genuinely emits it. See SessionID below.
 type ToolExecStartPayload struct {
 	ToolCallID session.ToolCallID
 	ChatID     string
 	// SessionID is the transcript-store session ID for this turn.
 	//
-	// ADR-057 FR-012 (W5/U23): the WS forwarder (pkg/gateway/websocket.go,
-	// U11) stamps the outbound tool_call_start frame's wire `session_id`
-	// straight from this field, so it MUST hold the ROUTING session id —
-	// the id inherited verbatim from the root of the delegation subtree
-	// (session.RoutingSessionID's contract) — not necessarily this turn's
-	// own store-backed session when the call fires several delegation
-	// levels deep. Emitting code (turn.go, U3/U9) is responsible for
-	// sourcing it from the emitting turnState's routing identity. The
-	// turn's own real session, when it differs, belongs in
-	// ProducingSessionID below.
+	// The WS forwarder stamps the outbound tool_call_start frame's wire
+	// session_id directly from this field. It therefore holds the producing
+	// turn's own transcript identity.
 	SessionID string
 	Tool      string
 	Arguments map[string]any
@@ -378,35 +380,19 @@ type ToolExecStartPayload struct {
 	// AgentID is the agent executing this tool call.
 	// FR-I-008: live tool_call_start frames must carry agent_id to match replay frame parity.
 	AgentID string
-	// ProducingSessionID is the real, store-backed session that actually
-	// executed this tool call (ADR-057 FR-013, W5d, owned by U23) — the
-	// child's own session.SessionID when the call fires inside a delegated
-	// sub-turn, distinct from SessionID's routing key above. Left as the
-	// zero value when this turn IS the routing session (producing ==
-	// routing), so the WS forwarder can implement FR-013's "present iff it
-	// differs from session_id" rule with a plain non-empty-and-unequal
-	// check before stamping the wire's optional producing_session_id
-	// (generated.ToolCallStartFrame.ProducingSessionId). Populated by the
-	// emitting turnState (U3/U9) with its own transcriptSessionID — never by
-	// this file, which defines the shape only.
-	ProducingSessionID session.SessionID
 }
 
 // ToolExecEndPayload describes the outcome of a tool execution.
 //
 // tool_call_result is class (a) per the ADR-057 W5 audit (FR-089, BDD-16): a
-// child turn genuinely emits it, so the wire frame carries both ids. See
-// SessionID and ProducingSessionID below for which is which.
+// child turn genuinely emits it. See SessionID below.
 type ToolExecEndPayload struct {
 	ToolCallID session.ToolCallID
 	ChatID     string
 	// SessionID is the transcript-store session ID for this turn.
 	//
-	// ADR-057 FR-012 (W5/U23): the WS forwarder (pkg/gateway/websocket.go,
-	// U11) stamps the outbound tool_call_result frame's wire `session_id`
-	// straight from this field, so it MUST hold the ROUTING session id — see
-	// ToolExecStartPayload.SessionID's doc comment for the full rationale,
-	// which applies identically here.
+	// The WS forwarder stamps tool_call_result.session_id directly from this
+	// producing turn's transcript identity.
 	SessionID  string
 	Tool       string
 	Duration   time.Duration
@@ -424,13 +410,6 @@ type ToolExecEndPayload struct {
 	// AgentID is the agent executing this tool call.
 	// FR-I-008: live tool_call_result frames must carry agent_id to match replay frame parity.
 	AgentID string
-	// ProducingSessionID is the real, store-backed session that actually
-	// executed this tool call (ADR-057 FR-013, W5d, owned by U23) — the
-	// child's own session.SessionID when the call fires inside a delegated
-	// sub-turn, distinct from SessionID's routing key above. See
-	// ToolExecStartPayload.ProducingSessionID's doc comment for the full
-	// "present iff it differs" contract, which applies identically here.
-	ProducingSessionID session.SessionID
 }
 
 // ToolExecSkippedPayload describes a skipped tool call.
@@ -484,13 +463,8 @@ const (
 	// explicitly claimed — i.e. RequestCancel targeted the sub-turn
 	// directly (childTS.cancelFired == true when its context was
 	// canceled), not merely inherited via a parent's hard-abort cascade.
-	// Reachable, if narrow (FIX 4, 7-reviewer-gate follow-up on the Wave 3
-	// fix pass — see spawnSubTurn's cleanup defer, pkg/agent/subturn.go):
-	// a Critical:true sub-turn survives a graceful parent finish by design
-	// (SubTurnConfig.Critical) and keeps running under its own session ID;
-	// a later RequestCancel against that same session (GetActiveTurnHookForSession's
-	// fallback match, pkg/agent/turn.go) can find and cancel the sub-turn
-	// itself once its parent has already finished. Distinct from
+	// A later RequestCancel against that same session can find and cancel the
+	// active turn directly. This is distinct from
 	// SubTurnStatusInterrupted below, which covers the cascade case
 	// (childTS.cancelFired stays false there — the parent's Finish(true)
 	// cascades via Finish(true) directly on children, bypassing
@@ -499,28 +473,39 @@ const (
 	//nolint:misspell // wire value "cancelled" matches frontend TS union in src/store/chat.ts, src/lib/ws.ts
 	SubTurnStatusCancelled SubTurnStatus = "cancelled"
 	// SubTurnStatusInterrupted indicates the sub-turn was interrupted by its
-	// parent's hard-abort cascade (the common case — see spawnSubTurn's
-	// cleanup defer for the childCtx.Err()==context.Canceled check). The
-	// wire contract's SubagentEndFrame.reason field (surfaced from
-	// SubTurnEndPayload.Reason) is populated only for this status.
+	// parent's hard-abort cascade (the common case — pre-ADR-091 this was
+	// decided by the deleted spawnSubTurn's cleanup defer, via the
+	// childCtx.Err()==context.Canceled check; today, steer_audience.go's
+	// SteerUpwardDeliverer.Deliver maps steer.OutcomeInterrupted onto this
+	// status — see steer_frames.go::deliverSubagentEnd). The wire contract's
+	// SubagentEndFrame.reason field (surfaced from SubTurnEndPayload.Reason)
+	// is DOCUMENTED as populated only for this status; see
+	// SubTurnEndPayload.Reason's own field doc comment below for the ADR-091
+	// fix lane RX-SUBTURN finding that nothing currently sets that field.
 	SubTurnStatusInterrupted SubTurnStatus = "interrupted"
 	// SubTurnStatusTimeout indicates the sub-turn exceeded its configured
 	// timeout. Deliberately routed to SubTurnStatusError in practice, not
-	// this value — spawnSubTurn's cleanup defer distinguishes an external
-	// cancel (context.Canceled) from every other error case, including a
-	// genuine context.DeadlineExceeded from the sub-turn's own Timeout
-	// config expiring, which falls through to SubTurnStatusError (a real
-	// failure, not a cancellation, from the sub-turn's own point of view).
-	// This value remains declared for wire-contract completeness (the
-	// SPA's SUBAGENT_END_STATUSES validation set already includes it) and
-	// as a documented, intentional design choice, not an oversight.
+	// this value — pre-ADR-091, the deleted spawnSubTurn's cleanup defer
+	// distinguished an external cancel (context.Canceled) from every other
+	// error case, including a genuine context.DeadlineExceeded from the
+	// sub-turn's own Timeout config expiring, which fell through to
+	// SubTurnStatusError (a real failure, not a cancellation, from the
+	// sub-turn's own point of view); today, deliverSubagentEnd
+	// (steer_frames.go) maps steer.OutcomeTimedOut onto THIS status
+	// directly — a change from the pre-ADR-091 routing this comment
+	// describes, flagged here rather than silently reconciled. This value
+	// remains declared for wire-contract completeness (the SPA's
+	// SUBAGENT_END_STATUSES validation set already includes it) and as a
+	// documented, intentional design choice, not an oversight.
 	SubTurnStatusTimeout SubTurnStatus = "timeout"
 	// SubTurnStatusParked indicates the sub-turn stopped because a
 	// message_parent(kind="question", wait=true) call parked its own
 	// session in needs_input (ADR-057 UAT defect C2 fix) — mirrors
-	// TurnEndStatusParked (this file, above), which spawnSubTurn's
-	// endStatus switch (pkg/agent/subturn.go) checks lastTurnStatus against
-	// to set this value. Named identically to TurnEndStatusParked's wire
+	// TurnEndStatusParked (this file, above). Pre-ADR-091, the deleted
+	// spawnSubTurn's endStatus switch (pkg/agent/subturn.go) checked
+	// lastTurnStatus against TurnEndStatusParked to set this value; today,
+	// steer_frames.go::deliverSubagentEnd maps steer.OutcomeParkedQuestion
+	// onto this status directly. Named identically to TurnEndStatusParked's wire
 	// value ("parked") end-to-end — turn status, this SubTurnStatus, and
 	// the SubagentEndFrame.status wire enum all use the same literal — so
 	// no per-layer translation is needed. Deliberately NOT named
@@ -555,13 +540,11 @@ type SubTurnSpawnPayload struct {
 	//
 	// FROZEN CONTRACT (ADR-057 Rule 7, this field owned by U23 — do not
 	// "tidy" it to the child): sourced from the PARENT's turnState — today
-	// parentTS.transcriptSessionID at pkg/agent/subturn.go:1183 (U7); once
+	// parentTS.transcriptSessionID (U7, in the pre-ADR-091 subturn.go, since deleted); once
 	// U3's turn.go role split (W4) lands, that becomes
 	// parentTS.routingSessionID, still parent-scoped. subagent_start is
 	// class (b) per the W5 audit (FR-089, BDD-98): emitted by the PARENT
-	// about the child, so producing_session_id would always equal this
-	// field and is therefore always absent (FR-013's "iff it differs") —
-	// no ProducingSessionID sibling exists on this payload for that reason.
+	// about the child, so SessionID names the producing parent.
 	// The child's own identity already rides this same payload as Label
 	// (set to childID at the spawn call site) and SpanID/ParentSpawnCallID.
 	// Repointing SessionID to the child here would split a delegation's
@@ -587,25 +570,38 @@ type SubTurnEndPayload struct {
 	// SessionID is the ROUTING session id (ADR-057 FR-011/FR-017), NOT this
 	// child turn's own transcript session — sourced from the PARENT's
 	// turnState, today parentTS.transcriptSessionID at
-	// pkg/agent/subturn.go:1424 (U7). See SubTurnSpawnPayload.SessionID's
+	// the pre-ADR-091 subturn.go (U7, since deleted). See SubTurnSpawnPayload.SessionID's
 	// doc comment for the full frozen-contract rationale (ADR-057 Rule 7,
 	// owned by U23), which applies identically here: subagent_end is class
 	// (b) (FR-089, BDD-98), so producing_session_id would always equal this
 	// field and is therefore always absent — do not repoint to the child.
 	SessionID string
-	// Reason is populated ONLY when Status == SubTurnStatusInterrupted (FIX 4,
-	// 7-reviewer-gate follow-up on the Wave 3 fix pass), mirroring the wire
-	// contract's SubagentEndFrame.reason field ("why the sub-turn was
+	// Reason was DOCUMENTED to be populated ONLY when Status ==
+	// SubTurnStatusInterrupted (FIX 4, 7-reviewer-gate follow-up on the
+	// Wave 3 fix pass), mirroring the wire contract's SubagentEndFrame.reason
+	// field ("why the sub-turn was
 	//nolint:misspell // documents the literal wire enum value, matches frontend TS union
 	// interrupted by the parent" — parent_timeout | parent_cancelled |
-	// parent_done_early | unknown). spawnSubTurn's cleanup defer sets this
-	// from the cheapest honest signal available at that point
-	// (parentTS.cancelFired) — see its doc comment for the deliberate
-	// coarseness (this does NOT yet distinguish a live user cancel from a
-	// scheduled run's deadline force-abort, both of which reach
-	// parentTS.cancelFired via the same RequestCancel path; a finer split
-	// would require threading the canceller identity through turnState,
-	// out of scope for this fix). Empty for every other Status value.
+	// parent_done_early | unknown). Pre-ADR-091, the deleted spawnSubTurn's
+	// cleanup defer set this from the cheapest honest signal available at
+	// that point (parentTS.cancelFired) — this does NOT yet distinguish a
+	// live user cancel from a scheduled run's deadline force-abort, both of
+	// which reach parentTS.cancelFired via the same RequestCancel path; a
+	// finer split would require threading the canceller identity through
+	// turnState, out of scope for the original fix. Empty for every other
+	// Status value.
+	//
+	// ADR-091 fix lane RX-SUBTURN finding (comment-only; code unchanged):
+	// steer_frames.go::deliverSubagentEnd, the ONLY current constructor of
+	// this payload, never sets this field — grep confirms no assignment to
+	// Reason (or SubTurnEndPayload{...Reason: ...}) anywhere in production
+	// code. pkg/gateway/websocket_forward.go::onSubTurnEnd still forwards it
+	// to the wire (`if p.Reason != "" { ... }`), and its own comment there
+	// says the frontend (SubagentBlock.tsx) already renders it — so today
+	// this field, and the wire's SubagentEndFrame.reason it feeds, appear to
+	// always be empty for an interrupted sub-turn, where they previously
+	// carried a real value. Flagged for the team to confirm and fix in
+	// code; not fixed here (comment-only lane).
 	Reason string
 }
 
@@ -840,14 +836,13 @@ type TaskRunStatusPayload struct {
 }
 
 // ToolResultProjectionPayload is EventKindToolResultProjection's payload
-// (ADR-066 D5 / FR-022). SessionID and ProducingSessionID follow the
-// ToolExecEndPayload contract exactly (routing id on the wire's session_id;
-// the child's own session only when it differs — u9ToolExecSessionIDs).
+// (ADR-066 D5 / FR-022). SessionID is the routing id on the wire's
+// session_id (u9ToolExecSessionIDs), which is the producing session's own
+// transcript identity.
 type ToolResultProjectionPayload struct {
-	ChatID             string
-	SessionID          string
-	ProducingSessionID session.SessionID
-	ToolCallID         session.ToolCallID
+	ChatID     string
+	SessionID  string
+	ToolCallID session.ToolCallID
 	// ArchiveLine is the zero-based archive line of the projected result;
 	// with ToolCallID it is the projection-state key (FR-019).
 	ArchiveLine int
@@ -893,4 +888,37 @@ type JudgeVerdictPayload struct {
 	SessionID string
 	// Verdict is the adjudication itself, identical to the persisted entry's.
 	Verdict task.JudgeVerdict
+}
+
+// SubagentMessagePayload is EventKindSubagentMessage's payload: one
+// progress/checkpoint/blocker/question/goal_status report from a steered
+// child, for the parent's side-panel status line (ADR-091 D7/I-4). Emitted
+// by steer_audience.go's SteerUpwardDeliverer.Deliver only after the
+// matching `system_subtype: subagent_message` transcript entry was saved
+// into the PARENT's own transcript (this payload's SessionID) — the same
+// entry the since-cursor replay returns on reload.
+type SubagentMessagePayload struct {
+	// SessionID is the PARENT's own session — where this frame is persisted
+	// and where the WS forwarder delivers it (never the child's).
+	SessionID string
+	// MessageID is the saved transcript entry's own id, stamped verbatim
+	// onto the frame so a live push, a replay and a cold load agree.
+	MessageID string
+	// Frame is the wire shape itself, identical to the persisted entry's.
+	Frame generated.SubagentMessageFrame
+}
+
+// SubagentStatePayload is EventKindSubagentState's payload: one lifecycle
+// transition of a steered child, for the parent's side-panel status
+// (ADR-091 D7/I-4). Emitted only after the matching `system_subtype:
+// subagent_state` transcript entry was saved into the PARENT's own
+// transcript (this payload's SessionID).
+type SubagentStatePayload struct {
+	// SessionID is the PARENT's own session — see SubagentMessagePayload's
+	// doc comment.
+	SessionID string
+	// MessageID is the saved transcript entry's own id.
+	MessageID string
+	// Frame is the wire shape itself, identical to the persisted entry's.
+	Frame generated.SubagentStateFrame
 }

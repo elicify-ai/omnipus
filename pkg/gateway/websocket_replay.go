@@ -223,18 +223,19 @@ func (wh *wsHandlerHandleAttachSession) replayTranscript(entries []session.Trans
 		return send(f)
 	}
 	var mediaStore media.MediaStore
-	var isSpanActive func(string) bool
 	if wh.h.agentLoop != nil {
 		mediaStore = wh.h.agentLoop.GetMediaStore()
-		// Real sub-turn liveness, so a delegate call whose placeholder ack has
-		// not been corrected by its real end is never shown as a fabricated
-		// "done" — see agent.AgentLoop.IsSubTurnActiveForSpawnCall.
-		isSpanActive = wh.h.agentLoop.IsSubTurnActiveForSpawnCall
 	}
+	// ADR-091 Finding 1 fix: real sub-turn liveness for a delegate call whose
+	// placeholder ack has not yet been corrected no longer needs wiring in
+	// from here — streamReplay derives it from the transcript's own persisted
+	// subagent_start/subagent_end entries (buildPersistedSubagentSpanIndexes
+	// in replay.go). agent.AgentLoop.IsSubTurnActiveForSpawnCall was deleted.
+	//
 	// askuserquestion-tool-spec v3 §0.6: the session's terminal
 	// AskUserQuestion record, so the collapsed card is reconstructed.
 	terminalAsk := loadTerminalAskRecord(wh.store, wh.attachID)
-	framesEmitted, err := streamReplay(wh.ctx, wh.attachID, entries, rs, emit, mediaStore, wh.h.toolStore, isSpanActive, terminalAsk)
+	framesEmitted, err := streamReplay(wh.ctx, wh.attachID, entries, rs, emit, mediaStore, wh.h.toolStore, terminalAsk)
 	durationMS := time.Since(started).Milliseconds()
 	if err != nil {
 		logsafeWarn("ws: replay_aborted",

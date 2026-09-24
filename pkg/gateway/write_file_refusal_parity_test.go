@@ -114,16 +114,19 @@ func TestReplay_PlainToolFailure_Unchanged(t *testing.T) {
 	assert.Nil(t, result.Result, "a prose failure must not gain a fabricated result object")
 }
 
-// TestReplay_DelegatedWorkerFailure_KeepsItsReason covers the SECOND frame
-// builder — the one that emits the tool calls a DELEGATED worker made, nested
-// inside its spawn's span.
+// TestReplay_DelegatedWorkerFailure_KeepsItsReason covered the SECOND frame
+// builder — the one that used to emit the tool calls a DELEGATED worker made,
+// nested inside its spawn's span, via emitNestedToolCalls.
 //
-// Those calls are skipped by the top-level pass and emitted only through
-// emitNestedToolCalls, which set no Error at all: not RC-5c's copy, not W5's
-// parse. So a delegated worker's refused write showed its reason live and a
-// bare failure with no explanation after a reload — in the exact code path
-// this whole change set is named after, and the one where the orchestrator is
-// least able to guess what happened.
+// ADR-091 D7 deletes emitNestedToolCalls outright: a delegated/task child now
+// owns its own transcript (D1), so its own tool calls — including a refused
+// write like this one — are never nested-replayed under the parent's spawn
+// span at all any more. They replay (with RC-5c's copy and W5's structured
+// parse, both exercised above at the top level by
+// TestReplay_WriteRefusal_RendersAsObjectNotRawJSON) only when the CHILD's
+// own session is itself replayed, which is outside this parent-transcript
+// fixture's scope. This test now proves the negative: the nested call is
+// gone, not silently reintroduced.
 func TestReplay_DelegatedWorkerFailure_KeepsItsReason(t *testing.T) {
 	spawnTC := session.ToolCall{
 		ID:         "c1",
@@ -141,30 +144,15 @@ func TestReplay_DelegatedWorkerFailure_KeepsItsReason(t *testing.T) {
 	}
 	frames, _ := runReplay(t, []session.TranscriptEntry{assistantEntry("delegating", "mia", spawnTC, nestedTC)})
 
-	var nested *replayFrameDecoder
 	for i := range frames {
-		if frames[i].Type == "tool_call_result" && frames[i].CallID == "t2" {
-			nested = &frames[i]
-			break
-		}
+		assert.False(t, frames[i].Type == "tool_call_result" && frames[i].CallID == "t2",
+			"ADR-091 D7: a nested child tool call must never be replayed under the outer span any more")
 	}
-	require.NotNil(t, nested, "expected a tool_call_result frame for the delegated worker's call")
-
-	require.NotEmpty(t, nested.Error,
-		"the delegated worker's failure reason vanished on reload — this frame builder never set "+
-			"Error at all, so the reason was visible live and gone after a refresh")
-	assert.Contains(t, nested.Error, "already exists")
-	assert.NotContains(t, nested.Error, `{"error"`,
-		"the raw payload must not be left in the error field")
-
-	obj, isObject := nested.Result.(map[string]any)
-	require.True(t, isObject, "expected the typed object in result, got %T", nested.Result)
-	assert.Equal(t, "file_exists", obj["error"])
 }
 
-// TestReplay_DelegatedWorkerPlainFailure_KeepsItsReason is the same path for an
-// ordinary (unstructured) failure, which RC-5c was supposed to cover and this
-// builder also missed.
+// TestReplay_DelegatedWorkerPlainFailure_KeepsItsReason is the same negative
+// proof for an ordinary (unstructured) failure — same ADR-091 D7 rationale as
+// TestReplay_DelegatedWorkerFailure_KeepsItsReason above.
 func TestReplay_DelegatedWorkerPlainFailure_KeepsItsReason(t *testing.T) {
 	spawnTC := session.ToolCall{
 		ID:         "c1",
@@ -182,10 +170,7 @@ func TestReplay_DelegatedWorkerPlainFailure_KeepsItsReason(t *testing.T) {
 	frames, _ := runReplay(t, []session.TranscriptEntry{assistantEntry("delegating", "mia", spawnTC, nestedTC)})
 
 	for i := range frames {
-		if frames[i].Type == "tool_call_result" && frames[i].CallID == "t2" {
-			assert.Equal(t, "exit status 127: command not found", frames[i].Error)
-			return
-		}
+		assert.False(t, frames[i].Type == "tool_call_result" && frames[i].CallID == "t2",
+			"ADR-091 D7: a nested child tool call must never be replayed under the outer span any more")
 	}
-	t.Fatal("no tool_call_result frame for the delegated worker's call")
 }

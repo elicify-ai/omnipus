@@ -49,6 +49,35 @@ const (
 	FSScopeAllow FSScope = "allow"
 )
 
+// PathGrant access bits (ADR-092 FR-036). These MUST stay bit-for-bit
+// identical to sandbox.AccessRead/AccessWrite/AccessExecute
+// (pkg/sandbox/sandbox.go) — the same vocabulary reused, not a new one, per
+// FR-036's own text. They are duplicated as untyped constants here, rather
+// than imported, because this package is a stdlib-only leaf (see the package
+// comment: it must not import pkg/sandbox, and pkg/sandbox already imports
+// this package, so the reverse import would cycle).
+// pkg/sandbox/pathgrant_bits_test.go pins the equivalence with a same-value
+// assertion so the two constant sets cannot drift apart unnoticed.
+const (
+	PathGrantAccessRead    uint64 = 1 << 0
+	PathGrantAccessWrite   uint64 = 1 << 1
+	PathGrantAccessExecute uint64 = 1 << 2
+)
+
+// PathGrant is one bash-scoped filesystem widening approved through the D7
+// pre-flight escalation (ADR-092 FR-016/FR-036): EXACTLY one path and
+// EXACTLY the access class the pre-flight verdict found missing — never a
+// subtree grant the way AllowedRoots is.
+type PathGrant struct {
+	// Path is the resolved (realpath'd, symlinks followed), absolute path
+	// this grant covers.
+	Path string
+
+	// Access is the PathGrantAccessRead|PathGrantAccessWrite|
+	// PathGrantAccessExecute bitmask this grant adds.
+	Access uint64
+}
+
 // FSPolicy is the effective, fully-resolved filesystem policy for one agent
 // turn — the single source of record both the app-layer resolver and the
 // future kernel ruleset builder consume (FR-036).
@@ -82,6 +111,32 @@ type FSPolicy struct {
 	// take no AllowedRoots parameter, so mounting even $HOME yields "write to
 	// $HOME minus the secret set" (asserted in mount_secret_independence_test.go).
 	AllowedRoots []string
+
+	// PathGrants are bash-scoped, single-path widenings approved through the
+	// D7 pre-flight escalation flow (ADR-092 FR-016/FR-036,
+	// pkg/tools/preflight.go's filesystem evaluator). Unlike AllowedRoots (a
+	// subtree WRITE grant populated from workspace mounts), a PathGrant is
+	// exactly one path and exactly the access class the pre-flight verdict
+	// found missing — read, write, or both — and sandbox.DeriveKernelPolicy
+	// renders each one as one additional PathRule, additive to the
+	// WorkDir/AllowedRoots rendering (never a parallel derivation).
+	//
+	// Tool scope (FR-036): this field is populated ONLY by the bash tool's
+	// own ResolveTurnFSPolicy call site, from an optional grant-overlay
+	// parameter that call site alone supplies. It is nil for every other of
+	// the eleven ResolveTurnFSPolicy callers (edit.go, filesystem.go,
+	// grep.go, send_file.go, web_serve.go, request_mount.go, the browser
+	// tools) — a bash-approved widening never reaches them. This package has
+	// no caller visibility to enforce that scoping itself (stdlib-only leaf,
+	// package comment); it is enforced entirely by which call sites choose
+	// to populate this field.
+	//
+	// Never a secret-set reopener (FR-037): Validate refuses a policy whose
+	// PathGrants names a path IsCarveOut already denies, so a malformed or
+	// buggy grant can never reach a kernel-rendering step at all, not merely
+	// be refused by the pre-flight's own (separate) decision not to prompt
+	// for one. See Validate's PathGrants loop.
+	PathGrants []PathGrant
 
 	// ReadConfined extends WorkDir confinement to the three operations that
 	// ADR-063 FR-2.2 deliberately left open outside the secret set —
@@ -186,6 +241,32 @@ func (p FSPolicy) Validate() error {
 	case FSScopeConfined, FSScopeUnrestricted, FSScopeAsk, FSScopeAllow:
 	default:
 		return fmt.Errorf("fspolicy: unknown Scope %q", p.Scope)
+	}
+
+	// PathGrants (ADR-092 FR-036/FR-037): each grant must be an absolute
+	// path, and none may name a path IsCarveOut denies — the secret set is
+	// never widenable, asserted here as a structural invariant rather than
+	// left to each consumer (the app-layer guard, the pre-flight evaluator,
+	// DeriveKernelPolicy) to independently filter the same case correctly.
+	// A policy shaped this way is refused before it can reach any of them.
+	for _, g := range p.PathGrants {
+		grantPath := strings.TrimSpace(g.Path)
+		if grantPath == "" {
+			return fmt.Errorf("fspolicy: PathGrants entry has an empty Path")
+		}
+		if !filepath.IsAbs(g.Path) {
+			return fmt.Errorf("fspolicy: PathGrants entry %q is not absolute", g.Path)
+		}
+		if g.Access == 0 {
+			return fmt.Errorf("fspolicy: PathGrants entry %q has no Access bits set", g.Path)
+		}
+		cleanGrant := filepath.Clean(g.Path)
+		if IsCarveOut(cleanGrant, p) {
+			return fmt.Errorf(
+				"fspolicy: PathGrants entry %q falls within the secret set — the secret set can never be widened (FR-037)",
+				g.Path,
+			)
+		}
 	}
 
 	return nil

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,7 +23,7 @@ import (
 // TestLifecycleParentIndex_MaintainedInsidePersist is test #11: the index
 // MUST be updated as a direct side effect of Persist (FR-020), and it MUST
 // track a session's later generations (which all carry the same
-// ParentDurableKey) without duplicating or losing the mapping. Assertions
+// SteeringSessionID) without duplicating or losing the mapping. Assertions
 // land on the index's own real, production state (idx.children(...)) —
 // observable, in-memory artefact of a REAL store — never on "add() was
 // called".
@@ -38,8 +39,8 @@ func TestLifecycleParentIndex_MaintainedInsidePersist(t *testing.T) {
 	}
 
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: childA, State: LifecycleQueued,
-		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: parent,
+		SessionID: childA, Generation: 1, State: LifecycleQueued,
+		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: parent, RootSessionID: parent},
 		WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("persist childA: %v", err)
@@ -53,8 +54,8 @@ func TestLifecycleParentIndex_MaintainedInsidePersist(t *testing.T) {
 	}
 
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: childB, State: LifecycleQueued,
-		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: parent,
+		SessionID: childB, Generation: 1, State: LifecycleQueued,
+		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: parent, RootSessionID: parent},
 		WorkspaceID: "ws-1", AgentID: "ava",
 	}); err != nil {
 		t.Fatalf("persist childB: %v", err)
@@ -66,11 +67,11 @@ func TestLifecycleParentIndex_MaintainedInsidePersist(t *testing.T) {
 		t.Fatalf("after persisting childB, parentIndex.children(%q) = %v, want %v", parent, got, want)
 	}
 
-	// A later generation of childA (same ParentDurableKey) must not
+	// A later generation of childA (same SteeringSessionID) must not
 	// duplicate the entry or evict it.
 	if err := s.Persist(&LifecycleRecord{
 		SessionID: childA, Generation: 1, State: LifecycleRunning,
-		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: parent,
+		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: parent, RootSessionID: parent},
 		WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("persist childA gen1: %v", err)
@@ -81,31 +82,51 @@ func TestLifecycleParentIndex_MaintainedInsidePersist(t *testing.T) {
 	}
 
 	// The public query surface (List) must agree with the index's own state.
-	viaList, err := s.List(LifecycleFilter{ParentDurableKey: parent})
+	viaList, err := s.List(LifecycleFilter{SteeringSessionID: parent})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if len(viaList) != 2 {
-		t.Fatalf("List(ParentDurableKey=%q) returned %d records, want 2", parent, len(viaList))
+		t.Fatalf("List(SteeringSessionID=%q) returned %d records, want 2", parent, len(viaList))
 	}
 }
 
-// TestLifecycleParentIndex_UnattributedRecordNotIndexed proves add()'s empty
-// guard: a record with no ParentDurableKey (FR-015's degraded-mode mint, or
-// any record predating this field) must never appear under
-// LifecycleFilter{ParentDurableKey: ""} — that value means "filter off"
-// everywhere else on LifecycleFilter and must keep meaning that here too.
-func TestLifecycleParentIndex_UnattributedRecordNotIndexed(t *testing.T) {
+// TestLifecycleParentIndex_UnattributedRecordRejectedAtPersist used to prove
+// add()'s empty guard by persisting SteeredBy{SteeringSessionID: ""}
+// successfully and checking it landed unindexed (FR-015's "degraded-mode
+// mint"). ADR-091's write-choke-point validation (persistLocked) now rejects
+// that exact shape outright — a non-nil SteeredBy with an empty
+// SteeringSessionID is precisely the "parentIndex.add("", id) silently
+// no-ops, leaving an unindexed orphan" gap the review named, so this is the
+// closed bug, not a legitimate write to keep tolerating.
+//
+// Traced: SteerLauncher.Launch (pkg/agent/steer_launcher.go) only ever
+// builds a non-nil SteeredBy inside launchSteered, which is reached only
+// when req.SteeringSessionID != "" — an empty SteeringSessionID routes to
+// launchOrdinaryRoot instead, which mints SteeredBy: nil. No live writer in
+// the tree constructs SteeredBy{SteeringSessionID: ""}, so flipping this
+// test to assert REJECTION (rather than deleting it) keeps a regression
+// guard on exactly the shape the review flagged, at zero cost to any real
+// caller.
+func TestLifecycleParentIndex_UnattributedRecordRejectedAtPersist(t *testing.T) {
 	s := newTestLifecycleStore(t)
-	if err := s.Persist(&LifecycleRecord{
-		SessionID: "orphan-11b", State: LifecycleQueued,
-		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: "",
+	err := s.Persist(&LifecycleRecord{
+		SessionID: "orphan-11b", Generation: 1, State: LifecycleQueued,
+		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: "", RootSessionID: "root-11b"},
 		WorkspaceID: "ws-1", AgentID: "ray",
-	}); err != nil {
-		t.Fatalf("persist: %v", err)
+	})
+	if err == nil {
+		t.Fatal("Persist(steered_by.steering_session_id=\"\") succeeded, want rejection — " +
+			"this is exactly the orphan shape parentIndex.add(\"\", id) used to silently no-op on")
+	}
+	if !strings.Contains(err.Error(), "non-empty steering_session_id") {
+		t.Errorf("Persist(steered_by.steering_session_id=\"\") error = %v, want a steering_session_id-required message", err)
+	}
+	if s.Exists("orphan-11b") {
+		t.Error("a rejected record must not land on disk")
 	}
 	if got := s.parentIndex.children(""); len(got) != 0 {
-		t.Fatalf("parentIndex.children(\"\") = %v, want empty — an unparented record must never be indexed under the empty key", got)
+		t.Fatalf("parentIndex.children(\"\") = %v, want empty — a rejected write must never reach the index either", got)
 	}
 }
 
@@ -114,7 +135,7 @@ func TestLifecycleParentIndex_UnattributedRecordNotIndexed(t *testing.T) {
 // the last child clearing the parent's bucket entirely (so long-running
 // processes do not accumulate empty buckets).
 func TestLifecycleParentIndex_RemoveIsIdempotentAndPrunesEmptyBucket(t *testing.T) {
-	idx := newLifecycleParentIndex()
+	idx := newLifecycleIndex()
 	// Removing something never added is a documented no-op, not a panic.
 	idx.remove("nope", "nope")
 
@@ -145,8 +166,8 @@ func TestLifecycleParentIndex_PruneTerminalRemovesFromIndex(t *testing.T) {
 	const parent = "chat-prune-11c"
 	const child = "child-prune-11c"
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: child, State: LifecycleCompleted,
-		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: parent,
+		SessionID: child, Generation: 1, State: LifecycleCompleted,
+		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: parent, RootSessionID: parent},
 		WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("persist: %v", err)
@@ -169,17 +190,50 @@ func TestLifecycleParentIndex_PruneTerminalRemovesFromIndex(t *testing.T) {
 		t.Fatalf("parentIndex.children(%q) after prune = %v, want empty — stale index entry survived a real file deletion", parent, got)
 	}
 	// The public surface must agree: no error, no ghost result.
-	list, err := s.List(LifecycleFilter{ParentDurableKey: parent})
+	list, err := s.List(LifecycleFilter{SteeringSessionID: parent})
 	if err != nil {
 		t.Fatalf("List after prune: %v", err)
 	}
 	if len(list) != 0 {
-		t.Fatalf("List(ParentDurableKey=%q) after prune = %v, want empty", parent, list)
+		t.Fatalf("List(SteeringSessionID=%q) after prune = %v, want empty", parent, list)
+	}
+}
+
+func TestLifecycleStore_PruneTerminal_PreservesAncestorOfRunningDescendant(t *testing.T) {
+	s := newTestLifecycleStore(t)
+	old := time.Now().Add(-72 * time.Hour)
+
+	for _, rec := range []*LifecycleRecord{
+		{SessionID: "ancestor", Generation: 1, State: LifecycleCompleted, UpdatedAt: old,
+			OwnerScopeKind: OwnerScopeHuman},
+		{SessionID: "terminal-child", Generation: 1, State: LifecycleCompleted, UpdatedAt: old,
+			OwnerScopeKind: OwnerScopeParentSession,
+			SteeredBy:      &SteeredBy{SteeringSessionID: "ancestor", RootSessionID: "ancestor"}},
+		{SessionID: "running-grandchild", Generation: 1, State: LifecycleRunning, UpdatedAt: old,
+			OwnerScopeKind: OwnerScopeParentSession,
+			SteeredBy:      &SteeredBy{SteeringSessionID: "terminal-child", RootSessionID: "ancestor"}},
+	} {
+		if err := s.Persist(rec); err != nil {
+			t.Fatalf("Persist(%s): %v", rec.SessionID, err)
+		}
+	}
+
+	removed, err := s.PruneTerminal(1, time.Now())
+	if err != nil {
+		t.Fatalf("PruneTerminal: %v", err)
+	}
+	if removed != 0 {
+		t.Fatalf("PruneTerminal removed %d records, want 0 while a descendant is running", removed)
+	}
+	for _, id := range []string{"ancestor", "terminal-child", "running-grandchild"} {
+		if !s.Exists(id) {
+			t.Fatalf("PruneTerminal deleted %q from a branch with a running descendant", id)
+		}
 	}
 }
 
 // TestLifecycleParentIndex_SelfHealsStaleEntryOutsidePrune covers the defensive
-// branch in listByParentDurableKey directly: if a child's file disappears by
+// branch in listBySteeringSessionID directly: if a child's file disappears by
 // a path OTHER than PruneTerminal (an operator `rm`, mirroring the
 // out-of-band-deletion scenarios this whole spec treats as a first-class
 // case), the very next query must still succeed and silently drop the ghost
@@ -189,8 +243,8 @@ func TestLifecycleParentIndex_SelfHealsStaleEntryOutsidePrune(t *testing.T) {
 	const parent = "chat-selfheal-11d"
 	const child = "child-selfheal-11d"
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: child, State: LifecycleRunning,
-		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: parent,
+		SessionID: child, Generation: 1, State: LifecycleRunning,
+		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: parent, RootSessionID: parent},
 		WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("persist: %v", err)
@@ -202,12 +256,12 @@ func TestLifecycleParentIndex_SelfHealsStaleEntryOutsidePrune(t *testing.T) {
 		t.Fatalf("simulate out-of-band removal: %v", err)
 	}
 
-	list, err := s.List(LifecycleFilter{ParentDurableKey: parent})
+	list, err := s.List(LifecycleFilter{SteeringSessionID: parent})
 	if err != nil {
 		t.Fatalf("List must self-heal a stale index entry rather than error, got: %v", err)
 	}
 	if len(list) != 0 {
-		t.Fatalf("List(ParentDurableKey=%q) = %v, want empty after the child's file vanished out of band", parent, list)
+		t.Fatalf("List(SteeringSessionID=%q) = %v, want empty after the child's file vanished out of band", parent, list)
 	}
 	if got := s.parentIndex.children(parent); len(got) != 0 {
 		t.Fatalf("parentIndex.children(%q) = %v, want empty — the stale entry should have self-healed out of the index", parent, got)
@@ -230,8 +284,8 @@ func TestLifecycleParentIndex_WarmsAcrossSimulatedRestart(t *testing.T) {
 	const child2 = "child-restart-11e-2"
 	for _, id := range []string{child1, child2} {
 		if err := first.Persist(&LifecycleRecord{
-			SessionID: id, State: LifecycleRunning,
-			OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: parent,
+			SessionID: id, Generation: 1, State: LifecycleRunning,
+			OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: parent, RootSessionID: parent},
 			WorkspaceID: "ws-1", AgentID: "ray",
 		}); err != nil {
 			t.Fatalf("seed via first instance: %v", err)
@@ -246,7 +300,7 @@ func TestLifecycleParentIndex_WarmsAcrossSimulatedRestart(t *testing.T) {
 		t.Fatalf("precondition failed: a fresh store instance's index must start empty, got %v", got)
 	}
 
-	got, err := second.List(LifecycleFilter{ParentDurableKey: parent})
+	got, err := second.List(LifecycleFilter{SteeringSessionID: parent})
 	if err != nil {
 		t.Fatalf("List on the fresh instance: %v", err)
 	}
@@ -255,7 +309,7 @@ func TestLifecycleParentIndex_WarmsAcrossSimulatedRestart(t *testing.T) {
 		ids[r.SessionID] = true
 	}
 	if len(ids) != 2 || !ids[child1] || !ids[child2] {
-		t.Fatalf("fresh-instance List(ParentDurableKey=%q) = %v, want exactly [%q %q] backfilled from disk",
+		t.Fatalf("fresh-instance List(SteeringSessionID=%q) = %v, want exactly [%q %q] backfilled from disk",
 			parent, listedSessionIDs(got), child1, child2)
 	}
 }
@@ -263,7 +317,7 @@ func TestLifecycleParentIndex_WarmsAcrossSimulatedRestart(t *testing.T) {
 // TestParentIndex_SteadyStateQueryNeverTouchesUnrelatedSessionFiles is the
 // deterministic, non-timing proof of BDD-19's steady-state claim ("its
 // file-read count scales with the subtree size, not with the total session
-// count"): once the index is warm (any prior ParentDurableKey query has
+// count"): once the index is warm (any prior SteeringSessionID query has
 // already run ensureWarm's one-time backfill — see
 // TestLifecycleParentIndex_WarmsAcrossSimulatedRestart for the cold-start
 // half), every SUBSEQUENT query must resolve its candidate id set purely
@@ -294,8 +348,8 @@ func TestParentIndex_SteadyStateQueryNeverTouchesUnrelatedSessionFiles(t *testin
 
 	for _, id := range []string{child1, child2} {
 		if err := s.Persist(&LifecycleRecord{
-			SessionID: id, State: LifecycleRunning,
-			OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: parent,
+			SessionID: id, Generation: 1, State: LifecycleRunning,
+			OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: parent, RootSessionID: parent},
 			WorkspaceID: "ws-1", AgentID: "ray",
 		}); err != nil {
 			t.Fatalf("seed child %q: %v", id, err)
@@ -307,8 +361,8 @@ func TestParentIndex_SteadyStateQueryNeverTouchesUnrelatedSessionFiles(t *testin
 	for i := 0; i < poisonCount; i++ {
 		id := "poison-11f-" + string(rune('a'+i%26)) + string(rune('0'+i/26))
 		if err := s.Persist(&LifecycleRecord{
-			SessionID: id, State: LifecycleRunning,
-			OwnerScopeKind: OwnerScopeHuman, // deliberately no ParentDurableKey — unrelated to `parent`
+			SessionID: id, Generation: 1, State: LifecycleRunning,
+			OwnerScopeKind: OwnerScopeHuman, // deliberately no SteeringSessionID — unrelated to `parent`
 			WorkspaceID:    "ws-1", AgentID: "ray",
 		}); err != nil {
 			t.Fatalf("seed poison %q: %v", id, err)
@@ -331,9 +385,9 @@ func TestParentIndex_SteadyStateQueryNeverTouchesUnrelatedSessionFiles(t *testin
 	// Warm the index NOW, while every file (including the poison ones) is
 	// still perfectly readable — this is the one-time backfill scan
 	// (ensureWarm's sync.Once) that necessarily touches every persisted
-	// session_id once. Any ParentDurableKey query triggers it; the result
+	// session_id once. Any SteeringSessionID query triggers it; the result
 	// here is exactly the same as the direct query below.
-	if _, err := s.List(LifecycleFilter{ParentDurableKey: parent}); err != nil {
+	if _, err := s.List(LifecycleFilter{SteeringSessionID: parent}); err != nil {
 		t.Fatalf("warm-up query failed unexpectedly: %v", err)
 	}
 
@@ -364,16 +418,16 @@ func TestParentIndex_SteadyStateQueryNeverTouchesUnrelatedSessionFiles(t *testin
 	// The steady-state query: the index is already warm, so this MUST
 	// resolve entirely from parentIndex.children(parent) plus a Load of
 	// exactly child1/child2 — never reopening any poisoned file.
-	got, err := s.List(LifecycleFilter{ParentDurableKey: parent})
+	got, err := s.List(LifecycleFilter{SteeringSessionID: parent})
 	if err != nil {
-		t.Fatalf("steady-state List(ParentDurableKey=%q) must never re-touch unrelated sessions, but got: %v", parent, err)
+		t.Fatalf("steady-state List(SteeringSessionID=%q) must never re-touch unrelated sessions, but got: %v", parent, err)
 	}
 	ids := map[string]bool{}
 	for _, r := range got {
 		ids[r.SessionID] = true
 	}
 	if len(ids) != 2 || !ids[child1] || !ids[child2] {
-		t.Fatalf("List(ParentDurableKey=%q) = %v, want exactly [%q %q] — a steady-state query must resolve the "+
+		t.Fatalf("List(SteeringSessionID=%q) = %v, want exactly [%q %q] — a steady-state query must resolve the "+
 			"subtree without touching any of the %d unrelated (now-unreadable) session files",
 			parent, listedSessionIDs(got), child1, child2, poisonCount)
 	}

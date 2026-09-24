@@ -34,14 +34,19 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // BootSweepResult records the outcome of one boot sweep pass for observability
@@ -60,6 +65,484 @@ type BootSweepResult struct {
 	// RebaselinedGoals lists in-flight goals quiesced/re-baselined for a
 	// trigger-semantics change (N-15).
 	RebaselinedGoals []string
+}
+
+const failedReasonPreADR091NotResumable = "pre-adr-091-not-resumable"
+
+// SteerBootRecovery is ADR-091's boot operation. Its collaborators are the
+// published pkg/steer package boundaries, so production and the
+// reboot fixture execute the same code against reopened durable stores.
+type SteerBootRecovery struct {
+	Lifecycle      *session.LifecycleStore
+	Sessions       *session.UnifiedStore
+	Inbox          *session.MessageInboxStore
+	Classifier     steer.RecordClassifier
+	Deliverer      steer.UpwardDeliverer
+	OperatorNotice func(message string)
+}
+
+type bootSessionMessageEnvelope struct {
+	MessageID string `json:"message_id"`
+	Kind      string `json:"kind"`
+	Text      string `json:"text"`
+	Fatal     bool   `json:"fatal"`
+	Mode      string `json:"mode"`
+}
+
+// Run classifies every lifecycle/session record before applying boot
+// consequences. Per-record damage is surfaced and skipped so one corrupt
+// session never prevents the gateway from starting or the remaining sessions
+// from recovering.
+func (r *SteerBootRecovery) Run(ctx context.Context) error {
+	if r == nil || r.Lifecycle == nil || r.Sessions == nil || r.Inbox == nil || r.Classifier == nil {
+		return errors.New("agent: steer boot recovery: stores and classifier must be configured")
+	}
+	noticed := make(map[string]bool)
+	notice := func(key, message string) {
+		if noticed[key] {
+			return
+		}
+		noticed[key] = true
+		if r.OperatorNotice != nil {
+			r.OperatorNotice(message)
+		}
+	}
+
+	// The indexed List path is the published I-9 warm-up trigger. The key is
+	// deliberately impossible as a real session id; the result is irrelevant,
+	// while IndexReport below is the durable diagnostic this operation consumes.
+	if _, err := r.Lifecycle.List(session.LifecycleFilter{SteeringSessionID: "__adr091_boot_warm__"}); err != nil {
+		return fmt.Errorf("agent: steer boot recovery: warm lifecycle index: %w", err)
+	}
+	for _, unreadable := range r.Lifecycle.IndexReport().Unreadable {
+		notice("unreadable:"+unreadable.ID, fmt.Sprintf(
+			"session %s refused at boot: lifecycle record unreadable: %v", unreadable.ID, unreadable.Err))
+	}
+
+	ids, err := r.sessionIDs()
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// I-9 currently distinguishes a load error from a missing record, but
+		// LifecycleStore.Load reports an all-malformed existing JSONL file as
+		// ErrLifecycleNotFound. The file's existence disambiguates that case at
+		// this consumer boundary so it is still refused and operator-visible.
+		if r.Lifecycle.Exists(id) {
+			if _, loadErr := r.Lifecycle.Load(id); loadErr != nil {
+				notice("unreadable:"+id, fmt.Sprintf("session %s refused at boot: lifecycle record unreadable: %v", id, loadErr))
+				continue
+			}
+		}
+		class, classifyErr := r.Classifier.Classify(ctx, id)
+		if classifyErr != nil {
+			notice("unreadable:"+id, fmt.Sprintf("session %s refused at boot: lifecycle record unreadable: %v", id, classifyErr))
+			continue
+		}
+		switch class {
+		case steer.ClassOrdinaryRoot:
+			// Existing root boot recovery remains authoritative.
+		case steer.ClassSteered:
+			r.recoverSteered(ctx, id, notice)
+		case steer.ClassLegacyDelegate:
+			r.failLegacy(id, notice)
+		case steer.ClassDamagedChild, steer.ClassInvalidEdge, steer.ClassUnreadable:
+			notice("refused:"+id, fmt.Sprintf("session %s refused at boot: classification %s", id, class))
+		default:
+			notice("refused:"+id, fmt.Sprintf("session %s refused at boot: unknown classification %q", id, class))
+		}
+	}
+	return nil
+}
+
+func (r *SteerBootRecovery) sessionIDs() ([]string, error) {
+	ids := make(map[string]struct{})
+	entries, err := os.ReadDir(r.Lifecycle.Dir())
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("agent: steer boot recovery: list lifecycle records: %w", err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".jsonl") || strings.HasPrefix(name, ".tmp-") {
+			continue
+		}
+		ids[strings.TrimSuffix(name, ".jsonl")] = struct{}{}
+	}
+	metas, err := r.Sessions.ListSessions()
+	if err != nil {
+		return nil, fmt.Errorf("agent: steer boot recovery: list session metadata: %w", err)
+	}
+	for _, meta := range metas {
+		if meta != nil && meta.ID != "" {
+			ids[meta.ID] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(ids))
+	for id := range ids {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func (r *SteerBootRecovery) failLegacy(id string, notice func(string, string)) {
+	err := r.Lifecycle.Mutate(id, func(rec *session.LifecycleRecord) error {
+		if rec.Terminal() {
+			return nil
+		}
+		rec.State = session.LifecycleFailed
+		rec.FailedReason = failedReasonPreADR091NotResumable
+		rec.NeedsInput = nil
+		return nil
+	})
+	if err != nil {
+		notice("legacy-write:"+id, fmt.Sprintf("legacy delegate %s could not be failed at boot: %v", id, err))
+		return
+	}
+	notice("legacy:"+id, fmt.Sprintf("legacy delegate %s failed at boot: %s", id, failedReasonPreADR091NotResumable))
+}
+
+func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notice func(string, string)) {
+	rec, err := r.Lifecycle.Load(id)
+	if err != nil || rec == nil {
+		notice("load:"+id, fmt.Sprintf("steered session %s refused at boot: %v", id, err))
+		return
+	}
+	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+		// A current-generation Stop is durable. Do not deliver or re-wake any
+		// pending entry; it waits for Revive to mint a newer generation.
+		r.ackConsumed(rec, notice)
+		return
+	}
+
+	messages := r.unacknowledged(rec, notice)
+	finalID := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation)
+	final, hasFinal := findBootMessage(messages, finalID)
+	finalHandled := false
+	if !rec.Terminal() && hasFinal {
+		r.deliverIfUnconsumed(ctx, rec, final, notice)
+		finalHandled = true
+		if err := r.finishFromFinal(rec, final); err != nil {
+			notice("repair-record:"+id, fmt.Sprintf("session %s terminal-record repair failed: %v", id, err))
+			return
+		}
+		rec, _ = r.Lifecycle.Load(id)
+	} else if rec.Terminal() && !hasFinal {
+		message, outcome, buildErr := r.terminalMessage(rec)
+		if buildErr != nil {
+			notice("repair-message:"+id, fmt.Sprintf("session %s terminal-inbox repair failed: %v", id, buildErr))
+			return
+		}
+		r.deliver(ctx, rec, outcome, message, notice)
+		finalHandled = true
+		messages = append(messages, message)
+	}
+
+	if !rec.Terminal() && rec.State != session.LifecycleNeedsInput {
+		for _, message := range messages {
+			r.deliverIfUnconsumed(ctx, rec, message, notice)
+		}
+		message, buildErr := interruptedBootMessage(rec)
+		if buildErr != nil {
+			notice("interrupted-message:"+id, fmt.Sprintf("session %s interrupted message failed: %v", id, buildErr))
+		} else {
+			r.deliver(ctx, rec, steer.OutcomeInterrupted, message, notice)
+		}
+		if err := r.failInterrupted(rec); err != nil {
+			notice("interrupted-write:"+id, fmt.Sprintf("session %s interrupted transition failed: %v", id, err))
+		}
+		return
+	}
+
+	for _, message := range messages {
+		if envelope, envErr := decodeBootMessage(message); finalHandled && envErr == nil && envelope.MessageID == finalID {
+			continue
+		}
+		r.deliverIfUnconsumed(ctx, rec, message, notice)
+	}
+}
+
+func (r *SteerBootRecovery) unacknowledged(rec *session.LifecycleRecord, notice func(string, string)) []generated.SessionMessage {
+	if rec.SteeredBy == nil {
+		return nil
+	}
+	var all []generated.SessionMessage
+	cursor := ""
+	for {
+		messages, next, more, err := r.Inbox.Drain(rec.SteeredBy.SteeringSessionID, rec.SessionID, cursor, session.DefaultInboxUnackedMax)
+		if err != nil {
+			notice("inbox:"+rec.SessionID, fmt.Sprintf("session %s inbox recovery failed: %v", rec.SessionID, err))
+			return all
+		}
+		all = append(all, messages...)
+		if !more || next == cursor {
+			return all
+		}
+		cursor = next
+	}
+}
+
+func (r *SteerBootRecovery) consumedIDs(parentID string) (map[string]bool, error) {
+	entries, err := r.Sessions.ReadTranscript(parentID)
+	if err != nil {
+		return nil, err
+	}
+	consumed := make(map[string]bool)
+	for _, entry := range entries {
+		if id, ok := strings.CutPrefix(strings.TrimSpace(entry.Content), "consumed "); ok && id != "" {
+			consumed[id] = true
+		}
+	}
+	return consumed, nil
+}
+
+func (r *SteerBootRecovery) ackConsumed(rec *session.LifecycleRecord, notice func(string, string)) {
+	if rec.SteeredBy == nil {
+		return
+	}
+	consumed, err := r.consumedIDs(rec.SteeredBy.SteeringSessionID)
+	if err != nil {
+		notice("transcript:"+rec.SessionID, fmt.Sprintf("session %s consumed-marker read failed: %v", rec.SessionID, err))
+		return
+	}
+	for _, message := range r.unacknowledged(rec, notice) {
+		envelope, envErr := decodeBootMessage(message)
+		if envErr == nil && consumed[envelope.MessageID] {
+			if err := r.Inbox.Ack(rec.SteeredBy.SteeringSessionID, []string{envelope.MessageID}); err != nil {
+				notice("ack:"+envelope.MessageID, fmt.Sprintf("session %s consumed inbox entry %s could not be acknowledged: %v", rec.SessionID, envelope.MessageID, err))
+			}
+		}
+	}
+}
+
+func (r *SteerBootRecovery) deliverIfUnconsumed(ctx context.Context, rec *session.LifecycleRecord, message generated.SessionMessage, notice func(string, string)) {
+	envelope, err := decodeBootMessage(message)
+	if err != nil {
+		notice("message:"+rec.SessionID, fmt.Sprintf("session %s has unreadable inbox message: %v", rec.SessionID, err))
+		return
+	}
+	consumed, err := r.consumedIDs(rec.SteeredBy.SteeringSessionID)
+	if err != nil {
+		notice("transcript:"+rec.SessionID, fmt.Sprintf("session %s consumed-marker read failed: %v", rec.SessionID, err))
+		return
+	}
+	if consumed[envelope.MessageID] {
+		if err := r.Inbox.Ack(rec.SteeredBy.SteeringSessionID, []string{envelope.MessageID}); err != nil {
+			notice("ack:"+envelope.MessageID, fmt.Sprintf("session %s consumed inbox entry %s could not be acknowledged: %v", rec.SessionID, envelope.MessageID, err))
+		}
+		return
+	}
+	class, classErr := session.ClassifySessionMessage(message)
+	if classErr != nil {
+		notice("message:"+rec.SessionID, fmt.Sprintf("session %s has unreadable inbox message: %v", rec.SessionID, classErr))
+		return
+	}
+	if !class.WakeEligible {
+		return
+	}
+	r.deliver(ctx, rec, bootOutcome(envelope), message, notice)
+}
+
+func (r *SteerBootRecovery) deliver(ctx context.Context, rec *session.LifecycleRecord, outcome steer.Outcome, message generated.SessionMessage, notice func(string, string)) {
+	envelope, _ := decodeBootMessage(message)
+	if r.Deliverer == nil {
+		notice("deliver:"+envelope.MessageID, fmt.Sprintf("session %s wake %s not delivered: upward deliverer is not configured", rec.SessionID, envelope.MessageID))
+		return
+	}
+	event := steer.UpwardEvent{ChildSessionID: rec.SessionID, Outcome: outcome, Message: message}
+	delivery, err := r.Deliverer.Deliver(ctx, event)
+	if err != nil {
+		notice("deliver:"+envelope.MessageID, fmt.Sprintf("session %s wake %s not delivered: %v", rec.SessionID, envelope.MessageID, err))
+		return
+	}
+	// [ADR-091 fix lane RX-OUTCOME, HIGH] Boot recovery IS the last-resort
+	// re-nudge every other Deliver call site relies on ("the boot re-nudge
+	// covers it"). A wake-eligible entry that comes back stored_not_woken
+	// HERE therefore has nothing left behind it: the parent will not be
+	// woken by this boot either, and the next restart will find the same
+	// unacknowledged entry and fail the same way. That makes it an
+	// undeliverable entry in FR-B-004's sense, so it takes BOTH the ERROR
+	// line every call site now emits AND the operator notice this sweep
+	// already reports its other failures through — a silent no-op was the
+	// one thing it must not be.
+	reportUndeliveredWake("steer: boot recovery", event, steerParentSessionID(rec), rec.Generation, delivery)
+	if delivery.Outcome == steer.DeliveryStoredNotWoken {
+		if class, cerr := session.ClassifySessionMessage(message); cerr != nil || class.WakeEligible {
+			notice("deliver:"+envelope.MessageID, fmt.Sprintf(
+				"session %s wake %s was stored but its steering session was NOT woken — it will not learn of this outcome until it is nudged by hand",
+				rec.SessionID, envelope.MessageID))
+		}
+	}
+}
+
+func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, message generated.SessionMessage) error {
+	envelope, err := decodeBootMessage(message)
+	if err != nil {
+		return err
+	}
+	return r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
+		if current.Terminal() {
+			return nil
+		}
+		switch envelope.Kind {
+		case "handback":
+			if envelope.Mode != "final" {
+				return fmt.Errorf("message %s is a non-terminal handback", envelope.MessageID)
+			}
+			current.State = session.LifecycleCompleted
+		case "error":
+			if !envelope.Fatal {
+				return fmt.Errorf("message %s is a non-fatal error", envelope.MessageID)
+			}
+			current.State = session.LifecycleFailed
+			current.FailedReason = failedReasonFromBootText(envelope.Text)
+		default:
+			return fmt.Errorf("message %s kind %q is not terminal", envelope.MessageID, envelope.Kind)
+		}
+		current.NeedsInput = nil
+		return nil
+	})
+}
+
+func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error {
+	return r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
+		if current.Terminal() || (current.Stop != nil && current.Stop.Generation == current.Generation) {
+			return nil
+		}
+		current.State = session.LifecycleFailed
+		current.FailedReason = failedReasonInterrupted
+		current.NeedsInput = nil
+		return nil
+	})
+}
+
+func (r *SteerBootRecovery) terminalMessage(rec *session.LifecycleRecord) (generated.SessionMessage, steer.Outcome, error) {
+	if rec.State == session.LifecycleCompleted {
+		result := ""
+		if entries, err := r.Sessions.ReadTranscript(rec.SessionID); err == nil {
+			for i := len(entries) - 1; i >= 0; i-- {
+				if entries[i].Role == "assistant" && strings.TrimSpace(entries[i].Content) != "" {
+					result = entries[i].Content
+					break
+				}
+			}
+		}
+		return completedBootMessage(rec, result)
+	}
+	return terminalErrorBootMessage(rec)
+}
+
+func completedBootMessage(rec *session.LifecycleRecord, result string) (generated.SessionMessage, steer.Outcome, error) {
+	parent := rec.SteeredBy.SteeringSessionID
+	generation := rec.Generation
+	created := rec.UpdatedAt
+	if created.IsZero() {
+		created = time.Now()
+	}
+	var message generated.SessionMessage
+	err := message.FromSessionMessageHandback(generated.SessionMessageHandback{
+		MessageId: fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation), SessionId: rec.SessionID,
+		ParentSessionId: &parent, CreatedAt: created, Depth: 1, Direction: "child_to_parent",
+		Generation: &generation, Kind: "handback", Mode: "final", ResultSoFar: result,
+		SenderIdentity: rec.AgentID, Artifacts: []string{}, OpenQuestions: []string{}, UntrustedOrigin: true,
+	})
+	return message, steer.OutcomeFinalAnswer, err
+}
+
+func terminalErrorBootMessage(rec *session.LifecycleRecord) (generated.SessionMessage, steer.Outcome, error) {
+	prefix, outcome := "failed:", steer.OutcomeFailed
+	switch rec.State {
+	case session.LifecycleCancelled:
+		prefix, outcome = "interrupted:", steer.OutcomeInterrupted
+	case session.LifecycleTimedOut:
+		prefix, outcome = "timeout:", steer.OutcomeTimedOut
+	case session.LifecycleFailed:
+		if rec.FailedReason == failedReasonInterrupted {
+			prefix, outcome = "interrupted:", steer.OutcomeInterrupted
+		}
+	}
+	text := prefix + " recovered terminal outcome after restart"
+	return errorBootMessage(rec, text, outcome)
+}
+
+func interruptedBootMessage(rec *session.LifecycleRecord) (generated.SessionMessage, error) {
+	message, _, err := errorBootMessage(rec, "interrupted: gateway restarted while session was running", steer.OutcomeInterrupted)
+	return message, err
+}
+
+func errorBootMessage(rec *session.LifecycleRecord, text string, outcome steer.Outcome) (generated.SessionMessage, steer.Outcome, error) {
+	parent := rec.SteeredBy.SteeringSessionID
+	generation := rec.Generation
+	created := rec.UpdatedAt
+	if created.IsZero() {
+		created = time.Now()
+	}
+	var message generated.SessionMessage
+	err := message.FromSessionMessageError(generated.SessionMessageError{
+		MessageId: fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation), SessionId: rec.SessionID,
+		ParentSessionId: &parent, CreatedAt: created, Depth: 1, Direction: "child_to_parent",
+		Generation: &generation, Kind: "error", Fatal: true, Text: text,
+		SenderIdentity: rec.AgentID, UntrustedOrigin: true,
+	})
+	return message, outcome, err
+}
+
+func decodeBootMessage(message generated.SessionMessage) (bootSessionMessageEnvelope, error) {
+	raw, err := message.MarshalJSON()
+	if err != nil {
+		return bootSessionMessageEnvelope{}, err
+	}
+	var envelope bootSessionMessageEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return bootSessionMessageEnvelope{}, err
+	}
+	if envelope.MessageID == "" || envelope.Kind == "" {
+		return bootSessionMessageEnvelope{}, errors.New("message_id and kind are required")
+	}
+	return envelope, nil
+}
+
+func findBootMessage(messages []generated.SessionMessage, id string) (generated.SessionMessage, bool) {
+	for _, message := range messages {
+		if envelope, err := decodeBootMessage(message); err == nil && envelope.MessageID == id {
+			return message, true
+		}
+	}
+	return generated.SessionMessage{}, false
+}
+
+func bootOutcome(envelope bootSessionMessageEnvelope) steer.Outcome {
+	switch envelope.Kind {
+	case "handback":
+		return steer.OutcomeFinalAnswer
+	case "question":
+		return steer.OutcomeParkedQuestion
+	case "blocker":
+		return steer.OutcomeBlocker
+	case "goal_status":
+		return steer.OutcomeGoalVerdict
+	case "error":
+		if strings.HasPrefix(envelope.Text, "interrupted:") {
+			return steer.OutcomeInterrupted
+		}
+		if strings.HasPrefix(envelope.Text, "timeout:") {
+			return steer.OutcomeTimedOut
+		}
+		return steer.OutcomeFailed
+	default:
+		return steer.OutcomeLifecycleNotice
+	}
+}
+
+func failedReasonFromBootText(text string) string {
+	prefix, _, ok := strings.Cut(strings.TrimSpace(text), ":")
+	if ok && prefix != "" {
+		return prefix
+	}
+	return "failed"
 }
 
 // runBootSweep is the boot-time crash-recovery pass (FR-118/G-13/INV-9). It is
@@ -282,13 +765,19 @@ func (pe *PlanEngine) sweepToFailedInterrupted(ls *session.LifecycleStore, rec *
 // a fix.
 //
 // Best-effort and expected to legitimately fail for a delegate/subturn
-// session: pkg/tools/delegate.go's spawnSubTurn path never calls
-// UnifiedStore.NewSession for a child turn at all, so rec.SessionID resolves
-// to no UnifiedMeta record for those. That ONE case — SetMeta's read hitting
-// os.ReadFile's file-not-found error — is the only one logged at Debug,
-// never escalated, and never blocking the sweep. A nil agentLoop (a bare
-// struct-literal test engine) or an unresolvable AgentID is handled the same
-// silent way (there is no meta.json to reconcile either way).
+// session: pre-ADR-091, pkg/tools/delegate.go's spawnSubTurn path never
+// called UnifiedStore.NewSession for a child turn at all, so rec.SessionID
+// resolved to no UnifiedMeta record for those. ADR-091 fix lane RX-SUBTURN
+// note (comment-only; code unchanged): today's launcher
+// (steer_launcher.go::SteerLauncher.Launch) DOES mint a UnifiedMeta record
+// for every delegate child — launchOrdinaryRoot via sessions.NewSession,
+// launchSteered via sessions.CreateSessionWithID — so this specific
+// "legitimately fail" case may no longer occur in practice; the defensive
+// handling below is harmless regardless. That ONE case — SetMeta's read
+// hitting os.ReadFile's file-not-found error — is the only one logged at
+// Debug, never escalated, and never blocking the sweep. A nil agentLoop (a
+// bare struct-literal test engine) or an unresolvable AgentID is handled
+// the same silent way (there is no meta.json to reconcile either way).
 //
 // EVERY OTHER SetMeta failure (a corrupted meta.json, a permission error, a
 // disk-full atomic-write failure) is a REAL, actionable inconsistency on a
@@ -361,31 +850,22 @@ func (pe *PlanEngine) planIsAwaitingSupervision(planID string) bool {
 // session may be preserved as resumable at boot (re-evaluated AT BOOT, never
 // the stored needs_input.reconstructable hint, which is park-time only/m5).
 //
-//	AND of four clauses:
-//	(1) durable record state=needs_input AND a checkpoint
-//	    (last_checkpoint_ref) captured result_so_far/context digest at park;
+//	AND of three clauses:
+//	(1) durable record state=needs_input with its NeedsInput payload;
 //	(2) child identity still resolves at boot (agent not deleted) — via the
 //	    engine's agentResolver hook, nil = treat as resolving;
 //	(3) the open correlation_id + its owner scope still exist
-//	    (needs_input.correlation_id non-empty and an owner scope is present);
-//	(4) retained snapshot within snapshot_max_bytes.
+//	    (needs_input.correlation_id non-empty and an owner scope is present).
 //
 // ALL true -> preserved resumable. ANY false -> swept identically to a
 // stranded running session (failed(interrupted)).
 //
-// Clause (4) is approximated in this wave: the lifecycle record does not yet
-// carry a byte-count of the retained snapshot, so the checkpoint's presence
-// (clause 1) stands in for "a snapshot was captured within cap at park time".
-// The authoritative re-evaluation here focuses on the clauses that CAN change
-// between park and boot — identity (2), correlation (3), and checkpoint (1) —
-// which are the ones that actually invalidate a warm resume. A future wave
-// that persists a snapshot byte-count extends this predicate's clause (4).
+// ADR-091 FR-D-006 removes the former checkpoint clause: parkNeedsInput does
+// not create one, and the NeedsInput record itself is the durable authority.
+// snapshotMaxBytes remains in the signature for the existing PlanEngine
+// configuration surface but is no longer a recovery precondition.
 func (pe *PlanEngine) isNeedsInputReconstructable(rec *session.LifecycleRecord, snapshotMaxBytes int64) bool {
 	if rec == nil || rec.State != session.LifecycleNeedsInput {
-		return false
-	}
-	// (1) checkpoint present at park.
-	if rec.LastCheckpointRef == "" {
 		return false
 	}
 	// (2) child identity still resolves at boot.
@@ -402,10 +882,6 @@ func (pe *PlanEngine) isNeedsInputReconstructable(rec *session.LifecycleRecord, 
 	if rec.OwnerScopeKind == "" {
 		return false
 	}
-	// (4) retained snapshot within snapshot_max_bytes — see the doc comment:
-	// approximated by checkpoint presence in this wave (snapshotMaxBytes is
-	// accepted as the configured cap but no byte-count is stored yet to test
-	// against; clause 1 already guarantees a snapshot was captured).
 	_ = snapshotMaxBytes
 	return true
 }

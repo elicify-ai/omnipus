@@ -10,10 +10,13 @@ import (
 	"strings"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // supersedeTaskSession closes out a retry-attempt's own session when the
@@ -55,7 +58,7 @@ func (te *TaskExecutor) supersedeTaskSession(agentID, taskSessionID string) {
 	if taskSessionID == "" {
 		return
 	}
-	if sessStore := te.agentLoop.GetAgentStore(agentID); sessStore != nil {
+	if sessStore := te.agentLoop.taskSessionStore(taskSessionID, agentID); sessStore != nil {
 		statusInterrupted := session.StatusInterrupted
 		if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusInterrupted}); setErr != nil {
 			logger.WarnCF("task_executor",
@@ -119,7 +122,12 @@ func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID 
 	if taskSessionID == "" || verdict == nil {
 		return
 	}
-	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+	// Resolved by SESSION, not by agent: an ADR-091 launcher-minted task
+	// session lives in the shared store, and writing it through the agent's
+	// own legacy store drops the verdict (AppendTranscriptStrict refuses a
+	// session it does not hold) — after which GET /tasks/{id}/verdicts has
+	// nothing to read back. See AgentLoop.taskSessionStore.
+	sessStore := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
 	if sessStore == nil {
 		return
 	}
@@ -150,6 +158,11 @@ func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID 
 	// just the GLOBAL ActivityPanel.
 	te.agentLoop.emitEvent(EventKindJudgeVerdict, EventMeta{Source: "task_executor", AgentID: t.AgentID},
 		JudgeVerdictPayload{SessionID: taskSessionID, Verdict: *verdict})
+
+	// ADR-091 FR-B-017/I-5 (AS-12): a not-met verdict is ALSO delivered
+	// upward as a goal_status SessionMessage — steer_frames.go's shared body,
+	// a no-op for a MET verdict or an unsteered session.
+	te.agentLoop.deliverGoalVerdictUpward(context.Background(), taskSessionID, verdict)
 }
 
 // completeTaskWithResult marks task t terminal — Done when success is true,
@@ -191,7 +204,11 @@ func (te *TaskExecutor) completeTaskWithResult(
 	if !success {
 		status = task.StatusFailed
 	}
-	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+	if success && strings.TrimSpace(result) == "" {
+		status = task.StatusFailed
+		result = "empty_answer: the task produced no result"
+	}
+	sessStore := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
 	now := time.Now().UTC().Format(time.RFC3339)
 	final, uerr := te.store.UpdateIfStatus(t.ID, expected, task.Patch{
 		Status:      &status,
@@ -236,6 +253,12 @@ func (te *TaskExecutor) completeTaskWithResult(
 				map[string]any{"task_id": t.ID, "error": setErr.Error()})
 		}
 	}
+	// I-5 terminal ordering: append and wake the deterministic upward entry
+	// before making the lifecycle record terminal. Boot recovery can repair a
+	// crash after this point; the reverse order can strand a terminal child
+	// whose result never reached its steering session.
+	te.deliverTaskCompletionUpward(context.Background(), final)
+
 	// FR-118/G-13: this is completeTaskWithResult's own terminal write —
 	// mirror it onto the durable lifecycle record (see finalizeTaskLifecycle's
 	// doc comment). Placed AFTER the CAS write above lands (never on the
@@ -251,7 +274,7 @@ func (te *TaskExecutor) completeTaskWithResult(
 	terminateTaskGoalRecord(t.ID, final.Status, final.CancelReason, result)
 	te.closeRun(t.ID, run, status, result)
 	te.recordEvidenceBoundary(final)
-	te.onTaskComplete(final)
+	te.onTaskCompleteAfterUpwardDelivery(final)
 	te.notifySourceChannel(final)
 	return true
 }
@@ -318,6 +341,12 @@ func (te *TaskExecutor) getEvidenceCommitter() evidenceCommitter {
 
 // notifySourceChannel sends a compact task result back to the originating
 // channel. Only sends for terminal statuses.
+//
+// ADR-091 boundary 9 (FR-B-001): a steered task session's
+// audience is never the user — its steering session hears about completion
+// through deliverTaskCompletionUpward (onTaskComplete), not this channel
+// notification. audienceFor also calls steer.BoundaryObserver.Observe
+// before this decision is acted on (FR-B-014).
 func (te *TaskExecutor) notifySourceChannel(t *task.Task) {
 	if t.SourceChannel == "" || t.SourceChatID == "" {
 		return
@@ -328,6 +357,9 @@ func (te *TaskExecutor) notifySourceChannel(t *task.Task) {
 		return
 	}
 	if !task.IsTerminal(t.Status) {
+		return
+	}
+	if te.agentLoop.audienceFor(context.Background(), steer.BoundaryTaskResultNotification, t.SessionID) != steer.AudienceUser {
 		return
 	}
 
@@ -352,14 +384,17 @@ func (te *TaskExecutor) notifySourceChannel(t *task.Task) {
 	}
 }
 
-// onTaskComplete handles post-completion logic: parent notification + the
-// blocked_by auto-advance (dispatch tasks whose deps are now all done).
+// onTaskComplete handles post-completion logic: the upward wake to a
+// steered task's OWN steering session (per child, as it finishes — never
+// batched behind siblings) + the blocked_by auto-advance (dispatch tasks
+// whose deps are now all done).
 func (te *TaskExecutor) onTaskComplete(t *task.Task) {
-	te.emitStatusChanged(t, t.Status)
+	te.deliverTaskCompletionUpward(context.Background(), t)
+	te.onTaskCompleteAfterUpwardDelivery(t)
+}
 
-	if t.ParentTaskID != "" {
-		te.notifyParentIfAllSiblingsDone(t.ParentTaskID)
-	}
+func (te *TaskExecutor) onTaskCompleteAfterUpwardDelivery(t *task.Task) {
+	te.emitStatusChanged(t, t.Status)
 
 	// Only a `done` task unblocks downstream tasks (a `failed` dep does not).
 	if t.Status != task.StatusDone {
@@ -370,94 +405,89 @@ func (te *TaskExecutor) onTaskComplete(t *task.Task) {
 		logger.WarnCF("task_executor", "Could not advance blocked dependents",
 			map[string]any{"completed_task_id": t.ID, "error": err.Error()})
 	}
+	// D-08/FR-057: stamped at advanceBlockedTasks itself (see its own doc
+	// comment) — a plain context.Background() here carries nothing to stamp.
 	te.advanceBlockedTasks(context.Background(), t.ID)
 }
 
-// notifyParentIfAllSiblingsDone resumes the parent agent once every child task
-// of parentID has reached a terminal state. Safe under concurrent sibling
-// completions via the atomic FollowedUp claim.
-func (te *TaskExecutor) notifyParentIfAllSiblingsDone(parentID string) {
-	siblings, err := te.store.List(task.Filter{ParentTaskID: parentID, ParentTaskIDSet: true})
-	if err != nil {
-		logger.WarnCF("task_executor", "Could not list siblings",
-			map[string]any{"parent_id": parentID, "error": err.Error()})
+// deliverTaskCompletionUpward routes t's own outcome through the single I-5
+// upward-delivery operation, per child, as each finishes. A `t`
+// whose own session is not steered (an ordinary-root task: human-,
+// schedule- or plan-created) has no steering session to wake, and this is
+// a deliberate no-op for it, not a bug.
+func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task.Task) {
+	if t.SessionID == "" {
 		return
 	}
-	for _, s := range siblings {
-		if !task.IsTerminal(s.Status) {
+	deliverer := te.agentLoop.getUpwardDeliverer()
+	if deliverer == nil {
+		return
+	}
+
+	var outcome steer.Outcome
+	var sm generated.SessionMessage
+	now := time.Now().UTC()
+	switch t.Status {
+	case task.StatusDone:
+		if strings.TrimSpace(t.Result) == "" {
+			outcome = steer.OutcomeEmptyAnswer
+			if err := sm.FromSessionMessageError(generated.SessionMessageError{
+				MessageId: t.ID, SessionId: t.SessionID, CreatedAt: now, Depth: 1,
+				SenderIdentity: t.AgentID, Fatal: true, Text: "empty_answer: the task produced no result",
+			}); err != nil {
+				logger.WarnCF("task_executor", "deliverTaskCompletionUpward: encode empty-answer error failed",
+					map[string]any{"task_id": t.ID, "error": err.Error()})
+				return
+			}
+		} else {
+			outcome = steer.OutcomeFinalAnswer
+			if err := sm.FromSessionMessageHandback(generated.SessionMessageHandback{
+				MessageId: t.ID, SessionId: t.SessionID, CreatedAt: now, Depth: 1,
+				SenderIdentity: t.AgentID, Mode: generated.SessionMessageHandbackModeFinal,
+				ResultSoFar: t.Result, Artifacts: []string{}, OpenQuestions: []string{},
+			}); err != nil {
+				logger.WarnCF("task_executor", "deliverTaskCompletionUpward: encode handback failed",
+					map[string]any{"task_id": t.ID, "error": err.Error()})
+				return
+			}
+		}
+	case task.StatusFailed:
+		text := "failed: " + t.Result
+		outcome = steer.OutcomeFailed
+		if strings.HasPrefix(t.Result, "empty_answer:") {
+			outcome = steer.OutcomeEmptyAnswer
+			text = t.Result
+		}
+		if err := sm.FromSessionMessageError(generated.SessionMessageError{
+			MessageId: t.ID, SessionId: t.SessionID, CreatedAt: now, Depth: 1,
+			SenderIdentity: t.AgentID, Fatal: true, Text: text,
+		}); err != nil {
+			logger.WarnCF("task_executor", "deliverTaskCompletionUpward: encode failed-error failed",
+				map[string]any{"task_id": t.ID, "error": err.Error()})
 			return
 		}
+	default:
+		// Not a terminal outcome this operation covers (e.g. cancelled —
+		// routed through the D8 cascade instead).
+		return
 	}
 
-	parent, err := te.store.Get(parentID)
+	event := steer.UpwardEvent{ChildSessionID: t.SessionID, Outcome: outcome, Message: sm}
+	delivery, err := deliverer.Deliver(ctx, event)
 	if err != nil {
-		logger.WarnCF("task_executor", "Could not load parent task",
-			map[string]any{"parent_id": parentID, "error": err.Error()})
+		logger.WarnCF("task_executor", "deliverTaskCompletionUpward: Deliver failed",
+			map[string]any{"task_id": t.ID, "session_id": t.SessionID, "error": err.Error()})
 		return
 	}
-	if parent.Status != task.StatusInProgress {
-		return
-	}
-
-	claimed, claimErr := te.store.ClaimParentFollowUp(parent.ID)
-	if claimErr != nil {
-		logger.WarnCF("task_executor", "Could not claim parent follow-up",
-			map[string]any{"parent_id": parent.ID, "error": claimErr.Error()})
-		return
-	}
-	if !claimed {
-		return
-	}
-
-	if te.parentFollowUp != nil {
-		te.parentFollowUp(parent.ID)
-		return
-	}
-
-	summary := te.buildChildSummary(siblings)
-	sessionKey := fmt.Sprintf("agent:%s:task:%s", parent.AgentID, parent.ID)
-	followUp := fmt.Sprintf("All child tasks of task %q have completed.\n\n%s", parent.ID, summary)
-	parentChatID := "task:" + parent.ID
-	// Fix-wave finding #1: this goroutine calls processTaskDirect — a real
-	// agent turn that reads/writes session and transcript stores — exactly
-	// like runTask/runTaskFromInProgress, but until now it was launched with
-	// NO wg tracking at all, so Drain's wg.Wait could never see it and it
-	// could still be writing through stores Close() had already torn down.
-	// Add(1) before `go` (mirroring the other two dispatch sites); Done() is
-	// the FIRST defer registered inside the goroutine so it fires LAST (after
-	// the panic-recovery defer below, which is registered second and thus
-	// runs first) — Drain only ever sees this goroutine as "done" once it has
-	// genuinely finished, panic or not.
-	//
-	// Routed through enterDispatch, NOT a bare Add: unlike runTask and
-	// runTaskFromInProgress, this launch site does NOT run while its caller
-	// already holds a wg entry. It is reached from the task_update tool via
-	// AgentLoop's SetOnComplete hook — an ordinary agent turn that holds no
-	// count of its own. A bare Add here can therefore take the counter 0 -> 1
-	// while Drain has a waiter parked, which is the sync.WaitGroup panic this
-	// gate exists to prevent (see dispatchGate's doc comment). Refusing while
-	// draining is also the correct BEHAVIOUR, not merely the safe one: Close()
-	// is already tearing down the session and transcript stores this follow-up
-	// turn would write through.
-	if !te.enterDispatch() {
-		return
-	}
-	go func() {
-		defer te.wg.Done()
-		defer func() {
-			if r := recover(); r != nil {
-				logger.ErrorCF("task_executor", "Panic in parent follow-up",
-					map[string]any{"parent_id": parent.ID, "panic": r})
-			}
-		}()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		_, ferr := te.agentLoop.processTaskDirect(ctx, parent.AgentID, followUp, sessionKey, parentChatID)
-		if ferr != nil {
-			logger.WarnCF("task_executor", "Parent follow-up failed",
-				map[string]any{"parent_id": parent.ID, "error": ferr.Error()})
-		}
-	}()
+	// [ADR-091 fix lane RX-OUTCOME, HIGH] Every outcome that reaches this
+	// point is TERMINAL (the switch above returns for anything else), so a
+	// stored_not_woken here means the task is finished and gone and its
+	// steering session was never told. The parent/generation pair is read
+	// from the child's own lifecycle record rather than the task, because
+	// the task record carries neither — a best-effort read on the
+	// diagnostic path only, never on the success path.
+	parentSessionID, generation := steerDeliveryEdge(te.agentLoop.GetSessionLifecycleStore(), t.SessionID)
+	reportUndeliveredWake("steer: task completion", event, parentSessionID, generation, delivery)
 }
 
 // readyBlockedCandidates returns the IDs of all `next` tasks that list
@@ -522,6 +552,12 @@ func (te *TaskExecutor) readyBlockedCandidates(completedTaskID string) []string 
 // function dispatch its now-unblocked dependents just because they satisfy
 // their BlockedBy set — ExecuteTask itself now refuses that dispatch.
 func (te *TaskExecutor) advanceBlockedTasks(ctx context.Context, completedTaskID string) {
+	// D-08/FR-057: an auto-advance dispatch is the orchestrator reacting to a
+	// dependency completing — never a person watching this specific new
+	// dispatch, regardless of how completedTaskID itself was started. Stamp
+	// unconditionally at this one chokepoint (advanceBlockedTasks' sole caller
+	// is onTaskComplete).
+	ctx = tools.WithAutoDenyAsk(ctx, true)
 	for _, taskID := range te.readyBlockedCandidates(completedTaskID) {
 		if err := te.ExecuteTask(ctx, taskID, nil); err != nil {
 			if !isRoutineAutoDispatchRefusal(err) {
@@ -535,19 +571,8 @@ func (te *TaskExecutor) advanceBlockedTasks(ctx context.Context, completedTaskID
 	}
 }
 
-// buildChildSummary produces a markdown summary of all child task results.
-func (te *TaskExecutor) buildChildSummary(children []task.Task) string {
-	var sb strings.Builder
-	sb.WriteString("## Child Task Results\n\n")
-	for _, c := range children {
-		fmt.Fprintf(&sb, "- **%s** (status: %s)", c.Title, c.Status)
-		if c.Result != "" {
-			fmt.Fprintf(&sb, ": %s", c.Result)
-		}
-		sb.WriteString("\n")
-	}
-	return sb.String()
-}
+// buildChildSummary was deleted 2026-09-24 as an unreachable ADR-091
+// leftover (golangci unused): grep found no caller anywhere in the repo.
 
 // failTask marks a task as failed with the given reason.
 func (te *TaskExecutor) failTask(taskID, reason string) {

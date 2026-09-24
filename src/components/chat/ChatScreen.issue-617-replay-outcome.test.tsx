@@ -158,7 +158,6 @@ vi.mock('./historical-markdown', () => ({
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
-vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 // `./tools/GenericToolCall`, `./tools/BrowserTool`, `./tools/WebServeUI`
 // deliberately LEFT UNMOCKED — see file header. Only WebServeBlock's own
 // preview-link renderer (an unrelated concern — resolving/copying a
@@ -202,7 +201,6 @@ function seedBucket(messages: ChatMessage[]): void {
         lastUserMessageAt: null,
         cancelStage: null,
         lastReceivedEventTime: null,
-        spanByParentCallId: {},
         trimmedCount: 0,
       },
     },

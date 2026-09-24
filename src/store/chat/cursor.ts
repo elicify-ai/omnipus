@@ -173,7 +173,7 @@ export function insertHistoryMessageId(
  * it via `withBucket`, which shallow-merges a `Partial<SessionChatState>`
  * over the existing bucket; returning every field here (rather than a
  * partial) guarantees every OTHER piece of transient state (toolCalls,
- * spanByParentCallId, textAtToolCallStart, …) is genuinely cleared rather
+ * spanBySpanId, textAtToolCallStart, …) is genuinely cleared rather
  * than left stale from before the wipe.
  */
 export function applySnapshotHistoryWipe(bucket: SessionChatState): SessionChatState {
@@ -203,6 +203,10 @@ export function applySnapshotHistoryWipe(bucket: SessionChatState): SessionChatS
     rateLimitEvent: bucket.rateLimitEvent,
     sessionTokens: bucket.sessionTokens,
     sessionCost: bucket.sessionCost,
+    // ADR-092 (merged from release): the chat's resolved per-chat
+    // Auto-approve state is session state, not history — never erased by a
+    // history wipe (the session_state that follows re-asserts it anyway).
+    autoApproveEffective: bucket.autoApproveEffective,
     // The cursor itself is set separately by the caller from the
     // session_snapshot frame's own seq/boot_id (cursorFromTerminalFrame) —
     // carried through here only as a safe default if the caller doesn't.

@@ -41,13 +41,12 @@ func TestGateway_ProjectionFrameAndContentState(t *testing.T) {
 		bus.Emit(agent.Event{
 			Kind: agent.EventKindToolResultProjection,
 			Payload: agent.ToolResultProjectionPayload{
-				ChatID:             "chat-1",
-				SessionID:          "sess-1",
-				ProducingSessionID: "child-sess",
-				ToolCallID:         session.ToolCallID("call-9"),
-				ArchiveLine:        12,
-				ContentState:       "emptied",
-				Mark:               mark,
+				ChatID:       "chat-1",
+				SessionID:    "sess-1",
+				ToolCallID:   session.ToolCallID("call-9"),
+				ArchiveLine:  12,
+				ContentState: "emptied",
+				Mark:         mark,
 			},
 		})
 		// Another chat's projection must not reach this connection.
@@ -71,15 +70,13 @@ func TestGateway_ProjectionFrameAndContentState(t *testing.T) {
 		assert.Equal(t, "emptied", f.ContentState)
 		require.NotNil(t, f.Mark)
 		assert.Equal(t, mark, *f.Mark)
-		require.NotNil(t, f.ProducingSessionId, "present iff it differs from session_id (ADR-057 FR-013)")
-		assert.Equal(t, "child-sess", *f.ProducingSessionId)
-
 		// Contract: the bytes on the wire validate against the schema.
 		var generic map[string]any
 		require.NoError(t, json.Unmarshal(raw, &generic))
-		for _, key := range []string{"type", "session_id", "tool_call_id", "archive_line", "content_state", "mark", "producing_session_id"} {
+		for _, key := range []string{"type", "session_id", "tool_call_id", "archive_line", "content_state", "mark"} {
 			assert.Contains(t, generic, key)
 		}
+		assert.NotContains(t, generic, "producing_session_id", "ADR-091: never stamped any more")
 	})
 
 	t.Run("transcript read returns content_state and the projected result", func(t *testing.T) {

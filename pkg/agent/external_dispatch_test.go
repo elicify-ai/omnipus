@@ -27,12 +27,12 @@ type denyApprover struct {
 	consulted chan runner.ConsentRequest
 }
 
-func (d *denyApprover) RequestApproval(_ context.Context, req PolicyApprovalReq) (bool, string) {
+func (d *denyApprover) RequestApproval(_ context.Context, req PolicyApprovalReq) (bool, string, bool) {
 	select {
 	case d.consulted <- runner.ConsentRequest{RequestID: req.ToolCallID, ToolName: req.ToolName}:
 	default:
 	}
-	return false, "denied for test"
+	return false, "denied for test", false
 }
 
 // newExternalTestLoop builds a minimal AgentLoop and a child turnState whose agent

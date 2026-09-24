@@ -594,35 +594,20 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 	if v := strings.TrimSpace(ac.Voice); v != "" {
 		ag.Voice = &v
 	}
-	// shell_policy: echo the persisted per-agent override. Previously this was
-	// persisted (updateAgent) or should have been persisted (createAgent, fixed
-	// alongside this) but never surfaced on any response path (list/get/create/
-	// update all built gen.Agent without ever touching this field) — a GET
-	// could never confirm what was saved.
-	if ac.ShellPolicy != nil {
-		// The literal below mirrors the inlined anonymous-struct shape
-		// oapi-codegen generated for gen.Agent.ShellPolicy — field
-		// names/types/tags (and order) must match for the assignment to
-		// gen.Agent.ShellPolicy below to type-check.
-		sp := struct { // not-wire-format: generated gen.Agent.ShellPolicy inline shape, only populates the generated field
-			CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
-			EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
-		}{
-			EnableDenyPatterns: boolPtr(ac.ShellPolicy.EnableDenyPatterns),
-		}
-		if len(ac.ShellPolicy.CustomDenyPatterns) > 0 {
-			cdp := make([]string, len(ac.ShellPolicy.CustomDenyPatterns))
-			copy(cdp, ac.ShellPolicy.CustomDenyPatterns)
-			sp.CustomDenyPatterns = &cdp
-		}
-		ag.ShellPolicy = &sp
-	}
+	// auto_approve_disabled (ADR-092 D1): echo the persisted per-agent
+	// override of the global Auto-approve default. Off-only by construction
+	// (see AutoApproveDisabled's own doc comment on config.go) — always
+	// echo the actual stored value (false is a meaningful "inherits the
+	// global default", not merely "unset"), matching memory_enabled's
+	// pattern above rather than voice's non-empty-string gate.
+	autoApproveDisabled := ac.AutoApproveDisabled
+	ag.AutoApproveDisabled = &autoApproveDisabled
 	// fallback_models: P-F2 — this was persisted correctly (createAgent/updateAgent
 	// both write ac.FallbackModels to config.json) but never echoed back on ANY
 	// response path (list/get/update all built gen.Agent without ever touching
 	// this field), so a GET could never confirm what was saved and a reopened
 	// agent's UI always rendered the field empty even though it was safely on
-	// disk — mirrors the ShellPolicy fix above. config.FallbackModel.Provider is
+	// disk. config.FallbackModel.Provider is
 	// a bare string (empty when unset); gen.FallbackModel.Provider is a pointer,
 	// so translate unconditionally (mirrors getMemorySettings' identical
 	// config->wire FallbackModel translation for recap_fallback_models).
@@ -637,7 +622,7 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 	// (Q1 fix). Previously config.AgentConfig had no ModelParams field at
 	// all, so a PUT that set it returned 200 and GET always echoed
 	// model_params: null — the ADR-037 anti-pattern (mirrors the
-	// FallbackModels/ShellPolicy echo fixes above). top_p was removed from
+	// FallbackModels echo fix above). top_p was removed from
 	// the wire entirely in T2 (see agentModelParamsInput's doc comment) — no
 	// provider adapter in this codebase ever implemented it — so there is no
 	// third field left to echo.
@@ -672,7 +657,10 @@ func buildAgentDefaults(cfg *config.Config) gen.Agent {
 }
 
 func applyAgentEditableFields(agent *gen.Agent, cfg config.AgentConfig) {
-	descriptors := agentmutation.FieldDescriptors(cfg)
+	// The operator view: operator-only safety switches (ADR-092
+	// auto_approve_disabled) are editable here, unlike in the sysagent
+	// read tool's agent view.
+	descriptors := agentmutation.OperatorFieldDescriptors(cfg)
 	wire := make([]gen.AgentFieldDescriptor, 0, len(descriptors))
 	for _, descriptor := range descriptors {
 		row := gen.AgentFieldDescriptor{Editable: descriptor.Editable, Name: descriptor.Name}
@@ -1090,8 +1078,7 @@ func agentModelParamsFromWire(mp *struct {
 // createAgent so the two paths cannot drift — a createAgent that silently
 // dropped model_params would be exactly the same ADR-037 anti-pattern the
 // Q1 fix closed for PUT. Field-level merge: only the sub-fields the caller
-// actually sent overwrite the persisted value (mirrors the ShellPolicy
-// partial-patch pattern elsewhere in this file), so a partial patch (e.g.
+// actually sent overwrite the persisted value, so a partial patch (e.g.
 // only max_tokens) does not clobber an existing temperature. existing may
 // be nil (e.g. on create, or an agent with no prior override).
 func mergeAgentModelParams(existing *config.AgentModelParams, in *agentModelParamsInput) *config.AgentModelParams {

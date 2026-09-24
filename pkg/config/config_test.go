@@ -1662,65 +1662,6 @@ func TestOmnipusRetentionConfig_Mode_DisabledTakesPrecedence(t *testing.T) {
 	}
 }
 
-// TestAgentConfig_ShellPolicy_RoundTrip verifies that AgentConfig with a
-// shell_policy field marshals and unmarshals without data loss. This is a
-// change-guard: if the field is accidentally removed or renamed, this test
-// will fail.
-func TestAgentConfig_ShellPolicy_RoundTrip(t *testing.T) {
-	trueBool := true
-	original := AgentConfig{
-		ID:   "test-agent",
-		Name: "Test Agent",
-		ShellPolicy: &AgentShellPolicy{
-			EnableDenyPatterns: trueBool,
-			CustomDenyPatterns: []string{`^\s*rm\s+-rf`, `curl.*\|.*sh`},
-		},
-	}
-
-	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("json.Marshal(AgentConfig) error: %v", err)
-	}
-
-	var decoded AgentConfig
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("json.Unmarshal(AgentConfig) error: %v", err)
-	}
-
-	if decoded.ShellPolicy == nil {
-		t.Fatal("ShellPolicy: got nil, want non-nil")
-	}
-	if decoded.ShellPolicy.EnableDenyPatterns != original.ShellPolicy.EnableDenyPatterns {
-		t.Errorf("ShellPolicy.EnableDenyPatterns: got %v, want %v",
-			decoded.ShellPolicy.EnableDenyPatterns, original.ShellPolicy.EnableDenyPatterns)
-	}
-	if len(decoded.ShellPolicy.CustomDenyPatterns) != len(original.ShellPolicy.CustomDenyPatterns) {
-		t.Fatalf("ShellPolicy.CustomDenyPatterns: len %d, want %d",
-			len(decoded.ShellPolicy.CustomDenyPatterns), len(original.ShellPolicy.CustomDenyPatterns))
-	}
-	for i, p := range original.ShellPolicy.CustomDenyPatterns {
-		if decoded.ShellPolicy.CustomDenyPatterns[i] != p {
-			t.Errorf("CustomDenyPatterns[%d]: got %q, want %q",
-				i, decoded.ShellPolicy.CustomDenyPatterns[i], p)
-		}
-	}
-}
-
-// TestAgentConfig_ShellPolicy_OmittedWhenEmpty confirms that omitempty
-// suppresses shell_policy when it holds its zero value, so existing configs
-// without this field are unaffected.
-func TestAgentConfig_ShellPolicy_OmittedWhenEmpty(t *testing.T) {
-	cfg := AgentConfig{ID: "minimal"}
-	data, err := json.Marshal(cfg)
-	if err != nil {
-		t.Fatalf("json.Marshal error: %v", err)
-	}
-	s := string(data)
-	if strings.Contains(s, "shell_policy") {
-		t.Errorf("shell_policy must be omitted when nil; got: %s", s)
-	}
-}
-
 // TestLoadConfig_LegacySandboxProfileFields_Ignored is a pinning test for
 // Fix 4 of the 7-reviewer SandboxProfile-removal gate (silent-failure-hunter
 // + pr-test-analyzer): ADR-035 explicitly chose "no backward compatibility"

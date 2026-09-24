@@ -82,7 +82,6 @@ describe('chat.unknown-target — T1.14: done for unknown targetSid force-clears
             // null = no user message sent recently → stale spinner
             lastUserMessageAt: null,
             lastReceivedEventTime: null,
-            spanByParentCallId: {},
           },
         },
         messages: [spinnerMsg],
@@ -142,7 +141,6 @@ describe('chat.unknown-target — T1.14: done for unknown targetSid force-clears
             // RECENT user message → guard must preserve this spinner
             lastUserMessageAt: recentUserMessageAt,
             lastReceivedEventTime: null,
-            spanByParentCallId: {},
           },
         },
         messages: [],

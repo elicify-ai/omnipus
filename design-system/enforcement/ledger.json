@@ -4669,6 +4669,69 @@
       "syntax": "StatusBadge#className",
       "reason": "Lead read (2026-09-22): line 61: destructured `className` prop, forwarded unmodified into `cn(STATUS_BADGE_CLASSES[status] ?? STATUS_BADGE_CLASSES.inbox, className)` at line 62 -- no transformation.",
       "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/chat/ChatModeBadge.tsx",
+      "syntax": "ChatModeBadge#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: ChatModeBadge's own destructured prop `className` is declared at src/components/chat/ChatModeBadge.tsx:22:33 and flows unmodified to 3 sink(s) — src/components/chat/ChatModeBadge.tsx:27:34 (JSX attribute `className`); src/components/chat/ChatModeBadge.tsx:35:34 (JSX attribute `className`); src/components/chat/ChatModeBadge.tsx:46:34 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/chat/composer/AutoApprovePicker.tsx",
+      "syntax": "AutoApprovePicker#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: AutoApprovePicker's own destructured prop `className` is declared at src/components/chat/composer/AutoApprovePicker.tsx:24:3 and flows unmodified to 1 sink(s) — src/components/chat/composer/AutoApprovePicker.tsx:44:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/tooltip.tsx",
+      "syntax": "Tooltip#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: Tooltip's own destructured prop `className` is declared at src/components/ui/tooltip.tsx:46:67 and flows unmodified to 1 sink(s) — src/components/ui/tooltip.tsx:107:11 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/ChatModeBadge.tsx",
+      "syntax": "ChatModeBadge#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: ChatModeBadge's own destructured prop `className` is declared at src/components/chat/ChatModeBadge.tsx:22:33 and flows unmodified to 3 sink(s) — src/components/chat/ChatModeBadge.tsx:27:34 (JSX attribute `className`); src/components/chat/ChatModeBadge.tsx:35:34 (JSX attribute `className`); src/components/chat/ChatModeBadge.tsx:46:34 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/composer/AutoApprovePicker.tsx",
+      "syntax": "AutoApprovePicker#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: AutoApprovePicker's own destructured prop `className` is declared at src/components/chat/composer/AutoApprovePicker.tsx:24:3 and flows unmodified to 1 sink(s) — src/components/chat/composer/AutoApprovePicker.tsx:44:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/tooltip.tsx",
+      "syntax": "Tooltip#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: Tooltip's own destructured prop `className` is declared at src/components/ui/tooltip.tsx:46:67 and flows unmodified to 1 sink(s) — src/components/ui/tooltip.tsx:107:11 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/chat/ChatModeBadge.tsx",
+      "syntax": "ChatModeBadge#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: ChatModeBadge's own destructured prop `className` is declared at src/components/chat/ChatModeBadge.tsx:22:33 and flows unmodified to 3 sink(s) — src/components/chat/ChatModeBadge.tsx:27:34 (JSX attribute `className`); src/components/chat/ChatModeBadge.tsx:35:34 (JSX attribute `className`); src/components/chat/ChatModeBadge.tsx:46:34 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/chat/composer/AutoApprovePicker.tsx",
+      "syntax": "AutoApprovePicker#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: AutoApprovePicker's own destructured prop `className` is declared at src/components/chat/composer/AutoApprovePicker.tsx:24:3 and flows unmodified to 1 sink(s) — src/components/chat/composer/AutoApprovePicker.tsx:44:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/tooltip.tsx",
+      "syntax": "Tooltip#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: Tooltip's own destructured prop `className` is declared at src/components/ui/tooltip.tsx:46:67 and flows unmodified to 1 sink(s) — src/components/ui/tooltip.tsx:107:11 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
     }
   ],
   "reviewedBoundaries": [
@@ -5143,16 +5206,6 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.subagent-spans-historical-agenttype-wiring.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.subagent-spans-live-visibility.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.tab-ring.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
@@ -5284,16 +5337,6 @@
     },
     {
       "path": "src/components/chat/OmnipusRuntimeProvider.reseed.test.ts",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/SubagentBlock.edge.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/SubagentBlock.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },

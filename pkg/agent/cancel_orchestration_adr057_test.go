@@ -88,18 +88,23 @@ func u15RegisterChildTurn(t *testing.T, al *AgentLoop, rootSessionID, childTrans
 }
 
 // u15PersistLifecycleRecord persists a real, disk-backed LifecycleRecord for
-// sessionID as a direct child of parentDurableKey, in the given state.
-func u15PersistLifecycleRecord(t *testing.T, store *session.LifecycleStore, sessionID, parentDurableKey string, state session.LifecycleState) {
+// sessionID as a direct child of parentDurableKey, in the given state. Its
+// SteeredBy.RootSessionID carries rootSessionID — the chain's real (walked)
+// root, which production's launchSteered always resolves and stamps, not the
+// immediate parent — so a multi-hop chain's deeper records correctly differ
+// from their own direct parent on this field, exactly as a real
+// SteerLauncher.Launch chain would.
+func u15PersistLifecycleRecord(t *testing.T, store *session.LifecycleStore, sessionID, parentDurableKey, rootSessionID string, state session.LifecycleState) {
 	t.Helper()
 	err := store.Persist(&session.LifecycleRecord{
-		SessionID:        sessionID,
-		Generation:       0,
-		State:            state,
-		OwnerScopeKind:   session.OwnerScopeParentSession,
-		OwnerScopeID:     parentDurableKey,
-		ParentDurableKey: parentDurableKey,
-		AgentID:          "u15-test-agent",
-		WorkspaceID:      "u15-test-workspace",
+		SessionID:      sessionID,
+		Generation:     1,
+		State:          state,
+		OwnerScopeKind: session.OwnerScopeParentSession,
+		OwnerScopeID:   parentDurableKey,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentDurableKey, RootSessionID: rootSessionID},
+		AgentID:        "u15-test-agent",
+		WorkspaceID:    "u15-test-workspace",
 	})
 	require.NoError(t, err)
 }
@@ -447,7 +452,7 @@ func TestU15Cancel_AuditNamesEveryDescendantAtDepth3(t *testing.T) {
 
 // TestU15Cancel_TransitionsEveryDescendantLifecycleRecord_Depth3 covers
 // BDD-30: a chat with children at DURABLE depths 1, 2 and 3 (persisted
-// LifecycleRecords chained via ParentDurableKey, independent of any
+// LifecycleRecords chained via SteeringSessionID, independent of any
 // in-memory turnState) must have EVERY descendant's persisted record
 // transitioned to cancelled by RequestCancel's own-goroutine durable walk
 // (cancelDurableDescendantLifecycleRecords), not just the root's.
@@ -463,9 +468,9 @@ func TestU15Cancel_TransitionsEveryDescendantLifecycleRecord_Depth3(t *testing.T
 	d2 := fmt.Sprintf("u15-lc-d2-%d", nonce)
 	d3 := fmt.Sprintf("u15-lc-d3-%d", nonce)
 
-	u15PersistLifecycleRecord(t, lifecycleStore, d1, rootID, session.LifecycleRunning)
-	u15PersistLifecycleRecord(t, lifecycleStore, d2, d1, session.LifecycleRunning)
-	u15PersistLifecycleRecord(t, lifecycleStore, d3, d2, session.LifecycleRunning)
+	u15PersistLifecycleRecord(t, lifecycleStore, d1, rootID, rootID, session.LifecycleRunning)
+	u15PersistLifecycleRecord(t, lifecycleStore, d2, d1, rootID, session.LifecycleRunning)
+	u15PersistLifecycleRecord(t, lifecycleStore, d3, d2, rootID, session.LifecycleRunning)
 
 	// Positive lower bound (Rule 4's spirit): prove the fixture's own walk is
 	// live before asserting the post-cancel state — all three records must

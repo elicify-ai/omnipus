@@ -15,6 +15,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -418,4 +419,45 @@ func TestAgentCancelAbuse_BurstEmitsOnce(t *testing.T) {
 	}
 	assert.Equal(t, 1, abuseCount,
 		"burst of 3 must emit exactly one cancel.abuse_pattern event")
+}
+
+// TestCollectDescendantSessionIDs_UnrelatedCorruptRecordNeverBlocksTheWalk
+// proves Finding 2 (ADR-091 fix lane 2): CollectDescendantSessionIDs must
+// answer "children of root" through the SteeringSessionID index
+// (session.LifecycleStore.List(LifecycleFilter{SteeringSessionID: id}),
+// FR-019/FR-020 — O(descendants of root)), never by os.ReadDir'ing and
+// Load'ing every persisted record on disk (O(every session ever)). The
+// index-backed walk has no reason to ever touch a session that is not
+// root's own descendant, so an unrelated, corrupted record elsewhere in the
+// store must not affect the answer at all.
+func TestCollectDescendantSessionIDs_UnrelatedCorruptRecordNeverBlocksTheWalk(t *testing.T) {
+	store := session.NewLifecycleStore(t.TempDir())
+	persistSteerLifecycle(t, store, testSteerLifecycleRecord("root", "", session.LifecycleRunning, 1))
+	persistSteerLifecycle(t, store, testSteerLifecycleRecord("child", "root", session.LifecycleRunning, 1))
+	persistSteerLifecycle(t, store, testSteerLifecycleRecord("grandchild", "child", session.LifecycleRunning, 1))
+	// Unrelated to root's subtree entirely — no SteeredBy edge into it.
+	persistSteerLifecycle(t, store, testSteerLifecycleRecord("unrelated", "", session.LifecycleRunning, 1))
+	// Made genuinely UNREADABLE (permission denied), not merely malformed: a
+	// malformed/torn JSONL line is deliberately tolerated by
+	// LifecycleStore.tail (it skips the bad line and treats the file as
+	// "not found" if no good line remains) so THAT would resolve to
+	// ErrLifecycleNotFound and self-heal silently either way, proving
+	// nothing about which walk strategy is used. A permission error is not
+	// self-healed — it is exactly the "one unreadable UNRELATED record" the
+	// finding names.
+	unrelatedPath := filepath.Join(store.Dir(), "unrelated.jsonl")
+	if err := os.Chmod(unrelatedPath, 0o000); err != nil {
+		t.Fatalf("make unrelated record unreadable: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unrelatedPath, 0o600) })
+
+	ids, err := CollectDescendantSessionIDs(store, "root")
+	if err != nil {
+		t.Fatalf("CollectDescendantSessionIDs returned an error because of an UNRELATED corrupted record on disk: %v", err)
+	}
+	got := append([]string(nil), ids...)
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"child", "grandchild"}) {
+		t.Fatalf("ids = %v, want [child grandchild]", got)
+	}
 }

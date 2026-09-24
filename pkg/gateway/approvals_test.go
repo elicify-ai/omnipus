@@ -44,7 +44,7 @@ func TestApprovalRegistry_ResolveDeletesEntry(t *testing.T) {
 		close(doneCh)
 	}()
 
-	ok, gone := reg.resolve(e.ApprovalID, ApprovalActionApprove)
+	ok, gone := reg.resolve(e.ApprovalID, ApprovalActionApprove, false)
 	require.True(t, ok, "resolve must succeed on a pending entry")
 	require.False(t, gone, "fresh resolve must not report gone=true")
 

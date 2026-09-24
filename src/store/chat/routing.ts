@@ -3,8 +3,7 @@
 import { queryClient } from '@/lib/queryClient'
 import { libraryQueryKeys } from '@/lib/api'
 import { queryKeyMentionsPlanId } from './frames'
-import { ORPHAN_BUFFER_TTL_MS, finishedTurnIdsBySession, orphanTimers, pendingByParentCallId } from './types'
-import type { BufferedFrame, SessionChatState } from './types'
+import { finishedTurnIdsBySession } from './types'
 
 // ── plan_status invalidation: scoped + coalesced (refetch-storm fix) ────────
 //
@@ -129,30 +128,9 @@ export function isTurnFinished(sessionId: string, turnId: string): boolean {
   return finishedTurnIdsBySession[sessionId]?.includes(turnId) ?? false
 }
 
-// ── Frame-routing helpers ─────────────────────────────────────────────────────
-
-/** O(1) span check using the spanByParentCallId index. */
-export function hasOpenSpanFast(bucket: SessionChatState, parentCallId: string): boolean {
-  return parentCallId in bucket.spanByParentCallId
-}
-
-export function bufferForSpan(
-  bufferKey: string,
-  frame: BufferedFrame['frame'],
-  onTimeout: (buffered: BufferedFrame[]) => void,
-): void {
-  if (!pendingByParentCallId[bufferKey]) {
-    pendingByParentCallId[bufferKey] = []
-    if (!orphanTimers[bufferKey]) {
-      orphanTimers[bufferKey] = setTimeout(() => {
-        const buffered = pendingByParentCallId[bufferKey] ?? []
-        delete pendingByParentCallId[bufferKey]
-        delete orphanTimers[bufferKey]
-        if (buffered.length > 0) {
-          onTimeout(buffered)
-        }
-      }, ORPHAN_BUFFER_TTL_MS)
-    }
-  }
-  pendingByParentCallId[bufferKey].push({ frame, arrivedAt: Date.now() })
-}
+// ADR-091 D10: `hasOpenSpanFast` and `bufferForSpan` (the O(1)
+// spanByParentCallId check and the out-of-order tool_call_start/result
+// buffer keyed by parent_call_id) are deleted along with the child-step-
+// nesting mechanism they served — a child's own tool calls now always carry
+// the child's own session_id (I-4) and never arrive in the parent's bucket,
+// so there is nothing left to buffer or fast-check against.

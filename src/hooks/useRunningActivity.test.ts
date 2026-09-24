@@ -57,8 +57,11 @@ function makeSpan(overrides: Partial<SubagentSpan> & { status: SubagentSpan['sta
     spanId: overrides.spanId ?? 'span_1',
     parentCallId: overrides.parentCallId ?? 'call_1',
     taskLabel: overrides.taskLabel ?? 'audit files',
-    steps: overrides.steps ?? [],
     agentId: overrides.agentId,
+    childSessionId: overrides.childSessionId,
+    statusLine: overrides.statusLine,
+    lifecycleState: overrides.lifecycleState,
+    lastUpdateAt: overrides.lastUpdateAt,
   }
   if (overrides.status === 'running') {
     return { ...base, status: 'running' }
@@ -220,9 +223,55 @@ describe('useRunningActivity — 3rd-party agent span', () => {
       expect(item.kind).toBe('agent')
       if (item.kind === 'agent') {
         expect(item.agentType).toBe('3p')
-        expect(item.steps).toEqual([])
       }
     })
+    client.clear()
+  })
+})
+
+// Finding 3 (ADR-091 seven-reviewer gate, 2026-09): useRunningActivity.ts
+// builds each AgentActivityItem from a span, copying statusLine,
+// childSessionId and lastUpdateAt (see the item literal in the hook's
+// agentSpans loop) — but no test asserted they actually arrive on the item.
+// If any one of the three were dropped, every row would silently lose it
+// (childSessionId especially: the user's only route into a child session,
+// via the Open control) and every test in the repo would still pass,
+// because ActivityPanel.test.tsx hands the item in directly rather than
+// going through this hook.
+describe('useRunningActivity — span metadata hop (statusLine/childSessionId/lastUpdateAt)', () => {
+  it('carries statusLine, childSessionId and lastUpdateAt from the span onto the running AgentActivityItem verbatim', async () => {
+    const client = makeClient()
+    act(() => {
+      useChatStore.setState({
+        messages: [
+          makeAssistantMessage({
+            spans: [
+              makeSpan({
+                spanId: 'span_metadata',
+                status: 'running',
+                agentId: 'ray',
+                statusLine: 'reading 3 files',
+                childSessionId: 'child-session-xyz',
+                lastUpdateAt: '2026-09-23T10:15:00.000Z',
+              }),
+            ],
+          }),
+        ],
+      })
+    })
+
+    const { result } = renderHook(() => useRunningActivity(), { wrapper: makeWrapper(client) })
+
+    await waitFor(() => {
+      expect(result.current.running).toHaveLength(1)
+    })
+
+    const item = result.current.running[0]
+    expect(item.kind).toBe('agent')
+    if (item.kind !== 'agent') throw new Error('expected an agent item')
+    expect(item.statusLine).toBe('reading 3 files')
+    expect(item.childSessionId).toBe('child-session-xyz')
+    expect(item.lastUpdateAt).toBe('2026-09-23T10:15:00.000Z')
     client.clear()
   })
 })
@@ -940,7 +989,6 @@ describe('mergeAndCapFinished — pure sort/cap contract', () => {
       agentType: 'unknown',
       taskLabel: 'x',
       status: 'success',
-      steps: [],
     }
   }
 
@@ -1155,7 +1203,7 @@ describe('useRunningActivity — elapsed time ticking', () => {
         messages: s.messages.map((m) => ({
           ...m,
           spans: (m.spans ?? []).map((sp) =>
-            sp.spanId === 'span_tick' ? { spanId: sp.spanId, parentCallId: sp.parentCallId, taskLabel: sp.taskLabel, steps: sp.steps, agentId: sp.agentId, status: 'running' as const } : sp,
+            sp.spanId === 'span_tick' ? { spanId: sp.spanId, parentCallId: sp.parentCallId, taskLabel: sp.taskLabel, agentId: sp.agentId, status: 'running' as const } : sp,
           ),
         })),
       }))

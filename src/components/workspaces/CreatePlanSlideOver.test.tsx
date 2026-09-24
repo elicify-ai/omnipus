@@ -1,7 +1,7 @@
 /**
  * CreatePlanSlideOver.test.tsx
  *
- * ADR-049 FR-083 (US-10 AS-4): Create Plan posts goal/DoD/owner/bounds.
+ * ADR-049 FR-083 (US-10 AS-4): Create Plan posts objective/DoD/owner/bounds.
  * FR-084 (US-10 AS-5, SD-C4): Approve is confirm-on-success — a 400 lists
  * per-task errors inline and does NOT close/optimistically transition.
  */
@@ -128,12 +128,12 @@ describe('CreatePlanSlideOver — create', () => {
     expect(createPlan).not.toHaveBeenCalled()
   })
 
-  it('posts title/goal/owner/bounds on Create', async () => {
+  it('posts title/objective/owner/bounds on Create', async () => {
     vi.mocked(createPlan).mockResolvedValueOnce(makePlan() as never)
     renderSlideOver()
 
     fireEvent.change(screen.getByLabelText(/^title/i), { target: { value: 'v1.0 Launch' } })
-    fireEvent.change(screen.getByLabelText(/^goal$/i), { target: { value: 'Ship it' } })
+    fireEvent.change(screen.getByLabelText(/^objective$/i), { target: { value: 'Ship it' } })
     await selectOwner(/^jim$/i)
 
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
@@ -141,7 +141,7 @@ describe('CreatePlanSlideOver — create', () => {
     await waitFor(() => expect(createPlan).toHaveBeenCalledOnce())
     const body = vi.mocked(createPlan).mock.calls[0][0]
     expect(body.title).toBe('v1.0 Launch')
-    expect(body.goal).toBe('Ship it')
+    expect(body.objective).toBe('Ship it')
     expect(body.workspace_id).toBe('ws-1')
     expect(body.owner_agent_id).toBe('jim')
   })
@@ -237,16 +237,17 @@ describe('CreatePlanSlideOver — Approve (SD-C4 confirm-on-success)', () => {
   })
 })
 
-// S2 UAT finding: the Goal textarea allowed 4000 chars client-side while the
-// SERVER caps goals at 2000 (pkg/plan/plan.go maxPlanGoalRunes) — a
-// 2500-char goal was silently accepted by the UI and only rejected on submit
-// with "plan validation: goal must be 2000 characters or fewer". These tests
-// pin the textarea's real cap and prove truncation is never silent (S3).
+// S2 UAT finding: the Objective textarea allowed 4000 chars client-side while
+// the SERVER caps objectives at 2000 (pkg/plan/plan.go maxPlanObjectiveRunes)
+// — a 2500-char objective was silently accepted by the UI and only rejected
+// on submit with "plan validation: objective must be 2000 characters or
+// fewer". These tests pin the textarea's real cap and prove truncation is
+// never silent (S3).
 describe('CreatePlanSlideOver — character caps are visible, not silent (S3/S4 UAT)', () => {
-  it('caps the Goal textarea at the real server limit (2000), not the old 4000', () => {
+  it('caps the Objective textarea at the real server limit (2000), not the old 4000', () => {
     renderSlideOver()
-    const goal = screen.getByLabelText(/^goal$/i) as HTMLTextAreaElement
-    expect(goal.maxLength).toBe(2000)
+    const objective = screen.getByLabelText(/^objective$/i) as HTMLTextAreaElement
+    expect(objective.maxLength).toBe(2000)
   })
 
   it('caps the Title input at the real server limit (200)', () => {
@@ -268,15 +269,15 @@ describe('CreatePlanSlideOver — character caps are visible, not silent (S3/S4 
     expect(screen.getByText(/max length reached/i)).toBeInTheDocument()
   })
 
-  it('shows a live character counter for Goal that flips to a "max length reached" notice at the cap', () => {
+  it('shows a live character counter for Objective that flips to a "max length reached" notice at the cap', () => {
     renderSlideOver()
-    const goal = screen.getByLabelText(/^goal$/i)
+    const objective = screen.getByLabelText(/^objective$/i)
 
-    fireEvent.change(goal, { target: { value: 'short goal' } })
+    fireEvent.change(objective, { target: { value: 'short goal' } })
     expect(screen.getByText('10/2000')).toBeInTheDocument()
     expect(screen.queryByText(/max length reached/i)).toBeNull()
 
-    fireEvent.change(goal, { target: { value: 'y'.repeat(2000) } })
+    fireEvent.change(objective, { target: { value: 'y'.repeat(2000) } })
     expect(screen.getByText(/2000\/2000/)).toBeInTheDocument()
     expect(screen.getByText(/max length reached/i)).toBeInTheDocument()
   })
@@ -315,7 +316,7 @@ function mergeBounds(
 
 function planWithBounds(overrides: Partial<Plan> = {}): Plan {
   return makePlan({
-    goal: 'Ship it',
+    objective: 'Ship it',
     bounds: STORED_BOUNDS as NonNullable<Plan['bounds']>,
     ...overrides,
   })
@@ -435,17 +436,17 @@ describe('CreatePlanSlideOver — an edit sends only what actually changed', () 
     expect(body.title).toBe('Launch v2')
   })
 
-  it('clearing the Goal actually clears it — the request carries an explicit empty string', async () => {
+  it('clearing the Objective actually clears it — the request carries an explicit empty string', async () => {
     vi.mocked(updatePlan).mockResolvedValueOnce(makePlan() as never)
     renderSlideOver({ plan: planWithBounds() })
 
-    fireEvent.change(screen.getByLabelText(/^goal$/i), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText(/^objective$/i), { target: { value: '' } })
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
 
     await waitFor(() => expect(updatePlan).toHaveBeenCalledOnce())
-    // The backend patch is presence-checked (`if patch.Goal != nil`), so an
-    // omitted key is a silent no-op. `''` is what actually clears the goal.
-    expect(lastUpdateBody().goal).toBe('')
+    // The backend patch is presence-checked (`if patch.Objective != nil`), so an
+    // omitted key is a silent no-op. `''` is what actually clears the objective.
+    expect(lastUpdateBody().objective).toBe('')
   })
 
   it('deleting every DoD criterion actually clears it — the request carries an explicit empty array', async () => {

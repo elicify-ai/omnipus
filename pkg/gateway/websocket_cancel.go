@@ -4,13 +4,56 @@ package gateway
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+var gatewaySteerCancellers sync.Map // key: *agent.AgentLoop, value: steer.Canceller
+
+// setGatewaySteerCanceller binds the composition-root Canceller to gateway
+// Stop surfaces. gateway_boot.go::wireSteerDeps calls this when it supplies the
+// generation-aware live-turn adapter; the lazy fallback keeps focused gateway
+// tests and partially landed branches functional without inventing a second
+// wire contract.
+func setGatewaySteerCanceller(al *agent.AgentLoop, canceller steer.Canceller) {
+	if al != nil && canceller != nil {
+		gatewaySteerCancellers.Store(al, canceller)
+	}
+}
+
+func gatewaySteerCanceller(al *agent.AgentLoop) steer.Canceller {
+	if al == nil {
+		return nil
+	}
+	if value, ok := gatewaySteerCancellers.Load(al); ok {
+		if c, ok := value.(steer.Canceller); ok {
+			return c
+		}
+		// gatewaySteerCancellers is private to this file; every writer
+		// (setGatewaySteerCanceller's Store, and the LoadOrStore below)
+		// stores a steer.Canceller — unreachable in practice. Fall through
+		// to mint a fresh canceller instead of trusting that blindly.
+	}
+	canceller := agent.NewSteerCanceller(al.GetSessionLifecycleStore())
+	actual, _ := gatewaySteerCancellers.LoadOrStore(al, steer.Canceller(canceller))
+	c, ok := actual.(steer.Canceller)
+	if !ok {
+		// Same guarantee as above — unreachable in practice.
+		return canceller
+	}
+	return c
+}
 
 // sendCancelStageFrame publishes a cancel_stage frame for sessionID through
 // the session hub (#823 BE-DESIGN.md §1.2): every tab bound to the session
@@ -28,9 +71,175 @@ func (h *WSHandler) sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
 	}, wc)
 }
 
+// sendCancelReportFrame is sendCancelStageFrame for ADR-091 I-6's detached
+// stage, carrying the cascade's report. Like every cancel_stage it is
+// published once through the session hub (#823: numbered, journaled, seen by
+// every bound tab), with an unsequenced copy for an unbound requester.
+func (h *WSHandler) sendCancelReportFrame(wc *wsConn, sessionID, stage string, report steer.CancelReport) {
+	// `partial` means one thing only: the cascade could NOT reach part of the
+	// subtree. WP-D FR-D-001 — "MUST report unreachable ones as partial — in
+	// the report, on the Stop response frame, and as one line on the
+	// originating channel" — and every other `partial` sentence in
+	// adr-091-wp-d-cancel-cascade-spec.md (US-1 AS-4, the "Partial reported"
+	// exact check, the BDD scenario, the integration-boundary table) names
+	// the unreadable/unreachable branch and nothing else.
+	//
+	// SkippedNewerGeneration is deliberately NOT part of this predicate. US-1
+	// AS-9's whole expected outcome is "the registry refuses it, B's
+	// generation-2 turn keeps running, and the report lists B under
+	// SkippedNewerGeneration" — no partial, no channel line. A revival that
+	// landed after the Stop is the LATER instruction, and ADR-091 D8 settles
+	// what that means: "the later instruction wins, which is what the
+	// operator asked for". Cancelling it anyway is listed among the ADR's
+	// prohibitions. Flagging a correct outcome as a partial failure is
+	// over-signalling, and it costs nothing in honesty: the frame carries
+	// `skipped_newer_generation` as its own array, so a client sees exactly
+	// which sessions kept running whatever `partial` says.
+	partial := len(report.Unreachable) > 0
+	frame := generated.CancelStageFrame{
+		Type:                   string(generated.WsFrameTypeCancelStage),
+		SessionId:              sessionID,
+		Stage:                  stage,
+		Reached:                append([]string(nil), report.Reached...),
+		SkippedNewerGeneration: append([]string(nil), report.SkippedNewerGeneration...),
+		SkippedTerminal:        append([]string(nil), report.SkippedTerminal...),
+		Partial:                &partial,
+	}
+	for _, unreachable := range report.Unreachable {
+		frame.Unreachable = append(frame.Unreachable, struct {
+			Id     string `json:"id"`
+			Reason string `json:"reason"`
+		}{Id: unreachable.ID, Reason: unreachable.Reason})
+	}
+	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeCancelStage), frame, wc)
+}
+
+// cancelPartialSummary renders the one-line PARTIAL-STOP notice — the line
+// ADR-091 Q21 sends to the channel the Stop came from, and the same wording
+// the SPA sees alongside `partial: true`. Its subject is exactly what the
+// cascade could not reach, so it is empty for a cascade that reached
+// everything it was allowed to touch.
+//
+// WP-D pins both the gate and the wording: FR-D-001 ("MUST report unreachable
+// ones as partial ... as one line on the originating channel"), the
+// "Partial reported" machine-verifiable check ("exactly one line on the
+// originating channel: \"stopped 3 of 5; 2 unreachable\"") and the US-1/AS-4
+// BDD scenario ("Telegram receives one line: \"stopped 2 of 3; 1
+// unreachable\"").
+//
+// SkippedNewerGeneration is not a partial failure and is not named here — see
+// sendCancelReportFrame's comment for why. A caller that needs the broader
+// "is anything under this node still running?" question answered — the REST
+// delete guard, which must not delete session data out from under a live turn
+// — wants cancelIncompleteSubtreeSummary below instead.
+func cancelPartialSummary(report steer.CancelReport) string {
+	if len(report.Unreachable) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("stopped %d of %d; %d unreachable",
+		len(report.Reached), len(report.Reached)+len(report.Unreachable), len(report.Unreachable))
+}
+
+// cancelIncompleteSubtreeSummary answers a DIFFERENT question from
+// cancelPartialSummary: not "was this Stop partial?" but "could any session
+// under this node still be running?". Only the second question justifies
+// refusing to delete session data, so a node the cascade correctly left alone
+// because a newer generation had taken over counts here even though it does
+// not count as partial. Empty when the cascade left nothing running.
+func cancelIncompleteSubtreeSummary(report steer.CancelReport) string {
+	summary := cancelPartialSummary(report)
+	if len(report.SkippedNewerGeneration) == 0 {
+		return summary
+	}
+	stillRunning := fmt.Sprintf("%d already advanced to a newer generation and are still running",
+		len(report.SkippedNewerGeneration))
+	if summary == "" {
+		return "Stop cascade incomplete: " + stillRunning
+	}
+	return summary + "; " + stillRunning
+}
+
+// sendCancelPartialNotice publishes the one-line PARTIAL-STOP notice as a
+// session error frame through the session hub (#823: every bound tab sees
+// it, numbered and journaled), with an unsequenced copy for an unbound
+// requester — the same delivery rule as the cancel_stage frame it
+// accompanies.
+func (h *WSHandler) sendCancelPartialNotice(wc *wsConn, sessionID string, report steer.CancelReport) {
+	message := cancelPartialSummary(report)
+	if message == "" {
+		return
+	}
+	sid := sessionID
+	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeError), generated.ErrorFrame{
+		Type:      string(generated.WsFrameTypeError),
+		SessionId: &sid,
+		Message:   message,
+	}, wc)
+}
+
+func (h *WSHandler) sendExternalCancelPartialNotice(ctx context.Context, sessionID string, report steer.CancelReport) {
+	message := cancelPartialSummary(report)
+	if h == nil || h.agentLoop == nil || h.msgBus == nil || message == "" {
+		return
+	}
+	lifecycle := h.agentLoop.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil || rec.SteeredBy == nil {
+		return
+	}
+	target := rec.SteeredBy.ReportingTarget
+	if target.Channel == "" || target.ChatID == "" || target.Channel == "web" || target.Channel == "webchat" {
+		return
+	}
+	if err := h.msgBus.PublishOutbound(ctx, bus.OutboundMessage{
+		Channel: target.Channel,
+		ChatID:  target.ChatID,
+		Content: message,
+	}); err != nil {
+		slog.Warn("ws: publish partial Stop notice to originating channel failed",
+			"session_id", sessionID, "channel", target.Channel, "chat_id", target.ChatID, "error", err)
+	}
+}
+
+// cancelSteeredSubtree applies ADR-091 Stop only when a durable lifecycle
+// record exists. Ordinary chats with no steering record keep using the legacy
+// live-turn cancel path and must not be falsely reported as partial.
+func cancelSteeredSubtree(ctx context.Context, al *agent.AgentLoop, sessionID string, by steer.Principal) (steer.CancelReport, bool) {
+	var report steer.CancelReport
+	if al == nil {
+		return report, false
+	}
+	store := al.GetSessionLifecycleStore()
+	if store == nil {
+		return report, false
+	}
+	if _, err := store.Load(sessionID); err != nil {
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			if _, statErr := os.Stat(filepath.Join(store.Dir(), sessionID+".jsonl")); errors.Is(statErr, os.ErrNotExist) {
+				return report, false
+			}
+		}
+		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: err.Error()})
+		return report, true
+	}
+	canceller := gatewaySteerCanceller(al)
+	if canceller == nil {
+		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: "steer canceller is not configured"})
+		return report, true
+	}
+	result, err := canceller.CancelSubtree(ctx, sessionID, by)
+	if err != nil {
+		result.Unreachable = append(result.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: err.Error()})
+	}
+	return result, true
+}
+
 // u11CollectDescendantSessionIDs walks the durable lifecycle store's
-// ParentDurableKey edges (pkg/session/lifecycle.go, FR-019/FR-020;
-// LifecycleStore.List(LifecycleFilter{ParentDurableKey: id}) returns X's
+// SteeringSessionID edges (pkg/session/lifecycle.go, FR-019/FR-020;
+// LifecycleStore.List(LifecycleFilter{SteeringSessionID: id}) returns X's
 // DIRECT children only, index-backed per BDD-19) to collect EVERY descendant
 // of rootID, however many delegation levels deep. Returns only descendants —
 // rootID itself is never included; the caller prepends it.
@@ -65,9 +274,9 @@ func (h *WSHandler) sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
 // react to a partial-walk failure with a more specific diagnostic than the
 // generic one logged here.
 //
-// Guards against a corrupted or cyclic ParentDurableKey chain with a visited
-// set rather than trusting the system's own delegation-depth cap
-// (config.SubTurn.MaxDepth) to bound recursion — this walk must terminate
+// Guards against a corrupted or cyclic SteeringSessionID chain with a visited
+// set rather than trusting the configured delegation-depth cap to bound
+// recursion — this walk must terminate
 // even over on-disk state that predates or violates that cap. A nil store
 // (no delegation lifecycle store wired — most webchat-only installs never
 // mint one) yields an empty slice, so the caller degrades to exactly
@@ -95,8 +304,16 @@ func u11CollectDescendantSessionIDs(ls *session.LifecycleStore, rootID string) [
 // is only one place in this file that knows how to build a web-cancel's side
 // effects.
 func (h *WSHandler) buildCancelHooks(wc *wsConn) agent.CancelHooks {
+	return h.buildCancelHooksWithReport(wc, nil)
+}
+
+func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelReport) agent.CancelHooks {
 	return agent.CancelHooks{
 		SendStageFrame: func(sid, stage string) {
+			if stage == "detached" && report != nil {
+				h.sendCancelReportFrame(wc, sid, stage, *report)
+				return
+			}
 			h.sendCancelStageFrame(wc, sid, stage)
 		},
 		CancelPendingApprovals: func(sid, reason string) {
@@ -225,12 +442,25 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 		return
 	}
 
+	report, cascaded := cancelSteeredSubtree(context.Background(), h.agentLoop, sessionID, steer.Principal{
+		Kind: steer.PrincipalKindHuman,
+		ID:   wc.userID,
+	})
+	if cascaded {
+		h.sendCancelPartialNotice(wc, sessionID, report)
+		h.sendExternalCancelPartialNotice(context.Background(), sessionID, report)
+	}
+
 	scope := agent.CancelScope{SessionID: sessionID}
 	canceller := agent.CancelCanceller{
 		UserID:  wc.userID,
 		Channel: "web",
 	}
-	hooks := h.buildCancelHooks(wc)
+	var reportForHooks *steer.CancelReport
+	if cascaded {
+		reportForHooks = &report
+	}
+	hooks := h.buildCancelHooksWithReport(wc, reportForHooks)
 
 	outcome, err := h.agentLoop.RequestCancel(context.Background(), scope, canceller, hooks)
 	if err != nil {
@@ -297,7 +527,9 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 				"session_id", sessionID,
 			)
 		}
-		if outcome.BackgroundSessionsKilled > 0 || outcome.Armed {
+		if cascaded {
+			h.sendCancelReportFrame(wc, sessionID, "detached", report)
+		} else if outcome.BackgroundSessionsKilled > 0 || outcome.Armed {
 			h.sendCancelStageFrame(wc, sessionID, "graceful")
 		}
 	}

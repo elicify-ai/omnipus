@@ -49,10 +49,16 @@ What each setting does, and what you see when it fires:
 | Setting | What the agent can do | What you see |
 |---|---|---|
 | Allow | Runs the tool without checking | The call runs and shows in the chat |
-| Ask | Stops and waits for your approval | An approval card with Approve, Deny and Always Allow |
+| Ask | Stops and waits for your approval, unless Auto-approve lets the call through | An approval card with Approve Once, Deny and Always Allow |
 | Deny | Cannot run the tool | The tool disappears from the agent's view |
 
-On the approval card, **Always Allow** remembers that exact call, so an identical one does not ask again.
+On the approval card, **Approve Once** runs the call and remembers nothing. **Always Allow** remembers that exact call for the rest of the chat, so an identical one does not ask again. For a shell command, Always Allow can instead remember a whole family of similar commands. See [security](security.md) for the exact wording and when that choice is offered.
+
+**Auto-approve** sits on top of Ask. It never changes a tool set to Allow or Deny. When it is on, a tool set to Ask skips the card for calls Omnipus can judge safe and still shows it for the rest — this now works with or without a kernel sandbox (changed 2026-09-24). Without a kernel sandbox, shell commands ask first, except read-only ones and commands an operator rule allows; see [security](security.md#auto-approve-and-the-kernel-sandbox-changed-2026-09-24) for what that means in practice. It is on by default, and you can turn it off globally, for one agent, or for one chat.
+
+Under Auto-approve, most tools run without a card. File tools run only when every path is inside the workspace or a mounted folder, so `write_file` to `notes/plan.md` runs while `read_file` of `/etc/hosts` asks. A fixed list of 28 tools keeps asking whenever it's set to Ask, even with Auto-approve on, such as `delete_task`, `send_email`, `set_config`, `browser_evaluate` and `install_skill`. `send_message` and `send_file` are **not** on that list: messages, and files from inside the workspace, go out to chat channels with no card. The shell has its own checks: it asks for writes outside the workspace and for network access. See [security](security.md) for the full list and the shell details.
+
+The **Under Auto** column in the [built-in tool catalog](reference/built-in-tools.md) shows, for every built-in tool, **Runs**, **Runs if inside workspace** or **Asks**. The same answer appears as a small marker — **Auto: runs**, **Auto: runs inside workspace** or **Auto: asks** — next to each tool set to Ask in the **Tools & Permissions** panel and in **Tool Access — Global Policies**. `bash` has no marker, because it has its own checks.
 
 The two layers — global and per agent — combine by one rule: **the stricter of the two wins** (Deny beats Ask, Ask beats Allow). A setting on one agent can only tighten the global setting, never loosen it.
 
@@ -89,12 +95,15 @@ To connect one:
 
 Server tools carry the server's name, so you can tell where a tool came from. In both policy editors they sit in their own group under the server's name. One Allow, Ask or Deny control covers every tool from that server. The stricter-wins rule applies to them like any other tool.
 
+Under Auto-approve, a server tool set to Ask runs without a card only when its server labels it read-only or explicitly not destructive. A tool with no label asks. Most servers send no labels today, so most server tools still ask. Each server tool set to Ask shows its own **Auto: runs** or **Auto: asks** marker.
+
 ## Limits and things to watch
 
 - **The four base agents are locked.** Their tool settings are read-only. To change tool access, create a custom agent — see [agents](agents.md).
 - **Policies do not reach external runners.** An agent on an external command-line tool manages its own tool access; Omnipus settings have no effect.
-- **Scheduled runs cannot answer questions.** When scheduled work hits a tool set to Ask, the call is denied automatically — nobody is there to approve. Give a scheduled agent Allow on the tools it needs.
+- **Unattended runs cannot answer questions.** This covers every run nobody is sending live: a Calendar-triggered task on a workspace's Board, a Schedules-feature fire, a queued task the task drain picks up, a plan's own member-task dispatch, a task's auto-advance once its dependency finishes, and a parent task's automatic follow-up once its children finish. Auto-approve works the same there as in a chat: a call it would run in a chat also runs there. A call that would need a person, such as `delete_task` or a file write outside the workspace, is refused straight away with an error saying no operator is available — never a live approval card, even if someone happens to have that agent's chat open (founder decision, 2026-09-24). Give an unattended agent Allow on any tool it needs that would otherwise ask. Clicking **Run now** on a task, or starting one from the Board, is different — you are watching it, so it still asks normally.
 - **The shell can touch files directly.** Denying `write_file` does not stop an agent with `bash` from changing files with a command. To block file access, deny `bash`.
+- **Auto-approve no longer needs a kernel sandbox (changed 2026-09-24).** On Windows, or with the process sandbox not set to Enforce, Auto-approve still runs — the chat header shows **Auto — no sandbox** instead of plain **Auto**. Every tool except the shell behaves exactly the same either way. For the shell, without a kernel sandbox Omnipus has no operating-system check behind its own text-based one, so *(changed again 2026-09-24)* shell commands ask first, except a read-only command (listing files, printing a file's contents, `git status`/`log`/`diff`/`show`, and similar) or one an operator's `command_rules` allow rule explicitly covers — even one that only touches files inside the workspace. A deliberately disguised command can still slip past the read-only check either way. See [security](security.md#auto-approve-and-the-kernel-sandbox-changed-2026-09-24) for the concrete risk and how to avoid it.
 - **Email tools need a mailbox.** They exist only for an agent that owns an enabled mailbox, configured on the [Connectors](connectors.md) screen — one mailbox per agent and workspace.
 - **Web search works without setup**, on a default provider that needs no key. To use another provider, add its key under **Settings → Integrations**.
 

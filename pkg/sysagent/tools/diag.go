@@ -58,9 +58,8 @@ func (t *DoctorRunTool) Execute(_ context.Context, _ map[string]any) *tools.Tool
 	currentCfg := t.deps.GetCfg()
 	execCfg := security.DiagnosticConfig{
 		// Tools are always registered; policy (allow/ask/deny) decides invocation.
-		ExecToolEnabled:     true,
-		ExecProxyEnabled:    currentCfg.Tools.Exec.EnableProxy,
-		ExecAllowedBinaries: currentCfg.Tools.Exec.AllowedBinaries,
+		ExecToolEnabled:  true,
+		ExecProxyEnabled: currentCfg.Tools.Exec.EnableProxy,
 	}
 	for _, w := range security.CheckExecEgress(execCfg) {
 		issues = append(issues, issue{

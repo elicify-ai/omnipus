@@ -404,15 +404,24 @@ test(
 //      And transcript.jsonl contains a {type: "turn_canceled"} entry
 //      And that entry has a non-empty descendants_canceled array.
 //
-// Both delegation modes are covered — both go through the single, unified
+// Both delegation modes were covered — both went through the single, unified
 // `delegate` tool (ADR-036), differentiated only by its `async` argument:
 //   T24a — `delegate` async=true  (background): the descendant streams in the
 //                                   background while the parent turn stays live.
 //   T24b — `delegate` async=false (await):      the parent turn BLOCKS on the
 //                                   descendant's run until it returns (or is
 //                                   cancelled).
-// Both route through spawnSubTurn (pkg/agent/subturn.go:618), which registers the
-// child in activeTurnStates — so RequestCancel → InterruptSession cascades to the
+// ADR-091 fix lane RX-SUBTURN finding (comment-only; code unchanged):
+// ADR-091 D4 deleted the async=false/true argument outright — every
+// `delegate` call is now what T24a used to mean (background, non-blocking).
+// T24b's specific "parent turn BLOCKS" mode no longer exists; whether this
+// spec still meaningfully exercises two distinct modes, or should be
+// updated/retired, is a test-content question outside a comment-only lane —
+// flagged for the team. Pre-ADR-091, both routed through spawnSubTurn
+// (pkg/agent/subturn.go, since deleted); today a delegated child registers
+// via turn.go's registerActiveTurn/registerTurnIfAbsent (steer_launcher.go's
+// dispatchSteeredSessionWithReservation) — so RequestCancel → InterruptSession
+// cascades to the
 // descendant in BOTH cases (the Go-level proof is TestCancel_SubAgentCascade).
 // This pair is the e2e proof that the cascade holds for background AND await.
 

@@ -629,7 +629,7 @@ func TestWorkspaceCreate_SelfEdgesPinDepthAtCeilingOr3(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			deps, home := newTestDepsWithHomeAndAgents(t, "ava", "jim", "worker")
-			deps.GetCfg().Agents.Defaults.SubTurn.MaxDepth = tc.maxDepth
+			deps.GetCfg().Performance.MaxDelegationDepth = tc.maxDepth
 			result := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{
 				"name":      "Self Depth",
 				"core_team": []any{"ava", "jim", "worker"},
@@ -667,7 +667,7 @@ func TestWorkspaceCreate_SelfEdgesPinDepthAtCeilingOr3(t *testing.T) {
 // pin (FR-006 applies to seeded edges, not supplied ones; no migration).
 func TestWorkspaceCreate_ExplicitSelfEdgeIsNotDepthPinned(t *testing.T) {
 	deps, home := newTestDepsWithHomeAndAgents(t, "jim")
-	deps.GetCfg().Agents.Defaults.SubTurn.MaxDepth = 5
+	deps.GetCfg().Performance.MaxDelegationDepth = 5
 	result := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{
 		"name":      "Explicit Self",
 		"core_team": []any{"jim"},
@@ -706,7 +706,7 @@ func TestWorkspaceUpdate_SelfEdgesPinDepthAndPreserveUserAuthored(t *testing.T) 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			deps, home := newTestDepsWithHomeAndAgents(t, "jim", "worker")
-			deps.GetCfg().Agents.Defaults.SubTurn.MaxDepth = tc.maxDepth
+			deps.GetCfg().Performance.MaxDelegationDepth = tc.maxDepth
 			wsPath := filepath.Join(home, "workspaces", tc.id+".json")
 			if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
 				t.Fatal(err)
@@ -1149,7 +1149,7 @@ func modesOf(edge map[string]any) []string {
 // whose endpoints are both on the new team AND touch a newly added member
 // (jim→ava, jim→worker, ava→worker) — jim→ray is dropped because ray is off
 // team, even though it's part of Jim's compiled-in seed. Also asserts Jim's
-// 3-value seed vocabulary ([task, background, await]) collapses+dedupes to
+// 2-value seed vocabulary ([task, background]) maps to
 // the 2-value trust-edge vocabulary ([task, direct]) per edgeModeCategory,
 // and that depth (unset for Jim/Ava's seed) stays absent.
 func TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers(t *testing.T) {

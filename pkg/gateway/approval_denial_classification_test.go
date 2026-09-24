@@ -45,8 +45,8 @@ import (
 // no matching pkg/agent/tool_denial.go table row must fail THIS test, not
 // default silently at runtime.
 func TestAllApprovalDenialReasons_EveryMemberClassifiesAsKnown(t *testing.T) {
-	require.Len(t, allApprovalDenialReasons, 8,
-		"six approvals.go literals + internal_error + session canceled; approved must stay excluded")
+	require.Len(t, allApprovalDenialReasons, 9,
+		"seven approvals.go literals (including missing_turn_id, D-03) + internal_error + session canceled; approved must stay excluded")
 
 	seen := make(map[string]bool, len(allApprovalDenialReasons))
 	for _, reason := range allApprovalDenialReasons {
@@ -159,7 +159,7 @@ func TestApprovalDenialReasons_User_RealRegistry(t *testing.T) {
 	)
 	require.True(t, accepted)
 
-	ok, gone := reg.resolve(entry.ApprovalID, ApprovalActionDeny)
+	ok, gone := reg.resolve(entry.ApprovalID, ApprovalActionDeny, false)
 	require.True(t, ok)
 	require.False(t, gone)
 
@@ -182,7 +182,7 @@ func TestApprovalDenialReasons_Cancel_RealRegistry(t *testing.T) {
 	)
 	require.True(t, accepted)
 
-	ok, gone := reg.resolve(entry.ApprovalID, ApprovalActionCancel)
+	ok, gone := reg.resolve(entry.ApprovalID, ApprovalActionCancel, false)
 	require.True(t, ok)
 	require.False(t, gone)
 

@@ -55,6 +55,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/voice"
@@ -782,19 +783,6 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	// can emit FR-039 omnipus_tool_filter_total counters. (C4)
 	tools.SetToolMetricsRecorder(globalToolMetrics)
 
-	// FIX (14-reviewer sign-off, HIGH): tools.SetMessageParentWakeFailureLogger
-	// was never called anywhere in the codebase, so message_parent's default
-	// logMessageParentWakeFailure — a deliberate no-op — was the ONLY logger
-	// ever installed on the production runtime path. A delegated child's
-	// failure to wake its parent session (B.6: the bounded typed wake that
-	// backs question/blocker/handback delivery) therefore vanished silently —
-	// no log line, no metric, nothing an operator could see. Install a
-	// slog-backed handler here, right alongside the sibling tool-level wiring
-	// immediately above, so a wake failure is surfaced as a slog.Warn.
-	tools.SetMessageParentWakeFailureLogger(func(kind string, err error) {
-		slog.Warn("gateway: message_parent: failed to wake parent session",
-			"kind", kind, "error", err)
-	})
 	return nil, false, nil
 }
 
@@ -913,6 +901,7 @@ func (stg *setupAndStartServicesState) setupPlans() (*services, bool, error) {
 		return nil, true, fmt.Errorf("gateway: failed to derive intent log HMAC chain key: %w", ilKeyErr)
 	}
 	stg.lifecycleStore = session.NewLifecycleStore(filepath.Join(stg.homePath, "session_lifecycle"))
+	stg.wireSteerDeps()
 	var ilDirErr error
 	stg.intentLog, ilDirErr = plan.NewIntentLog(filepath.Join(stg.homePath, "plan_intents"), intentLogChainKey)
 	if ilDirErr != nil {
@@ -949,8 +938,84 @@ func (stg *setupAndStartServicesState) setupPlans() (*services, bool, error) {
 	if stg.agentLoop.GetMessageInboxStore() == nil {
 		return nil, true, fmt.Errorf("gateway: session-messaging store wiring failed — SetSessionMessagingStores did not install a non-nil inbox")
 	}
+	if hook := stg.runningServices.SteerDeps.BootHook; hook != nil {
+		if err := hook(stg.ctx); err != nil {
+			// Match the existing boot-sweep contract: recovery damage is
+			// operator-visible but never wedges the whole gateway at startup.
+			slog.Error("gateway: ADR-091 boot recovery failed", "error", err)
+		}
+	}
 	fmt.Println("✓ Session-messaging plane wired (delegate + message_parent stores injected)")
 	return nil, false, nil
+}
+
+// ============================================================================
+// ADR-091 — pkg/steer wiring: this file wires every pkg/steer
+// implementation; the boot-hook body itself lives in boot_sweep.go
+// (SteerBootRecovery.Run), invoked from the BootHook closure below.
+// ============================================================================
+
+// wireSteerDeps builds every ADR-091 pkg/steer implementation from the
+// pkg/agent side (I-2 SessionLauncher, I-5 AudienceResolver/
+// UpwardDeliverer, I-6 Canceller, I-8 RecordClassifier) and stores the
+// bundle on stg.runningServices.SteerDeps, where other gateway boundaries
+// read it off the running *services to inject into their own code — they
+// do not re-wire pkg/agent themselves.
+//
+// All four implementations are real: I-8's Classifier and I-2's Launcher
+// (steer_launcher.go), I-6's Canceller (steer_cancel.go) and I-5's
+// AudienceResolver/UpwardDeliverer (steer_audience.go).
+func (stg *setupAndStartServicesState) wireSteerDeps() {
+	sessionStore := stg.agentLoop.GetSessionStore()
+	classifier := agent.NewSteerRecordClassifier(stg.lifecycleStore, sessionStore)
+	resolver := agent.NewSteerAudienceResolver(classifier)
+	observer := steer.NopBoundaryObserver{}
+	launcher := agent.NewSteerLauncher(stg.agentLoop)
+	deliverer := agent.NewSteerUpwardDeliverer()
+	canceller := agent.NewSteerCanceller(stg.lifecycleStore, stg.agentLoop.SteerGenerationCancel).
+		SetRevivalStateWriter(stg.agentLoop.WriteSteerRevivalState)
+	stg.runningServices.SteerAudienceResolver = resolver
+	stg.runningServices.SteerDeps = steer.Deps{
+		Launcher:       launcher,
+		Canceller:      canceller,
+		Deliverer:      deliverer,
+		Classifier:     classifier,
+		LifecycleStore: stg.lifecycleStore,
+		SessionStore:   sessionStore,
+		BootHook: func(ctx context.Context) error {
+			deps := stg.runningServices.SteerDeps
+			recovery := &agent.SteerBootRecovery{
+				Lifecycle:  deps.LifecycleStore,
+				Sessions:   deps.SessionStore,
+				Inbox:      stg.agentLoop.GetMessageInboxStore(),
+				Classifier: deps.Classifier,
+				Deliverer:  deps.Deliverer,
+				OperatorNotice: func(message string) {
+					slog.Warn("gateway: ADR-091 boot recovery notice", "message", message)
+				},
+			}
+			return recovery.Run(ctx)
+		},
+	}
+
+	stg.agentLoop.SetSteerAudienceDeps(resolver, observer, deliverer)
+	stg.agentLoop.SetSteerSessionLauncher(launcher)
+	if stg.runningServices.ChannelManager != nil {
+		stg.runningServices.ChannelManager.SetSteerAudienceResolver(resolver, observer)
+	}
+	if stg.wsHandler != nil && stg.wsHandler.askUserReg != nil {
+		stg.wsHandler.askUserReg.SetSteerAudienceResolver(resolver, observer, deliverer)
+	}
+	SetGatewaySteerAudienceDeps(resolver, observer)
+	if stg.tExecutor != nil {
+		stg.tExecutor.SetSessionLauncher(launcher)
+	}
+	setGatewaySteerCanceller(stg.agentLoop, canceller)
+	// The agent's own Stop — delegate(action="cancel"), wired in
+	// pkg/agent/session_messaging_wire.go — cascades through the SAME
+	// instance the human Stop above uses, so both take one cascade lock per
+	// session instead of two (agent.SteerCanceller::cascade).
+	stg.agentLoop.SetSteerCanceller(canceller)
 }
 
 // startPlanEngine configures and starts the plan engine when its task dependencies are available.

@@ -168,6 +168,45 @@ func TestHandleStateGET(t *testing.T) {
 	assert.Equal(t, false, resp["onboarding_complete"], "fresh install must have onboarding_complete=false")
 }
 
+// TestHandleStateGET_DevModeBypass pins contracts/components/schemas/
+// AppState.yaml's `dev_mode_bypass` field: "True when gateway.dev_mode_bypass
+// is enabled... The SPA uses this to hide controls that are inoperative when
+// bypass is active." The field existed in the contract and in the generated
+// Go/TS types (gen.AppState.DevModeBypass) but HandleState's GET branch never
+// set it on the response map — every SPA gate keyed on
+// `appState?.dev_mode_bypass === true` (GodModeControl / GodModeActiveBanner,
+// commit 671a68ad6) therefore always read false, even under
+// gateway.dev_mode_bypass=true, and never actually engaged. Confirmed via
+// CI run 35990283526's gateway.log: 79
+// gateway.admin_route_blocked_by_bypass_gate 503s on
+// /api/v1/gateway/god-mode across the E2E job despite the SPA-side gate
+// logic itself being correct — reproduced here at the handler level so a
+// future regression is caught before it reaches a browser console.
+func TestHandleStateGET_DevModeBypass(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		bypass bool
+	}{
+		{"bypass on", true},
+		{"bypass off", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newTestRestAPIWithHomeDevModeBypass(t, tc.bypass)
+
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+			api.HandleState(w, r)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			var resp map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			devModeBypass, hasField := resp["dev_mode_bypass"]
+			require.True(t, hasField, "response must contain 'dev_mode_bypass' field — the SPA cannot gate on an absent field")
+			assert.Equal(t, tc.bypass, devModeBypass)
+		})
+	}
+}
+
 // TestHandleStateGET_IdentityModeByEdition pins ADR-0010 / login-and-
 // onboarding-spec.md §2.2: `identity.mode` mirrors config.EditionAuthMode(),
 // which is DERIVED from the stamped config.Edition, never read from a

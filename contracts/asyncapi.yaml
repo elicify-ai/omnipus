@@ -107,6 +107,10 @@ channels:
         $ref: '#/components/messages/PongFrame'
       SessionCloseAckFrame:
         $ref: '#/components/messages/SessionCloseAckFrame'
+      SessionModeUpdateFrame:
+        $ref: '#/components/messages/SessionModeUpdateFrame'
+      SessionModeUpdatedFrame:
+        $ref: '#/components/messages/SessionModeUpdatedFrame'
       DevicePairingRequestFrame:
         $ref: '#/components/messages/DevicePairingRequestFrame'
       WhatsAppPairingFrame:
@@ -616,6 +620,26 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/SessionCloseAckFrame'
+  sendSessionModeUpdate:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'Turn this session''s ADR-092 Auto-approve modifier on or off (or clear it). Unlike the global default and
+      the per-agent override, this may LOOSEN — turn Auto on for this chat even when the resolved agent x global default
+      has it off — because a human is present in the session.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/SessionModeUpdateFrame'
+  receiveSessionModeUpdated:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'Acknowledgement of a session_mode_update request, carrying the session''s resulting resolved Auto-approve state.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/SessionModeUpdatedFrame'
   receiveDevicePairingRequest:
     action: receive
     channel:
@@ -1222,6 +1246,20 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SessionCloseAckFrame'
+    SessionModeUpdateFrame:
+      name: SessionModeUpdateFrame
+      title: session_mode_update
+      summary: Turn this session's Auto-approve modifier on/off, or clear it (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SessionModeUpdateFrame'
+    SessionModeUpdatedFrame:
+      name: SessionModeUpdatedFrame
+      title: session_mode_updated
+      summary: Session Auto-approve modifier applied; resolved effective state (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SessionModeUpdatedFrame'
     DevicePairingRequestFrame:
       name: DevicePairingRequestFrame
       title: device_pairing_request
@@ -1503,6 +1541,8 @@ components:
       - cancel_stage
       - pong
       - session_close_ack
+      - session_mode_update
+      - session_mode_updated
       - device_pairing_request
       - whatsapp_pairing
       - whatsapp_pairing_subscribe
@@ -1616,6 +1656,20 @@ components:
             type: string
             minLength: 1
             maxLength: 256
+        auto_approve:
+          type: boolean
+          nullable: true
+          description: 'ADR-092 per-chat Auto-approve choice for the chat this message mints — meaningful only when session_id
+            is absent (this frame is minting a new session); ignored when session_id is present, since an existing session''s
+            mode is changed exclusively via session_mode_update. Same value space and null semantics as SessionModeUpdateFrame.auto_approve:
+            true loosens Auto-approve on for this one new chat (may loosen past the resolved agent x global default, because
+            a human is present), false tightens it off, null/absent leaves it unset (the chat follows whatever the agent x
+            global default resolves to). Carrying the choice on the minting message itself — instead of a follow-up session_mode_update
+            sent after the session_started ack — is what lets the choice gate the new chat''s very first ask-policy tool call:
+            a post-ack send can race the agent loop''s own first LLM round trip.
+
+            '
+          example: false
         metadata:
           type: object
           additionalProperties: true
@@ -1760,8 +1814,7 @@ components:
       description: >
         Server → client new session minted. Session-scoped (registered in
         SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit
-        (FR-089) — a chat-lifecycle frame, not turn output — so
-        producing_session_id is absent (FR-013).
+        (FR-089) — a chat-lifecycle frame, not turn output.
       type: object
       required:
       - type
@@ -1776,12 +1829,6 @@ components:
           minLength: 1
         agent_id:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (b) (FR-089): absent for this frame type.
         seq:
           type: integer
           format: int64
@@ -1859,13 +1906,6 @@ components:
           maxLength: 65536
         agent_id:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (a) (FR-089): the child turn's own session id when this
-            frame crosses the wire from a delegated child.
         turn_id:
           type: string
           description: >-
@@ -1967,13 +2007,6 @@ components:
           minLength: 1
         stats:
           $ref: '#/components/schemas/DoneStats'
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (a) (FR-089): the child turn's own session id when this
-            frame crosses the wire from a delegated child.
         turn_id:
           type: string
           description: >-
@@ -2401,13 +2434,6 @@ components:
           type: string
         agent_id:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (a) (FR-089): the child turn's own session id when this
-            frame crosses the wire from a delegated child.
         seq:
           type: integer
           format: int64
@@ -2826,7 +2852,7 @@ components:
 
             F13 follow-up hardening: the object catch-all''s `error` exclusion below now keys on `error` being a
             STRING, not merely present — see that branch''s own description for why (settleAskToolCallTranscript /
-            spawnSubTurn persist a boolean `error` flag on an ordinary object, which is not an attempt at any of the
+            buildSyncDelegateResult persist a boolean `error` flag on an ordinary object, which is not an attempt at any of the
             four `error`-keyed $refs and must still match the catch-all). Regression fixture:
             pkg/api/generated/tool_call_result_error_key_contract_test.go.
 
@@ -2870,7 +2896,7 @@ components:
               const-string discriminator every one of the six `error`-keyed $refs below actually uses
               (DelegationFailure, FileExistsRefusal, PermissionDenied, ToolAssemblyDuplicate) — not merely on
               `error` being present. `error` is not a reserved key in practice: pkg/agent/approval_transcript.go''s
-              settleAskToolCallTranscript and pkg/agent/subturn.go''s spawnSubTurn both persist plain
+              settleAskToolCallTranscript and pkg/agent/delegate_result.go''s buildSyncDelegateResult both persist plain
               map[string]any results carrying a BOOLEAN `"error": true` flag (alongside `text`/`reason`/`permanent`),
               which is a legitimate ordinary object, not an attempted use of any of the six typed discriminator
               shapes. Excluding on bare presence of `error` made every such object match NO branch of this oneOf
@@ -2903,13 +2929,6 @@ components:
           type: string
         agent_id:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (a) (FR-089): the child turn's own session id when this
-            frame crosses the wire from a delegated child.
         seq:
           type: integer
           format: int64
@@ -2924,9 +2943,7 @@ components:
         Server → client subagent span opened (FR-H-004). Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
         ADR-057 W5 audit (FR-089) — emitted by the PARENT about the child
-        (pkg/agent/subturn.go); FR-017 pins its SessionID to the routing
-        key, so producing_session_id would equal session_id and is
-        therefore absent (FR-013's "iff it differs").
+        (pkg/agent/steer_frames.go); FR-017 pins its SessionID to the routing key.
       type: object
       required:
       - type
@@ -2948,18 +2965,23 @@ components:
         parent_call_id:
           type: string
           minLength: 1
+          description: >
+            The originating delegate or create_task tool-call id. For
+            delegate-origin children, this is the delegate tool-call id.
+            For create_task-origin children (task sessions), this is the
+            create_task tool-call id (the span key for I-4). This is the
+            span identifier used for both fronts.
         task_label:
           type: string
           maxLength: 100
         agent_id:
           type: string
-        producing_session_id:
+        child_session_id:
           type: string
-          minLength: 1
           description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (b) (FR-089): absent for this frame type — producing ==
-            routing by construction (FR-017).
+            Optional session id of the opened child session. Present for
+            steered sessions; absent for legacy/optional. Enables the open
+            control on the side panel row (ADR-091 I-4).
         seq:
           type: integer
           format: int64
@@ -2975,9 +2997,8 @@ components:
         the six allowed values — the SPA drops frames with invalid status (W4-6).
         Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b)
         per the ADR-057 W5 audit (FR-089) — emitted by the PARENT about the
-        child (pkg/agent/subturn.go); FR-017 pins its SessionID to the
-        routing key, so producing_session_id would equal session_id and is
-        therefore absent (FR-013's "iff it differs"). Kept in sync by hand
+        child (pkg/agent/steer_frames.go); FR-017 pins its SessionID to the
+        routing key. Kept in sync by hand
         with components/schemas/SubagentEndFrame.yaml for the full shape —
         see that file for the per-value description (including "parked",
         ADR-057 UAT defect C2 fix).
@@ -3024,13 +3045,6 @@ components:
           type: string
         message:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (b) (FR-089): absent for this frame type — producing ==
-            routing by construction (FR-017).
         seq:
           type: integer
           format: int64
@@ -3066,6 +3080,13 @@ components:
         session_id:
           type: string
           minLength: 1
+        child_session_id:
+          type: string
+          description: >
+            Optional session id of the delegated child session this
+            mid-span update is reporting on — the same value the
+            bracketing subagent_start frame's child_session_id carries
+            (ADR-091 I-4).
         span_id:
           type: string
           minLength: 1
@@ -3085,6 +3106,7 @@ components:
             - handback
             - steer
             - respond
+            - goal_status
         text:
           type: string
         pct:
@@ -3101,7 +3123,14 @@ components:
         created_at:
           type: string
           format: date-time
-
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/SubagentMessageFrame.yaml.
     SubagentStateFrame:
       title: SubagentStateFrame
       description: >
@@ -3124,6 +3153,13 @@ components:
         session_id:
           type: string
           minLength: 1
+        child_session_id:
+          type: string
+          description: >
+            Optional session id of the delegated child session this
+            lifecycle ping is reporting on — the same value the
+            bracketing subagent_start frame's child_session_id carries
+            (ADR-091 I-4).
         span_id:
           type: string
           minLength: 1
@@ -3140,7 +3176,9 @@ components:
             - timed_out
         steering_receipt:
           type: object
-          nullable: true
+          # Not nullable — see components/schemas/SubagentStateFrame.yaml's
+          # own note: this field is emitted via an omitempty Go pointer,
+          # present or absent, never an explicit JSON null.
           required:
             - correlation_id
             - applied_at
@@ -3154,13 +3192,20 @@ components:
         created_at:
           type: string
           format: date-time
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/SubagentStateFrame.yaml.
     TaskStatusChangedFrame:
       title: TaskStatusChangedFrame
       description: >
         Server → client task status updated. Session-scoped (registered in
         SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057
-        W5 audit (FR-089) — do not assume presence or absence of
-        producing_session_id for this type until the audit classifies it.
+        W5 audit (FR-089).
       type: object
       required:
       - type
@@ -3189,12 +3234,6 @@ components:
             - failed
         agent_id:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
-            (FR-089) — see TaskStatusChangedFrame's description.
     TaskRunStatusFrame:
       title: TaskRunStatusFrame
       description: 'Server → client task RUN status updated (open or close). Additive alongside TaskStatusChangedFrame (ADR-050
@@ -3239,8 +3278,7 @@ components:
       description: >
         Server → client replayed transcript entry. Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
-        ADR-057 W5 audit (FR-089) — emitted by the gateway replay path,
-        not by a turn, so producing_session_id is absent (FR-013).
+        ADR-057 W5 audit (FR-089) — emitted by the gateway replay path.
       type: object
       required:
       - type
@@ -3285,13 +3323,6 @@ components:
             entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels,
             without relying on stream adjacency (async delegation can interleave other agents'/turns' frames in between).
             Omitted for legacy entries written before turn-id stamping landed.
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (b) (FR-089): absent for this frame type — emitted by the
-            gateway replay path, not by a turn.
         truncated:
           type: boolean
           description: >
@@ -3439,10 +3470,6 @@ components:
           type: string
           maxLength: 2048
           description: The recall mark left in the window (names the tool, the id and the recall_conversation call that restores it). Rendered only under Verbose chat.
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: ADR-057 FR-012/FR-013 — present iff the projection was produced by a delegated child session different from session_id.
         seq:
           type: integer
           format: int64
@@ -3459,11 +3486,9 @@ components:
         ADR-057 W5 audit (FR-089) — a DOCUMENTED PRE-EXISTING GAP, audited
         and recorded here rather than fixed (operator decision 11): the
         underlying RateLimitPayload (pkg/agent/events.go) carries no
-        SessionID field at all, so there is no child-provenance signal to
-        stamp a producing_session_id from; this frame's session_id is
+        SessionID field at all; this frame's session_id is
         reconstructed downstream from the connection's chat→session map at
-        serialization time. No producing_session_id property is added to
-        this schema.
+        serialization time.
       type: object
       required:
       - type
@@ -3600,13 +3625,6 @@ components:
           maxItems: 32
           items:
             $ref: '#/components/schemas/MediaPart'
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (a) (FR-089): the child turn's own session id when this
-            frame crosses the wire from a delegated child.
         seq:
           type: integer
           format: int64
@@ -3620,8 +3638,7 @@ components:
       description: >
         Server → client active agent changed. Session-scoped (registered
         in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the
-        ADR-057 W5 audit (FR-089) — do not assume presence or absence of
-        producing_session_id for this type until the audit classifies it.
+        ADR-057 W5 audit (FR-089).
       type: object
       required:
       - type
@@ -3652,6 +3669,97 @@ components:
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy. Keep in sync by hand with
             contracts/components/schemas/AgentSwitchedFrame.yaml.
+    CommandSegmentInfo:
+      title: CommandSegmentInfo
+      description: >
+        ADR-092 D3/D4. One segment of the bash command awaiting approval,
+        split with the same splitter and program resolution the bash tool
+        itself uses (splitShellSegments / shellCommandHeadDetailed, through
+        the tool's own D3 evaluator), listed inside
+        ToolApprovalRequiredFrame.segments. Every segment of the command is
+        listed, in order, because one decision approves or denies the whole
+        call; the server records no per-segment grant for a chained command.
+        On Windows the whole command is one segment (FR-041).
+      type: object
+      required:
+      - segment_index
+      - command_text
+      additionalProperties: false
+      properties:
+        segment_index:
+          type: integer
+          minimum: 0
+          description: >
+            Zero-based position of this segment among the full chained
+            command's segments (splitShellSegments order).
+        command_text:
+          type: string
+          minLength: 1
+          description: This segment's raw command text (post-split, pre-resolution).
+        resolved_binary:
+          type: string
+          description: >
+            Absolute path the segment's leading token resolved to against
+            the child's effective PATH/env (D3 resolve-and-verify, FR-040).
+            Absent when the head could not be resolved to a literal
+            executable — a normalised head (shellCommandHeadDetailed's
+            third return), a quote-blind over-split, a redirection-only
+            segment, or brace expansion (FR-020/FR-040 blind spots). Such a
+            segment always routes to ask and offers no D3 rule match, only
+            this dialog.
+        args:
+          type: array
+          items:
+            type: string
+          description: Argument tokens following the resolved binary, as split.
+        classification:
+          type: string
+          enum:
+          - read
+          - write
+          - read_write
+          - none
+          description: >
+            FR-038 filesystem-operation classification for the path this
+            segment's D7 pre-flight escalation concerns. "none" when this
+            segment carries no filesystem escalation (an ordinary D3/D4
+            command-rule prompt, or a D8-only network escalation).
+        path:
+          type: string
+          description: >
+            The filesystem path FR-038's classifier extracted for this
+            segment. Present iff classification is read/write/read_write.
+        network_required:
+          type: boolean
+          description: >
+            FR-043's network-need classifier verdict for this segment —
+            true when approving widens the session's ConnectPortRules to
+            DefaultConnectPorts (D8/FR-044). Independent of
+            `classification`: a segment can need both a filesystem and a
+            network grant at once (e.g. `curl -o /etc/foo https://x`).
+        suggested_prefix:
+          type: string
+          description: >
+            The command prefix a scope="prefix" grant would cover: the program
+            as written plus the leading argument words the grant matches
+            (FR-026). Example: "npm run test" covers "npm run test --watch"
+            but not "npm run testfoo". The recorded grant matches the program
+            by its resolved path (resolved_binary), not by this text. Present
+            iff prefix_available is true.
+        prefix_available:
+          type: boolean
+          description: >
+            True exactly when choosing Allow with scope "prefix" would record
+            a prefix grant. The server derives this with the same function it
+            records the grant with (tools.BashPrefixGrantFor), so the dialog
+            never offers a scope the server would downgrade to exact. That
+            requires a single-segment command whose program resolves, whose
+            suggested prefix is narrower than the bare program, and which does
+            not start with a wrapper (sudo, env, timeout, xargs, sh -c).
+            Always false for every segment of a chained command (a && b, a |
+            b: the grant is recorded as exact for the whole chain) and on
+            Windows (FR-041). The dialog omits the "prefix" scope option when
+            false. Always present.
     ToolApprovalRequiredFrame:
       title: ToolApprovalRequiredFrame
       description: >
@@ -3706,13 +3814,6 @@ components:
           type: integer
           minimum: 0
           maximum: 86400000
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (a) (FR-089): the child turn's own session id when this
-            frame crosses the wire from a delegated child.
         workspace_id:
           type: string
           minLength: 1
@@ -3722,6 +3823,18 @@ components:
             from session meta, walking up to the delegating parent). The SPA
             shows the approval only while that workspace is active. Omitted
             when the session belongs to no workspace (shown everywhere).
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommandSegmentInfo'
+          description: >
+            ADR-092 D3/D4 per-segment breakdown of a bash approval. Present on
+            every tool_approval_required whose tool_name is "bash" and whose
+            args carry a non-empty command string, built with the bash tool's
+            own segment splitter and program resolution. A single, unchained
+            command still has exactly one entry so the SPA has one rendering
+            path. Absent for every other tool. Offer the "prefix" scope only
+            when a segment's prefix_available is true.
     ToolApprovalResolvedFrame:
       title: ToolApprovalResolvedFrame
       description: >
@@ -4070,6 +4183,24 @@ components:
             ADR-082 (review CR3) — the transcript session this snapshot
             describes; absent on the connection-open emit. Keep in sync by
             hand with components/schemas/SessionStateFrame.yaml.
+        auto_approve_modifier:
+          type: boolean
+          nullable: true
+          description: >
+            ADR-092 — this session's own per-chat Auto-approve modifier
+            (the value last set by session_mode_update and still held by
+            the server), so a reloading or reconnecting SPA re-learns it
+            instead of losing it. Only meaningful when session_id is
+            present (the connection-open emit carries neither). true —
+            Auto-approve forced ON for this chat; false — forced OFF for
+            this chat; null or absent — no per-chat modifier is set, the
+            chat follows the agent x global resolution
+            (SandboxStatus.auto_approve_effective floored by the agent's
+            auto_approve_disabled). Same value space as
+            SessionModeUpdateFrame.auto_approve. The modifier lives in
+            server memory only: after a gateway restart it is gone and
+            this field reads null/absent, so the UI follows the server.
+            Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
         active_turn:
           $ref: '#/components/schemas/SessionStateActiveTurn'
           description: >
@@ -4090,9 +4221,7 @@ components:
       description: >
         Server → client system at capacity (FR-016, MAJ-009). Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned
-        by the ADR-057 W5 audit (FR-089) — do not assume presence or
-        absence of producing_session_id for this type until the audit
-        classifies it.
+        by the ADR-057 W5 audit (FR-089).
       type: object
       required:
       - type
@@ -4107,12 +4236,6 @@ components:
           minLength: 1
         message:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
-            (FR-089) — see this frame's description.
     ReplayWarningStats:
       title: ReplayWarningStats
       description: Diagnostic counters in a ReplayWarningFrame.
@@ -4148,9 +4271,7 @@ components:
         Server → client cancel progress notification (B3). stage MUST be one of
         three values — SPA validates via isValidFrame() and drops invalid stages.
         Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not
-        yet assigned by the ADR-057 W5 audit (FR-089) — do not assume
-        presence or absence of producing_session_id for this type until the
-        audit classifies it.
+        yet assigned by the ADR-057 W5 audit (FR-089).
       type: object
       required:
       - type
@@ -4170,12 +4291,54 @@ components:
             - graceful
             - hard
             - detached
-        producing_session_id:
-          type: string
-          minLength: 1
+        reached:
+          type: array
+          items:
+            type: string
           description: >
-            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
-            (FR-089) — see this frame's description.
+            ADR-091 I-6. Present on the `detached` stage of a Stop: every session the
+            cascade stamped with a Stop marker (the stopped session and each reachable
+            non-terminal descendant).
+        unreachable:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - id
+              - reason
+            properties:
+              id:
+                type: string
+                minLength: 1
+              reason:
+                type: string
+          description: ADR-091 I-6. Descendants the cascade could not reach, with why.
+        skipped_newer_generation:
+          type: array
+          items:
+            type: string
+          description: >
+            ADR-091 I-6. Sessions whose live turn belonged to a newer generation than
+            the one stamped (a revival landed first); their cancel was refused.
+        skipped_terminal:
+          type: array
+          items:
+            type: string
+          description: ADR-091 I-6. Terminal descendants, left unwritten.
+        partial:
+          type: boolean
+          description: >
+            ADR-091 I-6. True when `unreachable` is non-empty — and ONLY then: the
+            cascade could not reach part of the subtree, so this Stop must not be
+            read as complete (WP-D FR-D-001).
+            `skipped_newer_generation` deliberately does NOT set this flag. A session
+            the cascade left alone because a revival had already carried it to a
+            newer generation is a CORRECT outcome, not a failure (ADR-091 D8: "the
+            later instruction wins, which is what the operator asked for"), and WP-D
+            US-1/AS-9 specifies that case with no `partial` and no channel line.
+            Read `skipped_newer_generation` itself to learn which sessions kept
+            running — `partial: false` hides nothing.
         seq:
           type: integer
           format: int64
@@ -4189,8 +4352,7 @@ components:
       description: >
         Server → client session close acknowledged. Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
-        ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn
-        output, so producing_session_id is absent (FR-013).
+        ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output.
       type: object
       required:
       - type
@@ -4211,6 +4373,96 @@ components:
           description: >
             ADR-057 FR-012/FR-013. Present iff it differs from session_id.
             Class (b) (FR-089): absent for this frame type.
+    SessionModeUpdateFrame:
+      title: SessionModeUpdateFrame
+      description: >
+        Client → server. Set or clear this session's ADR-092 per-chat
+        Auto-approve modifier — new, session-keyed state
+        (pkg/agent/sessionmode.go), structurally like ApprovalGrantStore,
+        never written into config.json and never a chat_id key on any
+        policy map (Hard Constraint #6). Auto is NOT a tool-policy value —
+        it only has meaning for a tool currently resolved to "ask", and
+        applies to every such tool, not only bash (see
+        SandboxConfig.auto_approve for the full behavioural description).
+
+        THE ONE EXCEPTION TO TIGHTEN-ONLY in this contract: unlike the
+        global default (SandboxConfig.auto_approve) and the per-agent
+        override (Agent.auto_approve_disabled, off-only), this frame may
+        LOOSEN — turn Auto ON for this one chat even when the resolved
+        agent x global default has it off — because a human is present in
+        this session to accept that risk. It may also tighten (turn Auto
+        off). Turning Auto on for a chat is deliberately a human-only
+        action: the agent-facing `set_config` tool must never be able to
+        send this frame or reach an equivalent effect (enforced
+        server-side; this frame's shape — a session-scoped WS write, not a
+        config.json path — structurally keeps it outside `set_config`'s
+        reach in the first place).
+
+        Inherits to a delegated subagent session exactly as approval
+        grants do (ApprovalGrantStore.InheritFrom); clears with the
+        session on restart.
+      type: object
+      required:
+      - type
+      - session_id
+      - auto_approve
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: session_mode_update
+        session_id:
+          type: string
+          minLength: 1
+        auto_approve:
+          type: boolean
+          nullable: true
+          description: >
+            true — turn Auto-approve ON for this chat (may loosen past the
+            resolved agent x global default). false — turn Auto-approve OFF
+            for this chat (tightens, same as every other scope). null —
+            clear this session's modifier; the chat reverts to whatever the
+            agent x global default currently resolves to, and will track
+            future changes to that default rather than staying pinned.
+    SessionModeUpdatedFrame:
+      title: SessionModeUpdatedFrame
+      description: >
+        Server → client. Acknowledges a session_mode_update request with
+        the session's resulting resolved Auto-approve state. A request is
+        always acknowledged here — this is the one frame allowed to
+        loosen, so there is no "rejected for looseness" case the way there
+        is for the global/per-agent scopes; a malformed request still gets
+        the existing, session-scoped ErrorFrame instead. Session-scoped
+        (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
+        ADR-057 W5 audit (FR-089) — a chat-lifecycle/settings frame, not
+        turn output, so producing_session_id is absent (FR-013), matching
+        SessionCloseAckFrame's own precedent.
+      type: object
+      required:
+      - type
+      - session_id
+      - auto_approve_effective
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: session_mode_updated
+        session_id:
+          type: string
+          minLength: 1
+        auto_approve_effective:
+          type: boolean
+          description: >
+            The resolved Auto-approve state for THIS session after applying
+            (or clearing) the modifier — the true per-session resolution
+            that SandboxStatus.auto_approve_effective cannot provide (that
+            field is the gateway-wide default only, with no session or
+            agent context). [2026-09-24, founder decision] true here means
+            Auto is genuinely active for this session's "ask" tool calls,
+            whether or not a kernel sandbox is enforcing — combine with
+            SandboxStatus.kernel_sandbox_active only to decide the badge's
+            "Auto" vs "Auto — no sandbox" (warning) rendering, not to
+            predict whether calls still prompt: they do not.
     DevicePairingRequestFrame:
       title: DevicePairingRequestFrame
       description: Server → client device pairing request needs admin approval.
@@ -5315,9 +5567,7 @@ components:
         completion, state change, and clear/stop. Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep
         in sync by hand with components/schemas/GoalStatusFrame.yaml.
-        Class not yet assigned by the ADR-057 W5 audit (FR-089) — do not
-        assume presence or absence of producing_session_id until the audit
-        classifies it.
+        Class not yet assigned by the ADR-057 W5 audit (FR-089).
       type: object
       required:
         - type
@@ -5405,12 +5655,6 @@ components:
             (ADR-086 GOAL-FR-028, terminal). See
             components/schemas/GoalStatusFrame.yaml for the full
             per-state crosswalk description.
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
-            (FR-089) — see this frame's description.
         criteria:
           type: array
           description: >
@@ -5651,9 +5895,7 @@ components:
         Server → client. Status push for a session's active /loop (ADR-049
         D6/D7/US-9). Emitted on run completion, state change, and stop.
         Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Class
-        not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume
-        presence or absence of producing_session_id until the audit
-        classifies it.
+        not yet assigned by the ADR-057 W5 audit (FR-089).
       type: object
       required:
         - type
@@ -5696,12 +5938,6 @@ components:
             contract wave rather than a closed enum (unlike
             GoalStatusFrame.state) so naming it does not require a
             breaking change once Part B's implementation lands.
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
-            (FR-089) — see this frame's description.
 
         seq:
           type: integer

@@ -513,7 +513,10 @@ func (t *TaskCreateTool) SetHome(home string) {
 
 // SetMaxDelegationDepth installs the hard task-mode recursion bound. A
 // task_create issued from within a task run whose stored DelegationDepth is
-// already >= the bound is rejected. The agent loop passes agent.maxTaskDepth (10).
+// already >= the bound is rejected. The agent loop resolves the bound from
+// performance.max_delegation_depth through resolveEffectiveDelegationDepth
+// (ADR-091 D9's single limit surface), so an unset key yields the backstop
+// default rather than a hardcoded constant.
 func (t *TaskCreateTool) SetMaxDelegationDepth(bound int) {
 	t.maxDelegationDepth = bound
 }
@@ -669,6 +672,14 @@ func (t *TaskCreateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskCreateTool) Description() string {
 	return "Create a task and assign it to an agent for execution.\n" +
+		"Choosing between these: delegate hands work to another agent now and returns immediately — use " +
+		"it when you need the result inside this conversation. create_task files work as a card on the " +
+		"board that runs on its own and is judged against its goal — use it for work that outlives this " +
+		"conversation or that someone should see. A plan is for long-running, complex implementations and " +
+		"higher-level planning: several tasks with an order and dependencies between them, and an agent " +
+		"working on one of those tasks can itself delegate further. If the work is a single lookup or one " +
+		"action you can do yourself, just do it — starting a child costs time and one of a limited number " +
+		"of concurrent slots. " +
 		"This is a DELEGATION: it passes the same delegation-policy gate (trust set + modes + depth) as " +
 		"any other delegation, and is refused if you are not authorized to delegate to the assignee. " +
 		"criteria AND dod are BOTH REQUIRED: at least one acceptance criterion and at least one " +
@@ -1145,6 +1156,8 @@ func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 	tc.entity = &task.Task{
 		Title:           tc.title,
 		Prompt:          tc.prompt,
+		OriginSessionID: strings.TrimSpace(ToolTranscriptSessionID(tc.ctx)),
+		OriginCallID:    strings.TrimSpace(ToolCallID(tc.ctx)),
 		Action:          task.ActionLLM,
 		AgentID:         tc.agentID,
 		CreatedBy:       tc.callerID,

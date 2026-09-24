@@ -445,7 +445,8 @@ func TestTaskCreateTool_DelegationDepthStamped(t *testing.T) {
 }
 
 // TestTaskCreateTool_DelegationDepthBound proves a task→task chain is rejected
-// once it would exceed maxTaskDepth — closing the A→B→A unbounded-recursion gap.
+// once it would exceed the configured depth bound — closing the A→B→A
+// unbounded-recursion gap.
 func TestTaskCreateTool_DelegationDepthBound(t *testing.T) {
 	t.Parallel()
 	store := task.New(t.TempDir())

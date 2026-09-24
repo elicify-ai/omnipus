@@ -29,8 +29,9 @@ import (
 //
 // agentID is the identity FindForAgentPreferring keys off primarily (CoreTeam
 // membership) — this is what makes the gate apply uniformly to top-level
-// turns, delegated (spawnSubTurn) children, and external-CLI dispatches
-// alike, since all three resolve the acting agent's ID the same way. System
+// turns, delegated children (steer_launcher.go's SteerLauncher; pre-ADR-091,
+// the deleted spawnSubTurn), and external-CLI dispatches alike, since all
+// three resolve the acting agent's ID the same way. System
 // Agents (coreagent.IsSystemAgentID; today: the Judge, ADR-049 D3) are
 // IMPLICIT members of EVERY workspace — that positive rule lives entirely in
 // pkg/workspace (FindForAgent/FindForAgentPreferring's isImplicitMember), NOT

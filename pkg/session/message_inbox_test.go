@@ -114,6 +114,16 @@ func TestMessageInboxStore_DedupeByMessageID(t *testing.T) {
 // child hitting the 20-open-question+blocker ceiling gets a CLEAR ERROR
 // (never a silent drop), and a SIBLING child under the same owner key is
 // unaffected.
+//
+// FR-B-010's wake-eligible bypass (handback/question/blocker/fatal
+// error/goal_status "always admitted") is scoped to the unacked-cap and
+// the rate check — Append's own doc comment says so explicitly ("but
+// never the D15 per-type ceiling, which still bounds every kind"). D15
+// (ADR-053, AC-15) is a separate, narrower abuse guard against a
+// misbehaving child and applies regardless of wake-eligibility — question
+// and blocker are the ONLY two kinds the ceiling ever gates, and both are
+// also always wake-eligible, so bypassing the ceiling for wake-eligible
+// kinds would make the ceiling permanently unreachable dead code.
 func TestMessageInboxStore_PerChildCeiling_FailsBackNeverDrops(t *testing.T) {
 	s := newTestInboxStore(t)
 	s.InboxPerTypeCeiling = 20      // explicit, matches D15 default
@@ -146,6 +156,106 @@ func TestMessageInboxStore_PerChildCeiling_FailsBackNeverDrops(t *testing.T) {
 
 func questionID(i int) string {
 	return "q-" + strconv.Itoa(i)
+}
+
+func handbackMsg(t *testing.T, sessionID, messageID string) generated.SessionMessage {
+	t.Helper()
+	var sm generated.SessionMessage
+	if err := sm.FromSessionMessageHandback(generated.SessionMessageHandback{
+		MessageId:      messageID,
+		SessionId:      sessionID,
+		CreatedAt:      time.Now(),
+		Depth:          1,
+		SenderIdentity: "child-agent",
+		Mode:           generated.SessionMessageHandbackModeFinal,
+		ResultSoFar:    "done",
+		Artifacts:      []string{},
+		OpenQuestions:  []string{},
+	}); err != nil {
+		t.Fatalf("FromSessionMessageHandback failed: %v", err)
+	}
+	return sm
+}
+
+func fatalErrorMsg(t *testing.T, sessionID, messageID string) generated.SessionMessage {
+	t.Helper()
+	var sm generated.SessionMessage
+	if err := sm.FromSessionMessageError(generated.SessionMessageError{
+		MessageId:      messageID,
+		SessionId:      sessionID,
+		CreatedAt:      time.Now(),
+		Depth:          1,
+		SenderIdentity: "child-agent",
+		Fatal:          true,
+		Text:           "failed: boom",
+	}); err != nil {
+		t.Fatalf("FromSessionMessageError failed: %v", err)
+	}
+	return sm
+}
+
+// TestMessageInboxStore_WakeEligibleBypassesUnackedCapAndRate proves
+// FR-B-010 (I-5): a wake-eligible kind (handback here) is always admitted —
+// it bypasses the unacked-cap AND the per-minute rate cap — while a
+// non-wake-eligible kind (progress) stays subject to both, exactly as
+// today. The D15 per-type question/blocker ceiling is untouched by this
+// bypass (message_parent_test.go's retained ceiling test covers that).
+func TestMessageInboxStore_WakeEligibleBypassesUnackedCapAndRate(t *testing.T) {
+	s := newTestInboxStore(t)
+	s.InboxUnackedMax = 1
+	s.ChildSendRatePerMinute = 1
+
+	// Exhaust BOTH the unacked cap and the rate cap with one progress message.
+	if _, err := s.Append("owner-1", progressMsg(t, "child-1", "p-1")); err != nil {
+		t.Fatalf("first progress Append failed: %v", err)
+	}
+
+	// A second, non-wake-eligible progress message is rejected by the cap —
+	// unchanged behavior.
+	if _, err := s.Append("owner-1", progressMsg(t, "child-1", "p-2")); err == nil {
+		t.Fatal("expected the second progress message to be rejected (unacked cap exhausted)")
+	}
+
+	// A wake-eligible handback is STILL admitted even though the store is at
+	// its unacked cap and its rate cap.
+	res, err := s.Append("owner-1", handbackMsg(t, "child-1", "child-1:1:final"))
+	if err != nil {
+		t.Fatalf("expected the wake-eligible handback to bypass the cap, got error: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("expected the handback to be accepted, got: %+v", res)
+	}
+}
+
+// TestMessageInboxStore_FatalErrorBypasses_NonFatalDoesNot proves the
+// fatal/non-fatal distinction within kind=error: only a FATAL error is
+// wake-eligible (and therefore bypasses admission); a non-fatal error stays
+// subject to the same caps as progress/checkpoint.
+func TestMessageInboxStore_FatalErrorBypasses_NonFatalDoesNot(t *testing.T) {
+	s := newTestInboxStore(t)
+	s.InboxUnackedMax = 1
+	s.ChildSendRatePerMinute = 1000 // isolate the unacked-cap check
+
+	if _, err := s.Append("owner-1", progressMsg(t, "child-1", "p-1")); err != nil {
+		t.Fatalf("first progress Append failed: %v", err)
+	}
+
+	// A non-fatal error is NOT wake-eligible — still capped.
+	var nonFatal generated.SessionMessage
+	if err := nonFatal.FromSessionMessageError(generated.SessionMessageError{
+		MessageId: "err-nonfatal", SessionId: "child-1", CreatedAt: time.Now(), Depth: 1,
+		SenderIdentity: "child-agent", Fatal: false, Text: "a recoverable notice",
+	}); err != nil {
+		t.Fatalf("FromSessionMessageError: %v", err)
+	}
+	if _, err := s.Append("owner-1", nonFatal); err == nil {
+		t.Fatal("expected a non-fatal error to be rejected by the unacked cap, same as progress")
+	}
+
+	// A fatal error IS wake-eligible — bypasses the cap.
+	if _, err := s.Append("owner-1", fatalErrorMsg(t, "child-1", "child-1:1:final")); err != nil {
+		t.Fatalf("expected the fatal error to bypass the cap, got error: %v", err)
+	}
 }
 
 // TestMessageInboxStore_RateCap_FakeClock proves the 10/min child-send rate

@@ -22,9 +22,11 @@ import (
 // single-word "cancel" row, reachable via
 // pkg/agent/cancel.go::AgentLoop.RequestCancel ->
 // pkg/gateway/approvals.go::cancelAllPendingForSessions) — bringing the
-// table to twelve rows. Declared once so every test below iterates the same
-// canonical set rather than re-typing the enumeration and risking drift
-// between tests.
+// table to twelve rows. A D-03 fix (ADR-092, 2026-09-24) added a thirteenth:
+// "missing_turn_id", pkg/gateway/approvals.go::approvalRegistryV2.requestApproval's
+// fail-closed guard for a request whose turn id is empty. Declared once so
+// every test below iterates the same canonical set rather than re-typing
+// the enumeration and risking drift between tests.
 var denialTableFixture = []struct {
 	reason    string
 	permanent bool
@@ -41,6 +43,7 @@ var denialTableFixture = []struct {
 	{"", true},
 	{autoDenyHeadlessReason, true},
 	{"session canceled", true},
+	{"missing_turn_id", true},
 }
 
 // TestClassifyDenial_TableHasExactlyTwelveRows guards the table's own size
@@ -48,12 +51,13 @@ var denialTableFixture = []struct {
 // expects would not notice an extra or missing row. Originally asserted ten
 // rows (ADR-058 spec §4.1); a post-epic-review pass added two real,
 // driveable reasons the spec table missed (see denialTableFixture's doc),
-// bringing the count to twelve.
+// bringing the count to twelve, then a D-03 fix (ADR-092) added
+// "missing_turn_id", bringing it to thirteen.
 func TestClassifyDenial_TableHasExactlyTwelveRows(t *testing.T) {
-	if got, want := len(denialTable), 12; got != want {
+	if got, want := len(denialTable), 13; got != want {
 		t.Fatalf("denialTable has %d rows, want exactly %d", got, want)
 	}
-	if got, want := len(denialTableFixture), 12; got != want {
+	if got, want := len(denialTableFixture), 13; got != want {
 		t.Fatalf("test fixture has %d rows, want exactly %d — keep denialTableFixture in sync with denialTable", got, want)
 	}
 }

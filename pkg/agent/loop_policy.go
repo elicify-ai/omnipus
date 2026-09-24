@@ -10,6 +10,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/shellrule"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -330,7 +331,7 @@ func (al *AgentLoop) loadToolApprover() PolicyApprover {
 // identity (turnState.routingSessionID, W4). This is a narrower requirement
 // than the pre-ADR-057 invariant it replaces: before D1, a delegated child's
 // transcriptSessionID was always threaded through unchanged from its parent
-// (subturn.go's spawnSubTurn), so "the one identity shared across a
+// (subturn.go's spawnSubTurn, since deleted by ADR-091), so "the one identity shared across a
 // delegation chain" and "the child's own identity" were the same value and
 // this distinction did not exist. Under ADR-057 the child gets its OWN
 // distinct, store-backed transcriptSessionID (FR-005/FR-007/FR-009), and
@@ -347,13 +348,30 @@ func (al *AgentLoop) loadToolApprover() PolicyApprover {
 // write side, TestCheckGrantOrRequestApproval_UsesActingSessionKey below for
 // this one). ClearSession (session teardown, U17b) uses the same key for the
 // same reason: it is the acting session's own bucket, not a shared one.
+// ADR-092 D4/FR-024 extension: for the "bash" tool specifically, this
+// consultation ALSO checks the prefix-scope grant kind
+// (ApprovalGrantStore.IsPrefixAllowed) alongside the classic exact-
+// fingerprint IsAllowed check above — closing the gap where a human's
+// earlier "Allow" with scope=prefix (e.g. "npm run test") never suppressed
+// the dialog for a later, textually-different invocation ("npm run test
+// -v") on this SAME classic ask-policy path. tools.BashPrefixGrantCheck
+// does the resolve-and-verify (D3's own look-alike defence) so this
+// function never needs its own copy of that logic.
+// recordGrant (third return, review finding #5) is true only when this call
+// reached a FRESH human "allow" decision (not "allow_once", and not an
+// already-existing grant this function's own IsAllowed/BashPrefixGrantCheck
+// short-circuits above already satisfied — there is nothing NEW to record
+// in either of those branches, so both return recordGrant=false). The
+// classic ask-policy caller (loop_run_turn_tools.go) does not consume this
+// value; the ADR-092 D7/D8 pre-flight escalation callers
+// (ShellPermissionGate.RequestShellApproval, below) do.
 func (al *AgentLoop) CheckGrantOrRequestApproval(
 	ctx context.Context,
 	sessionID, agentID, toolName, toolCallID, turnID string,
 	args map[string]any,
-) (approved bool, denialReason string) {
-	if al.ApprovalGrants().IsAllowed(sessionID, agentID, toolName, args) {
-		return true, ""
+) (approved bool, denialReason string, recordGrant bool) {
+	if al.checkStandingGrant(sessionID, agentID, toolName, args) {
+		return true, "", false
 	}
 	approver := al.loadToolApprover()
 	return approver.RequestApproval(ctx, PolicyApprovalReq{
@@ -364,6 +382,28 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 		SessionID:  sessionID,
 		TurnID:     turnID,
 	})
+}
+
+// checkStandingGrant reports whether a standing "Always Allow" grant already
+// covers this call — the classic exact-fingerprint IsAllowed check, plus
+// bash's D4 prefix-scope grant. Split out of CheckGrantOrRequestApproval
+// (§5.7 fix, review finding "spurious waiting-for-approval placeholder") so a
+// caller that must decide whether to render an "awaiting approval" placeholder
+// can consult the EXACT SAME grant check the interactive path uses BEFORE
+// writing one: a call a standing grant already settles must never flash a
+// pending-approval card for a human nobody is about to ask. args MUST be
+// fingerprinted identically to how the grant was recorded — for a bash call
+// whose one upfront prompt also settles a D3 {action: ask} operator rule,
+// that means the adr092_kind:"rule_ask" augmented map ruleAskRequestArgs
+// builds (loop_run_turn_tools.go), not the tool's own bare arguments; every
+// grant-lookup call site along this path (resolveAskPolicy's fast path,
+// requestAskApproval's pre-placeholder check, and this function's own
+// interactive fallback) now shares that one rule via this function.
+func (al *AgentLoop) checkStandingGrant(sessionID, agentID, toolName string, args map[string]any) bool {
+	if al.ApprovalGrants().IsAllowed(sessionID, agentID, toolName, args) {
+		return true
+	}
+	return toolName == "bash" && tools.BashPrefixGrantCheck(al.ApprovalGrants(), sessionID, agentID, toolName, args)
 }
 
 // emitPolicyDenyAudit writes a tool.policy.deny.attempted audit entry.
@@ -482,4 +522,326 @@ func (al *AgentLoop) emitScheduledAutoDenyAudit(
 			},
 		)
 	}
+}
+
+// ShellPermissionGate implements tools.ShellModeResolver and
+// tools.ShellApprovalRequester: the ADR-092 adapter connecting the bash
+// tool's enforcement (pkg/tools/shell_permission_mode.go — D3 ask rules, D7
+// filesystem and D8 network pre-flights) to the AgentLoop state that decides
+// them, without pkg/tools importing pkg/agent (that import would cycle).
+//
+// One instance per AgentLoop, built in NewAgentLoop and injected into every
+// agent's bash tool by wireExecToolDepsOn as both ExecToolDeps.ShellMode and
+// ExecToolDeps.ApprovalRequester. The per-chat Auto-approve modifier is read
+// from Loop.SessionModes() through Loop.autoApproveActive.
+type ShellPermissionGate struct {
+	Loop *AgentLoop
+}
+
+// shellModeKey carries the bash mode the agent loop settled on for one tool
+// call (see withPinnedShellMode).
+type shellModeKey struct{}
+
+// withPinnedShellMode records, on the tool call's context, the mode the
+// agent loop used when it decided whether to prompt before dispatch
+// (resolveAskPolicy). ResolveShellMode returns this pinned value instead of
+// re-resolving, so the tool enforces exactly the decision the loop acted on
+// (ADR-092 FR-006: a command is resolved against the mode in force at the
+// pre-dispatch check). Without the pin, a chat toggled from Auto to off
+// between the loop skipping the prompt and the tool running would leave the
+// tool in Ask mode, which assumes the loop already prompted: the command
+// would run with neither a prompt nor the Auto pre-flights.
+func withPinnedShellMode(ctx context.Context, mode tools.ShellMode) context.Context {
+	return context.WithValue(ctx, shellModeKey{}, mode)
+}
+
+func pinnedShellMode(ctx context.Context) (tools.ShellMode, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	m, ok := ctx.Value(shellModeKey{}).(tools.ShellMode)
+	return m, ok && m != ""
+}
+
+// ResolveShellMode implements tools.ShellModeResolver. A mode pinned on ctx
+// by the agent loop wins; otherwise the live value is resolved (liveMode).
+// A nil receiver or nil Loop fails closed to Ask.
+func (g *ShellPermissionGate) ResolveShellMode(ctx context.Context, agentID, sessionID string) tools.ShellMode {
+	if m, ok := pinnedShellMode(ctx); ok {
+		return m
+	}
+	return g.liveMode(agentID, sessionID, false)
+}
+
+// liveMode resolves which bash enforcement mode applies to agentID's call in
+// sessionID right now:
+//
+//	God Mode active                          -> God (no approvals, no sandbox;
+//	                                            D3 deny rules still apply)
+//	bash policy is not "ask"                 -> Ask. "allow" runs without the
+//	                                            Auto machinery (the contract:
+//	                                            Auto never touches an allow
+//	                                            tool); "deny" never reaches
+//	                                            execution at all.
+//	"ask" + Auto not active                  -> Ask (the loop prompts first)
+//	"ask" + Auto active                      -> Auto (no upfront prompt; the
+//	                                            tool's D7/D8 pre-flights ask
+//	                                            for what they cannot clear;
+//	                                            a kernel sandbox, where one is
+//	                                            enforcing, confines whatever
+//	                                            those pre-flights miss)
+//
+// "Auto active" is AgentLoop.autoApproveActive — the one check every tool
+// shares (auto_approve_gate.go): God Mode off, and Auto-approve resolved on.
+// [2026-09-24, founder decision] Auto no longer additionally requires an
+// enforcing kernel sandbox (ADR-092 D1/J13, revised) — see
+// autoApproveActive's own doc comment for the accepted risk. Every missing
+// dependency still fails closed to Ask.
+func (g *ShellPermissionGate) liveMode(agentID, sessionID string, delegated bool) tools.ShellMode {
+	if g == nil || g.Loop == nil {
+		return tools.ShellModeAsk
+	}
+	cfg := g.Loop.GetConfig()
+	if cfg == nil {
+		return tools.ShellModeAsk
+	}
+	if GodModeActive(cfg) {
+		return tools.ShellModeGod
+	}
+	if g.Loop.ResolveApprovalToolPolicy(agentID, "bash") != string(config.ToolPolicyAsk) {
+		return tools.ShellModeAsk
+	}
+	if !g.Loop.autoApproveActive(agentID, sessionID, delegated) {
+		return tools.ShellModeAsk
+	}
+	return tools.ShellModeAuto
+}
+
+// RequestShellApproval implements tools.ShellApprovalRequester: the D3
+// ask-rule and D7/D8 pre-flight escalation call sites in pkg/tools reach
+// AgentLoop.CheckGrantOrRequestApproval — the same consultation function the
+// classic "ask" tool-policy path uses — through here. pkg/tools checks its
+// own prefix/path/network grant kinds first and calls this only to reach the
+// interactive approval dialog.
+//
+// A nil receiver or nil Loop fails closed (approved=false).
+func (g *ShellPermissionGate) RequestShellApproval(
+	ctx context.Context,
+	sessionID, agentID, toolName, toolCallID, turnID string,
+	args map[string]any,
+) (bool, string, bool) {
+	if g == nil || g.Loop == nil {
+		return false, "shell permission gate not wired", false
+	}
+	return g.Loop.CheckGrantOrRequestApproval(ctx, sessionID, agentID, toolName, toolCallID, turnID, args)
+}
+
+// bashShellModeFor returns the ADR-092 mode for a bash call in ts's turn, or
+// "" for any other tool. resolveAskPolicy records it before deciding whether
+// to prompt, and the same value is pinned on the bash tool's context, so the
+// prompt decision and the tool's enforcement come from one resolution.
+func (al *AgentLoop) bashShellModeFor(ts *turnState, toolName string) tools.ShellMode {
+	if toolName != "bash" || ts == nil {
+		return ""
+	}
+	return al.shellGate.liveMode(ts.agentID, ts.transcriptSessionID, ts.isDelegated())
+}
+
+// bashCommandArg reads args["command"] as a string, "" when absent or not a
+// string — shared by the two audit helpers below so a malformed/missing
+// command never panics the audit path.
+func bashCommandArg(args map[string]any) string {
+	command, _ := args["command"].(string)
+	return command
+}
+
+// emitShellRuleSettledAudit writes the FR-032(d)/review finding #8(c)
+// shell.approval_decision event for a prompt an operator D3 ALLOW rule
+// fully settled (bashRuleVerdict.settlesPrompt) — before this fix, this decision
+// point left no audit trail at all, indistinguishable in the log from an
+// ordinary unprompted "allow"-ceiling execution. No grant is recorded by
+// this call site (the D3 rule itself is the standing authorization, not a
+// session grant), so the outcome is ShellApprovalAllowOnce, matching the
+// same vocabulary pkg/tools' own D3 ask-rule branch already uses for an
+// equivalent "approved, no new grant" case.
+//
+// D-12 fix (MEDIUM, 2026-09-24 security review): this function hardcodes
+// ShellApprovalAllowOnce/"rule_fully_allowed" — correct ONLY for
+// settlesPrompt()'s allow case. The caller (loop_run_turn_tools.go's
+// resolveAskPolicy) MUST gate this call on bashRuleVerdict.
+// fullyAllowedSettlesPrompt(), never on the broader settlesPrompt() (which
+// is also true for a D3 DENY verdict) — calling this for a deny would write
+// a false "allow"/"rule_fully_allowed" shell.approval_decision row for a
+// command that is about to be refused. See fullyAllowedSettlesPrompt's own
+// doc comment for why writing NOTHING is the correct choice for the deny
+// case, rather than writing a second, separately-worded deny row here.
+func (al *AgentLoop) emitShellRuleSettledAudit(ts *turnState, args map[string]any) {
+	if ts == nil {
+		return
+	}
+	audit.EmitShellApprovalDecision(context.Background(), al.auditLogger,
+		audit.ShellApprovalAllowOnce, ts.agentID, ts.transcriptSessionID, "bash", bashCommandArg(args),
+		"rule_fully_allowed", "operator command_rules ALLOW rule covers every segment of this command")
+}
+
+// emitShellClassicAskDecisionAudit writes the FR-032(d)/review finding
+// #8(b) shell.approval_decision event for the classic (bash tool policy ==
+// "ask", non-Auto) human-in-the-loop decision path. kind is "classic_ask",
+// or "rule_ask" when that one prompt also settled an operator D3 ask rule
+// (§5.7). Before this fix, only
+// the NEW ADR-092 D3/D7/D8 call sites inside pkg/tools emitted this event —
+// the original, pre-ADR-092 "ask" consultation this branch drives (the same
+// CheckGrantOrRequestApproval call every other ask-policy tool uses) left
+// no audit trail of its own for bash specifically.
+func (al *AgentLoop) emitShellClassicAskDecisionAudit(ts *turnState, args map[string]any, kind string, approved bool, denialReason string) {
+	if ts == nil {
+		return
+	}
+	outcome := audit.ShellApprovalDeny
+	if approved {
+		outcome = audit.ShellApprovalAllowOnce
+	}
+	audit.EmitShellApprovalDecision(context.Background(), al.auditLogger,
+		outcome, ts.agentID, ts.transcriptSessionID, "bash", bashCommandArg(args), kind, denialReason)
+}
+
+// inheritSessionPermissions copies a delegating parent's session-scoped
+// permission state onto a delegate at spawn: its approval grants (ADR-057
+// two-key InheritFrom) and its per-chat Auto-approve modifier (ADR-092
+// FR-005), both keyed on the parent's own session id and the child's own.
+//
+// Review finding #6 (MEDIUM, 2026-09-23 security fix lane): a delegate must
+// never end up loosened past its OWN AutoApproveDisabled=true, however it
+// inherits — FR-005's "a delegate takes the tightest of (parent modifier,
+// its own override)" makes the delegate's own off-switch a floor the
+// inherited modifier cannot cross. sessionmode.go's per-chat scope is
+// documented and tested (TestResolveAutoApprove) as the one scope allowed
+// to loosen past an agent's off-switch for that CHAT'S OWN directly-
+// attached agent — a human is present and made the choice for exactly that
+// conversation. A delegate's session is not that: nobody reviewed THIS
+// agent's off-switch when the PARENT's chat toggle was set. Skipping the
+// SessionModes() copy here — rather than hardening ResolveAutoApprove
+// itself — leaves that documented direct-chat behaviour intact and closes
+// only the inheritance gap: with no per-chat modifier of its own, the
+// child's later ResolveAutoApprove call falls through to its own agent-level
+// AutoApproveDisabled check, which already resolves to Auto off correctly.
+func (al *AgentLoop) inheritSessionPermissions(parentSessionID, parentAgentID, childSessionID, childAgentID string) {
+	al.ApprovalGrants().InheritFrom(parentSessionID, parentAgentID, childSessionID, childAgentID)
+	if al.agentAutoApproveDisabled(childAgentID) {
+		return
+	}
+	al.SessionModes().InheritFrom(parentSessionID, childSessionID)
+}
+
+// agentAutoApproveDisabled reports whether agentID's own config carries
+// AutoApproveDisabled=true. A nil config or an agent absent from the list
+// reports false (not disabled).
+func (al *AgentLoop) agentAutoApproveDisabled(agentID string) bool {
+	return agentAutoApproveDisabledIn(al.GetConfig(), agentID)
+}
+
+// bashRuleVerdict is the ADR-092 D3 operator-rule verdict for one bash call,
+// evaluated once in resolveAskPolicy and read by both the prompt decision
+// and the one-dialog fix (§5.7). ok is false for any non-bash call, an empty
+// command, or an agent without a registered bash tool.
+type bashRuleVerdict struct {
+	verdict shellrule.CommandVerdict
+	ok      bool
+}
+
+// bashCommandRuleVerdict evaluates the call against the agent's own
+// registered bash tool (tools.ExecTool.EvaluateCommandRules), so this
+// decision and the tool's enforcement use one rule list and one evaluator.
+func bashCommandRuleVerdict(ts *turnState, toolName string, args map[string]any) bashRuleVerdict {
+	if toolName != "bash" || ts == nil || ts.agent == nil || ts.agent.Tools == nil {
+		return bashRuleVerdict{}
+	}
+	command, _ := args["command"].(string)
+	if command == "" {
+		return bashRuleVerdict{}
+	}
+	t, ok := ts.agent.Tools.Get("bash")
+	if !ok {
+		return bashRuleVerdict{}
+	}
+	exec, ok := t.(*tools.ExecTool)
+	if !ok {
+		return bashRuleVerdict{}
+	}
+	return bashRuleVerdict{verdict: exec.EvaluateCommandRules(command), ok: true}
+}
+
+// settlesPrompt reports whether the operator rules already settle a bash
+// call the "ask" policy would otherwise prompt for:
+//
+//   - every segment of the command matches an allow rule, with no deny or
+//     ask rule on any segment (deny > ask > allow still holds) — the
+//     allow rule is the retired exec allowlist's replacement, so the call
+//     proceeds without the prompt;
+//   - any segment matches a deny rule — the bash tool refuses the command
+//     outright in every mode, so prompting a human first would only ask
+//     them to approve a command that cannot run.
+//
+// An allow verdict does not bypass the D7/D8 pre-flights: under Auto the
+// tool still escalates a write outside the sandbox or a network need. Any
+// other verdict (no rule, a partial match, an ask rule, a blind spot)
+// returns false and the normal prompt runs.
+func (v bashRuleVerdict) settlesPrompt() bool {
+	return v.ok && (v.verdict.Action == shellrule.ActionDeny || v.verdict.FullyAllowed())
+}
+
+// fullyAllowedSettlesPrompt reports whether settlesPrompt() is true because
+// of its ALLOW case specifically — every segment matched an ALLOW rule — as
+// opposed to settlesPrompt()'s OTHER case, a D3 deny verdict.
+//
+// D-12 fix (MEDIUM, 2026-09-24 security review): resolveAskPolicy must gate
+// its emitShellRuleSettledAudit call on THIS, narrower check, not
+// settlesPrompt() — emitShellRuleSettledAudit hardcodes an
+// "allow"/"rule_fully_allowed" shell.approval_decision row, which is a
+// FALSE record for a command a D3 deny rule is about to refuse.
+//
+// The deny case is deliberately left to write NOTHING from that call site:
+// ExecTool.enforceShellPermissionMode re-evaluates the SAME D3 rules
+// (bashCommandRuleVerdict's own "one rule list, one evaluator" contract —
+// this AgentLoop-side verdict and the tool's own are computed from
+// identical inputs) and, when it independently reaches the identical deny
+// verdict, its own emitAudit call (pkg/tools/shell.go, EventExec /
+// DecisionDeny) already writes an accurate exec-deny row for this exact
+// call before refusing to spawn it. Writing a SECOND, separately-worded
+// deny row here — instead of correcting the mislabeled one — would leave
+// two shell-permission audit rows for one decision instead of exactly one
+// truthful one; omitting this call entirely for the deny case is the
+// smaller, correct change.
+func (v bashRuleVerdict) fullyAllowedSettlesPrompt() bool {
+	return v.ok && v.verdict.FullyAllowed()
+}
+
+// needsRuleAsk reports whether the upfront prompt must also settle an
+// operator D3 {action: ask} rule (§5.7): the call is in Ask mode, no rule
+// denies it, and at least one segment matched a genuine ask rule. The bash
+// tool would otherwise prompt a second time for the same call.
+func (v bashRuleVerdict) needsRuleAsk(mode tools.ShellMode) bool {
+	return v.ok && mode == tools.ShellModeAsk &&
+		v.verdict.Action != shellrule.ActionDeny &&
+		tools.VerdictHasGenuineAskRuleMatch(v.verdict)
+}
+
+// ruleAskRequestArgs is the approval request for a call whose one upfront
+// prompt also settles a D3 ask rule: the call's own arguments plus the
+// adr092_kind "rule_ask" marker the bash tool's own rule prompt carries, and
+// a note naming the matched rule so the dialog explains why it is asking.
+func ruleAskRequestArgs(args map[string]any, verdict shellrule.CommandVerdict) map[string]any {
+	out := make(map[string]any, len(args)+2)
+	for k, v := range args {
+		out[k] = v
+	}
+	out["adr092_kind"] = "rule_ask"
+	for _, seg := range verdict.Segments {
+		if seg.Action == shellrule.ActionAsk && seg.MatchedRule != nil {
+			out["note"] = fmt.Sprintf("matches an operator rule that requires approval (binary=%q arg_prefix=%q)",
+				seg.MatchedRule.Binary, seg.MatchedRule.ArgPrefix)
+			break
+		}
+	}
+	return out
 }

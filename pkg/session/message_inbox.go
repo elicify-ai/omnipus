@@ -141,6 +141,16 @@ type envelopePeek struct {
 	Direction       string  `json:"direction"`
 	Depth           int     `json:"depth"`
 	CorrelationID   string  `json:"correlation_id"`
+	// Fatal is only meaningful (and only ever present) on kind=error — see
+	// classifyEnvelope (this file), which needs it to tell a fatal error
+	// (I-5 wake-eligible) from a non-fatal one (not wake-eligible).
+	// Absent/false on every other kind, which is the correct default for
+	// them too.
+	Fatal bool `json:"fatal"`
+	// Text is only read for kind=error, by isSteeringLifecycleNoticeText
+	// below (ADR-091 fix lane RX-HANG) — it never affects any other kind's
+	// classification.
+	Text string `json:"text"`
 }
 
 // messageInboxPeekEnvelopeCalls counts peekEnvelope invocations process-wide
@@ -176,6 +186,79 @@ func peekEnvelope(msg generated.SessionMessage) (envelopePeek, []byte, error) {
 // matching the spec's literal "question+blocker" phrasing).
 func questionOrBlockerKind(kind string) bool {
 	return kind == "question" || kind == "blocker"
+}
+
+// SessionMessageDeliveryClass is the single delivery classifier used by
+// initial upward delivery, inbox admission, and boot recovery.
+type SessionMessageDeliveryClass struct {
+	Kind         string
+	Fatal        bool
+	WakeEligible bool
+}
+
+// ClassifySessionMessage derives delivery behavior from the actual generated
+// envelope, never from a parallel caller-supplied outcome label.
+func ClassifySessionMessage(msg generated.SessionMessage) (SessionMessageDeliveryClass, error) {
+	peek, _, err := peekEnvelope(msg)
+	if err != nil {
+		return SessionMessageDeliveryClass{}, err
+	}
+	return classifyEnvelope(peek), nil
+}
+
+func classifyEnvelope(peek envelopePeek) SessionMessageDeliveryClass {
+	class := SessionMessageDeliveryClass{Kind: peek.Kind, Fatal: peek.Fatal}
+	switch peek.Kind {
+	case "handback", "question", "blocker", "goal_status":
+		class.WakeEligible = true
+	case "error":
+		class.WakeEligible = peek.Fatal || isSteeringLifecycleNoticeText(peek.Text)
+	}
+	return class
+}
+
+// LifecycleNoticeReasonPrefixToolIterations is the exact failureReason
+// prefix pkg/agent/steer_completion.go::completionDisposition stamps on a
+// steered child's `error` message when its turn hits the tool-iteration
+// ceiling with no final answer (steer.OutcomeLifecycleNotice). It is
+// exported so that call site and isSteeringLifecycleNoticeText below share
+// ONE literal instead of two that could silently drift apart.
+const LifecycleNoticeReasonPrefixToolIterations = "max_tool_iterations:"
+
+// steeringLifecycleNoticeTextPrefixes lists every machine-authored
+// failureReason prefix (never user-supplied free text) that marks a
+// kind=error, Fatal=false SessionMessage as a genuine ADR-091 steering
+// lifecycle notice rather than an ordinary non-fatal error — the ONLY
+// signal available here to tell the two apart, since this package cannot
+// import pkg/agent (which owns steer.Outcome) and the wire schema
+// (pkg/api/generated) has no dedicated notice kind to discriminate on.
+//
+// ADR-091 fix lane RX-HANG: a steered child that hit the tool-iteration
+// ceiling used to leave the child `running` (deliberately resumable — see
+// completionDisposition's own comment) but ALSO never woke its parent,
+// because ordinary non-fatal errors are not wake-eligible
+// (TestMessageInboxStore_FatalErrorBypasses_NonFatalDoesNot pins that
+// general rule and is UNCHANGED by this list — it uses non-matching text).
+// With nothing ever telling the parent, hasRunningOrQueuedDescendant
+// (steer_completion.go) saw the child forever and the whole ancestor chain
+// hung silently. A lifecycle notice must still wake the parent — deciding
+// whether to retry, raise the budget, or give up is the parent's call, not
+// a machine default — while Fatal stays false so the child does not look
+// dead in the UI. Matching on a stable, code-authored Text prefix mirrors
+// the SAME sub-classification convention pkg/agent/boot_sweep.go::
+// bootOutcome already relies on (its own "interrupted:"/"timeout:" prefix
+// matches inside this same generic `error` envelope).
+var steeringLifecycleNoticeTextPrefixes = []string{
+	LifecycleNoticeReasonPrefixToolIterations,
+}
+
+func isSteeringLifecycleNoticeText(text string) bool {
+	for _, prefix := range steeringLifecycleNoticeTextPrefixes {
+		if strings.HasPrefix(text, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // AppendResult reports the outcome of a successful (non-error) Append.
@@ -439,7 +522,14 @@ func (s *MessageInboxStore) rateAllow(ownerKey, childSessionID string) bool {
 // question+blocker unacked ceiling, the per-child inbox-wide unacked cap,
 // and the child-send rate cap. A non-nil error is ALWAYS one of this file's
 // sentinel Err* values (wrapped) — never-silent-drop (FR-125): the caller
-// (pkg/tools/message_parent.go) turns it into a tool error the child sees.
+// (pkg/tools/message_parent.go, or steer.UpwardDeliverer for a turn-outcome
+// event) turns it into a tool error / a real error, never a silent drop.
+//
+// ADR-091 FR-B-010 (I-5): a wake-eligible kind — handback, question,
+// blocker, a FATAL error, or goal_status (classifyEnvelope's
+// WakeEligible verdict, this file) — is always admitted: it bypasses the
+// unacked-cap and rate checks (but never the D15 per-type ceiling, which
+// still bounds every kind).
 func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage) (*AppendResult, error) {
 	if strings.TrimSpace(ownerKey) == "" {
 		return nil, ErrInboxEmptyOwnerKey
@@ -516,6 +606,10 @@ func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage
 		return &AppendResult{Accepted: true, Deduped: true, MessageID: peek.MessageID}, nil
 	}
 
+	// FR-B-010 (I-5): the D15 per-type question/blocker ceiling bounds
+	// every kind, wake-eligible or not (this function's own doc comment
+	// above), so it is checked unconditionally, before the wake-eligible
+	// bypass below.
 	if questionOrBlockerKind(peek.Kind) {
 		ceiling := s.InboxPerTypeCeiling
 		if ceiling <= 0 {
@@ -525,20 +619,27 @@ func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage
 			return nil, fmt.Errorf("%w (%d/%d for session %s)", ErrInboxPerChildCeiling, openTypeCount, ceiling, peek.SessionID)
 		}
 	}
-	unackedMax := s.InboxUnackedMax
-	if unackedMax <= 0 {
-		unackedMax = DefaultInboxUnackedMax
-	}
-	if openTotalCount >= unackedMax {
-		return nil, fmt.Errorf("%w (%d/%d for session %s)", ErrInboxSessionFull, openTotalCount, unackedMax, peek.SessionID)
-	}
 
-	if !s.rateAllow(ownerKey, peek.SessionID) {
-		limit := s.ChildSendRatePerMinute
-		if limit <= 0 {
-			limit = DefaultChildSendRatePerMinute
+	// A wake-eligible kind bypasses the unacked-cap and rate checks
+	// entirely — it never even consults them, so it also never consumes a
+	// rate-window slot that would otherwise count against an unrelated
+	// later message.
+	if !classifyEnvelope(peek).WakeEligible {
+		unackedMax := s.InboxUnackedMax
+		if unackedMax <= 0 {
+			unackedMax = DefaultInboxUnackedMax
 		}
-		return nil, fmt.Errorf("%w (%d/min for session %s)", ErrInboxRateLimited, limit, peek.SessionID)
+		if openTotalCount >= unackedMax {
+			return nil, fmt.Errorf("%w (%d/%d for session %s)", ErrInboxSessionFull, openTotalCount, unackedMax, peek.SessionID)
+		}
+
+		if !s.rateAllow(ownerKey, peek.SessionID) {
+			limit := s.ChildSendRatePerMinute
+			if limit <= 0 {
+				limit = DefaultChildSendRatePerMinute
+			}
+			return nil, fmt.Errorf("%w (%d/min for session %s)", ErrInboxRateLimited, limit, peek.SessionID)
+		}
 	}
 
 	entry := InboxEntry{Kind: InboxEntryMessage, Seq: nextSeqAfter(entries), Message: &msg, CreatedAt: s.now().UTC()}
@@ -865,6 +966,35 @@ func (s *MessageInboxStore) Drain(ownerKey, childSessionID, sinceCursor string, 
 	// the loop scans nothing new (an empty/fully-behind-cursor file), so the
 	// cursor does not move backwards.
 	return candidates, strconv.FormatInt(lastScannedSeq, 10), false, nil
+}
+
+// Latest returns the newest message for childSessionID, including messages
+// that were already acknowledged. Acknowledgement is a delivery cursor, not
+// deletion: durable status still needs the last upward report and its real
+// timestamp after a parent has consumed it.
+func (s *MessageInboxStore) Latest(ownerKey, childSessionID string) (*generated.SessionMessage, error) {
+	if strings.TrimSpace(ownerKey) == "" {
+		return nil, ErrInboxEmptyOwnerKey
+	}
+	mu := s.lock.Get(ownerKey)
+	mu.Lock()
+	entries, err := s.readEntries(ownerKey)
+	mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.Kind != InboxEntryMessage || e.Message == nil {
+			continue
+		}
+		envelope, _, perr := peekEnvelope(*e.Message)
+		if perr == nil && envelope.SessionID == childSessionID {
+			msg := *e.Message
+			return &msg, nil
+		}
+	}
+	return nil, nil
 }
 
 // UnackedCount returns the current open question+blocker count for

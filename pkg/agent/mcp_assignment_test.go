@@ -75,13 +75,13 @@ type adr090UnbindOnApproval struct {
 	calls int
 }
 
-func (h *adr090UnbindOnApproval) RequestApproval(context.Context, PolicyApprovalReq) (bool, string) {
+func (h *adr090UnbindOnApproval) RequestApproval(context.Context, PolicyApprovalReq) (bool, string, bool) {
 	h.calls++
 	for _, id := range h.loop.GetRegistry().ListAgentIDs() {
 		agent, _ := h.loop.GetRegistry().GetAgent(id)
 		agent.StoreToolPolicy(&tools.ToolPolicyCfg{GlobalPolicies: map[string]config.ToolPolicy{"mcp_connector_read": config.ToolPolicyAllow}})
 	}
-	return true, ""
+	return true, "", false
 }
 
 func TestADR090_MCPUnboundDuringApprovalNeverDispatches(t *testing.T) {

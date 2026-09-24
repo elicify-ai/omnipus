@@ -143,12 +143,10 @@ func TestSeedBaseDelegationPolicies(t *testing.T) {
 	assert.True(t, hasTarget(jimDP, string(coreagent.IDJim)), "Jim → self helper")
 	assert.True(t, hasMode(jimDP, config.DelegationModeTask), "Jim allows task mode")
 	assert.True(t, hasMode(jimDP, config.DelegationModeBackground), "Jim allows background mode")
-	assert.True(t, hasMode(jimDP, config.DelegationModeAwait), "Jim allows await mode")
+	assert.False(t, hasMode(jimDP, config.DelegationMode("await")), "Jim must not seed the retired await mode")
 
-	// Companion assertion (mode collapse): Jim's seed DTO stays 3-valued
-	// (task/background/await, asserted above — coreAgentDelegation is
-	// deliberately unchanged), but the workspace GRAPH edge it bootstraps
-	// collapses+dedupes down to the trust edge's 2-value vocabulary.
+	// Companion assertion: the remaining task/background seed vocabulary maps
+	// onto the trust edge's task/direct vocabulary.
 	assert.ElementsMatch(t,
 		[]workspace.DelegationMode{workspace.ModeTask, workspace.ModeDirect},
 		seedModesToEdgeModes(jimDP.Modes),

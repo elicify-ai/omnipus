@@ -42,11 +42,6 @@ properties:
     type: string
     maxLength: 2048
     description: The recall mark left in the window (names the tool, the id and the recall_conversation call that restores it). Rendered only under Verbose chat.
-  producing_session_id:
-    type: string
-    minLength: 1
-    description: ADR-057 FR-012/FR-013 — present iff the projection was produced by a delegated child session different from session_id.
-
   seq:
     type: integer
     format: int64

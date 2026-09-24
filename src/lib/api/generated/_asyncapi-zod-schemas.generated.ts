@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message"]);
 
 export const AuthFrame = z
   .object({
@@ -23,6 +23,7 @@ export const MessageFrameBase = z
     session_id: z.string().min(1).max(128).optional(),
     agent_id: z.string().min(1).max(128).optional(),
     media: z.array(z.string().min(1).max(256)).max(16).optional(),
+    auto_approve: z.boolean().nullable().optional(),
     metadata: z
     .object({
       model_name: z.string().min(1).max(256).optional(),
@@ -78,7 +79,6 @@ export const SessionStartedFrame = z
     type: z.literal("session_started"),
     session_id: z.string().min(1),
     agent_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
     seq: z.number().int().min(1).optional(),
     boot_id: z.string().optional(),
   })
@@ -100,7 +100,6 @@ export const TokenFrame = z
     session_id: z.string().min(1).max(128),
     content: z.string().max(65536),
     agent_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
     turn_id: z.string().optional(),
     message_id: z.string().optional(),
     replace: z.boolean().optional(),
@@ -130,7 +129,6 @@ export const DoneFrame = z
     type: z.literal("done"),
     session_id: z.string().min(1),
     stats: DoneStats.optional(),
-    producing_session_id: z.string().min(1).optional(),
     turn_id: z.string().optional(),
     message_id: z.string().optional(),
     seq: z.number().int().min(1).optional(),
@@ -177,7 +175,6 @@ export const ToolCallStartFrame = z
     params: z.record(z.unknown()),
     parent_call_id: z.string().optional(),
     agent_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -276,7 +273,6 @@ export const ToolCallResultFrame = z
     error: z.string().optional(),
     parent_call_id: z.string().optional(),
     agent_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -289,7 +285,7 @@ export const SubagentStartFrame = z
     parent_call_id: z.string().min(1),
     task_label: z.string().max(100),
     agent_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
+    child_session_id: z.string().optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -306,7 +302,6 @@ export const SubagentEndFrame = z
     agent_id: z.string().optional(),
     parent_call_id: z.string().optional(),
     message: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -315,15 +310,17 @@ export const SubagentMessageFrame = z
   .object({
     type: z.literal("subagent_message"),
     session_id: z.string().min(1),
+    child_session_id: z.string().optional(),
     span_id: z.string().min(1),
     message_id: z.string().min(1),
-    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond"]),
+    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond", "goal_status"]),
     text: z.string().optional(),
     pct: z.number().int().min(0).max(100).optional(),
     correlation_id: z.string().optional(),
     sender_identity: z.string().min(1),
     untrusted_origin: z.boolean(),
     created_at: z.string(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -331,6 +328,7 @@ export const SubagentStateFrame = z
   .object({
     type: z.literal("subagent_state"),
     session_id: z.string().min(1),
+    child_session_id: z.string().optional(),
     span_id: z.string().min(1),
     state: z.enum(["queued", "running", "needs_input", "paused", "completed", "failed", "cancelled", "timed_out"]),
     steering_receipt: z
@@ -340,6 +338,7 @@ export const SubagentStateFrame = z
     })
     .strict().optional(),
     created_at: z.string(),
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -350,7 +349,6 @@ export const TaskStatusChangedFrame = z
     task_id: z.string().min(1),
     status: z.enum(["inbox", "next", "in_progress", "blocked", "done", "failed"]),
     agent_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -359,7 +357,7 @@ export const TaskRunStatusFrame = z
     type: z.literal("task_run_status"),
     task_id: z.string().min(1),
     run_id: z.string().min(1),
-    occurrence_ms: z.number().int().optional(),
+    occurrence_ms: z.number().int().nullable().optional(),
     status: z.enum(["in_progress", "done", "failed", "skipped"]),
   })
   .strict();
@@ -375,7 +373,6 @@ export const ReplayMessageFrame = z
     agent_id: z.string().optional(),
     model: z.string().max(256).optional(),
     turn_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
     client_message_id: z.string().optional(),
@@ -407,7 +404,6 @@ export const ToolResultProjectionFrame = z
     archive_line: z.number().int().min(0),
     content_state: z.enum(["capped", "emptied"]),
     mark: z.string().max(2048).optional(),
-    producing_session_id: z.string().min(1).optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -450,7 +446,6 @@ export const MediaFrame = z
     type: z.literal("media"),
     session_id: z.string().min(1),
     parts: z.array(MediaPart).min(1).max(32),
-    producing_session_id: z.string().min(1).optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -466,6 +461,20 @@ export const AgentSwitchedFrame = z
   })
   .strict();
 
+export const CommandSegmentInfo = z
+  .object({
+    segment_index: z.number().int().min(0),
+    command_text: z.string().min(1),
+    resolved_binary: z.string().optional(),
+    args: z.array(z.string()).optional(),
+    classification: z.enum(["read", "write", "read_write", "none"]).optional(),
+    path: z.string().optional(),
+    network_required: z.boolean().optional(),
+    suggested_prefix: z.string().optional(),
+    prefix_available: z.boolean().optional(),
+  })
+  .strict();
+
 export const ToolApprovalRequiredFrame = z
   .object({
     type: z.literal("tool_approval_required"),
@@ -477,8 +486,8 @@ export const ToolApprovalRequiredFrame = z
     session_id: z.string().min(1),
     turn_id: z.string().min(1),
     expires_in_ms: z.number().int().min(0).max(86400000),
-    producing_session_id: z.string().min(1).optional(),
     workspace_id: z.string().min(1).max(128).optional(),
+    segments: z.array(CommandSegmentInfo).optional(),
   })
   .strict();
 
@@ -578,6 +587,7 @@ export const SessionStateFrame = z
     pending_approvals: z.array(SessionStatePendingApproval).max(1000),
     pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
     session_id: z.string().optional(),
+    auto_approve_modifier: z.boolean().nullable().optional(),
     active_turn: SessionStateActiveTurn.optional(),
     boot_id: z.string().optional(),
     emitted_at: z.string(),
@@ -589,7 +599,6 @@ export const SystemOverloadFrame = z
     type: z.literal("system_overload"),
     session_id: z.string().min(1),
     message: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -613,7 +622,16 @@ export const CancelStageFrame = z
     type: z.literal("cancel_stage"),
     session_id: z.string().min(1),
     stage: z.enum(["graceful", "hard", "detached"]),
-    producing_session_id: z.string().min(1).optional(),
+    reached: z.array(z.string()).optional(),
+    unreachable: z.array(z
+    .object({
+      id: z.string().min(1),
+      reason: z.string(),
+    })
+    .strict()).optional(),
+    skipped_newer_generation: z.array(z.string()).optional(),
+    skipped_terminal: z.array(z.string()).optional(),
+    partial: z.boolean().optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -624,6 +642,22 @@ export const SessionCloseAckFrame = z
     session_id: z.string().min(1),
     id: z.string().optional(),
     producing_session_id: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const SessionModeUpdateFrame = z
+  .object({
+    type: z.literal("session_mode_update"),
+    session_id: z.string().min(1),
+    auto_approve: z.boolean().nullable(),
+  })
+  .strict();
+
+export const SessionModeUpdatedFrame = z
+  .object({
+    type: z.literal("session_mode_updated"),
+    session_id: z.string().min(1),
+    auto_approve_effective: z.boolean(),
   })
   .strict();
 
@@ -911,7 +945,6 @@ export const GoalStatusFrame = z
     active_loops: z.number().int().min(0),
     cap: z.number().int().min(1),
     state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed", "cleared", "judge_cas_loss", "blocked", "claim_overturned", "expired"]),
-    producing_session_id: z.string().min(1).optional(),
     criteria: z.array(z
     .object({
       id: z.string().optional(),
@@ -987,7 +1020,6 @@ export const LoopStatusFrame = z
     max_runs: z.number().int().min(1),
     next_delay: z.number().int().optional(),
     state: z.string(),
-    producing_session_id: z.string().min(1).optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -1226,6 +1258,8 @@ export const WsFrame = z.discriminatedUnion("type", [
   ReplayWarningFrame,
   CancelStageFrame,
   SessionCloseAckFrame,
+  SessionModeUpdateFrame,
+  SessionModeUpdatedFrame,
   DevicePairingRequestFrame,
   WhatsAppPairingFrame,
   SessionCloseFrame,

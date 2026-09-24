@@ -81,13 +81,13 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// fresh AgentInstances whose Tools registries don't know about the shared
 	// ServedSubdirs / DevServerRegistry / EgressProxy singletons.
 	if al.tier13Deps != nil {
-		al.wireTier13DepsLocked(registry, *al.tier13Deps)
+		al.wireTier13DepsLocked(registry, *al.tier13Deps, cfg)
 	}
 
 	// Re-wire exec tool deps (sandbox mode + egress proxy) on the new
 	// registry. Without this, the rebuilt exec tool would lose the kernel
 	// sandbox routing and revert to the legacy `sh -c` path on a hot reload.
-	al.wireExecToolDepsOn(registry)
+	al.wireExecToolDepsOn(registry, cfg)
 
 	// Re-wire system.* tools on the new registry (FR-001, FR-002).
 	if al.sysagentDeps != nil {

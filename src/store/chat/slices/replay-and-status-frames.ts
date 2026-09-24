@@ -55,12 +55,11 @@ interface ReplayAndStatusFrameContext {
   frame: Frame
   targetSid: string | null
   get: StoreApi<ChatStore>['getState']
-  getActiveSid: () => string | null
   withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void
   armRateLimitClear: (sid: string, event: RateLimitEventData) => void
 }
 
-// Opus review round 2 item 2: a role:'user' replay_message can name the
+// #823 Opus review round 2 item 2: a role:'user' replay_message can name the
 // SAME message this tab already holds as its own send-time optimistic
 // bubble — which is stored under the CLIENT's locally-generated id
 // (sendMessage's own buildQueuedUserMessage), never the server's
@@ -98,28 +97,670 @@ function reconcileOwnOptimisticBubble(
   return true
 }
 
-// Extracted purely to keep handleReplayAndStatusFrame's replay_message case
-// under its line budget (scripts/budgets/functions.txt) — no behavior
-// change from the inline version it replaces. Bakes any tool calls that
-// belong to this turn into `lastMsgId`'s `tool_calls` BEFORE the coalesce
-// branch's early return. Without this, toolCallOrder accumulates across
-// turns and ends up baked onto the wrong (later) assistant message.
-function bakePendingToolCallsInto(draft: SessionChatState, lastMsgId: string): void {
-  if (draft.toolCallOrder.length === 0) return
-  const existing = (draft.messagesById[lastMsgId].tool_calls ?? []) as PositionedToolCall[]
-  const existingById = new Map(existing.map((tc) => [tc.id, tc]))
-  const baked = draft.toolCallOrder
-    .filter((id) => draft.toolCalls[id])
-    .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
-  const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
-  for (const tc of baked) mergedById.set(tc.id, tc)
-  draft.messagesById[lastMsgId].tool_calls = Array.from(mergedById.values())
-  draft.toolCalls = {}
-  draft.toolCallOrder = []
-  draft.textAtToolCallStart = {}
+// Extracted from handleReplayAndStatusFrame's 'session_state' case (budget
+// split, ADR-092) — kept as its own named function purely to stay under the
+// module-level function-size budget; no behaviour change from the inline
+// version. See the case's own history for the reasoning below.
+function handleSessionStateFrame(
+  frame: SessionStateFrame,
+  targetSid: string | null,
+  get: StoreApi<ChatStore>['getState'],
+  withBucket: ReplayAndStatusFrameContext['withBucket'],
+): void {
+  useToolApprovalStore.getState().reconcileWithSessionState(frame)
+  // askuserquestion-tool-spec v3 US-6 S1/FR-9: reconcile pending
+  // AskUserQuestion cards on every reconnect snapshot. The
+  // hydrate/clear/race semantics live in the dedicated, unit-tested
+  // reconcilePendingAsks (mirrors the toolApproval
+  // reconcileWithSessionState pattern); this case only applies the
+  // computed per-session changes.
+  const askChanges = reconcilePendingAsks(
+    frame.pending_asks ?? [],
+    get().sessionsById,
+  )
+  for (const [sid, card] of Object.entries(askChanges)) {
+    withBucket(sid, () => ({ pendingAsk: card }))
+  }
+  // ADR-082 D4/D5 (FR-008/FR-009), review CR3/S2: a connection that
+  // just bound to a session (fresh mount, reconnect, or second tab)
+  // learns here whether a turn is already running for it. `targetSid`
+  // resolves to `frame.session_id` when the frame carries one (the
+  // generated `SessionStateFrame` type carries an optional
+  // `session_id` — CR3), falling back to `activeSid` only when it is
+  // absent (an older gateway, or any other reason the field is
+  // missing) — see the generic `frameSessionId` resolution above.
+  // This matters because a client can be attached/foreground on one
+  // session while a session_state snapshot for a DIFFERENT session
+  // (e.g. a background tab's own reconnect, or a stale broadcast)
+  // arrives — routing it to whatever happens to be foreground would
+  // wrongly stamp an unrelated session's turn onto the active one.
+  //
+  // Mirror exactly the state a live turn THIS client had started
+  // would already be in — isStreaming:true so the Stop control and
+  // composer lock render immediately — without creating the
+  // assistant bubble yet: replay history for this attach has not
+  // arrived on the wire at this point (case 'replay_message' below
+  // pushes messages in arrival order onto messageOrder), so opening
+  // the bubble here would insert it BEFORE messages that are
+  // chronologically earlier, corrupting order. The bubble opens
+  // instead at the replay-terminating `done` (see case 'done'
+  // above), which is guaranteed to fire only after every
+  // replay_message for this attach has already landed — UNLESS a
+  // token for this turn beats that done here (out-of-order gateway,
+  // or a fast concurrent turn), in which case the 'token' case's own
+  // ADR-082 review fix opens/marks the bubble first and this done
+  // becomes a no-op for placeholder purposes.
+  if (!targetSid) return
+  // ADR-092 review finding D: a page reload or gateway reconnect re-fetches
+  // this frame, but a plain WS reconnect never replays a fresh
+  // session_mode_updated ack — that only fires from a LIVE
+  // session_mode_update send, so a reload used to silently drop the chat's
+  // per-chat Auto-approve modifier from the UI even though the server still
+  // held it (session_mode_updated's own case comment above previously,
+  // wrongly, called this a "reconnect snapshot echo" — no such echo
+  // existed). frame.auto_approve_modifier is only meaningful when
+  // frame.session_id is present (the connection-open emit, before any
+  // session is attached, carries neither) — guard on that, not just
+  // targetSid's truthiness, since targetSid can fall back to the active
+  // session on that same connection-open emit. null/absent (a fresh gateway
+  // process, or simply never set) explicitly CLEARS any stale local true —
+  // same field, same semantics as the session_mode_updated ack case below.
+  if (frame.session_id) {
+    withBucket(targetSid, () => ({ autoApproveEffective: frame.auto_approve_modifier ?? null }))
+  }
+  const activeTurn = frame.active_turn
+  if (activeTurn) {
+    // S2: a stale/racing announcement for a turn this client
+    // already finalized (its own done already processed — see
+    // markTurnFinished in the 'done' case) must be ignored
+    // outright. Re-applying it would set isStreaming:true /
+    // activeTurnId again with no second done ever coming to close
+    // it a second time — a permanent Stop button and locked
+    // composer.
+    if (!isTurnFinished(targetSid, activeTurn.turn_id)) {
+      // #823 catch-up redesign pass 2 (§6.3, Q3): no "bubble opened" flag
+      // to maintain any more — bubble existence is now derived directly
+      // from message_id-keyed lookups (resolveTokenBubbleByMessageId,
+      // slices/frames.ts), not tracked as separate bucket state.
+      withBucket(targetSid, () => ({
+        isStreaming: true,
+        activeTurnId: activeTurn.turn_id,
+        activeTurnAgentId: activeTurn.agent_id,
+      }))
+    }
+  } else {
+    // CR3: this snapshot says NO turn is in flight for this
+    // session. If a PRIOR snapshot (or the token case) had
+    // announced one and it is still unresolved, clear it so a
+    // stale announcement can never wedge the composer — but only
+    // force isStreaming:false when no bubble is actually open;
+    // a genuinely open, mid-stream bubble keeps streaming exactly
+    // as before (its own done will finalize it normally).
+    //
+    // Check bucket existence BEFORE calling withBucket: withBucket
+    // always creates (`?? emptySessionState()`) and writes back the
+    // bucket it's given, even for a no-op `{}` patch. A session
+    // this client has never otherwise heard of (no bucket yet) has
+    // nothing to clear — calling withBucket unconditionally here
+    // would materialize a brand-new empty bucket for it, which is
+    // an observable regression: a bare "no turn in flight" snapshot
+    // for a session with no other activity must stay a true no-op,
+    // exactly like it was before this fix (chat.reconnect.test.ts's
+    // "session_state WITHOUT active_turn leaves current behaviour
+    // unchanged").
+    const existing = get().sessionsById[targetSid]
+    if (existing?.activeTurnId) {
+      withBucket(targetSid, (b) => {
+        // #823 catch-up redesign pass 2: "is a bubble actually open" is now
+        // answered directly (findOpenAssistantMessageId) rather than via a
+        // separately-tracked flag.
+        const bubbleOpen = findOpenAssistantMessageId(b.messageOrder, b.messagesById) !== null
+        return {
+          activeTurnId: null,
+          activeTurnAgentId: null,
+          ...(bubbleOpen ? {} : { isStreaming: false }),
+        }
+      })
+    }
+  }
 }
 
-export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid, withBucket, armRateLimitClear }: ReplayAndStatusFrameContext): boolean {
+// ADR-070 §2.1/§2.2, Fix 5c, A-I4 (function-budget extraction, function-size
+// gate — a brand-new function must be under 240 lines from the start,
+// scripts/budgets/functions.txt): the `role === 'assistant'` branch of
+// handleReplayMessageFrame's produce callback, split out verbatim (same
+// statements, same nesting, only re-indented) — no behavior change. Tries,
+// in order: coalescing into a trailing empty placeholder bubble
+// (tool_call_start already opened one), merging into the same-turn tail
+// bubble (turn_id + agent_id correlation), and finally the T1.10 stale
+// tool-call bake fallback. Returns true when the message was fully applied
+// here (the original code's early `return` from the enclosing produce
+// callback — the caller must not fall through to minting a fresh bubble),
+// false when nothing matched and the caller should continue.
+function applyAssistantReplayCoalesce(
+  draft: SessionChatState,
+  ctx: {
+    text: string
+    messageId: string | undefined
+    replayAgentId: string | undefined
+    replayModel: string
+    replayTurnId: string | undefined
+    replayTruncated: boolean
+    replayTruncationReason: ChatMessage['truncationReason']
+  },
+): boolean {
+  const { text, messageId, replayAgentId, replayModel, replayTurnId, replayTruncated, replayTruncationReason } = ctx
+  const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
+  // ADR-070 §2.2: a candidate is only eligible to receive more
+  // replayed content — coalesce OR the same-turn merge below —
+  // if it is still the RAW TAIL of messageOrder. Replay
+  // bubbles are finalized (isStreaming:false) the instant
+  // they're created, so isStreaming can't serve as the "still
+  // open" signal the way it does live (§2.1); raw-tail
+  // position is the substitute. Without this, a steer's
+  // persisted user entry replayed between two same-turn
+  // assistant entries would be skipped over by the backward
+  // scan and the two entries would wrongly merge into one
+  // bubble positioned before the steer message.
+  const lastMsgIsRawTail =
+    lastMsgId != null && draft.messageOrder[draft.messageOrder.length - 1] === lastMsgId
+  if (lastMsgId && lastMsgIsRawTail && (draft.messagesById[lastMsgId].content ?? '') === '') {
+    // Bake any tool calls that belong to this turn BEFORE taking the early
+    // return. Without this, toolCallOrder accumulates across turns and ends
+    // up baked onto the wrong (later) assistant message.
+    if (draft.toolCallOrder.length > 0) {
+      const existing = (draft.messagesById[lastMsgId].tool_calls ?? []) as PositionedToolCall[]
+      const existingById = new Map(existing.map((tc) => [tc.id, tc]))
+      const baked = draft.toolCallOrder
+        .filter((id) => draft.toolCalls[id])
+        .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
+      const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
+      for (const tc of baked) mergedById.set(tc.id, tc)
+      draft.messagesById[lastMsgId].tool_calls = Array.from(mergedById.values())
+      draft.toolCalls = {}
+      draft.toolCallOrder = []
+      draft.textAtToolCallStart = {}
+    }
+    const m = draft.messagesById[lastMsgId]
+    m.content = text
+    m.status = 'done'
+    m.isStreaming = false
+    m.pendingTextBoundary = false
+    if (replayAgentId) m.agentId = replayAgentId
+    // Stamp the per-turn model on the coalesced assistant turn (FR-014).
+    // Only set when the frame carried a non-empty model —
+    // legacy frames and non-model-producing turns stay
+    // model-less.
+    if (replayModel) m.model = replayModel
+    // Fix 5c: stamp the turn-correlation id so a later
+    // turn_canceled replay entry can find this exact message.
+    if (replayTurnId) m.turnId = replayTurnId
+    // ADR-087 D2 — this frame is the entry that closes the
+    // bubble (coalesced into the empty placeholder), so it's
+    // the one MarkLastEntryTruncated would have stamped.
+    if (replayTruncated) {
+      m.truncated = true
+      m.truncationReason = replayTruncationReason
+    }
+    // Coalesce path: this empty placeholder was created by the
+    // turn's own tool_call_start frames, so any pending live tool
+    // calls belong to THIS assistant. Bake them in before the early
+    // return — otherwise toolCallOrder leaks into the next turn and
+    // all calls get attributed to the LAST assistant at `done`.
+    // Mirrors the non-coalesce bake path immediately below.
+    if (draft.toolCallOrder.length > 0) {
+      const existing = (m.tool_calls ?? []) as PositionedToolCall[]
+      const existingById = new Map(existing.map((tc) => [tc.id, tc]))
+      const baked = draft.toolCallOrder
+        .filter((id) => draft.toolCalls[id])
+        .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
+      const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
+      for (const tc of baked) mergedById.set(tc.id, tc)
+      m.tool_calls = Array.from(mergedById.values())
+      draft.toolCalls = {}
+      draft.toolCallOrder = []
+      draft.textAtToolCallStart = {}
+    }
+    return true
+  }
+  // Live/reload parity fix (A-I4): a real interleaved
+  // (narration -> tool call -> narration) turn persists as
+  // MULTIPLE transcript entries — pkg/agent/turn.go's
+  // appendIntermediateAssistantTranscript writes the
+  // pre-tool-call segment as its own entry, separate from the
+  // post-tool-call segment (Bug #416) — but pkg/gateway/replay.go
+  // emits one replay_message frame per entry unconditionally,
+  // with no signal distinguishing "a new turn" from "the next
+  // segment of the turn still streaming live". Live rendering
+  // never splits these: the `token` case's agent_id-boundary
+  // check (Fix 5a) keeps ONE bubble open across the whole
+  // producer's turn, using pendingTextBoundary to insert a
+  // paragraph break around each intervening tool call — the
+  // bubble only closes on an actual producer change. Mirror
+  // that here using turn_id (every modern entry sharing one
+  // turnState's ts.turnID) + agent_id as the equivalent
+  // "same producer, still the same turn" signal — replay
+  // bubbles are already finalized (isStreaming:false) the
+  // instant they're created, so isStreaming can't serve as the
+  // open/closed boundary the way it does live; turn_id is the
+  // substitute. This is deliberately restricted to entries that
+  // both carry a turn_id — legacy/undecorated entries (no
+  // turn_id) keep the pre-existing separate-bubble behavior,
+  // never merged, since there is no reliable correlation data
+  // for them.
+  if (lastMsgId) {
+    const candidate = draft.messagesById[lastMsgId]
+    const sameTurn = !!replayTurnId && candidate.turnId === replayTurnId
+    // Mirrors the 'token' case's exact boundary rule: only a
+    // hard mismatch (BOTH sides known and different) blocks the
+    // merge. An unset id on either side stays permissive.
+    const compatibleProducer =
+      !replayAgentId || !candidate.agentId || candidate.agentId === replayAgentId
+    // Session-level check (see mergedReplayMessageIds' doc
+    // comment) — not just this bubble's own field — so this
+    // guard stays correct even if `candidate` is no longer the
+    // bubble the id was originally merged into.
+    const alreadyMerged = messageId != null && (
+      (draft.mergedReplayMessageIds?.[messageId] ?? false) ||
+      (candidate.mergedReplayIds?.includes(messageId) ?? false)
+    )
+    // ADR-070 §2.2: `lastMsgIsRawTail` (computed once, above,
+    // alongside `lastMsgId`) refuses this merge whenever
+    // something — in practice, a steer's persisted user entry
+    // — has been replayed after `candidate` since it was
+    // created, even when turnId/agentId still match.
+    if (sameTurn && compatibleProducer && !alreadyMerged && lastMsgIsRawTail) {
+      // Bake any tool calls that started on this bubble since
+      // the last segment landed, onto the SAME bubble we are
+      // about to extend — this is the bubble live's `done`
+      // handler would have baked onto too, since live never
+      // split this content into separate bubbles in the first
+      // place.
+      if (draft.toolCallOrder.length > 0) {
+        // Offsets are computed from `textAtToolCallStart` BEFORE
+        // `candidate.content += '\n\n' + text` below appends the
+        // next segment — each call's snapshot was captured back
+        // when it started (mid-way through the content
+        // accumulated so far), and since content only ever
+        // grows at the end, that snapshot's `.length` is
+        // already the correct split offset into whatever the
+        // FINAL merged content becomes, including segments
+        // appended after this bake (see stampToolCallOffset's
+        // doc comment; pinned by the "WS-replay same-turn
+        // merge" describe block's exact-offset assertion in
+        // chat.tool-call-offset.test.ts).
+        const existingCalls = (candidate.tool_calls ?? []) as PositionedToolCall[]
+        const existingById = new Map(existingCalls.map((tc) => [tc.id, tc]))
+        const baked = draft.toolCallOrder
+          .filter((id) => draft.toolCalls[id])
+          .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
+        const mergedById = new Map<string, PositionedToolCall>(existingCalls.map((tc) => [tc.id, tc]))
+        for (const tc of baked) mergedById.set(tc.id, tc)
+        candidate.tool_calls = Array.from(mergedById.values())
+        draft.toolCalls = {}
+        draft.toolCallOrder = []
+        draft.textAtToolCallStart = {}
+      }
+      // Consume the seam marker exactly like the live 'token'
+      // handler: a tool call started on this bubble since the
+      // last segment, so insert a paragraph break rather than
+      // gluing the two segments together with no separator.
+      if (candidate.pendingTextBoundary) {
+        candidate.pendingTextBoundary = false
+      }
+      candidate.content += '\n\n' + text
+      // Keep the FIRST known model rather than the last — live
+      // never shows a per-segment model tag at all (the
+      // 'token' case never sets .model), so a single
+      // once-set-only tag on the merged bubble is the closest
+      // replay equivalent, and avoids the tag flip-flopping
+      // across segments that may report different models.
+      if (!candidate.model && replayModel) candidate.model = replayModel
+      // ADR-087 D2 — only the LAST transcript entry of an
+      // incomplete turn carries truncated/truncation_reason
+      // (MarkLastEntryTruncated stamps the final assistant
+      // entry only), so this only ever fires on the segment
+      // that closes the merged bubble — earlier segments in
+      // the same merge chain arrive with replayTruncated false
+      // and leave candidate.truncated untouched.
+      if (replayTruncated) {
+        candidate.truncated = true
+        candidate.truncationReason = replayTruncationReason
+      }
+      // Stamp agentId when previously unknown (mirrors the
+      // 'token' case). compatibleProducer already guarantees
+      // this never overwrites a genuinely different producer.
+      if (replayAgentId) candidate.agentId = replayAgentId
+      if (messageId) {
+        candidate.mergedReplayIds = [...(candidate.mergedReplayIds ?? []), messageId]
+        // Record at the session level too (see
+        // mergedReplayMessageIds' doc comment) so a later
+        // dedup check finds this id even after `candidate` is
+        // no longer the tail bubble.
+        draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
+      }
+      return true
+    }
+  }
+  // T1.10: Bake any live tool calls from the previous turn.
+  if (lastMsgId && draft.toolCallOrder.length > 0) {
+    const lastMsg = draft.messagesById[lastMsgId]
+    const existing = (lastMsg.tool_calls ?? []) as PositionedToolCall[]
+    const existingById = new Map(existing.map((tc) => [tc.id, tc]))
+    const baked = draft.toolCallOrder
+      .filter((id) => draft.toolCalls[id])
+      .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
+    const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
+    for (const tc of baked) mergedById.set(tc.id, tc)
+    lastMsg.tool_calls = Array.from(mergedById.values())
+    draft.toolCalls = {}
+    draft.toolCallOrder = []
+    draft.textAtToolCallStart = {}
+    draft.toolCallOwnerMessageId = {}
+  }
+  return false
+}
+
+// FR-16/Fix 5c (function-budget extraction, function-size gate — a
+// brand-new function must be under 240 lines from the start,
+// scripts/budgets/functions.txt): the `turn_canceled` branch of
+// handleReplayMessageFrame, split out verbatim (same statements, same
+// nesting, only re-indented) — no behavior change. A `turn_canceled`
+// transcript entry is metadata-only (never its own chat bubble) — this
+// marks the matching assistant bubble (correlated by turn_id) interrupted,
+// mirroring the live-cancel path's markLastMessageInterrupted.
+function handleTurnCanceledReplayEntry({
+  replayFrame,
+  targetSid,
+  withBucket,
+}: {
+  replayFrame: WsReplayMessageFrame
+  targetSid: string
+  withBucket: ReplayAndStatusFrameContext['withBucket']
+}): void {
+  const canceledTurnId = replayFrame.turn_id
+  if (!canceledTurnId) {
+    // Legacy/undecorated cancellation entry (no turn_id) — nothing
+    // to correlate against. Drop gracefully rather than guessing at
+    // "last assistant message", which could mis-mark an unrelated
+    // turn when async delegation has interleaved other frames.
+    console.warn('chat.turn_canceled_missing_turn_id', { sessionId: targetSid })
+    logDiagnostic('chatTurnCanceledMissingTurnId', { sessionId: targetSid })
+    return
+  }
+  withBucket(targetSid, (b) => {
+    return produce(b, (draft) => {
+      const matchId = findAssistantMessageIdByTurnId(draft.messageOrder, draft.messagesById, canceledTurnId)
+      if (!matchId) {
+        // No assistant message in this bucket carries this turnId
+        // (e.g. evicted from the ring buffer, or replay delivered the
+        // cancellation before its assistant entry). No-op — never
+        // guess which message to mark.
+        //
+        // Finding D (A-I4 round 4): live-verified this is the EXPECTED,
+        // benign shape for the common case — a turn canceled before it
+        // streamed any narration text at all (e.g. Stop clicked while
+        // still on the first LLM call of a round, right after a
+        // background delegate() dispatch). pkg/gateway/replay.go only
+        // ever emits a replay_message frame — the ONLY frame type that
+        // stamps `.turnId` onto a ChatMessage — when
+        // TranscriptEntry.Content is non-empty; tool_call_start/
+        // subagent_start (which DO still replay correctly, since they
+        // key off entry.ToolCalls independent of Content) carry no
+        // turn_id field on the wire at all. So a turn with empty
+        // narration legitimately has NO bubble anywhere carrying its
+        // turnId for this correlation to find — not a bug, just a gap
+        // in what there is to correlate against. Confirmed this has NO
+        // user-visible effect: the interrupted delegation still renders
+        // correctly (SubagentBlock reads its OWN status field, set
+        // independently via subagent_end/tool_call_result, never via
+        // this turnId match) — reproduced via a real background
+        // delegation canceled mid-dispatch, reloaded twice, span showed
+        // "interrupted" correctly both times despite this no-op firing
+        // both times too. Kept as a dev-visible console.warn (unchanged
+        // behavior) but deliberately NOT escalated to production
+        // error-telemetry (logDiagnostic) — that tier is for
+        // conditions with observable impact, and this one has none.
+        // The ring-buffer-eviction case this branch also covers is not
+        // meaningfully more severe: the underlying data is safely in
+        // transcript.jsonl regardless, only this session's bounded
+        // in-memory window lost the (also-cosmetic) correlation.
+        console.warn('chat.turn_canceled_no_match', { sessionId: targetSid, turnId: canceledTurnId })
+        return
+      }
+      const m = draft.messagesById[matchId]
+      if (m) { m.isStreaming = false; m.status = 'interrupted'; m.pendingTextBoundary = false }
+    }) as Partial<SessionChatState>
+  })
+  return
+}
+
+// ADR-051/Fix 5c/ADR-070/ADR-087 (function-budget extraction, function-size
+// gate — grandfathered row may only shrink, scripts/budgets/functions.txt):
+// the `replay_message` reducer, split out of `handleReplayAndStatusFrame`
+// verbatim (same statements, same nesting, only re-indented) — no behavior
+// change. Handles one WS-replay transcript entry: `turn_canceled` metadata
+// entries (delegated to handleTurnCanceledReplayEntry above), dedup against
+// an already-live or already-replayed entry, the empty-placeholder coalesce
+// and same-turn merge paths for assistant entries (delegated to
+// applyAssistantReplayCoalesce above), and finally minting a fresh bubble
+// for whatever wasn't coalesced/merged away. See the inline comments below
+// for the many individually-cited fixes this reducer carries — unchanged
+// by the extraction.
+function handleReplayMessageFrame({
+  frame,
+  targetSid,
+  withBucket,
+}: {
+  frame: Frame
+  targetSid: string | null
+  withBucket: ReplayAndStatusFrameContext['withBucket']
+}): void {
+  if (!targetSid) return
+  sawReplayMessageThisTurn[targetSid] = true
+  const replayFrame = frame as WsReplayMessageFrame
+  // FR-16 / Fix 5c: turn_canceled entries are metadata-only and must
+  // never render as their own chat bubble. ReplayMessageFrame carries
+  // no status/truncated field, so — unlike a fresh REST cold-load,
+  // where the persisted TranscriptEntry.Status already says
+  // "interrupted" — this WS-replay path only learns a turn was
+  // cancelled from this separate turn_canceled entry, correlated by
+  // TurnId to the specific assistant entry it interrupted (both
+  // stamped from TranscriptEntry.TurnID by pkg/gateway/replay.go).
+  // Find that message via turnId (captured below whenever an
+  // assistant replay_message frame carries one) and mark it
+  // interrupted the same way the live-cancel path
+  // (markLastMessageInterrupted) does, so reload and live rendering
+  // match — that parity is the entire point of this fix.
+  if (replayFrame.role === 'turn_canceled') {
+    handleTurnCanceledReplayEntry({ replayFrame, targetSid, withBucket })
+    return
+  }
+  // Widened from 'user' | 'assistant' — the 'turn_canceled'
+  // branch above always `break`s, so by this point
+  // `replayFrame.role` can only be 'user' | 'assistant' | 'system'
+  // | undefined (the wire type's fourth member is excluded by
+  // control flow). The old, narrower cast silently dropped 'system'
+  // even though `Message`/`ChatMessage` (and every downstream
+  // consumer keyed off `role`) fully supports it — this is exactly
+  // the shape the kickoff's own SYSTEM-role transcript entry
+  // replays as.
+  const role = (replayFrame.role || 'assistant') as 'user' | 'assistant' | 'system'
+  const text = replayFrame.content ?? ''
+  const messageId = replayFrame.id
+  const messageTimestamp = replayFrame.timestamp
+  const replayAgentId = replayFrame.agent_id
+  // Per-turn model record on replay. The field is optional on the wire;
+  // we read it as `model?: string` so frames without it (legacy or non-
+  // model-producing turns) still parse. Trim and treat empty/whitespace
+  // as absent — matches the renderer trim guard.
+  const replayModelRaw = replayFrame.model
+  const replayModel = typeof replayModelRaw === 'string' ? replayModelRaw.trim() : ''
+  // Fix 5c: turn-correlation id, stamped by the backend on assistant
+  // replay entries so a later turn_canceled entry (handled above) can
+  // find this exact message. Captured on the ChatMessage so it survives
+  // for the lifetime of the bucket entry (until ring-buffer eviction).
+  const replayTurnId = replayFrame.turn_id
+  // ADR-087 D2 — WS-replay truncation plumbing, layer 6 of the SPA's
+  // six-layer path (§7.2). Same legacy-default rule as the cold-load
+  // path (rawToMessage, src/lib/api.ts) via the same helper, so both
+  // paths derive the same value from the same wire shape.
+  const replayTruncated = replayFrame.truncated === true
+  const replayTruncationReason = normalizeTruncationReason(
+    replayFrame.truncated,
+    replayFrame.truncation_reason,
+  )
+  withBucket(targetSid, (b) => {
+    return produce(b, (draft) => {
+      // Cursor advancement is handled centrally before the switch (I1);
+      // no per-case advance needed here.
+      const msgs = getMessages(b)
+      // #823 Opus review round 2 item 2 — see reconcileOwnOptimisticBubble above.
+      if (reconcileOwnOptimisticBubble(draft, replayFrame.client_message_id, messageId, role, targetSid)) return
+      // Reconnection dedup: prefer server-assigned id match when present;
+      // fall back to (content + role + timestamp) tuple. Content-only dedup
+      // was silently dropping legitimate identical user retries.
+      if (messageId) {
+        // Also check whether this id was already folded into an
+        // existing bubble by the same-turn merge branch below — a
+        // reconnect re-replaying frames the SPA already merged must
+        // not merge them a second time (merge is an append, not an
+        // idempotent overwrite, so a second pass would duplicate
+        // content). Checked against the SESSION-level
+        // mergedReplayMessageIds set (not just the current tail
+        // bubble) — a merge always targets the then-current tail at
+        // MERGE time, but by the time a reconnect re-replays that id,
+        // a LATER turn may have produced a new tail bubble that never
+        // saw this id merged into it. See mergedReplayMessageIds'
+        // doc comment on SessionChatState for the exact failure this
+        // closes. Also OR in the per-bubble field (belt-and-braces;
+        // covers hand-built test fixtures that predate the
+        // session-level set).
+        const tailAssistantId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
+        const alreadyMerged =
+          (draft.mergedReplayMessageIds?.[messageId] ?? false) ||
+          (tailAssistantId != null &&
+            (draft.messagesById[tailAssistantId].mergedReplayIds?.includes(messageId) ?? false))
+        if (draft.messageOrder.includes(messageId) || alreadyMerged) {
+          console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: alreadyMerged ? 'merged-id-match' : 'id-match' })
+          logDiagnostic('chatReplayDedupSkipped', { messageId, role, reason: alreadyMerged ? 'merged-id-match' : 'id-match', sessionId: targetSid })
+          return
+        }
+      } else {
+        const tailId = draft.messageOrder[draft.messageOrder.length - 1]
+        const tail = tailId ? draft.messagesById[tailId] : null
+        const tailTs = tail?.timestamp ?? ''
+        const frameTs = messageTimestamp ?? ''
+        // Only dedup on content+role if timestamps also match (or both absent).
+        if (
+          tail &&
+          tail.role === role &&
+          (tail.content ?? '') === text &&
+          (tailTs === frameTs || (tailTs === '' && frameTs === ''))
+        ) {
+          console.warn('chat.replay_dedup_skipped', { role, reason: 'content-tuple-match' })
+          logDiagnostic('chatReplayDedupSkipped', { role, reason: 'content-tuple-match', sessionId: targetSid })
+          return
+        }
+      }
+      // Coalesce assistant text into the trailing empty assistant bubble
+      // that tool_call_start frames already created.
+      if (
+        role === 'assistant' &&
+        applyAssistantReplayCoalesce(draft, {
+          text,
+          messageId,
+          replayAgentId,
+          replayModel,
+          replayTurnId,
+          replayTruncated,
+          replayTruncationReason,
+        })
+      ) {
+        return
+      }
+      // FX-E (ADR-082 D9): bake any STILL-pending tool calls before
+      // opening a message of a NON-assistant role (user/system) —
+      // every branch above only bakes for `role === 'assistant'`
+      // (the empty-placeholder coalesce and same-turn-merge
+      // sub-paths bake-then-`return`; the T1.10 fallback
+      // immediately above bakes-then-falls-through), so a
+      // `role === 'assistant'` frame always leaves toolCallOrder
+      // empty by the time it reaches here. A user/system
+      // replay_message skips that whole `if` block, so without
+      // this, a tool call whose owner is a PRIOR assistant bubble —
+      // e.g. `set_goal` as the LAST thing in a turn, immediately
+      // followed by the transcript's next USER message with no
+      // further assistant narration replayed afterward — is left
+      // stranded in `toolCallOrder` forever: the only other bake
+      // site, the terminal `done` frame, is a no-op replay
+      // terminator (`isReplayTerminatorDone`, this file's `done`
+      // case) whenever the session has no live turn in flight — the
+      // ordinary case of reloading an already-completed session.
+      // The call then never reaches `message.tool_calls`, so
+      // SetGoalCardBlock (and any other tool-call renderer keyed off
+      // `message.tool_calls`) never sees it: the card renders live
+      // but silently vanishes on reload (e2e
+      // goal-card-position.spec.ts's post-reload assertion).
+      // Routed through the owner map (bakeToolCallsByOwner, same as
+      // the `done` case) rather than a flat "last assistant
+      // message" bake — correct even when more than one assistant
+      // bubble is currently open/pending an owner.
+      if (role !== 'assistant' && draft.toolCallOrder.length > 0) {
+        const fallbackMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
+        bakeToolCallsByOwner(draft.messagesById, draft.toolCallOrder, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, fallbackMsgId, draft.textAtToolCallStart)
+        draft.toolCalls = {}
+        draft.toolCallOrder = []
+        draft.textAtToolCallStart = {}
+        draft.toolCallOwnerMessageId = {}
+      }
+      const newMsg: ChatMessage = {
+        id: messageId ?? generateId(),
+        role,
+        content: text,
+        timestamp: messageTimestamp ?? new Date().toISOString(),
+        status: 'done' as const,
+        ...(replayAgentId ? { agentId: replayAgentId } : {}),
+        // Per-turn model record. Only on assistant messages (user/system turns
+        // don't carry a producer model). Empty model is treated as
+        // absent so the renderer doesn't show a phantom footer.
+        ...(replayModel && role === 'assistant' ? { model: replayModel } : {}),
+        // Fix 5c: turn-correlation id. Only meaningful on assistant
+        // messages (the backend stamps turn_id on assistant + turn-
+        // cancellation entries only) — lets a later turn_canceled
+        // replay entry find this exact message.
+        ...(replayTurnId && role === 'assistant' ? { turnId: replayTurnId } : {}),
+        // ADR-087 D2 — only meaningful on assistant messages (the
+        // backend only ever stamps this on the last assistant
+        // transcript entry of an incomplete turn). D4a: an entry
+        // with truncated:true and EMPTY content (`text === ''`)
+        // still reaches here and still gets stamped — nothing in
+        // this reducer conditions message creation on non-empty
+        // content, so the bubble renders with no body and just the
+        // D1 footer suffix, per spec.
+        ...(replayTruncated && role === 'assistant'
+          ? { truncated: true as const, truncationReason: replayTruncationReason }
+          : {}),
+      }
+      draft.messagesById[newMsg.id] = newMsg
+      // #823 Opus review round 2 item 2 (founder decision Q1): a
+      // replay_message is HISTORY the server already persisted — insert it
+      // before the pending tail (unresolved queued/sending/failed sends),
+      // not blindly at the true end of messageOrder, so a pending message a
+      // session_snapshot preserved never renders ABOVE history it was sent
+      // after.
+      insertHistoryMessageId(draft.messageOrder, draft.messagesById, newMsg.id)
+      // Ring buffer enforcement during replay — evict oldest entry plus all dependent maps.
+      if (draft.messageOrder.length > MAX_MESSAGES_PER_SESSION) {
+        const evictId = draft.messageOrder[0]
+        evictMessageFromBucket(draft as unknown as SessionChatState, evictId)
+        draft.trimmedCount += 1
+      }
+      void msgs // suppress unused warning — only used for dedup context above
+    }) as Partial<SessionChatState>
+  })
+}
+export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, armRateLimitClear }: ReplayAndStatusFrameContext): boolean {
   switch (frame.type) {
         case 'replay_error': {
           // ADR-051 — historical (replay) error frame. Mirrors the live
@@ -210,445 +851,7 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
         }
 
         case 'replay_message': {
-          if (!targetSid) break
-          sawReplayMessageThisTurn[targetSid] = true
-          const replayFrame = frame as WsReplayMessageFrame
-          // FR-16 / Fix 5c: turn_canceled entries are metadata-only and must
-          // never render as their own chat bubble. ReplayMessageFrame carries
-          // no status/truncated field, so — unlike a fresh REST cold-load,
-          // where the persisted TranscriptEntry.Status already says
-          // "interrupted" — this WS-replay path only learns a turn was
-          // cancelled from this separate turn_canceled entry, correlated by
-          // TurnId to the specific assistant entry it interrupted (both
-          // stamped from TranscriptEntry.TurnID by pkg/gateway/replay.go).
-          // Find that message via turnId (captured below whenever an
-          // assistant replay_message frame carries one) and mark it
-          // interrupted the same way the live-cancel path
-          // (markLastMessageInterrupted) does, so reload and live rendering
-          // match — that parity is the entire point of this fix.
-          if (replayFrame.role === 'turn_canceled') {
-            const canceledTurnId = replayFrame.turn_id
-            if (!canceledTurnId) {
-              // Legacy/undecorated cancellation entry (no turn_id) — nothing
-              // to correlate against. Drop gracefully rather than guessing at
-              // "last assistant message", which could mis-mark an unrelated
-              // turn when async delegation has interleaved other frames.
-              console.warn('chat.turn_canceled_missing_turn_id', { sessionId: targetSid })
-              logDiagnostic('chatTurnCanceledMissingTurnId', { sessionId: targetSid })
-              break
-            }
-            withBucket(targetSid, (b) => {
-              return produce(b, (draft) => {
-                const matchId = findAssistantMessageIdByTurnId(draft.messageOrder, draft.messagesById, canceledTurnId)
-                if (!matchId) {
-                  // No assistant message in this bucket carries this turnId
-                  // (e.g. evicted from the ring buffer, or replay delivered the
-                  // cancellation before its assistant entry). No-op — never
-                  // guess which message to mark.
-                  //
-                  // Finding D (A-I4 round 4): live-verified this is the EXPECTED,
-                  // benign shape for the common case — a turn canceled before it
-                  // streamed any narration text at all (e.g. Stop clicked while
-                  // still on the first LLM call of a round, right after a
-                  // background delegate() dispatch). pkg/gateway/replay.go only
-                  // ever emits a replay_message frame — the ONLY frame type that
-                  // stamps `.turnId` onto a ChatMessage — when
-                  // TranscriptEntry.Content is non-empty; tool_call_start/
-                  // subagent_start (which DO still replay correctly, since they
-                  // key off entry.ToolCalls independent of Content) carry no
-                  // turn_id field on the wire at all. So a turn with empty
-                  // narration legitimately has NO bubble anywhere carrying its
-                  // turnId for this correlation to find — not a bug, just a gap
-                  // in what there is to correlate against. Confirmed this has NO
-                  // user-visible effect: the interrupted delegation still renders
-                  // correctly (SubagentBlock reads its OWN status field, set
-                  // independently via subagent_end/tool_call_result, never via
-                  // this turnId match) — reproduced via a real background
-                  // delegation canceled mid-dispatch, reloaded twice, span showed
-                  // "interrupted" correctly both times despite this no-op firing
-                  // both times too. Kept as a dev-visible console.warn (unchanged
-                  // behavior) but deliberately NOT escalated to production
-                  // error-telemetry (logDiagnostic) — that tier is for
-                  // conditions with observable impact, and this one has none.
-                  // The ring-buffer-eviction case this branch also covers is not
-                  // meaningfully more severe: the underlying data is safely in
-                  // transcript.jsonl regardless, only this session's bounded
-                  // in-memory window lost the (also-cosmetic) correlation.
-                  console.warn('chat.turn_canceled_no_match', { sessionId: targetSid, turnId: canceledTurnId })
-                  return
-                }
-                const m = draft.messagesById[matchId]
-                if (m) { m.isStreaming = false; m.status = 'interrupted'; m.pendingTextBoundary = false }
-              }) as Partial<SessionChatState>
-            })
-            break
-          }
-          // Widened from 'user' | 'assistant' — the 'turn_canceled'
-          // branch above always `break`s, so by this point
-          // `replayFrame.role` can only be 'user' | 'assistant' | 'system'
-          // | undefined (the wire type's fourth member is excluded by
-          // control flow). The old, narrower cast silently dropped 'system'
-          // even though `Message`/`ChatMessage` (and every downstream
-          // consumer keyed off `role`) fully supports it — this is exactly
-          // the shape the kickoff's own SYSTEM-role transcript entry
-          // replays as.
-          const role = (replayFrame.role || 'assistant') as 'user' | 'assistant' | 'system'
-          const text = replayFrame.content ?? ''
-          const messageId = replayFrame.id
-          const messageTimestamp = replayFrame.timestamp
-          const replayAgentId = replayFrame.agent_id
-          // Per-turn model record on replay. The field is optional on the wire;
-          // we read it as `model?: string` so frames without it (legacy or non-
-          // model-producing turns) still parse. Trim and treat empty/whitespace
-          // as absent — matches the renderer trim guard.
-          const replayModelRaw = replayFrame.model
-          const replayModel = typeof replayModelRaw === 'string' ? replayModelRaw.trim() : ''
-          // Fix 5c: turn-correlation id, stamped by the backend on assistant
-          // replay entries so a later turn_canceled entry (handled above) can
-          // find this exact message. Captured on the ChatMessage so it survives
-          // for the lifetime of the bucket entry (until ring-buffer eviction).
-          const replayTurnId = replayFrame.turn_id
-          // ADR-087 D2 — WS-replay truncation plumbing, layer 6 of the SPA's
-          // six-layer path (§7.2). Same legacy-default rule as the cold-load
-          // path (rawToMessage, src/lib/api.ts) via the same helper, so both
-          // paths derive the same value from the same wire shape.
-          const replayTruncated = replayFrame.truncated === true
-          const replayTruncationReason = normalizeTruncationReason(
-            replayFrame.truncated,
-            replayFrame.truncation_reason,
-          )
-          withBucket(targetSid, (b) => {
-            return produce(b, (draft) => {
-              // Cursor advancement is handled centrally before the switch (I1);
-              // no per-case advance needed here.
-              const msgs = getMessages(b)
-              // Opus review round 2 item 2 — see reconcileOwnOptimisticBubble above.
-              if (reconcileOwnOptimisticBubble(draft, replayFrame.client_message_id, messageId, role, targetSid)) return
-              // Reconnection dedup: prefer server-assigned id match when present;
-              // fall back to (content + role + timestamp) tuple. Content-only dedup
-              // was silently dropping legitimate identical user retries.
-              if (messageId) {
-                // Also check whether this id was already folded into an
-                // existing bubble by the same-turn merge branch below — a
-                // reconnect re-replaying frames the SPA already merged must
-                // not merge them a second time (merge is an append, not an
-                // idempotent overwrite, so a second pass would duplicate
-                // content). Checked against the SESSION-level
-                // mergedReplayMessageIds set (not just the current tail
-                // bubble) — a merge always targets the then-current tail at
-                // MERGE time, but by the time a reconnect re-replays that id,
-                // a LATER turn may have produced a new tail bubble that never
-                // saw this id merged into it. See mergedReplayMessageIds'
-                // doc comment on SessionChatState for the exact failure this
-                // closes. Also OR in the per-bubble field (belt-and-braces;
-                // covers hand-built test fixtures that predate the
-                // session-level set).
-                const tailAssistantId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
-                const alreadyMerged =
-                  (draft.mergedReplayMessageIds?.[messageId] ?? false) ||
-                  (tailAssistantId != null &&
-                    (draft.messagesById[tailAssistantId].mergedReplayIds?.includes(messageId) ?? false))
-                if (draft.messageOrder.includes(messageId) || alreadyMerged) {
-                  console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: alreadyMerged ? 'merged-id-match' : 'id-match' })
-                  logDiagnostic('chatReplayDedupSkipped', { messageId, role, reason: alreadyMerged ? 'merged-id-match' : 'id-match', sessionId: targetSid })
-                  return
-                }
-              } else {
-                const tailId = draft.messageOrder[draft.messageOrder.length - 1]
-                const tail = tailId ? draft.messagesById[tailId] : null
-                const tailTs = tail?.timestamp ?? ''
-                const frameTs = messageTimestamp ?? ''
-                // Only dedup on content+role if timestamps also match (or both absent).
-                if (
-                  tail &&
-                  tail.role === role &&
-                  (tail.content ?? '') === text &&
-                  (tailTs === frameTs || (tailTs === '' && frameTs === ''))
-                ) {
-                  console.warn('chat.replay_dedup_skipped', { role, reason: 'content-tuple-match' })
-                  logDiagnostic('chatReplayDedupSkipped', { role, reason: 'content-tuple-match', sessionId: targetSid })
-                  return
-                }
-              }
-              // Coalesce assistant text into the trailing empty assistant bubble
-              // that tool_call_start frames already created.
-              if (role === 'assistant') {
-                const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
-                // ADR-070 §2.2: a candidate is only eligible to receive more
-                // replayed content — coalesce OR the same-turn merge below —
-                // if it is still the RAW TAIL of messageOrder. Replay
-                // bubbles are finalized (isStreaming:false) the instant
-                // they're created, so isStreaming can't serve as the "still
-                // open" signal the way it does live (§2.1); raw-tail
-                // position is the substitute. Without this, a steer's
-                // persisted user entry replayed between two same-turn
-                // assistant entries would be skipped over by the backward
-                // scan and the two entries would wrongly merge into one
-                // bubble positioned before the steer message.
-                const lastMsgIsRawTail =
-                  lastMsgId != null && draft.messageOrder[draft.messageOrder.length - 1] === lastMsgId
-                if (lastMsgId && lastMsgIsRawTail && (draft.messagesById[lastMsgId].content ?? '') === '') {
-                  // Bake any tool calls that belong to this turn BEFORE taking the early
-                  // return — see bakePendingToolCallsInto's own doc comment.
-                  bakePendingToolCallsInto(draft, lastMsgId)
-                  const m = draft.messagesById[lastMsgId]
-                  m.content = text
-                  m.status = 'done'
-                  m.isStreaming = false
-                  m.pendingTextBoundary = false
-                  if (replayAgentId) m.agentId = replayAgentId
-                  // Stamp the per-turn model on the coalesced assistant turn (FR-014).
-                  // Only set when the frame carried a non-empty model —
-                  // legacy frames and non-model-producing turns stay
-                  // model-less.
-                  if (replayModel) m.model = replayModel
-                  // Fix 5c: stamp the turn-correlation id so a later
-                  // turn_canceled replay entry can find this exact message.
-                  if (replayTurnId) m.turnId = replayTurnId
-                  // ADR-087 D2 — this frame is the entry that closes the
-                  // bubble (coalesced into the empty placeholder), so it's
-                  // the one MarkLastEntryTruncated would have stamped.
-                  if (replayTruncated) {
-                    m.truncated = true
-                    m.truncationReason = replayTruncationReason
-                  }
-                  // Coalesce path: this empty placeholder was created by the
-                  // turn's own tool_call_start frames, so any pending live tool
-                  // calls belong to THIS assistant. Bake them in before the early
-                  // return — otherwise toolCallOrder leaks into the next turn and
-                  // all calls get attributed to the LAST assistant at `done`.
-                  // Mirrors the non-coalesce bake path immediately below.
-                  if (draft.toolCallOrder.length > 0) {
-                    const existing = (m.tool_calls ?? []) as PositionedToolCall[]
-                    const existingById = new Map(existing.map((tc) => [tc.id, tc]))
-                    const baked = draft.toolCallOrder
-                      .filter((id) => draft.toolCalls[id])
-                      .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
-                    const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
-                    for (const tc of baked) mergedById.set(tc.id, tc)
-                    m.tool_calls = Array.from(mergedById.values())
-                    draft.toolCalls = {}
-                    draft.toolCallOrder = []
-                    draft.textAtToolCallStart = {}
-                  }
-                  return
-                }
-                // Live/reload parity fix (A-I4): a real interleaved
-                // (narration -> tool call -> narration) turn persists as
-                // MULTIPLE transcript entries — pkg/agent/turn.go's
-                // appendIntermediateAssistantTranscript writes the
-                // pre-tool-call segment as its own entry, separate from the
-                // post-tool-call segment (Bug #416) — but pkg/gateway/replay.go
-                // emits one replay_message frame per entry unconditionally,
-                // with no signal distinguishing "a new turn" from "the next
-                // segment of the turn still streaming live". Live rendering
-                // never splits these: the `token` case's agent_id-boundary
-                // check (Fix 5a) keeps ONE bubble open across the whole
-                // producer's turn, using pendingTextBoundary to insert a
-                // paragraph break around each intervening tool call — the
-                // bubble only closes on an actual producer change. Mirror
-                // that here using turn_id (every modern entry sharing one
-                // turnState's ts.turnID) + agent_id as the equivalent
-                // "same producer, still the same turn" signal — replay
-                // bubbles are already finalized (isStreaming:false) the
-                // instant they're created, so isStreaming can't serve as the
-                // open/closed boundary the way it does live; turn_id is the
-                // substitute. This is deliberately restricted to entries that
-                // both carry a turn_id — legacy/undecorated entries (no
-                // turn_id) keep the pre-existing separate-bubble behavior,
-                // never merged, since there is no reliable correlation data
-                // for them.
-                if (lastMsgId) {
-                  const candidate = draft.messagesById[lastMsgId]
-                  const sameTurn = !!replayTurnId && candidate.turnId === replayTurnId
-                  // Mirrors the 'token' case's exact boundary rule: only a
-                  // hard mismatch (BOTH sides known and different) blocks the
-                  // merge. An unset id on either side stays permissive.
-                  const compatibleProducer =
-                    !replayAgentId || !candidate.agentId || candidate.agentId === replayAgentId
-                  // Session-level check (see mergedReplayMessageIds' doc
-                  // comment) — not just this bubble's own field — so this
-                  // guard stays correct even if `candidate` is no longer the
-                  // bubble the id was originally merged into.
-                  const alreadyMerged = messageId != null && (
-                    (draft.mergedReplayMessageIds?.[messageId] ?? false) ||
-                    (candidate.mergedReplayIds?.includes(messageId) ?? false)
-                  )
-                  // ADR-070 §2.2: `lastMsgIsRawTail` (computed once, above,
-                  // alongside `lastMsgId`) refuses this merge whenever
-                  // something — in practice, a steer's persisted user entry
-                  // — has been replayed after `candidate` since it was
-                  // created, even when turnId/agentId still match.
-                  if (sameTurn && compatibleProducer && !alreadyMerged && lastMsgIsRawTail) {
-                    // Bake any tool calls that started on this bubble since
-                    // the last segment landed, onto the SAME bubble we are
-                    // about to extend — this is the bubble live's `done`
-                    // handler would have baked onto too, since live never
-                    // split this content into separate bubbles in the first
-                    // place.
-                    if (draft.toolCallOrder.length > 0) {
-                      // Offsets are computed from `textAtToolCallStart` BEFORE
-                      // `candidate.content += '\n\n' + text` below appends the
-                      // next segment — each call's snapshot was captured back
-                      // when it started (mid-way through the content
-                      // accumulated so far), and since content only ever
-                      // grows at the end, that snapshot's `.length` is
-                      // already the correct split offset into whatever the
-                      // FINAL merged content becomes, including segments
-                      // appended after this bake (see stampToolCallOffset's
-                      // doc comment; pinned by the "WS-replay same-turn
-                      // merge" describe block's exact-offset assertion in
-                      // chat.tool-call-offset.test.ts).
-                      const existingCalls = (candidate.tool_calls ?? []) as PositionedToolCall[]
-                      const existingById = new Map(existingCalls.map((tc) => [tc.id, tc]))
-                      const baked = draft.toolCallOrder
-                        .filter((id) => draft.toolCalls[id])
-                        .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
-                      const mergedById = new Map<string, PositionedToolCall>(existingCalls.map((tc) => [tc.id, tc]))
-                      for (const tc of baked) mergedById.set(tc.id, tc)
-                      candidate.tool_calls = Array.from(mergedById.values())
-                      draft.toolCalls = {}
-                      draft.toolCallOrder = []
-                      draft.textAtToolCallStart = {}
-                    }
-                    // Consume the seam marker exactly like the live 'token'
-                    // handler: a tool call started on this bubble since the
-                    // last segment, so insert a paragraph break rather than
-                    // gluing the two segments together with no separator.
-                    if (candidate.pendingTextBoundary) {
-                      candidate.pendingTextBoundary = false
-                    }
-                    candidate.content += '\n\n' + text
-                    // Keep the FIRST known model rather than the last — live
-                    // never shows a per-segment model tag at all (the
-                    // 'token' case never sets .model), so a single
-                    // once-set-only tag on the merged bubble is the closest
-                    // replay equivalent, and avoids the tag flip-flopping
-                    // across segments that may report different models.
-                    if (!candidate.model && replayModel) candidate.model = replayModel
-                    // ADR-087 D2 — only the LAST transcript entry of an
-                    // incomplete turn carries truncated/truncation_reason
-                    // (MarkLastEntryTruncated stamps the final assistant
-                    // entry only), so this only ever fires on the segment
-                    // that closes the merged bubble — earlier segments in
-                    // the same merge chain arrive with replayTruncated false
-                    // and leave candidate.truncated untouched.
-                    if (replayTruncated) {
-                      candidate.truncated = true
-                      candidate.truncationReason = replayTruncationReason
-                    }
-                    // Stamp agentId when previously unknown (mirrors the
-                    // 'token' case). compatibleProducer already guarantees
-                    // this never overwrites a genuinely different producer.
-                    if (replayAgentId) candidate.agentId = replayAgentId
-                    if (messageId) {
-                      candidate.mergedReplayIds = [...(candidate.mergedReplayIds ?? []), messageId]
-                      // Record at the session level too (see
-                      // mergedReplayMessageIds' doc comment) so a later
-                      // dedup check finds this id even after `candidate` is
-                      // no longer the tail bubble.
-                      draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
-                    }
-                    return
-                  }
-                }
-                // T1.10: Bake any live tool calls from the previous turn.
-                if (lastMsgId && draft.toolCallOrder.length > 0) {
-                  const lastMsg = draft.messagesById[lastMsgId]
-                  const existing = (lastMsg.tool_calls ?? []) as PositionedToolCall[]
-                  const existingById = new Map(existing.map((tc) => [tc.id, tc]))
-                  const baked = draft.toolCallOrder
-                    .filter((id) => draft.toolCalls[id])
-                    .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
-                  const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
-                  for (const tc of baked) mergedById.set(tc.id, tc)
-                  lastMsg.tool_calls = Array.from(mergedById.values())
-                  draft.toolCalls = {}
-                  draft.toolCallOrder = []
-                  draft.textAtToolCallStart = {}
-                  draft.toolCallOwnerMessageId = {}
-                }
-              }
-              // FX-E (ADR-082 D9): bake any STILL-pending tool calls before
-              // opening a message of a NON-assistant role (user/system) —
-              // every branch above only bakes for `role === 'assistant'`
-              // (the empty-placeholder coalesce and same-turn-merge
-              // sub-paths bake-then-`return`; the T1.10 fallback
-              // immediately above bakes-then-falls-through), so a
-              // `role === 'assistant'` frame always leaves toolCallOrder
-              // empty by the time it reaches here. A user/system
-              // replay_message skips that whole `if` block, so without
-              // this, a tool call whose owner is a PRIOR assistant bubble —
-              // e.g. `set_goal` as the LAST thing in a turn, immediately
-              // followed by the transcript's next USER message with no
-              // further assistant narration replayed afterward — is left
-              // stranded in `toolCallOrder` forever: the only other bake
-              // site, the terminal `done` frame, is a no-op replay
-              // terminator (`isReplayTerminatorDone`, this file's `done`
-              // case) whenever the session has no live turn in flight — the
-              // ordinary case of reloading an already-completed session.
-              // The call then never reaches `message.tool_calls`, so
-              // SetGoalCardBlock (and any other tool-call renderer keyed off
-              // `message.tool_calls`) never sees it: the card renders live
-              // but silently vanishes on reload (e2e
-              // goal-card-position.spec.ts's post-reload assertion).
-              // Routed through the owner map (bakeToolCallsByOwner, same as
-              // the `done` case) rather than a flat "last assistant
-              // message" bake — correct even when more than one assistant
-              // bubble is currently open/pending an owner.
-              if (role !== 'assistant' && draft.toolCallOrder.length > 0) {
-                const fallbackMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
-                bakeToolCallsByOwner(draft.messagesById, draft.toolCallOrder, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, fallbackMsgId, draft.textAtToolCallStart)
-                draft.toolCalls = {}
-                draft.toolCallOrder = []
-                draft.textAtToolCallStart = {}
-                draft.toolCallOwnerMessageId = {}
-              }
-              const newMsg: ChatMessage = {
-                id: messageId ?? generateId(),
-                role,
-                content: text,
-                timestamp: messageTimestamp ?? new Date().toISOString(),
-                status: 'done' as const,
-                ...(replayAgentId ? { agentId: replayAgentId } : {}),
-                // Per-turn model record. Only on assistant messages (user/system turns
-                // don't carry a producer model). Empty model is treated as
-                // absent so the renderer doesn't show a phantom footer.
-                ...(replayModel && role === 'assistant' ? { model: replayModel } : {}),
-                // Fix 5c: turn-correlation id. Only meaningful on assistant
-                // messages (the backend stamps turn_id on assistant + turn-
-                // cancellation entries only) — lets a later turn_canceled
-                // replay entry find this exact message.
-                ...(replayTurnId && role === 'assistant' ? { turnId: replayTurnId } : {}),
-                // ADR-087 D2 — only meaningful on assistant messages (the
-                // backend only ever stamps this on the last assistant
-                // transcript entry of an incomplete turn). D4a: an entry
-                // with truncated:true and EMPTY content (`text === ''`)
-                // still reaches here and still gets stamped — nothing in
-                // this reducer conditions message creation on non-empty
-                // content, so the bubble renders with no body and just the
-                // D1 footer suffix, per spec.
-                ...(replayTruncated && role === 'assistant'
-                  ? { truncated: true as const, truncationReason: replayTruncationReason }
-                  : {}),
-              }
-              draft.messagesById[newMsg.id] = newMsg
-              // Opus review round 2 item 2 (founder decision Q1): a
-              // replay_message is HISTORY the server already persisted —
-              // insert it before the pending tail (unresolved
-              // queued/sending/failed sends), not blindly at the true end
-              // of messageOrder, so a pending message a session_snapshot
-              // preserved never renders ABOVE history it was sent after.
-              insertHistoryMessageId(draft.messageOrder, draft.messagesById, newMsg.id)
-              // Ring buffer enforcement during replay — evict oldest entry plus all dependent maps.
-              if (draft.messageOrder.length > MAX_MESSAGES_PER_SESSION) {
-                const evictId = draft.messageOrder[0]
-                evictMessageFromBucket(draft as unknown as SessionChatState, evictId)
-                draft.trimmedCount += 1
-              }
-              void msgs // suppress unused warning — only used for dedup context above
-            }) as Partial<SessionChatState>
-          })
+          handleReplayMessageFrame({ frame, targetSid, withBucket })
           break
         }
 
@@ -754,9 +957,15 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
         }
 
         case 'rate_limit': {
+          // ADR-091 D7/FR-E-002: rate_limit is session-scoped
+          // (SESSION_SCOPED_FRAME_TYPES) — a missing-id instance is already
+          // dropped at the top of handleFrame, so targetSid is guaranteed
+          // non-null here. No `?? getActiveSid()` fallback (cross-family
+          // review finding 18: that fallback is exactly what let an untagged
+          // rate_limit get filed under whatever session happened to be
+          // active).
+          if (!targetSid) break
           const rlFrame = frame as WsRateLimitFrame
-          const sid = targetSid ?? getActiveSid()
-          if (!sid) break
           const event: RateLimitEventData = {
             scope: rlFrame.scope,
             resource: rlFrame.resource,
@@ -765,7 +974,7 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
             agentId: rlFrame.agent_id,
             tool: rlFrame.tool,
           }
-          armRateLimitClear(sid, event)
+          armRateLimitClear(targetSid, event)
           break
         }
 
@@ -968,6 +1177,10 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
         }
 
         case 'tool_approval_required':
+          // ADR-091 D7/FR-E-002: session-scoped (SESSION_SCOPED_FRAME_TYPES)
+          // — a missing-id instance is already dropped at the top of
+          // handleFrame, so frame.session_id (which enqueue reads directly)
+          // is guaranteed present here.
           useToolApprovalStore.getState().enqueue(frame)
           break
 
@@ -978,108 +1191,11 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
           break
 
         case 'session_state': {
-          useToolApprovalStore.getState().reconcileWithSessionState(frame)
-          // askuserquestion-tool-spec v3 US-6 S1/FR-9: reconcile pending
-          // AskUserQuestion cards on every reconnect snapshot. The
-          // hydrate/clear/race semantics live in the dedicated, unit-tested
-          // reconcilePendingAsks (mirrors the toolApproval
-          // reconcileWithSessionState pattern); this case only applies the
-          // computed per-session changes.
-          const stateFrame = frame as SessionStateFrame
-          const askChanges = reconcilePendingAsks(
-            stateFrame.pending_asks ?? [],
-            get().sessionsById,
-          )
-          for (const [sid, card] of Object.entries(askChanges)) {
-            withBucket(sid, () => ({ pendingAsk: card }))
-          }
-          // ADR-082 D4/D5 (FR-008/FR-009), review CR3/S2: a connection that
-          // just bound to a session (fresh mount, reconnect, or second tab)
-          // learns here whether a turn is already running for it. `targetSid`
-          // resolves to `frame.session_id` when the frame carries one (the
-          // generated `SessionStateFrame` type carries an optional
-          // `session_id` — CR3), falling back to `activeSid` only when it is
-          // absent (an older gateway, or any other reason the field is
-          // missing) — see the generic `frameSessionId` resolution above.
-          // This matters because a client can be attached/foreground on one
-          // session while a session_state snapshot for a DIFFERENT session
-          // (e.g. a background tab's own reconnect, or a stale broadcast)
-          // arrives — routing it to whatever happens to be foreground would
-          // wrongly stamp an unrelated session's turn onto the active one.
-          //
-          // Mirror exactly the state a live turn THIS client had started
-          // would already be in — isStreaming:true so the Stop control and
-          // composer lock render immediately — without creating the
-          // assistant bubble yet: replay history for this attach has not
-          // arrived on the wire at this point (case 'replay_message' below
-          // pushes messages in arrival order onto messageOrder), so opening
-          // the bubble here would insert it BEFORE messages that are
-          // chronologically earlier, corrupting order. The bubble opens
-          // instead at the replay-terminating `done` (see case 'done'
-          // above), which is guaranteed to fire only after every
-          // replay_message for this attach has already landed — UNLESS a
-          // token for this turn beats that done here (out-of-order gateway,
-          // or a fast concurrent turn), in which case the 'token' case's own
-          // ADR-082 review fix opens/marks the bubble first and this done
-          // becomes a no-op for placeholder purposes.
-          if (targetSid) {
-            const activeTurn = stateFrame.active_turn
-            if (activeTurn) {
-              // S2: a stale/racing announcement for a turn this client
-              // already finalized (its own done already processed — see
-              // markTurnFinished in the 'done' case) must be ignored
-              // outright. Re-applying it would set isStreaming:true /
-              // activeTurnId again with no second done ever coming to close
-              // it a second time — a permanent Stop button and locked
-              // composer.
-              if (!isTurnFinished(targetSid, activeTurn.turn_id)) {
-                // #823 catch-up redesign pass 2 (§6.3, Q3): no "bubble
-                // opened" flag to maintain any more — bubble existence is
-                // now derived directly from message_id-keyed lookups
-                // (resolveTokenBubbleByMessageId, slices/frames.ts), not
-                // tracked as separate bucket state.
-                withBucket(targetSid, () => ({
-                  isStreaming: true,
-                  activeTurnId: activeTurn.turn_id,
-                  activeTurnAgentId: activeTurn.agent_id,
-                }))
-              }
-            } else {
-              // CR3: this snapshot says NO turn is in flight for this
-              // session. If a PRIOR snapshot (or the token case) had
-              // announced one and it is still unresolved, clear it so a
-              // stale announcement can never wedge the composer — but only
-              // force isStreaming:false when no bubble is actually open;
-              // a genuinely open, mid-stream bubble keeps streaming exactly
-              // as before (its own done will finalize it normally).
-              //
-              // Check bucket existence BEFORE calling withBucket: withBucket
-              // always creates (`?? emptySessionState()`) and writes back the
-              // bucket it's given, even for a no-op `{}` patch. A session
-              // this client has never otherwise heard of (no bucket yet) has
-              // nothing to clear — calling withBucket unconditionally here
-              // would materialize a brand-new empty bucket for it, which is
-              // an observable regression: a bare "no turn in flight" snapshot
-              // for a session with no other activity must stay a true no-op,
-              // exactly like it was before this fix (chat.reconnect.test.ts's
-              // "session_state WITHOUT active_turn leaves current behaviour
-              // unchanged").
-              const existing = get().sessionsById[targetSid]
-              if (existing?.activeTurnId) {
-                withBucket(targetSid, (b) => {
-                  // #823 catch-up redesign pass 2: "is a bubble actually
-                  // open" is now answered directly (findOpenAssistantMessageId)
-                  // rather than via a separately-tracked flag.
-                  const bubbleOpen = findOpenAssistantMessageId(b.messageOrder, b.messagesById) !== null
-                  return {
-                    activeTurnId: null,
-                    activeTurnAgentId: null,
-                    ...(bubbleOpen ? {} : { isStreaming: false }),
-                  }
-                })
-              }
-            }
-          }
+          // ADR-092 budget split: the full handling (tool-approval
+          // reconcile, pending-ask reconcile, and active-turn mirroring) now
+          // lives in handleSessionStateFrame above — see that function's
+          // doc comment and inline comments for the complete reasoning.
+          handleSessionStateFrame(frame as SessionStateFrame, targetSid, get, withBucket)
           break
         }
 
@@ -1106,6 +1222,21 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
           // the stop-button label in real time. The done handler (above) clears
           // it back to null once the turn is definitively over.
           withBucket(targetSid, () => ({ cancelStage: frame.stage }))
+          break
+
+        case 'session_mode_updated':
+          // ADR-092: acknowledgement of a LIVE session_mode_update send —
+          // the session's resolved per-chat Auto-approve state. Always an
+          // ack; there is no rejection case. A page reload or WS reconnect
+          // does NOT re-arrive here (there is no "echo" of this frame on
+          // reconnect) — that case is covered separately by
+          // SessionStateFrame.auto_approve_modifier in
+          // handleSessionStateFrame's 'session_state' case above, which is
+          // what actually survives a reload. targetSid (not frame.session_id
+          // directly) matches every other session-scoped case in this
+          // switch — same resolver, same fallback behaviour if the frame is
+          // ever missing it.
+          withBucket(targetSid, () => ({ autoApproveEffective: frame.auto_approve_effective }))
           break
 
         case 'device_pairing_request':

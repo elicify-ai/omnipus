@@ -230,9 +230,17 @@ describe('chat store — delegator-narration/delegate-content text join (regress
 // headless browser) found that a REAL delegate call sequence rendered as
 // FOUR separate bubbles live, not one — directly contradicting what the old
 // test asserted "live" does. Root cause (traced via a real WS frame capture,
-// not guesswork): pkg/agent/subturn.go's spawnSubTurn runs a delegated child
-// through the EXACT SAME pkg/agent/loop.go runTurn/finalizeStreamer path as
-// a root turn — so the CHILD's own wsStreamer.Finalize (pkg/gateway/
+// not guesswork): pre-ADR-091, pkg/agent/subturn.go's deleted spawnSubTurn
+// ran a delegated child through the EXACT SAME pkg/agent/loop.go
+// runTurn/finalizeStreamer path as a root turn — ADR-091 fix lane
+// RX-SUBTURN note: today's replacement dispatch (steer_launcher.go's
+// runDispatchedSteeredTurn) still calls al.runTurn for a delegated child, so
+// that specific premise continues to hold; ADR-091 D4 also deleted the
+// synchronous ("await") delegate mode this root-cause narrative describes,
+// so the exact repro shape is pre-ADR-091 history even though the
+// underlying shadow-stream-ownership mechanism it motivated
+// (websocket_streamer.go) remains live — so the CHILD's own
+// wsStreamer.Finalize (pkg/gateway/
 // websocket.go) fired its own live "done" WS frame the instant the child's
 // (synchronous, blocking) sub-turn finished, mid-parent-turn. DoneFrame
 // carries no turn/parent discriminator, so the client's `done` case

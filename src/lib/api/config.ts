@@ -55,8 +55,6 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
     preview_enabled?: boolean
   }
   security: {
-    policy_mode: 'allow' | 'deny'
-    exec_approval: 'auto' | 'ask' | 'deny'
     // Prompt guard strictness is owned by the dedicated /security/prompt-guard
     // endpoint since Wave 3. This field is still populated on read for
     // backward compatibility but must NOT be sent on updateConfig calls.
@@ -65,7 +63,6 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
     // gone from both the wire types and this Config.
     exec_timeout_seconds?: number
     max_background_seconds?: number
-    enable_deny_patterns?: boolean
     rate_limits: {
       max_tokens_per_day?: number
       max_cost_per_day?: number
@@ -92,10 +89,6 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
     }
   }
 }
-
-const VALID_POLICY_MODES = ['allow', 'deny'] as const
-
-const VALID_EXEC_APPROVALS = ['auto', 'ask', 'deny'] as const
 
 const VALID_INJECTION_LEVELS = ['off', 'low', 'medium', 'high'] as const
 
@@ -225,8 +218,6 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
       preview_enabled: gateway.preview_enabled !== false,
     },
     security: {
-      policy_mode: validEnum(security.policy_mode, VALID_POLICY_MODES, 'deny', 'security.policy_mode'),
-      exec_approval: validEnum(security.exec_approval, VALID_EXEC_APPROVALS, 'ask', 'security.exec_approval'),
       prompt_injection_level: validEnum(security.prompt_injection_level, VALID_INJECTION_LEVELS, 'medium', 'security.prompt_injection_level'),
       // Spend/execution guardrails: a wrong-shaped value here is a bad
       // decision downstream, not just a display glitch — SecuritySection reads
@@ -238,7 +229,6 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
       // ADR-053 D12: daily_cost_cap is gone.
       exec_timeout_seconds: castOptionalNumber(security.exec_timeout_seconds, 'security.exec_timeout_seconds'),
       max_background_seconds: castOptionalNumber(security.max_background_seconds, 'security.max_background_seconds'),
-      enable_deny_patterns: security.enable_deny_patterns as boolean | undefined,
       rate_limits: {
         max_tokens_per_day: castOptionalNumber(rateLimits.max_tokens_per_day, 'security.rate_limits.max_tokens_per_day'),
         max_cost_per_day: castOptionalNumber(rateLimits.max_cost_per_day, 'security.rate_limits.max_cost_per_day'),
@@ -297,14 +287,11 @@ function frontendToRawConfig(data: Partial<Config>): Record<string, unknown> {
   }
   if (data.security) {
     const sec: Record<string, unknown> = {}
-    if (data.security.policy_mode !== undefined) sec.policy_mode = data.security.policy_mode
-    if (data.security.exec_approval !== undefined) sec.exec_approval = data.security.exec_approval
     // prompt_injection_level intentionally omitted — owned by PUT /security/prompt-guard.
     // daily_cost_cap intentionally omitted — ADR-053 D12 retired the SEC-26
     // USD cap.
     if (data.security.exec_timeout_seconds !== undefined) sec.exec_timeout_seconds = data.security.exec_timeout_seconds
     if (data.security.max_background_seconds !== undefined) sec.max_background_seconds = data.security.max_background_seconds
-    if (data.security.enable_deny_patterns !== undefined) sec.enable_deny_patterns = data.security.enable_deny_patterns
     if (data.security.rate_limits) {
       sec.rate_limits = { ...data.security.rate_limits }
     }

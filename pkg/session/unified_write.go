@@ -513,13 +513,9 @@ func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID, reason string)
 // latestByID in pkg/gateway/replay.go).
 //
 // Returns found=false (with a nil error) when no entry with a matching
-// ToolCall.ID is found — NOT necessarily an error condition (see below), but
-// the caller can now distinguish this from a real update. This is the
-// expected outcome for SYNCHRONOUS delegation (DelegateTool.executeSync):
-// spawnSubTurn blocks until the child turn finishes, so at the point
-// EventKindSubTurnEnd fires the caller has not yet appended the spawning
-// tool call's own record — it does so correctly itself moments later, once
-// spawnSubTurn returns with the real result.
+// ToolCall.ID is found. That is not necessarily an error: a child can finish
+// before the parent has appended the delegate tool call's placeholder. The
+// caller can distinguish this ordering window from a real update failure.
 //
 // found=false can ALSO legitimately occur for ASYNC delegation due to a real
 // race: DelegateTool.executeAsync launches the child sub-turn in a goroutine

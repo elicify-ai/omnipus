@@ -3,10 +3,10 @@
 // Tests:
 //  1. Modal does not render when queue is empty
 //  2. Modal renders when queue has an entry
-//  3. Approve button calls POST /api/v1/tool-approvals/{id} with action:"approve"
+//  3. Approve button calls POST /api/v1/tool-approvals/{id} with action:"allow_once"
 //  4. Deny button calls POST with action:"deny"
 //  5. Cancel button calls POST with action:"cancel"
-//  5b. Always Allow button calls POST with action:"always" (ADR-036 §3.4 gap closure)
+//  5b. Always Allow button calls POST with action:"allow" (ADR-036 §3.4 gap closure)
 //  6. On 410 response, modal entry is dismissed without a toast
 //  7. On 403 response, shows admin-required toast
 //  8. On 401 response, shows re-auth toast
@@ -71,7 +71,7 @@ beforeEach(async () => {
   vi.clearAllMocks()
   vi.mocked(api.submitToolApproval).mockResolvedValue({
     approval_id: 'appr-001',
-    action: 'approve',
+    action: 'allow_once',
     status: 'ok',
   })
 })
@@ -198,7 +198,7 @@ describe('ToolApprovalModal — bash command preview (ADR-036 §3.4 port)', () =
 })
 
 describe('ToolApprovalModal — button dispatch', () => {
-  it('Approve button calls submitToolApproval with action:"approve"', async () => {
+  it('Approve button calls submitToolApproval with action:"allow_once"', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
@@ -207,7 +207,7 @@ describe('ToolApprovalModal — button dispatch', () => {
     fireEvent.click(screen.getByRole('button', { name: /Approve/i }))
 
     await waitFor(() => {
-      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'approve')
+      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'allow_once')
     })
   })
 
@@ -240,7 +240,7 @@ describe('ToolApprovalModal — button dispatch', () => {
   // ADR-036 §3.4 gap closure: the retired ExecApprovalBlock's 3-way decision
   // (Allow / Deny / "Always Allow") is now fully reachable from the generic
   // modal for every tool, not just bash.
-  it('Always Allow button calls submitToolApproval with action:"always"', async () => {
+  it('Always Allow button calls submitToolApproval with action:"allow"', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
     })
@@ -249,14 +249,14 @@ describe('ToolApprovalModal — button dispatch', () => {
     fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
 
     await waitFor(() => {
-      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'always')
+      expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'allow')
     })
   })
 
   it('toasts when Always Allow approved this call but the grant did not stick', async () => {
     vi.mocked(api.submitToolApproval).mockResolvedValue({
       approval_id: 'appr-001',
-      action: 'always',
+      action: 'allow',
       status: 'ok',
       grant_recorded: false,
     })
@@ -279,7 +279,7 @@ describe('ToolApprovalModal — button dispatch', () => {
   it('toasts when Always Allow omits grant_recorded — treated as did-not-stick', async () => {
     vi.mocked(api.submitToolApproval).mockResolvedValue({
       approval_id: 'appr-001',
-      action: 'always',
+      action: 'allow',
       status: 'ok',
     })
     act(() => {
@@ -298,6 +298,85 @@ describe('ToolApprovalModal — button dispatch', () => {
     expect(useToolApprovalStore.getState().queue).toHaveLength(0)
   })
 
+  // Item 4 (ADR-092 D4/FR-024): show the scope the server actually
+  // RECORDED (ToolApprovalResponse.scope), not the client's own request —
+  // this is the SPA's only confirmation of what stuck, since the card
+  // closes immediately after a successful allow.
+  it('toasts the actually-recorded scope ("prefix") after a successful Always Allow, distinct from the did-not-stick warning', async () => {
+    vi.mocked(api.submitToolApproval).mockResolvedValue({
+      approval_id: 'appr-shell-001',
+      action: 'allow',
+      status: 'ok',
+      grant_recorded: true,
+      scope: 'prefix',
+    })
+    act(() => {
+      useToolApprovalStore.setState({
+        queue: [
+          {
+            approvalId: 'appr-shell-001',
+            toolCallId: 'call-shell-001',
+            toolName: 'bash',
+            args: { command: 'npm run build' },
+            agentId: 'agent-main',
+            sessionId: 'sess-001',
+            turnId: 'turn-001',
+            expiresAt: Date.now() + 300_000,
+          },
+        ],
+      })
+    })
+    render(<ToolApprovalModal />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+
+    await waitFor(() => {
+      expect(capturedAddToast).toHaveBeenCalledWith({
+        message: 'Always allowed — every command starting with that prefix is now allowed for this session.',
+        variant: 'success',
+      })
+    })
+    expect(capturedAddToast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'warning' }),
+    )
+  })
+
+  it('toasts the actually-recorded "exact" scope, not a prefix, when the server recorded exact even though a prefix was offered', async () => {
+    vi.mocked(api.submitToolApproval).mockResolvedValue({
+      approval_id: 'appr-shell-002',
+      action: 'allow',
+      status: 'ok',
+      grant_recorded: true,
+      scope: 'exact',
+    })
+    act(() => {
+      useToolApprovalStore.setState({
+        queue: [
+          {
+            approvalId: 'appr-shell-002',
+            toolCallId: 'call-shell-002',
+            toolName: 'bash',
+            args: { command: 'npm run build' },
+            agentId: 'agent-main',
+            sessionId: 'sess-001',
+            turnId: 'turn-002',
+            expiresAt: Date.now() + 300_000,
+          },
+        ],
+      })
+    })
+    render(<ToolApprovalModal />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Always Allow/i }))
+
+    await waitFor(() => {
+      expect(capturedAddToast).toHaveBeenCalledWith({
+        message: 'Always allowed — this exact command is now allowed for this session.',
+        variant: 'success',
+      })
+    })
+  })
+
   it('removes approval from queue after successful Approve', async () => {
     act(() => {
       useToolApprovalStore.setState({ queue: [SAMPLE_APPROVAL] })
@@ -314,7 +393,7 @@ describe('ToolApprovalModal — button dispatch', () => {
   it('removes approval from queue after successful Always Allow', async () => {
     vi.mocked(api.submitToolApproval).mockResolvedValue({
       approval_id: 'appr-001',
-      action: 'always',
+      action: 'allow',
       status: 'ok',
       grant_recorded: true,
     })
@@ -353,7 +432,7 @@ describe('ToolApprovalModal — a11y safe-default contract (C2)', () => {
       expect(api.submitToolApproval).toHaveBeenCalledWith('appr-001', 'deny')
     })
     // The safe default must NEVER be an approve.
-    expect(api.submitToolApproval).not.toHaveBeenCalledWith('appr-001', 'approve')
+    expect(api.submitToolApproval).not.toHaveBeenCalledWith('appr-001', 'allow_once')
   })
 
   it('lands default focus on the Deny button when the modal opens', async () => {
@@ -715,7 +794,7 @@ describe('ToolApprovalModal — Always Allow for request_mount', () => {
     // request_mount's copy diverges from the generic Approve/Deny labels
     // (operator-approved "Add folder" / "Don't add" — see
     // approvalPreviews/registry.ts and RequestMountApprovalPreview.tsx) but
-    // still dispatches the same 'approve'/'deny' actions — covered by the
+    // still dispatches the same 'allow_once'/'deny' actions — covered by the
     // dedicated ToolApprovalModal.readablePreviews.test.tsx suite. This test
     // only asserts BOTH decision buttons are present, whatever their label.
     act(() => {

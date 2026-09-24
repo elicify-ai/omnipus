@@ -5,58 +5,24 @@ package gateway
 import (
 	"encoding/json"
 	"log/slog"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/channels"
 )
 
-// orphanWatchdogTimeout is the duration the forwarder waits after a parent turn ends
-// before synthesizing a subagent_end{status:"interrupted"} for any still-open span.
-// Configurable so tests can override to a short value (e.g., 200ms) without sleeping.
-//
-// Bumped 2026-05-11 from 5s → 60s. The old value killed legitimate subagents:
-// a sub-turn that runs 3 shell calls back-to-back through a real LLM regularly
-// takes 6–12s of wall-clock (1–4s per turn iteration × N tool calls), and Mia's
-// root turn ends within ~2s of dispatching `spawn`. With a 5s watchdog the
-// subagent was synthesizing `status:"interrupted"` after the second shell call
-// even though the agent loop was still executing — closes the cascade of
-// suite-load flakes in subagent.spec.ts (a)–(e) and handoff.spec.ts (b).
-//
-// 60s is a conservative upper bound for a single sub-turn; the parent-loop
-// `subturn.default_timeout_minutes` config knob already enforces a hard
-// runtime cap higher up the stack for legitimately stuck sub-turns.
-var orphanWatchdogTimeout = 60 * time.Second
-
-// orphanWatchdogMaxRechecks bounds how many times startOrphanWatchdog will
-// reschedule after agent.AgentLoop.IsSubTurnActiveForSpawnCall reports "still
-// active" before giving up and force-emitting the synthetic interrupted
-// terminal frame regardless of what the liveness check reports (fail-closed).
-//
-// The re-check-and-reschedule loop is correctly bounded for the NORMAL case
-// by the pre-existing sub-turn context timeout (pkg/agent/subturn.go's
-// defaultSubTurnTimeout, 5 minutes by default, or subturn.default_timeout_minutes
-// when configured) — that timeout cancels the child's context, runTurn
-// returns, and IsSubTurnActiveForSpawnCall eventually reports false once
-// spawnSubTurn's cleanup defer finishes persisting the real terminal status
-// (see turnState.subTurnRecordPersisted's doc comment, pkg/agent/turn.go).
-// But a genuinely wedged/deadlocked turn — a goroutine that neither returns
-// nor panics, e.g. blocked on a tool call that does not honor context
-// cancellation — has no ceiling of its own: IsSubTurnActiveForSpawnCall would
-// report "active" forever (isFinished never flips), and without this bound
-// the watchdog would reschedule indefinitely, logging only at slog.Debug
-// (invisible at typical production log levels) and never emitting a terminal
-// frame for that span.
-//
-// Default 15 reschedules x orphanWatchdogTimeout's default 60s = 15 minutes,
-// comfortably (~3x) above pkg/agent/subturn.go's defaultSubTurnTimeout (5
-// minutes) — a legitimately still-running sub-turn should never come close to
-// exhausting this many reschedules; long before it would, its own context
-// timeout has fired and IsSubTurnActiveForSpawnCall is already reporting
-// false. Configurable so tests can override to a small value without
-// sleeping for the real 15 minutes.
-var orphanWatchdogMaxRechecks = 15
+// ADR-091 UAT defect 2: the orphan watchdog (formerly orphanWatchdogTimeout /
+// orphanWatchdogMaxRechecks / openSpanEntry / startOrphanWatchdog /
+// synthesizeOrphanEnd / the rootTurnEnded latch — which the #823 catch-up
+// redo had moved from this per-connection forwarder into the session hub,
+// websocket_forward_hub_spans.go) is retired, not re-aimed. It existed for
+// the pre-ADR-091 design, where a nested sub-turn's lifetime was
+// structurally scoped to its parent's own turn. Under ADR-091 a delegated
+// child is a session of its own (D1): it is DESIGNED to keep running after
+// its parent's turn ends, and its real terminal state arrives independently
+// via its own EventKindSubTurnEnd (pkg/agent/steer_frames.go's
+// deliverSubagentEnd, driven by the child's own steer.Outcome — never
+// guessed from the parent's turn).
 
 // ADR-057 FR-089 — W5 audit classification artefact (U11's half).
 //
@@ -185,8 +151,8 @@ func (h *WSHandler) eventForwarder(wc *wsConn, _ string, sub agent.EventSubscrip
 			f.onPlanStatusChanged(evt)
 		case agent.EventKindTaskRunStatus:
 			f.onTaskRunStatus(evt)
-		case agent.EventKindTurnStart, agent.EventKindSubTurnSpawn, agent.EventKindSubTurnEnd,
-			agent.EventKindTurnEnd,
+		case agent.EventKindSubTurnSpawn, agent.EventKindSubTurnEnd,
+			agent.EventKindSubagentMessage, agent.EventKindSubagentState,
 			agent.EventKindToolExecStart, agent.EventKindToolExecEnd,
 			agent.EventKindError, agent.EventKindGoalStatusChanged, agent.EventKindGoalOutcome,
 			agent.EventKindJudgeVerdict, agent.EventKindLoopStatusChanged, agent.EventKindToolResultProjection:
@@ -210,7 +176,8 @@ func (h *WSHandler) eventForwarder(wc *wsConn, _ string, sub agent.EventSubscrip
 			// listed in SQUAD-REPORT-BEA.md). This case is explicitly
 			// empty (not a silent unmatched-case fallthrough) so the
 			// intent reads plainly at the call site.
-		case agent.EventKindLLMRequest, agent.EventKindLLMDelta, agent.EventKindLLMResponse,
+		case agent.EventKindTurnStart, agent.EventKindTurnEnd,
+			agent.EventKindLLMRequest, agent.EventKindLLMDelta, agent.EventKindLLMResponse,
 			agent.EventKindLLMRetry, agent.EventKindContextCompress,
 			agent.EventKindToolExecSkipped, agent.EventKindSteeringInjected, agent.EventKindFollowUpQueued,
 			agent.EventKindInterruptReceived, agent.EventKindSubTurnResultDelivered, agent.EventKindSubTurnOrphan,
@@ -218,9 +185,13 @@ func (h *WSHandler) eventForwarder(wc *wsConn, _ string, sub agent.EventSubscrip
 			agent.EventKindBackgroundProcessKill:
 			// Not part of the live WS wire protocol — this forwarder only
 			// translates the kinds handled above into browser frames.
-			// Behavior-preserving: previously these fell through the switch
-			// unmatched (no default case existed), which is a silent no-op
-			// identical to this explicit, empty case.
+			// EventKindTurnStart/TurnEnd joined this ignored list with the
+			// ADR-091 UAT defect 2 fix: their only consumer was the retired
+			// orphan watchdog (see this file's top-of-file comment).
+			// Behavior-preserving for every other kind here: previously
+			// these fell through the switch unmatched (no default case
+			// existed), which is a silent no-op identical to this explicit,
+			// empty case.
 		}
 	}
 }

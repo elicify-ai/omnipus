@@ -72,7 +72,7 @@ func TestDelegationDenyChecker_SelfAuthorizationViaWorkspaceRecordIsRefused(t *t
 	// a later "denied" result cannot be mistaken for a pre-existing failure of
 	// the fixture.
 	workerCheck := buildDelegationDenyCheckerForDelegate(
-		"worker", config.AgentDefaults{}, config.DelegationModeBackground)
+		"worker", config.PerformanceConfig{}, config.DelegationModeBackground)
 	if denial := workerCheck(ctxWS(testWS, 0), "ray"); denial == nil {
 		t.Fatal("fixture is wrong: worker→ray must already be denied before the attack")
 	}
@@ -97,7 +97,7 @@ func TestDelegationDenyChecker_SelfAuthorizationViaWorkspaceRecordIsRefused(t *t
 	// has simply stopped working (a gate that denies everything would pass the
 	// assertion above for entirely the wrong reason).
 	miaCheck := buildDelegationDenyCheckerForDelegate(
-		"mia", config.AgentDefaults{}, config.DelegationModeBackground)
+		"mia", config.PerformanceConfig{}, config.DelegationModeBackground)
 	if denial := miaCheck(ctxWS(testWS, 0), "ray"); denial != nil {
 		t.Fatalf("the legitimate mia→ray edge must still authorize; got deny: %+v", denial)
 	}
@@ -121,7 +121,7 @@ func TestDelegationDenyChecker_PlantedRecordCannotWidenAnExistingEdge(t *testing
 	})
 
 	check := buildDelegationDenyCheckerForDelegate(
-		"worker", config.AgentDefaults{}, config.DelegationModeBackground)
+		"worker", config.PerformanceConfig{}, config.DelegationModeBackground)
 
 	// Control: the stored cap of 1 allows depth 0 and denies depth 1, BEFORE
 	// the attack. Without both halves, "denied after the attack" could mean the
@@ -155,28 +155,28 @@ func TestDelegationDenyChecker_GeneralPurposeSelfEdgesRequireIdentityModeAndDept
 		edge("worker", "worker", []string{"task"}, intPtr(2)),
 	})
 
-	jimDirect := buildDelegationDenyCheckerForDelegate("jim", config.AgentDefaults{}, config.DelegationModeBackground)
+	jimDirect := buildDelegationDenyCheckerForDelegate("jim", config.PerformanceConfig{}, config.DelegationModeBackground)
 	if denial := jimDirect(ctxWS(testWS, 0), "jim"); denial != nil {
 		t.Fatalf("jim explicit self edge denied: %+v", denial)
 	}
 	if denial := jimDirect(ctxWS(testWS, 1), "jim"); denial == nil {
 		t.Fatal("jim self edge ignored its depth cap")
 	}
-	jimTask := buildDelegationDenyCheckerForDelegate("jim", config.AgentDefaults{}, config.DelegationModeTask)
+	jimTask := buildDelegationDenyCheckerForDelegate("jim", config.PerformanceConfig{}, config.DelegationModeTask)
 	if denial := jimTask(ctxWS(testWS, 0), "jim"); denial == nil {
 		t.Fatal("jim self edge ignored its mode restriction")
 	}
 
-	workerTask := buildDelegationDenyCheckerForDelegate("worker", config.AgentDefaults{}, config.DelegationModeTask)
+	workerTask := buildDelegationDenyCheckerForDelegate("worker", config.PerformanceConfig{}, config.DelegationModeTask)
 	if denial := workerTask(ctxWS(testWS, 1), "worker"); denial != nil {
 		t.Fatalf("worker explicit task self edge denied: %+v", denial)
 	}
-	workerDirect := buildDelegationDenyCheckerForDelegate("worker", config.AgentDefaults{}, config.DelegationModeAwait)
+	workerDirect := buildDelegationDenyCheckerForDelegate("worker", config.PerformanceConfig{}, config.DelegationMode("await"))
 	if denial := workerDirect(ctxWS(testWS, 0), "worker"); denial == nil {
 		t.Fatal("worker self edge allowed an unlisted mode")
 	}
 
-	mia := buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeAwait)
+	mia := buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationMode("await"))
 	if denial := mia(ctxWS(testWS, 0), "mia"); denial == nil {
 		t.Fatal("non-general identity self-delegation was allowed")
 	}

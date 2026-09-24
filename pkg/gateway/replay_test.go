@@ -70,7 +70,7 @@ func runReplay(t *testing.T, entries []session.TranscriptEntry) ([]replayFrameDe
 	t.Helper()
 	sink := &sliceSink{}
 	rs := computeReplayStats(entries)
-	n, err := streamReplay(context.Background(), "session_test", entries, rs, sink.emit, nil, nil, nil, nil)
+	n, err := streamReplay(context.Background(), "session_test", entries, rs, sink.emit, nil, nil, nil)
 	require.NoError(t, err, "streamReplay must not return an error for valid input")
 	return sink.all(), n
 }
@@ -119,7 +119,7 @@ func TestStreamReplay_Extracted_TestableSignature(t *testing.T) {
 	sink := &sliceSink{}
 	// Pass pre-computed stats; nil entries produce an empty stats struct.
 	rs := computeReplayStats(nil)
-	n, err := streamReplay(context.Background(), "s1", nil, rs, sink.emit, nil, nil, nil, nil)
+	n, err := streamReplay(context.Background(), "s1", nil, rs, sink.emit, nil, nil, nil)
 	require.NoError(t, err, "streamReplay must accept a nil entry slice")
 	// Done frame is NOT counted in framesEmitted (content frames only).
 	assert.Equal(t, 0, n, "empty transcript must emit 0 content frames (done frame excluded from count)")
@@ -329,12 +329,18 @@ func TestReplay_ToolCall_CarriesAgentID(t *testing.T) {
 // TDD Row 8 — TestReplay_SpawnSpan_Synthesizes_StartEnd
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestReplay_SpawnSpan_Synthesizes_StartEnd verifies that when a spawn call has
-// children, the replay emits:
+// TestReplay_SpawnSpan_Synthesizes_StartEnd verifies that a spawn call
+// replays:
 //
 //	replay_message, tool_call_start{c1,spawn}, subagent_start{span_c1},
-//	tool_call_start{t2}, tool_call_result{t2}, subagent_end{span_c1},
-//	tool_call_result{c1}, done
+//	subagent_end{span_c1}, tool_call_result{c1}, done
+//
+// ADR-091 D7: emitNestedToolCalls is deleted — nestedTC ("t2", a child's own
+// tool call recorded with ParentToolCallID under the outer span) is no
+// longer nested-replayed at all (a delegated/task child owns its own
+// transcript now, D1); it remains in this fixture only to prove
+// buildSpanRealAgentIDs' span-level agent attribution still works from a
+// nested child's entry.AgentID, unaffected by the deleted emission path.
 //
 // Traces to: TDD row 8, FR-I-003, BDD Scenario 5, dataset D2
 func TestReplay_SpawnSpan_Synthesizes_StartEnd(t *testing.T) {
@@ -365,14 +371,12 @@ func TestReplay_SpawnSpan_Synthesizes_StartEnd(t *testing.T) {
 			"replay_message",
 			"tool_call_start",  // spawn call start
 			"subagent_start",   // span bracket open
-			"tool_call_start",  // nested t2
-			"tool_call_result", // nested t2
 			"subagent_end",     // span bracket close
 			"tool_call_result", // spawn call result
 			"done",
 		},
 		types,
-		"frame sequence for spawn span must match spec",
+		"frame sequence for spawn span must match spec (ADR-091 D7: no nested child frames)",
 	)
 
 	// Verify subagent_start fields.
@@ -383,13 +387,11 @@ func TestReplay_SpawnSpan_Synthesizes_StartEnd(t *testing.T) {
 	assert.Equal(t, "audit go files", subStart.TaskLabel)
 	assert.Equal(t, "max", subStart.AgentID)
 
-	// Verify nested tool_call_start carries parent_call_id.
+	// Only the outer spawn call's own tool_call_start is emitted — ADR-091
+	// D7 deleted the nested child's tool_call_start (emitNestedToolCalls).
 	startFrames := filterByType(frames, "tool_call_start")
-	// First is spawn, second is nested.
-	require.Len(t, startFrames, 2)
+	require.Len(t, startFrames, 1)
 	assert.Equal(t, "c1", startFrames[0].CallID)
-	assert.Equal(t, "t2", startFrames[1].CallID)
-	assert.Equal(t, "c1", startFrames[1].ParentCallID, "nested start must carry parent_call_id")
 
 	// Verify subagent_end fields.
 	subEnd := findFrame(frames, "subagent_end")
@@ -465,18 +467,15 @@ func TestReplay_SpawnSpan_StatusFromPersistedRecord_NotChildAggregate(t *testing
 	assert.Equal(t, "success", spawnResult.Status)
 	assert.EqualValues(t, 250, spawnResult.DurationMs)
 
-	// The nested child's own tool_call_result frame must still independently
-	// report its real "error" status — only the OUTER span's status changed,
-	// per the fix's scope (nested frames are unaffected).
-	var childResult *replayFrameDecoder
+	// ADR-091 D7: emitNestedToolCalls is deleted — the nested child's own
+	// tool_call_result ("t2") is no longer replayed at all (a delegated/
+	// task child owns its own transcript now, D1); deniedChildTC remains
+	// in this fixture only to prove it can no longer flip the OUTER span's
+	// own status, which is this test's actual point.
 	for i := range resultFrames {
-		if resultFrames[i].CallID == "t2" {
-			childResult = &resultFrames[i]
-		}
+		assert.NotEqual(t, "t2", resultFrames[i].CallID,
+			"ADR-091 D7: a nested child tool call must never be replayed under the outer span any more")
 	}
-	require.NotNil(t, childResult, "nested child's own tool_call_result frame must be emitted")
-	assert.Equal(t, "error", childResult.Status,
-		"the nested child tool call's own status must remain 'error' — only the outer span status changed")
 }
 
 // TestReplay_SpawnSpan_StatusFromPersistedRecord_ErrorPropagates verifies the
@@ -951,7 +950,7 @@ func TestReplay_CtxCancelled_StopsCleanly(t *testing.T) {
 		return nil
 	}
 
-	_, err := streamReplay(ctx, "session_cancel", entries, computeReplayStats(entries), emitFn, nil, nil, nil, nil)
+	_, err := streamReplay(ctx, "session_cancel", entries, computeReplayStats(entries), emitFn, nil, nil, nil)
 	assert.ErrorIs(t, err, context.Canceled, "streamReplay must return context.Canceled on ctx cancellation")
 	// goleak.VerifyNone (deferred) will fail the test if any goroutine was leaked.
 }
@@ -1739,23 +1738,26 @@ func TestReplay_MultiStepDelegation_ChildNarrationSurfacesOnLegacyTranscript(t *
 		"the delegator's own final answer never carried a model tag and still doesn't — only "+
 			"the delegate-authored entries in this fixture do")
 
-	// The child's own tool calls are UNAFFECTED by D6 — ParentToolCallID
-	// nesting is a wholly separate correlation from the (now-deleted)
+	// The spawn span itself is UNAFFECTED by D6 — ParentToolCallID nesting
+	// is a wholly separate correlation from the (now-deleted)
 	// ParentSpawnCallID content filter (replay.go's "Do not confuse it
-	// with..." note). Still nested under exactly one subagent span,
-	// bracketed by subagent_start/subagent_end, with all 5 nested
-	// tool_call_start/result pairs present.
+	// with..." note). Still bracketed by exactly one subagent_start/
+	// subagent_end pair.
+	//
+	// ADR-091 D7 (a later, separate change): emitNestedToolCalls — the
+	// mechanism that replayed a delegated child's OWN tool calls nested
+	// under the parent's spawn span — is deleted outright, for text AND
+	// tool-call entries alike, because a delegated child now owns its own
+	// transcript (D1) and is never merged back into the parent's replay
+	// stream. So the 5 nested web_search tool calls in this fixture no
+	// longer surface at all here; they replay only when the child's own
+	// session is itself replayed.
 	require.Len(t, filterByType(frames, "subagent_start"), 1)
 	require.Len(t, filterByType(frames, "subagent_end"), 1)
-	nestedStarts := 0
 	for _, f := range filterByType(frames, "tool_call_start") {
-		if f.ParentCallID == spawnCallID {
-			nestedStarts++
-		}
+		assert.NotEqual(t, spawnCallID, f.ParentCallID,
+			"ADR-091 D7: a nested child tool call must never be replayed under the outer span any more")
 	}
-	assert.Equal(t, 5, nestedStarts,
-		"all 5 nested web_search tool calls must still replay, correctly bracketed under the "+
-			"spawn span — D6 only touches ASSISTANT TEXT entries, never tool calls")
 
 	// The done frame must still be exactly one.
 	assert.Equal(t, "done", frames[len(frames)-1].Type)

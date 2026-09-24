@@ -59,12 +59,9 @@ function makeConfig(overrides: {
     },
     agents: { defaults: { default_agent_id: '' } },
     security: {
-      policy_mode: 'deny',
-      exec_approval: 'ask',
       daily_cost_cap: 10,
       exec_timeout_seconds: 0,
       max_background_seconds: 0,
-      enable_deny_patterns: false,
       rate_limits: {
         max_agent_llm_calls_per_hour: null,
         max_agent_tool_calls_per_minute: null,

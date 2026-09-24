@@ -6,6 +6,7 @@ import { ToastContainer } from '@/components/ui/toast-container'
 import { Button } from '@/components/ui/button'
 import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
 import { CrossWorkspaceApprovalBanner } from '@/components/layout/CrossWorkspaceApprovalBanner'
+import { GodModeActiveBanner } from '@/components/settings/GodModeControl'
 import { MediaLightbox } from '@/components/chat/MediaLightbox'
 import { BrowserLivePanel } from '@/components/browser/BrowserLivePanel'
 import { LibraryPanel } from '@/components/library/LibraryPanel'
@@ -236,6 +237,14 @@ export function AppShell() {
               </span>
             </div>
           )}
+
+          {/* ADR-092 FR-034: god-mode-active banner, relocated app-wide from
+              the Gateway settings section — a real user or agent can trip
+              God Mode from any screen, so the warning (and its "Turn off"
+              action) must be visible from any screen too, not just Gateway. */}
+          <div className="px-[var(--space-3)] pt-[var(--space-2)] shrink-0">
+            <GodModeActiveBanner />
+          </div>
 
           {/* Cross-workspace tool-approval notice — founder decision
               2026-09-14. Ambient, non-blocking: an approval waiting in a

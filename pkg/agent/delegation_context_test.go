@@ -73,13 +73,15 @@ func TestBuildDelegationContext_SingleTargetAllModes(t *testing.T) {
 	if !strings.Contains(got, "### → Ava (Builder: implementation & code)") {
 		t.Errorf("missing target header; got:\n%s", got)
 	}
-	// Both delegate forms (background default, await async=false) must appear,
-	// plus create_task.
+	// The background delegate form and create_task must appear. The former
+	// "await" form (`delegate(..., async=false)`) is GONE: ADR-091 D4 deleted
+	// the delegate tool's `async` parameter entirely (wait-inline delegation
+	// no longer exists), so it must never appear in the rendered context.
 	if !strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
 		t.Errorf("missing background delegate(agent_id= tool call; got:\n%s", got)
 	}
-	if !strings.Contains(got, `delegate(agent_id="ava", task="…", async=false)`) {
-		t.Errorf("missing await delegate(agent_id=..., async=false) tool call; got:\n%s", got)
+	if strings.Contains(got, "async=false") {
+		t.Errorf("retired await form 'async=false' must NOT appear (ADR-091 D4 deleted the async parameter); got:\n%s", got)
 	}
 	if !strings.Contains(got, `create_task(agent_id="ava"`) {
 		t.Errorf("missing create_task(agent_id= tool call; got:\n%s", got)
@@ -107,25 +109,47 @@ func TestBuildDelegationContext_SingleTargetAllModes(t *testing.T) {
 	}
 }
 
-func TestBuildDelegationContext_ModesAwaitOnly(t *testing.T) {
+// TestBuildDelegationContext_RetiredModeValueRendersNoForms guards the
+// degrade path for a workspace delegation edge whose Modes still carries the
+// pre-ADR-091 "await" string. config.DelegationMode is an unvalidated string
+// alias (pkg/config/config.go), so a stale persisted edge (or a config
+// written before this delivery) CAN still deserialize an "await" entry even
+// though config.DelegationModeAwait no longer exists as a constant — only
+// DelegationModeBackground and DelegationModeTask remain. This used to be
+// TestBuildDelegationContext_ModesAwaitOnly, asserting the deleted
+// `delegate(..., async=false)` "await mode" form was the (only) form
+// rendered. ADR-091 D4 deleted wait-inline delegation outright — the
+// delegate tool schema no longer publishes an `async` parameter — so that
+// assertion pinned removed behavior. The mode-subset CONCEPT itself is not
+// vestigial (background vs. task is still real, see
+// TestBuildDelegationContext_BackgroundModeOnly /
+// _TaskModeOnly / _TwoModeSubset); only "await" as a value is gone from the
+// vocabulary. What buildDelegationContext actually does with an
+// unrecognized mode string is fall through both the background and task
+// switch cases silently, rendering the target's header with NO tool-call
+// bullets at all — not a crash, and NOT a resurrection of the deleted async
+// form. That silent, non-crashing degrade is the behavior this test now
+// pins.
+func TestBuildDelegationContext_RetiredModeValueRendersNoForms(t *testing.T) {
 	targets := []delegationTarget{
-		makeTarget("ava", []config.DelegationMode{config.DelegationModeAwait}, nil),
+		makeTarget("ava", []config.DelegationMode{config.DelegationMode("await")}, nil),
 	}
 	got := buildDelegationContext(targets, 0)
 
-	// Only the await (async=false) form must appear; the background form and
-	// create_task must NOT appear as tool calls.
-	if !strings.Contains(got, `delegate(agent_id="ava", task="…", async=false)`) {
-		t.Errorf("missing await delegate call for await mode; got:\n%s", got)
+	// The target section still renders (the target itself is known/labeled) …
+	if !strings.Contains(got, "### → Ava (Builder: implementation & code)") {
+		t.Errorf("missing target header for unrecognized-mode target; got:\n%s", got)
 	}
-	// The background form's exact closing (`task="…")`, immediate paren) must
-	// be absent — it is NOT a substring of the await form (which continues
-	// with ", async=false)" instead of closing immediately).
+	// … but with NO tool-call bullets: neither the background delegate form
+	// nor create_task, and definitely not the retired async=false form.
 	if strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
-		t.Errorf("background delegate call must NOT appear when Modes=[await]; got:\n%s", got)
+		t.Errorf("background delegate call must NOT appear for an unrecognized mode value; got:\n%s", got)
+	}
+	if strings.Contains(got, "async=false") {
+		t.Errorf("retired await form 'async=false' must NOT appear; got:\n%s", got)
 	}
 	if strings.Contains(got, `create_task(agent_id=`) {
-		t.Errorf("create_task tool call must NOT appear when Modes=[await]; got:\n%s", got)
+		t.Errorf("create_task tool call must NOT appear for an unrecognized mode value; got:\n%s", got)
 	}
 	// No mode footer — the new implementation renders the global depth footer only.
 	if !strings.Contains(got, "max chain depth: uncapped") {
@@ -350,37 +374,42 @@ func TestBuildDelegationContext_PerTargetOnwardForbidden(t *testing.T) {
 }
 
 // TestBuildDelegationContext_PerTargetModeSubset verifies that when two targets
-// have different mode subsets, each renders only its own tools.
+// have different mode subsets, each renders only its own tools. ava carries a
+// retired "await" mode string (pre-ADR-091; see
+// TestBuildDelegationContext_RetiredModeValueRendersNoForms for why that
+// value can still show up on a stale edge) — it must render NO tool-call
+// bullets. ray carries no Modes override (nil = both real modes active) and
+// must render both. Neither target may ever render the deleted
+// `async=false` await form — ADR-091 D4 deleted it from the delegate tool
+// entirely, for every target regardless of mode.
 func TestBuildDelegationContext_PerTargetModeSubset(t *testing.T) {
 	targets := []delegationTarget{
-		// ava: await only
-		makeTarget("ava", []config.DelegationMode{config.DelegationModeAwait}, nil),
-		// ray: all modes
+		// ava: retired/unrecognized mode value → no forms render
+		makeTarget("ava", []config.DelegationMode{config.DelegationMode("await")}, nil),
+		// ray: all (real) modes
 		makeTarget("ray", nil, nil),
 	}
 	got := buildDelegationContext(targets, 0)
 
-	// ava section: only the await form; background delegate and create_task
-	// must NOT appear for ava.
+	// ava section: no tool-call bullets at all for an unrecognized mode value.
 	if strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
-		t.Errorf("background delegate for ava must NOT appear when ava edge is await-only; got:\n%s", got)
+		t.Errorf("background delegate for ava must NOT appear when ava's only mode is unrecognized; got:\n%s", got)
 	}
 	if strings.Contains(got, `create_task(agent_id="ava"`) {
-		t.Errorf("create_task for ava must NOT appear when ava edge is await-only; got:\n%s", got)
-	}
-	if !strings.Contains(got, `delegate(agent_id="ava", task="…", async=false)`) {
-		t.Errorf("await delegate for ava must appear; got:\n%s", got)
+		t.Errorf("create_task for ava must NOT appear when ava's only mode is unrecognized; got:\n%s", got)
 	}
 
-	// ray section: all three tools.
+	// ray section: both real tools (background delegate + create_task).
 	if !strings.Contains(got, `delegate(agent_id="ray", task="…")`) {
 		t.Errorf("background delegate for ray must appear (all modes); got:\n%s", got)
 	}
 	if !strings.Contains(got, `create_task(agent_id="ray"`) {
 		t.Errorf("create_task for ray must appear (all modes); got:\n%s", got)
 	}
-	if !strings.Contains(got, `delegate(agent_id="ray", task="…", async=false)`) {
-		t.Errorf("await delegate for ray must appear (all modes); got:\n%s", got)
+
+	// The retired await form must appear nowhere in the output, for either target.
+	if strings.Contains(got, "async=false") {
+		t.Errorf("retired await form 'async=false' must NOT appear for any target; got:\n%s", got)
 	}
 }
 

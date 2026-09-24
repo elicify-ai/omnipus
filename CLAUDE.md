@@ -70,7 +70,7 @@ Write for a technically literate non-engineer. Plain words over jargon — a tec
 3. **Minimal footprint** — security-feature RAM overhead < 10MB beyond baseline.
 4. **Graceful degradation** — Linux 5.13+ features (Landlock, seccomp) fall back to app-level enforcement on older kernels and non-Linux.
 5. **Ecosystem compatibility** — follow Omnipus/OpenClaw conventions (SKILL.md, HEARTBEAT.md, SOUL.md, AGENTS.md, JSON config).
-6. **Two layers, no third — the reconciled global ceiling IS the default; per-agent overrides only tighten (ADR-077).** Layer 1: the global ceiling (`cfg.Sandbox.ToolPolicies`), kept complete for the whole static catalog (general + browser + `system.*`-legacy-named sysagent tools) by `config.ReconcileToolPolicyCeiling` (ADR-076) on every load; an old install's ceiling self-heals forward additively — a static builtin tool added to `defaults.go` after an install's `config.json` was last written gets its shipped default added to `sandbox.tool_policies` on the next load — and Reconcile never overwrites an operator-set value or re-adds a retired key; reconciling to the shipped default (including `bash = allow`) is intended, not a gap (ADR-077 D2). Layer 2: deliberately sparse per-agent overrides (`AgentConfig.Tools.Builtin.Policies`) that under strictest-wins (`pkg/tools/compositor.go::resolveEffectivePolicyWith`) only ever *tighten* below the ceiling — an agent with no entry riding the ceiling is the normal, intended state, not a gap. There is no hardcoded allow/deny/ask fallback anywhere in the Go code, no `DefaultPolicy`/`GlobalDefaultPolicy` field, and no fail-closed per-agent `deny` backfill or own-coverage boot log — removed by operator decision, do not reintroduce (guard: `scripts/check-no-fail-closed-backfill.sh`). To lock a tool down, set an explicit `deny`, per-agent (tighten one agent) or global (tighten the ceiling for everyone). `bash` is registered for every agent regardless of sandbox mode — the kernel sandbox is the protective layer — and resolves `allow` from the ceiling for an agent with no explicit entry (accepted risk, ADR-077 R1; ADR-090 deliberately seeds Jim with `bash: deny`). `config.ValidateToolPolicyCoverage` still runs but is a never-firing correctness tripwire after Reconcile. Exception — MCP tools: MCP-server tool names aren't known until an operator connects the server at runtime, so per-server `mcp_<server>_*` wildcard policies remain available; the no-wildcard rule applies to the static builtin catalog only. ADR-090 also requires an agent's explicit server/tool assignment before discovery and execution. Registration alone grants no access. Policy and assignment checks both apply, including to tools loaded before a binding was removed.
+6. **Two layers, no third — the reconciled global ceiling IS the default; per-agent overrides only tighten (ADR-077).** Layer 1: the global ceiling (`cfg.Sandbox.ToolPolicies`), kept complete for the whole static catalog (general + browser + `system.*`-legacy-named sysagent tools) by `config.ReconcileToolPolicyCeiling` (ADR-076) on every load; an old install's ceiling self-heals forward additively — a static builtin tool added to `defaults.go` after an install's `config.json` was last written gets its shipped default added to `sandbox.tool_policies` on the next load — and Reconcile never overwrites an operator-set value or re-adds a retired key; reconciling to the shipped default is intended, not a gap (ADR-077 D2) — since [ADR-092 — Shell permission modes: Ask / Auto / God Mode; drop the block list; one rule format](docs/internal/architecture/ADR-092-shell-permission-modes.md), that shipped default for `bash` is `ask`, and a fresh install also ships `sandbox.auto_approve: true`. Auto-approve is a separate switch, never a policy value: it acts only on a call whose tool resolves to `ask` (no Auto in God Mode), and it never changes an `allow` or a `deny`. **[2026-09-24, founder decision]** Auto-approve no longer additionally requires an enforcing kernel sandbox — it now applies on Windows, when a sandbox failed to start, and in permissive mode, exactly as elsewhere; see [ADR-092](docs/internal/architecture/ADR-092-shell-permission-modes.md)'s 2026-09-24 revision note for the accepted risk (without a kernel sandbox, `bash` under Auto is checked only by the D7/D8 pre-flights and the text-based guards). For `bash`, Auto runs what the pre-flights (and, where a kernel sandbox is enforcing, the sandbox itself) can confine, and asks for writes outside the workspace, network access and operator `ask` rules; an install that predates ADR-092 and already persisted `bash: allow` keeps that value, because Reconcile never overwrites an operator-set entry. Layer 2: deliberately sparse per-agent overrides (`AgentConfig.Tools.Builtin.Policies`) that under strictest-wins (`pkg/tools/compositor.go::resolveEffectivePolicyWith`) only ever *tighten* below the ceiling — an agent with no entry riding the ceiling is the normal, intended state, not a gap. There is no hardcoded allow/deny/ask fallback anywhere in the Go code, no `DefaultPolicy`/`GlobalDefaultPolicy` field, and no fail-closed per-agent `deny` backfill or own-coverage boot log — removed by operator decision, do not reintroduce (guard: `scripts/check-no-fail-closed-backfill.sh`). To lock a tool down, set an explicit `deny`, per-agent (tighten one agent) or global (tighten the ceiling for everyone). `bash` is registered for every agent regardless of sandbox mode — the kernel sandbox, where enforcing, is an additional protective layer, not a precondition for Auto — and resolves whatever the ceiling currently holds for an agent with no explicit entry: `ask` on a fresh install (so Auto-approve, when on, decides per command, with or without an enforcing kernel sandbox), or a persisted `allow` on an install that predates ADR-092 (accepted risk, ADR-077 R1; ADR-090 deliberately seeds Jim with `bash: deny`). `config.ValidateToolPolicyCoverage` still runs but is a never-firing correctness tripwire after Reconcile. Exception — MCP tools: MCP-server tool names aren't known until an operator connects the server at runtime, so per-server `mcp_<server>_*` wildcard policies remain available; the no-wildcard rule applies to the static builtin catalog only. ADR-090 also requires an agent's explicit server/tool assignment before discovery and execution. Registration alone grants no access. Policy and assignment checks both apply, including to tools loaded before a binding was removed.
 7. **Release responsibility — fix everything, no excuses.** Every branch fully green before shipping. Pre-existing failures (lint, vuln, Go test, race, vitest, tsc, Playwright — anything CI runs) are ours to fix regardless of origin. "Pre-existing"/"not mine"/"broken on main too" are NEVER acceptable closure paths. Fix now, or get explicit user approval to defer with a tracked issue + target date.
 8. **Contract-first wire formats — single source of truth, runtime-validated.** Every byte crossing the gateway/SPA boundary (REST req/resp, WS frame, persisted JSON the SPA reads) MUST be defined in `contracts/openapi.yaml` or `contracts/asyncapi.yaml` **before** any Go/TS code. Generated types in `pkg/api/generated/` and `src/lib/api/generated/` are the only legal cross-boundary types — committed, regenerated via `scripts/gen-contracts.sh`, verified by `make verify-contracts` (fails on drift). **Hand-written wire-format types are FORBIDDEN and lint-caught** by `scripts/check-no-handwritten-wire-types.sh` (opt out: `// not-wire-format`). AsyncAPI Zod schemas are generated, not hand-written. The 5-step process is under Contract regeneration, below.
 
@@ -92,6 +92,51 @@ mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/inde
 
 **Never run the full Go test suite locally — CI is the authority for Go test/build results.** `go test ./...` OOM-kills this environment; push and read the checks instead. At most one narrowly-scoped local test when you must (`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/<one>/`); never run multiple Go test suites in parallel.
 
+**Remote CI cluster — run heavy gates here, not locally.** `ci-omnipus-1` (Fly, `sin`) is
+**5 machines** of `performance-8x`/16 GB, each a TIER with its own `/cache` volume (repo
+clone, Go build cache, `node_modules`) and its own `/tmp/runci.lock`. Scaled to zero when
+idle; a stopped machine bills nothing for compute. One command fans the gates out and stops
+every machine it started, on every exit path including Ctrl-C:
+
+```bash
+deploy/ci-worker/ci-cluster.sh <git-ref>            # full fan-out (ref must be PUSHED)
+deploy/ci-worker/ci-cluster.sh <git-ref> go node    # restrict to tiers
+```
+
+| Tier | Gates | ~time |
+|---|---|---|
+| `go` | `gofmt go-build go-vet lint go-test go-race` | ~43 min (`go-race` alone ~25) |
+| `node` | `contracts spa` | ~12 min |
+| `xplat` | `embed-build records-no-sqlite cli-verb-guard` | ~8 min |
+
+Gates run **sequentially within a tier** (that machine's warm cache is the point; the lock
+would queue a second run for up to 90 min) and **tiers run concurrently**. One tier per
+machine is enforced — the dispatcher refuses a map that assigns a machine twice. Do NOT
+split a tier across machines: tiers are dependency clusters sharing a warm cache, so
+splitting buys N cold caches rebuilding the same thing. Override the whole map with
+`CI_CLUSTER_TIERS` (`<name>|<machine-id>|<gates>` per line); machine ids are DATA, never
+hardcoded — get them from `fly machines list -a ci-omnipus-1`.
+
+**`e2e` is deliberately NOT in the default map** — it needs the OpenRouter secret, runs
+~20-30 min, and would pin a machine for the whole run. Give it its own machine when you
+want it (`ci-cluster.sh` with a custom tier, or by hand:
+`fly ssh console -a ci-omnipus-1 --machine <id> -C "/cache/runci.sh <ref> e2e"`). Inside
+that one gate the Playwright suite fans out across the 24 shards in `tests/e2e/shards.json`
+— the same plan `.github/workflows/pr.yml` uses, so the two surfaces cannot drift —
+capped 2-wide for render-bound shards (a **measured** cap: a 5-wide run failed 17 specs a
+1-wide run passed 16/17) and 4-wide for I/O-bound `llm-*`, with `solo` shards strictly
+serial and listed last. `all` is refused outright (exit 2): it would serialise every gate
+on one machine.
+
+Three traps that produce a **wrong verdict**, not an error: (1) the `fly ssh console`
+wrapper's exit code is NOT the gate's — parse the log for `RESULT:` / `GATE FAILURE(S)`;
+(2) `/cache/runci.sh` is deployed per machine, so the dispatcher md5-checks every machine
+against the repo copy first and refuses on mismatch — `fly ssh sftp put` has silently
+written an **empty** file and truncated another, so repair it from the machine's own git
+objects (`git show FETCH_HEAD:deploy/ci-worker/runci.sh`) instead; (3) logs live in `/tmp`
+and die with the machine — collect before stopping. Full detail and the remaining traps:
+`deploy/ci-worker/CLAUDE.md` and `docs/internal/architecture/ci-cluster-design.md`.
+
 **Typecheck trap:** `tsconfig.json` is a project-references root with no `include`/`files` — bare `tsc --noEmit` is a silent no-op that always exits 0. Use `npm run typecheck` (wired to `tsc -b --noEmit`).
 
 **Design system (MANDATORY):** before touching anything under `src/components/`,
@@ -99,7 +144,9 @@ mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/inde
 skill (`.claude/skills/omnipus-design-system/SKILL.md`; `src/components/ui/CLAUDE.md`
 carries the two rules that bite hardest). The design-system CI gate teaches by red build
 — the skill states each rule with the script or test that fires if you skip it, so you
-catch it before CI does, not after.
+catch it before CI does, not after. A recurring UI job (tooltip, inline error banner,
+copy-to-clipboard, …) uses a catalogued component, preferring a ported shadcn/ui
+component over a new local one — skill rule 14.
 
 **Size budgets (founder ruling, 2026-09-15; file fail limit set to 3,000 on 2026-09-22):** one file, one job; one function, one job. A file warns over 2,000 lines and fails over 3,000; a function warns over 120 lines and fails over 240 — same numbers for production and test code, but a React component only warns, never fails. Grandfathered entries (`scripts/budgets/*.txt`) may only shrink — do not add to one, extract first. `make lint-budgets` runs both gates with their self-checks.
 
@@ -115,6 +162,7 @@ A merge from a branch cut before a removal can resurrect deleted files/surfaces 
 - **Goal confirm-gate machinery** (ADR-088) — goals activate instantly; the working agent authors the record via `set_goal`; steering replaces confirmation. Guard: `scripts/check-no-goal-confirm-gate.sh`.
 - **Fail-closed per-agent tool-policy backfill** (ADR-077) — see Hard Constraint #6. Guard: `scripts/check-no-fail-closed-backfill.sh`.
 - **Goal-ending-on-lost-UI watchdog** (ADR-082) — a turn never depends on a UI connection; only an explicit Stop/cancel (`RequestCancel`, `InterruptSessionHard`) ends a turn early. Guard: `scripts/check-no-orphan-turn-watchdog.sh`.
+- **Shell command-text block list, exec allowlist, and the dead exec-approval manager** (ADR-092) — `defaultDenyPatterns`/`secretGuardPatterns`/`applyDenyPatterns`/`compileDenyPatterns`/`denyPatternMessage`/`operatorDenyPatterns`/`GlobalShellDenyPatterns`, `config.SandboxConfig.ShellDenyPatterns` (wire key `shell_deny_patterns`) and `config.AgentShellPolicy` (wire key `shell_policy`), the per-binary exec allowlist (`HandleExecAllowlist`, `AllowedBinaries`), and `pkg/security/execapproval.go`'s `ExecApprovalManager` are all deleted outright — replaced by the Auto-approve setting (`sandbox.auto_approve`, a per-agent "Never auto-approve" off-switch, a per-chat toggle), the D3 config-file-only `sandbox.command_rules` engine, and D7/D8's kernel-backed pre-flight checks; the unenforced `exec_approval`/`enable_deny_patterns` settings keys and the `/security/exec-allowlist` route are gone too. Guard: `scripts/check-no-shell-deny-patterns.sh`.
 
 Guards are wired into CI via `scripts/guards.sh` (`make lint-guards`); discovery picks up every `scripts/check-*.sh`, and each guard's banned-name list lives in that script.
 

@@ -418,17 +418,13 @@ func TestUpdateAgent_AppliesSharedEditableConfiguration(t *testing.T) {
 		"voice":                   "alloy",
 		"context_window_override": float64(2048),
 		"model_params":            map[string]any{"temperature": temp, "max_tokens": float64(128)},
-		"shell_policy": map[string]any{
-			"enable_deny_patterns": true,
-			"custom_deny_patterns": []any{"rm -rf"},
-		},
 	})
 	if result.IsError {
 		t.Fatalf("expected success, got: %s", result.ForLLM)
 	}
 	body := parseSuccess(t, result.ForLLM)
 	fields := changedFields(t, body)
-	for _, want := range []string{"memory_enabled", "voice", "context_window_override", "model_params", "shell_policy"} {
+	for _, want := range []string{"memory_enabled", "voice", "context_window_override", "model_params"} {
 		if !containsField(fields, want) {
 			t.Errorf("changed_fields=%v missing %s", fields, want)
 		}
@@ -452,9 +448,6 @@ func TestUpdateAgent_AppliesSharedEditableConfiguration(t *testing.T) {
 	}
 	if ag.ModelParams == nil || ag.ModelParams.MaxTokens == nil || *ag.ModelParams.MaxTokens != 128 {
 		t.Errorf("ModelParams.MaxTokens=%v, want 128", ag.ModelParams)
-	}
-	if ag.ShellPolicy == nil || !ag.ShellPolicy.EnableDenyPatterns || len(ag.ShellPolicy.CustomDenyPatterns) != 1 || ag.ShellPolicy.CustomDenyPatterns[0] != "rm -rf" {
-		t.Errorf("ShellPolicy=%v, want enable + [rm -rf]", ag.ShellPolicy)
 	}
 	_ = cfg
 }
@@ -815,38 +808,5 @@ func TestUpdateAgent_DefaultWithoutWriterDoesNotWrite(t *testing.T) {
 	}
 	if cfg.Agents.Defaults.DefaultAgentID == "writer" {
 		t.Error("singleton must not name writer")
-	}
-}
-
-func TestUpdateAgent_RejectsUnknownShellPolicyField(t *testing.T) {
-	deps, _ := newTestDeps()
-	store := agentstore.New(deps.Home)
-	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
-		t.Fatal(err)
-	}
-	result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
-		"id":       "writer",
-		"revision": currentAgentRevision(t, deps, "writer"),
-		"shell_policy": map[string]any{
-			"enable_deny_patterns": true,
-			"bogus":                true,
-		},
-	})
-	if !result.IsError {
-		t.Fatalf("unknown nested field must reject, got: %s", result.ForLLM)
-	}
-	code, msg := toolErrorCode(t, result.ForLLM)
-	if code != "INVALID_INPUT" {
-		t.Errorf("code=%s, want INVALID_INPUT", code)
-	}
-	if !strings.Contains(msg, "bogus") {
-		t.Errorf("message=%q, want bogus", msg)
-	}
-	ag, err := store.Get("writer")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ag.ShellPolicy != nil {
-		t.Errorf("shell_policy after rejection=%v, want nil", ag.ShellPolicy)
 	}
 }

@@ -67,7 +67,7 @@ properties:
       Message-hop cap (m7) — how many parent<->child hops this message has
       traversed. Distinct from and independent of the spawn-nesting
       delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3,
-      `pkg/agent/subturn.go`) — one caps message forwarding, the other caps
+      `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps
       spawn nesting (m-5).
     example: 0
   created_at:

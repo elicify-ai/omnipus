@@ -42,6 +42,15 @@ properties:
     type: string
     minLength: 1
     description: Session in which the parent's span is running.
+  child_session_id:
+    type: string
+    minLength: 1
+    description: >
+      Optional session id of the delegated child session this mid-span
+      update is reporting on — the same value the bracketing
+      `subagent_start` frame's `child_session_id` carries (ADR-091 I-4).
+      Present for steered sessions; absent for legacy subturn spans.
+    example: "550e8400-e29b-41d4-a716-446655440000"
   span_id:
     type: string
     minLength: 1
@@ -66,11 +75,12 @@ properties:
       - handback
       - steer
       - respond
+      - goal_status
     description: >
-      The underlying SessionMessage kind. `revision_entry` and
-      `goal_status` are excluded — they ride their own existing
-      plan/goal-scoped frame families, not the span-scoped mid-span
-      channel.
+      The underlying SessionMessage kind. `revision_entry` is excluded —
+      it rides its own existing plan-scoped frame family, not the
+      span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this
+      span-scoped frame for child-to-parent verdicts.
     example: "progress"
   text:
     type: string
@@ -108,3 +118,17 @@ properties:
     format: date-time
     description: RFC3339 timestamp the underlying message was created.
     example: "2026-07-22T10:00:00Z"
+
+  seq:
+    type: integer
+    format: int64
+    minimum: 1
+    description: >-
+      Per-session sequence number of this frame (#823 catch-up redesign). Strictly
+      increasing and gap-free within the session, assigned by the gateway's per-session
+      hub as the single chokepoint through which every session-scoped frame is published.
+      Optional: absent on an unsequenced copy of this frame (for example a replayed
+      transcript entry) — the client only advances its per-session cursor for frames that
+      carry seq. The client stores the highest seq it has applied per session and sends it
+      back as since_seq on attach_session; frames at or below that cursor are ignored,
+      which makes re-delivery idempotent.

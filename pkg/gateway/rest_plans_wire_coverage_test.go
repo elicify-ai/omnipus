@@ -108,7 +108,7 @@ func fullyPopulatedPlan(t *testing.T, api *restAPI, wsID string) *plan.Plan {
 	p := &plan.Plan{
 		WorkspaceID:  wsID,
 		Title:        "Fully populated plan",
-		Goal:         "every contract field reachable",
+		Objective:    "every contract field reachable",
 		Description:  "seeded by fullyPopulatedPlan",
 		Rationale:    "pins the toWirePlan coverage sweep",
 		OwnerAgentID: testPlansAgentID,

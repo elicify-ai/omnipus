@@ -84,7 +84,6 @@ function seedBucket(seedMessages: ChatMessage[]): void {
           cancelStage: null,
           lastUserMessageAt: null,
           lastReceivedEventTime: null,
-          spanByParentCallId: {},
         },
       },
       messages: seedMessages,

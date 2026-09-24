@@ -275,8 +275,47 @@ export function registerChatResetForReplay(fn: (sessionId: string) => void): voi
   _chatResetForReplay = fn
 }
 
+// ADR-092 UX fix: same cycle-break pattern as _chatSetReplaying above.
+// startNewSession, attachToSession, and enterWorkspaceChat below all clear
+// this so a per-chat Auto-approve choice made in a chat that was then
+// abandoned (no message ever sent, so the choice was never consumed by
+// session_started) does not silently leak onto a LATER, unrelated chat,
+// whether that chat is reached by attaching to a session, starting fresh, or
+// switching workspaces (even into a workspace that itself resolves to no
+// session at all). startNewSession and enterWorkspaceChat call this
+// unconditionally, as the very first thing each does — every branch of
+// either is a genuine chat/workspace change. attachToSession is the one
+// exception: its failed-send branch (`!sent`) deliberately does NOT clear —
+// Wave-1 Bug 2's contract is that a failed send leaves ALL store state
+// untouched (the attach never happened, so whatever chat the user was
+// already on, pending choice included, is unchanged) — so the clear call
+// there is scoped to its two branches that DO change state: the
+// connected+sent branch (its own explicit call — #823 no longer wipes the
+// bucket there via resetChatBucketForReplay) and the
+// offline/no-connection branch (its own explicit call). Deliberately NOT
+// wired into setActiveSession itself — sendMessage's own pending-session
+// mint (session id '__pending') and sendWorkspaceSetupKickoff both call
+// setActiveSession too, and clearing there would erase the very choice this
+// fix exists to carry through to session_started.
+let _chatClearPendingAutoApprove: (() => void) | null = null
+
+/** Called once by chat.ts after it creates useChatStore. */
+export function registerChatClearPendingAutoApprove(fn: () => void): void {
+  _chatClearPendingAutoApprove = fn
+}
+
+/**
+ * The clear point called by startNewSession, enterWorkspaceChat, and (on its
+ * two state-changing branches only) attachToSession — see the doc comment
+ * above.
+ */
+function clearPendingAutoApproveOnSessionChange(): void {
+  _chatClearPendingAutoApprove?.()
+}
+
 export function resetChatBucketForReplay(sessionId: string): void {
   _chatResetForReplay?.(sessionId)
+  _chatClearPendingAutoApprove?.()
 }
 
 // #823 catch-up redesign (BE-DESIGN.md §6.1) — same circular-import-break
@@ -451,11 +490,17 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       // longer wiped here — only session_snapshot wipes now (Q3).
       const sent = connection.send({ type: 'attach_session', session_id: sessionId, ...attachSessionCursorFields(sessionId) })
       if (!sent) {
+        // Wave-1 Bug 2: leave ALL state, pending Auto choice included, untouched.
         useConnectionStore.getState().setConnectionError(
           'Could not attach to session — connection dropped. Please reconnect and try again.'
         )
         return false
       }
+      // ADR-092 UX fix: the attach frame is confirmed sent, so this IS a
+      // chat change — clear a pending Auto-approve choice here. (Release did
+      // this through resetChatBucketForReplay; #823 no longer wipes the
+      // bucket on attach, so the clear is called directly.)
+      clearPendingAutoApproveOnSessionChange()
       set((state) => ({
         activeSessionId: sessionId,
         attachedSessionType: type,
@@ -485,13 +530,12 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       setChatReplaying(true)
       return true
     } else {
+      clearPendingAutoApproveOnSessionChange() // unlike failed-send, this branch changes state
       console.warn('[session] attachToSession: no connection — attach_session not sent')
       logDiagnostic('sessionAttachToSessionNoConnection', { sessionId, type })
-      // The click otherwise looks like it "succeeded" (activeSessionId updates,
-      // the UI navigates) but the transcript replay never happens because the
-      // attach_session frame was never sent — surface that to the user rather
-      // than failing silently. Reattach happens automatically once the
-      // connection is restored (WsLifecycle.onConnected → reattachActiveSession).
+      // The click would otherwise look like it "succeeded" with no replay ever
+      // arriving — surface it. Reattach retries automatically on reconnect
+      // (WsLifecycle.onConnected → reattachActiveSession).
       useUiStore.getState().addToast({
         message: 'Not connected — this session will finish loading once your connection is restored.',
         variant: 'warning',
@@ -524,7 +568,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   startNewSession: (agentId, agentType) => {
-    set((state) => {
+    clearPendingAutoApproveOnSessionChange(); set((state) => {
       // Precedence rule 3 — `agentId`/`agentType` are a hint here too, for
       // uniformity across every session-derived writer. A `/new` keeps the
       // user's pick either way (no caller passes an agent today), which is
@@ -607,6 +651,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   // (resolveRememberedSessionFromServer) — see the "D4 fix, revised" note
   // further down this file.
   enterWorkspaceChat: async (workspaceId: string) => {
+    // Unconditional, first — covers every branch below, session-less included.
+    clearPendingAutoApproveOnSessionChange()
     // Precedence rule 2 is scoped to the workspace the pick was made in.
     // Every workspace has its own team roster, so carrying a pick from
     // workspace A into workspace B would leave the composer routing to an

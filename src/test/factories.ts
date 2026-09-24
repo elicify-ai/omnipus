@@ -43,7 +43,8 @@ export function makeAgent(overrides: Partial<Agent> = {}): Agent {
     editable_fields: overrides.editable_fields ?? [
       'name', 'description', 'model', 'provider', 'fallback_models', 'model_params',
       'soul', 'memory_enabled', 'voice', 'max_tool_iterations',
-      'context_window_override', 'shell_policy', 'skills', 'tool_policy_changes', 'mcp_servers', 'executor', 'default',
+      'context_window_override', 'skills', 'tool_policy_changes', 'mcp_servers', 'executor', 'default',
+      'auto_approve_disabled',
     ].map((name) => ({ name, editable: true })),
   }
 }

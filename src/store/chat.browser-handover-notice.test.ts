@@ -62,7 +62,6 @@ function seedBucket(seedMessages: ChatMessage[] = []): void {
           lastUserMessageAt: null,
           cancelStage: null,
           lastReceivedEventTime: null,
-          spanByParentCallId: {},
         },
       },
       messages: seedMessages,
@@ -199,7 +198,6 @@ describe('browser-handover-notice — insertion (ADR-085 BROWSER-FR-041/042)', (
             lastUserMessageAt: null,
             cancelStage: null,
             lastReceivedEventTime: null,
-            spanByParentCallId: {},
           },
         },
       }))

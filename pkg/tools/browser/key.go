@@ -112,8 +112,8 @@ var ErrNoBrowsingContext = errors.New(
 // chat's tabs across the agents that took turns in it.
 //
 // The id is transcriptSessionID and NEVER routingSessionID (§5, FR-080):
-// routingSessionID is inherited verbatim through a delegation subtree
-// (pkg/agent/subturn.go's spawnSubTurn), so it would merge every descendant's
+// routingSessionID is inherited verbatim from the delegation cascade root
+// (the steered edge's RootSessionID), so it would merge every descendant's
 // tabs into the root's.
 //
 // TabOwnerSession("") IS NOT AN OWNER — it is a named failure. An empty

@@ -1364,8 +1364,6 @@ components:
       $ref: ./components/schemas/AgentRateLimits.yaml
     AgentStats:
       $ref: ./components/schemas/AgentStats.yaml
-    AgentShellPolicy:
-      $ref: ./components/schemas/AgentShellPolicy.yaml
     AgentToolsCfg:
       $ref: ./components/schemas/AgentToolsCfg.yaml
     AgentToolsMcpServerBinding:
@@ -1460,8 +1458,6 @@ components:
       $ref: ./components/schemas/AuditLogToggle.yaml
     RateLimitConfig:
       $ref: ./components/schemas/RateLimitConfig.yaml
-    ExecAllowlist:
-      $ref: ./components/schemas/ExecAllowlist.yaml
     ExecProxyStatus:
       $ref: ./components/schemas/ExecProxyStatus.yaml
     SkillTrustResponse:
@@ -2839,10 +2835,58 @@ paths:
                 type: object
                 required:
                 - success
+                additionalProperties: false
                 properties:
                   success:
                     type: boolean
                     example: true
+                  reached:
+                    type: array
+                    items:
+                      type: string
+                    description: >
+                      ADR-091 I-6. Every session the cascade stamped with a Stop marker
+                      (the stopped session and each reachable non-terminal descendant).
+                  unreachable:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required:
+                        - id
+                        - reason
+                      properties:
+                        id:
+                          type: string
+                          minLength: 1
+                        reason:
+                          type: string
+                    description: ADR-091 I-6. Descendants the cascade could not reach, with why.
+                  skipped_newer_generation:
+                    type: array
+                    items:
+                      type: string
+                    description: >
+                      ADR-091 I-6. Sessions whose live turn belonged to a newer generation than
+                      the one stamped (a revival landed first); their cancel was refused.
+                  skipped_terminal:
+                    type: array
+                    items:
+                      type: string
+                    description: ADR-091 I-6. Terminal descendants, left unwritten.
+                  partial:
+                    type: boolean
+                    description: >
+                      ADR-091 I-6. True when `unreachable` is non-empty — and ONLY then: the
+                      cascade could not reach part of the subtree, so this Stop must not be
+                      read as complete (WP-D FR-D-001).
+                      `skipped_newer_generation` deliberately does NOT set this flag. A session
+                      the cascade left alone because a revival had already carried it to a
+                      newer generation is a CORRECT outcome, not a failure (ADR-091 D8: "the
+                      later instruction wins, which is what the operator asked for"), and WP-D
+                      US-1/AS-9 specifies that case with no `partial` and no channel line.
+                      Read `skipped_newer_generation` itself to learn which sessions kept
+                      running — `partial: false` hides nothing.
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -3654,63 +3698,6 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
           $ref: '#/components/responses/503BypassActive'
-  /security/exec-allowlist:
-    get:
-      operationId: getExecAllowlist
-      summary: Get exec binary allowlist (SEC-05)
-      description: 'Returns the current exec allowlist and approval mode.
-
-        '
-      tags:
-      - Security
-      responses:
-        '200':
-          description: Current exec allowlist.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ExecAllowlist'
-        '401':
-          description: Missing or invalid bearer token.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-    put:
-      operationId: updateExecAllowlist
-      summary: Update exec binary allowlist (SEC-05)
-      description: 'Atomically updates the exec binary allowlist. Patterns are trimmed, validated, and deduplicated. Changes are audit-logged (SEC-15). Note: requires_restart=true in the response because the in-memory agent loop uses the previous allowlist until the gateway restarts (SEC-12).
-
-        '
-      tags:
-      - Security
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-              - allowed_binaries
-              properties:
-                allowed_binaries:
-                  type: array
-                  items:
-                    type: string
-                  description: List of allowed binary name patterns.
-      responses:
-        '200':
-          description: Updated allowlist (restart required).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ExecAllowlist'
-        '400':
-          description: Invalid pattern (empty, too long, or too many entries).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
   /security/exec-proxy-status:
     get:
       operationId: getExecProxyStatus
@@ -3911,7 +3898,7 @@ paths:
     put:
       operationId: updateSandboxConfig
       summary: Update sandbox configuration
-      description: "Partial update \u2014 any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, shell_deny_patterns. At least one field required. mode and allowed_paths are restart-gated (requires_restart=true). SSRF and shell_deny_patterns are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).\n"
+      description: "Partial update \u2014 any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, auto_approve. At least one field required. mode and allowed_paths are restart-gated (requires_restart=true). SSRF and auto_approve are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).\n"
       tags:
       - Security
       requestBody:

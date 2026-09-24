@@ -187,7 +187,21 @@ func DefaultConfig() *Config {
 func defaultToolPoliciesGeneral() map[string]string {
 	return map[string]string{
 		// --- General builtin tools ---
-		"bash":           "allow",
+		// bash ships "ask" (founder decision, 2026-09-23, ADR-092): the D1
+		// three-mode selector (Ask/Auto/God Mode), the D7 filesystem
+		// pre-flight, and the D8 network deny-by-default only engage when
+		// the "bash" ceiling resolves to "ask" — a shipped "allow" would
+		// give a fresh install none of that machinery. sandbox.AutoApprove
+		// (pkg/config/sandbox.go, seeded true in DefaultConfig) is the
+		// fresh-install default for ADR-092 D1's Auto mode, so a new
+		// install's actual behaviour is: commands the kernel sandbox can
+		// confine run without a prompt, and anything that would leave the
+		// sandbox, reach the network, or touch a secret still asks. This is
+		// a fresh-install seed only — config.ReconcileToolPolicyCeiling
+		// (ADR-076) never overwrites an operator-set "bash" value on an
+		// existing install, so an install that already has "allow" written
+		// stays "allow".
+		"bash":           "ask",
 		"read_file":      "allow",
 		"write_file":     "allow",
 		"list_directory": "allow",
@@ -658,6 +672,15 @@ func defaultToolPoliciesGrep() map[string]string {
 	}
 }
 
+// DefaultToolPolicyCeiling is the exported accessor for defaultToolPolicyCeiling,
+// so a test outside this package (e.g. the ADR-092 D9 drift guard,
+// pkg/gateway/auto_approve_classification_test.go §6 check 3) can assert that
+// every key in the global policy ceiling has an explicit Auto-approve
+// classification entry, without duplicating the seeded family maps.
+func DefaultToolPolicyCeiling() map[string]string {
+	return defaultToolPolicyCeiling()
+}
+
 // defaultToolPolicyCeiling assembles the seeded global tool-policy ceiling from its
 // per-family maps. Keys never overlap (the original single literal would not have
 // compiled with a duplicate key), so order only affects nothing.
@@ -772,6 +795,15 @@ func defaultSandboxConfig() OmnipusSandboxConfig {
 		// independent hardcoded literal. A drift between the two is caught
 		// loudly at boot by the same coverage validator, not silently ignored.
 		ToolPolicies: defaultToolPolicyCeiling(),
+
+		// AutoApprove ships true (founder decision, 2026-09-23, ADR-092 D1):
+		// paired with the "bash": "ask" ceiling seed above, a fresh install
+		// resolves to Auto mode — safe commands the kernel sandbox can
+		// confine run without a prompt; anything that would leave the
+		// sandbox, reach the network, or touch a secret still asks. See
+		// AutoApprove's own doc comment on sandbox.go for the tighten-only
+		// override chain and the write-authorization requirement.
+		AutoApprove: true,
 	}
 }
 
@@ -1067,23 +1099,6 @@ func defaultAgentsConfig(workspacePath string) AgentsConfig {
 			Temperature:       nil, // nil means use provider default
 			MaxToolIterations: 200,
 			SteeringMode:      "one-at-a-time",
-			// Concurrency-gate consolidation (2026-08-04, commit
-			// 536b7340's follow-up fix): SubTurn.MaxConcurrent is
-			// deliberately left UNSET (Go zero value) rather than seeded.
-			// A fresh install previously seeded this to a fixed 16
-			// (ADR-057 FR-095 / grill #2 M2-1) so getSubTurnConfig's and
-			// ResolveRootDelegationCap's `if maxConcurrent <= 0` fallback
-			// branch (pkg/agent/subturn.go, pkg/agent/admission.go) would
-			// never fire — that reasoning depended on
-			// Performance.EffectiveMaxParallelAgents() ALSO being
-			// hard-clamped to 16 at the time. 536b7340 removed that
-			// ceiling, so a fixed 16 seed here would become a SECOND,
-			// independent concurrency cap silently disagreeing with the
-			// operator's own max_parallel_agents setting — leaving this
-			// field at zero makes Performance.EffectiveMaxParallelAgents()
-			// the single, central authority both fallback branches
-			// resolve to, with no seeded value to drift out of sync. See
-			// SubTurnConfig.MaxConcurrent's doc comment (config.go).
 			ToolFeedback: ToolFeedbackConfig{
 				Enabled:       false,
 				MaxArgsLength: 300,

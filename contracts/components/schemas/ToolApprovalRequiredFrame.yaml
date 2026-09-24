@@ -67,13 +67,6 @@ properties:
       delegated child has none). The SPA shows the approval only while that
       workspace is the active one. Omitted when the session belongs to no
       workspace — such an approval is shown everywhere.
-  producing_session_id:
-    type: string
-    minLength: 1
-    description: >
-      ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-      Class (a) (FR-089): the child turn's own session id when this
-      frame crosses the wire from a delegated child.
   turn_id:
     type: string
     minLength: 1
@@ -87,3 +80,15 @@ properties:
       expiresAt = Date.now() + expires_in_ms. Using a relative delta avoids
       clock-skew between server and browser (OBS-004). Minimum 0 (no negative
       expiry); maximum 86400000 (24 hours — prevents absurd expiry windows).
+  segments:
+    type: array
+    items:
+      $ref: './CommandSegmentInfo.yaml'
+    description: >
+      ADR-092 D3/D4 per-segment breakdown of a bash approval. Present on every
+      tool_approval_required whose tool_name is "bash" and whose args carry a
+      non-empty command string, built with the bash tool's own segment
+      splitter and program resolution. A single, unchained command still has
+      exactly one entry so the SPA has one rendering path. Absent for every
+      other tool. Offer the "prefix" scope only when a segment's
+      prefix_available is true.

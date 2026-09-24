@@ -42,22 +42,22 @@ import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
 import { AgentPicker } from './composer/AgentPicker'
 import { ModelPicker } from './composer/ModelPicker'
+import { AutoApprovePicker } from './composer/AutoApprovePicker'
 import { TokenCounter } from './composer/TokenCounter'
 import { MarkdownText } from './markdown-text'
-import { SubagentBlock } from './SubagentBlock'
 import { ModelFooter } from './ModelFooter'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useChatStore } from '@/store/chat'
-import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage, SubagentSpan } from '@/store/chat'
+import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { shouldRenderSubagentSpan, shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
+import { shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
 import { getMessageStatusSuffix, INTERRUPTED_SUFFIX_TEXT, CUT_OFF_SUFFIX_TEXT } from '@/lib/truncation'
@@ -384,20 +384,15 @@ function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): str
   return 'Working in the background…'
 }
 
-/**
- * Derives the thinking-indicator label for an in-progress `delegate` call's
- * "run" sub-case — the only delegate sub-case with a specific label (its
- * `status`-poll sub-case, and any other hidden tool with no rule, fall
- * through to the generic pool). Resolves the target agent's display name
- * from the call's `agent_id` arg (pkg/tools/delegate.go's Parameters())
- * against the agents list; never invents a name — falls back to a bare
- * "Delegating…" when the id is absent or unresolvable.
- */
-function deriveDelegateThinkingLabel(args: Record<string, unknown> | undefined, agents: Agent[]): string {
-  const agentId = typeof args?.agent_id === 'string' ? args.agent_id : ''
-  const target = agentId ? agents.find((a) => a.id === agentId) : undefined
-  return target?.name ? `Delegating to ${target.name}…` : 'Delegating…'
-}
+// ADR-091 D7/AC-7: `deriveDelegateThinkingLabel` ("Delegating to <name>…" /
+// "Delegating…" for a hidden `delegate` 'run' call) is deleted — a `run`
+// call is visible unconditionally now (toolVisibility.ts's
+// shouldRenderToolCall), so `deriveHiddenRunningToolLabel` below always
+// returns null for it before ever reaching a delegate-specific branch (its
+// own `shouldRenderToolCall` check short-circuits first). The one delegate
+// sub-case that still hides, `status` (polling), has no specific-label rule
+// and falls through to the generic rotating pool, same as any other hidden
+// tool with no rule.
 
 /**
  * Finds the LAST tool-call part in a live message's `content` whose live
@@ -407,16 +402,18 @@ function deriveDelegateThinkingLabel(args: Record<string, unknown> | undefined, 
  * shouldRenderToolCall — derives a specific, stable label for it.
  *
  * Returns null (generic rotating pool applies) when: the tool is visible
- * (its own chip already shows progress), it's ToolSearch or any other
- * hidden tool with no specific-label rule, or nothing is currently running.
- * Defensive: never throws — an unexpected message/part shape falls back to
- * the generic pool via the null return, exactly like "nothing found".
+ * (its own chip already shows progress — a `delegate` 'run' call included,
+ * ADR-091 D7/AC-7: it is visible unconditionally now, so it never reaches
+ * this function's tool-name branches below), it's ToolSearch, a delegate
+ * `status` poll, or any other hidden tool with no specific-label rule, or
+ * nothing is currently running. Defensive: never throws — an unexpected
+ * message/part shape falls back to the generic pool via the null return,
+ * exactly like "nothing found".
  */
 function deriveHiddenRunningToolLabel(
   content: unknown,
   storeToolCalls: Record<string, { status?: string }>,
   verboseChatEnabled: boolean,
-  agents: Agent[],
 ): string | null {
   try {
     if (!Array.isArray(content)) return null
@@ -437,14 +434,10 @@ function deriveHiddenRunningToolLabel(
         return null
       }
 
-      if (toolName === 'delegate') {
-        const action = typeof args?.action === 'string' ? args.action : 'run'
-        return action === 'run' ? deriveDelegateThinkingLabel(args, agents) : null
-      }
       if (toolName === 'bash') {
         return deriveBashThinkingLabel(args)
       }
-      return null // ToolSearch, or any other hidden tool with no rule — generic pool.
+      return null // ToolSearch, a delegate status poll, or any other hidden tool with no rule — generic pool.
     }
     return null
   } catch {
@@ -559,11 +552,13 @@ function AssistantTextPart() {
 // Uses useMessage() for reactive state (not getState() which is a snapshot).
 //
 // Context-aware: when the current in-progress step is a HIDDEN tool call
-// (ToolSearch, background bash, delegate — see toolVisibility.ts) whose
-// tool-call part is present in message.content but rendered invisible, this
-// shows a specific, stable label for it (e.g. "Delegating to Ray…",
+// (ToolSearch, background bash, a delegate status poll — see
+// toolVisibility.ts) whose tool-call part is present in message.content but
+// rendered invisible, this shows a specific, stable label for it (e.g.
 // "Running the test suite…") instead of the generic rotating pool — see
-// deriveHiddenRunningToolLabel above.
+// deriveHiddenRunningToolLabel above. ADR-091 D7/AC-7 removed the
+// `agents`-dependent "Delegating to <name>…" case: a `delegate` 'run' call
+// is visible unconditionally now, so it no longer reaches this label at all.
 function InlineThinkingIndicator() {
   const message = useMessage()
   const isRunning = message.status?.type === 'running'
@@ -575,11 +570,6 @@ function InlineThinkingIndicator() {
   // frame (same field GoalIndicator already reads), so this needs no extra
   // subscription setup.
   const goalStatus = useChatStore((s) => s.goalStatus)
-  const { data: agents = [] } = useQuery<Agent[]>({
-    queryKey: ['agents'],
-    queryFn: fetchAgents,
-    staleTime: 60_000,
-  })
 
   if (!isRunning) return null
 
@@ -587,7 +577,7 @@ function InlineThinkingIndicator() {
   const goalLabel = goalRecordEmpty
     ? deriveGoalAwareThinkingLabel(runningToolNamesFromLiveContent(message.content, storeToolCalls), true)
     : null
-  const label = goalLabel ?? deriveHiddenRunningToolLabel(message.content, storeToolCalls, verboseChatEnabled, agents)
+  const label = goalLabel ?? deriveHiddenRunningToolLabel(message.content, storeToolCalls, verboseChatEnabled)
   return <ThinkingIndicator label={label} />
 }
 
@@ -792,11 +782,12 @@ function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled')
  * ToolCallBadge each apply at render time (Fix 3, 2026-07-16). Used ONLY to
  * decide whether a message has any VISIBLE content, so the ghost-bubble
  * empty-placeholder / bare-Copy-bar logic below doesn't unmask a bubble
- * whose only content is a hidden delegation or background-bash dispatch
- * (the D-fix UAT defect resurfacing once the thread started hiding
- * delegation/background-bash by default — toolVisibility.ts). Reuses the
- * same sentinel-detection semantics and the shouldRenderToolCall classifier
- * those components call directly.
+ * whose only content is a hidden delegate status poll or background-bash
+ * dispatch (the D-fix UAT defect resurfacing once the thread started hiding
+ * those by default — toolVisibility.ts; a `delegate` 'run' call no longer
+ * hides at all, ADR-091 D7/AC-7, so it no longer exercises this path).
+ * Reuses the same sentinel-detection semantics and the shouldRenderToolCall
+ * classifier those components call directly.
  *
  * F2 (second review wave on branch fix/615-617-618-hardening): the three
  * structured-failure sentinels (delegation-denied, file-exists refusal,
@@ -868,77 +859,14 @@ function wouldToolCallBeVisible(
   return shouldRenderToolCall(tool, params, verboseChatEnabled, isError)
 }
 
-/**
- * Resolves a subagent span's delegate kind for SubagentBlock's W3 "no live
- * progress" notice — '3p' only for a resolved external-CLI (subagent_3p)
- * delegate, undefined otherwise (unresolvable agentId included — an unknown
- * agent must not be guessed as either kind).
- *
- * Unlike useRunningActivity.ts's resolveSpanAgentId, this does NOT apply that
- * hook's originating-delegate-call fallback — and doesn't need to.
- * resolveSpanAgentId exists to fix which agent's AVATAR/NAME displays, where
- * getting the exact agent wrong is visibly wrong; resolveSpanAgentType only
- * needs the delegate's KIND (native vs subagent_3p), which it derives by
- * resolving `span.agentId` against the agents list. Per ADR-032, agent
- * identity flows from the resolved target for BOTH dispatch kinds —
- * `spawnSubTurn` (pkg/agent/subturn.go) sets `agent.ID = execSource.ID`
- * unconditionally, native or external-CLI, with no per-dispatch-kind
- * exception — so `span.agentId` reliably carries the resolved delegate id
- * here regardless of which kind it turns out to be.
- */
-function resolveSpanAgentType(span: SubagentSpan, agents: Agent[]): '3p' | 'native' | undefined {
-  if (!span.agentId) return undefined
-  const agent = agents.find((a) => a.id === span.agentId)
-  if (!agent) return undefined
-  return agent.type === 'subagent_3p' ? '3p' : 'native'
-}
-
-// Renders subagent spans attached to the current message (FR-H-008).
-// useMessage().id corresponds to the store message's id (set in omnipus-runtime convertMessage).
-export function SubagentSpansRenderer() {
-  const message = useMessage()
-  // Perf (chat UI freeze under heavy subagent/delegation
-  // activity): select the ONE message by id from `messagesById` instead of
-  // subscribing to the whole `messages` array + `.find()`ing it every
-  // render. `messages` gets a brand-new array identity on every WS frame
-  // (bucketToForeground rebuilds it every bucket mutation), so the old
-  // `useChatStore((s) => s.messages)` re-rendered this component on every
-  // frame of the ENTIRE turn, not just frames touching this message; the
-  // `.find()` then re-scanned the whole array on top of that. `messagesById`
-  // returns the SAME object reference across renders unless THIS message
-  // was the one touched by the last mutation (Immer structural sharing —
-  // see ChatStore.messagesById's doc comment), so Zustand's default
-  // Object.is equality correctly skips re-rendering otherwise. The `??`
-  // fallback is a defensive O(N) scan — mirrors attachStepToSpan's
-  // established "O(1) lookup first, O(N) fallback" idiom (src/store/chat.ts)
-  // — for the narrow case of a hand-rolled test fixture that sets `messages`
-  // on the store directly without also setting `messagesById`; real app
-  // flows always keep the two in sync (bucketToForeground derives both from
-  // the same bucket, and getMessages() filters `messages` down to exactly
-  // the ids present in `messagesById`), so this fallback is never reached
-  // outside such fixtures.
-  const storeMsg = useChatStore((s) => s.messagesById[message.id] ?? s.messages.find((m) => m.id === message.id))
-  // Fix 2 (user-approved 2026-07-16): delegation cards are hidden from the
-  // thread by default — verbose chat is the only way to bring them back
-  // here (shouldRenderSubagentSpan, src/lib/toolVisibility.ts). Selector
-  // pattern mirrors ToolCallBadge.tsx's use of the same store (a plain hook
-  // call inside a component, not getState()) so this stays reactive to the
-  // preference toggling live.
-  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
-  // W3: reused ['agents'] query (prefetched by AppShell, staleTime 30s
-  // elsewhere) — resolves each span's agentId to native/3p so a running
-  // external-CLI delegate's card can show the "no live progress" notice.
-  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
-  const spans = (storeMsg?.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
-  if (spans.length === 0) return null
-  return (
-    <>
-      {spans.map((span) => (
-        <SubagentBlock key={span.spanId} span={span} agentType={resolveSpanAgentType(span, agents)} />
-      ))}
-    </>
-  )
-}
+// ADR-091 D7/D10: `resolveSpanAgentType` and `SubagentSpansRenderer` (the
+// per-message thread rendering of subagent spans via SubagentBlock) are
+// deleted — a child's own frames never arrive in the parent's bucket any
+// more (I-4), so the thread has no span content left to render at any
+// verbosity. A delegation's status now lives only in the side panel
+// (ActivityPanel.tsx, fed by useRunningActivity.ts reading message.spans
+// directly) and in the child's own session, opened via its
+// `childSessionId`.
 
 // Bug 2 (UAT, ADR-040 browser-panel round): renders the agent the CALLER
 // already resolved per-message (`message.agentId ?? activeAgentId`), passed in
@@ -1278,13 +1206,20 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // as the live path (see AssistantMessage's showEmptyPlaceholder).
   //
   // Fix 3 (2026-07-16): emptiness is judged on VISIBLE content only — a
-  // message whose only content is a hidden delegation/background-bash
-  // dispatch (default thread policy, toolVisibility.ts) must not render an
-  // empty bubble with a bare Copy action bar (the D-fix UAT defect
-  // resurfacing once the thread started hiding those by default).
-  // visibleToolCalls/visibleSpans are also what's actually rendered below —
-  // hoisted here so both the emptiness check and the render loop share one
-  // computation instead of drifting into two different notions of "visible".
+  // message whose only content is a hidden delegate status poll or
+  // background-bash dispatch (default thread policy, toolVisibility.ts) must
+  // not render an empty bubble with a bare Copy action bar (the D-fix UAT
+  // defect resurfacing once the thread started hiding those by default). A
+  // `delegate` 'run' call is visible by default now (ADR-091 D7/AC-7), so it
+  // counts as real content here rather than triggering this guard.
+  // visibleToolCalls is also what's actually rendered below — hoisted here
+  // so both the emptiness check and the render loop share one computation
+  // instead of drifting into two different notions of "visible". Subagent
+  // spans no longer factor in at all (ADR-091 D7/D10): a child's own frames
+  // never arrive in the parent's bucket any more, so the thread has no span
+  // content to render or to judge emptiness against — the side panel
+  // (ActivityPanel.tsx, fed by useRunningActivity.ts reading message.spans
+  // directly) is where a delegation's status lives now.
   const hasContent = !!message.content?.trim().length
   // F4 (second review wave on branch fix/615-617-618-hardening): `tc` here
   // is a baked PositionedToolCall, which — like every other #617-era call
@@ -1305,10 +1240,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   )
   const hasVisibleToolCalls = visibleToolCalls.length > 0
   const hasMedia = mediaItems.length > 0
-  // Fix 2 (user-approved 2026-07-16): the actual render list, filtered
-  // through the thread gate (shouldRenderSubagentSpan).
-  const visibleSpans = (message.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
-  const isEmptyContent = !hasContent && !hasVisibleToolCalls && !hasMedia && !visibleSpans.length
+  const isEmptyContent = !hasContent && !hasVisibleToolCalls && !hasMedia
   const showEmptyPlaceholder = !!message.isStreaming && isEmptyContent
   // D-fix, terminal-empty variant (integrate, kept through the 2026-09-15
   // merge next to release's goal-aware label): a message that finished
@@ -1536,13 +1468,6 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
               />
             )
           })}
-
-          {/* Subagent spans — pre-filtered via visibleSpans above (Fix 2).
-              W3: agentType resolved from the `agents` list already fetched
-              above (for the avatar) — see resolveSpanAgentType's doc comment. */}
-          {visibleSpans.map((span) => (
-            <SubagentBlock key={span.spanId} span={span} agentType={resolveSpanAgentType(span, agents)} />
-          ))}
         </div>
 
         {/* Action bar — always visible at reduced opacity, fully opaque on hover.
@@ -1903,10 +1828,11 @@ function AssistantMessage() {
   )
   // Fix 3 (2026-07-16): VISIBLE tool calls only — mirrors the historical
   // path's wouldToolCallBeVisible check (same function, same rationale: a
-  // hidden delegation/background-bash dispatch must not count as "content"
-  // for the ghost-bubble guard below). part.isError is the closest
-  // available proxy for this surface's outcome signal — see
-  // wouldToolCallBeVisible's own doc comment for why.
+  // hidden delegate status poll or background-bash dispatch must not count
+  // as "content" for the ghost-bubble guard below — a `delegate` 'run' call
+  // IS content, ADR-091 D7/AC-7). part.isError is the closest available
+  // proxy for this surface's outcome signal — see wouldToolCallBeVisible's
+  // own doc comment for why.
   const hasVisibleToolCall = message.content?.some(
     (part) =>
       part.type === 'tool-call' &&
@@ -1919,8 +1845,10 @@ function AssistantMessage() {
       ),
   )
   const hasMedia = !!storeMsg?.media?.length
-  const visibleSpans = (storeMsg?.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
-  const isEmptyContent = !hasVisibleText && !hasVisibleToolCall && !hasMedia && !visibleSpans.length
+  // ADR-091 D7/D10: subagent spans no longer factor into thread emptiness —
+  // a child's own frames never arrive in the parent's bucket any more, so
+  // there is no span content in the thread to judge emptiness against.
+  const isEmptyContent = !hasVisibleText && !hasVisibleToolCall && !hasMedia
   // FR-21: show (interrupted) suffix when the store marks this message interrupted.
   const isInterrupted = storeMsg?.status === 'interrupted'
   const showEmptyPlaceholder = isRunning && isEmptyContent
@@ -1980,8 +1908,6 @@ function AssistantMessage() {
                   },
                 }}
               />
-              {/* Subagent spans — rendered per-message, keyed by span_id (FR-H-008) */}
-              <SubagentSpansRenderer />
               {/* Trailing thinking indicator — sits at the bottom of the bubble
                   while the turn is running so the user always sees a "still
                   working" cue at the position where the next text/tool will
@@ -2758,6 +2684,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             textarea, ChatGPT/Claude-style) — it was visually lost up here. */}
         <AgentPicker disabled={agentRemoved} tabIndex={3} />
         <ModelPicker disabled={agentRemoved} tabIndex={4} />
+        {/* ADR-092: per-chat Auto-approve quick switch. Deliberately NO
+            explicit tabIndex — the closed 1-8 composer ring documented
+            above (see ChatControls.tsx) stays exactly as numbered; this
+            control falls into natural DOM tab order after it, same as the
+            header tab menu. */}
+        <AutoApprovePicker disabled={agentRemoved} />
         <span className="flex-1" />
         {/* Token counter — status; hidden below @2xl of the composer root's
             @container (~42rem). */}

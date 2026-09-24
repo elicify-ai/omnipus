@@ -830,53 +830,17 @@ jobs:
       - run: npm run test:design-system:components
       - run: npm run build:storybook
       - run: npm run test:storybook
-      # Must target the static build made one step up, never the dev server:
-      # without STORYBOOK_STATIC_DIR the config fell back to the on-demand-
-      # compiling Storybook dev server, and this step overran the job's
-      # 45-minute ceiling on every release/v0.1.1 run (2026-09-22/23). The
-      # config now refuses that fallback under CI. timeout-minutes sits just
-      # above the config's 25-minute globalTimeout, so an overrun fails here
-      # with Playwright's own reason, not as a silent job cancel.
-      - run: npm run test:design-system:browser
-        timeout-minutes: 27
-        env:
-          STORYBOOK_STATIC_DIR: dist/storybook
-      # Appearance gate (issue #753): pixel screenshots of the static
-      # Storybook build, diffed against tests/design-system/screenshot.spec.ts-snapshots/.
-      # Must run after build:storybook, and must never fall back to the dev
-      # server (rule 11 / this suite's own header comment: 16-of-18 vs
-      # 18-of-18 evidence). STORYBOOK_STATIC_DIR makes
-      # playwright.design-system.config.ts serve dist/storybook itself, with
-      # Playwright's own webServer managing start/stop for this one step --
-      # no separate long-running process to coordinate across steps.
-      #
-      # Blocking: pixel diff of every catalogued component story against the
-      # committed darwin and linux baselines (maxDiffPixels: 50).
-      - run: npm run test:design-system:screenshot
-        timeout-minutes: 27
-        env:
-          STORYBOOK_STATIC_DIR: dist/storybook
-      - name: Upload appearance-gate diff evidence
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: design-system-appearance-diffs
-          path: test-results/design-system-browser-artifacts/screenshot-*
-          if-no-files-found: ignore
-      - run: npm run verify:design-system
-      # Enforcement audit (design-system/enforcement/contract.json): complete
-      # six-scanner audit at the checkpoint recorded in contract.json's
-      # currentCheckpoint (read by scripts/design-system-locks/current-checkpoint.mjs
-      # -- never hardcoded here) with the live token policy, canonical
-      # baseline/ledger (composed ONLY from lead-approved fragments), and composed
-      # public export→manifest→story→executed-check coverage. Intentionally a hard,
-      # blocking step with NO continue-on-error: unapproved existing debt and
-      # unsupported governed syntax are real gate failures today — suppressing the
-      # exit would manufacture a green the contract's failClosed clause forbids.
-      # Must run AFTER build:storybook/test:storybook/test:design-system:browser so
-      # --index dist/storybook/index.json and the --evidence executed-check files
-      # exist; coverage composition reads them.
-      - run: npm run audit:design-system
+      # Browser and screenshot tests now run in separate matrix jobs
+      # (design-system-browser-* below) to reduce per-worker contention:
+      # 1316 tests across 4 browser projects with 2 workers = 658 tests/worker.
+      # Splitting into 4 parallel jobs reduces that to ~329 tests/worker,
+      # eliminating Storybook's a11y instrumentation flakes (play/report lifecycle).
+      # Both jobs (browser + screenshot) require the static build from this step,
+      # so they must run after build:storybook.
+      # verify:design-system and the enforcement audit both read
+      # test-results/design-system-browser.json, which only exists after the
+      # design-system-browser matrix jobs finish and their per-project reports
+      # are merged — so both run in the design-system-audit job, not here.
       - run: npm run test:design-system:package
       # Build both revisions on this runner; a macOS baseline is not a Linux budget oracle.
       - name: Checkout immutable production baseline
@@ -895,6 +859,12 @@ jobs:
       - run: npm run measure:design-system-bundle
       - name: Enforce production budget and Storybook exclusion
         run: node scripts/design-system/bundle-audit.mjs --baseline test-results/design-system-ci-baseline.json --candidate test-results/design-system-production-candidate.json --provenance docs/internal/design/evidence/design-system-production-provenance.json --output test-results/design-system-production-budget.json
+      - name: Upload storybook build (needed by audit)
+        uses: actions/upload-artifact@v7
+        with:
+          name: design-system-storybook-build
+          path: dist/storybook
+          if-no-files-found: error
       - name: Upload execution evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -904,6 +874,153 @@ jobs:
             test-results/design-system*.json
             docs/internal/design/evidence/design-system-production-provenance.json
           if-no-files-found: error
+
+  design-system-browser:
+    name: Design system browser checks — ${{ matrix.project }}
+    runs-on: ubuntu-latest
+    needs: [changes, setup, design-system]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.spa == 'true'
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [chromium, firefox, webkit, chromium-coarse-pointer]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}
+      - run: tar -xf node_modules.tar
+      - run: npx playwright install --with-deps ${{ matrix.project == 'chromium-coarse-pointer' && 'chromium' || matrix.project }}
+      - run: npm run build:storybook
+      - name: Run browser checks for ${{ matrix.project }}
+        run: npx playwright test --config=playwright.design-system.config.ts tests/design-system/browser.spec.ts --project=${{ matrix.project }}
+        timeout-minutes: 27
+        env:
+          STORYBOOK_STATIC_DIR: dist/storybook
+          CI: "true"
+      - name: Move per-project browser evidence (for merge)
+        if: always()
+        run: |
+          if [ -f "test-results/design-system-browser.json" ]; then
+            mv "test-results/design-system-browser.json" "test-results/design-system-browser-${{ matrix.project }}.json"
+          fi
+      - name: Upload browser evidence for ${{ matrix.project }}
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: design-system-browser-evidence-${{ matrix.project }}
+          path: test-results/design-system-browser-${{ matrix.project }}.json
+          if-no-files-found: error
+
+  design-system-screenshot:
+    name: Design system appearance gate
+    runs-on: ubuntu-latest
+    needs: [changes, setup, design-system]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.spa == 'true'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}
+      - run: tar -xf node_modules.tar
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build:storybook
+      - name: Run appearance gate (screenshot comparisons)
+        run: npm run test:design-system:screenshot
+        timeout-minutes: 27
+        env:
+          STORYBOOK_STATIC_DIR: dist/storybook
+          CI: "true"
+      - name: Upload appearance-gate diff evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: design-system-appearance-diffs
+          path: test-results/design-system-browser-artifacts/screenshot-*
+          if-no-files-found: ignore
+
+  design-system-audit:
+    name: Design system enforcement audit
+    runs-on: ubuntu-latest
+    needs: [changes, setup, design-system, design-system-browser, design-system-screenshot]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.spa == 'true'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}
+      - run: tar -xf node_modules.tar
+      - name: Download storybook build (required by audit's coverage composition)
+        uses: actions/download-artifact@v7
+        with:
+          name: design-system-storybook-build
+          path: dist/storybook
+      - name: Download all evidence artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: /tmp/ci-evidence
+      - name: Merge evidence files and validate audit preconditions
+        run: |
+          set -e  # fail fast on any error
+
+          mkdir -p test-results docs/internal/design/evidence
+
+          # Copy design-system evidence files from the main design-system job
+          # These are the component and production test results
+          cp /tmp/ci-evidence/design-system-evidence/test-results/design-system-components.json test-results/
+          cp /tmp/ci-evidence/design-system-evidence/test-results/design-system-storybook-chromium.json test-results/
+          cp /tmp/ci-evidence/design-system-evidence/test-results/design-system-storybook-firefox.json test-results/
+          cp /tmp/ci-evidence/design-system-evidence/test-results/design-system-storybook-webkit.json test-results/
+          cp /tmp/ci-evidence/design-system-evidence/docs/internal/design/evidence/design-system-production-provenance.json docs/internal/design/evidence/
+
+          # Copy per-project browser evidence files for merging
+          cp /tmp/ci-evidence/design-system-browser-evidence-chromium/test-results/design-system-browser-chromium.json test-results/
+          cp /tmp/ci-evidence/design-system-browser-evidence-firefox/test-results/design-system-browser-firefox.json test-results/
+          cp /tmp/ci-evidence/design-system-browser-evidence-webkit/test-results/design-system-browser-webkit.json test-results/
+          cp /tmp/ci-evidence/design-system-browser-evidence-chromium-coarse-pointer/test-results/design-system-browser-chromium-coarse-pointer.json test-results/
+
+          # Merge all per-project browser evidence files into a single design-system-browser.json
+          node scripts/design-system/merge-browser-evidence.mjs
+
+          # Verify all required evidence files exist and are not empty
+          echo "Verifying audit preconditions..."
+          for file in \
+            test-results/design-system-components.json \
+            test-results/design-system-storybook-chromium.json \
+            test-results/design-system-storybook-firefox.json \
+            test-results/design-system-storybook-webkit.json \
+            test-results/design-system-browser.json \
+            dist/storybook/index.json; do
+            if [ ! -f "$file" ] || [ ! -s "$file" ]; then
+              echo "ERROR: Required evidence file missing or empty: $file"
+              exit 1
+            fi
+          done
+          echo "All evidence files present and ready for audit."
+        env:
+          CI: "true"
+
+      - name: Verify design-system manifests against the executed evidence
+        run: npm run verify:design-system
+        env:
+          CI: "true"
+
+      - name: Run design-system audit
+        run: npm run audit:design-system
+        env:
+          CI: "true"
 
   wire-types-lint:
     name: Wire-Types Lint
@@ -2998,6 +3115,9 @@ jobs:
       - lint-spa
       - vitest
       - design-system
+      - design-system-browser
+      - design-system-screenshot
+      - design-system-audit
       - wire-types-lint
       - tool-error-status-lint
       - verify-contracts

@@ -361,39 +361,13 @@ describe('chat.multisession — (g) concurrent token streams for A and B', () =>
 // (h) Frame missing session_id falls back to activeSessionId with console.warn
 // ---------------------------------------------------------------------------
 
-describe('chat.multisession — (h) frame missing session_id falls back with console.warn', () => {
-  // Traces to: quizzical-marinating-frog.md Step 9 — scenario (h)
-  it('token frame without session_id routes to activeSessionId and emits console.warn', () => {
-    // BDD: Given session A is active
-    act(() => {
-      useChatStore.getState().handleFrame({ type: 'session_started', session_id: SID_A })
-      useSessionStore.setState({ activeSessionId: SID_A })
-    })
-
-    const warnSpy = vi.spyOn(console, 'warn')
-
-    // BDD: When a token frame arrives with no session_id
-    act(() => {
-      useChatStore.getState().handleFrame({ type: 'token', content: 'fallback-token' } as unknown as WsReceiveFrame)
-    })
-
-    // BDD: Then a console.warn was emitted
-    const warnCalls = warnSpy.mock.calls
-    const hasWarn = warnCalls.some(
-      (args) =>
-        typeof args[0] === 'string' &&
-        (args[0].includes('session_id') || args[0].includes('missing'))
-    )
-    expect(hasWarn).toBe(true)
-
-    // BDD: And the token was routed to the active session's bucket (not lost)
-    const state = useChatStore.getState()
-    const bucketA = state.sessionsById[SID_A]
-    // The bucket should have received the token (routed to fallback SID_A)
-    const hasToken = bucketA ? getMessages(bucketA).some((m) => m.content.includes('fallback-token')) : false
-    expect(hasToken).toBe(true)
-  })
-})
+// ADR-091 D7/FR-E-002: the test-mode active-session fallback (routing an
+// untagged session-scoped frame to whatever session happened to be
+// foreground, in test builds only) is deleted — a session-scoped frame
+// missing session_id is now dropped with a diagnostic in every environment,
+// never filed under the active session. Scenario (h), which pinned that
+// fallback, is retired; scenario (k) below already proves the drop, and now
+// proves it environment-independently.
 
 // ---------------------------------------------------------------------------
 // (i) session_started binds when activeSessionId is null AND optimistic msg exists
@@ -434,10 +408,16 @@ describe('chat.multisession — (i) session_started binds when activeSessionId i
 // (k) untagged session-scoped frame in production drops and sets connection error
 // ---------------------------------------------------------------------------
 
-describe('chat.multisession — (k) untagged session-scoped frame in production mode', () => {
-  // F-S10 test (k): in production, a session-scoped frame missing session_id is dropped
-  // and a connection error toast is surfaced.
-  it('drops the frame and calls setConnectionError in production mode', async () => {
+describe('chat.multisession — (k) untagged session-scoped frame is dropped, environment-independently (ADR-091 FR-E-002)', () => {
+  // F-S10 test (k): a session-scoped frame missing session_id is dropped
+  // and a connection error toast is surfaced. Originally proven under a
+  // 'production' MODE stub only (the pre-ADR-091 fallback made this
+  // conditional); ADR-091 deleted that fallback, so the same assertion now
+  // holds unconditionally — this test keeps the production stub as ONE
+  // proof point, and the test immediately below proves the SAME drop with
+  // no MODE stub at all (the actual test environment), so the two together
+  // show the behavior no longer depends on environment.
+  it('drops the frame and calls setConnectionError under MODE=production', async () => {
     const { useConnectionStore } = await import('@/store/connection')
 
     // Stub MODE to 'production' for this test
@@ -452,7 +432,7 @@ describe('chat.multisession — (k) untagged session-scoped frame in production 
     const errorSpy = vi.spyOn(console, 'error')
 
     act(() => {
-      // This frame is session-scoped but missing session_id — should be dropped in production
+      // This frame is session-scoped but missing session_id — must be dropped.
       useChatStore.getState().handleFrame({ type: 'token', content: 'should be dropped' } as unknown as WsReceiveFrame)
     })
 
@@ -476,5 +456,39 @@ describe('chat.multisession — (k) untagged session-scoped frame in production 
 
     // Restore MODE
     vi.stubEnv('MODE', origMode)
+  })
+
+  // ADR-091 D7/FR-E-002: the same drop, under the DEFAULT test-mode
+  // environment (no MODE stub) — this is the regression proof that the
+  // deleted fallback (which used to special-case exactly this mode) is
+  // really gone, not merely untested under it.
+  it('drops the frame and calls setConnectionError under the default (test) MODE too', async () => {
+    const { useConnectionStore } = await import('@/store/connection')
+
+    act(() => {
+      useSessionStore.setState({ activeSessionId: SID_A })
+      useChatStore.getState().handleFrame({ type: 'session_started', session_id: SID_A })
+    })
+
+    const errorSpy = vi.spyOn(console, 'error')
+
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'token', content: 'should also be dropped' } as unknown as WsReceiveFrame)
+    })
+
+    const errorCalls = errorSpy.mock.calls
+    const hasError = errorCalls.some(
+      (args) => typeof args[0] === 'string' && args[0].includes('session_id')
+    )
+    expect(hasError).toBe(true)
+
+    const connError = useConnectionStore.getState().connectionError
+    expect(connError).toBeTruthy()
+    expect(connError).toContain('session_id')
+
+    const state = useChatStore.getState()
+    const bucketA = state.sessionsById[SID_A]
+    const hasToken = bucketA ? getMessages(bucketA).some((m) => m.content.includes('should also be dropped')) : false
+    expect(hasToken).toBeFalsy()
   })
 })

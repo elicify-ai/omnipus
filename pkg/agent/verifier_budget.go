@@ -26,10 +26,15 @@
 // package compiling, which is outside this wave's write-set ("the
 // tool-dispatch refusal point ... and nothing else" — see the ADR-084/085/
 // 086 joint delivery plan §3, wave E2). turnState.ctx (turn.go) is not a
-// substitute either: it is populated only for a delegated sub-turn
-// (pkg/agent/subturn.go's spawnSubTurn), not for an ordinary root turn, and
-// a verifier adjudication's tool-using turn is dispatched as an ordinary
-// turn via runTurn, not as a delegation. turnState.turnID, by contrast, is
+// substitute either: it was DOCUMENTED as populated only for a delegated
+// sub-turn (pre-ADR-091, by the deleted spawnSubTurn, pkg/agent/subturn.go),
+// not for an ordinary root turn — and a verifier adjudication's tool-using
+// turn is dispatched as an ordinary turn via runTurn, not as a delegation,
+// so the conclusion here is unaffected either way. ADR-091 fix lane
+// RX-SUBTURN finding (comment-only; code unchanged): grep finds
+// newTurnState's struct literal never sets ctx at all today, so this field
+// appears to be nil/unset for every turn, delegated or not — flagged for
+// the team, not fixed here. turnState.turnID, by contrast, is
 // populated on every turn ("<agentID>-turn-<seq>", seq monotonic per agent
 // — see the AgentLoop turn constructor) and is readable from both
 // admitToolResult and the loop.go dispatch point with no signature change

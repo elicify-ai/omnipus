@@ -2,8 +2,9 @@
 //
 // # Why this file exists
 //
-// The hardcoded deny-pattern baseline (defaultDenyPatterns in shell.go, FR-B4)
-// used to carry a single blanket rule:
+// Before ADR-092 deleted it, the hardcoded deny-pattern baseline
+// (defaultDenyPatterns, formerly in shell.go, FR-B4) carried a single blanket
+// rule:
 //
 //	regexp.MustCompile(`\$\([^)]+\)`)   // "reject ANY command substitution"
 //
@@ -13,14 +14,15 @@
 // additionally made the four narrower rules immediately below it in the list
 // (`$(cat `, `$(curl `, `$(wget `, `$(which `) unreachable dead code.
 //
-// # Why "recursively re-apply defaultDenyPatterns to the inner text" is a no-op
+// # Why "recursively re-apply defaultDenyPatterns to the inner text" would have been a no-op
 //
 // The obvious narrowing — extract the text inside `$( … )` and re-run the
-// baseline patterns against it — adds exactly nothing, because every baseline
-// pattern is an UNANCHORED substring match evaluated over the whole command
-// string. `echo $(rm -rf /tmp)` already matches `\brm\s+-[rf]{1,2}\b` today,
-// with or without recursion; `$(sudo x)` already matches `\bsudo\b`. Recursion
-// would only matter if those patterns were anchored, and they are not.
+// (now-deleted, ADR-092) baseline patterns against it — would have added
+// exactly nothing, because every baseline pattern was an UNANCHORED substring
+// match evaluated over the whole command string. `echo $(rm -rf /tmp)` already
+// matched `\brm\s+-[rf]{1,2}\b` with or without recursion; `$(sudo x)` already
+// matched `\bsudo\b`. Recursion would only have mattered if those patterns had
+// been anchored, and they were not.
 //
 // So the blanket rule's UNIQUE contribution has to be identified and preserved
 // deliberately. It is three things:
@@ -45,9 +47,11 @@
 //
 // substitutionGuard below re-implements S1/S2/S3 as three structural rules
 // (R1/R2/R3) so that benign substitutions pass and every shape above is still
-// refused. It runs on the SAME unconditional baseline path as the regex list
-// (see ExecTool.guardCommand) — no policy verdict or operator configuration
-// disables it, per FR-B4.
+// refused. It runs unconditionally on every bash call (see
+// ExecTool.guardCommand) — no policy verdict, mode (Ask/Auto/God Mode), or
+// operator configuration disables it, per FR-B4. ADR-092 D2 deleted
+// defaultDenyPatterns entirely without touching this guard, which is the
+// baseline check that survives that removal unchanged.
 //
 // # Threat-model boundary
 //
@@ -147,8 +151,10 @@ var shellKeywordSkips = map[string]bool{
 // dirname, realpath, readlink, stat, hostname, whoami, id, uname, mktemp,
 // git, go, npm, npx, yarn, pnpm, pip, cargo, make, docker, kubectl.
 // The dangerous FORMS of those (`git push`, `npm install -g`, `docker run`, …)
-// are already matched by defaultDenyPatterns, which sees them inside a
-// substitution exactly as it sees them outside one.
+// are network operations; ADR-092 D2 deleted defaultDenyPatterns, and D8's
+// Auto-mode network deny-by-default (a pre-flight classifier on the resolved
+// binary) is their compensating control at the top level — this file does
+// not duplicate that coverage inside a substitution.
 //
 // DO NOT MUTATE AT RUNTIME — security-relevant FR-B4 baseline. Both deny maps
 // and substitutionHostileHosts below are read on every guardCommand call;
@@ -193,8 +199,14 @@ var substitutionDenyAnySegment = map[string]bool{
 	// Whole-file readers that have no legitimate mid-pipeline use.
 	"cat": true, "tac": true, "less": true, "more": true, "strings": true,
 	// Destructive / system-state commands: no useful stdout, so a substitution
-	// is never the right place for them. (Their dangerous argument forms are
-	// already caught by defaultDenyPatterns; this closes the shape entirely.)
+	// is never the right place for them. Their FILESYSTEM-shaped forms (rm, mv,
+	// dd, mkfs, chmod, chown, mount, …) are covered at the top level by
+	// ADR-092 D7's Auto-mode kernel pre-flight; their PROCESS/PRIVILEGE-shaped
+	// forms (kill, shutdown, sudo, systemctl, iptables, crontab, …) have no
+	// top-level compensating control since ADR-092 D2 deleted
+	// defaultDenyPatterns — an accepted, ADR-documented gap (D2's own removal
+	// inventory). Either way, this map closes the substitution-hiding shape
+	// regardless of what, if anything, covers the bare top-level form.
 	"rm": true, "rmdir": true, "unlink": true, "shred": true, "mv": true,
 	"dd": true, "mkfs": true, "fdisk": true, "diskpart": true,
 	"mount": true, "umount": true, "chmod": true, "chown": true,
@@ -261,8 +273,8 @@ var substitutionHostileHosts = func() map[string]bool {
 // whether the command substitutions in a command are safe. Returns a non-empty
 // block message when the command must be refused, "" when it may proceed.
 //
-// Callers must treat this exactly like applyDenyPatterns — unconditional, not
-// disableable by policy or operator config.
+// This check is unconditional and not disableable by policy or operator
+// config.
 func substitutionGuard(command string) string {
 	lower := lowerASCII(command)
 	subs := extractCommandSubstitutions(lower)
@@ -787,4 +799,20 @@ func init() {
 					"(see shell_subst_guard.go)", host))
 		}
 	}
+}
+
+// lowerASCII returns a copy of s with ASCII uppercase letters lowercased.
+// Avoids importing strings just for ToLower at call sites that already import
+// this package. Unicode-aware lowercasing is not needed here — shell commands
+// are ASCII.
+func lowerASCII(s string) string {
+	b := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b[i] = c
+	}
+	return string(b)
 }

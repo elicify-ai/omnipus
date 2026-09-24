@@ -5,12 +5,12 @@
 // Regression coverage for the nested-delegation message leak (HIGH,
 // 2026-08).
 //
-// executeInbox and executePeek were re-keyed to rec.ParentDurableKey (the
+// executeInbox and executePeek were re-keyed to rec.SteeringSessionID() (the
 // key a child's messages are actually Appended under — see
 // message_parent.go::ownerKeyFor) but executeInboxAck was left keyed to
 // callerOwnerKey(ctx). Since verifyCallerOwnsSession deliberately permits an
 // ANCESTOR (FR-039), whose key is by definition NOT the target's
-// ParentDurableKey, an A -> B -> C chain let A drain C's message and then
+// SteeringSessionID, an A -> B -> C chain let A drain C's message and then
 // ack it against A's OWN inbox file: every id came back Unknown, nothing was
 // acknowledged, and the message was redelivered on every subsequent drain
 // while permanently consuming C's InboxUnackedMax budget.
@@ -25,16 +25,21 @@ import (
 )
 
 // seedChainRecord persists one lifecycle record for a delegated session with
-// the given direct-parent durable key.
-func seedChainRecord(t *testing.T, lc *session.LifecycleStore, sessionID, parentDurableKey string) {
+// the given direct-parent durable key and the chain's real (walked) root —
+// production's launchSteered always resolves and stamps the TRUE root, not
+// the immediate parent, on every hop (pkg/agent/steer_launcher.go's
+// walkVerifiedRoot), so a session two or more hops below the root carries a
+// RootSessionID that differs from its own direct SteeringSessionID.
+func seedChainRecord(t *testing.T, lc *session.LifecycleStore, sessionID, parentDurableKey, rootSessionID string) {
 	t.Helper()
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID:        sessionID,
-		State:            session.LifecycleRunning,
-		OwnerScopeKind:   session.OwnerScopeHuman,
-		ParentDurableKey: parentDurableKey,
-		WorkspaceID:      "ws-1",
-		AgentID:          "worker",
+		SessionID:      sessionID,
+		Generation:     1,
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentDurableKey, RootSessionID: rootSessionID},
+		WorkspaceID:    "ws-1",
+		AgentID:        "worker",
 	}); err != nil {
 		t.Fatalf("seed lifecycle record %s failed: %v", sessionID, err)
 	}
@@ -42,12 +47,12 @@ func seedChainRecord(t *testing.T, lc *session.LifecycleStore, sessionID, parent
 
 // TestDelegateInboxAck_AncestorAck_KeyedByTargetParent_NoRedelivery is the
 // RED/GREEN test for the leak. Chain: A (root chat) -> B -> C. C's message
-// is Appended under C's own ParentDurableKey ("sess-B"). The ANCESTOR A
+// is Appended under C's own SteeringSessionID ("sess-B"). The ANCESTOR A
 // drains it (permitted by FR-039) and then acks it.
 //
 // Pre-fix this ack ran AckDetailed("sess-A", ...) and every id came back
 // Unknown, so the message survived and the very next drain redelivered it.
-// Post-fix the ack is keyed by rec.ParentDurableKey ("sess-B"), matching the
+// Post-fix the ack is keyed by rec.SteeringSessionID() ("sess-B"), matching the
 // read path, so the id is genuinely acknowledged and never redelivered.
 func TestDelegateInboxAck_AncestorAck_KeyedByTargetParent_NoRedelivery(t *testing.T) {
 	tool, lc, inbox, _ := newADR053TestTool(t)
@@ -58,8 +63,8 @@ func TestDelegateInboxAck_AncestorAck_KeyedByTargetParent_NoRedelivery(t *testin
 	const rootA = "sess-A"
 	const midB = "sess-B"
 	const leafC = "sess-C"
-	seedChainRecord(t, lc, midB, rootA)
-	seedChainRecord(t, lc, leafC, midB)
+	seedChainRecord(t, lc, midB, rootA, rootA)
+	seedChainRecord(t, lc, leafC, midB, rootA)
 
 	// C appends its message under its OWN direct parent's key — this is
 	// what message_parent.go does in production (ownerKeyFor(rec)).
@@ -131,13 +136,13 @@ func TestDelegateInboxAck_AncestorAck_KeyedByTargetParent_NoRedelivery(t *testin
 }
 
 // TestDelegateInboxAck_DirectParentStillWorks pins the common case the fix
-// must not regress: the DIRECT parent's own key IS rec.ParentDurableKey, so
+// must not regress: the DIRECT parent's own key IS rec.SteeringSessionID(), so
 // its ack behaves exactly as before.
 func TestDelegateInboxAck_DirectParentStillWorks(t *testing.T) {
 	tool, lc, inbox, _ := newADR053TestTool(t)
 	const parent = "parent-direct"
 	const child = "child-direct"
-	seedChainRecord(t, lc, child, parent)
+	seedChainRecord(t, lc, child, parent, parent)
 
 	if _, err := inbox.Append(parent, progressMsgForDelegateTest(t, child, "pm-direct-1")); err != nil {
 		t.Fatalf("seed inbox message failed: %v", err)
@@ -158,7 +163,7 @@ func TestDelegateInboxAck_DirectParentStillWorks(t *testing.T) {
 }
 
 // TestDelegateInboxAck_UnrelatedCallerDenied proves the ownership gate the
-// fix necessarily introduces: keying the ack by rec.ParentDurableKey without
+// fix necessarily introduces: keying the ack by rec.SteeringSessionID() without
 // verifying the caller owns rec would let ANY caller ack messages in an
 // inbox it has no relationship to. A stranger must be denied, and the
 // message must survive untouched.
@@ -166,7 +171,7 @@ func TestDelegateInboxAck_UnrelatedCallerDenied(t *testing.T) {
 	tool, lc, inbox, _ := newADR053TestTool(t)
 	const victimParent = "victim-parent"
 	const victimChild = "victim-child"
-	seedChainRecord(t, lc, victimChild, victimParent)
+	seedChainRecord(t, lc, victimChild, victimParent, victimParent)
 
 	if _, err := inbox.Append(victimParent, progressMsgForDelegateTest(t, victimChild, "pm-victim-1")); err != nil {
 		t.Fatalf("seed inbox message failed: %v", err)
@@ -181,7 +186,7 @@ func TestDelegateInboxAck_UnrelatedCallerDenied(t *testing.T) {
 	if !res.IsError {
 		t.Fatalf("an unrelated caller must NOT be able to ack another owner's inbox, got success: %s", res.ForLLM)
 	}
-	if !strings.Contains(res.ForLLM, "not owned by the calling session") {
+	if !strings.Contains(res.ForLLM, "not steered by the calling principal") {
 		t.Errorf("expected an ownership denial, got: %s", res.ForLLM)
 	}
 

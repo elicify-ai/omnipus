@@ -886,7 +886,7 @@ describe('getApiSchemaErrorCount / resetApiSchemaErrorCount', () => {
 // 3. Throws ApiSchemaError when the response body is not valid JSON
 //
 // Tests use the generated LoginResponse schema (a simple well-understood shape)
-// and the live fetchAgents/fetchExecAllowlist functions which now pass schemas.
+// and the live fetchAgents/fetchSandboxStatus functions which now pass schemas.
 
 describe('request() with Zod schema — validation errors', () => {
   let fetchSpy: ReturnType<typeof vi.fn>
@@ -986,8 +986,8 @@ describe('request() with Zod schema — validation errors', () => {
       })
     )
 
-    const { fetchExecAllowlist, ApiSchemaError: ApiSchemaErrorClass, getApiSchemaErrorCount: count } = await import('./api')
-    await expect(fetchExecAllowlist()).rejects.toBeInstanceOf(ApiSchemaErrorClass)
+    const { fetchSandboxStatus, ApiSchemaError: ApiSchemaErrorClass, getApiSchemaErrorCount: count } = await import('./api')
+    await expect(fetchSandboxStatus()).rejects.toBeInstanceOf(ApiSchemaErrorClass)
     expect(count()).toBe(1)
   })
 })
@@ -1616,7 +1616,7 @@ describe('updateConfig: sends wire shape to backend', () => {
     // echoes back the full config after applying the change).
     const rawConfigResponse = {
       gateway: { host: '0.0.0.0', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      security: {},
       storage: { retention: { session_days: 90 } },
     }
 
@@ -1643,7 +1643,7 @@ describe('updateConfig: sends wire shape to backend', () => {
   it('translates data.session_retention_days → storage.retention.session_days', async () => {
     const rawConfigResponse = {
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      security: {},
       storage: { retention: { session_days: 30 } },
     }
 
@@ -1670,7 +1670,7 @@ describe('updateConfig: sends wire shape to backend', () => {
   it('does not include dev_mode_bypass in the PUT body (blocked server-side)', async () => {
     const rawConfigResponse = {
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      security: {},
       storage: { retention: { session_days: 90 } },
     }
 
@@ -1893,7 +1893,7 @@ describe('rawToFrontendConfig: preserves agents.defaults.default_model', () => {
     // Traces to: hotfix/v0.1.1 — agents.defaults fields must survive rawToFrontendConfig
     const wireConfig = {
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      security: {},
       storage: { retention: { session_days: 90 } },
       agents: {
         defaults: {
@@ -1919,7 +1919,7 @@ describe('rawToFrontendConfig: preserves agents.defaults.default_model', () => {
     // Traces to: hotfix/v0.1.1 — agents.defaults must survive the full fetchConfig→updateConfig round-trip
     const wireConfig = {
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      security: {},
       storage: { retention: { session_days: 90 } },
       agents: {
         defaults: {
@@ -2059,7 +2059,7 @@ describe('rotateGatewayToken: schema validation', () => {
 // ── validEnum / _configCoercionCount integration tests ────────────────────────
 //
 // Verifies that rawToFrontendConfig calls validEnum which increments _configCoercionCount
-// when the backend returns an invalid enum value for security.policy_mode.
+// when the backend returns an invalid enum value for security.prompt_injection_level.
 // Also verifies that valid enum values do NOT increment the counter.
 
 describe('validEnum / _configCoercionCount', () => {
@@ -2075,12 +2075,12 @@ describe('validEnum / _configCoercionCount', () => {
     sessionStorage.clear()
   })
 
-  it('increments counter when backend returns invalid enum value for security.policy_mode', async () => {
-    // Simulate backend returning "garbage" for security.policy_mode —
-    // not one of the valid values: allow | deny.
+  it('increments counter when backend returns invalid enum value for security.prompt_injection_level', async () => {
+    // Simulate backend returning "garbage" for security.prompt_injection_level —
+    // not one of the valid values: off | low | medium | high.
     const wireConfig = {
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'garbage' },
+      security: { prompt_injection_level: 'garbage' },
     }
     fetchSpy.mockResolvedValueOnce(
       new Response(JSON.stringify(wireConfig), {
@@ -2094,17 +2094,17 @@ describe('validEnum / _configCoercionCount', () => {
 
     const config = await fetchConfig()
 
-    // The coercion counter must have been incremented by at least 1 (for policy_mode).
+    // The coercion counter must have been incremented by at least 1 (for prompt_injection_level).
     expect(getConfigCoercionCount()).toBeGreaterThan(0)
-    // The invalid value must be replaced by the fallback ("deny").
-    expect(config.security.policy_mode).toBe('deny')
+    // The invalid value must be replaced by the fallback ("medium").
+    expect(config.security.prompt_injection_level).toBe('medium')
   })
 
-  it('does NOT increment counter when backend returns a valid enum value for security.policy_mode', async () => {
-    // "allow" is a valid value — no coercion should occur.
+  it('does NOT increment counter when backend returns a valid enum value for security.prompt_injection_level', async () => {
+    // "low" is a valid value — no coercion should occur.
     const wireConfig = {
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'allow' },
+      security: { prompt_injection_level: 'low' },
     }
     fetchSpy.mockResolvedValueOnce(
       new Response(JSON.stringify(wireConfig), {
@@ -2121,14 +2121,15 @@ describe('validEnum / _configCoercionCount', () => {
     // No coercion should have occurred.
     expect(getConfigCoercionCount()).toBe(0)
     // The valid value must be preserved.
-    expect(config.security.policy_mode).toBe('allow')
+    expect(config.security.prompt_injection_level).toBe('low')
   })
 
-  it('increments counter once per invalid enum field — differentiation test', async () => {
-    // Two different invalid enum values — counter should increment twice (once per field).
+  it('increments counter once per invalid/wrong-typed field — differentiation test', async () => {
+    // An invalid enum value (validEnum) and a wrong-typed scalar (castNumber)
+    // — counter should increment for each, independently.
     const wireConfig = {
-      gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'invalid_policy', exec_approval: 'invalid_exec' },
+      gateway: { host: '127.0.0.1', port: 'not-a-port' },
+      security: { prompt_injection_level: 'invalid_level' },
     }
     fetchSpy.mockResolvedValueOnce(
       new Response(JSON.stringify(wireConfig), {
@@ -2142,7 +2143,7 @@ describe('validEnum / _configCoercionCount', () => {
 
     await fetchConfig()
 
-    // Two invalid enum values should produce count ≥ 2 (one per field).
+    // Two independently-invalid fields should produce count ≥ 2 (one per field).
     expect(getConfigCoercionCount()).toBeGreaterThanOrEqual(2)
   })
 })
@@ -2214,7 +2215,7 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
     // production-telemetry coverage is preserved.)
     mockConfigResponse({
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask', exec_timeout_seconds: 'unlimited' },
+      security: { exec_timeout_seconds: 'unlimited' },
     })
 
     // Force the production (non-DEV) branch of recordCoercion so logError
@@ -2245,7 +2246,7 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
   it('castNumber: gateway.port="8080" (string, wrong-typed) falls back to the default port, increments the counter, and calls logError in production', async () => {
     mockConfigResponse({
       gateway: { host: '127.0.0.1', port: '8080' },
-      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      security: {},
     })
 
     vi.stubEnv('DEV', false)
@@ -2275,7 +2276,7 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
   it('castString: gateway.host=12345 (number, wrong-typed) falls back to the default bind address, increments the counter, and calls logError in production', async () => {
     mockConfigResponse({
       gateway: { host: 12345, port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      security: {},
     })
 
     vi.stubEnv('DEV', false)
@@ -2305,8 +2306,6 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
     mockConfigResponse({
       gateway: { host: '127.0.0.1', port: 8080 },
       security: {
-        policy_mode: 'deny',
-        exec_approval: 'ask',
         rate_limits: { max_tokens_per_day: 'unlimited', max_cost_per_day: {} },
       },
     })
@@ -2333,7 +2332,7 @@ describe('castString/castNumber/castOptionalNumber: wrong-shaped value coercion 
     // from the retired daily_cost_cap to exec_timeout_seconds per ADR-053 D12.)
     mockConfigResponse({
       gateway: { host: '127.0.0.1', port: 8080 },
-      security: { policy_mode: 'deny', exec_approval: 'ask', exec_timeout_seconds: 'unlimited' },
+      security: { exec_timeout_seconds: 'unlimited' },
     })
 
     vi.stubEnv('DEV', true)

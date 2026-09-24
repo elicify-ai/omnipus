@@ -67,7 +67,7 @@ async function assertNoBannedText(page: import('@playwright/test').Page): Promis
 
 test.describe('quiet disconnect banner (#823)', () => {
   test('a real network drop stays silent for 15s, silent well past it, shows only the calm line at the real chat-wide threshold, and clears cleanly on recovery', async ({ page, context }) => {
-    test.setTimeout(240_000)
+    test.setTimeout(CHAT_NOTICE_MS + 120_000)
 
     await page.goto('/')
     await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
@@ -102,11 +102,19 @@ test.describe('quiet disconnect banner (#823)', () => {
     await expect(page.getByTestId('connection-status-line')).toBeHidden()
     await assertNoBannedText(page)
 
+    // Merge of release #845 and the #823 redo (stricter of both): still
+    // hidden just BEFORE the real chat-wide threshold — so a line that
+    // appeared early (anywhere between 15s and 2 minutes) fails here
+    // instead of passing a single long "visible within 2 minutes" wait.
+    // Elapsed since the drop registered: (QUIET_DROP_MS - 2s) + 5s so far.
+    await page.waitForTimeout(CHAT_NOTICE_MS - QUIET_DROP_MS - 3_000 - 7_000)
+    await expect(page.getByTestId('connection-status-line')).toBeHidden()
+    await assertNoBannedText(page)
+
     // At the real chat-wide threshold (CHAT_NOTICE_MS) the calm status
     // line appears — never the old alarming banner, and still never the
     // banned wording.
-    await page.waitForTimeout(CHAT_NOTICE_MS - QUIET_DROP_MS - 5_000)
-    await expect(page.getByTestId('connection-status-line')).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByTestId('connection-status-line')).toBeVisible({ timeout: 25_000 })
     await assertNoBannedText(page)
 
     // Restore the network — recovery must clear cleanly (the ~2s "back"

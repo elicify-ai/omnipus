@@ -2,7 +2,12 @@
 
 import { syncChatForeground, useChatStore } from './chat/store'
 
-import { registerChatSetReplaying, registerChatResetForReplay, registerGetSessionCursor } from '@/store/session'
+import {
+  registerChatSetReplaying,
+  registerChatResetForReplay,
+  registerGetSessionCursor,
+  registerChatClearPendingAutoApprove,
+} from '@/store/session'
 
 import { registerSyncChatForeground } from '@/store/session'
 
@@ -19,6 +24,10 @@ registerSyncChatForeground(syncChatForeground)
 // above).
 registerGetSessionCursor((sessionId) => useChatStore.getState().sessionsById[sessionId]?.cursor ?? null)
 
+// ADR-092 UX fix: see session.ts's registerChatClearPendingAutoApprove doc
+// comment for why this is not folded into setReplaying/resetForReplay.
+registerChatClearPendingAutoApprove(() => useChatStore.getState().setPendingAutoApproveChoice(null))
+
 // ── Split modules (2026-09-16) ──────────────────────────────────────────────────
 //
 // api.ts is a barrel: every name below was declared in this file before the
@@ -27,7 +36,7 @@ registerGetSessionCursor((sessionId) => useChatStore.getState().sessionsById[ses
 export * from './chat/frames'
 export * from './chat/messages'
 export * from './chat/store'
-export type { ChatMessage, ClientTruncatedResult, MediaAttachment, OutboundQueueItem, PositionedToolCall, QueuedOutboundMessage, RateLimitEventData, SessionChatState, SpanStep, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from './chat/types'
+export type { ChatMessage, ClientTruncatedResult, MediaAttachment, OutboundQueueItem, PositionedToolCall, QueuedOutboundMessage, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from './chat/types'
 
 // F-S8: removed flat→bucket bidirectional sync subscriber.
 // Tests now seed sessionsById directly (see resetStores() in test files).

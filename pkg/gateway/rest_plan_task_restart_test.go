@@ -123,7 +123,7 @@ func TestPlanPut_RejectsAnyStateField(t *testing.T) {
 	require.NoError(t, json.Unmarshal(wTitle.Body.Bytes(), &afterTitle))
 	assert.Equal(t, "Renamed", afterTitle.Title)
 
-	wGoal := putPlan(t, api, p.Id, `{"goal":"Ship it"}`)
+	wGoal := putPlan(t, api, p.Id, `{"objective":"Ship it"}`)
 	require.Equal(t, http.StatusOK, wGoal.Code, "body=%s", wGoal.Body.String())
 
 	// A present state field rejects the WHOLE request, even alongside a
@@ -143,12 +143,12 @@ func TestPlanPut_RejectsAnyStateField(t *testing.T) {
 	require.NoError(t, json.Unmarshal(wTitleValueState.Body.Bytes(), &afterTitleValueState))
 	assert.Equal(t, "state", afterTitleValueState.Title, "a title VALUE of \"state\" must apply, not be mistaken for the state key")
 
-	wGoalValueState := putPlan(t, api, p.Id, `{"goal":"state"}`)
+	wGoalValueState := putPlan(t, api, p.Id, `{"objective":"state"}`)
 	require.Equal(t, http.StatusOK, wGoalValueState.Code, "body=%s", wGoalValueState.Body.String())
 	var afterGoalValueState gen.Plan
 	require.NoError(t, json.Unmarshal(wGoalValueState.Body.Bytes(), &afterGoalValueState))
-	require.NotNil(t, afterGoalValueState.Goal)
-	assert.Equal(t, "state", *afterGoalValueState.Goal, "a goal VALUE of \"state\" must apply")
+	require.NotNil(t, afterGoalValueState.Objective)
+	assert.Equal(t, "state", *afterGoalValueState.Objective, "an objective VALUE of \"state\" must apply")
 
 	wDoDValueState := putPlan(t, api, p.Id,
 		`{"dod":[{"kind":"prose","text":"state","author":{"kind":"user","id":"tester"}}]}`)

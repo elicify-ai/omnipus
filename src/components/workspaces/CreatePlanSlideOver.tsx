@@ -39,7 +39,7 @@ interface CreatePlanSlideOverProps {
 
 interface FormState {
   title: string
-  goal: string
+  objective: string
   description: string
   ownerAgentId: string
   dod: AcceptanceCriterion[]
@@ -106,16 +106,17 @@ const DEFAULT_BOUNDS_ROUNDS = '20'
 const DEFAULT_BOUNDS_DAYS = '7'
 
 // S2 UAT finding: these MUST mirror the server's real caps
-// (pkg/plan/plan.go maxPlanTitleRunes / maxPlanGoalRunes) — the Goal textarea
-// previously allowed 4000 chars client-side while the server 400s anything
-// over 2000 ("plan validation: goal must be 2000 characters or fewer"), so a
-// 2500-char goal was silently accepted by the UI and only rejected on submit.
+// (pkg/plan/plan.go maxPlanTitleRunes / maxPlanObjectiveRunes) — the Objective
+// textarea previously allowed 4000 chars client-side while the server 400s
+// anything over 2000 ("plan validation: objective must be 2000 characters or
+// fewer"), so a 2500-char objective was silently accepted by the UI and only
+// rejected on submit.
 const TITLE_MAX_LEN = 200
-const GOAL_MAX_LEN = 2000
+const OBJECTIVE_MAX_LEN = 2000
 
 const INITIAL_FORM: FormState = {
   title: '',
-  goal: '',
+  objective: '',
   description: '',
   ownerAgentId: '__none__',
   dod: [],
@@ -126,7 +127,7 @@ const INITIAL_FORM: FormState = {
 function formFromPlan(plan: Plan): FormState {
   return {
     title: plan.title,
-    goal: plan.goal ?? '',
+    objective: plan.objective ?? '',
     description: plan.description ?? '',
     ownerAgentId: plan.owner_agent_id,
     dod: plan.dod ?? [],
@@ -202,9 +203,9 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
    *     the title of ANY approved/running/done/failed plan 409'd
    *     unconditionally. Unchanged fields are now absent, so they no longer
    *     trip a freeze they were never trying to break.
-   *  2. `goal`/`description`/`dod` were sent as `undefined` when emptied, and
+   *  2. `objective`/`description`/`dod` were sent as `undefined` when emptied, and
    *     `JSON.stringify` drops undefined keys — so the backend's
-   *     presence-checked patch (`if patch.Goal != nil`) never saw them and
+   *     presence-checked patch (`if patch.Objective != nil`) never saw them and
    *     CLEARING any of the three was a silent no-op that still toasted
    *     "Plan updated". A field the user emptied now differs from its stored
    *     value and is sent explicitly as `''` / `[]`, which the store does
@@ -222,8 +223,8 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
     const title = form.title.trim()
     if (title !== existing.title) body.title = title
 
-    const goal = form.goal.trim()
-    if (goal !== (existing.goal ?? '')) body.goal = goal
+    const objective = form.objective.trim()
+    if (objective !== (existing.objective ?? '')) body.objective = objective
 
     const description = form.description.trim()
     if (description !== (existing.description ?? '')) body.description = description
@@ -254,7 +255,7 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
       return createPlan({
         workspace_id: workspaceId,
         title: form.title.trim(),
-        goal: form.goal.trim() || undefined,
+        objective: form.objective.trim() || undefined,
         description: form.description.trim() || undefined,
         owner_agent_id: form.ownerAgentId,
         dod: buildDod(),
@@ -419,24 +420,24 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
 
           <div className="flex flex-col gap-[var(--space-1)]">
             <div className="flex items-center justify-between gap-[var(--space-2)]">
-              <Label htmlFor="cp-goal">Goal</Label>
+              <Label htmlFor="cp-objective">Objective</Label>
               <span
                 className={cn(
                   'text-[length:var(--type-caption-size)]',
-                  form.goal.length >= GOAL_MAX_LEN ? 'text-[var(--color-error)]' : 'text-[var(--color-muted)]',
+                  form.objective.length >= OBJECTIVE_MAX_LEN ? 'text-[var(--color-error)]' : 'text-[var(--color-muted)]',
                 )}
               >
-                {form.goal.length}/{GOAL_MAX_LEN}
-                {form.goal.length >= GOAL_MAX_LEN ? ' — max length reached' : ''}
+                {form.objective.length}/{OBJECTIVE_MAX_LEN}
+                {form.objective.length >= OBJECTIVE_MAX_LEN ? ' — max length reached' : ''}
               </span>
             </div>
             <Textarea
-              id="cp-goal"
-              value={form.goal}
-              onChange={(e) => setForm((s) => ({ ...s, goal: e.target.value }))}
+              id="cp-objective"
+              value={form.objective}
+              onChange={(e) => setForm((s) => ({ ...s, objective: e.target.value }))}
               placeholder="Plain-prose objective the plan judge evaluates against when the DoD is empty…"
               rows={3}
-              maxLength={GOAL_MAX_LEN}
+              maxLength={OBJECTIVE_MAX_LEN}
               className="text-[length:var(--type-utility-xs-size)]"
             />
           </div>
@@ -485,7 +486,7 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
               criteria={form.dod}
               onChange={(dod) => setForm((s) => ({ ...s, dod }))}
               currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
-              emptyHint="No DoD criteria — the plan judge will evaluate against the goal/title instead (soft tier). Every member task still needs its own criteria before Approve."
+              emptyHint="No DoD criteria — the plan judge will evaluate against the objective/title instead (soft tier). Every member task still needs its own criteria before Approve."
             />
           </div>
 

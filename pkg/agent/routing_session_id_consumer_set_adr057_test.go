@@ -120,6 +120,33 @@
 // own comments for the current, authoritative counts — this paragraph is
 // historical context for the original K=17 derivation above, not re-derived
 // in place, matching this file's own "Post-merge addition" precedent.
+//
+// ADR-091 amendment (2026-09-24, "a sub-agent is a session steered by
+// another session"): the entire subturn.go ring — subturn.go and its
+// 2026-09-15 sibling subturn_result.go — is deleted. Re-derived against the
+// CURRENT tree (not by subtracting subturn.go's former per-comment
+// contributions from the prior total, per this lane's own instructions):
+// the pre-arm bucket drops from 3 to 2 (subturn.go's pendingSpawnKeysForThisCall
+// site is gone, no successor); the FR-011 inheritance-copy bucket drops from
+// 1 to 0 (subturn.go's childTS.routingSessionID = parentTS.routingSessionID
+// assignment is gone — the concept survives via steer_reconstruct.go's
+// reconstructSteeredTurn, but as a WRITE sourced from the persisted
+// LifecycleRecord's SteeredBy.RootSessionID, never a READ of another
+// turnState's live field, so it contributes zero AST reads); and the
+// WS-stamping bucket drops from 22 to 18 for TWO separate reasons verified
+// independently — subturn.go's own 2 sites (SubTurnSpawnPayload/
+// SubTurnEndPayload) are gone with no successor read (the frames survive,
+// relocated to steer_frames.go, but now populate SessionID from a
+// persisted-record field, not a live routingSessionID read), AND loop.go's
+// pre-existing u9ToolExecSessionIDs site independently stopped reading
+// routingSessionID at all (see the WS-stamping assertion's own comment
+// below for the full explanation) — a change this branch did not make and
+// is not attributable to the subturn.go deletion. Role-B (7) and the
+// browser-control-gate bucket (1) are unaffected. New total: K = 7 + 2 + 18
+// + 0 + 1 = 28. See the assertions' own comments below for the
+// authoritative, currently-verified counts — this paragraph, like the
+// ADR-082 one above it, is a dated amendment, not a rewrite of the
+// historical K=17/K=34 derivations above.
 package agent
 
 import (
@@ -205,20 +232,37 @@ func u19FindRoutingSessionIDReads(t *testing.T, fset *token.FileSet, filePath st
 
 // u19RoutingSessionIDScanFiles is the EXHAUSTIVE non-test file list: every
 // non-test .go file anywhere in the module referencing "routingSessionID" as
-// of this verification (2026-08), found via
+// of this verification, found via
 //
 //	grep -rl "routingSessionID" --include="*.go" pkg/ | grep -v _test.go
 //
-// which returns exactly these eight files (ADR-082 D1 deleted orphan_watch.go
-// — the sole caller of the steering.go/turn.go role-B predicates that read
-// this field for the now-retired orphan-foreground-turn watchdog — so it no
-// longer appears in this list) — all under pkg/agent (the field is
-// unexported and never crosses a package boundary). Three of the eight
-// (cancel.go, events.go, session_messaging_wire.go) are verified below to
-// contribute ZERO actual reads — they only mention the identifier in prose —
-// which is itself part of the closure proof: scanning them and finding
-// nothing is what rules out a read hiding in a file this spec's own "Eight
-// sites"/"Three reads" sections never named.
+// all under pkg/agent (the field is unexported and never crosses a package
+// boundary — a handful of hits in pkg/session, pkg/tools and
+// pkg/tools/browser are prose-only comments naming the field for
+// cross-package documentation purposes; Go visibility rules make an actual
+// cross-package selector on an unexported field impossible, so those files
+// are out of scope and not on this list). cancel.go and events.go are
+// verified below to contribute ZERO actual reads — they only mention the
+// identifier in prose — which is itself part of the closure proof: scanning
+// them and finding nothing is what rules out a read hiding in a file this
+// spec's own "Eight sites"/"Three reads" sections never named.
+//
+// ADR-091 re-derivation (2026-09-24, this delivery): the whole subturn.go
+// ring — subturn.go AND its 2026-09-15 identity/result sibling
+// subturn_result.go — was deleted (pkg/agent/CLAUDE.md's Delegation
+// section: "The subturn.go ring... are gone in the same delivery"), so both
+// drop off this list; a worker is now a normal session steered through
+// pkg/steer.SessionLauncher, reconstructed by steer_reconstruct.go, which
+// picks up a routingSessionID assignment of its own — but ONLY as a write
+// (`ts.routingSessionID = session.RoutingSessionID(rec.SteeredBy.RootSessionID)`,
+// reading the persisted LifecycleRecord's SteeredBy.RootSessionID, never
+// another turnState's live routingSessionID field), so it contributes ZERO
+// AST reads under the normative definition (LHS-of-assignment is excluded)
+// even though it is now on the grep-seeded list. session_messaging_wire.go
+// no longer mentions the identifier at all (the prose that used to name it
+// is gone) and so is REMOVED from the list — keeping a file grep no longer
+// finds would contradict this list's own stated methodology.
+//
 // browser_deferral.go was ADDED to this list by wave B123 (ADR-085
 // BROWSER-FR-022): its browserRootChatSessionID function reads
 // ts.routingSessionID exactly once, to supply the FR-020/FR-021 root-chat
@@ -227,47 +271,31 @@ func u19FindRoutingSessionIDReads(t *testing.T, fset *token.FileSet, filePath st
 // or addressing identity, classified into its own bucket (u19BucketBrowserGate)
 // below rather than folded into an existing one, per FR-022's explicit
 // four-part amendment requirement.
-// subturn_result.go was ADDED to this list by the 2026-09-15 subturn.go
-// split (identity/result sibling files): subTurnTimedOutResult moved there
-// and its doc comment mentions routingSessionID in prose (asserting it is
-// NOT read there), so the grep that seeds this list picks the file up —
-// and scanning it contributes zero reads, which is itself the closure proof
-// this list exists to make. A read that ever DOES appear there classifies
-// into no bucket and fails closed below. subturn_identity.go references
-// the identifier nowhere (not even prose) and so is not on the list.
 var u19RoutingSessionIDScanFiles = []string{
 	"steering.go",
 	"turn.go",
 	"cancel_prearm.go",
-	"subturn.go",
-	"subturn_result.go",
 	"loop.go",
 	"cancel.go",
 	"events.go",
-	"session_messaging_wire.go",
+	"steer_reconstruct.go",
 	"browser_deferral.go",
 	// The 2026-09-16 stage-conductor splits (5fb77ec5c for loop.go,
 	// 2911aeb85 for external_dispatch.go) moved loop.go's WS-payload
-	// stamps into per-stage sibling files — 11 reads left loop.go (which
-	// kept 7), every one landing in one of the four loop_run_turn*.go
-	// files below, read-preserving. The ten-file list above went blind to
-	// those 11 reads the moment the split landed, which is what made the
-	// test fail with total=21 against want 32.
+	// stamps into per-stage sibling files — 11 reads left loop.go, every
+	// one landing in one of the four loop_run_turn*.go files below,
+	// read-preserving.
 	//
 	// external_dispatch.go is a DIFFERENT, older omission: its two
-	// ErrorPayload stamps predate the K=32 derivation (they arrived with
-	// the ADR-081 branch's e515e5ed9, 2026-08-17) and the file was simply
-	// never on the list — the K=32 derivation under-counted the closed
-	// set by exactly those 2 reads (the true set was already 34 then; the
-	// test passed because it never scanned the file). See wantTotal
-	// below.
+	// ErrorPayload stamps predate an earlier derivation and the file was
+	// simply never on the list at the time — see wantTotal below.
 	"external_dispatch.go",
 	"loop_run_turn.go",
 	"loop_run_turn_iterations.go",
 	"loop_run_turn_response.go",
 	"loop_run_turn_tools.go",
 	// The remaining four mention routingSessionID in prose only (verified
-	// 2026-09-16: zero AST reads). Scanning them and finding nothing is
+	// 2026-09-24: zero AST reads). Scanning them and finding nothing is
 	// itself the closure proof this list exists to make — a read that ever
 	// DOES appear there classifies into no bucket and fails closed.
 	"loop_policy.go",
@@ -331,21 +359,43 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 	case "loop.go", "external_dispatch.go", "loop_run_turn.go",
 		"loop_run_turn_iterations.go", "loop_run_turn_response.go",
 		"loop_run_turn_tools.go":
-		// loop.go's two original sites are u9ToolExecSessionIDs (feeds
-		// tool_call_start/tool_call_result) and TurnEndPayload's SessionID
-		// stamp (inside runTurn's deferred EventKindTurnEnd emission — an
-		// anonymous func literal, whose ast.FuncDecl-based funcName here is
-		// "runTurn", the enclosing named declaration). The 2026-09-16
-		// stage-conductor split moved 11 of loop.go's 18 stamps into the
+		// ADR-091 re-derivation (2026-09-24): loop.go's remaining 5 sites are
+		// abortTurn (2: session-restore-failure and hard-abort ErrorPayload
+		// stamps), hookAbortError (1), recordRateLimitDenial (1), and
+		// runTurn's deferred EventKindTurnEnd emission (1, an anonymous func
+		// literal whose ast.FuncDecl-based funcName here is "runTurn", the
+		// enclosing named declaration). loop.go's PRE-split u9ToolExecSessionIDs
+		// (the site that used to feed tool_call_start/tool_call_result) no
+		// longer reads routingSessionID at all — its own doc comment now
+		// states outright "routingSessionID is retained only for cascade
+		// cancellation and is never a frame destination", and its body
+		// returns ts.transcriptSessionID or ts.sessionKey instead. Every
+		// error-frame emitter that used to stamp routingSessionID directly
+		// (typedTurnExit, and the three pre-turn refusal gates) now funnels
+		// through emitTurnErrorFrame → emitErrorEvent → u9ToolExecSessionIDs,
+		// so none of them contain a direct routingSessionID read anymore
+		// either. This is a REAL, verified behavior change (not a
+		// subturn.go-deletion artifact) and is the reason loop.go's count is
+		// 5, not the 7 a naive "just drop subturn.go's contribution" delta
+		// would predict — flagged here rather than silently absorbed into a
+		// bigger number.
+		//
+		// The 2026-09-16 stage-conductor split moved 11 stamps into the
 		// loop_run_turn*.go siblings (runTurn's conductor chain:
-		// prepare/finalize/iteration/response/tools stages), and
-		// external_dispatch.go carries its own two ErrorPayload stamps for
-		// external-CLI sub-turn exits. Every routingSessionID read in this
-		// whole file family was verified per-site at the 2026-09-16
-		// re-derivation to populate a wire-bound payload's SessionID
-		// (ErrorPayload / RateLimitPayload / TurnEndPayload / ToolExec*) —
-		// there is no pre-arm/role-B site in any of them — so no funcName
-		// disambiguation is needed.
+		// prepare/finalize/iteration/response/tools stages) — each verified
+		// directly (assembleInitialContext x3, resolveWorkspaceAndModel x2,
+		// beginIteration x1, finalizeTurn x1 in loop_run_turn.go;
+		// handleInitialResponse x1, surfaceEmptyRetryOutcome x1 in
+		// loop_run_turn_iterations.go; handleProviderResponse x1 in
+		// loop_run_turn_response.go; prepareDispatch x1 in
+		// loop_run_turn_tools.go) still stamping an ErrorPayload/RateLimitPayload
+		// SessionID directly from ts.routingSessionID, unaffected by either
+		// the subturn.go deletion or the u9ToolExecSessionIDs change above.
+		// external_dispatch.go carries its own two ErrorPayload stamps
+		// (emitExternalCLIErrorEvent, runExternalCLISubTurn) for external-CLI
+		// sub-turn exits. There is no pre-arm/role-B site in any of this
+		// family, so no funcName disambiguation beyond what's shown above is
+		// needed.
 		return u19BucketWSStamping
 	case "browser_deferral.go":
 		// ADR-085 BROWSER-FR-022 (B123): browserRootChatSessionID is
@@ -357,80 +407,11 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 		if r.funcName == "browserRootChatSessionID" {
 			return u19BucketBrowserGate
 		}
-	case "subturn.go":
-		switch r.funcName {
-		case "spawnSubTurn", "configureChildTurn", "publishChildSpawn":
-			// subturn.go's four sites (pre-arm, the FR-011 inheritance copy,
-			// and both WS-payload stamps) live across spawnSubTurn and the two
-			// spawnSubTurnState methods the function was split into —
-			// configureChildTurn (the FR-011 inheritance copy moved there
-			// whole, marker intact) and publishChildSpawn (SubTurnSpawnPayload's
-			// stamp). The split relocated reads without adding or removing
-			// any: subturn.go's contribution to every bucket below is
-			// unchanged, and each read still classifies by its own intent
-			// marker. The funcName list stays EXHAUSTIVE and explicit — a read
-			// in any other subturn.go function still fails closed below.
-			//
-			// Disambiguated by an INTENT MARKER on the source line, not by
-			// line number. The line-number form broke twice on a single branch
-			// (once when a ~48-line transcript-persistence block landed ahead
-			// of three sites, once when a 5-line store fix moved the pre-arm
-			// read), and each repair was "append the new number" — which
-			// confirms the number, never the invariant the test exists to
-			// protect. A marker moves with the line it annotates, so a refactor
-			// that RELOCATES a read stays green while one that ADDS a read
-			// still fails closed, which is FR-014's actual requirement.
-			marker := u19MarkerFor(t, r)
-			switch marker {
-			case "pre-arm":
-				return u19BucketPreArm
-			case "inheritance":
-				return u19BucketInheritance
-			case "ws-stamping":
-				return u19BucketWSStamping
-			}
-		}
 	}
 	t.Fatalf("routingSessionID read %s falls OUTSIDE the FR-014 closed consumer set. "+
 		"If this is a NEW consumer, FR-014 forbids it — justify it against ADR-057 and add it to a "+
-		"bucket deliberately. If it is an EXISTING read you relocated or reworded, give the line its "+
-		"intent marker (`// u19:pre-arm`, `// u19:inheritance`, `// u19:ws-stamping`) so it classifies "+
-		"by intent rather than position", r.String())
+		"bucket deliberately, updating u19ClassifyRoutingSessionIDRead's switch above.", r.String())
 	return ""
-}
-
-// u19MarkerFor returns the `// u19:<intent>` marker annotating the source line
-// of read r, or fails the test if the line carries none.
-//
-// Why a marker and not a line number: the reads inside spawnSubTurn cannot be
-// told apart by file or enclosing function — all four share both — so
-// SOMETHING per-site is required. A line number is the one choice that changes
-// every time anything above it changes, which is why the previous form needed
-// re-pinning twice on a single branch. The marker is attached to the statement
-// itself, so it survives relocation and only needs touching when a read is
-// genuinely added, moved between buckets, or removed.
-func u19MarkerFor(t *testing.T, r u19RoutingSessionIDRead) string {
-	t.Helper()
-	path := filepath.Join(".", r.file)
-	src, err := os.ReadFile(path)
-	require.NoErrorf(t, err, "read %s to resolve the intent marker for %s", path, r.String())
-	lines := strings.Split(string(src), "\n")
-	require.Greaterf(t, len(lines), r.line-1,
-		"%s reports line %d but the file has only %d lines", r.file, r.line, len(lines))
-
-	line := lines[r.line-1]
-	idx := strings.Index(line, "// u19:")
-	require.GreaterOrEqualf(t, idx, 0,
-		"routingSessionID read %s carries no `// u19:<intent>` marker. Every read inside "+
-			"spawnSubTurn must declare which FR-014 bucket it belongs to on the line itself:\n  %s",
-		r.String(), strings.TrimSpace(line))
-
-	marker := strings.TrimSpace(line[idx+len("// u19:"):])
-	// Tolerate a trailing comment continuation, e.g. `// u19:pre-arm (see …)`.
-	if sp := strings.IndexAny(marker, " \t"); sp >= 0 {
-		marker = marker[:sp]
-	}
-	return marker
 }
 
 // u19CountClassAInWS5Artefact reads pkg/gateway/websocket_forward.go's own
@@ -470,10 +451,12 @@ func u19CountClassAInWS5Artefact(t *testing.T) int {
 // FR-014). It enumerates every AST read of routingSessionID across the
 // EXHAUSTIVE non-test file list above, asserts a positive lower bound
 // (binding Rule 4 — proving the search is live) BEFORE asserting closure,
-// then asserts every read classifies into one of the four named buckets
+// then asserts every read classifies into one of the five named buckets
 // with the exact expected per-bucket count, and finally asserts the grand
-// total is exactly 34 (7 role-B + 3 pre-arm + 22 WS-stamping + 1
-// inheritance-copy + 1 browser control-gate) — none outside the set, none
+// total is exactly 28 (7 role-B + 2 pre-arm + 18 WS-stamping + 0
+// inheritance-copy + 1 browser control-gate — see the ADR-091 amendment in
+// this file's header, and each assertion's own comment, for how this
+// dropped from the pre-ADR-091 total of 34) — none outside the set, none
 // silently missing.
 func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	fset := token.NewFileSet()
@@ -527,83 +510,87 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 			"deleted predicates' names and the original verified discrepancy against the spec's "+
 			"pre-verification worked total of 7)", got)
 	}
-	if got := counts[u19BucketPreArm]; got != 3 {
-		t.Errorf("pre-arm key reads = %d, want 3 (FR-016's three direct sites: cancel_prearm.go x2, subturn.go x1)", got)
+	if got := counts[u19BucketPreArm]; got != 2 {
+		t.Errorf("pre-arm key reads = %d, want 2 (FR-016's remaining direct sites: cancel_prearm.go x2. "+
+			"ADR-091 deleted subturn.go — and with it the file's former third pre-arm site "+
+			"(pendingSpawnKeysForThisCall) — outright, with NO successor read taking its place: the "+
+			"steered-child reconstruction path (steer_reconstruct.go) does not build or read a pre-arm "+
+			"key from a live turnState at all)", got)
 	}
-	// typedTurnExit's stamp (ADR-066 D7, counted below) lives in loop.go's
-	// emitTurnErrorFrame, which typedTurnExit and subturn.go's
-	// subTurnTimedOutResult (UAT A-17: a delegation force-cancelled at its
-	// time limit) share — one read, one frame shape, two exits. The
-	// force-cancel is the exit a timed-out child took through typedTurnExit
-	// before the force-cancel existed, so sharing the emitter adds no
-	// consumer, and the emitter never hands the value back to a caller.
-	if got := counts[u19BucketWSStamping]; got != 23 {
-		t.Errorf("WS-payload-stamping reads = %d, want 23 (loop.go x7 after the 2026-09-16 stage-conductor "+
-			"split, its four loop_run_turn*.go siblings x12, external_dispatch.go x2, subturn.go x2: "+
-			"SubTurnSpawnPayload + SubTurnEndPayload; 22 -> 23 on 2026-09-24 when #823 review item 8 "+
-			"stamped TurnStartPayload.SessionID in loop_run_turn.go, the same WS-stamping shape as "+
-			"TurnEndPayload's). "+
-			"SubTurnSpawnPayload + SubTurnEndPayload). loop.go's count grew from 2 to 13 in the 2026-08 UAT "+
-			"remediation, then to 14 when ADR-066 D7 (T066-11) added typedTurnExit's ErrorPayload stamp for "+
-			"the typed turn exits, then to 15 when ADR-066 D3 (T066-09) added runTurn's context_window_unknown "+
-			"pre-turn refusal (the same ErrorPayload shape as the workspace refusal right above it), then to 16 "+
-			"when ADR-067 FR-016 (T067-09) added runTurn's needs_provider pre-turn refusal — the FIRST of the "+
-			"three pre-turn gates — then to 17 when ADR-068 FR-015 (T068-12) added runTurn's model_unassigned "+
-			"pre-turn refusal, the SECOND of those three, completing the ladder "+
-			"(needs_provider → model_unassigned → context_window_unknown), then to 18 when commit b6ca6055 "+
-			"(2026-09-13, the orphan tool-call markup fix) added runTurn's orphan_tool_markup terminal "+
-			"ErrorPayload stamp — the 'repair budget spent' error emitted after maxOrphanToolMarkupRepairs "+
-			"re-prompts when a model's tool call keeps arriving as unparseable text. The 2026-09-16 "+
-			"stage-conductor splits (5fb77ec5c loop.go, 2911aeb85 external_dispatch.go) then REDISTRIBUTED "+
-			"those 18 read-preservingly — 7 stayed in loop.go, 11 moved into the loop_run_turn*.go conductor "+
-			"stages — and the 2026-09-16 re-derivation added external_dispatch.go's 2 ErrorPayload stamps, "+
-			"which had existed since the ADR-081 branch's e515e5ed9 (2026-08-17) but were never on the scan "+
-			"list, taking the bucket from 20 to 22. Each emits that same ErrorPayload shape: every live "+
-			"ErrorPayload and RateLimitPayload emit site now stamps SessionID with routingSessionID, "+
-			"because ServeHTTP mints a fresh webchat: uuid per connection — an error carrying only the "+
-			"ChatID was dropped by matchesEvent for a second tab or a reload, which is how a provider 429 "+
-			"and a workspace refusal both reached the user as silence. These are WS payload stamping by "+
-			"definition (the same bucket as TurnEndPayload), so the consumer set is still CLOSED — it is "+
-			"wider. A read that is NOT a payload stamp still fails, in the classifier above", got)
+	if got := counts[u19BucketWSStamping]; got != 18 {
+		t.Errorf("WS-payload-stamping reads = %d, want 18 (loop.go x5, its four loop_run_turn*.go "+
+			"siblings x11, external_dispatch.go x2 — see the classifier's own comment on this bucket "+
+			"for the full per-site breakdown). This dropped from a prior verified total of 22 for TWO "+
+			"distinct, independently-verified reasons, not one: (1) ADR-091 deleted subturn.go outright, "+
+			"removing its 2 WS-stamping sites (SubTurnSpawnPayload.SessionID, SubTurnEndPayload.SessionID) "+
+			"with no successor read — the frames themselves SURVIVE (moved to steer_frames.go's "+
+			"deliverSubagentStart/deliverSubagentEnd), but now populate SessionID from "+
+			"req.SteeringSessionID / rec.SteeredBy.SteeringSessionID (persisted-record fields), never "+
+			"from a live turnState.routingSessionID read — so this is a genuine consumer-set shrink, not "+
+			"a relocation; and (2) loop.go's own u9ToolExecSessionIDs — historically counted as ONE of "+
+			"this bucket's original sites, feeding tool_call_start/tool_call_result — no longer reads "+
+			"routingSessionID at all: its doc comment states outright 'routingSessionID is retained only "+
+			"for cascade cancellation and is never a frame destination', and every error-frame emitter "+
+			"that used to stamp routingSessionID directly (typedTurnExit, and the three pre-turn refusal "+
+			"gates: needs_provider/model_unassigned/context_window_unknown) now funnels through that same "+
+			"helper. Reason (2) is a real, independently-verified behavior change in the base tree, not an "+
+			"ADR-091 subturn.go-deletion artifact — flagged here rather than folded silently into reason "+
+			"(1)'s number.", got)
 	}
-	if got := counts[u19BucketInheritance]; got != 1 {
-		t.Errorf("FR-011 inheritance-copy reads = %d, want 1 (subturn.go's spawnSubTurn, the "+
-			"childTS.routingSessionID = parentTS.routingSessionID assignment)", got)
+	if got := counts[u19BucketInheritance]; got != 0 {
+		t.Errorf("FR-011 inheritance-copy reads = %d, want 0. ADR-091 deleted subturn.go's "+
+			"`childTS.routingSessionID = parentTS.routingSessionID` assignment (the sole prior member of "+
+			"this bucket) along with the whole file, and verified against the CURRENT tree there is no "+
+			"successor READ of this shape anywhere: the routing-session-id inheritance concept itself "+
+			"still holds (a steered child's cascade root is still the same identity its steering session "+
+			"had), but the MECHANISM changed from a live in-memory field-to-field copy to "+
+			"steer_reconstruct.go's `ts.routingSessionID = "+
+			"session.RoutingSessionID(rec.SteeredBy.RootSessionID)` — a WRITE sourced from the PERSISTED "+
+			"LifecycleRecord's SteeredBy.RootSessionID field, never from another turnState's live "+
+			"routingSessionID, so it contributes zero AST reads under this file's normative definition "+
+			"(assignment LHS is excluded, and the RHS here reads a DIFFERENT field). The bucket constant "+
+			"is kept, at zero, rather than deleted outright: a read that DOES reappear in this shape still "+
+			"needs a place to classify into, and 0 is itself a meaningful, verified fact about the current "+
+			"tree worth pinning (Rule 4's generative spirit — proving absence, not assuming it).", got)
 	}
 	if got := counts[u19BucketBrowserGate]; got != 1 {
 		t.Errorf("browser control-gate root-chat key reads = %d, want 1 (browser_deferral.go's "+
-			"browserRootChatSessionID — ADR-085 BROWSER-FR-022, added by wave B123)", got)
+			"browserRootChatSessionID — ADR-085 BROWSER-FR-022, added by wave B123; unaffected by "+
+			"ADR-091)", got)
 	}
 
-	// 7 role-B + 3 pre-arm + 22 WS-stamping + 1 inheritance + 1 browser
-	// control-gate = 34. Was 32 before the 2026-09-16 re-derivation, which
-	// (a) re-attached the 11 reads the 2026-09-16 stage-conductor splits
-	// (5fb77ec5c loop.go, 2911aeb85 external_dispatch.go) had moved out of
-	// loop.go into the loop_run_turn*.go files this test's file list did
-	// not yet name — a pure rediscovery, not a code change — and (b) added
-	// external_dispatch.go to the list at all, exposing its 2 ErrorPayload
-	// stamps that had existed since e515e5ed9 (2026-08-17, the ADR-081
-	// branch) without ever being counted: the K=32 derivation under-counted
-	// by exactly those 2 (the true closed set was already 34). Was 31
-	// before commit b6ca6055 (2026-09-13, the orphan tool-call markup fix)
-	// added runTurn's orphan_tool_markup terminal ErrorPayload stamp,
-	// widening the WS-stamping bucket to 18 loop.go reads (see above). Was
-	// 30 before wave B123 (ADR-085 BROWSER-FR-022) added the fifth bucket.
-	// Before that: 9 role-B (32 total) before ADR-082 D1 deleted the two
-	// role-B predicates (hasLiveCriticalDelegate,
-	// getActiveRootTurnStateForSession) that existed solely for the
-	// now-retired orphan-foreground-turn watchdog. Before that: 17 before
-	// the 2026-08 UAT remediation widened the WS-stamping bucket (see
-	// above), 28 before ADR-066 D7's typedTurnExit stamp, 29 before
-	// ADR-066 D3's context_window_unknown refusal stamp (T066-09), 30
-	// before ADR-067 FR-016's needs_provider refusal stamp (T067-09), and
-	// 31 before ADR-068 FR-015's model_unassigned refusal stamp (T068-12).
-	// 34 -> 35 on 2026-09-24: #823 review item 8 stamps TurnStartPayload's
-	// SessionID (WS-stamping bucket, loop_run_turn.go).
-	const wantTotal = 35
+	// ADR-091 re-derivation (2026-09-24): 7 role-B + 2 pre-arm + 18
+	// WS-stamping + 0 inheritance + 1 browser control-gate = 28. Was 34
+	// (7 + 3 + 22 + 1 + 1) immediately before this delivery — see the
+	// per-bucket comments above for exactly which reads left the set and
+	// why (subturn.go's outright deletion: -1 pre-arm, -2 WS-stamping, -1
+	// inheritance = -4; plus u9ToolExecSessionIDs's independent, verified
+	// behavior change: -2 more WS-stamping = -6 total, 34 - 6 = 28). Every
+	// number below this line was re-derived by RUNNING u19FindRoutingSessionIDReads
+	// against the current tree (see /tmp scratch verification in this
+	// lane's own report), never by subtracting the prior derivation's
+	// per-bucket comments from the old total — those comments describe a
+	// tree that partly no longer exists.
+	//
+	// Earlier history (pre-ADR-091, for archaeology only — do not treat as
+	// current): was 32 before the 2026-09-16 re-derivation re-attached the
+	// 11 reads the stage-conductor splits (5fb77ec5c loop.go, 2911aeb85
+	// external_dispatch.go) had moved out of loop.go, and added
+	// external_dispatch.go to the scan list at all (its 2 ErrorPayload
+	// stamps had existed since e515e5ed9, 2026-08-17, uncounted). Was 31
+	// before commit b6ca6055 (2026-09-13) added runTurn's orphan_tool_markup
+	// terminal ErrorPayload stamp. Was 30 before wave B123 (ADR-085
+	// BROWSER-FR-022) added the browser-gate bucket. Before that: 9 role-B
+	// (32 total) before ADR-082 D1 deleted two watchdog-only role-B
+	// predicates. Before that: 17 before the 2026-08 UAT remediation
+	// widened WS-stamping, 28 before ADR-066 D7's typedTurnExit stamp, 29
+	// before ADR-066 D3's context_window_unknown refusal stamp, 30 before
+	// ADR-067 FR-016's needs_provider refusal stamp, and 31 before
+	// ADR-068 FR-015's model_unassigned refusal stamp.
+	const wantTotal = 28
 	if len(all) != wantTotal {
 		t.Fatalf("total routingSessionID reads = %d, want exactly %d (the closed consumer set) — "+
-			"either a new read was added outside the four named buckets, or one of the buckets "+
+			"either a new read was added outside the named buckets, or one of the buckets "+
 			"undercounted; see the per-bucket breakdown above", len(all), wantTotal)
 	}
 

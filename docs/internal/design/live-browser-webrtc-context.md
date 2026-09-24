@@ -150,7 +150,7 @@ we built + learned. Mine it for reusable pieces (NOT the whole pipeline):
   browser while the operator is testing** — it's single-driver; a second viewer holds
   the wheel and locks everyone else out.
 - **Build/CI:** tags `goolm,stdjson`; `CGO_ENABLED=0 go build -tags goolm,stdjson ./...`;
-  never run the full Go test suite locally (OOM) — push and use `ci-omnipus`.
+  never run the full Go test suite locally (OOM) — push and use the `ci-omnipus-1` cluster (deploy/ci-worker/ci-cluster.sh).
 - **Other active clones (unrelated):** `/home/dev/omnipus` = `feat/cancel-propagation` /
   `feat/fs-workspace` (ADR-046); `/home/dev/omnipus4` = `bugfixes3`. This session's
   clone = `/home/dev/omnipus3`.

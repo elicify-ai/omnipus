@@ -93,6 +93,24 @@ const (
 	toolCallStatusDenied  = "denied"
 )
 
+// askPendingPlaceholdersWritten counts every recordAskPendingToolCall call
+// that actually wrote a `pending` placeholder (ts != nil) — the direct
+// instrument for the §5.7 "no placeholder when a standing grant already
+// settles the call" invariant (loop_run_turn_tools.go's resolveAskPolicy and
+// requestAskApproval both consult the grant store BEFORE calling
+// recordAskPendingToolCall, specifically so a grant-covered call never
+// reaches here). Mirrors the transcriptMutateMissed counter pattern already
+// established in this file.
+var askPendingPlaceholdersWritten atomic.Uint64
+
+// AskPendingPlaceholdersWritten returns the current value of the
+// omnipus_ask_pending_placeholders_written_total counter. Used by tests to
+// assert that a grant-covered ask-policy call writes zero placeholders while
+// a call that genuinely blocks on a human writes exactly one.
+func AskPendingPlaceholdersWritten() uint64 {
+	return askPendingPlaceholdersWritten.Load()
+}
+
 // recordAskPendingToolCall writes the placeholder `tool_call` entry for a tool
 // call that is about to block on human approval, and registers its ID so the
 // eventual settle (approved-and-executed, or denied) REPLACES this entry rather
@@ -112,6 +130,7 @@ func recordAskPendingToolCall(ts *turnState, callID session.ToolCallID, toolName
 	if ts == nil {
 		return
 	}
+	askPendingPlaceholdersWritten.Add(1)
 	ts.askPendingToolCalls.Store(callID, struct{}{})
 	ts.appendToolCallTranscript(session.ToolCall{
 		ID:         callID,

@@ -1855,7 +1855,16 @@ func (a *restAPI) handleTaskVerdicts(w http.ResponseWriter, id string) {
 		jsonOK(w, out)
 		return
 	}
-	sessStore := a.agentLoop.GetAgentStore(t.AgentID)
+	// Resolved by SESSION id, exactly like every other session-reading REST
+	// boundary (getSession/getSessionMessages, rest_sessions.go). Resolving by
+	// AGENT was correct only while every task session was minted in the
+	// assigned agent's own legacy store; since ADR-091 routes task starts
+	// through SteerLauncher.Launch the session lives in the SHARED store, and
+	// the per-agent lookup found no transcript.jsonl at all — ReadTranscript
+	// answers an empty slice with no error, so this endpoint returned 200 []
+	// and the caller could not tell "the Judge never ran" from "we looked in
+	// the wrong store".
+	sessStore := a.resolveSessionStore(t.SessionID)
 	if sessStore == nil {
 		jsonOK(w, out)
 		return

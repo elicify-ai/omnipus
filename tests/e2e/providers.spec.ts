@@ -211,10 +211,31 @@ test('the picker reads the catalog from the GET, and serves at most one 200 per 
   // fetch reports incomplete, which it always does here. `/login` is a
   // sibling route with no such guard (`src/routes/login.tsx`), so it unmounts
   // the picker the same way `/agents` would without tripping that redirect.
+  //
+  // CI flake root cause (run 35867017610, E2E stubs-2, 17.9s failure ->
+  // 2.5s pass on retry): `toHaveURL` only polls the BROWSER's address bar
+  // (`page.url()`), which `window.location.hash =` updates synchronously —
+  // it proves nothing about whether the SPA's own `hashchange` listener
+  // (TanStack Router's hash history) has actually run yet. The wizard never
+  // changes the URL between its own steps (`step` is component state, not
+  // route state, onboarding.tsx's `useState<Step>(1)`), so the ONLY signal
+  // that OnboardingWizard genuinely unmounted before this test writes the
+  // SECOND hash is real rendered content from the intermediate `/login`
+  // route — not the address bar. Without that, a second hash write that
+  // lands before the router has processed the first one risks the SPA
+  // still being mid-transition (or, worst case, still showing the picker
+  // at whatever step the test left it on) when the assertion below starts
+  // polling for "Step 1 of 4", which then never appears within the window
+  // — this failure mode is a hang, not a slow render, matching the CI
+  // trace exactly. Waiting for `#login-username` (src/routes/login.tsx)
+  // forces a real React commit of the `/login` route before navigating
+  // back, so OnboardingWizard is provably gone (and its `step` state reset
+  // to 1 on the fresh mount) before the second hash write fires.
   await page.evaluate(() => {
     window.location.hash = '#/login'
   })
   await expect(page).toHaveURL(/login/, { timeout: 10_000 })
+  await expect(page.locator('#login-username')).toBeVisible({ timeout: 10_000 })
   await page.evaluate(() => {
     window.location.hash = '#/onboarding'
   })

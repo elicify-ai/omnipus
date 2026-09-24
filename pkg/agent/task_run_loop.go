@@ -188,7 +188,7 @@ const claimBareMarker = "bare_marker"
 // blocked claim.
 func (te *TaskExecutor) resolveRunClaim(t *task.Task, taskSessionID, resp string, state *taskRunState) (runClaim, error) {
 	if !te.dispatchesExternalCLI(t.AgentID) {
-		store := te.agentLoop.GetAgentStore(t.AgentID)
+		store := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
 		if store == nil || taskSessionID == "" {
 			return runClaim{}, nil
 		}
@@ -244,7 +244,7 @@ func (te *TaskExecutor) finishRunTurn(
 	run *activeRun,
 	state *taskRunState,
 ) (step runStep, nextPrompt, redispatchTaskID string) {
-	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+	sessStore := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
 
 	if turnErr != nil {
 		// The one place a turn error's raw text is kept: the operator's log,
@@ -703,7 +703,7 @@ func (te *TaskExecutor) consumeTaskAttempt(
 			logger.WarnCF("task_executor", "goal: could not persist why the previous run failed",
 				map[string]any{"task_id": updated.ID, "error": serr.Error()})
 		}
-		te.appendRunSystemTranscript(updated, taskSessionID, te.agentLoop.GetAgentStore(updated.AgentID), restartNote)
+		te.appendRunSystemTranscript(updated, taskSessionID, te.agentLoop.taskSessionStore(taskSessionID, updated.AgentID), restartNote)
 		te.supersedeTaskSession(updated.AgentID, taskSessionID)
 		logger.InfoCF("task_executor", "goal: run failed — restarting the task in a fresh run",
 			map[string]any{"task_id": updated.ID, "attempt": newAttempt, "max_attempts": maxAttempts, "reason": reason})

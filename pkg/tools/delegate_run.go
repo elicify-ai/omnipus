@@ -1,4 +1,4 @@
-// delegate_run.go: Run a delegation, sync or async, and return its result — including ending one early by timeout or cancel.
+// delegate_run.go: launch and manage durable delegated sessions.
 
 package tools
 
@@ -11,17 +11,15 @@ import (
 	"strings"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/google/uuid"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // ErrRequestedSkillDenied and ErrRequestedSkillNotFound are the two distinct
-// dispatch-time failure sentinels a SubTurnSpawner implementation (in
-// practice, pkg/agent's spawnSubTurn) returns for a `delegate.run` call's
-// RequestedSkill (ADR-072 D9, spec FR-053/FR-054). Declared here — in
-// pkg/tools, the lower package in the tools<->agent duplication this file's
-// own ContextSnapshot/SubTurnConfig doc comments already describe — rather
-// than in pkg/agent, so executeSync/executeAsync below can distinguish them
+// dispatch-time failure sentinels returned when a `delegate.run` call requests
+// a skill (ADR-072 D9, spec FR-053/FR-054). Declared here in pkg/tools rather
+// than in pkg/agent, so the corrective dispatch below can distinguish them
 // with a plain errors.Is with no import cycle: pkg/agent already imports
 // pkg/tools and MUST return these exact sentinel values (wrapped with %w),
 // never a package-local duplicate, or the discrimination here silently
@@ -44,10 +42,8 @@ var (
 // requestedSkillDispatchFailureResult builds the structured, discriminated
 // ToolResult for a `delegate.run` requested_skill dispatch failure (ADR-072
 // D9, spec FR-053/FR-054): a pure function — it performs no lifecycle
-// transition or task bookkeeping of its own, so both executeSync (which
-// returns the result directly, unwrapped) and executeAsync (which folds it
-// into the same state/lifecycle bookkeeping every other dispatch outcome
-// goes through) can call it identically.
+// transition or task bookkeeping of its own, so the corrective dispatch can
+// fold it into the same state/lifecycle bookkeeping as every other outcome.
 //
 // dispatchErr MUST be (or wrap) exactly ErrRequestedSkillDenied or
 // ErrRequestedSkillNotFound — callers are expected to have already checked
@@ -158,18 +154,16 @@ func ValidateContextSnapshot(snap *ContextSnapshot, maxBytes, maxRefs int) error
 
 // delegateToolExecuteRun carries the shared state of executeRun across its stages.
 type delegateToolExecuteRun struct {
-	t                 *DelegateTool
-	ctx               context.Context
-	args              map[string]any
-	task              string
-	label             string
-	agentID           string
-	async             bool
-	timeout           time.Duration
-	requestedSkill    string
-	snap              *ContextSnapshot
-	resolvedMaxDepth  *int
-	delegateSessionID string
+	t              *DelegateTool
+	ctx            context.Context
+	args           map[string]any
+	task           string
+	label          string
+	agentID        string
+	timeout        time.Duration
+	requestedSkill string
+	snap           *ContextSnapshot
+	goal           *steer.GoalSpec
 }
 
 func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
@@ -179,9 +173,8 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 		return r0
 	}
 
-	// Delegation policy gate (FR-6.2): trust set + mode + depth, mode selected
-	// by the async flag ("background" vs "await") — applied identically
-	// regardless of async value (FR-D3). ADR-037: this is now the ONLY gate —
+	// Delegation policy gate (FR-6.2): trust set + background mode + depth.
+	// ADR-037: this is now the ONLY gate —
 	// the legacy trust-only allowlistCheck/delegateChecker fallbacks (consulted
 	// only when these were nil, which never happened in production) are
 	// retired.
@@ -189,7 +182,7 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 	// FAIL CLOSED, not open, when no checker is wired: an unwired deny-checker
 	// is a configuration error, never a permission grant. This is unreachable
 	// in today's production wiring — pkg/agent/loop.go's registerSharedTools
-	// unconditionally calls SetDelegationDenyCheckerBackground/Await for every
+	// unconditionally calls SetDelegationDenyCheckerBackground for every
 	// agent — but removing the legacy fallback (which was itself deny-by-
 	// default: config.IsDelegationAllowed/CanSpawnSubagent both returned false
 	// on an unset policy) must not also remove the safety net for the NEXT
@@ -201,23 +194,79 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 		return r0
 	}
 
-	// ADR-053 S2 — mint the child's own durable session_id (distinct from
-	// the shared transcript session id, D1) and persist its initial
-	// `queued` lifecycle record BEFORE dispatch, so a crash between here and
-	// the goroutine/spawn call below still leaves a queryable record (the
-	// boot sweep — another wave — will reconcile it to failed(interrupted)).
-	if r0, stop := dt.persistLifecycle(); stop {
-		return r0
+	return dt.launchAndDispatch(cb)
+}
+
+// launchAndDispatch is the entire ADR-091 run front: creation belongs to the
+// injected launcher, Dispatch owns admission, and this method waits for
+// neither the child turn nor its completion.
+func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult {
+	if dt.t.launcher == nil {
+		return ErrorResult("delegate: no session launcher configured")
+	}
+	targetAgentID := strings.TrimSpace(dt.agentID)
+	if targetAgentID == "" {
+		targetAgentID = strings.TrimSpace(ToolAgentID(dt.ctx))
+	}
+	launch, err := dt.t.launcher.Launch(dt.ctx, steer.LaunchRequest{
+		SteeringSessionID: strings.TrimSpace(ToolTranscriptSessionID(dt.ctx)),
+		TargetAgentID:     targetAgentID,
+		Label:             strings.TrimSpace(dt.label),
+		Task:              strings.TrimSpace(dt.task),
+		Origin: steer.Origin{
+			Kind:   steer.OriginKindDelegate,
+			CallID: strings.TrimSpace(ToolCallID(dt.ctx)),
+		},
+		Goal: dt.goal,
+		Limits: steer.Limits{
+			TimeoutSeconds: int(dt.timeout / time.Second),
+		},
+		ToolExclusions: []string{string(ExcludedSwitchAgent)},
+		RequestedSkill: strings.TrimSpace(dt.requestedSkill),
+	})
+	if err != nil {
+		// ADR-072 D9/FR-053/FR-054: a requested_skill dispatch failure is a
+		// distinct, structured outcome (denied vs. not-found), never the
+		// generic launch-error text — Launch (pkg/agent/steer_launcher.go)
+		// wraps exactly ErrRequestedSkillDenied/ErrRequestedSkillNotFound
+		// (declared in this file) for this one reason: so the discrimination
+		// below is a plain errors.Is with no import cycle.
+		if errors.Is(err, ErrRequestedSkillDenied) || errors.Is(err, ErrRequestedSkillNotFound) {
+			return requestedSkillDispatchFailureResult(targetAgentID, strings.TrimSpace(dt.requestedSkill), err)
+		}
+		return ErrorResult(fmt.Sprintf("delegate: launch: %v", err)).WithError(err)
+	}
+	dispatch, err := dt.t.launcher.Dispatch(dt.ctx, launch.SessionID, launch.Generation)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: dispatch: %v", err)).WithError(err)
 	}
 
-	if dt.async {
-		// isResume: false — executeRun always mints a BRAND-NEW
-		// delegateSessionID (generation 0) just above; this is a genuine
-		// create, never a resume. Native `follow_up`'s warm resume goes
-		// through spawnCorrectiveFollowUp's own executeAsync call instead.
-		return dt.t.executeAsync(dt.ctx, dt.task, dt.label, dt.agentID, dt.resolvedMaxDepth, dt.delegateSessionID, dt.timeout, dt.snap, dt.requestedSkill, false, cb)
+	state := generated.DelegateSessionResponseState(dispatch.State)
+	response := generated.DelegateSessionResponse{
+		Generation: dispatch.Generation,
+		SessionId:  launch.SessionID,
+		State:      state,
 	}
-	return dt.t.executeSync(dt.ctx, dt.task, dt.label, dt.agentID, dt.resolvedMaxDepth, dt.delegateSessionID, dt.timeout, dt.snap, dt.requestedSkill)
+	if dt.t.getAgentRegistry != nil {
+		if registry := dt.t.getAgentRegistry(); registry != nil {
+			response.Is3p = registry.IsExternalCLI(targetAgentID)
+		}
+	}
+	if dispatch.State == steer.DispatchQueued {
+		position := dispatch.QueuePosition
+		response.QueuePosition = &position
+	}
+	payload, err := json.Marshal(response)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: encode launch response: %v", err)).WithError(err)
+	}
+	result := string(payload)
+	if dispatch.State == steer.DispatchQueued {
+		result += fmt.Sprintf("\nQueued because the concurrency limit %d is in use; queue position %d. "+
+			`Use delegate(action="cancel") with session_id=%q to drop this queued session.`,
+			dispatch.ConcurrencyLimit, dispatch.QueuePosition, launch.SessionID)
+	}
+	return NewToolResult(result)
 }
 
 // validateRequest validates and resolves the delegation request arguments.
@@ -250,22 +299,14 @@ func (dt *delegateToolExecuteRun) validateRequest() (*ToolResult, bool) {
 		dt.agentID = s
 	}
 
-	dt.async = true
-	if rawAsync, present := dt.args["async"]; present && rawAsync != nil {
-		b, ok := rawAsync.(bool)
-		if !ok {
-			return ErrorResult("async must be a boolean"), true
+	for _, removed := range []string{"async", "allow_blocking_question"} {
+		if _, present := dt.args[removed]; present {
+			return ErrorResult("invalid_argument: " + removed), true
 		}
-		dt.async = b
 	}
 
-	// timeout_seconds was documented in the schema but never actually read
-	// anywhere — every delegated sub-turn silently used the hardcoded
-	// defaultSubTurnTimeout (5 minutes, pkg/agent/subturn.go) regardless of
-	// what the caller requested. 0/absent means "no override — use the
-	// spawner's own default", matching the schema's "0 = default (5 min)"
-	// wording; a nonzero value is bounds-checked and threaded into
-	// SubTurnConfig.Timeout below.
+	// 0/absent means "use the configured delegation timeout"; a nonzero
+	// value is bounds-checked and passed to the launcher.
 	var timeoutErr error
 	dt.timeout, timeoutErr = resolveDelegateTimeoutSeconds(dt.args)
 	if timeoutErr != nil {
@@ -277,10 +318,10 @@ func (dt *delegateToolExecuteRun) validateRequest() (*ToolResult, bool) {
 	// just above — a caller that supplies the key must not supply an empty
 	// string, which would silently mean the same thing as omitting it while
 	// looking like a deliberate request. The actual grant/existence
-	// resolution happens against the CHILD's own ContextBuilder inside
-	// spawnSubTurn (pkg/agent/subturn.go) — this file never resolves or
-	// gates the slug itself (D9: "the receiver's grant is the real gate,
-	// structurally, not by convention").
+	// resolution happens against the CHILD's own ContextBuilder, built in the
+	// steered-session reconstruction path (pkg/agent/steer_reconstruct.go) —
+	// this file never resolves or gates the slug itself (D9: "the receiver's
+	// grant is the real gate, structurally, not by convention").
 
 	if raw, present := dt.args["requested_skill"]; present && raw != nil {
 		s, ok := raw.(string)
@@ -324,157 +365,32 @@ func (dt *delegateToolExecuteRun) validateRequest() (*ToolResult, bool) {
 			dt.snap.Notes = s
 		}
 	}
-	if err := ValidateContextSnapshot(dt.snap, dt.t.snapshotMaxBytes, dt.t.snapshotMaxRefs); err != nil {
+	if err := ValidateContextSnapshot(dt.snap, defaultSnapshotMaxBytes, defaultSnapshotMaxRefs); err != nil {
 		return ErrorResult(err.Error()).WithError(err), true
 	}
+	goal, err := parseDelegateGoal(dt.args["criteria"], dt.args["dod"])
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("goal: %v", err)).WithError(err), true
+	}
+	dt.goal = goal
 	return nil, false
 }
 
 // authorizeDelegation applies the delegation policy and resolves the authorized depth.
 func (dt *delegateToolExecuteRun) authorizeDelegation() (*ToolResult, bool) {
-	if dt.async {
-		if dt.t.delegationDenyBackground != nil {
-			if denial := dt.t.delegationDenyBackground(dt.ctx, dt.agentID); denial != nil {
-				return DelegationDeniedResult("delegate", denial), true
-			}
-		} else {
-			slog.Error("delegate: no background delegation-deny checker installed — denying by default",
-				"agent_id", dt.agentID)
-			return DelegationDeniedResult("delegate", &DelegationDenial{
-				Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
-				Policy:        DenyTrustSet,
-				TargetAgentID: dt.agentID,
-			}), true
+	if dt.t.delegationDenyBackground != nil {
+		if denial := dt.t.delegationDenyBackground(dt.ctx, dt.agentID); denial != nil {
+			return DelegationDeniedResult("delegate", denial), true
 		}
 	} else {
-		if dt.t.delegationDenyAwait != nil {
-			if denial := dt.t.delegationDenyAwait(dt.ctx, dt.agentID); denial != nil {
-				return DelegationDeniedResult("delegate", denial), true
-			}
-		} else {
-			slog.Error("delegate: no await delegation-deny checker installed — denying by default",
-				"agent_id", dt.agentID)
-			return DelegationDeniedResult("delegate", &DelegationDenial{
-				Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
-				Policy:        DenyTrustSet,
-				TargetAgentID: dt.agentID,
-			}), true
-		}
+		slog.Error("delegate: no delegation-deny checker installed — denying by default", "agent_id", dt.agentID)
+		return DelegationDeniedResult("delegate", &DelegationDenial{
+			Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
+			Policy:        DenyTrustSet,
+			TargetAgentID: dt.agentID,
+		}), true
 	}
 
-	// #477: resolve the effective depth cap the gate above just authorized
-	// this call against, so the spawner's own depth check does not
-	// independently re-derive a different (possibly stricter) default.
-
-	if dt.t.delegationDepthResolver != nil {
-		dt.resolvedMaxDepth = dt.t.delegationDepthResolver(dt.ctx, dt.agentID)
-	}
-	return nil, false
-}
-
-// persistLifecycle creates and persists the delegated session lifecycle record.
-func (dt *delegateToolExecuteRun) persistLifecycle() (*ToolResult, bool) {
-	dt.delegateSessionID = uuid.NewString()
-	parentDurableKey := strings.TrimSpace(ToolTranscriptSessionID(dt.ctx))
-	is3P := false
-	if dt.agentID != "" && dt.t.getAgentRegistry != nil {
-		if reg := dt.t.getAgentRegistry(); reg != nil {
-			is3P = reg.IsExternalCLI(dt.agentID)
-		}
-	}
-	ownerScopeKind := session.OwnerScopeHuman
-	ownerScopeID := ""
-	if parentDelegateID := strings.TrimSpace(ToolDelegateSessionID(dt.ctx)); parentDelegateID != "" {
-		ownerScopeKind = session.OwnerScopeParentSession
-		ownerScopeID = parentDelegateID
-	}
-	if dt.t.lifecycle != nil {
-		// FR-015 — fail closed on an unresolvable parent. ToolAgentID returns
-		// "" for BOTH a missing context key AND a wrong-typed value (it is a
-		// comma-ok type assertion with the error discarded), so an empty
-		// value here means the DELEGATING agent's identity could not be
-		// resolved at all. A record minted without it is permanently
-		// unattributable: ParentAgentID is the only parent linkage, and no
-		// other field can stand in for it (ParentDurableKey post-ADR-057 (D1)
-		// names only the DIRECT parent — one hop, never re-inherited down the
-		// chain, see pkg/session/lifecycle.go's ParentDurableKey doc comment —
-		// so it cannot stand in for ParentAgentID either; OwnerScopeID is ""
-		// for a top-level delegation, and AgentID is the child's). Such a
-		// session could never be returned to its parent by list_jobs. Refuse
-		// the mint — and therefore the whole delegation — rather than persist
-		// an orphan. Note the mint is deliberately still skipped entirely
-		// when no lifecycle store is configured: with no store there is no
-		// record to orphan (see the else branch below — FR-021/BDD-20 refuse
-		// the delegation outright in that case instead).
-		//
-		// R2-MAJ-015 — tools.delegate.require_parent_agent_id is the operator
-		// kill switch for exactly that refusal. It exists because the guard's
-		// blast radius is the whole install: a wiring regression anywhere
-		// upstream of ToolAgentID turns EVERY delegate call into this error,
-		// and without a lever the only remedy is a code change. Resolving the
-		// key to false downgrades the refusal to a log-at-Error and mints
-		// with an empty ParentAgentID — knowingly degraded attribution, an
-		// explicit operator choice, never the default (unset resolves to
-		// true) and never silent: the Error line below fires on EVERY such
-		// mint, not once, so a forgotten kill switch keeps announcing the
-		// orphan records it is creating.
-		parentAgentID := strings.TrimSpace(ToolAgentID(dt.ctx))
-		if parentAgentID == "" {
-			if dt.t.parentAgentIDRequired() {
-				slog.Error("delegate: refusing to mint an unattributable lifecycle record — no parent agent id in context",
-					"delegate_session_id", dt.delegateSessionID,
-					"target_agent_id", dt.agentID,
-					"parent_durable_key", parentDurableKey)
-				return ErrorResult("delegate: cannot resolve the delegating agent's identity — " +
-					"refusing to start a delegated session that could never be traced back to its parent"), true
-			}
-			slog.Error("delegate: minting an unattributable lifecycle record with an empty parent agent id — "+
-				"the FR-015 guard is disabled by tools.delegate.require_parent_agent_id=false; "+
-				"this session cannot be traced back to its parent and will never be returned to it by list_jobs",
-				"delegate_session_id", dt.delegateSessionID,
-				"target_agent_id", dt.agentID,
-				"parent_durable_key", parentDurableKey)
-		}
-		rec := &session.LifecycleRecord{
-			SessionID:        dt.delegateSessionID,
-			Generation:       0,
-			State:            session.LifecycleQueued,
-			OwnerScopeKind:   ownerScopeKind,
-			OwnerScopeID:     ownerScopeID,
-			ParentAgentID:    parentAgentID,
-			ParentDurableKey: parentDurableKey,
-			OriginChannel:    ToolChannel(dt.ctx),
-			OriginChatID:     ToolChatID(dt.ctx),
-			WorkspaceID:      ToolWorkspaceID(dt.ctx),
-			AgentID:          dt.agentID,
-			Is3P:             is3P,
-		}
-		if err := dt.t.lifecycle.Persist(rec); err != nil {
-			return ErrorResult(fmt.Sprintf("delegate: failed to persist durable session record: %v", err)).WithError(err), true
-		}
-	} else {
-		// FR-021/BDD-20 (W7a) — fail CLOSED, not silently degraded, when no
-		// durable lifecycle store is wired at all. Before this fix, the whole
-		// `if t.lifecycle != nil { ... }` block above (mint + persist) was
-		// simply skipped and execution fell straight through to
-		// executeAsync/executeSync below — spawning a real child sub-turn
-		// with NO durable record, no ParentDurableKey edge for the ancestor
-		// walk (W12) or the boot sweep (W6/FR-078) to ever find, and a
-		// success-shaped AsyncResult/inline result returned to the caller as
-		// if nothing were wrong. That is precisely the silent-degradation
-		// posture Hard Constraint #6 and this file's own FR-015 guard above
-		// forbid, and BDD-20 pins the correct behavior: an operator-visible
-		// refusal, no child session created, no success payload returned.
-		// Mirrors the FR-015 refusal's shape (slog.Error + ErrorResult)
-		// immediately above rather than introducing a second error style.
-		slog.Error("delegate: refusing delegation — no durable lifecycle store configured",
-			"delegate_session_id", dt.delegateSessionID,
-			"target_agent_id", dt.agentID,
-			"parent_durable_key", parentDurableKey)
-		return ErrorResult("delegate: cannot start a delegated session — no durable lifecycle store is " +
-			"configured (operator misconfiguration); refusing rather than spawning an untracked, " +
-			"unrecoverable session"), true
-	}
 	return nil, false
 }
 
@@ -491,7 +407,7 @@ const (
 // action="run". Absent/nil/explicit 0 all resolve to 0 (time.Duration zero
 // value), meaning "no override — use the spawner's own default
 // (defaultSubTurnTimeout)", matching the schema's documented "0 = default
-// (5 min)". A nonzero value is bounds-checked against
+// (30 min)". A nonzero value is bounds-checked against
 // [minDelegateTimeoutSeconds, maxDelegateTimeoutSeconds] and REJECTED —
 // never silently clamped or ignored — when out of range, mirroring
 // shell.go's resolveTimeoutSeconds.
@@ -533,10 +449,15 @@ func resolveDelegateTimeoutSeconds(args map[string]any) (time.Duration, error) {
 //
 // NOTE ON LOCKING (Correctness-MAJOR-3, honesty template): this delegates
 // to session.TransitionSession (the single dual-store mediator, Defect #28)
-// with a nil UnifiedStore — a delegate/subturn session has no chat-transcript
-// meta.json at all (UnifiedStore.NewSession is never called for a child turn
-// — see pkg/agent/subturn.go), so there is nothing to mirror onto. The
-// mediator's atomic LifecycleStore.Mutate (the RMW primitive that holds the
+// with a nil UnifiedStore — not because a delegated child has no
+// chat-transcript meta.json (it does: pkg/agent/steer_launcher.go's Launch
+// mints one via sessions.NewSession/CreateSessionWithID for every child,
+// ordinary-root or steered, and writeChildMetaAndHistory sets its Title),
+// but because t.lifecycle here is typed MessageParentLifecycleStore (see
+// message_parent.go), a narrow interface with no *session.UnifiedStore
+// handle to pass — this call site simply has no store reference available,
+// so the mediator's UnifiedMeta-status mirror step is skipped rather than
+// wired to one. The mediator's atomic LifecycleStore.Mutate (the RMW primitive that holds the
 // per-session striped lock across tail→fn→write) replaces the hand-rolled
 // Mutate call this helper used to make directly. The prior Load+Persist pair
 // was a non-atomic RMW: two concurrent transitions on the same session_id
@@ -553,10 +474,10 @@ func (t *DelegateTool) transitionLifecycle(sessionID string, state session.Lifec
 	if t.lifecycle == nil || sessionID == "" {
 		return
 	}
-	// nil UnifiedStore: delegate/subturn sessions have no chat-transcript meta
-	// (see the doc comment above) — the mediator skips the mirror. t.lifecycle
-	// (MessageParentLifecycleStore) satisfies session.LifecycleMutator, so no
-	// type assertion is needed.
+	// nil UnifiedStore: t.lifecycle has no *session.UnifiedStore handle to
+	// pass (see the doc comment above) — the mediator skips the mirror.
+	// t.lifecycle (MessageParentLifecycleStore) satisfies
+	// session.LifecycleMutator, so no type assertion is needed.
 	if err := session.TransitionSession(t.lifecycle, nil, sessionID, state, failedReason); err != nil {
 		slog.Warn("delegate: transitionLifecycle: dual-store transition failed", "session_id", sessionID, "state", state, "error", err)
 	}
@@ -618,15 +539,15 @@ func (t *DelegateTool) killChildBackgroundShells(sessionID string) (killed, fail
 }
 
 // collectCancelDescendantSessionIDs performs a breadth-first walk of the
-// durable ParentDurableKey edge (pkg/session/lifecycle.go) starting at
+// durable SteeringSessionID edge (pkg/session/lifecycle.go) starting at
 // rootSessionID and returns every reachable descendant's own session id
 // (rootSessionID itself is never included).
 //
 // This mirrors agent.CollectDescendantSessionIDs (pkg/agent/cancel.go)
 // byte-for-byte in walk semantics and error contract, duplicated here rather
 // than called directly because pkg/tools cannot import pkg/agent (pkg/agent
-// already imports pkg/tools — see AgentLoopSpawner/SubTurnConfig — so the
-// dependency can only run that direction). This is the same class of
+// already imports pkg/tools, so the dependency can only run that direction).
+// This is the same class of
 // cross-package duplication cancel.go's own CollectDescendantSessionIDs doc
 // comment describes for the (now-hoisted) pkg/gateway/websocket.go copy.
 //
@@ -654,7 +575,7 @@ func (t *DelegateTool) collectCancelDescendantSessionIDs(rootSessionID string) (
 	for len(queue) > 0 {
 		id := queue[0]
 		queue = queue[1:]
-		children, err := t.lifecycle.List(session.LifecycleFilter{ParentDurableKey: id})
+		children, err := t.lifecycle.List(session.LifecycleFilter{SteeringSessionID: id})
 		if err != nil {
 			// This branch of the tree is now UNREACHABLE for this walk —
 			// recorded (not just logged) so the caller can distinguish this
@@ -678,668 +599,6 @@ func (t *DelegateTool) collectCancelDescendantSessionIDs(rootSessionID string) (
 	return descendants, nil
 }
 
-// ErrDelegationTimedOut is wrapped into a SpawnSubTurn error when the
-// delegated sub-turn reached its time limit (SubTurnConfig.Timeout) and was
-// force-cancelled (pkg/agent/subturn.go's armSubTurnForceCancel). It lives here,
-// not in pkg/agent, because this package cannot import pkg/agent — it is the
-// one discriminator executeSync/executeAsync use to tell the delegator the
-// truth about a timeout. A cooperative child is stopped; ErrDelegationDetached
-// additionally identifies the exceptional case where the child turn's
-// in-flight operation ignored cancellation and may still be unwinding.
-var ErrDelegationTimedOut = errors.New("delegation timed out")
-
-// ErrDelegationDetached additionally marks a timed-out native child whose
-// in-flight operation ignored cancellation. The parent has stopped waiting
-// and no new model/tool call can start, but that operation may still be
-// unwinding. User-facing timeout copy must preserve that distinction.
-var ErrDelegationDetached = fmt.Errorf("%w: detached after ignoring cancellation", ErrDelegationTimedOut)
-
-// delegateTaskStatusTimedOut is the in-memory DelegateTaskState.Status for a
-// delegation that reached its time limit and was force-cancelled. It mirrors
-// the durable session.LifecycleTimedOut record written alongside it, so
-// action:"status" and list_jobs agree on what happened.
-const delegateTaskStatusTimedOut = "timed_out"
-
-// delegateToolExecuteAsync carries the shared state of executeAsync across its stages.
-type delegateToolExecuteAsync struct {
-	t                 *DelegateTool
-	ctx               context.Context
-	task              string
-	label             string
-	agentID           string
-	resolvedMaxDepth  *int
-	delegateSessionID string
-	timeout           time.Duration
-	snap              *ContextSnapshot
-	requestedSkill    string
-	isResume          bool
-	cb                AsyncCallback
-	taskID            string
-}
-
-// executeAsync runs the background (async=true) delegation path. It records
-// the task's state in t.tasks BEFORE launching the sub-turn goroutine and
-// updates that SAME record on completion — the fix for FR-D2: action:"status"
-// reads from this exact map, so a real, live status is always available.
-func (t *DelegateTool) executeAsync(
-	ctx context.Context,
-	task, label, agentID string,
-	resolvedMaxDepth *int,
-	delegateSessionID string,
-	timeout time.Duration,
-	snap *ContextSnapshot,
-	requestedSkill string,
-	isResume bool,
-	cb AsyncCallback,
-) *ToolResult {
-	dt := &delegateToolExecuteAsync{t: t, ctx: ctx, task: task, label: label, agentID: agentID, resolvedMaxDepth: resolvedMaxDepth, delegateSessionID: delegateSessionID, timeout: timeout, snap: snap, requestedSkill: requestedSkill, isResume: isResume, cb: cb}
-
-	if dt.t.spawner == nil {
-		return ErrorResult("delegate: no sub-turn spawner configured")
-	}
-
-	channel := ToolChannel(dt.ctx)
-	chatID := ToolChatID(dt.ctx)
-	// W2: capture, at task-creation time, the exact correlation anchors a
-	// spawned child sub-turn's transcript entries will carry back —
-	// SessionID mirrors TranscriptSessionID: parentTS.transcriptSessionID
-	// (pkg/agent/subturn.go), and SpawnCallID mirrors the delegate tool
-	// call's own ID (the value spawnToolCallIDFromContext captures on the
-	// agent-package side to set childTS.parentSpawnCallID). Reading both
-	// from THIS SAME ctx guarantees they match what the child will actually
-	// use, without any agent-package coupling.
-	sessionID := ToolTranscriptSessionID(dt.ctx)
-	spawnCallID := ToolCallID(dt.ctx)
-	is3P := false
-	if dt.agentID != "" && dt.t.getAgentRegistry != nil {
-		if reg := dt.t.getAgentRegistry(); reg != nil {
-			is3P = reg.IsExternalCLI(dt.agentID)
-		}
-	}
-
-	dt.t.mu.Lock()
-	// FR-045: eviction runs as part of the tool's own bookkeeping — every
-	// new task registration — never a separate goroutine/ticker.
-	dt.t.evictStaleTasksLocked()
-	dt.taskID = fmt.Sprintf("delegate-%d", dt.t.nextID)
-	dt.t.nextID++
-	dt.t.tasks[dt.taskID] = &DelegateTaskState{
-		ID:                dt.taskID,
-		Task:              dt.task,
-		Label:             dt.label,
-		AgentID:           dt.agentID,
-		OriginChannel:     channel,
-		OriginChatID:      chatID,
-		Status:            "running",
-		Created:           time.Now().UnixMilli(),
-		SessionID:         sessionID,
-		SpawnCallID:       spawnCallID,
-		Is3P:              is3P,
-		DelegateSessionID: dt.delegateSessionID,
-		LastStatusRead:    dt.t.now().UnixMilli(),
-	}
-	if dt.delegateSessionID != "" {
-		dt.t.sessionIndex[dt.delegateSessionID] = dt.taskID
-	}
-	dt.t.mu.Unlock()
-
-	dt.t.transitionLifecycle(dt.delegateSessionID, session.LifecycleRunning, "")
-
-	// The task is the first USER message; the delegate's soul (worker /
-	// configured agent) is resolved inside spawnSubTurn and used as the
-	// system role. delegate does not pre-inject any persona — a configured
-	// delegate exposes its own soul and a soul-less worker runs with an empty
-	// system role (worker souls are OPTIONAL by design). The label, when set,
-	// is preserved as the task label for the WS subTurn_start frame.
-	//
-	// Critical: true is REQUIRED here, not optional. Background delegation's
-	// entire premise is "the parent moves on; tell me later" — the parent
-	// turn routinely finishes (its own follow-up LLM call after receiving
-	// this async ack, then Finish(false)) in well under the time it takes
-	// the delegate to run even one tool call. Without Critical:true, the
-	// child sub-turn's own loop (pkg/agent/loop.go's "Parent turn ended"
-	// check, evaluated early in each iteration, before the next LLM call)
-	// treats !ts.critical && ts.IsParentEnded() as a signal to exit
-	// gracefully — silently discarding the delegate's real answer for any
-	// task needing more than a single LLM turn (i.e.
-	// any task that calls a tool before its final answer). The delegate's
-	// pre-tool-call narration survives (persisted per-iteration), but the
-	// synthesized final answer is never produced at all: spawnSubTurn's
-	// result comes back with ForLLM/ForUser == "", and asyncCallback's
-	// `content == "" { return }` guard (pkg/agent/loop.go) then silently
-	// drops it — no error, no notification, nothing delivered to the user,
-	// live or on reload. Critical:true lets the child keep running past the
-	// parent's own finish (it still delivers as an "orphan" on the
-	// now-moot pendingResults channel — see deliverSubTurnResult — but its
-	// REAL delivery path, this same cb -> AsyncNotifier.Notify chain, is
-	// unaffected by parent lifecycle and fires correctly once the child
-	// actually finishes). See SubTurnConfig.Critical's doc comment.
-	//
-	// Pending-spawn marker (delegate-spawn cancel race fix): recorded HERE,
-	// synchronously on THIS (the delegating parent's own tool-execution)
-	// goroutine, as the LAST thing that happens before the goroutine below
-	// is dispatched — not inside the goroutine itself, and not any earlier
-	// than this point. Marking any earlier (e.g. before the t.tasks
-	// bookkeeping above) would risk recording a marker for a spawn that
-	// this function then aborts before ever reaching the goroutine — there
-	// is no such abort path between here and the `go func` below, so this
-	// is also the LATEST point that still guarantees "marked implies a
-	// spawn attempt is genuinely in flight," which is exactly the
-	// invariant AgentLoopSpawner.MarkPendingDelegateSpawn's own doc comment
-	// (pkg/agent/subturn.go) requires of every caller. sessionID/channel/
-	// chatID are the delegating PARENT turn's own identity (captured above
-	// from this same ctx) — the SAME identity a Stop click's
-	// CancelScope carries (CancelScope.SessionID for the web SPA/CLI/Tier A
-	// path, or (Channel, ChatID) for Tier B). channel/chatID are inherited
-	// verbatim by the spawned child at any delegation depth; sessionID's
-	// match instead relies on ROUTING identity being what's inherited
-	// verbatim (turn.go's own doc comment: "routingSessionID is inherited
-	// verbatim through the whole subtree"), NOT transcriptSessionID — post-
-	// ADR-057 D1 each child gets its OWN distinct transcriptSessionID
-	// rather than copying the parent's (this comment used to claim
-	// "processOptions construction copies parentTS.transcriptSessionID …
-	// onto the child," which was true pre-D1 and is false now). So
-	// spawnSubTurn's own cleanup clears the exact keys marked here. A nil
-	// t.spawnMarker (SetSpawner was never called with a marker-capable
-	// spawner — e.g. this package's own unit tests) makes this call a
-	// silent no-op, unchanged from before this fix.
-	if dt.t.spawnMarker != nil {
-		dt.t.spawnMarker.MarkPendingDelegateSpawn(sessionID, channel, chatID)
-	}
-	dt.t.asyncWG.Add(1)
-	go func() {
-		dt.runSubturn()
-	}()
-
-	// NOTE: "(task_id: %s)" must stay its own parenthesized clause, ending in
-	// the FIRST ")" after the id — pkg/tools/delegate_test.go's extractTaskID
-	// helper scans for "task_id: " and stops at the next ")"/"\n", so a
-	// session_id appended INSIDE the same parens would corrupt every test
-	// using that helper (regression: existing one-shot delegate.run compat).
-	msg := fmt.Sprintf("Delegated task for: %s (task_id: %s)", dt.task, dt.taskID)
-	if dt.label != "" {
-		msg = fmt.Sprintf("Delegated task '%s' for: %s (task_id: %s)", dt.label, dt.task, dt.taskID)
-	}
-	msg += fmt.Sprintf(" (session_id: %s)", dt.delegateSessionID)
-	msg += fmt.Sprintf(
-		" — running in background; check progress with delegate(action=\"status\", session_id=%q), "+
-			"or inbox/steer/respond/cancel/follow_up/peek using the same session_id.", dt.delegateSessionID,
-	)
-	return AsyncResult(msg)
-}
-
-// runSubturn runs the delegated sub-turn and records and reports its outcome.
-func (dt *delegateToolExecuteAsync) runSubturn() {
-	defer dt.t.asyncWG.Done()
-	result, err := dt.t.spawner.SpawnSubTurn(dt.ctx, SubTurnConfig{
-		Model:             dt.t.defaultModel,
-		Tools:             nil, // Will inherit from parent via context
-		SystemPrompt:      dt.task,
-		TargetAgentID:     dt.agentID,
-		MaxTokens:         dt.t.maxTokens,
-		Temperature:       dt.t.temperature,
-		Async:             true,
-		Critical:          true,
-		Timeout:           dt.timeout,
-		TaskLabel:         dt.label,
-		TaskID:            dt.taskID,
-		ResolvedMaxDepth:  dt.resolvedMaxDepth,
-		ContextSnapshot:   dt.snap,
-		DelegateSessionID: dt.delegateSessionID,
-		IsResume:          dt.isResume,
-		RequestedSkill:    dt.requestedSkill,
-	})
-
-	// ADR-072 D9 / FR-053/054: a requested_skill dispatch failure (the
-	// receiver denied it, or the slug does not resolve at all) is a
-	// distinct, structured outcome — never the generic "Delegate failed"
-	// wrap below, which would flatten DelegationDeniedCode/SkillNotFoundCode
-	// down to opaque prose. Built once, up front, so both the bookkeeping
-	// switch (state.Result) and the result-rebuild switch below use the
-	// SAME structured payload.
-	requestedSkillFailure := errors.Is(err, ErrRequestedSkillDenied) || errors.Is(err, ErrRequestedSkillNotFound)
-	var requestedSkillFailureResult *ToolResult
-	if requestedSkillFailure {
-		requestedSkillFailureResult = requestedSkillDispatchFailureResult(dt.agentID, dt.requestedSkill, err)
-	}
-
-	var lifecycleState session.LifecycleState
-	var lifecycleFailedReason string
-	// parked: the child called message_parent(wait=true) and is waiting on
-	// the parent's respond(), NOT finished. Its turn stopped deliberately,
-	// so err is nil and the result is neither Interrupted nor IsError —
-	// exactly the shape that otherwise falls into `default` below and gets
-	// stamped LifecycleCompleted, overwriting the needs_input state
-	// parkNeedsInput just wrote. That overwrite is what made respond()
-	// fail closed with "session is not parked" in the ADR-057 UAT even
-	// once the turn loop itself was fixed to stop.
-	parked := false
-
-	// UAT A-17: a delegation that reached its time limit was
-	// force-cancelled (pkg/agent/subturn.go). Built BEFORE t.mu is taken:
-	// timedOutDelegationResult kills the child's background shells, which
-	// walks the lifecycle store and must never run under this tool's
-	// mutex. Its case below is checked ahead of `ctx.Err() != nil` on
-	// purpose — ctx is the delegating PARENT's tool context, which is
-	// routinely already cancelled by the time a background child times
-	// out (the parent turn moved on), so that case would otherwise report
-	// a timeout as "Task canceled during execution".
-	timedOut := !requestedSkillFailure && errors.Is(err, ErrDelegationTimedOut)
-	var timedOutResult *ToolResult
-	if timedOut {
-		timedOutResult = dt.t.timedOutDelegationResult(dt.delegateSessionID, dt.taskID, dt.label, err)
-	}
-
-	dt.t.mu.Lock()
-	if state, ok := dt.t.tasks[dt.taskID]; ok {
-		switch {
-		case requestedSkillFailure:
-			state.Status = "failed"
-			state.Result = requestedSkillFailureResult.ForLLM
-			lifecycleState, lifecycleFailedReason = session.LifecycleFailed, "error"
-		case timedOut:
-			state.Status = delegateTaskStatusTimedOut
-			state.Result = timedOutResult.ForLLM
-			lifecycleState, lifecycleFailedReason = session.LifecycleTimedOut, ""
-		case err != nil && dt.ctx.Err() != nil:
-			state.Status = "canceled"
-			state.Result = "Task canceled during execution"
-			lifecycleState, lifecycleFailedReason = session.LifecycleCancelled, "stopped_by_user"
-		case err != nil:
-			state.Status = "failed"
-			state.Result = fmt.Sprintf("Error: %v", err)
-			lifecycleState, lifecycleFailedReason = session.LifecycleFailed, "error"
-		case result != nil && result.ParksTurn:
-			parked = true
-			state.Status = "needs_input"
-			state.Result = result.ForLLM
-		default:
-			state.Status = "completed"
-			if result != nil {
-				state.Result = result.ForLLM
-			}
-			lifecycleState = session.LifecycleCompleted
-		}
-	}
-	dt.t.mu.Unlock()
-
-	// Skip the transition entirely when parked — parkNeedsInput already
-	// owns this record's state, and any write here would clobber it.
-	if !parked {
-		dt.t.transitionLifecycle(dt.delegateSessionID, lifecycleState, lifecycleFailedReason)
-	}
-
-	switch {
-	case requestedSkillFailure:
-		result = requestedSkillFailureResult
-	case timedOut:
-		// Not "spawn failed": the child ran and was force-cancelled at its
-		// time limit. Warn (an expected, bounded outcome), not Error, and
-		// with its own grep-able message.
-		slog.Warn("delegate: async subagent reached its time limit and was force-cancelled",
-			"session_id", dt.delegateSessionID,
-			"task_id", dt.taskID,
-			"agent_id", dt.agentID,
-			"is_resume", dt.isResume,
-			"error", err)
-		result = timedOutResult
-	case err != nil:
-		// Kill the silent swallow: a spawn that dies before starting
-		// (e.g. a `follow_up` resume whose target session vanished, or
-		// any other SpawnSubTurn failure) must be operator-visible on
-		// its OWN, unconditionally — never dependent on whatever `cb`
-		// happens to do with the result downstream (a live channel that
-		// may already be gone, an AsyncNotifier publish that lands
-		// somewhere other than where an operator is watching, etc.).
-		// This is the ONE line that fires every single time this
-		// goroutine's spawn attempt fails, regardless of whether cb is
-		// nil, so `grep -i "async subturn spawn failed" gateway.log`
-		// always finds it.
-		slog.Error("delegate: async subturn spawn failed",
-			"session_id", dt.delegateSessionID,
-			"task_id", dt.taskID,
-			"agent_id", dt.agentID,
-			"is_resume", dt.isResume,
-			"error", err)
-		result = ErrorResult(fmt.Sprintf("Delegate failed: %v", err)).WithError(err)
-	case result != nil:
-		// Finding B (A-I4 round 4, live-verified): mirror executeSync's
-		// own wrapping below — the raw spawner result's ForUser field
-		// (spawnSubTurn / pkg/agent/subturn.go sets it to
-		// turnRes.finalContent, the CHILD's own unwrapped, first-person
-		// final text) must never reach pkg/agent/loop.go's asyncCallback
-		// unmodified. asyncCallback unconditionally does
-		// `if !result.Silent && result.ForUser != "" { PublishOutbound(...
-		// Content: result.ForUser ...) }` — a DIRECT, immediate publish
-		// with no relation to the wsStreamer/shadow-stream machinery at
-		// all (confirmed via a live background delegation: the leaked
-		// bubble appeared even with no cancellation involved, the moment
-		// the child's own final answer happened to require no wrapping —
-		// e.g. a policy-denied task explaining itself in its own voice).
-		// That silently turns the delegate's own raw narration into a
-		// second, unattributed top-level chat bubble the instant the
-		// parent's own turn has already ended — the common case for
-		// background delegation (Critical:true's own doc comment above:
-		// "the parent turn routinely finishes ... in well under the time
-		// it takes the delegate to run even one tool call"). This is
-		// exactly the content class the design intends to keep hidden,
-		// matching the already-correct sync/await case (executeSync
-		// below never independently publishes anything — its result only
-		// ever becomes a normal tool_call_result) and
-		// pkg/gateway/replay.go's ParentSpawnCallID skip. The LLM-facing
-		// AsyncNotifier continuation turn (still fed the wrapped ForLLM
-		// content below) already informs the user, in the DELEGATOR's
-		// own voice, that the delegation finished and what it found —
-		// clearing ForUser here removes the duplicate, unattributed raw
-		// dump without losing any user-facing information.
-		labelStr := dt.label
-		if labelStr == "" {
-			labelStr = "(unnamed)"
-		}
-		// A parked child is NOT finished — it is waiting on this
-		// delegator's own respond(). Saying "completed" would tell the
-		// delegator's next turn the opposite of what the lifecycle
-		// record says (needs_input), which is how an orchestrator ends
-		// up believing work is done and never answering the question.
-		// ParksTurn must also survive this rebuild: dropping it here
-		// would silently kill the signal for every downstream reader.
-		headline := "Subagent task completed"
-		if result.ParksTurn {
-			headline = "Subagent task is PAUSED awaiting your answer (respond to it to continue)"
-		}
-		// ADR-072 D9 / FR-056: report the loaded skill in the delegation
-		// result. Reaching this branch at all (requestedSkillFailure was
-		// false above) means the receiver's own grant permitted it, so a
-		// non-empty requestedSkill here was necessarily granted and
-		// appended to the child's ForcedSkills by spawnSubTurn.
-		if dt.requestedSkill != "" {
-			headline += fmt.Sprintf(" (requested_skill %q was loaded into the child's first turn)", dt.requestedSkill)
-		}
-		result = &ToolResult{
-			ForLLM: fmt.Sprintf(
-				"%s:\nLabel: %s\nTask ID: %s\nSession: %s\nResult: %s",
-				headline, labelStr, dt.taskID, dt.delegateSessionID, result.ForLLM,
-			),
-			IsError:   result.IsError,
-			ParksTurn: result.ParksTurn,
-			Async:     true,
-		}
-	}
-
-	// Call callback if provided
-	if dt.cb != nil {
-		dt.cb(dt.ctx, result)
-	} else if err != nil {
-		slog.Error("delegate: subturn failed with no callback", "error", err)
-	}
-}
-
-// executeSync runs the await (async=false) delegation path: it blocks until
-// the delegated turn completes and returns the result inline.
-func (t *DelegateTool) executeSync(
-	ctx context.Context,
-	task, label, agentID string,
-	resolvedMaxDepth *int,
-	delegateSessionID string,
-	timeout time.Duration,
-	snap *ContextSnapshot,
-	requestedSkill string,
-) *ToolResult {
-	if t.spawner == nil {
-		return ErrorResult("delegate: no sub-turn spawner configured").WithError(fmt.Errorf("spawner not set"))
-	}
-
-	// ADR-057 FR-044/BDD-49: executeSync now registers a DelegateTaskState
-	// too — previously only executeAsync did, so a completed/failed
-	// synchronous (await) delegation left action:"status" with nothing to
-	// find for it at all (not "empty", genuinely absent), and
-	// recentActivityLines could never build a snapshot for a task that
-	// action:"status" could not even resolve. Mirrors executeAsync's own
-	// registration exactly (same fields, same eviction call).
-	channel := ToolChannel(ctx)
-	chatID := ToolChatID(ctx)
-	sessionID := ToolTranscriptSessionID(ctx)
-	spawnCallID := ToolCallID(ctx)
-	is3P := false
-	if agentID != "" && t.getAgentRegistry != nil {
-		if reg := t.getAgentRegistry(); reg != nil {
-			is3P = reg.IsExternalCLI(agentID)
-		}
-	}
-
-	t.mu.Lock()
-	t.evictStaleTasksLocked()
-	taskID := fmt.Sprintf("delegate-%d", t.nextID)
-	t.nextID++
-	t.tasks[taskID] = &DelegateTaskState{
-		ID:                taskID,
-		Task:              task,
-		Label:             label,
-		AgentID:           agentID,
-		OriginChannel:     channel,
-		OriginChatID:      chatID,
-		Status:            "running",
-		Created:           time.Now().UnixMilli(),
-		SessionID:         sessionID,
-		SpawnCallID:       spawnCallID,
-		Is3P:              is3P,
-		DelegateSessionID: delegateSessionID,
-		LastStatusRead:    t.now().UnixMilli(),
-	}
-	if delegateSessionID != "" {
-		t.sessionIndex[delegateSessionID] = taskID
-	}
-	t.mu.Unlock()
-
-	t.transitionLifecycle(delegateSessionID, session.LifecycleRunning, "")
-
-	result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
-		Model:             t.defaultModel,
-		Tools:             nil, // Will inherit from parent via context
-		SystemPrompt:      task,
-		TargetAgentID:     agentID, // "" → parent's own soul; non-empty → named agent's soul
-		TaskLabel:         label,
-		TaskID:            taskID,
-		MaxTokens:         t.maxTokens,
-		Temperature:       t.temperature,
-		Async:             false,
-		Timeout:           timeout,
-		ResolvedMaxDepth:  resolvedMaxDepth,
-		ContextSnapshot:   snap,
-		DelegateSessionID: delegateSessionID,
-		RequestedSkill:    requestedSkill,
-	})
-	// ADR-072 D9 / FR-053/054: a requested_skill dispatch failure gets its
-	// OWN structured result — DelegationDeniedCode for a denial,
-	// SkillNotFoundCode for an unresolvable slug — returned UNWRAPPED,
-	// exactly like the pre-flight trust/mode/depth DelegationDeniedResult
-	// this file's own executeRun already returns directly on denial. Checked
-	// before the generic dispatch-failure shortcut below so neither
-	// discriminator is ever flattened into "Delegate execution failed: %v".
-	if errors.Is(err, ErrRequestedSkillDenied) || errors.Is(err, ErrRequestedSkillNotFound) {
-		t.transitionLifecycle(delegateSessionID, session.LifecycleFailed, "error")
-		failureResult := requestedSkillDispatchFailureResult(agentID, requestedSkill, err)
-		t.finalizeSyncTask(taskID, "failed", failureResult.ForLLM)
-		return failureResult
-	}
-	// Finding F (A-I4 round 5): only take the generic "Delegate execution
-	// failed" shortcut for a genuine dispatch failure — result == nil (e.g.
-	// a panic spawnSubTurn's own recover() deliberately nils result for) or
-	// a real, non-interrupted error. A parent-cancellation interruption
-	// (result.Interrupted, set by spawnSubTurn's cleanup defer using the
-	// SAME classification the live subagent_end frame already reports —
-	// see ToolResult.Interrupted's doc comment) still returns a non-nil err
-	// here (the child's context WAS canceled), but must fall through to the
-	// normal formatting below so result.Interrupted survives onto the
-	// result this function returns — which pkg/agent/loop.go's tool-call-
-	// transcript persistence reads to decide whether a session reload shows
-	// "interrupted" (matching live) or "failed" (the bug this closes).
-	// UAT A-17: a delegation that reached its time limit was force-cancelled
-	// (pkg/agent/subturn.go) — report exactly that, never the generic
-	// "Delegate execution failed" wording below, which told an orchestrator
-	// nothing about whether the child was still running. Checked before that
-	// shortcut so the timeout discriminator is never flattened into it.
-	if errors.Is(err, ErrDelegationTimedOut) {
-		timedOut := t.timedOutDelegationResult(delegateSessionID, taskID, label, err)
-		t.transitionLifecycle(delegateSessionID, session.LifecycleTimedOut, "")
-		t.finalizeSyncTask(taskID, delegateTaskStatusTimedOut, timedOut.ForLLM)
-		return timedOut
-	}
-	if result == nil || (err != nil && !result.Interrupted) {
-		t.transitionLifecycle(delegateSessionID, session.LifecycleFailed, "error")
-		t.finalizeSyncTask(taskID, "failed", fmt.Sprintf("Error: %v", err))
-		return ErrorResult(fmt.Sprintf("Delegate execution failed: %v", err)).WithError(err)
-	}
-
-	switch {
-	case result.Interrupted:
-		t.transitionLifecycle(delegateSessionID, session.LifecycleCancelled, "stopped_by_user")
-		t.finalizeSyncTask(taskID, "canceled", "Task canceled during execution")
-	case result.IsError:
-		t.transitionLifecycle(delegateSessionID, session.LifecycleFailed, "error")
-		t.finalizeSyncTask(taskID, "failed", result.ForLLM)
-	case result.ParksTurn:
-		// Parked on message_parent(wait=true): waiting for the parent's
-		// respond(), not finished. Deliberately transitions nothing —
-		// parkNeedsInput already wrote needs_input, and writing
-		// LifecycleCompleted here would clobber it and make respond() fail
-		// closed with "session is not parked" (the ADR-057 UAT symptom).
-		// The in-memory task status IS updated (finalizeSyncTask is a plain
-		// setter despite the name), so `delegate status` reports needs_input
-		// rather than a stale "running" — matching executeAsync's parked case.
-		t.finalizeSyncTask(taskID, "needs_input", result.ForLLM)
-	default:
-		t.transitionLifecycle(delegateSessionID, session.LifecycleCompleted, "")
-		t.finalizeSyncTask(taskID, "completed", result.ForLLM)
-	}
-
-	// Format result for display
-	userContent := result.ForLLM
-	if result.ForUser != "" {
-		userContent = result.ForUser
-	}
-	maxUserLen := 500
-	if len(userContent) > maxUserLen {
-		userContent = userContent[:maxUserLen] + "..."
-	}
-
-	labelStr := label
-	if labelStr == "" {
-		labelStr = "(unnamed)"
-	}
-	// Same truthfulness rule as executeAsync's rebuild: a parked child is
-	// waiting on this delegator's respond(), not finished. Telling the
-	// delegator's next turn "completed" contradicts the needs_input record
-	// and is how an unanswered question turns into a permanently stuck child.
-	llmHeadline := "Subagent task completed"
-	if result.ParksTurn {
-		llmHeadline = "Subagent task is PAUSED awaiting your answer (respond to it to continue)"
-	}
-	// ADR-072 D9 / FR-056: report the loaded skill in the delegation result.
-	// Reaching here at all means the requestedSkill dispatch-failure check
-	// above did not fire, so a non-empty requestedSkill was necessarily
-	// granted and appended to the child's ForcedSkills by spawnSubTurn.
-	if requestedSkill != "" {
-		llmHeadline += fmt.Sprintf(" (requested_skill %q was loaded into the child's first turn)", requestedSkill)
-	}
-	llmContent := fmt.Sprintf(
-		"%s:\nLabel: %s\nTask ID: %s\nSession: %s\nResult: %s",
-		llmHeadline, labelStr, taskID, delegateSessionID, result.ForLLM,
-	)
-
-	return &ToolResult{
-		ForLLM:      llmContent,
-		ForUser:     userContent,
-		Silent:      false,
-		IsError:     result.IsError,
-		Interrupted: result.Interrupted,
-		// Carry the park signal across this rebuild. Dropping it would leave
-		// the delegator's OWN turn loop unaware that its child parked — the
-		// same class of silently-lost signal this defect started as.
-		ParksTurn: result.ParksTurn,
-		Async:     false,
-	}
-}
-
-// finalizeSyncTask records executeSync's terminal outcome onto the
-// DelegateTaskState registered at the top of executeSync (FR-044), mirroring
-// the status/Result assignment executeAsync's own completion goroutine makes.
-// A no-op if taskID was never registered (defensive; cannot happen given
-// executeSync always registers before this is called).
-func (t *DelegateTool) finalizeSyncTask(taskID, status, resultText string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if st, ok := t.tasks[taskID]; ok {
-		st.Status = status
-		st.Result = resultText
-	}
-}
-
-// timedOutDelegationResult is the ONE place a delegation that reached its time
-// limit is reported to the delegator — shared by executeSync and executeAsync
-// so the two can never describe the same outcome differently.
-//
-// Documented intent (Description / the timeout_seconds schema): "A delegation
-// is force-cancelled after timeout_seconds ... if it has not finished by then."
-// pkg/agent/subturn.go's force-cancel has already hard-aborted the child's turn
-// by the time this runs; this function completes the force-cancel for the
-// child's OS-level work, exactly as executeCancel does for an explicit cancel:
-// it kills the child's (and its descendants') background shells, so a backgrounded
-// command cannot keep writing after the delegator was told the delegation ended.
-//
-// The ordinary force-cancel wording is deliberate (UAT A-17): an orchestrator that read the old
-// "SubTurn failed: turn timed out: context deadline exceeded" concluded "a
-// timed-out delegation is not necessarily dead", then fought a phantom writer.
-// The message states plainly when the child is stopped and when partial work
-// may remain. ErrDelegationDetached takes a separate truthful branch: no new
-// work can start, but the cancellation-ignoring in-flight operation may still be
-// unwinding.
-func (t *DelegateTool) timedOutDelegationResult(delegateSessionID, taskID, label string, err error) *ToolResult {
-	_, killFailed, walkIncomplete := t.killChildBackgroundShells(delegateSessionID)
-
-	labelStr := label
-	if labelStr == "" {
-		labelStr = "(unnamed)"
-	}
-	shells := "Any background shells it started were killed."
-	if t.sessionManager == nil {
-		shells = "No background-shell manager is configured, so none could be checked."
-	}
-	var msg string
-	if errors.Is(err, ErrDelegationDetached) {
-		msg = fmt.Sprintf(
-			"Subagent task TIMED OUT, ignored cancellation, and was detached:\nLabel: %s\nTask ID: %s\nSession: %s\nDetail: %v\n"+
-				"The parent stopped waiting and no new model or tool call will be dispatched, but the "+
-				"already-running operation may still be unwinding. %s Work completed before the time limit "+
-				"may still be on disk, possibly incomplete — inspect the current state before re-delegating.",
-			labelStr, taskID, delegateSessionID, err, shells,
-		)
-	} else {
-		msg = fmt.Sprintf(
-			"Subagent task TIMED OUT and was force-cancelled:\nLabel: %s\nTask ID: %s\nSession: %s\nDetail: %v\n"+
-				"The subagent is STOPPED: it will make no further tool calls or file changes. %s "+
-				"There is nothing left to cancel. Work it finished before the time limit (for example "+
-				"files it had already written) may still be on disk, possibly incomplete — inspect the "+
-				"current state before re-delegating, and raise timeout_seconds if the task needs longer.",
-			labelStr, taskID, delegateSessionID, err, shells,
-		)
-	}
-	msg += cancelBackgroundShellWarnings(killFailed, walkIncomplete)
-	return ErrorResult(msg).WithError(err)
-}
-
-// cancelBackgroundShellWarnings renders the "could not be killed" /
-// "descendant walk incomplete" warning sentences shared by every
-// executeCancel outcome message — INCLUDING the TOCTOU "nothing to cancel"
-// branch (MEDIUM-3, 14-reviewer sign-off): a background-shell kill failure or
-// an incomplete descendant walk is real, caller-relevant information
-// regardless of whether the turn-level cancel itself found anything left to
-// cancel. Before this fix, killChildBackgroundShells' own warnings were
-// computed unconditionally but appended ONLY to the two success-message
-// branches below — the "terminated between the terminal check and the
-// cancel hook" branch discarded them outright, so a caller could be told
-// "nothing to cancel" while a background shell it just tried to kill was, in
-// fact, left running with no warning at all.
 func cancelBackgroundShellWarnings(killFailed int, walkIncomplete bool) string {
 	var warnings string
 	if killFailed > 0 {
@@ -1353,6 +612,40 @@ func cancelBackgroundShellWarnings(killFailed int, walkIncomplete bool) string {
 			"some of its descendants may not have been reached at all and their background shells could still be running."
 	}
 	return warnings
+}
+
+// droppedQueuedResult answers for a session the cancel reached while it was
+// still QUEUED — launched, admitted to the start queue, but never given a
+// turn. It returns nil for any other state, leaving the caller's own wording
+// in place.
+//
+// Such a session has no live turn: nothing to interrupt, nothing to flush to
+// a checkpoint, and no cooperative grace window worth waiting out. So both
+// hard and soft resolve identically here — the cascade's durable Stop marker
+// is what actually drops it (ADR-091 I-6: admission never promotes a stamped
+// session), and the record is landed terminal at once so the side panel, the
+// parent's own completion check (hasRunningOrQueuedDescendant) and the queue
+// positions this tool reports all agree that it is gone.
+//
+// The wording matters as much as the act. Before ADR-091's cascade was wired
+// here this call reported "terminated between the terminal check and the
+// cancel hook — no action needed" — a success shape claiming the session had
+// already ended, while it sat in the queue waiting to start. Saying plainly
+// that a session which never started has been dropped is the whole point of
+// the fix.
+func (t *DelegateTool) droppedQueuedResult(sessionID, warnings string) *ToolResult {
+	if t.lifecycle == nil {
+		return nil
+	}
+	rec, err := t.lifecycle.Load(sessionID)
+	if err != nil || rec == nil || rec.State != session.LifecycleQueued {
+		return nil
+	}
+	t.transitionLifecycle(sessionID, session.LifecycleCancelled, "stopped_by_user")
+	return NewToolResult(fmt.Sprintf(
+		"Session %s was still queued behind the concurrency limit and had not started; it has been dropped and will never run.",
+		sessionID,
+	) + warnings)
 }
 
 func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *ToolResult {
@@ -1384,7 +677,13 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 	if lerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", lerr))
 	}
-	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
+	// The principal is not just the authorisation answer: it is stamped on
+	// the durable Stop marker (session.Stop.By, ADR-091 I-1) and is what the
+	// UI and the audit trail show as who stopped this session. This used to
+	// call verifyCallerOwnsSession, which computes the same identity and
+	// throws it away.
+	by, verr := t.verifyCallerPrincipal(ctx, rec)
+	if verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", verr))
 	}
 
@@ -1467,7 +766,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		if t.cancelHard == nil {
 			return ErrorResult("delegate: no hard-cancel hook configured")
 		}
-		descendants, cerr := t.cancelHard(sessionID, "delegate cancel(hard=true)")
+		descendants, cerr := t.cancelHard(sessionID, by, "delegate cancel(hard=true)")
 		if cerr != nil {
 			return ErrorResult(fmt.Sprintf("delegate: cancel: %v", cerr)).WithError(cerr)
 		}
@@ -1493,6 +792,9 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 				sessionID,
 			) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
 		}
+		if dropped := t.droppedQueuedResult(sessionID, cancelBackgroundShellWarnings(killFailed, walkIncomplete)); dropped != nil {
+			return dropped
+		}
 		t.transitionLifecycle(sessionID, session.LifecycleCancelled, "stopped_by_user")
 		msg := fmt.Sprintf("Session %s hard-cancelled immediately.", sessionID)
 		msg += cancelBackgroundShellWarnings(killFailed, walkIncomplete)
@@ -1502,7 +804,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 	if t.cancelSoft == nil {
 		return ErrorResult("delegate: no soft-cancel hook configured")
 	}
-	softDescendants, cerr := t.cancelSoft(sessionID, "delegate cancel(hard=false)")
+	softDescendants, cerr := t.cancelSoft(sessionID, by, "delegate cancel(hard=false)")
 	if cerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", cerr)).WithError(cerr)
 	}
@@ -1520,6 +822,10 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 			"Session %s terminated between the terminal check and the cancel hook — no action needed.",
 			sessionID,
 		) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
+	}
+
+	if dropped := t.droppedQueuedResult(sessionID, cancelBackgroundShellWarnings(killFailed, walkIncomplete)); dropped != nil {
+		return dropped
 	}
 
 	// cancel(soft) = soft cooperative stop + a hard RequestCancel backstop
@@ -1544,7 +850,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 			// cancelHard returns (nil, nil) and there is nothing left to
 			// transition — skip transitionLifecycle rather than stamping a
 			// redundant LifecycleCancelled onto an already-terminal record.
-			backstopDescendants, cerr := t.cancelHard(sessionID, "delegate cancel(hard=false): grace elapsed")
+			backstopDescendants, cerr := t.cancelHard(sessionID, by, "delegate cancel(hard=false): grace elapsed")
 			if cerr != nil {
 				slog.Warn("delegate: cancel: hard-cancel backstop failed", "session_id", sessionID, "error", cerr)
 				return

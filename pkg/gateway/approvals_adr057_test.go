@@ -198,7 +198,7 @@ func TestApprovalRoundTrip_ChildApprovedResolvesByApprovalID(t *testing.T) {
 	go func() { got <- <-childEntry.resultCh }()
 
 	// The client responds APPROVE, carrying only the approval id.
-	resolveOK, gone := r.resolve(childEntry.ApprovalID, ApprovalActionApprove)
+	resolveOK, gone := r.resolve(childEntry.ApprovalID, ApprovalActionApprove, false)
 	if !resolveOK || gone {
 		t.Fatalf("BDD-91: approve must resolve; resolveOK=%v gone=%v", resolveOK, gone)
 	}
@@ -236,13 +236,13 @@ func TestApprovalRoundTrip_ChildApprovedResolvesByApprovalID(t *testing.T) {
 	if got := r.get(childEntry.ApprovalID); got != nil {
 		t.Errorf("the resolved entry must no longer resolve by id, got %v", got)
 	}
-	if resolveOK, gone := r.resolve(childEntry.ApprovalID, ApprovalActionApprove); resolveOK || gone {
+	if resolveOK, gone := r.resolve(childEntry.ApprovalID, ApprovalActionApprove, false); resolveOK || gone {
 		t.Errorf("a repeat action on a deleted entry must be not-found; got "+
 			"resolveOK=%v gone=%v", resolveOK, gone)
 	}
 	// An approval id that was never issued resolves nothing and must not fall
 	// back to any session-id-shaped match against the surviving sibling.
-	if resolveOK, gone := r.resolve("approval_never_issued", ApprovalActionApprove); resolveOK || gone {
+	if resolveOK, gone := r.resolve("approval_never_issued", ApprovalActionApprove, false); resolveOK || gone {
 		t.Errorf("an unknown approval id must resolve nothing; got resolveOK=%v gone=%v",
 			resolveOK, gone)
 	}

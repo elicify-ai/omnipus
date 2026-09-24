@@ -175,7 +175,7 @@ func TestNoAgentConfigWorkspaceIdentifier(t *testing.T) {
 //     declared later in the SAME file are a package-private staging format
 //     used only to shuttle data between the two schemas before
 //     ToStandardConfig() writes the REAL config.AgentConfig/AgentDefaults —
-//     which correctly uses .Home (openclaw_config.go:889,916 — NOT
+//     which correctly uses .Home (openclaw_config.go:884,919 — NOT
 //     allowlisted, and must never be added here).
 //   - (retired) pkg/sandbox/sandbox.go's comment heading ("// Workspace: full
 //     RWX ...", a prose label), not a struct field or composite literal.
@@ -191,8 +191,13 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	// reviewed shift means re-pointing, not a regression. The previous
 	// gateway entries were rest_workspace_delegation.go:139,212 and
 	// rest_workspaces.go:378,962,1253,1321,1579.)
-	"pkg/gateway/rest_workspace_delegation.go:138":             true,
-	"pkg/gateway/rest_workspace_delegation.go:211":             true,
+	// (Re-pointed again 2026-09-23: ADR-091 D9's config-fold commit
+	// (8667a4e58, "performance.max_delegation_depth" comment rewrite)
+	// added two comment lines above delegationDepthCeiling, shifting both
+	// call sites in this file down by +1; still config.workspace.State's
+	// unrelated Workspace field, not agent-config.)
+	"pkg/gateway/rest_workspace_delegation.go:139":             true,
+	"pkg/gateway/rest_workspace_delegation.go:212":             true,
 	"pkg/gateway/rest_workspace_wire_snapshot_test.go:32":      true,
 	"pkg/gateway/rest_workspace_wire_snapshot_test.go:37":      true,
 	"pkg/gateway/rest_workspaces.go:390":                       true,
@@ -252,10 +257,22 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	"pkg/migrate/sources/openclaw/openclaw_config.go:374": true,
 	"pkg/migrate/sources/openclaw/openclaw_config.go:377": true,
 	"pkg/migrate/sources/openclaw/openclaw_config.go:416": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:863": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:864": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:890": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:925": true,
+	// (Re-pointed 2026-09-24: the ADR-092 removal-lane retirement of
+	// OpenClaw's Exec/ExecConfig deny-pattern migration (dead exports —
+	// ADR-036's config.ExecConfig is gone) removed 6 lines above these four
+	// entries (863/864/890/925 -> 857/858/884/919); per the fragility note
+	// above, a reviewed shift means re-pointing, not a regression. Same
+	// four call sites as before: entry.Workspace/agentCfg.Workspace is the
+	// package-private staging AgentConfig (this file's own type, not
+	// config.AgentConfig), and the two `.Workspace` reads on the right of
+	// a `.Home =`/`Home:` assignment are OpenClawAgentDefaults.Workspace /
+	// the same staging AgentConfig.Workspace being translated INTO the
+	// real config.AgentConfig/AgentDefaults .Home field, not reintroducing
+	// the renamed identifier.)
+	"pkg/migrate/sources/openclaw/openclaw_config.go:857": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:858": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:884": true,
+	"pkg/migrate/sources/openclaw/openclaw_config.go:919": true,
 
 	"pkg/migrate/sources/openclaw/openclaw_config_test.go:250": true,
 	"pkg/migrate/sources/openclaw/openclaw_config_test.go:251": true,

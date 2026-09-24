@@ -428,8 +428,8 @@ func HasSystemAllowsInConstructorSeed(agentID string) bool {
 // Planner, Researcher, General Purpose, himself and Ava for configuration proposals;
 // Planner can ask Researcher;
 // General Purpose can create same-role helpers. Other roles have no seeded edges.
-// Task/background/await are agent delegation modes. Workspace creation translates
-// background/await into the graph's direct mode; this return value is not a graph.
+// Task/background are agent delegation modes. Workspace creation translates
+// background into the graph's direct mode; this return value is not a graph.
 func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 	ref := func(agentID CoreAgentID) config.AgentRef {
 		return config.AgentRef{Kind: config.AgentRefKindLocal, ID: string(agentID)}
@@ -441,7 +441,6 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 			Modes: []config.DelegationMode{
 				config.DelegationModeTask,
 				config.DelegationModeBackground,
-				config.DelegationModeAwait,
 			},
 		}
 	case IDPlanner:
@@ -449,7 +448,7 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 		return &config.DelegationPolicy{
 			To: []config.AgentRef{ref(IDResearcher)},
 			Modes: []config.DelegationMode{
-				config.DelegationModeAwait,
+				config.DelegationModeBackground,
 				config.DelegationModeTask,
 			},
 			Depth: intPtr(2),
@@ -457,7 +456,7 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 	case IDWorker:
 		return &config.DelegationPolicy{
 			To:    []config.AgentRef{ref(IDWorker)},
-			Modes: []config.DelegationMode{config.DelegationModeTask, config.DelegationModeBackground, config.DelegationModeAwait},
+			Modes: []config.DelegationMode{config.DelegationModeTask, config.DelegationModeBackground},
 		}
 	default:
 		// Other roles receive no onward delegation by default.

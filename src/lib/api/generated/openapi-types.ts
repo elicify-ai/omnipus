@@ -740,30 +740,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/security/exec-allowlist": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get exec binary allowlist (SEC-05)
-         * @description Returns the current exec allowlist and approval mode.
-         */
-        get: operations["getExecAllowlist"];
-        /**
-         * Update exec binary allowlist (SEC-05)
-         * @description Atomically updates the exec binary allowlist. Patterns are trimmed, validated, and deduplicated. Changes are audit-logged (SEC-15). Note: requires_restart=true in the response because the in-memory agent loop uses the previous allowlist until the gateway restarts (SEC-12).
-         */
-        put: operations["updateExecAllowlist"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/security/exec-proxy-status": {
         parameters: {
             query?: never;
@@ -870,7 +846,7 @@ export interface paths {
         get: operations["getSandboxConfig"];
         /**
          * Update sandbox configuration
-         * @description Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, shell_deny_patterns. At least one field required. mode and allowed_paths are restart-gated (requires_restart=true). SSRF and shell_deny_patterns are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
+         * @description Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, auto_approve. At least one field required. mode and allowed_paths are restart-gated (requires_restart=true). SSRF and auto_approve are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
          */
         put: operations["updateSandboxConfig"];
         post?: never;
@@ -4378,12 +4354,16 @@ export interface components {
             model?: string;
             verdict?: components["schemas"]["JudgeVerdict"];
             /**
-             * @description BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
+             * @description BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
              * @example browser_handover_notice
              * @enum {string}
              */
-            system_subtype?: "browser_handover_notice" | "goal_outcome";
+            system_subtype?: "browser_handover_notice" | "goal_outcome" | "subagent_start" | "subagent_state" | "subagent_message" | "subagent_end";
             goal_outcome?: components["schemas"]["GoalOutcome"];
+            subagent_start?: components["schemas"]["SubagentStartFrame"];
+            subagent_state?: components["schemas"]["SubagentStateFrame"];
+            subagent_message?: components["schemas"]["SubagentMessageFrame"];
+            subagent_end?: components["schemas"]["SubagentEndFrame"];
         };
         /** @description A single tool invocation recorded in a transcript entry. Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts. */
         ToolCall: {
@@ -4398,7 +4378,7 @@ export interface components {
              */
             tool: string;
             /**
-             * @description Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+             * @description Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
              * @example success
              * @enum {string}
              */
@@ -8010,7 +7990,11 @@ export interface components {
              */
             max_tool_iterations: number;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
-            shell_policy?: components["schemas"]["AgentShellPolicy"];
+            /**
+             * @description ADR-092 per-agent override of the global Auto-approve default (SandboxConfig.auto_approve). Off-only, by construction: this field can only ever mean "force Auto off for this agent's ask-policy tool calls" — there is no value meaning "force it on," so a per-agent write can never loosen past the global default (tighten-only, matching every scope except the per-chat session modifier, SessionModeUpdateFrame). false (the default) means this agent inherits the global default unchanged. Distinct from `tools_cfg.builtin.policies`, which is unchanged by ADR-092 and still governs the ordinary allow/deny/ask value per tool — this field only ever narrows what "ask" DOES for this agent's tools, never which tools are allow/deny/ask.
+             * @example false
+             */
+            auto_approve_disabled?: boolean;
             /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007). Capped at 2 entries. Hidden for subagent_3p.
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
@@ -8155,25 +8139,6 @@ export interface components {
              */
             last_active?: string;
         };
-        /**
-         * AgentShellPolicy
-         * @description Per-agent shell command deny-pattern configuration.
-         */
-        AgentShellPolicy: {
-            /**
-             * @description Enable pattern-based shell command blocking.
-             * @example true
-             */
-            enable_deny_patterns?: boolean;
-            /**
-             * @description Additional Go regexp patterns to block in shell commands.
-             * @example [
-             *       "rm -rf /",
-             *       "curl.*169\\.254"
-             *     ]
-             */
-            custom_deny_patterns?: string[];
-        };
         /** @description Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts). */
         AgentToolsCfg: {
             /** @description Controls builtin tool visibility for this agent. */
@@ -8291,6 +8256,11 @@ export interface components {
             icon?: string;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
+             * @description Initial per-agent override forcing Auto-approve off (ADR-092) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
+             * @example false
+             */
+            auto_approve_disabled?: boolean;
+            /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
              * @example [
@@ -8332,7 +8302,6 @@ export interface components {
              * @example alloy
              */
             voice?: string | null;
-            shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
              * @description Maximum number of tool calls allowed per turn.
              * @example 50
@@ -8385,6 +8354,11 @@ export interface components {
             icon?: string;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
+             * @description Initial per-agent override forcing Auto-approve off (ADR-092) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
+             * @example false
+             */
+            auto_approve_disabled?: boolean;
+            /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
              * @example [
@@ -8421,7 +8395,6 @@ export interface components {
              * @example You are a focused research assistant...
              */
             soul: string;
-            shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
              * @description Maximum number of tool calls allowed per turn.
              * @example 50
@@ -8546,18 +8519,6 @@ export interface components {
              * @example 100
              */
             max_tool_iterations?: number;
-            /** @description Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents. */
-            shell_policy?: {
-                /** @example true */
-                enable_deny_patterns?: boolean;
-                /**
-                 * @description Must each be valid Go regexp patterns (400 on invalid regexp).
-                 * @example [
-                 *       "rm -rf /"
-                 *     ]
-                 */
-                custom_deny_patterns?: string[];
-            };
             /**
              * @description Hex color code for agent avatar display (e.g. "#D4AF37").
              * @example #D4AF37
@@ -8594,6 +8555,11 @@ export interface components {
                 max_tokens?: number;
             };
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
+            /**
+             * @description Force Auto-approve off for this agent (ADR-092), overriding the global default (SandboxConfig.auto_approve) for every tool this agent resolves to "ask". Off-only: true disables Auto for this agent; false (or omitting the field, which leaves the stored value unchanged) does not loosen past the global default — there is no value here that turns Auto on when the global default has it off. Distinct from `tool_policy_changes`, which is unchanged and still governs allow/deny/ask per tool.
+             * @example false
+             */
+            auto_approve_disabled?: boolean;
             /**
              * @description Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external agents cannot be defaults. This does not change workspace membership.
              * @example false
@@ -8883,6 +8849,12 @@ export interface components {
              * @example github-mcp
              */
             server_id?: string;
+            /**
+             * @description ADR-092 D9: this tool's verdict when Auto-approve is active and the tool's effective policy is "ask". "runs" = always runs with no prompt. "runs_if_args" = runs only when this call's arguments meet the tool's own condition (e.g. a file path resolves inside the workspace or a mount); otherwise it asks. "asks" = always asks under Auto, and is auto-denied in an unattended run. For source="builtin" this is read from the static classifier table (tools.AutoApproveClassOf); "bash" is excluded (its own per-command mechanism, D3/D7/D8) and never appears with this field set. For source="mcp" this reflects the server's tool annotations: "runs" when the server marks the tool read-only or explicitly not destructive, "asks" otherwise (including tools with no annotations at all).
+             * @example runs
+             * @enum {string}
+             */
+            auto_approve?: "runs" | "runs_if_args" | "asks";
         };
         /**
          * AgentToolEntry
@@ -9097,7 +9069,7 @@ export interface components {
                 allow_internal?: string[];
             };
             /**
-             * @description O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable.
+             * @description O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool-policy ceiling is floored at "allow" (for every tool, not just bash) — which also makes `auto_approve` below moot for that agent, since Auto only ever applies to a tool resolved to "ask" and nothing is left in "ask" state once the ceiling is floored. The kernel sandbox is off and network egress is open. Operator `deny` command rules (ADR-092 D3) still apply — the floor cannot erase them. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable. Independent of `auto_approve` — the two are separate mechanisms.
              * @example false
              */
             god_mode?: boolean;
@@ -9117,13 +9089,12 @@ export interface components {
              */
             workspace_path_guard_env_override?: boolean;
             /**
-             * @description Global fallback shell command deny-list (regex entries). Per-agent custom patterns extend this list.
-             * @example [
-             *       "^curl\\s",
-             *       "^wget\\s"
-             *     ]
+             * @description ADR-092's global default for Auto-approve (fresh-install default: true). Auto is NOT a tool-policy value — every tool, including bash, keeps the ordinary three-value policy ("allow" runs unprompted with none of this machinery, "deny" makes the tool invisible to the agent, "ask" is where Auto applies). For every tool currently resolved to "ask", Auto-approve ON auto-approves the cases the pre-flight/rule matcher can positively clear (ADR-092 D3/D7/D8) and still prompts for everything else; Auto-approve OFF means an "ask" tool always prompts. Auto never touches an "allow" or "deny" tool. [2026-09-24, founder decision] Auto no longer additionally requires an enforcing kernel sandbox: it applies to bash and every other tool whether or not a kernel sandbox is confining spawned children (see SandboxStatus.kernel_sandbox_active, now purely informational for this purpose). Without a kernel sandbox, the D7/D8 pre-flights and the surviving text-based guards are the only checks on what a bash command touches — a disguised command can slip past a text-based check where a kernel boundary would have caught it; this is the accepted, founder-approved risk, not an oversight.
+             *     This is the GLOBAL default only. Two narrower scopes layer on top, neither stored here: a per-agent setting (Agent.auto_approve_disabled) that may only turn Auto OFF for that agent, and a per-chat session modifier (SessionModeUpdateFrame, asyncapi.yaml) that may turn Auto ON OR OFF for that one chat — deliberately allowed to loosen, since a human is present in that session; every other scope in this contract is tighten-only.
+             *     Deliberately named `auto_approve`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide. Hot-reloaded, like the rest of this handler's fields — no restart required.
+             * @example true
              */
-            shell_deny_patterns?: string[];
+            auto_approve?: boolean;
             /** @description Present in PUT responses. True when the change requires a gateway restart to take effect (mode, allowed_paths). */
             requires_restart?: boolean;
             /** @description Present in PUT responses. Always true on success. */
@@ -9199,6 +9170,21 @@ export interface components {
              * @example 2
              */
             bind_ports_count: number;
+            /**
+             * @description Whether a kernel sandbox is confining the processes agents spawn right now (sandbox.TurnPolicyBaseInstalled: the gateway registers a per-turn kernel policy base only once a kernel backend is enforcing for spawned children). Linux: true when Landlock was applied in enforce mode and not degraded (false in permissive mode). macOS: true when the Seatbelt boot profile was installed, so every spawned child is wrapped (policy_applied above reports the gateway's OWN confinement and is documented false on macOS by design). Windows, sandbox mode off, and the app-level fallback backend: always false. God Mode does not change this value, but under God Mode agents' children run without the per-turn kernel policy; see god_mode_active. [2026-09-24, founder decision] This no longer gates Auto-approve: Auto applies to every tool, bash included, whether or not this value is true. It is now purely informational — the input the UI uses to show the "Auto — no sandbox" warning badge/tooltip: without a kernel sandbox, shell commands under Auto now ask first (the D7/D8 pre-flights plus the founder-decision-A no-sandbox gate, pkg/tools/shell_no_sandbox_gate.go) unless the command is read-only or fully covered by an operator allow rule. Always present from this gateway.
+             * @example true
+             */
+            kernel_sandbox_active?: boolean;
+            /**
+             * @description The gateway-wide Auto-approve DEFAULT: exactly the live SandboxConfig.auto_approve value, reported here so the chat-header badge needs no second request. It is NOT combined with kernel_sandbox_active and NOT resolved for any agent or chat (this endpoint has no agent or session context). Auto actually takes effect for a call when the tool resolves to "ask", the resolved Auto-approve for that chat is on (this default, turned off by the agent's auto_approve_disabled, then overridden either way by the chat's own modifier — SessionModeUpdatedFrame / SessionStateFrame.auto_approve_modifier), and god_mode_active is false. [2026-09-24, founder decision] Auto no longer also requires kernel_sandbox_active — it now means exactly what the agent loop's autoApproveActive predicate computes (God Mode off, Auto resolved on), independent of kernel enforcement. Badge reading, before the per-agent and per-chat layers are folded in: god_mode_active=true shows "God Mode" whatever the other two fields say; else auto_approve_effective=false shows "Ask"; else kernel_sandbox_active= true shows "Auto"; else kernel_sandbox_active=false shows "Auto — no sandbox" with a warning tooltip (Auto is on and DOES clear "ask" calls for every tool except the shell; a shell command now asks first unless it is read-only or fully covered by an operator allow rule — there is no kernel confining what a disguised command can reach either way). There is no more "Auto → Ask" degraded state: Auto never silently becomes Ask for lack of a kernel sandbox. Always present from this gateway.
+             * @example true
+             */
+            auto_approve_effective?: boolean;
+            /**
+             * @description Whether the global God Mode override is ACTIVE in this process right now — the same value as GodModeStatus.enabled (the persisted sandbox.god_mode switch AND availability in this boot). When true every agent's tool policy is floored at "allow": no approval prompts, no per-turn kernel sandbox for spawned children, network egress open; operator deny command rules, audit logging, the prompt-injection guard and rate limiting stay on. The chat-header badge shows God Mode whenever this is true, whatever auto_approve_effective and kernel_sandbox_active say. Always present from this gateway.
+             * @example false
+             */
+            god_mode_active?: boolean;
         };
         /**
          * AuditEntry
@@ -9332,31 +9318,6 @@ export interface components {
              * @example 60
              */
             max_agent_tool_calls_per_minute?: number;
-        };
-        /**
-         * ExecAllowlist
-         * @description Exec binary allowlist configuration for GET/PUT /api/v1/security/exec-allowlist (SEC-05).
-         */
-        ExecAllowlist: {
-            /**
-             * @description Ordered list of allowed binary name patterns evaluated on every exec call. Patterns are trimmed, deduplicated, and validated server-side. Empty array = block all exec calls.
-             * @example [
-             *       "git",
-             *       "python3",
-             *       "node"
-             *     ]
-             */
-            allowed_binaries: string[];
-            /**
-             * @description Approval mode for exec calls. Reflects config.tools.exec.approval. Only present in GET responses.
-             * @example ask
-             */
-            approval?: string;
-            /**
-             * @description True in PUT responses — the in-memory agent loop uses the previous allowlist until the gateway restarts (SEC-12).
-             * @example true
-             */
-            restart_required?: boolean;
         };
         /**
          * ExecProxyStatus
@@ -10586,7 +10547,7 @@ export interface components {
              */
             ref?: string;
         };
-        /** @description Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and shell_deny_patterns are hot-reloaded. */
+        /** @description Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and auto_approve are hot-reloaded. This endpoint is the routing target for ADR-092's global Auto-approve default write (auto_approve below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use. No new auth mechanism; the requirement is routing the write through this handler rather than a bespoke endpoint that bypasses it. */
         SandboxConfigUpdate: {
             /**
              * @description Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
@@ -10636,13 +10597,11 @@ export interface components {
                 allow_internal?: string[];
             };
             /**
-             * @description Global fallback list of Go regexp patterns to block in shell commands. Per-agent custom_deny_patterns extend this list. Hot-reloaded.
-             * @example [
-             *       "rm -rf /",
-             *       "curl.*169\\.254"
-             *     ]
+             * @description Set the ADR-092 global default for Auto-approve. Auto is a SEPARATE setting from tool policy — it only has meaning for a tool currently resolved to "ask" (see SandboxConfig.auto_approve for the full behavioural description) and applies to every such tool, not only bash. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
+             *     Per-agent and per-chat Auto settings are NOT set here: a per-agent override is `auto_approve_disabled` on PUT /agents/{id} (AgentUpdateRequest) — off-only, tighten-only. A chat's session modifier is the session_mode_update WS frame (asyncapi.yaml, SessionModeUpdateFrame) — the one place in this contract allowed to LOOSEN (turn Auto on for that chat even when the agent or this global default has it off), because a human is present in that session. The per-agent field is tighten-only relative to this global default; this global default has no scope above it to tighten against.
+             * @example true
              */
-            shell_deny_patterns?: string[];
+            auto_approve?: boolean;
             /**
              * @description ADR-068 §6. Turns the IN-PROCESS bash workspace path guard on or off. Distinct from `mode`, which is the kernel sandbox — the two are separate boundaries and setting one has no effect on the other (UAT defect 002 was operators expecting otherwise). When true, a WRITE outside the agent's working directory needs an approved workspace mount; reads outside it are allowed either way. Restart-gated: it resolves into AgentDefaults.RestrictToWorkspace at boot. Ignored at runtime while OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE is set, which outranks it — see workspace_path_guard_env_override on the GET response.
              * @example false
@@ -11947,18 +11906,24 @@ export interface components {
              */
             approval_id: string;
             /**
-             * @description The action that was applied. Echoes the request action, including "always" (approve-and-remember).
-             * @example approve
+             * @description The action that was applied. Echoes the request action (ADR-092 D4), including "allow" (approve-and-remember, renamed from "always").
+             * @example allow_once
              * @enum {string}
              */
-            action: "approve" | "deny" | "cancel" | "always";
+            action: "deny" | "allow_once" | "allow" | "cancel";
+            /**
+             * @description The scope actually RECORDED (ADR-092 D4/FR-024), which is not always the requested one: a "prefix" request is recorded as "exact" whenever no safe prefix exists (chained command, bare program, wrapper, unresolvable program, Windows, or any tool other than bash). The SPA must show this value, not its own request. Present only when action is "allow" and the grant was recorded (grant_recorded true); omitted otherwise.
+             * @example exact
+             * @enum {string}
+             */
+            scope?: "exact" | "prefix";
             /**
              * @description Result status. Always "ok" when the action was accepted.
              * @example ok
              * @enum {string}
              */
             status: "ok";
-            /** @description Present only when action is "always". True when the standing Always Allow grant was stored. False means this call was approved once, but the next identical call will ask again — the grant did not stick (missing session, agent, or tool identity on the approval). */
+            /** @description Present only when action is "allow". True when the grant was stored — a session command grant (scope: exact/prefix), or the pre-flight escalation's own path-widening/network-widening grant when this approval resolved a D7/D8 escalation instead of an ordinary tool-approval-required frame. False means this call was approved once, but the next identical call (or the next command needing the same widening) will ask again — the grant did not stick (missing session, agent, or tool identity on the approval). */
             grant_recorded?: boolean;
         };
         /**
@@ -12755,15 +12720,23 @@ export interface components {
         };
         /**
          * ToolApprovalActionRequest
-         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, cancelling, or approving-and-remembering ("always") it.
+         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `cancel` is retained in the enum with no corresponding UI button — see its own description.
          */
         ToolApprovalActionRequest: {
             /**
-             * @description Action to take on this approval. approve — allow this single invocation. deny    — reject this single invocation. cancel  — cancel this invocation (e.g. modal dismissed / turn aborted). always  — allow this invocation AND record a session-scoped "Always Allow" grant for (session, agent, tool) so future matching calls in the same session auto-approve without re-prompting.
-             * @example approve
+             * @description Action to take on this approval. deny       — reject this single invocation (also the resolution for Escape/overlay-click/X in the UI, none of which render a Cancel button any more). allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — client-issued resolution for the stuck-approval recovery path only (a lost-server 404), distinct from `deny` (a network failure, which leaves the approval unresolved so a later snapshot can restore it) — ToolApprovalModal.resolution.test.tsx and the headless CLI approval path (pkg/app/internal/run/run.go) both depend on `deny` and `cancel` remaining distinct wire values. Never shown as a button.
+             * @example allow_once
              * @enum {string}
              */
-            action: "approve" | "deny" | "cancel" | "always";
+            action: "deny" | "allow_once" | "allow" | "cancel";
+            /**
+             * @description Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
+             *     Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — approving one of those records the path-widening or network-widening grant the frame described, not an exact/prefix command grant; `scope` is ignored for those approvals.
+             *     When the pending approval covers a chained command (more than one entry in ToolApprovalRequiredFrame.segments), "prefix" is not available: the server records an exact grant for the whole chain and reports scope "exact" in ToolApprovalResponse. The server never records a prefix grant it did not offer (see CommandSegmentInfo.prefix_available).
+             * @example exact
+             * @enum {string}
+             */
+            scope?: "exact" | "prefix";
         };
         /**
          * CredentialSetRequest
@@ -13406,7 +13379,7 @@ export interface components {
                 [key: string]: components["schemas"]["WorkspaceMemberConfig"];
             };
         };
-        /** @description A single directed delegation edge in a workspace's delegation graph. The graph is the per-workspace source of truth for who-delegates-to-whom (M5): each edge authorizes from_agent to delegate work to to_agent, in the listed modes, bounded by depth. Membership in the workspace team is the union of all agents referenced by any edge plus the workspace's core_team roster. */
+        /** @description A single directed delegation edge in a workspace's delegation graph. The graph is the per-workspace source of truth for who-delegates-to-whom (M5): each edge authorizes from_agent to delegate work to to_agent, in the listed modes, bounded by depth. Membership in the workspace team is the union of all agents referenced by any edge plus the workspace's core_team roster. Delegation never awaits — a delegating agent hands work to the target and continues; the child runs in parallel and reports back through upward delivery (ADR-091 D4). */
         WorkspaceDelegationEdge: {
             /**
              * @description Agent ID of the delegating agent (the source node). Must be a member of the workspace team (present in core_team or referenced by another edge).
@@ -13550,7 +13523,7 @@ export interface components {
              * @description Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
              * @example Ship the v1.0 release with all P0 issues closed and CI green.
              */
-            goal?: string;
+            objective?: string;
             /**
              * @description Optional free-form description.
              * @example Coordinates the v1.0 release train across backend and SPA.
@@ -13629,7 +13602,7 @@ export interface components {
              * @example jim
              */
             owner_agent_id: string;
-            /** @description Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `goal`, ADR D5). */
+            /** @description Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `objective`, ADR D5). */
             dod?: components["schemas"]["AcceptanceCriterion"][];
             /**
              * @description ADR-053 §Contract Surface — persisted planning rationale (see `PlanCreateRequest.rationale`). Plan-lint and the owner-loop correction flow read this alongside member `write_set`/`stream`/ `is_join`.
@@ -13745,7 +13718,7 @@ export interface components {
              * @description Plain-prose objective (used by the plan judge when `dod` is empty).
              * @example Ship the v1.0 release with all P0 issues closed and CI green.
              */
-            goal?: string;
+            objective?: string;
             /**
              * @description Optional free-form description.
              * @example Coordinates the v1.0 release train across backend and SPA.
@@ -13756,7 +13729,7 @@ export interface components {
              * @example jim
              */
             owner_agent_id: string;
-            /** @description Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `goal`). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
+            /** @description Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `objective`). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
             dod?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
              * @description ADR-053 §Contract Surface — persisted planning rationale (the "why" behind the plan's decomposition, e.g. the write-set/stream split chosen and the join points authored). Plan-lint and the owner-loop correction flow read this alongside `write_set`/`stream`/`is_join` on member tasks. Optional — absent for simple plans with no parallel-stream reasoning to record.
@@ -13795,7 +13768,7 @@ export interface components {
              * @description New plain-prose objective.
              * @example Ship the v1.0 release with all P0 issues closed and CI green.
              */
-            goal?: string;
+            objective?: string;
             /**
              * @description New free-form description.
              * @example Coordinates the v1.0 release train across backend and SPA.
@@ -14438,7 +14411,7 @@ export interface components {
              */
             kind: "progress";
             /**
-             * @description Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/subturn.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
+             * @description Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
              * @example 0
              */
             depth: number;
@@ -14900,10 +14873,11 @@ export interface components {
             /** @example 0 */
             generation?: number;
             /**
+             * @description Direction this verdict travels. `session_to_ui` for verdicts meant for the operator; `session_to_parent` for verdicts from a steered child to its steering parent (ADR-091 I-5).
              * @example session_to_ui
              * @enum {string}
              */
-            direction: "session_to_ui";
+            direction: "session_to_ui" | "session_to_parent";
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -14921,11 +14895,29 @@ export interface components {
             /** @example false */
             untrusted_origin: boolean;
             /**
-             * @description The typed `GOAL_STATUS:` marker outcome (US-2). No marker on a turn means "not waiting" — a deterministic fallback, never inferred by a prose classifier, and never represented as a third enum value here (absence of this message IS the not-waiting state).
+             * @description The typed condition outcome. `met` — goal conditions met. `not_met` — goal conditions failed (founder decision, round 10). `waiting_on_user` — waiting on operator input. No marker on a turn means "not waiting" — a deterministic fallback, never inferred by a prose classifier, and never represented as a fourth enum value here (absence of this message IS the not-waiting state).
              * @example met
              * @enum {string}
              */
-            condition: "met" | "waiting_on_user";
+            condition: "met" | "not_met" | "waiting_on_user";
+            /** @description Optional evidence list supporting the verdict. Each entry explains one criterion and whether it was met (ADR-091 I-5, founder decision round 10). */
+            evidence?: {
+                /**
+                 * @description The criterion being evaluated.
+                 * @example checkout complete
+                 */
+                criterion?: string;
+                /**
+                 * @description Whether this criterion was met.
+                 * @example true
+                 */
+                met?: boolean;
+                /**
+                 * @description Optional contextual note about this criterion.
+                 * @example Order confirmed with confirmation number XYZ
+                 */
+                note?: string;
+            }[];
             /**
              * @description The goal this condition applies to (R§8.11 — a session may carry multiple independent goals, each keyed by goal-id).
              * @example goal_01J3ZQK8N2H8VXNRP5T7C9M4WU
@@ -15122,12 +15114,12 @@ export interface components {
              */
             session_id: string;
             /**
-             * @description This session's generation number. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
-             * @example 0
+             * @description This session's generation number. Starts at 1. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
+             * @example 1
              */
             generation: number;
             /**
-             * @description The prior generation's `session_id` this record resumed from. Null for generation 0 (the original spawn).
+             * @description The prior generation's `session_id` this record resumed from. Null for generation 1 (the original spawn).
              * @example null
              */
             resumed_from?: string | null;
@@ -15224,6 +15216,104 @@ export interface components {
              * @example 2026-07-22T10:05:00Z
              */
             updated_at: string;
+            /** @description Every record carries its origin: how and where this session was launched (ADR-091 I-1). Kind discriminates the launch path. */
+            origin?: {
+                /**
+                 * @description The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+                 * @example delegate
+                 * @enum {string}
+                 */
+                kind: "delegate" | "task" | "chat" | "channel" | "scheduled" | "heartbeat" | "verifier" | "plan" | "human";
+                /**
+                 * @description For delegate/task-origin sessions, the tool-call id (span key) of the originating delegate or create_task call. Absent for other kinds.
+                 * @example span_01J3ZQK8N2H8VXNRP5T7C9M4WE
+                 */
+                call_id?: string;
+                /**
+                 * @description For task-origin sessions, the persistent task id from the task record (persisted on the task disk-only, by tools/task.go). Absent for delegate-origin and other kinds.
+                 * @example task_01J3ZQK8N2H8VXNRP5T7C9M4WF
+                 */
+                task_id?: string;
+            };
+            /** @description Present for steered sessions (a session launched by another session's delegate or create_task). Absent for ordinary-root sessions that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment). */
+            steered_by?: {
+                /**
+                 * @description The direct parent session; the inbox owner key.
+                 * @example 550e8400-e29b-41d4-a716-446655440001
+                 */
+                steering_session_id: string;
+                /**
+                 * @description The cascade root, verified by walking the chain at launch. Equal to steering_session_id at depth 1.
+                 * @example 550e8400-e29b-41d4-a716-446655440002
+                 */
+                root_session_id: string;
+                /** @description The steering session's own address; where completion wakes it. */
+                reporting_target?: {
+                    /** @example 550e8400-e29b-41d4-a716-446655440001 */
+                    session_id?: string;
+                    /** @example web */
+                    channel?: string;
+                    /** @example chat_01J3ZQK8N2H8VXNRP5T7C9M4WL */
+                    chat_id?: string;
+                };
+                /** @description The gate verdict at launch. */
+                authorization: {
+                    /**
+                     * @description How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
+                     * @example direct
+                     * @enum {string}
+                     */
+                    mode: "direct" | "task";
+                    /**
+                     * @description Remaining delegation depth budget for this child's own onward delegations. Decremented from the edge or global default.
+                     * @example 2
+                     */
+                    remaining_depth: number;
+                };
+                /** @description Creator-set session limits. */
+                limits?: {
+                    /**
+                     * @description Maximum seconds before this delegation is force-cancelled. 0 = the configured default. Scope is the session's lifetime across re-entries (ADR-091 I-1).
+                     * @example 300
+                     */
+                    timeout_seconds?: number;
+                };
+                /**
+                 * @description Tool names excluded for this steered session (e.g., switch_agent). Applied at launch.
+                 * @example [
+                 *       "switch_agent"
+                 *     ]
+                 */
+                tool_exclusions?: string[];
+            };
+            /** @description Present when this session's own record carries a Stop marker, written by the cancel cascade on the stopped node and every reachable non-terminal descendant (ADR-091 I-6). Absent for sessions that were not stopped. No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment). */
+            stop?: {
+                /**
+                 * Format: date-time
+                 * @description RFC3339 timestamp when the Stop marker was written.
+                 * @example 2026-07-22T10:05:00Z
+                 */
+                at: string;
+                /**
+                 * @description The generation this Stop marker names. A revived generation is a newer generation number.
+                 * @example 1
+                 */
+                generation: number;
+                /** @description Who or what initiated the stop. */
+                by: {
+                    /**
+                     * @description Principal kind (agent or human).
+                     * @example human
+                     * @enum {string}
+                     */
+                    kind?: "agent" | "human";
+                    /**
+                     * @description The agent id (if kind=agent) or user id (if kind=human).
+                     * @example user-123
+                     */
+                    id?: string;
+                };
+            };
         };
         /**
          * Goal
@@ -15436,22 +15526,12 @@ export interface components {
              */
             label?: string;
             /**
-             * @description True for a synchronous (blocking) delegation. A synchronous delegation whose child raises a `question` is rejected by default with a clear tool error (never a silent deadlock, MIN-3) unless the caller also sets `allow_blocking_question`.
-             * @example false
-             */
-            wait?: boolean;
-            /**
-             * @description Explicit opt-in (only meaningful with `wait: true`) permitting a bounded human-routed wait on a child `question` instead of the default rejection (P2M-14/MIN-3).
-             * @example false
-             */
-            allow_blocking_question?: boolean;
-            /**
              * @description Continue running after the parent finishes gracefully.
              * @example false
              */
             critical?: boolean;
             /**
-             * @description Maximum seconds before this delegation is force-cancelled. 0 = default (5 min).
+             * @description Maximum seconds before this delegation is force-cancelled. 0 = default (30 min).
              * @example 300
              */
             timeout_seconds?: number;
@@ -15470,6 +15550,8 @@ export interface components {
                  */
                 notes?: string;
             };
+            /** @description Optional goal: criteria + Definition of Done for this delegation. Reuses the shape `create_task` already validates. The delegated session becomes goal-bearing when provided (ADR-091 I-2, D6). */
+            goal?: components["schemas"]["Goal"];
         };
         /**
          * DelegateStatusAction
@@ -15666,6 +15748,11 @@ export interface components {
              * @example 1
              */
             generation: number;
+            /**
+             * @description 1-based position in the admission queue when `state == queued`, else 0. Lets the caller know its place in line for execution (ADR-091 I-2).
+             * @example 1
+             */
+            queue_position?: number;
             /**
              * @description The prior session id this generation resumed from, when applicable.
              * @example 660e8400-e29b-41d4-a716-446655440000
@@ -15993,6 +16080,183 @@ export interface components {
              * @example await answers — per-child unacked ceiling reached
              */
             error?: string;
+        };
+        /**
+         * SubagentStartFrame
+         * @description Server → client (FR-H-004). Opening bracket of a subagent span. Emitted when the agent loop spawns a sub-turn. The SPA uses span_id to group subsequent nested tool_call_start / tool_call_result frames under a collapsible span UI.
+         */
+        SubagentStartFrame: {
+            /** @enum {string} */
+            type: "subagent_start";
+            /** @description Session in which this sub-turn is running. */
+            session_id: string;
+            /** @description Unique identifier for this span. Constructed by the server as "span_" + parent spawn ToolCall.ID. */
+            span_id: string;
+            /** @description The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts. */
+            parent_call_id: string;
+            /** @description Human-readable label for the subagent task, extracted from the spawn call's "label" or "task" parameter (truncated to 60 chars by the server; schema allows up to 100 to accommodate edge cases). */
+            task_label: string;
+            /** @description Agent running the sub-turn. */
+            agent_id?: string;
+            /**
+             * @description Optional session id of the opened child session. Present for steered sessions; absent for legacy subturn spans. Enables the open control on the side panel row (ADR-091 I-4).
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            child_session_id?: string;
+            /**
+             * Format: int64
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             */
+            seq?: number;
+        };
+        /**
+         * SubagentStateFrame
+         * @description Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+         */
+        SubagentStateFrame: {
+            /** @enum {string} */
+            type: "subagent_state";
+            /** @description Session in which the parent's span is running. */
+            session_id: string;
+            /**
+             * @description Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            child_session_id?: string;
+            /** @description Matches the `span_id` from the bracketing `subagent_start` frame. */
+            span_id: string;
+            /**
+             * @description The child's current durable lifecycle state (SessionLifecycleRecord.state).
+             * @example running
+             * @enum {string}
+             */
+            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            /** @description Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3). */
+            steering_receipt?: {
+                /**
+                 * @description The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
+                 * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+                 */
+                correlation_id: string;
+                /**
+                 * Format: date-time
+                 * @example 2026-07-22T10:00:30Z
+                 */
+                applied_at: string;
+            };
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp this state ping was emitted.
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+            /**
+             * Format: int64
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             */
+            seq?: number;
+        };
+        /**
+         * SubagentMessageFrame
+         * @description Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span event riding between the existing `subagent_start`/`subagent_end` brackets, feeding pill/panel/board live as a child pushes typed messages / the parent steers it. Rides the existing since-cursor WS replay (same pattern as `ReplayMessageFrame`).
+         *     SHAPE DECISION (flagged for review): this is a FLAT, UI-facing PROJECTION of the underlying `SessionMessage` — it does not embed the full 12-variant `SessionMessage` discriminated union. Reasons: (1) the full union is hosted INLINE in `openapi.yaml` per ADR-034 specifically because oapi-codegen needs internal component refs inside a `oneOf` — embedding it inside an asyncapi frame would require a second, hand-duplicated copy of all 12 variants inside `asyncapi.yaml` (which does not resolve cross-file `$ref` for its own codegen, per the existing `GoalStatusFrame.yaml` note), multiplying maintenance burden for a live UI ping that only ever needs a handful of display fields; (2) this mirrors the established precedent of `GoalStatusFrame` itself being a flat projection of goal state rather than embedding a full Goal record. Full-fidelity SessionMessage data (every typed field, for every kind) is available via `delegate.inbox`/`delegate.peek` (`DelegateInboxResponse`/`DelegatePeekResponse`) — this frame is a live nudge, not the source of truth.
+         */
+        SubagentMessageFrame: {
+            /** @enum {string} */
+            type: "subagent_message";
+            /** @description Session in which the parent's span is running. */
+            session_id: string;
+            /**
+             * @description Optional session id of the delegated child session this mid-span update is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            child_session_id?: string;
+            /** @description Matches the `span_id` from the bracketing `subagent_start` frame. */
+            span_id: string;
+            /**
+             * @description The underlying SessionMessage's `message_id` — correlates this live ping with the full record fetchable via `delegate.inbox`/`peek`.
+             * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WF
+             */
+            message_id: string;
+            /**
+             * @description The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+             * @example progress
+             * @enum {string}
+             */
+            kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond" | "goal_status";
+            /**
+             * @description Flattened display text (progress.text / checkpoint.summary / blocker.text / question.text / error.text / steer.text / respond.text), when the kind carries one.
+             * @example Scanning pkg/plan for the write-set boundary...
+             */
+            text?: string;
+            /**
+             * @description Present for `kind: progress` when a percentage estimate was given.
+             * @example 40
+             */
+            pct?: number;
+            /**
+             * @description Present for `question`/`decision_request`/`steer`/`respond` — lets the SPA thread a live reply.
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+             */
+            correlation_id?: string;
+            /**
+             * @description Agent ID (or "human") that authored the underlying message.
+             * @example ray
+             */
+            sender_identity: string;
+            /**
+             * @description True when the underlying message's free-text content originated from a child agent and must render in untrusted-content framing (FE-7/MAJ-12).
+             * @example true
+             */
+            untrusted_origin: boolean;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp the underlying message was created.
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+            /**
+             * Format: int64
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             */
+            seq?: number;
+        };
+        /**
+         * SubagentEndFrame
+         * @description Server → client (FR-H-004). Closing bracket of a subagent span. Emitted when the sub-turn finishes. The SPA transitions the span from "running" to a terminal status and records duration and optional result. NOTE: status MUST be validated — the SPA's generated Zod schema (src/lib/api/generated/schemas.ts, built from this enum) rejects any status string not in this set; such frames are dropped.
+         */
+        SubagentEndFrame: {
+            /** @enum {string} */
+            type: "subagent_end";
+            /** @description Session in which this sub-turn ran. */
+            session_id: string;
+            /** @description Matches the span_id from the preceding subagent_start frame. */
+            span_id: string;
+            /**
+             * @description Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
+             * @enum {string}
+             */
+            status: "success" | "error" | "cancelled" | "interrupted" | "timeout" | "parked";
+            /** @description Wall-clock duration of the sub-turn in milliseconds. */
+            duration_ms?: number;
+            /** @description Optional textual summary of the sub-turn's output. */
+            final_result?: string;
+            /**
+             * @description When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+             * @enum {string}
+             */
+            reason?: "parent_timeout" | "parent_cancelled" | "parent_done_early" | "unknown";
+            /** @description Agent that ran the sub-turn. */
+            agent_id?: string;
+            /** @description The spawn ToolCall.ID that triggered this sub-turn. */
+            parent_call_id?: string;
+            /** @description Internal reason string emitted by the orphan-watchdog synthetic end frame. Not rendered directly in the UI. */
+            message?: string;
+            /**
+             * Format: int64
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             */
+            seq?: number;
         };
         /**
          * ExternalCliTool
@@ -16713,6 +16977,19 @@ export interface operations {
                     "application/json": {
                         /** @example true */
                         success: boolean;
+                        /** @description ADR-091 I-6. Every session the cascade stamped with a Stop marker (the stopped session and each reachable non-terminal descendant). */
+                        reached?: string[];
+                        /** @description ADR-091 I-6. Descendants the cascade could not reach, with why. */
+                        unreachable?: {
+                            id: string;
+                            reason: string;
+                        }[];
+                        /** @description ADR-091 I-6. Sessions whose live turn belonged to a newer generation than the one stamped (a revival landed first); their cancel was refused. */
+                        skipped_newer_generation?: string[];
+                        /** @description ADR-091 I-6. Terminal descendants, left unwritten. */
+                        skipped_terminal?: string[];
+                        /** @description ADR-091 I-6. True when `unreachable` is non-empty — and ONLY then: the cascade could not reach part of the subtree, so this Stop must not be read as complete (WP-D FR-D-001). `skipped_newer_generation` deliberately does NOT set this flag. A session the cascade left alone because a revival had already carried it to a newer generation is a CORRECT outcome, not a failure (ADR-091 D8: "the later instruction wins, which is what the operator asked for"), and WP-D US-1/AS-9 specifies that case with no `partial` and no channel line. Read `skipped_newer_generation` itself to learn which sessions kept running — `partial: false` hides nothing. */
+                        partial?: boolean;
                     };
                 };
             };
@@ -17497,71 +17774,6 @@ export interface operations {
                 };
             };
             503: components["responses"]["503BypassActive"];
-        };
-    };
-    getExecAllowlist: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Current exec allowlist. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExecAllowlist"];
-                };
-            };
-            /** @description Missing or invalid bearer token. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    updateExecAllowlist: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description List of allowed binary name patterns. */
-                    allowed_binaries: string[];
-                };
-            };
-        };
-        responses: {
-            /** @description Updated allowlist (restart required). */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExecAllowlist"];
-                };
-            };
-            /** @description Invalid pattern (empty, too long, or too many entries). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
         };
     };
     getExecProxyStatus: {
@@ -23489,7 +23701,6 @@ export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];
 export type AgentRateLimits = components["schemas"]["AgentRateLimits"];
 export type AgentStats = components["schemas"]["AgentStats"];
-export type AgentShellPolicy = components["schemas"]["AgentShellPolicy"];
 export type AgentToolsCfg = components["schemas"]["AgentToolsCfg"];
 export type AgentToolsMcpServerBinding = components["schemas"]["AgentToolsMcpServerBinding"];
 export type AgentToolsUpdateRequest = components["schemas"]["AgentToolsUpdateRequest"];
@@ -23525,7 +23736,6 @@ export type AuditEntry = components["schemas"]["AuditEntry"];
 export type AuditLogResponse = components["schemas"]["AuditLogResponse"];
 export type AuditLogToggle = components["schemas"]["AuditLogToggle"];
 export type RateLimitConfig = components["schemas"]["RateLimitConfig"];
-export type ExecAllowlist = components["schemas"]["ExecAllowlist"];
 export type ExecProxyStatus = components["schemas"]["ExecProxyStatus"];
 export type SkillTrustResponse = components["schemas"]["SkillTrustResponse"];
 export type PromptGuardResponse = components["schemas"]["PromptGuardResponse"];

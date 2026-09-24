@@ -885,10 +885,13 @@ func (rs *restartServicesState) applyMessagingCaps() error {
 // silently vanishes on the next external config edit. Passing the real
 // homePath in avoids the derivation entirely.
 //
-// markDegraded (may be nil, e.g. in tests) is called when
-// populateAgentsListFromEntityStoreStrict rejects a candidate config for
-// this home — see its doc for why an empty/wiped roster is a
-// privilege-escalation risk, not merely a UX gap. This lets the poller
+// markDegraded (may be nil, e.g. in tests) is called whenever the poller
+// rejects a candidate config: the file fails to load or validate (an invalid
+// sandbox.command_rules entry, malformed JSON, a bad provider entry), or
+// populateAgentsListFromEntityStoreStrict rejects it for this home — see its
+// doc for why an empty/wiped roster is a privilege-escalation risk, not
+// merely a UX gap. The next successful reload clears it (executeReload's
+// clearDegraded). This lets the poller
 // surface the same operator-visible /health degraded signal executeReload's
 // own internal checks already produce, for a failure that happens BEFORE
 // executeReload is even reached.
@@ -961,6 +964,14 @@ func setupConfigWatcherPolling(
 					if err != nil {
 						logger.Errorf("⚠ Error loading new config: %v", err)
 						logger.Warn("  Using previous valid config")
+						// A rejected external edit (e.g. an invalid
+						// sandbox.command_rules entry) must be visible on
+						// GET /health, not only in the log: the operator
+						// believes their edit is live. Cleared by the next
+						// successful reload (executeReload's clearDegraded).
+						if markDegraded != nil {
+							markDegraded(fmt.Errorf("config reload rejected: %w", err))
+						}
 						continue
 					}
 					// ADR-054 D2/D3: repopulate cfg.Agents.List from the agent
@@ -985,6 +996,9 @@ func setupConfigWatcherPolling(
 					if err := newCfg.ValidateProviders(); err != nil {
 						logger.Errorf("  ⚠ New config validation failed: %v", err)
 						logger.Warn("  Using previous valid config")
+						if markDegraded != nil {
+							markDegraded(fmt.Errorf("config reload rejected: %w", err))
+						}
 						continue
 					}
 

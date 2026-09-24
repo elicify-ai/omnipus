@@ -174,7 +174,7 @@ interface OutboundLifecycleContext {
   get: StoreApi<ChatStore>['getState']
   getActiveSid: () => string | null
   withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void
-  bucketToForeground: (bucket: SessionChatState) => Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanByParentCallId' | 'spanBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null }
+  bucketToForeground: (bucket: SessionChatState) => Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanBySpanId' | 'pendingSpanUpdatesBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null }
   abandonPendingKickoffInternal: () => void
   maybeDrainNext: () => void
   runtime: { agentIdAtLastMintSend: string | null }
@@ -652,6 +652,11 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         // has since picked a different one" (see runtime.agentIdAtLastMintSend).
         runtime.agentIdAtLastMintSend = activeAgentId ?? null
 
+        // ADR-092 (founder, 2026-09-24): a per-chat Auto choice made before this
+        // chat had a session rides on the minting message as `auto_approve`, so
+        // the server records it before the first turn runs (no post-ack race).
+        // Omitted when the user never touched the toggle.
+        const autoApproveChoice = get().pendingAutoApproveChoice
         const payload2 = {
           type: 'message' as const,
           content,
@@ -659,6 +664,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
           ...metadataFrame,
+          ...(autoApproveChoice !== null ? { auto_approve: autoApproveChoice } : {}),
         }
         get()._validateOutboundFrame(payload2, pendingSid)
         const sent = connection.send(payload2)

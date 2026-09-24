@@ -3,13 +3,69 @@
 package agent
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/plan"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
+
+type lifecycleOrderingDeliverer struct {
+	lifecycle       *session.LifecycleStore
+	stateAtDelivery session.LifecycleState
+	outcome         steer.Outcome
+}
+
+func (d *lifecycleOrderingDeliverer) Deliver(_ context.Context, event steer.UpwardEvent) (steer.Delivery, error) {
+	rec, err := d.lifecycle.Load(event.ChildSessionID)
+	if err != nil {
+		return steer.Delivery{}, err
+	}
+	d.stateAtDelivery = rec.State
+	d.outcome = event.Outcome
+	return steer.Delivery{MessageID: "observed", Outcome: steer.DeliveryWoke}, nil
+}
+
+func TestCompleteTask_EmptyAnswerFailsAndDeliversBeforeLifecycleTerminal(t *testing.T) {
+	al := newNativeTaskCompletionTestLoop(t, &mockProvider{})
+	lifecycle := session.NewLifecycleStore(t.TempDir())
+	al.SetSessionMessagingStores(session.NewMessageInboxStore(t.TempDir()), lifecycle)
+	al.taskExecutor.SetLifecycleStore(lifecycle)
+	const taskSessionID = "task-empty-session"
+	seedParentAndChild(t, lifecycle, "parent-1", taskSessionID)
+	deliverer := &lifecycleOrderingDeliverer{lifecycle: lifecycle}
+	al.SetSteerAudienceDeps(nil, nil, deliverer)
+	tk := &task.Task{Title: "empty", Prompt: "x", Action: task.ActionLLM, AgentID: "native-agent", WorkspaceID: "default", Priority: 3, Status: task.StatusInProgress, SessionID: taskSessionID}
+	if err := al.taskStore.Create(tk); err != nil {
+		t.Fatal(err)
+	}
+	if !al.taskExecutor.completeTaskWithResult(tk, taskSessionID, task.StatusInProgress, true, "  ", nil) {
+		t.Fatal("completion was not applied")
+	}
+	final, err := al.taskStore.Get(tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status != task.StatusFailed || deliverer.outcome != steer.OutcomeEmptyAnswer {
+		t.Fatalf("task status/outcome = %q/%q, want failed/empty_answer", final.Status, deliverer.outcome)
+	}
+	if deliverer.stateAtDelivery != session.LifecycleRunning {
+		t.Fatalf("lifecycle state at upward delivery = %q, want running (inbox before terminal write)", deliverer.stateAtDelivery)
+	}
+	rec, err := lifecycle.Load(taskSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.State != session.LifecycleFailed {
+		t.Fatalf("final lifecycle state = %q, want failed", rec.State)
+	}
+}
 
 // --- moved from task_executor.go tests 2026-09-15 ---
 
@@ -72,6 +128,157 @@ func TestWriteJudgeVerdictTranscript_NonexistentSession_NoLiveEvent(t *testing.T
 	// recordGoalOutcome's "NO frame is sent" rule, goal_outcome.go).
 	if live := judgeVerdictPayloadsFor(events, u26NonexistentSessionID); len(live) != 0 {
 		t.Errorf("%d live judge_verdict events fired for a failed transcript write; want 0", len(live))
+	}
+}
+
+// TestWriteJudgeVerdictTranscript_NotMet_DeliversGoalStatusUpward covers
+// FR-B-017/AS-12 (TDD plan test 31): when the deciding session is a steered
+// child (this task's run session is steered by a parent) and the Judge rules
+// "not met" on some of its criteria, writeJudgeVerdictTranscript — in
+// addition to its existing FR-056 transcript write and live event — MUST
+// also deliver a goal_status SessionMessage upward through I-5's
+// steer.UpwardDeliverer, with direction session_to_parent, condition
+// not_met, and one evidence entry per judged criterion.
+func TestWriteJudgeVerdictTranscript_NotMet_DeliversGoalStatusUpward(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	store := al.GetAgentStore("native-agent")
+	if store == nil {
+		t.Fatal("GetAgentStore(native-agent) returned nil")
+	}
+	sessionID := u26FreshTaskSession(t, store, "native-agent")
+
+	// Wire I-5's steer deps and steer this task's run session by a parent —
+	// the "C ran with a goal, steered by B" shape AS-12 describes.
+	const parentID = "steering-parent"
+	lifecycle := session.NewLifecycleStore(t.TempDir())
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	al.SetSessionMessagingStores(inbox, lifecycle)
+	seedParentAndChild(t, lifecycle, parentID, sessionID)
+	deliverer := NewSteerUpwardDeliverer()
+	al.SetSteerAudienceDeps(
+		NewSteerAudienceResolver(NewSteerRecordClassifier(lifecycle, al.GetSessionStore())),
+		steer.NopBoundaryObserver{}, deliverer)
+
+	// This task's run session carries an active /goal — activeGoalForSession
+	// resolves the goal_id a SessionMessageGoalStatus must carry (GOAL-FR-013,
+	// the one session-bound lookup shared by chat-owned and task-owned goals).
+	if err := resolveGoalRecordStore().Create(&goal.Goal{
+		GoalID: "g-verdict-1", Prompt: "ship the feature", MaxRounds: 3,
+		OwnerKind: generated.GoalOwnerKindSession, OwnerID: sessionID, Source: generated.GoalSourceChatCompiled,
+		State: generated.GoalStateActive, ActiveSessionID: sessionID,
+		DoD: []task.AcceptanceCriterion{planProseCriterion("ship it")},
+	}); err != nil {
+		t.Fatalf("seed active goal record: %v", err)
+	}
+
+	tk := &task.Task{
+		Title: "not-met judge verdict upward delivery", Prompt: "x", Action: task.ActionLLM,
+		AgentID: "native-agent", Priority: 3, WorkspaceID: "default", Status: task.StatusNext,
+	}
+	if err := al.taskStore.Create(tk); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	verdict := &task.JudgeVerdict{
+		ID: "verdict-2", Scope: task.VerdictScopeTask, TaskID: tk.ID,
+		Round: 2, Met: false, JudgeAgentID: "judge",
+		PerCriterion: []task.CriterionVerdict{
+			{CriterionID: "c1", Met: true, Reason: "done"},
+			{CriterionID: "c2", Met: false, Reason: "still failing"},
+			{CriterionID: "c3", Met: false, Reason: "missing coverage"},
+		},
+	}
+	al.taskExecutor.writeJudgeVerdictTranscript(tk, sessionID, verdict)
+
+	msgs, _, _, derr := inbox.Drain(parentID, sessionID, "", 10)
+	if derr != nil {
+		t.Fatalf("Drain: %v", derr)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected exactly 1 goal_status entry in the parent's inbox, got %d", len(msgs))
+	}
+	kind, _ := msgs[0].Discriminator()
+	if kind != "goal_status" {
+		t.Fatalf("kind = %q, want goal_status", kind)
+	}
+	gs, gerr := msgs[0].AsSessionMessageGoalStatus()
+	if gerr != nil {
+		t.Fatalf("AsSessionMessageGoalStatus: %v", gerr)
+	}
+	if gs.Condition != generated.SessionMessageGoalStatusConditionNotMet {
+		t.Errorf("condition = %q, want not_met", gs.Condition)
+	}
+	if gs.Direction != generated.SessionMessageGoalStatusDirectionSessionToParent {
+		t.Errorf("direction = %q, want session_to_parent", gs.Direction)
+	}
+	if gs.GoalId != "g-verdict-1" {
+		t.Errorf("goal_id = %q, want g-verdict-1 (activeGoalForSession's own record)", gs.GoalId)
+	}
+	if gs.SessionId != sessionID {
+		t.Errorf("session_id = %q, want the task's own run session %q", gs.SessionId, sessionID)
+	}
+	if gs.Evidence == nil || len(*gs.Evidence) != 3 {
+		t.Fatalf("expected 3 evidence items (one per judged criterion), got %v", gs.Evidence)
+	}
+}
+
+// TestWriteJudgeVerdictTranscript_Met_DeliversGoalStatus covers FR-C-009's
+// positive verdict half: the parent receives the Judge's actual decision,
+// not an inferred handback-only success.
+func TestWriteJudgeVerdictTranscript_Met_DeliversGoalStatus(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	store := al.GetAgentStore("native-agent")
+	if store == nil {
+		t.Fatal("GetAgentStore(native-agent) returned nil")
+	}
+	sessionID := u26FreshTaskSession(t, store, "native-agent")
+
+	const parentID = "steering-parent-2"
+	lifecycle := session.NewLifecycleStore(t.TempDir())
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	al.SetSessionMessagingStores(inbox, lifecycle)
+	seedParentAndChild(t, lifecycle, parentID, sessionID)
+	deliverer := NewSteerUpwardDeliverer()
+	al.SetSteerAudienceDeps(
+		NewSteerAudienceResolver(NewSteerRecordClassifier(lifecycle, al.GetSessionStore())),
+		steer.NopBoundaryObserver{}, deliverer)
+	if err := resolveGoalRecordStore().Create(&goal.Goal{
+		GoalID: "g-verdict-2", Prompt: "ship the feature", MaxRounds: 3,
+		OwnerKind: generated.GoalOwnerKindSession, OwnerID: sessionID, Source: generated.GoalSourceChatCompiled,
+		State: generated.GoalStateActive, ActiveSessionID: sessionID,
+		DoD: []task.AcceptanceCriterion{planProseCriterion("ship it")},
+	}); err != nil {
+		t.Fatalf("seed active goal record: %v", err)
+	}
+
+	tk := &task.Task{
+		Title: "met judge verdict upward delivery", Prompt: "x", Action: task.ActionLLM,
+		AgentID: "native-agent", Priority: 3, WorkspaceID: "default", Status: task.StatusNext,
+	}
+	if err := al.taskStore.Create(tk); err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	verdict := &task.JudgeVerdict{
+		ID: "verdict-3", Scope: task.VerdictScopeTask, TaskID: tk.ID,
+		Round: 1, Met: true, JudgeAgentID: "judge",
+		PerCriterion: []task.CriterionVerdict{{CriterionID: "c1", Met: true, Reason: "done"}},
+	}
+	al.taskExecutor.writeJudgeVerdictTranscript(tk, sessionID, verdict)
+
+	msgs, _, _, derr := inbox.Drain(parentID, sessionID, "", 10)
+	if derr != nil {
+		t.Fatalf("Drain: %v", derr)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected one goal_status entry for a MET verdict, got %d", len(msgs))
+	}
+	gs, gerr := msgs[0].AsSessionMessageGoalStatus()
+	if gerr != nil {
+		t.Fatalf("AsSessionMessageGoalStatus: %v", gerr)
+	}
+	if gs.Condition != generated.SessionMessageGoalStatusConditionMet {
+		t.Fatalf("condition = %q, want met", gs.Condition)
 	}
 }
 

@@ -45,11 +45,38 @@ type ForcedColorsContract = {
   }>
 }
 
-type StoryFinished = { storyId?: string; status?: string; reporters?: Array<{ status?: string }> }
+type StoryReportViolation = {
+  id?: string; impact?: string | null
+  nodes?: Array<{ target?: unknown[]; any?: Array<{ data?: unknown }> }>
+}
+type StoryReport = { type?: string; status?: string; result?: { violations?: StoryReportViolation[] } }
+type StoryFinished = { storyId?: string; status?: string; reporters?: StoryReport[] }
+// Storybook announces why a story errored on these channel events; STORY_FINISHED itself
+// only says "error". Captured so a failure names its cause instead of a bare status diff.
+const storyErrorEvents = ['storyErrored', 'storyThrewException', 'playFunctionThrewException', 'unhandledErrorsWhilePlaying'] as const
+type StoryErrorEvent = { event: string; payload: unknown }
 
-function assertSuccessfulStoryFinished(finished: StoryFinished | undefined, storyId: string) {
-  expect(finished, `${storyId} play/report lifecycle must finish successfully`).toMatchObject({ storyId, status: 'success' })
-  expect(finished?.reporters?.some((report) => report.status === 'failed') ?? false, `${storyId} must not contain a failed Storybook report`).toBe(false)
+function describeStoryFailure(finished: StoryFinished | undefined, errors: StoryErrorEvent[] = []) {
+  const lines: string[] = []
+  for (const report of finished?.reporters ?? []) {
+    if (report.status !== 'failed') continue
+    const violations = report.result?.violations ?? []
+    if (violations.length === 0) lines.push(`failed ${report.type ?? 'unknown'} report`)
+    for (const violation of violations) {
+      for (const node of violation.nodes ?? []) {
+        const data = node.any?.find((check) => check.data !== undefined && check.data !== null)?.data
+        lines.push(`failed ${report.type ?? 'unknown'} report: ${violation.id} (${violation.impact ?? 'no impact'}) at ${JSON.stringify(node.target)}${data === undefined ? '' : ` ${JSON.stringify(data)}`}`)
+      }
+    }
+  }
+  for (const error of errors) lines.push(`${error.event}: ${JSON.stringify(error.payload)}`)
+  return lines.length === 0 ? '' : `\n${lines.join('\n')}`
+}
+
+function assertSuccessfulStoryFinished(finished: StoryFinished | undefined, storyId: string, errors: StoryErrorEvent[] = []) {
+  const cause = describeStoryFailure(finished, errors)
+  expect(finished, `${storyId} play/report lifecycle must finish successfully${cause}`).toMatchObject({ storyId, status: 'success' })
+  expect(finished?.reporters?.some((report) => report.status === 'failed') ?? false, `${storyId} must not contain a failed Storybook report${cause}`).toBe(false)
 }
 
 const manifestDir = resolve('design-system/manifests')
@@ -79,34 +106,41 @@ async function openStory(page: Page, manifest: Manifest, check: Check) {
     candidate.type === 'story' && candidate.exportName === check.story &&
     candidate.importPath.replace(/^\.\//, '').endsWith(declared!.file.replace(/^\.\//, '')))
   expect(entry, `${declared!.file}#${check.story} must exist in Storybook index`).toBeTruthy()
-  await page.addInitScript(() => {
+  await page.addInitScript((errorEvents) => {
     const state = window as Window & {
-      __designSystemStoryFinished?: { storyId?: string; status?: string; reporters?: Array<{ status?: string }> }
+      __designSystemStoryFinished?: StoryFinished
+      __designSystemStoryErrors?: StoryErrorEvent[]
       __STORYBOOK_ADDONS_CHANNEL__?: { on: (event: string, listener: (payload: unknown) => void) => void }
     }
     state.__designSystemStoryFinished = undefined
+    state.__designSystemStoryErrors = []
     const attach = () => {
       if (!state.__STORYBOOK_ADDONS_CHANNEL__) {
         window.setTimeout(attach, 0)
         return
       }
       state.__STORYBOOK_ADDONS_CHANNEL__.on('storyFinished', (payload) => {
-        state.__designSystemStoryFinished = payload as typeof state.__designSystemStoryFinished
+        state.__designSystemStoryFinished = payload as StoryFinished
       })
+      for (const event of errorEvents) {
+        state.__STORYBOOK_ADDONS_CHANNEL__.on(event, (payload) => {
+          state.__designSystemStoryErrors?.push({ event, payload })
+        })
+      }
     }
     attach()
-  })
+  }, [...storyErrorEvents])
   await page.goto(`/iframe.html?id=${entry!.id}&viewMode=story`)
   await expect(page.locator('[data-design-system-config]')).toBeAttached()
   await page.waitForFunction((storyId) => {
     const state = window as Window & { __designSystemStoryFinished?: { storyId?: string } }
     return state.__designSystemStoryFinished?.storyId === storyId
   }, entry!.id, { timeout: 30_000 })
-  const finished = await page.evaluate(() => {
-    const state = window as Window & { __designSystemStoryFinished?: { storyId?: string; status?: string; reporters?: Array<{ status?: string }> } }
-    return state.__designSystemStoryFinished
+  const { finished, errors } = await page.evaluate(() => {
+    const state = window as Window & { __designSystemStoryFinished?: StoryFinished; __designSystemStoryErrors?: StoryErrorEvent[] }
+    return { finished: state.__designSystemStoryFinished, errors: state.__designSystemStoryErrors ?? [] }
   })
-  assertSuccessfulStoryFinished(finished, entry!.id)
+  assertSuccessfulStoryFinished(finished, entry!.id, errors)
   const metadata = JSON.parse(await page.locator('[data-design-system-config]').getAttribute('data-design-system-config') ?? '{}') as Metadata
   const renderedTarget = check.kind === 'pointer' ? metadata.pointerTargets?.[0]
     : check.kind === 'keyboard' ? metadata.keyboard?.[0]?.trigger
@@ -384,6 +418,12 @@ test('keyboard scroll outcome rejects a non-scrollable target', async ({ page })
 test('story readiness rejects wrong-story and failed-reporter terminal events', () => {
   expect(() => assertSuccessfulStoryFinished({ storyId: 'other-story', status: 'success', reporters: [{ status: 'success' }] }, 'expected-story')).toThrow(/expected-story/)
   expect(() => assertSuccessfulStoryFinished({ storyId: 'expected-story', status: 'success', reporters: [{ status: 'failed' }] }, 'expected-story')).toThrow(/failed Storybook report/)
+  const contrastFailure = {
+    storyId: 'expected-story', status: 'error',
+    reporters: [{ type: 'a11y', status: 'failed', result: { violations: [{ id: 'color-contrast', impact: 'serious', nodes: [{ target: ['button'], any: [{ data: { contrastRatio: 2.1 } }] }] }] } }],
+  }
+  expect(() => assertSuccessfulStoryFinished(contrastFailure, 'expected-story')).toThrow(/color-contrast \(serious\) at \["button"\] \{"contrastRatio":2\.1\}/)
+  expect(() => assertSuccessfulStoryFinished({ storyId: 'expected-story', status: 'error', reporters: [] }, 'expected-story', [{ event: 'playFunctionThrewException', payload: { message: 'boom' } }])).toThrow(/playFunctionThrewException: \{"message":"boom"\}/)
 })
 
 test('reflow rejects viewport protrusion without treating internal control paint as page overflow', async ({ page }) => {
@@ -405,6 +445,16 @@ for (const manifest of manifests) {
       // cross-browser matrix. Reserve 30s for its terminal event and 15s for the
       // component assertion; exact story/status/reporter checks remain fail-closed.
       testInfo.setTimeout(45_000)
+      if (check.kind === 'forced-colors' && testInfo.project.use.browserName === 'webkit') {
+        // Issue #865 (engine artefact): WebKit implements no forced-colors mode —
+        // Playwright only flips the media flag, so this check would measure WebKit's
+        // default system palette (Linux WebKit pairs ButtonFace=silver with
+        // ButtonText=white; axe color-contrast #ffffff on #c0c0c0, 1.81:1) rather than
+        // our styling. Chromium and Firefox implement forced colors and keep running
+        // the check; the coverage contract in scripts/design-system/verification.mjs
+        // does not require WebKit evidence for forced-colors checks.
+        testInfo.skip(true, 'WebKit does not implement forced-colors; Playwright only flips the media flag, so the check measures an engine artefact rather than our styling (issue #865)')
+      }
       if (check.kind === 'forced-colors') await page.emulateMedia({ forcedColors: 'active' })
       const metadata = await openStory(page, manifest, check)
 
@@ -568,9 +618,11 @@ for (const manifest of manifests) {
           }
           const enabled = await nativeMiddleClick('[data-testid="enabled-link"]')
           expect(enabled.event).toEqual({ matches: true, trusted: true, button: 1, prevented: false })
-          if (testInfo.project.use.browserName === 'webkit') {
-            // This WebKit runtime dispatches trusted auxclick but does not open a
-            // tab for an unmodified middle click, including on plain anchors.
+          if (testInfo.project.use.browserName === 'webkit' && process.platform === 'darwin') {
+            // Playwright's macOS WebKit dispatches trusted auxclick but does not open a
+            // tab for an unmodified middle click, including on plain anchors. Its Linux
+            // build (the CI runner) does open one, so Linux WebKit takes the branch below
+            // and must prove the tab opens at the link's own URL.
             expect(enabled.newPage).toBeNull()
           } else {
             expect(enabled.newPage, 'enabled middle click must open a tab in this engine').not.toBeNull()

@@ -270,10 +270,10 @@ func TestRun_ToolApprovalDeny(t *testing.T) {
 }
 
 // TestRun_ToolApprovalApprove verifies that with --yes, the CLI sends
-// {"action":"approve"} and the run completes normally.
+// {"action":"allow_once"} and the run completes normally.
 //
 // BDD: Given --yes, When tool_approval_required frame arrives, Then a
-// POST {"action":"approve"} is sent and the run completes.
+// POST {"action":"allow_once"} is sent and the run completes.
 func TestRun_ToolApprovalApprove(t *testing.T) {
 	t.Parallel()
 
@@ -303,14 +303,14 @@ func TestRun_ToolApprovalApprove(t *testing.T) {
 		t.Fatalf("Run returned unexpected error: %v", err)
 	}
 
-	// Must have received an approve POST.
+	// Must have received an allow_once POST.
 	select {
 	case rec := <-ss.approvals:
 		if rec.ApprovalID != "appr-def" {
 			t.Errorf("approval ID = %q, want appr-def", rec.ApprovalID)
 		}
-		if rec.Action != "approve" {
-			t.Errorf("action = %q, want approve", rec.Action)
+		if rec.Action != "allow_once" {
+			t.Errorf("action = %q, want allow_once", rec.Action)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("no approval POST received")

@@ -467,7 +467,7 @@ func TestTurnKernelPolicyUsesCallerResolvedRuntimeSnapshot(t *testing.T) {
 	// rules — even though the workspace env exists on disk and a re-read
 	// would find it.
 	zeroSnapshot := environmentsetup.RuntimeEnv{}
-	policy, err := tool.turnKernelPolicy(ctx, ws, zeroSnapshot, documentEnvLayer{})
+	policy, err := tool.turnKernelPolicy(ctx, ws, zeroSnapshot, documentEnvLayer{}, nil)
 	if err != nil {
 		t.Fatalf("zero-snapshot policy derivation failed: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestTurnKernelPolicyUsesCallerResolvedRuntimeSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve runtime env: %v", err)
 	}
-	policy, err = tool.turnKernelPolicy(ctx, ws, resolved, documentEnvLayer{})
+	policy, err = tool.turnKernelPolicy(ctx, ws, resolved, documentEnvLayer{}, nil)
 	if err != nil {
 		t.Fatalf("resolved-snapshot policy derivation failed: both snapshots ride one read: %v", err)
 	}

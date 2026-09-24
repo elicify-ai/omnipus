@@ -7,6 +7,8 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/elicify-ai/omnipus/pkg/shellrule"
 )
 
 // SkillTrustLevel controls how skills without a verifiable SHA-256 hash are handled (SEC-09).
@@ -523,15 +525,25 @@ type OmnipusSandboxConfig struct {
 	// service while still blocking all other private ranges).
 	SSRF OmnipusSSRFConfig `json:"ssrf,omitempty"`
 
-	// GodMode is the runtime global "bypass-permissions" switch (O14). It is
-	// DISTINCT from the --allow-god-mode boot flag: the boot flag (and the
-	// nogodmode build tag) gate AVAILABILITY; this field is the live ON/OFF
-	// state. When true (and god mode is available), the override engine:
-	//   - floors every agent's effective tool policy at "allow" (no prompts);
-	//   - forces the kernel sandbox off (full host fs + syscalls), network
-	//     egress open, and shell guard / deny-patterns off, regardless of the
-	//     fixed "bash" (ADR-036 unified the retired
-	//     "exec"/"workspace_shell"/"workspace_shell_bg" tools into it) limits.
+	// GodMode is the runtime global "bypass-permissions" switch (O14),
+	// renamed "God Mode" (ADR-092 D1/D6). It is DISTINCT from the
+	// --allow-god-mode boot flag: the boot flag (and the nogodmode build tag) gate AVAILABILITY;
+	// this field is the live ON/OFF state, and — per D1's storage note —
+	// God Mode is one of the three named modes (Ask/Auto/God Mode), sharing
+	// the same underlying "bash" tool-policy value ("allow") as Auto,
+	// distinguished from Auto only by this flag. When true (and god mode is
+	// available), the override engine:
+	//   - floors every agent's effective "bash" ceiling at "allow" (no
+	//     approval prompts) — but a D3 `command_rules` `deny` rule and an
+	//     agent's own stricter explicit per-agent override (e.g. ADR-090's
+	//     Jim, bash: deny) both still apply under strictest-wins (D1: "D3
+	//     rules are enforced inside the shell tool, downstream of
+	//     resolveEffectivePolicyWith's God Mode floor, so the floor cannot
+	//     erase them");
+	//   - forces the kernel sandbox off (full host fs + syscalls) and
+	//     network egress open (no D8 port-level containment) for the fixed
+	//     "bash" tool (ADR-036 unified the retired
+	//     "exec"/"workspace_shell"/"workspace_shell_bg" tools into it).
 	// Audit logging, the prompt-injection guard, and rate limiting are NOT
 	// disabled — those defend against external threats, not agent freedom.
 	//
@@ -573,11 +585,53 @@ type OmnipusSandboxConfig struct {
 	// authorization entirely requires editing config.json directly.
 	GodModeAllowed bool `json:"god_mode_allowed,omitempty"`
 
-	// ShellDenyPatterns is the global operator-controlled list of shell command
-	// deny patterns (regular expressions). Per-agent AgentShellPolicy.CustomDenyPatterns
-	// are merged with this list at enforcement time. Patterns that fail to compile
-	// are logged at Warn and skipped.
-	ShellDenyPatterns []string `json:"shell_deny_patterns,omitempty"`
+	// AutoApprove is the global default for ADR-092 D1's "Auto" shell
+	// permission mode. Ships true on a fresh install (founder decision,
+	// 2026-09-23): the shipped "bash" ceiling is "ask" (config/defaults.go),
+	// and Auto is the presentation that runs a command while a kernel
+	// sandbox confines it (D7 filesystem pre-flight, D8 network
+	// deny-by-default) and only asks when the command needs more than the
+	// sandbox allows — so a fresh install prompts for genuinely
+	// sandbox-escaping, network-reaching, or secret-touching commands, not
+	// for everything. Where no kernel sandbox is active, Auto behaves
+	// exactly like Ask (D1's Auto→Ask fallback) — this field does not
+	// change that. Tighten-only below this global default at the per-agent
+	// (AgentAutoApproveDisabled) and per-chat levels, enforced server-side
+	// (D1's tighten-only merge); loosening past this value requires the
+	// same password step-up as God Mode (rest_sandbox_config.go's
+	// requireReAuth gate). The agent-facing set_config tool blocks the
+	// whole sandbox.* subtree by ancestor closure
+	// (pkg/sysagent/tools/config.go::blockedConfigKeys), so an agent cannot
+	// change this field.
+	//
+	// NO `omitempty` (security fix, 2026-09-23 review): this field's
+	// default is TRUE, so `omitempty` silently drops an operator's explicit
+	// `false` from the marshalled JSON — encoding/json omits a field
+	// exactly when it holds its type's zero value, and false IS bool's zero
+	// value. SaveConfig would therefore write a config.json with NO
+	// "auto_approve" key at all after an operator turned Auto off, and the
+	// next load starts from DefaultConfig()'s seeded true (see
+	// loadConfig's own unmarshal-onto-defaults pattern, migration.go) and
+	// never sees anything in the JSON to overwrite it with — silently
+	// turning Auto back ON, the opposite of Auto's own "switching off
+	// globally stays off" requirement. Mirrors the identical, already-fixed
+	// trap on AuditLog above (json:"audit_log", no omitempty) — same
+	// default-true-boolean shape, same fix.
+	AutoApprove bool `json:"auto_approve"`
+
+	// CommandRules is the ADR-092 D3 operator shell command rule list:
+	// {action: allow|ask|deny, binary, arg_prefix?}, evaluated for every
+	// bash call in every mode (God Mode included), deny beats ask beats
+	// allow. Config-file-only (ADR-092 D3): no REST path or screen reads
+	// or writes it, and the agent-facing set_config tool cannot reach it
+	// (the whole sandbox.* subtree is blocked). Read by pkg/agent's
+	// exec-tool wiring (loop_wire.go) into tools.ExecToolDeps.CommandRules,
+	// so an edit to config.json takes effect on the gateway's config reload
+	// (the file poller picks up the change and rebuilds every bash tool);
+	// no restart needed. Validated on every load by ValidateCommandRules — a
+	// config with an invalid rule is rejected and the previous config stays
+	// in force.
+	CommandRules []shellrule.Rule `json:"command_rules,omitempty"`
 
 	// Experimental holds feature flags for dark-launched capabilities.
 	// All flags default to false (deny-by-default per SEC design).

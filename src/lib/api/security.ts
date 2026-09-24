@@ -1,4 +1,4 @@
-// security.ts: Credentials, audit log, god-mode, sandbox, exec allowlist and backups
+// security.ts: Credentials, audit log, god-mode, sandbox, and backups
 
 import { maybeDevToast } from '../dev-toast'
 import type { ZodType } from 'zod'
@@ -7,7 +7,6 @@ import {
   AuditLogResponse as AuditLogResponseSchema,
   AuditEntry as AuditEntrySchema,
   BackupEntry as BackupEntrySchema,
-  ExecAllowlist as ExecAllowlistSchema,
   ExecProxyStatus as ExecProxyStatusSchema,
   PendingRestartEntry as PendingRestartEntrySchema,
   PromptGuardResponse as PromptGuardResponseSchema,
@@ -31,7 +30,6 @@ import type {
   SandboxStatus,
   AuditLogResponse,
   BackupEntry,
-  ExecAllowlist,
   ExecProxyStatus,
   SkillTrustResponse,
   PromptGuardResponse,
@@ -226,21 +224,6 @@ export async function fetchAuditLog(): Promise<AuditLogResponse> {
   return parsed.data
 }
 
-// ── Exec Allowlist ────────────────────────────────────────────────────────────
-
-// ExecAllowlist — re-exported from generated openapi-types (no local body needed).
-
-export function fetchExecAllowlist(): Promise<ExecAllowlist> {
-  return request<ExecAllowlist>('/security/exec-allowlist', undefined, ExecAllowlistSchema)
-}
-
-export function updateExecAllowlist(patterns: string[]): Promise<ExecAllowlist> {
-  return request<ExecAllowlist>('/security/exec-allowlist', {
-    method: 'PUT',
-    body: JSON.stringify({ allowed_binaries: patterns }),
-  }, ExecAllowlistSchema)
-}
-
 // ── Security Admin Endpoints ──────────────────────────────────────────────────
 //
 // Enums and typed helpers for the security and admin endpoints.
@@ -346,8 +329,8 @@ export function updatePromptGuardLevel(level: PromptInjectionLevel): Promise<Pro
   }, PromptGuardUpdateResponseSchema)
 }
 
-// Sandbox config — mode, allowed paths, SSRF controls, and the global
-// shell_deny_patterns default.
+// Sandbox config — mode, filesystem model, allowed paths, SSRF controls,
+// God Mode, the workspace path guard, and the global Auto-approve default.
 // SandboxConfig — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/SandboxConfig.yaml.
 // SandboxConfigUpdate — re-exported from generated openapi-types (contract-first #8).

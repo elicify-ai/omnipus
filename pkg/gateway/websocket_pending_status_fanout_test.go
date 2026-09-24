@@ -33,7 +33,7 @@ func TestQueueWorkingStatus_FansOutToAllSessionConnections(t *testing.T) {
 	wcSender := makeTestConn()
 	handler.handleChatMessageWithClientID(
 		context.Background(), "chat-fanout", "", "hello", "", nil,
-		"", "", false, "client-fanout-1", wcSender,
+		"", "", false, "client-fanout-1", nil, wcSender,
 	)
 
 	receivedFrames := readMessageStatusFrames(t, wcSender, 1)
@@ -119,7 +119,7 @@ func TestPendingMessageStatus_LeftoverEntry_FlushedAndClearedAtTurnEnd(t *testin
 	wc := makeTestConn()
 	handler.handleChatMessageWithClientID(
 		context.Background(), "chat-leftover", "", "hello", "", nil,
-		"", "", false, "client-leftover-1", wc,
+		"", "", false, "client-leftover-1", nil, wc,
 	)
 
 	receivedFrames := readMessageStatusFrames(t, wc, 1)

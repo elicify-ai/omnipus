@@ -104,7 +104,7 @@ func TestNopApprover_DefaultBuild_DeniesAndAudits(t *testing.T) {
 	defer logger.Close()
 
 	approver := nopPolicyApprover{auditLogger: logger}
-	approved, reason := approver.RequestApproval(context.Background(), PolicyApprovalReq{
+	approved, reason, _ := approver.RequestApproval(context.Background(), PolicyApprovalReq{
 		ToolCallID: "call-1",
 		ToolName:   "exec",
 		AgentID:    "ray",
@@ -163,7 +163,7 @@ func TestNopApprover_RepeatedHits_OnlyAuditOnce(t *testing.T) {
 
 	approver := nopPolicyApprover{auditLogger: logger}
 	for i := 0; i < 5; i++ {
-		approved, reason := approver.RequestApproval(context.Background(), PolicyApprovalReq{
+		approved, reason, _ := approver.RequestApproval(context.Background(), PolicyApprovalReq{
 			ToolCallID: "call-rep",
 			ToolName:   "exec",
 			AgentID:    "ray",
@@ -191,7 +191,7 @@ func TestNopApprover_NilAuditLogger_StillDenies(t *testing.T) {
 	resetNopApproverFallbackOnceForTest()
 
 	approver := nopPolicyApprover{auditLogger: nil}
-	approved, reason := approver.RequestApproval(context.Background(), PolicyApprovalReq{
+	approved, reason, _ := approver.RequestApproval(context.Background(), PolicyApprovalReq{
 		ToolName: "exec",
 		AgentID:  "ray",
 	})

@@ -53,6 +53,23 @@ properties:
       the connection-open emit (no session yet). The SPA routes active_turn
       by this id instead of the globally active session. Keep in sync by
       hand with contracts/asyncapi.yaml's inline SessionStateFrame.
+  auto_approve_modifier:
+    type: boolean
+    nullable: true
+    description: >
+      ADR-092 — this session's own per-chat Auto-approve modifier (the value
+      last set by session_mode_update and still held by the server), so a
+      reloading or reconnecting SPA re-learns it instead of losing it. Only
+      meaningful when session_id is present (the connection-open emit
+      carries neither). true — Auto-approve forced ON for this chat; false —
+      forced OFF for this chat; null or absent — no per-chat modifier is
+      set, the chat follows the agent x global resolution
+      (SandboxStatus.auto_approve_effective floored by the agent's
+      auto_approve_disabled). Same value space as
+      SessionModeUpdateFrame.auto_approve. The modifier lives in server
+      memory only: after a gateway restart it is gone and this field reads
+      null/absent, so the UI follows the server. Keep in sync by hand with
+      contracts/asyncapi.yaml's inline SessionStateFrame.
   active_turn:
     $ref: SessionStateActiveTurn.yaml
     description: >

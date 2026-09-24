@@ -41,6 +41,8 @@ export type WsFrameType =
   | "cancel_stage"
   | "pong"
   | "session_close_ack"
+  | "session_mode_update"
+  | "session_mode_updated"
   | "device_pairing_request"
   | "whatsapp_pairing"
   | "whatsapp_pairing_subscribe"
@@ -92,6 +94,7 @@ export interface MessageFrame {
   session_id?: string;
   agent_id?: string;
   media?: Array<string>;
+  auto_approve?: boolean | null;
   metadata?: {
     model_name?: string;
     workspace_id?: string;
@@ -130,7 +133,6 @@ export interface SessionStartedFrame {
   type: "session_started";
   session_id: string;
   agent_id?: string;
-  producing_session_id?: string;
   seq?: number;
   boot_id?: string;
 }
@@ -148,7 +150,6 @@ export interface TokenFrame {
   session_id: string;
   content: string;
   agent_id?: string;
-  producing_session_id?: string;
   turn_id?: string;
   message_id?: string;
   replace?: boolean;
@@ -175,7 +176,6 @@ export interface DoneFrame {
   type: "done";
   session_id: string;
   stats?: DoneStats;
-  producing_session_id?: string;
   turn_id?: string;
   message_id?: string;
   seq?: number;
@@ -214,7 +214,6 @@ export interface ToolCallStartFrame {
   };
   parent_call_id?: string;
   agent_id?: string;
-  producing_session_id?: string;
   seq?: number;
 }
 
@@ -293,7 +292,6 @@ export interface ToolCallResultFrame {
   error?: string;
   parent_call_id?: string;
   agent_id?: string;
-  producing_session_id?: string;
   seq?: number;
 }
 
@@ -304,7 +302,7 @@ export interface SubagentStartFrame {
   parent_call_id: string;
   task_label: string;
   agent_id?: string;
-  producing_session_id?: string;
+  child_session_id?: string;
   seq?: number;
 }
 
@@ -319,27 +317,29 @@ export interface SubagentEndFrame {
   agent_id?: string;
   parent_call_id?: string;
   message?: string;
-  producing_session_id?: string;
   seq?: number;
 }
 
 export interface SubagentMessageFrame {
   type: "subagent_message";
   session_id: string;
+  child_session_id?: string;
   span_id: string;
   message_id: string;
-  kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond";
+  kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond" | "goal_status";
   text?: string;
   pct?: number;
   correlation_id?: string;
   sender_identity: string;
   untrusted_origin: boolean;
   created_at: string;
+  seq?: number;
 }
 
 export interface SubagentStateFrame {
   type: "subagent_state";
   session_id: string;
+  child_session_id?: string;
   span_id: string;
   state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
   steering_receipt?: {
@@ -347,6 +347,7 @@ export interface SubagentStateFrame {
     applied_at: string;
   };
   created_at: string;
+  seq?: number;
 }
 
 export interface TaskStatusChangedFrame {
@@ -355,14 +356,13 @@ export interface TaskStatusChangedFrame {
   task_id: string;
   status: "inbox" | "next" | "in_progress" | "blocked" | "done" | "failed";
   agent_id?: string;
-  producing_session_id?: string;
 }
 
 export interface TaskRunStatusFrame {
   type: "task_run_status";
   task_id: string;
   run_id: string;
-  occurrence_ms?: number;
+  occurrence_ms?: number | null;
   status: "in_progress" | "done" | "failed" | "skipped";
 }
 
@@ -376,7 +376,6 @@ export interface ReplayMessageFrame {
   agent_id?: string;
   model?: string;
   turn_id?: string;
-  producing_session_id?: string;
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";
   client_message_id?: string;
@@ -402,7 +401,6 @@ export interface ToolResultProjectionFrame {
   archive_line: number;
   content_state: "capped" | "emptied";
   mark?: string;
-  producing_session_id?: string;
   seq?: number;
 }
 
@@ -437,7 +435,6 @@ export interface MediaFrame {
   type: "media";
   session_id: string;
   parts: Array<MediaPart>;
-  producing_session_id?: string;
   seq?: number;
 }
 
@@ -448,6 +445,18 @@ export interface AgentSwitchedFrame {
   message?: string;
   producing_session_id?: string;
   seq?: number;
+}
+
+export interface CommandSegmentInfo {
+  segment_index: number;
+  command_text: string;
+  resolved_binary?: string;
+  args?: Array<string>;
+  classification?: "read" | "write" | "read_write" | "none";
+  path?: string;
+  network_required?: boolean;
+  suggested_prefix?: string;
+  prefix_available?: boolean;
 }
 
 export interface ToolApprovalRequiredFrame {
@@ -462,8 +471,8 @@ export interface ToolApprovalRequiredFrame {
   session_id: string;
   turn_id: string;
   expires_in_ms: number;
-  producing_session_id?: string;
   workspace_id?: string;
+  segments?: Array<CommandSegmentInfo>;
 }
 
 export interface ToolApprovalResolvedFrame {
@@ -541,6 +550,7 @@ export interface SessionStateFrame {
   pending_approvals: Array<SessionStatePendingApproval>;
   pending_asks?: Array<AskUserQuestionCard>;
   session_id?: string;
+  auto_approve_modifier?: boolean | null;
   active_turn?: SessionStateActiveTurn;
   boot_id?: string;
   emitted_at: string;
@@ -550,7 +560,6 @@ export interface SystemOverloadFrame {
   type: "system_overload";
   session_id: string;
   message?: string;
-  producing_session_id?: string;
 }
 
 export interface ReplayWarningStats {
@@ -569,7 +578,14 @@ export interface CancelStageFrame {
   type: "cancel_stage";
   session_id: string;
   stage: "graceful" | "hard" | "detached";
-  producing_session_id?: string;
+  reached?: Array<string>;
+  unreachable?: Array<{
+    id: string;
+    reason: string;
+  }>;
+  skipped_newer_generation?: Array<string>;
+  skipped_terminal?: Array<string>;
+  partial?: boolean;
   seq?: number;
 }
 
@@ -578,6 +594,18 @@ export interface SessionCloseAckFrame {
   session_id: string;
   id?: string;
   producing_session_id?: string;
+}
+
+export interface SessionModeUpdateFrame {
+  type: "session_mode_update";
+  session_id: string;
+  auto_approve: boolean | null;
+}
+
+export interface SessionModeUpdatedFrame {
+  type: "session_mode_updated";
+  session_id: string;
+  auto_approve_effective: boolean;
 }
 
 export interface DevicePairingRequestFrame {
@@ -815,7 +843,6 @@ export interface GoalStatusFrame {
   active_loops: number;
   cap: number;
   state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared" | "judge_cas_loss" | "blocked" | "claim_overturned" | "expired";
-  producing_session_id?: string;
   criteria?: Array<{
     id?: string;
     kind: "check" | "prose" | "behavior";
@@ -873,7 +900,6 @@ export interface LoopStatusFrame {
   max_runs: number;
   next_delay?: number;
   state: string;
-  producing_session_id?: string;
   seq?: number;
 }
 
@@ -1075,6 +1101,8 @@ export type WsFrame =
   | ReplayWarningFrame
   | CancelStageFrame
   | SessionCloseAckFrame
+  | SessionModeUpdateFrame
+  | SessionModeUpdatedFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
   | SessionCloseFrame
@@ -1120,20 +1148,23 @@ export type ClientFrame =
   | PingFrame
   | AttachSessionFrame
   | DevicePairingResponseFrame
+  | AskUserAnswerFrame
+  | SessionModeUpdateFrame
   | SessionCloseFrame
   | WhatsAppPairingSubscribeFrame
-  | AskUserAnswerFrame
   | BrowserAttachFrame
   | BrowserInputFrame
   | BrowserControlFrame
   | BrowserDetachFrame
+  | BrowserViewportFrame
+  | BrowserTabActionFrame
   | BrowserWebRTCOfferFrame
   | BrowserInputOfferFrame;
 
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "whatsapp_pairing_subscribe", "ask_user_answer", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_webrtc_offer", "browser_input_offer"] as const
+export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "session_close", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
@@ -1167,12 +1198,11 @@ export type ServerFrame =
   | ReplayWarningFrame
   | CancelStageFrame
   | SessionCloseAckFrame
+  | SessionModeUpdatedFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
   | NotificationFrame
   | BrowserStatusFrame
-  | BrowserViewportFrame
-  | BrowserTabActionFrame
   | BrowserTabsFrame
   | BrowserWebRTCAnswerFrame
   | BrowserWebRTCStateFrame

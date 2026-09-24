@@ -87,9 +87,9 @@ func (b *blockingProvider) GetDefaultModel() string { return "blocking-model" }
 // approver would approve and the stub tool would execute.
 type autoApproveApprover struct{ consulted atomic.Bool }
 
-func (a *autoApproveApprover) RequestApproval(context.Context, PolicyApprovalReq) (bool, string) {
+func (a *autoApproveApprover) RequestApproval(context.Context, PolicyApprovalReq) (bool, string, bool) {
 	a.consulted.Store(true)
-	return true, "auto-approved"
+	return true, "auto-approved", false
 }
 
 // snapshotHandoffMap returns a stable copy of the sessionActiveAgent map so a

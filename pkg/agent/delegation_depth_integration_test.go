@@ -1,202 +1,160 @@
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
-//
 // Copyright (c) 2026 Omnipus contributors
 
+// ADR-091 fix-lane 7 (Gap 1): the delegation depth limit's refusal had NO
+// test anywhere — `grep -rn "ErrDepthExceeded" --include="*_test.go"`
+// returned nothing before this file. This matters more under ADR-091 than
+// before: the founder's D9 decision removed refusal from the CONCURRENCY
+// gate (a launch at the cap queues, it is never refused), so the depth cap
+// is now the ONLY bound on recursion. An off-by-one here no longer produces
+// a bounded pile of in-memory sub-turns — it produces unbounded creation of
+// REAL sessions, each with a record, transcript, inbox and queue entry on
+// disk. These tests drive the real steer.SessionLauncher.Launch path (no
+// mock, no private-function shortcut) against a real AgentLoop.
 package agent
 
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/bus"
-	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-// ddiNewTestAgentLoop mirrors loop_test.go's newTestAgentLoop but nests Home
-// under tmpDir/agents/main rather than using tmpDir directly. ADR-057 FR-005/
-// FR-096 fixture repair: AgentLoop resolves its shared-session-store root as
-// filepath.Dir(cfg.AgentHomeBasePath()); a flat Home resolves that to the OS
-// temp root shared by every test process in this package, so a deterministic
-// child id like "subturn-1" (al.generateSubTurnID's per-AgentLoop counter
-// restarts at 1 for every fresh *AgentLoop) can collide with a leftover
-// session directory from another test. Nesting isolates each test's store.
-func ddiNewTestAgentLoop(t *testing.T) *AgentLoop {
-	t.Helper()
-	tmpDir, err := os.MkdirTemp("", "agent-ddi-test-*")
-	if err != nil {
-		t.Fatalf("os.MkdirTemp: %v", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
-	agentHome := filepath.Join(tmpDir, "agents", "main")
-	if err := os.MkdirAll(agentHome, 0o700); err != nil {
-		t.Fatalf("os.MkdirAll(%q): %v", agentHome, err)
-	}
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:              agentHome,
-				DefaultModel:      config.DefaultModel{Model: "test-model"},
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-			List: []config.AgentConfig{{ID: "mia", Home: agentHome}},
-		},
-	}
-	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
-	t.Cleanup(al.Close)
-	return al
-}
-
-// ddiRealParentTurnState mints a real, store-backed session and returns a
-// bare parent turnState literal referencing it — ADR-057 FR-005 fixture
-// repair: spawnSubTurn's sharedStore.CreateSessionWithID(childID,
-// parentTS.transcriptSessionID, ...) now requires the parent id to resolve
-// to a real session in al.GetSessionStore().
-func ddiRealParentTurnState(t *testing.T, al *AgentLoop, turnID string, depth int) *turnState {
-	t.Helper()
-	store := al.GetSessionStore()
-	if store == nil {
-		t.Fatal("test harness did not wire a shared session store")
-	}
-	meta, err := store.NewSession(session.SessionTypeChat, "test-channel", "main")
-	if err != nil {
-		t.Fatalf("store.NewSession: %v", err)
-	}
-	return &turnState{
-		ctx:                 context.Background(),
-		turnID:              turnID,
-		depth:               depth,
-		childTurnIDs:        []string{},
-		pendingResults:      make(chan *tools.ToolResult, 10),
-		session:             &ephemeralSessionStore{},
-		agent:               al.registry.GetDefaultAgent(),
-		transcriptSessionID: meta.ID,
-		routingSessionID:    session.RoutingSessionID(meta.ID),
-		transcriptStore:     store,
-	}
-}
-
-// TestSpawnSubTurn_HonorsExplicitPerEdgeDepthOverDefaultBackstop is the real
-// bug-fix proof for #477 (FR-D10): an operator who configures a delegation-
-// graph edge with an explicit Depth: 10, leaving the global SubTurn.MaxDepth
-// unset, must get a chain that actually reaches depth 10 — NOT silently cut
-// off at the spawn-time backstop's own hardcoded default of 3.
+// TestLaunch_AtExhaustedDepthBudget_Refused drives root -> A -> B -> (C) with
+// MaxDelegationDepth = 2: the first two hops must succeed, and the third
+// (which would create a fourth session, one hop past the configured cap)
+// must be refused with steer.ErrDepthExceeded — and must leave no trace: no
+// lifecycle record for a fourth session, and no admission slot consumed.
 //
-// This drives the REAL graph → buildDelegationDepthResolver → spawnSubTurn
-// path: the edge is seeded on disk (the same on-disk shape the delegation
-// gate reads), the depth cap is resolved via the real, un-mocked
-// buildDelegationDepthResolver, and spawnSubTurn is invoked directly (the
-// same function the real delegate tool call funnels through, for both its
-// background and await modes) with that resolved cap threaded via
-// SubTurnConfig.ResolvedMaxDepth — exactly as DelegateTool.executeRun does.
-func TestSpawnSubTurn_HonorsExplicitPerEdgeDepthOverDefaultBackstop(t *testing.T) {
-	// Seed a real delegation-graph edge: mia -> ray, Depth: 10, background mode.
-	// Global SubTurn.MaxDepth is left unset (0) — the exact configuration that
-	// triggered #477 (silently capped at 3 before the fix).
-	seedWorkspaceGraph(t, testWS, true, []graphEdge{
-		edge("mia", "ray", []string{"background"}, intPtr(10)),
-	})
-	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{})
-
-	al := ddiNewTestAgentLoop(t)
-
-	spawnAt := func(depth int) (*tools.ToolResult, error) {
-		resolved := resolver(ctxWS(testWS, depth), "ray")
-		if resolved == nil {
-			t.Fatalf("expected a resolved depth cap for mia->ray at chain depth %d, got nil", depth)
-		}
-		parent := ddiRealParentTurnState(t, al, "parent-1", depth)
-		cfg := SubTurnConfig{
-			Model:            "gpt-4o-mini",
-			Tools:            []tools.Tool{},
-			ResolvedMaxDepth: resolved,
-		}
-		return spawnSubTurn(context.Background(), al, parent, cfg)
-	}
-
-	// Depth 4 is PAST the old hardcoded backstop default of 3 — under the
-	// pre-fix behavior this would have been silently rejected with
-	// ErrDepthLimitExceeded despite the edge's explicit Depth: 10. It must now
-	// succeed because the edge's resolved cap (10) is honored.
-	if _, err := spawnAt(4); err != nil {
-		t.Fatalf(
-			"depth 4 (past the old default-3 backstop) must succeed under an edge Depth=10 cap, got error: %v",
-			err,
-		)
-	}
-
-	// Depth 9 is still under the edge's cap of 10 — must succeed.
-	if _, err := spawnAt(9); err != nil {
-		t.Fatalf("depth 9 (under the edge's cap of 10) must succeed, got error: %v", err)
-	}
-
-	// Depth 10 is AT the edge's cap — must be rejected (parentTS.depth >=
-	// maxDepth), proving the chain is rejected at EXACTLY the boundary the
-	// edge authorized, not before and not after.
-	if _, err := spawnAt(10); !errors.Is(err, ErrDepthLimitExceeded) {
-		t.Fatalf("depth 10 (at the edge's cap of 10) must be rejected with ErrDepthLimitExceeded, got: %v", err)
-	}
-}
-
-// TestSpawnSubTurn_ResolvedMaxDepthOverridesGlobalOnlyBackstop is a narrower,
-// unit-level companion proving spawnSubTurn's own precedence rule directly:
-// when SubTurnConfig.ResolvedMaxDepth is set, it takes priority over
-// getSubTurnConfig's global-only default (which would otherwise apply the
-// safety-backstop default of 3 regardless of any delegation-graph edge).
-func TestSpawnSubTurn_ResolvedMaxDepthOverridesGlobalOnlyBackstop(t *testing.T) {
-	al := ddiNewTestAgentLoop(t)
-
-	resolved := 5
-	parent := ddiRealParentTurnState(t, al, "parent-1", 4) // past the global default-3 backstop
-	cfg := SubTurnConfig{
-		Model:            "gpt-4o-mini",
-		Tools:            []tools.Tool{},
-		ResolvedMaxDepth: &resolved,
-	}
-	if _, err := spawnSubTurn(context.Background(), al, parent, cfg); err != nil {
-		t.Fatalf("ResolvedMaxDepth=5 at depth 4 must succeed (override honored), got error: %v", err)
-	}
-
-	// At depth 5 (== ResolvedMaxDepth), must be rejected.
-	parent.depth = 5
-	if _, err := spawnSubTurn(context.Background(), al, parent, cfg); !errors.Is(err, ErrDepthLimitExceeded) {
-		t.Fatalf("depth 5 (at ResolvedMaxDepth=5) must be rejected, got: %v", err)
-	}
-}
-
-// TestSpawnSubTurn_NilResolvedMaxDepthFallsBackToSharedDefault proves that
-// when ResolvedMaxDepth is nil (the untargeted/self-delegation case, or any
-// caller that predates this field), spawnSubTurn falls back to
-// getSubTurnConfig's own resolution — which itself now calls the SAME shared
-// resolveEffectiveDelegationDepth function, defaulting to 3 when the global
-// config is unset. This is a regression guard for the pre-existing
-// TestSpawnSubTurn depth-limit subtest (parentDepth=3 -> ErrDepthLimitExceeded).
-func TestSpawnSubTurn_NilResolvedMaxDepthFallsBackToSharedDefault(t *testing.T) {
-	al, _, _, provider, cleanup := newTestAgentLoop(t)
-	_ = provider
+// Self-delegation (testDefaultAgentID -> testDefaultAgentID at every hop) is
+// deliberate: ADR-091 explicitly allows a session to delegate to its own
+// agent profile, and using one agent throughout isolates the assertion to
+// the depth arithmetic alone, with no workspace delegation-graph edges in
+// the way.
+func TestLaunch_AtExhaustedDepthBudget_Refused(t *testing.T) {
+	al, cleanup := newSteerAL(t)
 	defer cleanup()
+	// D9's single source of truth for the global depth ceiling (config.go's
+	// PerformanceConfig.MaxDelegationDepth) — read live by
+	// startingRemainingDepth on every Launch call, so setting it after
+	// construction still governs.
+	al.GetConfig().Performance.MaxDelegationDepth = 2
 
-	parent := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-1",
-		depth:          3, // == defaultMaxSubTurnDepth
-		childTurnIDs:   []string{},
-		pendingResults: make(chan *tools.ToolResult, 10),
-		session:        &ephemeralSessionStore{},
-		agent:          al.registry.GetDefaultAgent(),
+	l := NewSteerLauncher(al)
+	ctx := context.Background()
+
+	root := newTestSteeringSession(t, al, "")
+
+	resA, err := l.Launch(ctx, steer.LaunchRequest{
+		SteeringSessionID: root, TargetAgentID: testDefaultAgentID, Task: "do A",
+		Origin: steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-a"},
+	})
+	if err != nil {
+		t.Fatalf("Launch(root->A) at depth budget 2: unexpected error: %v", err)
 	}
-	cfg := SubTurnConfig{Model: "gpt-4o-mini", Tools: []tools.Tool{}} // ResolvedMaxDepth left nil
 
-	if _, err := spawnSubTurn(context.Background(), al, parent, cfg); !errors.Is(err, ErrDepthLimitExceeded) {
-		t.Fatalf(
-			"depth 3 with no ResolvedMaxDepth override must fall back to the shared default (3) and reject, got: %v",
-			err,
-		)
+	resB, err := l.Launch(ctx, steer.LaunchRequest{
+		SteeringSessionID: resA.SessionID, TargetAgentID: testDefaultAgentID, Task: "do B",
+		Origin: steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-b"},
+	})
+	if err != nil {
+		t.Fatalf("Launch(A->B) at depth budget 2: unexpected error: %v", err)
+	}
+
+	_, err = l.Launch(ctx, steer.LaunchRequest{
+		SteeringSessionID: resB.SessionID, TargetAgentID: testDefaultAgentID, Task: "do C",
+		Origin: steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-c"},
+	})
+	if !errors.Is(err, steer.ErrDepthExceeded) {
+		t.Fatalf("Launch(B->C) once the depth budget (2) is exhausted = %v, want steer.ErrDepthExceeded", err)
+	}
+
+	lifecycle := al.GetSessionLifecycleStore()
+	children, listErr := lifecycle.List(session.LifecycleFilter{SteeringSessionID: resB.SessionID})
+	if listErr != nil {
+		t.Fatalf("list B's children: %v", listErr)
+	}
+	if len(children) != 0 {
+		t.Fatalf("B has %d persisted child record(s) after a refused launch, want 0 — "+
+			"C's admission slot must never be taken when the depth budget is exhausted", len(children))
+	}
+}
+
+// TestLaunch_GrandchildRemainingDepth_InheritsFromParentBudget_NotRecomputedFromGlobalCap
+// proves the sibling-case regression named in the Gap-1 brief: a grandchild's
+// stored RemainingDepth is derived from its own parent's ACTUAL persisted
+// remaining budget, never recomputed fresh from (global cap - ancestor
+// distance). The global cap alone is deliberately generous (10) here so a
+// "recomputed from the cap" bug would NOT be caught by the exhaustion test
+// above (that test would still pass even if this specific inheritance step
+// were broken, because both compute the SAME number when nothing tightens
+// the budget mid-chain) — this test manufactures exactly that mid-chain
+// tightening. A can only get a tight budget (1) by way of a stricter
+// per-edge cap somewhere upstream (the normal production mechanism); this
+// test reproduces "A's true remaining budget is smaller than the global cap
+// would suggest" by mutating A's OWN persisted record directly (real
+// on-disk shape, same field steer_launcher.go reads) rather than wiring a
+// second delegation edge — isolating the assertion to
+// startingRemainingDepth's inheritance step alone.
+func TestLaunch_GrandchildRemainingDepth_InheritsFromParentBudget_NotRecomputedFromGlobalCap(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	al.GetConfig().Performance.MaxDelegationDepth = 10
+
+	l := NewSteerLauncher(al)
+	ctx := context.Background()
+	lifecycle := al.GetSessionLifecycleStore()
+
+	root := newTestSteeringSession(t, al, "")
+	resA, err := l.Launch(ctx, steer.LaunchRequest{
+		SteeringSessionID: root, TargetAgentID: testDefaultAgentID, Task: "do A",
+		Origin: steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-a"},
+	})
+	if err != nil {
+		t.Fatalf("Launch(root->A): unexpected error: %v", err)
+	}
+
+	// Manufacture "A's true remaining budget is 1" — reachable in production
+	// via a stricter per-edge cap somewhere upstream of A; constructed
+	// directly here to isolate the assertion. A is one hop below root, so a
+	// buggy "recompute from the global cap" implementation would instead
+	// compute (globalCap=10 - parentDepth=1) = 9 for B's budget.
+	aRec, err := lifecycle.Load(resA.SessionID)
+	if err != nil {
+		t.Fatalf("load A: %v", err)
+	}
+	aRec.SteeredBy.Authorization.RemainingDepth = 1
+	if persistErr := lifecycle.Persist(aRec); persistErr != nil {
+		t.Fatalf("persist tightened A: %v", persistErr)
+	}
+
+	resB, err := l.Launch(ctx, steer.LaunchRequest{
+		SteeringSessionID: resA.SessionID, TargetAgentID: testDefaultAgentID, Task: "do B",
+		Origin: steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-b"},
+	})
+	if err != nil {
+		t.Fatalf("Launch(A->B) with A's tightened budget: unexpected error: %v", err)
+	}
+
+	bRec, err := lifecycle.Load(resB.SessionID)
+	if err != nil {
+		t.Fatalf("load B: %v", err)
+	}
+	if bRec.SteeredBy == nil {
+		t.Fatal("B has no SteeredBy edge")
+	}
+	const wantFromParentBudget = 0       // A's RemainingDepth(1) - 1
+	const wouldBeIfRecomputedFromCap = 8 // (globalCap=10 - parentDepth(A)=1) - 1
+	if bRec.SteeredBy.Authorization.RemainingDepth != wantFromParentBudget {
+		if bRec.SteeredBy.Authorization.RemainingDepth == wouldBeIfRecomputedFromCap {
+			t.Fatalf("B.RemainingDepth = %d — recomputed from the GLOBAL cap and A's ancestor "+
+				"distance, ignoring A's own tighter persisted budget (want %d, inherited from "+
+				"A.RemainingDepth=1)", bRec.SteeredBy.Authorization.RemainingDepth, wantFromParentBudget)
+		}
+		t.Fatalf("B.RemainingDepth = %d, want %d (A.RemainingDepth(1) - 1)",
+			bRec.SteeredBy.Authorization.RemainingDepth, wantFromParentBudget)
 	}
 }

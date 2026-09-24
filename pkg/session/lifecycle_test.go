@@ -35,6 +35,117 @@ func countJSONL(t *testing.T, s *LifecycleStore, sessionID string) int {
 	return n
 }
 
+func TestPublishChildUnderParentLock_ChildWriteFailureRollsBackNewParent(t *testing.T) {
+	store := NewLifecycleStore(t.TempDir())
+	childID := "child-write-fails"
+	if err := os.MkdirAll(store.path(childID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := store.PublishChildUnderParentLock("new-parent", func(parent *LifecycleRecord, existed bool) (*LifecycleRecord, error) {
+		if existed {
+			t.Fatal("new parent unexpectedly existed")
+		}
+		parent.Generation = 1
+		parent.State = LifecycleRunning
+		parent.OwnerScopeKind = OwnerScopeHuman
+		return &LifecycleRecord{
+			SessionID: childID, Generation: 1, State: LifecycleQueued,
+			OwnerScopeKind: OwnerScopeParentSession,
+			SteeredBy:      &SteeredBy{SteeringSessionID: "new-parent", RootSessionID: "new-parent"},
+		}, nil
+	})
+	if err == nil {
+		t.Fatal("child write failure unexpectedly succeeded")
+	}
+	_, err = store.Load("new-parent")
+	if !errors.Is(err, ErrLifecycleNotFound) {
+		t.Fatalf("a failed child append left the newly-created parent root: %v", err)
+	}
+	if got := store.parentIndex.children("new-parent"); len(got) != 0 {
+		t.Fatalf("a failed child append left indexed children: %v", got)
+	}
+}
+
+func TestPublishChildUnderParentLock_ParentWriteFailurePublishesNoChild(t *testing.T) {
+	store := NewLifecycleStore(t.TempDir())
+	parentID := "parent-write-fails"
+	childID := "child-never-published"
+	if err := os.MkdirAll(store.path(parentID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := store.PublishChildUnderParentLock(parentID, func(parent *LifecycleRecord, _ bool) (*LifecycleRecord, error) {
+		parent.Generation = 1
+		parent.State = LifecycleRunning
+		parent.OwnerScopeKind = OwnerScopeHuman
+		return &LifecycleRecord{
+			SessionID: childID, Generation: 1, State: LifecycleQueued,
+			OwnerScopeKind: OwnerScopeParentSession,
+			SteeredBy:      &SteeredBy{SteeringSessionID: parentID, RootSessionID: parentID},
+		}, nil
+	})
+	if err == nil {
+		t.Fatal("parent write failure unexpectedly succeeded")
+	}
+	if _, statErr := os.Stat(store.path(childID)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("parent write failure created child storage: %v", statErr)
+	}
+	if got := store.parentIndex.children(parentID); len(got) != 0 {
+		t.Fatalf("parent write failure indexed children: %v", got)
+	}
+}
+
+func TestPublishChildUnderParentLock_ChildWriteFailureRestoresExistingParent(t *testing.T) {
+	store := NewLifecycleStore(t.TempDir())
+	parent := &LifecycleRecord{
+		SessionID: "existing-parent", Generation: 1, State: LifecycleRunning,
+		OwnerScopeKind: OwnerScopeHuman,
+	}
+	if err := store.Persist(parent); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(store.path(parent.SessionID))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	childID := "child-write-fails-existing"
+	if mkdirErr := os.MkdirAll(store.path(childID), 0o755); mkdirErr != nil {
+		t.Fatal(mkdirErr)
+	}
+	err = store.PublishChildUnderParentLock(parent.SessionID, func(current *LifecycleRecord, existed bool) (*LifecycleRecord, error) {
+		if !existed {
+			t.Fatal("existing parent was not loaded")
+		}
+		current.State = LifecyclePaused
+		return &LifecycleRecord{
+			SessionID: childID, Generation: 1, State: LifecycleQueued,
+			OwnerScopeKind: OwnerScopeParentSession,
+			SteeredBy:      &SteeredBy{SteeringSessionID: parent.SessionID, RootSessionID: parent.SessionID},
+		}, nil
+	})
+	if err == nil {
+		t.Fatal("child write failure unexpectedly succeeded")
+	}
+	after, readErr := os.ReadFile(store.path(parent.SessionID))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("rollback did not restore the parent's JSONL byte-for-byte\nbefore: %q\nafter: %q", before, after)
+	}
+	loaded, loadErr := store.Load(parent.SessionID)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if loaded.State != LifecycleRunning {
+		t.Fatalf("parent state = %q, want %q", loaded.State, LifecycleRunning)
+	}
+	if got := store.parentIndex.children(parent.SessionID); len(got) != 0 {
+		t.Fatalf("failed child remained indexed: %v", got)
+	}
+}
+
 func newTestLifecycleStore(t *testing.T) *LifecycleStore {
 	t.Helper()
 	return NewLifecycleStore(t.TempDir())
@@ -44,7 +155,7 @@ func TestLifecycleStore_PersistAndReload(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	rec := &LifecycleRecord{
 		SessionID:      "sess-1",
-		Generation:     0,
+		Generation:     1,
 		State:          LifecycleQueued,
 		OwnerScopeKind: OwnerScopeHuman,
 		WorkspaceID:    "ws-1",
@@ -104,7 +215,7 @@ func TestLifecycleStore_TerminalImmutability(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	rec := &LifecycleRecord{
 		SessionID:      "sess-term",
-		Generation:     0,
+		Generation:     1,
 		State:          LifecycleCompleted,
 		OwnerScopeKind: OwnerScopeHuman,
 		WorkspaceID:    "ws-1",
@@ -140,8 +251,8 @@ func TestLifecycleStore_TerminalImmutability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load after new generation failed: %v", err)
 	}
-	if reloaded.Generation != 1 {
-		t.Errorf("generation = %d, want 1", reloaded.Generation)
+	if reloaded.Generation != 2 {
+		t.Errorf("generation = %d, want 2", reloaded.Generation)
 	}
 	if reloaded.State != LifecycleQueued {
 		t.Errorf("state = %q, want %q", reloaded.State, LifecycleQueued)
@@ -170,6 +281,7 @@ func TestLifecycleStore_ListNonTerminalOnly(t *testing.T) {
 	for _, sp := range specs {
 		rec := &LifecycleRecord{
 			SessionID:      sp.id,
+			Generation:     1,
 			State:          sp.state,
 			OwnerScopeKind: OwnerScopeHuman,
 			WorkspaceID:    "ws-1",
@@ -279,7 +391,7 @@ func TestLifecycleStore_Mutate_NotFoundFnReceivesNil(t *testing.T) {
 func TestLifecycleStore_Mutate_AppliesAndPersists(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: "sess-m1", State: LifecycleRunning,
+		SessionID: "sess-m1", Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman, WorkspaceID: "ws", AgentID: "a",
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -313,7 +425,7 @@ func TestLifecycleStore_Mutate_AppliesAndPersists(t *testing.T) {
 func TestLifecycleStore_Mutate_TerminalImmutableGuard(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: "sess-term2", State: LifecycleCompleted,
+		SessionID: "sess-term2", Generation: 1, State: LifecycleCompleted,
 		OwnerScopeKind: OwnerScopeHuman, WorkspaceID: "ws", AgentID: "a",
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -363,7 +475,7 @@ func TestLifecycleStore_Mutate_NilSignalNoWrite(t *testing.T) {
 func TestLifecycleStore_Mutate_ConcurrentTerminalGuardHolds(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: "sess-race", State: LifecycleRunning,
+		SessionID: "sess-race", Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman, WorkspaceID: "ws", AgentID: "a",
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -433,7 +545,7 @@ func TestLifecycleStore_Mutate_ConcurrentTerminalGuardHolds(t *testing.T) {
 func TestLifecycleStore_Mutate_ConcurrentNoLostAppend(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: "sess-append", State: LifecycleRunning,
+		SessionID: "sess-append", Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman, WorkspaceID: "ws", AgentID: "a",
 	}); err != nil {
 		t.Fatalf("seed: %v", err)

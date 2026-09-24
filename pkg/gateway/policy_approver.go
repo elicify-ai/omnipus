@@ -43,7 +43,7 @@ func newPolicyApproverAdapter(reg *approvalRegistryV2, ws *WSHandler) *policyApp
 // Saturation path (FR-016, MAJ-009): if requestApproval returns accepted==false
 // the entry is already in denied_saturated state and resultCh has a pre-delivered
 // outcome, so we skip the WS broadcast and unblock immediately.
-func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.PolicyApprovalReq) (bool, string) {
+func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.PolicyApprovalReq) (bool, string, bool) {
 	entry, accepted := a.reg.requestApproval(
 		req.ToolCallID,
 		req.ToolName,
@@ -55,7 +55,7 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 	if entry == nil {
 		// Defensive: should never happen (requestApproval always returns non-nil).
 		slog.Error("policyApprover: requestApproval returned nil entry", "tool", req.ToolName)
-		return false, "internal_error"
+		return false, "internal_error", false
 	}
 
 	if accepted {
@@ -71,11 +71,11 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 	case outcome := <-entry.resultCh:
 		// FR-039: record approval latency on every terminal transition.
 		globalToolMetrics.ObserveApprovalLatency(outcome.Reason, time.Since(approvalStart).Seconds())
-		return outcome.Approved, outcome.Reason
+		return outcome.Approved, outcome.Reason, outcome.RecordGrant
 	case <-ctx.Done():
 		// Turn was canceled (hard abort, graceful shutdown, etc.). Cancel the entry.
-		a.reg.resolve(entry.ApprovalID, ApprovalActionCancel)
+		a.reg.resolve(entry.ApprovalID, ApprovalActionCancel, false)
 		globalToolMetrics.ObserveApprovalLatency("cancel", time.Since(approvalStart).Seconds())
-		return false, "cancel"
+		return false, "cancel", false
 	}
 }

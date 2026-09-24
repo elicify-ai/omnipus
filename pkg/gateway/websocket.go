@@ -29,7 +29,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/pairing"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
-	"github.com/elicify-ai/omnipus/pkg/validation"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -967,16 +966,13 @@ func writeCloseAuthFailedWithReason(conn *websocket.Conn, reason string) {
 // outcome, so it changes who can authenticate not at all; it changes only how
 // fast and how audibly a handshake that never could authenticate dies.
 //
-// The frame path loops every account in Gateway.Users first (bcrypt; the
-// single-user model normally holds exactly one, but a pre-single-user-model
-// install may still carry leftover extra accounts — config.warnAboutExtraUsers
-// flags that at load time as an advisory; every configured account still
-// authenticates here, same as checkBearerAuth), then the CLI's dedicated
-// Gateway.CLIToken, then falls back to OMNIPUS_BEARER_TOKEN env var for
-// backward compatibility. Sets wc.userID to the resolved identity on success,
-// and wc.isCLIToken when that identity came from the CLIToken branch (the
-// cookie path never sets isCLIToken — a cookie always identifies a real human
-// Gateway.Users account, never the synthetic CLI identity).
+// The frame path resolves the bearer through resolveBearerIdentity (every
+// configured account can still match, same as checkBearerAuth), then falls
+// back to the OMNIPUS_BEARER_TOKEN env var for backward compatibility.
+// Sets wc.userID to the resolved identity on success, and wc.isCLIToken
+// when that identity came from the CLIToken branch (the cookie path never
+// sets isCLIToken — a cookie always identifies a real human Gateway.Users
+// account, never the synthetic CLI identity).
 func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Request) bool {
 	cfg := h.agentLoop.GetConfig()
 
@@ -1022,12 +1018,10 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 
 	rawToken := authFrame.Token
 
-	// 1 & 2. Configured identities — human Gateway.Users accounts, then the
-	// CLI's dedicated token. See resolveBearerIdentity's doc (auth.go) for
-	// the full rationale (looping every user, ViaCLIToken/isCLIToken
-	// semantics, etc.) — shared with checkBearerAuth (auth.go) and
-	// withOptionalAuth (rest_auth.go), which previously reimplemented this
-	// same lookup independently.
+	// 1 & 2. Configured identities. Order depends on token shape; see
+	// resolveBearerIdentity's doc (auth.go) for which slot is tried first
+	// and for ViaCLIToken/isCLIToken. Shared with checkBearerAuth (auth.go)
+	// and withOptionalAuth (rest_auth.go).
 	if user, viaCLIToken, matched := resolveBearerIdentity(cfg, rawToken); matched {
 		wc.userID = user.Username // FR-073: needed for session_state user scoping
 		wc.isCLIToken = viaCLIToken
@@ -1290,7 +1284,7 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 		}
 		wh.h.handleChatMessageWithClientID(
 			wh.ctx, wh.chatID, sessionID, f.Content, agentID, f.Media,
-			modelName, workspaceID, setupKickoff, clientMessageID, wh.wc,
+			modelName, workspaceID, setupKickoff, clientMessageID, f.AutoApprove, wh.wc,
 		)
 	case string(generated.WsFrameTypeCancel):
 		var f generated.CancelFrame
@@ -1328,35 +1322,9 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			slog.Warn("ws: attach_session with empty session_id", "chat_id", wh.chatID)
 		}
 	case string(generated.WsFrameTypeSessionClose):
-		var f generated.SessionCloseFrame
-		if err := json.Unmarshal(data, &f); err != nil {
-			slog.Warn("ws: malformed session_close frame", "error", err)
-			return wsHandlerReadLoopContinue
-		}
-		// FR-023: explicit session close request from the client.
-		if f.SessionId == "" {
-			wh.wc.inboundDropped.Add(1)
-			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:    string(generated.WsFrameTypeError),
-				Message: "session_close requires session_id",
-			})
-			return wsHandlerReadLoopContinue
-		}
-		if err := validation.EntityID(f.SessionId); err != nil {
-			wh.wc.inboundDropped.Add(1)
-			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:    string(generated.WsFrameTypeError),
-				Message: "invalid session_id",
-			})
-			return wsHandlerReadLoopContinue
-		}
-		wh.h.agentLoop.CloseSession(f.SessionId, "explicit")
-		sid := f.SessionId
-		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeSessionCloseAck), generated.SessionCloseAckFrame{
-			Type:      string(generated.WsFrameTypeSessionCloseAck),
-			SessionId: f.SessionId,
-			Id:        &sid,
-		})
+		return wh.handleSessionCloseFrame(data)
+	case string(generated.WsFrameTypeSessionModeUpdate):
+		return wh.handleSessionModeUpdateFrame(data)
 	case string(generated.WsFrameTypePing):
 		// Application-layer pong: the SPA's 60s "any frame received" liveness
 		// check needs a server-originated frame during idle. Gorilla WS-protocol
@@ -1444,6 +1412,8 @@ func wsFrameSchemaName(frameType string) string {
 		return "DevicePairingResponseFrame"
 	case string(generated.WsFrameTypeSessionClose):
 		return "SessionCloseFrame"
+	case string(generated.WsFrameTypeSessionModeUpdate):
+		return "SessionModeUpdateFrame"
 	case string(generated.WsFrameTypeWhatsappPairingSubscribe):
 		return "WhatsAppPairingSubscribeFrame"
 	case string(generated.WsFrameTypeAskUserAnswer):

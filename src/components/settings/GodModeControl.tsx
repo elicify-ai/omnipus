@@ -4,9 +4,10 @@
  * God-mode is the single global "bypass-permissions" switch. When ON it:
  *   - flips every agent's tool permissions from "ask" → "allow" (no prompts),
  *   - disables the kernel sandbox (full host filesystem + syscalls),
- *   - opens outbound network egress,
- *   - turns off the shell guard / deny-patterns.
- * Audit logging, the prompt-guard, and rate limiting STAY ON.
+ *   - opens outbound network egress (no network pre-flight, ADR-092 D8).
+ * Audit logging, the prompt-guard, and rate limiting STAY ON — and operator
+ * `command_rules` deny entries (ADR-092 D3) still refuse a matching command,
+ * since they are enforced inside the shell tool, downstream of this floor.
  *
  * Because it removes capability restraints globally, flipping it ALWAYS asks for
  * a confirmation first (ADR-0008 ruling 6) — a dialog that names the change and
@@ -41,21 +42,52 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Warning, ShieldCheck, SpinnerGap } from '@phosphor-icons/react'
 import { fetchGodMode, setGodMode, getErrorMessage } from '@/lib/api'
+import { isApiError } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
 import { Button } from '@/components/ui/button'
+import { useDevModeBypassKnown } from '@/hooks/useDevModeBypassKnown'
 import { useStepUp } from './useStepUp'
 import { isReAuthCancelled } from './useReAuthGate'
 import { GatewayRestartModal } from './GatewayRestartModal'
+
+// GET /api/v1/gateway/god-mode is gated by adminWrap (withAuth →
+// RequireNotBypass) — pkg/gateway/rest_god_mode.go:49. Under
+// gateway.dev_mode_bypass=true, RequireNotBypass returns 503 BEFORE the
+// handler runs (pkg/gateway/middleware/bypass_gate.go), every single time —
+// not an outage, an expected "this surface is disabled while bypass is
+// active" response. Treating that 503 the same as a transport failure
+// produced a permanent, false "gateway may be offline" banner on every
+// screen for any dev-mode-bypass install. A genuine failure (network down,
+// 500, anything else) must still surface normally.
+function isBypassUnavailable(err: unknown): boolean {
+  return isApiError(err) && err.status === 503
+}
 
 export function GodModeControl() {
   const { addToast } = useUiStore()
   const stepUp = useStepUp()
   const queryClient = useQueryClient()
 
-  const { data: godMode, isLoading, isError } = useQuery({
+  // See GodModeActiveBanner's matching comment below: GET /api/v1/gateway/
+  // god-mode always 503s under dev_mode_bypass, so skip the doomed request
+  // once dev_mode_bypass (shared ['app-state'] cache entry, same key
+  // AppShell already fetches — see useDevModeBypassKnown) says it's on,
+  // rather than firing it and explaining the error away afterward.
+  const { known: devModeBypassKnown, resolved: appStateResolved } = useDevModeBypassKnown()
+
+  const { data: godMode, isLoading: godModeIsLoading, isError, error } = useQuery({
     queryKey: ['god-mode'],
     queryFn: fetchGodMode,
+    enabled: appStateResolved && !devModeBypassKnown,
   })
+  const bypassUnavailable = devModeBypassKnown || isBypassUnavailable(error)
+  // Still resolving whether god-mode is even reachable: either appState
+  // itself hasn't answered yet, or it has (bypass confirmed off) and the
+  // now-enabled god-mode query is in flight. Once bypass is confirmed on,
+  // this reads false immediately — nothing is "loading", it's just
+  // unavailable, exactly like a completed fetch that hit the real 503 did
+  // before this fix.
+  const isLoading = !appStateResolved || (!devModeBypassKnown && godModeIsLoading)
 
   // Opened when setGodMode reports restart_required=true (enabling from a
   // boot that was not yet authorized). Never opens for a disable.
@@ -87,7 +119,11 @@ export function GodModeControl() {
   // support. `isError` must never collapse into this — a fetch failure
   // (gateway offline) is not the same fact as "god-mode compiled out", and
   // must not read (or behave, e.g. disabling the toggle) as if it were.
-  const knownUnsupported = !isLoading && !isError && !supported
+  // `bypassUnavailable` must not collapse into this either, now that it can
+  // be known WITHOUT the query ever running (isError stays false in that
+  // case) — otherwise this would show "compiled out" side by side with the
+  // "unavailable while bypass is active" note below on every bypass install.
+  const knownUnsupported = !isLoading && !isError && !bypassUnavailable && !supported
 
   const { mutateAsync: applyChangeAsync, isPending: isSaving } = useMutation({
     // The consent token exists only in local (password) mode; confirm mode
@@ -138,9 +174,9 @@ export function GodModeControl() {
         confirmLabel: next ? 'Enable god mode' : 'Disable god mode',
       })
       .catch((err: unknown) => {
-        // A cancelled gate sent nothing; a real failure already toasted in
-        // the mutation's onError. Nothing else to undo.
-        if (!isReAuthCancelled(err)) return
+        // A cancelled gate sent nothing — stay silent. A real failure already
+        // toasted once via applyChangeAsync's own onError; do not toast twice.
+        if (isReAuthCancelled(err)) return
       })
   }
 
@@ -191,8 +227,8 @@ export function GodModeControl() {
           // (authorized, pending restart). Keying the card on it produced a red
           // ON switch sitting inside a calm, muted card — a milder replay of the
           // exact switch-vs-banner contradiction the D1 fix existed to remove.
-          // S1 is one restart away from disabling the kernel sandbox, egress
-          // restrictions and the shell guard for every agent, so it must read as
+          // S1 is one restart away from disabling the kernel sandbox and
+          // egress restrictions for every agent, so it must read as
           // dangerous, not as reassuring.
           persisted
             ? 'border-[var(--color-error)]/60 bg-[var(--color-error)]/10'
@@ -214,8 +250,9 @@ export function GodModeControl() {
             <div id="god-mode-consequence-copy">
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
                 Removes <strong className="text-[var(--color-secondary)]">all permission prompts</strong> and
-                disables the kernel sandbox, outbound-network restrictions, and the shell guard for every agent.
-                Audit logging, the prompt-guard, and rate limiting stay on.
+                disables the kernel sandbox and outbound-network restrictions for every agent. Configured
+                deny rules still refuse a matching command. Audit logging, the prompt-guard, and rate
+                limiting stay on.
               </p>
               <p className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                 <ShieldCheck size={12} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
@@ -227,7 +264,15 @@ export function GodModeControl() {
                 rather than depending on the element itself being inserted. At
                 most one of the three conditions below is ever true at once. */}
             <div id="god-mode-status-note" aria-live="polite">
-              {isError && (
+              {bypassUnavailable && (
+                <p
+                  data-testid="god-mode-bypass-unavailable-note"
+                  className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic"
+                >
+                  Not available while development-mode bypass is active.
+                </p>
+              )}
+              {isError && !bypassUnavailable && (
                 <p
                   data-testid="god-mode-fetch-error-note"
                   className="text-[length:var(--type-caption-size)] text-[var(--color-error)]"
@@ -336,17 +381,81 @@ export function GodModeControl() {
 }
 
 /**
- * GodModeActiveBanner — persistent indicator shown at the top of the Gateway
- * section (and anywhere god-mode visibility matters) while god-mode is active.
- * Reads the live state from AppState; renders nothing when god-mode is off.
+ * GodModeActiveBanner — persistent, app-wide indicator (ADR-092 FR-034:
+ * rendered from AppShell, not just the Gateway section) shown while god-mode
+ * is active. Reads the live state from AppState; renders nothing when
+ * god-mode is off. Carries its own working "Turn off" action — a move to
+ * AppShell means the banner can be on screen with no GodModeControl toggle
+ * anywhere nearby, so "turn it off below" is no longer a real instruction.
  */
 export function GodModeActiveBanner() {
-  const { data: godMode, isError } = useQuery({
+  const { addToast } = useUiStore()
+  const stepUp = useStepUp()
+  const queryClient = useQueryClient()
+
+  // Shares AppShell's own ['app-state'] cache entry (same queryKey,
+  // staleTime 60s, via useDevModeBypassKnown) — this is not a second network
+  // round trip on a page that already renders AppShell. `dev_mode_bypass` is
+  // what the god-mode query is doomed against (see isBypassUnavailable's doc
+  // comment above): reading it here lets the doomed request be skipped
+  // entirely, rather than fired and then explained away. Before this fix,
+  // GodModeActiveBanner mounts on EVERY page (ADR-092 FR-034 moved it
+  // app-wide) and fired ['god-mode'] unconditionally, so a dev_mode_bypass
+  // install produced a real 503 — retried 3 times by the query client's
+  // default retry — on every single page load, 4 browser console errors per
+  // load. E2E CI runs with dev_mode_bypass:true (see .github/workflows/pr.yml
+  // "Seed gateway config"), so this fired on every spec that loaded a page at
+  // all; only specs opting into the `consoleErrors` fixture
+  // (tests/e2e/subagent.spec.ts (d)) asserted on it and went red.
+  const { known: devModeBypassKnown, resolved: appStateResolved } = useDevModeBypassKnown()
+
+  const { data: godMode, isError, error } = useQuery({
     queryKey: ['god-mode'],
     queryFn: fetchGodMode,
+    // Only fire once app-state has resolved AND confirmed bypass is off.
+    // While appState is still loading, the query stays disabled (not an
+    // error) — `enabled` below reads false and the banner renders nothing,
+    // which is correct: there is nothing yet to report either way. The
+    // moment appState resolves with dev_mode_bypass:false, this flips
+    // enabled:true and the query fires exactly as before.
+    enabled: appStateResolved && !devModeBypassKnown,
   })
+  // Known from appState (the common case — no doomed request was even
+  // made) OR a genuine 503 the query itself hit (defense in depth, e.g. a
+  // late toggle of dev_mode_bypass mid-session before appState refetches).
+  const bypassUnavailable = devModeBypassKnown || isBypassUnavailable(error)
 
   const enabled = godMode?.enabled === true
+
+  const { mutateAsync: disableAsync, isPending: isDisabling } = useMutation({
+    mutationFn: (vars: { token?: string }) =>
+      vars.token === undefined ? setGodMode(false) : setGodMode(false, vars.token),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['god-mode'] })
+      queryClient.invalidateQueries({ queryKey: ['config'] })
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+      queryClient.invalidateQueries({ queryKey: ['pending-restart'] })
+      addToast({ message: 'God-mode disabled', variant: 'success' })
+    },
+    onError: (err: unknown) => {
+      addToast({ message: getErrorMessage(err, 'Could not change god-mode'), variant: 'error' })
+    },
+  })
+
+  function requestDisable() {
+    if (isDisabling) return
+    void stepUp
+      .gate((token) => disableAsync({ token }), {
+        title: 'Disable god mode?',
+        body: 'Agents go back to asking permission, and the sandbox around their code is switched back on.',
+        confirmLabel: 'Disable god mode',
+      })
+      .catch((err: unknown) => {
+        // A cancelled gate sent nothing — stay silent. A real failure already
+        // toasted once via disableAsync's own onError; do not toast twice.
+        if (isReAuthCancelled(err)) return
+      })
+  }
 
   // Genuinely off (query succeeded and reported enabled=false) — nothing to
   // warn about. NB: this must NOT be reached on a fetch failure — `enabled`
@@ -355,6 +464,14 @@ export function GodModeActiveBanner() {
   // never silently look like "sandboxing is definitely on" — that is exactly
   // the moment an operator most needs a signal, not silence.
   if (!enabled && !isError) return null
+
+  // Under dev_mode_bypass the god-mode status endpoint always 503s
+  // (RequireNotBypass fires before the handler runs) — an expected
+  // "unavailable in this mode" response, not a real outage. Rendering the
+  // "gateway may be offline" warning here would put a false alarm on every
+  // screen for the lifetime of any dev-mode-bypass install. Say nothing;
+  // the dedicated dev-mode-bypass banner (AppShell) already covers this case.
+  if (bypassUnavailable) return null
 
   if (isError) {
     return (
@@ -383,14 +500,26 @@ export function GodModeActiveBanner() {
       className="flex items-start gap-[var(--space-2-5)] rounded-lg border border-[var(--color-error)]/60 bg-[var(--color-error)]/10 px-[var(--space-3)] py-[var(--space-2-5)]"
     >
       <Warning size={18} weight="fill" className="shrink-0 mt-[var(--space-0-5)] text-[var(--color-error)]" />
-      <div className="space-y-[var(--space-1)]">
+      <div className="min-w-0 flex-1 space-y-[var(--space-1)]">
         <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-error)]">God-mode is active</p>
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]/80">
-          All permission prompts are bypassed and the kernel sandbox, network restrictions, and shell guard are
-          disabled for every agent. Audit logging, the prompt-guard, and rate limiting remain on. Turn god-mode
-          off below to restore the previous protections.
+          All permission prompts are bypassed and the kernel sandbox and network restrictions are disabled
+          for every agent. Configured deny rules still refuse a matching command. Audit logging, the
+          prompt-guard, and rate limiting remain on.
         </p>
       </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        data-testid="god-mode-banner-turn-off"
+        disabled={isDisabling}
+        onClick={requestDisable}
+        className="shrink-0 border-[var(--color-error)]/60 text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
+      >
+        {isDisabling ? 'Turning off…' : 'Turn off'}
+      </Button>
+      {stepUp.dialogs}
     </div>
   )
 }

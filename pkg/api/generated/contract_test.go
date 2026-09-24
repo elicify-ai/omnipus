@@ -2990,16 +2990,19 @@ func TestContract_ChannelEntry_RejectsExtraneousField(t *testing.T) {
 		"ChannelEntry with extraneous field must fail — additionalProperties: false")
 }
 
-func TestContract_ExecAllowlist_RejectsExtraneousField(t *testing.T) {
-	// Traces to: ExecAllowlist.yaml — additionalProperties: false
+func TestContract_ToolApprovalActionRequest_RejectsExtraneousField(t *testing.T) {
+	// Traces to: ToolApprovalActionRequest.yaml — additionalProperties: false.
+	// Replaces the retired ExecAllowlist coverage (ADR-092 D2/D5 — the exec
+	// allowlist and its wire schema are deleted outright, no shim).
 	doc := map[string]any{
-		"allowed_binaries": []string{"ls", "grep"},
-		"bypass_flag":      true, // extraneous
+		"action":      "allow",
+		"scope":       "exact",
+		"bypass_flag": true, // extraneous
 	}
 	raw, err := json.Marshal(doc)
 	require.NoError(t, err)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "ExecAllowlist", raw),
-		"ExecAllowlist with extraneous field must fail — additionalProperties: false")
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "ToolApprovalActionRequest", raw),
+		"ToolApprovalActionRequest with extraneous field must fail — additionalProperties: false")
 }
 
 func TestContract_AuditLogToggle_RejectsExtraneousField(t *testing.T) {

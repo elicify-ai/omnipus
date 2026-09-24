@@ -449,12 +449,10 @@ var tier3BaselineAllowList = []string{
 //     the binary token must be a bare name with no path separator.
 //  4. Case-sensitive match.
 //
-// Reusing PolicyAuditor.EvaluateExec was considered but rejected: that
-// function performs glob-match on the full command against an exec
-// allow-list, whereas here we need an exact token-prefix match against a
-// "binary subcommand" allow-list. Wiring a PolicyAuditor into WebServeTool
-// would also couple tools → policy → (agent, config) and create import-cycle
-// risk. A focused local validator is the architecturally cleaner choice.
+// A focused local validator is used rather than a shared policy-package
+// helper: this needs an exact token-prefix match against a "binary
+// subcommand" allow-list, not a glob match against a full command, and
+// keeping it local avoids coupling tools → policy → (agent, config).
 // shellMetaChars lists characters that have special meaning in POSIX shells.
 // Checked against the raw command string BEFORE tokenisation so that
 // injection payloads embedded in newlines (e.g. "next dev\nbash") are caught

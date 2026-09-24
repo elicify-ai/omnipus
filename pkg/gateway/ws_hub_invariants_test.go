@@ -67,33 +67,45 @@ func TestHub_H7_PersistBeforeDone(t *testing.T) {
 	assert.True(t, obs.persistedThen, "the answer must already be persisted when its done is published")
 }
 
-// TestHub_H14_DelegationRouting pins BE-DESIGN.md §7 (H14): a delegated
-// child's tool frame is numbered in the ROUTING (parent) session's hub with
-// its producing_session_id kept, no hub is created for the child, and a
-// child's own streamed text (a shadow stream) is never published at all.
+// TestHub_H14_DelegationRouting pins BE-DESIGN.md §7 (H14), re-expressed on
+// ADR-091 D1/D7 (merge of release/v0.1.1): a steered child is a session of
+// its own, and every frame it produces carries ITS OWN session id
+// (producing_session_id is retired). So a child's tool frame is numbered in
+// the CHILD's hub — never the parent's — and the child's own streamed text
+// is published there too (the parentSpawnCallID shadow gate is deleted), so
+// a tab that opens the child sees it live and catches it up like any other
+// session. The parent's hub receives none of it; the parent only gets its
+// own subagent_* lifecycle frames (TestHub_H12_SpanFramesOncePerSession_TwoTabs).
 func TestHub_H14_DelegationRouting(t *testing.T) {
 	h := makeMinimalHandler()
 	h.hubSyncTap(agent.Event{
 		Kind: agent.EventKindToolExecStart,
 		Payload: agent.ToolExecStartPayload{
-			ToolCallID:         session.ToolCallID("child-call"),
-			SessionID:          "parent-session",
-			ProducingSessionID: "child-session",
-			Tool:               "read_file",
+			ToolCallID: session.ToolCallID("child-call"),
+			SessionID:  "child-session",
+			Tool:       "read_file",
 		},
 	})
-	parent := h.hubs.lookup("parent-session")
-	require.NotNil(t, parent)
-	starts := journalFramesOfType(t, parent, "tool_call_start")
+	assert.Nil(t, h.hubs.lookup("parent-session"), "the parent's hub never receives a child's own frames")
+	childHub := h.hubs.lookup("child-session")
+	require.NotNil(t, childHub, "a steered child's frames are numbered in its own session hub")
+	starts := journalFramesOfType(t, childHub, "tool_call_start")
 	require.Len(t, starts, 1)
-	assert.Equal(t, "child-session", starts[0]["producing_session_id"])
-	assert.Nil(t, h.hubs.lookup("child-session"), "the child session never gets frames of its own")
+	assert.Equal(t, "child-session", starts[0]["session_id"])
+	_, hasProducing := starts[0]["producing_session_id"]
+	assert.False(t, hasProducing, "ADR-091 D7 retired producing_session_id")
+	seq, ok := starts[0]["seq"].(float64)
+	require.True(t, ok, "the child's frame carries its own hub's seq")
+	assert.GreaterOrEqual(t, seq, float64(1))
 
-	child := &wsStreamer{sessionID: "parent-session", chatID: "chat-p", h: h}
+	child := &wsStreamer{sessionID: "child-session", chatID: "chat-c", h: h}
 	child.SetTurnID("child-turn")
 	child.SetParentSpawnCallID("spawn-call")
-	require.NoError(t, child.Update(context.Background(), "hidden child narration"))
-	assert.Empty(t, journalFramesOfType(t, parent, "token"), "a delegated child's own tokens are never published")
+	require.NoError(t, child.Update(context.Background(), "child narration"))
+	tokens := journalFramesOfType(t, childHub, "token")
+	require.Len(t, tokens, 1, "the child's own tokens are published once, in its own hub")
+	assert.Equal(t, "child narration", tokens[0]["content"])
+	assert.Nil(t, h.hubs.lookup("parent-session"), "and still nothing in the parent's hub")
 }
 
 // TestHub_H15_ProjectionOverBudget_KeepsTheCurrentAnswerWhole pins §3.1's

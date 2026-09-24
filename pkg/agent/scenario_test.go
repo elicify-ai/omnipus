@@ -114,10 +114,11 @@ func TestScenario2AvaCreatesAgentPenny(t *testing.T) {
 // ==================================================================================
 // Scenario 3 (ToolPolicyDenyBlocks) and Scenario 4 (ToolPolicyAskRequiresApproval):
 // REMOVED (#70). These exercised policy.Evaluator.EvaluateTool/SecurityConfig.ToolPolicies,
-// which was never the live tool-policy authority (see pkg/policy/evaluator.go's prior
-// SCOPE (#438) note) — the real global-deny/global-ask enforcement path is
-// pkg/tools.FilterToolsByPolicy (compositor.go), already covered by
-// pkg/tools/compositor_test.go and compositor_wildcard_test.go.
+// which was never the live tool-policy authority — that whole evaluator (and
+// its exec-allowlist sibling, EvaluateExec) was deleted under ADR-092. The
+// real global-deny/global-ask enforcement path is pkg/tools.FilterToolsByPolicy
+// (compositor.go), already covered by pkg/tools/compositor_test.go and
+// compositor_wildcard_test.go.
 // Traces to: temporal-puzzling-melody.md §Layer 2, scenarios 3-4
 // ==================================================================================
 

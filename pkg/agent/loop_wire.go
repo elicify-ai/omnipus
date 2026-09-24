@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/shellrule"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -30,45 +31,35 @@ import (
 
 // wireExecToolDeps replaces each agent's bash tool with one constructed via
 // NewExecToolWithDeps, injecting the policy auditor (SEC-05), the ADR-035
-// god-mode/egress-proxy hardening deps, and the deny-pattern configuration
-// (ADR-036 — this is now the ONE registration path for `bash`, folding in what
-// used to be the separate workspace_shell/workspace_shell_bg wiring in
-// WireTier13Deps). This runs after NewAgentInstance has created the default
+// god-mode/egress-proxy hardening deps, and the ADR-092 permission deps
+// (mode resolver, approval fallback, grant store, operator command rules).
+// This is the ONE registration path for `bash` (ADR-036). This runs after NewAgentInstance has created the default
 // bash tool so that all other tool setup (allow paths) is preserved — we only
 // add the security deps on top.
 //
 // No-op when the agent has bash disabled or when the registry lookup fails.
 func (al *AgentLoop) wireExecToolDeps() {
-	al.wireExecToolDepsOn(al.registry)
+	al.wireExecToolDepsOn(al.registry, al.GetConfig())
 }
 
 // wireExecToolDepsOn is the registry-parameterized form of wireExecToolDeps,
 // used by hot-reload to wire the new registry before the atomic swap.
-func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
-	if registry == nil {
-		return
-	}
-	// Read al.cfg under al.mu.RLock (GetConfig), NOT bare. This helper runs
-	// inside UpsertAgentFast's and ReloadProviderAndConfig's wiring pass with
-	// NO al.mu held, so a bare `al.cfg` read races every pointer-swap publisher
-	// (SwapConfig, ReloadProviderAndConfig, and MutateConfig's copy-then-swap)
-	// writing the al.cfg slot under al.mu.Lock. The locked read establishes the
-	// happens-before edge the bare read lacked.
-	cfg := al.GetConfig()
-	if cfg == nil {
+//
+// cfg is the config the registry was built from, passed in rather than read
+// via al.GetConfig(): on a reload the new config is published only AFTER
+// this wiring pass (ReloadProviderAndConfig swaps al.cfg last), so reading
+// the live pointer here would build the new bash tools from the previous
+// config's god mode, audit fail-closed setting and command rules.
+func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry, cfg *config.Config) {
+	if registry == nil || cfg == nil {
 		return
 	}
 	allowReadPaths := buildAllowReadPatterns(cfg)
 
 	// O14 god-mode: the single source of truth for the sandbox escape hatch
-	// (ADR-035). When active: full host fs + syscalls, network egress open,
-	// shell guard / deny-patterns off, regardless of per-agent shell policy.
+	// (ADR-035). When active: full host fs + syscalls, network egress open.
+	// ADR-092 D3 deny rules still apply (enforced inside the bash tool).
 	godMode := GodModeActive(cfg)
-
-	globalShellDenyPatterns := cfg.Sandbox.ShellDenyPatterns
-	if godMode {
-		globalShellDenyPatterns = nil
-	}
 
 	for _, agentID := range registry.ListAgentIDs() {
 		agent, ok := registry.GetAgent(agentID)
@@ -76,23 +67,9 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 			continue
 		}
 
-		var agentShellPolicy *config.AgentShellPolicy
-		for i := range cfg.Agents.List {
-			entry := &cfg.Agents.List[i]
-			if entry.ID == agentID {
-				agentShellPolicy = entry.ShellPolicy
-				break
-			}
-		}
-		if godMode {
-			agentShellPolicy = nil // drop per-agent deny patterns under god mode
-		}
-
 		deps := tools.ExecToolDeps{
-			GodMode:                 godMode,
-			AuditFailClosed:         resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),
-			GlobalShellDenyPatterns: globalShellDenyPatterns,
-			AgentShellPolicy:        agentShellPolicy,
+			GodMode:         godMode,
+			AuditFailClosed: resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),
 		}
 		// Plumb the kernel-sandbox egress proxy into the bash tool so the
 		// hardened path (non-god-mode) injects HTTP_PROXY pointing at the
@@ -101,12 +78,18 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 		if al.sandboxEgressProxy != nil {
 			deps.Proxy = al.sandboxEgressProxy
 		}
-		// Nil-guarded to avoid the typed-nil-in-interface trap: storing a nil
-		// *policy.PolicyAuditor in an interface field would create a non-nil
-		// interface holding a nil pointer, defeating downstream `!= nil` checks.
-		if al.policyAuditor != nil {
-			deps.PolicyAuditor = al.policyAuditor
+		// ADR-092: mode resolution, the interactive escalation fallback,
+		// the session grant store (the SAME instance AgentLoop.
+		// ApprovalGrants() returns, so a grant recorded by the tool is the
+		// one the gateway and delegate inheritance see), and the operator
+		// command rules. Nil-guarded: a nil gate leaves the tool failing
+		// closed to Ask.
+		if al.shellGate != nil {
+			deps.ShellMode = al.shellGate
+			deps.ApprovalRequester = al.shellGate
 		}
+		deps.ApprovalGrants = al.approvalGrants
+		deps.CommandRules = append([]shellrule.Rule(nil), cfg.Sandbox.CommandRules...)
 
 		restrict := cfg.Agents.Defaults.RestrictToWorkspace
 		execTool, err := tools.NewExecToolWithDeps(agent.Home, restrict, cfg, deps, allowReadPaths)
@@ -125,7 +108,7 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 	// ADR-090: the environment_setup tool rides the same registry pass —
 	// god mode, egress proxy and the production storage adapter land with
 	// each exec-deps refresh, and hot-reload re-applies them identically.
-	al.wireEnvironmentSetupDepsOn(registry)
+	al.wireEnvironmentSetupDepsOn(registry, cfg)
 }
 
 // WireTier13Deps registers the web_serve, workspace.shell, and
@@ -155,7 +138,7 @@ func (al *AgentLoop) WireTier13Deps(deps Tier13Deps) {
 		al.sandboxEgressProxy = deps.EgressProxy
 	}
 
-	al.wireTier13DepsLocked(al.registry, deps)
+	al.wireTier13DepsLocked(al.registry, deps, al.GetConfig())
 
 	// Re-wire exec deps now that we have the egress proxy. Without this,
 	// the exec tool's hardened path runs without HTTP_PROXY env vars.
@@ -164,16 +147,20 @@ func (al *AgentLoop) WireTier13Deps(deps Tier13Deps) {
 
 // wireTier13DepsLocked is the actual wiring logic, factored out so hot-reload
 // can re-apply it against a freshly-built registry without re-stashing.
-func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13Deps) {
-	if registry == nil {
-		return
-	}
-	// Read al.cfg under al.mu.RLock (GetConfig), NOT bare — see the matching
-	// comment in wireExecToolDepsOn: this helper likewise runs in the unlocked
-	// wiring pass of UpsertAgentFast/ReloadProviderAndConfig, and a bare al.cfg
-	// read races every pointer-swap publisher of al.cfg.
-	cfg := al.GetConfig()
-	if cfg == nil {
+//
+// cfg is the config the registry was (or is being) built from, passed in
+// rather than read via al.GetConfig(): ReloadProviderAndConfig publishes the
+// new config only AFTER this wiring pass (the atomic al.cfg swap happens
+// later), so reading the live pointer here would build every web_serve tool
+// from the PREVIOUS config's ServeWorkspace duration bounds, dev-server port
+// range/concurrency cap, Tier3Commands and EgressAllowList — the same bug
+// class wireExecToolDepsOn had (fixed in 42657cc64). This does NOT apply to
+// the al.GetConfig method value passed into tools.NewWebServeTool below,
+// which the tool calls again on every serve_web request to read the LIVE
+// config at call time (preview-on-main-listener v5) — that live read is the
+// intended behavior, not the bug.
+func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13Deps, cfg *config.Config) {
+	if registry == nil || cfg == nil {
 		return
 	}
 
@@ -728,21 +715,6 @@ func (rw *registerSharedToolsWire3) registerHandoffAndSkills(agentID string, age
 func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agent *AgentInstance, sharedStore *session.UnifiedStore) {
 	{
 		delegateTool := tools.NewDelegateTool(agent.Model, agent.MaxTokens, agent.Temperature)
-		// ADR-057 W17 (FR-069/FR-070/FR-095): wrap the real spawner with
-		// the root-delegation admission gate (admission.go) so a
-		// ROOT-level `delegate` fan-out from this agent is actually
-		// capped by al.rootDelegationAdmission — the SAME shared,
-		// process-wide instance every other agent's DelegateTool is
-		// wrapped with, so the cap applies once across the whole running
-		// gateway, not per agent. See rootDelegationAdmittingSpawner's
-		// doc comment (admission.go) for why wrapping SpawnSubTurn here
-		// is the correct choke point for both sync and async delegation.
-		delegateTool.SetSpawner(newRootDelegationAdmittingSpawner(NewSubTurnSpawner(rw.rs.al), rw.rs.al.rootDelegationAdmission, agentID))
-		// Retain it so Close() can drain its background delegations before
-		// the stores they write through are torn down. See delegateTools.
-		rw.rs.al.delegateToolsMu.Lock()
-		rw.rs.al.delegateTools = append(rw.rs.al.delegateTools, delegateTool)
-		rw.rs.al.delegateToolsMu.Unlock()
 		// FR-196 kill switch — wire it HERE, at construction, not only in
 		// SetSessionMessagingStores' later re-wire. This is a PER-AGENT
 		// DelegateTool: the session_messaging_wire.go re-wire walks the
@@ -831,35 +803,11 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 			// real sub-turn and MUST be graph-gated (and thus denied), never exempted.
 			buildDelegationDenyCheckerForDelegate(
 				currentAgentID,
-				rw.cfg.Agents.Defaults,
+				rw.cfg.Performance,
 				config.DelegationModeBackground,
 				agentExistsChecker(rw.rs.registry),
 			),
 		)
-		// FR-6.2: full-policy gate for the await (async=false) mode. Uses
-		// the same buildDelegationDenyChecker as the background gate
-		// above but with DelegationModeAwait, so a targeted
-		// delegate(agent_id="X", async=false) is checked against the
-		// caller→X edge for the "await" mode, and an untargeted call
-		// falls back to evalUntargetedDelegation.
-		delegateTool.SetDelegationDenyCheckerAwait(
-			// ForDelegate bakes in exempt=false: same reasoning as the background
-			// gate — a self-targeted await delegate() is real delegation, graph-gated.
-			buildDelegationDenyCheckerForDelegate(
-				currentAgentID, rw.cfg.Agents.Defaults, config.DelegationModeAwait, agentExistsChecker(rw.rs.registry),
-			),
-		)
-		// #477 / FR-D9-FR-D10: thread the SAME effective depth cap the
-		// gates above just authorized against into spawnSubTurn's own
-		// depth check — the resolver is mode-agnostic (sourced only from
-		// the matched edge's own Depth, shared by both the background and
-		// await gates) — so the spawn-time backstop does not
-		// independently re-derive (and silently override) an explicit
-		// per-edge Depth.
-		delegateTool.SetDelegationDepthResolver(buildDelegationDepthResolver(
-			currentAgentID, rw.cfg.Agents.Defaults,
-		))
-
 		// ADR-057: derive the ownership-walk bound from the SAME operator
 		// setting that bounds delegation depth. Left unwired, the walk used
 		// a hardcoded 3 while delegation depth stayed configurable — so
@@ -867,7 +815,11 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 		// child fail with an ownership error indistinguishable from a real
 		// cross-tenant attempt. Zero/unset is ignored by the setter, which
 		// keeps its own default.
-		delegateTool.SetOwnershipWalkMaxDepth(rw.cfg.Agents.Defaults.SubTurn.MaxDepth)
+		configuredDepthCap, depthErr := rw.cfg.Performance.EffectiveMaxDelegationDepth()
+		if depthErr != nil {
+			configuredDepthCap = 0
+		}
+		delegateTool.SetOwnershipWalkMaxDepth(resolveEffectiveDelegationDepth(nil, configuredDepthCap))
 
 		agent.Tools.RegisterReplacing(delegateTool)
 	}
@@ -920,17 +872,24 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 			// oneself is not delegation (no new instance spawned), not graph-gated.
 			buildDelegationDenyCheckerForTaskReassignment(
 				currentAgentID,
-				rw.cfg.Agents.Defaults,
+				rw.cfg.Performance,
 				config.DelegationModeTask,
 				agentExistsChecker(rw.rs.registry),
 			),
 		)
-		// Task-mode recursion bound: reject a task_create issued from within a
-		// task run whose delegation generation already sits at the ceiling. The
-		// per-agent depth gate cannot bound task mode on its own because every
-		// task run starts a fresh turn at depth 0 (see processTaskDirect depth
-		// seeding); this hard ceiling closes that gap.
-		taskCreate.SetMaxDelegationDepth(maxTaskDepth)
+		// Task-mode recursion bound (ADR-091 D9): reject a task_create issued
+		// from within a task run whose delegation generation already sits at the
+		// ceiling. The per-agent depth gate cannot bound task mode on its own
+		// because every task run starts a fresh turn at depth 0 (see
+		// processTaskDirect depth seeding). Route the ceiling through the SAME
+		// single limit surface as every other reader — resolveEffectiveDelegationDepth
+		// over performance.max_delegation_depth, with the safety-backstop default
+		// when the key is unset — never a separate hardcoded constant.
+		configuredDepthCap, depthErr := rw.cfg.Performance.EffectiveMaxDelegationDepth()
+		if depthErr != nil {
+			configuredDepthCap = 0
+		}
+		taskCreate.SetMaxDelegationDepth(resolveEffectiveDelegationDepth(nil, configuredDepthCap))
 		// Founder decision 2026-09-15: refuse assigning a task to an agent
 		// that cannot finish it (task_assignee_readiness.go).
 		taskCreate.SetAssigneeReadinessChecker(rw.rs.al.TaskAssigneeCannotFinish)
@@ -991,14 +950,14 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 			// existing owner is a no-op reassignment, not delegation — not graph-gated.
 			buildDelegationDenyCheckerForTaskReassignment(
 				currentAgentID,
-				rw.cfg.Agents.Defaults,
+				rw.cfg.Performance,
 				config.DelegationModeTask,
 				agentExistsChecker(rw.rs.registry),
 			),
 		)
 		// Same rationale as taskCreate above: the subagent_3p reassignment
 		// guard is retired now that processTaskDirect dispatches an
-		// external-CLI worker's task run through runExternalCLISubTurn.
+		// external-CLI worker's task run through the shared command-line runner.
 		agent.Tools.RegisterReplacing(taskUpdate)
 
 		setTodos := tools.NewSetTodosTool(rw.rs.al.taskStore)

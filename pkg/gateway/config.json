@@ -8,12 +8,6 @@
       "provider": "",
       "restrict_to_workspace": false,
       "split_on_marker": false,
-      "subturn": {
-        "concurrency_timeout_sec": 0,
-        "default_timeout_minutes": 0,
-        "max_concurrent": 0,
-        "max_depth": 0
-      },
       "tool_feedback": {
         "enabled": false,
         "max_args_length": 0
@@ -191,11 +185,7 @@
       "enabled": false
     },
     "exec": {
-      "custom_allow_patterns": null,
-      "custom_deny_patterns": null,
-      "enable_deny_patterns": false,
-      "enabled": false,
-      "timeout_seconds": 0
+      "enabled": false
     },
     "filter_min_length": 0,
     "filter_sensitive_data": false,

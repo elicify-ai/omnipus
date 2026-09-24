@@ -35,14 +35,14 @@ import (
 // per-connection eventForwarder path.
 func (h *WSHandler) hubSyncTap(evt agent.Event) {
 	switch evt.Kind {
-	case agent.EventKindTurnStart:
-		h.hubTurnStart(evt)
 	case agent.EventKindSubTurnSpawn:
 		h.hubSubTurnSpawn(evt)
 	case agent.EventKindSubTurnEnd:
 		h.hubSubTurnEnd(evt)
-	case agent.EventKindTurnEnd:
-		h.hubTurnEnd(evt)
+	case agent.EventKindSubagentMessage:
+		h.hubSubagentMessage(evt)
+	case agent.EventKindSubagentState:
+		h.hubSubagentState(evt)
 	case agent.EventKindToolExecStart:
 		h.hubToolExecStart(evt)
 	case agent.EventKindToolExecEnd:
@@ -203,9 +203,8 @@ func (h *WSHandler) hubToolExecStart(evt agent.Event) {
 		pc := string(p.ParentSpawnCallID)
 		startF.ParentCallId = &pc
 	}
-	if producingSID := string(p.ProducingSessionID); producingSID != "" && producingSID != startSID {
-		startF.ProducingSessionId = &producingSID
-	}
+	// ADR-091 D7: the payload's session ID is the tool-producing session's
+	// own identity (producing_session_id is retired).
 	data, err := json.Marshal(startF)
 	if err != nil {
 		logsafeError("ws: marshal tool_call_start for hub failed", "session_id", startSID, "error", err)
@@ -274,11 +273,8 @@ func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
 		liveErr := truncateRunesForFrame(p.Result, maxLiveErrorChars)
 		resultF.Error = &liveErr
 	}
-	var producingSIDForResult string
-	if producingSID := string(p.ProducingSessionID); producingSID != "" && producingSID != evtSID {
-		resultF.ProducingSessionId = &producingSID
-		producingSIDForResult = producingSID
-	}
+	// ADR-091 D7: the payload's session ID is the tool-producing session's
+	// own identity (producing_session_id is retired).
 	data, err := json.Marshal(resultF)
 	if err != nil {
 		logsafeError("ws: marshal tool_call_result for hub failed", "session_id", evtSID, "error", err)
@@ -288,7 +284,7 @@ func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
 		hubFrameMeta{kind: hubKindToolResult, key: string(p.ToolCallID), turnID: evt.Meta.TurnID}, data, nil)
 
 	if p.Tool == "switch_agent" && status == "success" {
-		h.hubEmitAgentSwitched(evtSID, producingSIDForResult)
+		h.hubEmitAgentSwitched(evtSID)
 	}
 }
 
@@ -296,7 +292,7 @@ func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
 // the old per-connection onToolExecEnd (websocket_forward.go) verbatim —
 // see that function's history for the ADR-071 §5.2.1/§5.2.2 rationale this
 // reproduces unchanged.
-func (h *WSHandler) hubEmitAgentSwitched(evtSID, producingSIDForResult string) {
+func (h *WSHandler) hubEmitAgentSwitched(evtSID string) {
 	defaultAgent := h.agentLoop.GetRegistry().GetDefaultAgent()
 	var defaultName string
 	if defaultAgent != nil {
@@ -325,10 +321,6 @@ func (h *WSHandler) hubEmitAgentSwitched(evtSID, producingSIDForResult string) {
 		}
 	} else if defaultName != "" {
 		switchF.Message = &defaultName
-	}
-	if producingSIDForResult != "" {
-		pid := producingSIDForResult
-		switchF.ProducingSessionId = &pid
 	}
 	data, err := json.Marshal(switchF)
 	if err != nil {
@@ -461,9 +453,8 @@ func (h *WSHandler) hubToolResultProjection(evt agent.Event) {
 		mark := p.Mark
 		projF.Mark = &mark
 	}
-	if producingSID := string(p.ProducingSessionID); producingSID != "" && producingSID != projSID {
-		projF.ProducingSessionId = &producingSID
-	}
+	// ADR-091 D7: the payload's session ID is the projection-producing
+	// session's own identity (producing_session_id is retired).
 	data, err := json.Marshal(projF)
 	if err != nil {
 		logsafeError("ws: marshal tool_result_projection for hub failed", "session_id", projSID, "error", err)

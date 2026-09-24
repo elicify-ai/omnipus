@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 )
@@ -32,18 +33,30 @@ type agentLoopRunTurnToolsExecute struct {
 	toolArgs                  map[string]any
 	ledgerToolName            string
 	toctouPolicy              string
-	toolCallID                string
-	asyncCallback             func(_ context.Context, result *tools.ToolResult)
-	asyncCallbackGate         *asyncToolCallbackGate
-	toolCBSig                 string
-	toolResult                *tools.ToolResult
-	toolDuration              time.Duration
-	contentForLLM             string
-	recallDecision            recallInjectionDecision
-	admitted                  admittedToolResult
-	toolResultMsg             providers.Message
-	tcRecord                  session.ToolCall
-	ret0                      agentLoopRunTurnToolsFlow
+	// shellModePin is the ADR-092 bash mode resolveAskPolicy settled on for
+	// this call; guardAndDispatch pins it on the tool's context so the bash
+	// tool enforces the same decision. Empty for every non-bash call.
+	shellModePin tools.ShellMode
+	// autoPin is the ADR-092 D9 Auto-approve verdict resolveAskPolicy
+	// reached for this call; when it ran the call, guardAndDispatch pins it
+	// on the tool's context (tools.WithAutoApproved). Reset for every call.
+	autoPin tools.AutoVerdict
+	// ruleAskSettled is true when this bash call's one upfront prompt also
+	// settled an operator D3 ask rule (§5.7); guardAndDispatch pins it so
+	// the bash tool does not prompt again. Reset for every call.
+	ruleAskSettled    bool
+	toolCallID        string
+	asyncCallback     func(_ context.Context, result *tools.ToolResult)
+	asyncCallbackGate *asyncToolCallbackGate
+	toolCBSig         string
+	toolResult        *tools.ToolResult
+	toolDuration      time.Duration
+	contentForLLM     string
+	recallDecision    recallInjectionDecision
+	admitted          admittedToolResult
+	toolResultMsg     providers.Message
+	tcRecord          session.ToolCall
+	ret0              agentLoopRunTurnToolsFlow
 }
 
 // asyncToolCallbackGate keeps an executor that completes inline from publishing
@@ -224,10 +237,18 @@ agentLoopRunTurnToolsExecuteLoop1:
 		// appendToolCallTranscript (which persists tcRecord, including
 		// this Error field) is not — it only requires a wired
 		// transcriptStore/transcriptSessionID (turn.go's
-		// appendToolCallTranscript). So on a NoHistory turn (e.g. a
-		// delegated sub-turn's ephemeral history — see subturn.go), this
-		// durable transcript write is the ONLY copy of the failure reason
-		// that survives the turn at all.
+		// appendToolCallTranscript). So on a NoHistory turn (pre-ADR-091,
+		// e.g. a delegated sub-turn's ephemeral history — see the deleted
+		// spawnSubTurn, subturn.go), this durable transcript write is the
+		// ONLY copy of the failure reason that survives the turn at all.
+		// ADR-091 fix lane RX-SUBTURN finding (comment-only; code
+		// unchanged): grep finds NoHistory:true set nowhere in production
+		// code today — every delegated/task child is now a durable
+		// session.SessionTypeDelegate/SessionTypeTask session with its own
+		// real transcript (steer_launcher.go), so "ephemeral history" may no
+		// longer be this architecture's concept for a delegate child; this
+		// paragraph's own NoHistory example is likely stale for that reason,
+		// separate from the symbol-citation fix. Not resolved here.
 
 		switch ex.finishCall(i) {
 		case agentLoopRunTurnToolsExecuteReturn:
@@ -831,205 +852,311 @@ func (ex *agentLoopRunTurnToolsExecute) enforceExecutionPolicy(tc providers.Tool
 	return agentLoopRunTurnToolsExecuteNext
 }
 
-// resolveAskPolicy resolves ask-policy approval before dispatch.
+// resolveAskPolicy resolves ask-policy approval before dispatch. The order
+// (ADR-092 D9 §5.1, ruling J1) is: Auto and the operator's standing
+// authorisations first — bash's Auto shell mode, the Auto-approve verdict
+// for every other tool, D3 rules that fully settle a bash call, the
+// session's "Always Allow" grants — and only then either the unattended
+// auto-deny or a human prompt. A call that would run unprompted in a chat
+// therefore also runs in a scheduled run; anything that needs a human is
+// denied there.
 func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
-	if ex.toctouPolicy == "ask" {
-		// Headless auto-deny (issue #264, FR-009): a scheduled run has no
-		// operator to approve, so any `ask`-policy tool is denied without
-		// ever issuing an approval request — the run must never stall.
-		if ex.rx.rr.rq.ri.rf.rt.ts.opts.AutoDenyAsk {
-			// ADR-058: this literal is a DEDICATED denialTable row
-			// (agent.autoDenyHeadlessReason, tool_denial.go) with
-			// headless-specific wording, not the generic
-			// unknown-reason fallback — an earlier revision of this
-			// comment described the fallback path, which produced a
-			// stuttering message ("the tool call was refused (reason:
-			// auto-denied: ...)") with no headless-specific guidance
-			// and failed AC-01's "every driven reason must be known"
-			// guard. A headless scheduled run has no operator by
-			// construction, for the whole run, so Permanent: true is
-			// the correct classification (ADR D1 row 9).
-			const denialReason = autoDenyHeadlessReason
-			cls, _ := ClassifyDenial(denialReason)
-			denyMsg := denialPayloadJSON(ex.toolName, denialReason, cls)
-			// Build optional extra Details for the deny.attempted entry so
-			// both correlated records carry the schedule identity (O-3 / F-13
-			// / issue #342). scheduledJobContextFrom is a no-op read — safe to
-			// call even when no job info was injected.
-			var denyExtra map[string]any
-			if jobInfo, ok := scheduledJobContextFrom(ex.rx.rr.rq.ri.rf.rt.turnCtx); ok && jobInfo.JobID != "" {
-				denyExtra = map[string]any{
-					"schedule_job_id":   jobInfo.JobID,
-					"schedule_job_name": jobInfo.JobName,
-				}
-			}
-			ex.rx.rr.rq.ri.rf.rt.al.emitPolicyDenyAudit(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, "ask", denialReason, denyExtra)
-			// O-3 / F-13 / issue #342: emit the canonical tool.policy.ask.denied
-			// entry via EmitToolPolicyAskDenied (CRIT-6 compliant, INFO severity,
-			// reason=AskDenyReasonScheduled). See emitScheduledAutoDenyAudit.
-			ex.rx.rr.rq.ri.rf.rt.al.emitScheduledAutoDenyAudit(ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, tc.ID)
-			// Persist the refusal as a real tool_call entry. This path
-			// never blocks (there is no approver on a headless run), so
-			// there is no pending placeholder to settle — but without
-			// this the scheduled run's transcript showed the tool had
-			// simply never been called, with the reason living only in
-			// the audit log. settleAskToolCallTranscript appends when it
-			// finds no placeholder, which is exactly this case.
-			settleAskToolCallTranscript(
-				ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, denialReason)
-			// ADR-066 D4: denied results enter through the choke point on the
-			// builtin-failure surface (FR-009); it persists the line itself.
-			deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
-				Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-			}).Message
-			ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
-			// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-			// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-			// ends the turn typed with no further provider call (FR-032).
-			if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-				res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-				ex.rx.rr.rq.ri.turnStatus = status
-				ex.rx.ret0 = res
-				ex.rx.ret1 = exitErr
-				ex.ret0 = agentLoopRunTurnToolsReturn
-				return agentLoopRunTurnToolsExecuteReturn
-			}
-			ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
-				EventKindToolExecSkipped,
-				ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.skipped"),
-				ToolExecSkippedPayload{
-					Tool:   ex.toolName,
-					Reason: fmt.Sprintf("permission_denied (ask auto-denied: %s)", denialReason),
-				},
-			)
-			if used, exhausted := ex.rx.rr.rq.ri.rf.rt.ts.recordToolDenial(ex.ledgerToolName, denialReason, cls.Permanent, denyMsg); exhausted {
-				ex.rx.rr.rq.ri.turnStatus = TurnEndStatusAborted
-				ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurnForToolDenialBudget(ex.rx.rr.rq.ri.rf.rt.ts, ex.ledgerToolName, denialReason, used)
-				ex.ret0 = agentLoopRunTurnToolsReturn
-				return agentLoopRunTurnToolsExecuteReturn
-			}
-			return agentLoopRunTurnToolsExecuteContinue
-		}
-		// ask-policy: consult the session-scoped "Always Allow" grant
-		// store first (ADR-036 §3.4 — the sole grant-consultation point
-		// now that the legacy WS-frame gate, wsApprovalHook, has been
-		// retired), then fall through to interactive human approval
-		// (FR-011) only when no grant is on file.
-		//
-		// A standing grant resolves without ever contacting a human, so
-		// it must NOT write a pending placeholder — that would render an
-		// "awaiting approval" card for a call nobody was asked about.
-		// Consult the grant store separately here (CheckGrantOrRequestApproval
-		// consults the SAME store first, so a granted call still
-		// short-circuits identically), and write the placeholder only on
-		// the path that genuinely blocks on a human.
-		approved := ex.rx.rr.rq.ri.rf.rt.al.ApprovalGrants().IsAllowed(ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID, ex.rx.rr.rq.ri.rf.rt.ts.agentID, ex.toolName, ex.toolArgs)
-		denialReason := ""
-		if !approved {
-			// About to block on a human, for up to the approval
-			// registry's timeout (600 s by default, configurable —
-			// pkg/gateway/gateway.go's defaultToolApprovalTimeout). The
-			// wait is server-side and needs no browser attached: a task
-			// run's approval waits exactly like a chat turn's (ADR-082;
-			// pinned by pkg/gateway/task_run_ask_approval_test.go).
-			// Record the call as `pending`
-			// FIRST so the thread shows what the turn is waiting on for
-			// the whole wait, and so a reload mid-wait still shows it:
-			// the tool_approval_required WS frame is live-only and does
-			// not survive a refresh. Before this, an unanswered approval
-			// rendered nothing at all and the turn looked hung for no
-			// visible reason.
-			recordAskPendingToolCall(ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs)
-			approved, denialReason = ex.rx.rr.rq.ri.rf.rt.al.CheckGrantOrRequestApproval(
-				ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID, ex.rx.rr.rq.ri.rf.rt.ts.agentID, ex.toolName, tc.ID, ex.rx.rr.rq.ri.rf.rt.ts.turnID, ex.toolArgs,
-			)
-		}
-		if !approved {
-			// Settle the placeholder to `denied` with the outcome
-			// reason, so "denied by the user" and "expired after five
-			// minutes with nobody watching" are distinguishable in the
-			// thread and on replay.
-			settleAskToolCallTranscript(
-				ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, denialReason)
-			// ADR-058 site 3 — the original defect: denialReason here
-			// is verbatim from CheckGrantOrRequestApproval, so it is
-			// classified for real rather than assumed to be a user
-			// "no". ClassifyDenial handles every reason this call is
-			// KNOWN to be able to produce — not just the
-			// approvals.go-authored six (user, timeout, saturated,
-			// cancel, restart, batch_short_circuit), but also
-			// internal_error (policy_approver.go's nil-entry branch),
-			// no_approver_configured (tool_approver.go's nop
-			// fallback), the empty reason, and "session canceled"
-			// (verified end-to-end in this session:
-			// pkg/agent/cancel.go::AgentLoop.RequestCancel ->
-			// hooks.CancelPendingApprovals ->
-			// pkg/gateway/approvals.go::cancelAllPendingForSessions's
-			// ApprovalOutcome{Reason: "session canceled"} -> here,
-			// distinct from the single-word "cancel" reason above).
-			// An earlier revision of this comment claimed the table
-			// "covers every reason this call can produce" and
-			// enumerated only nine of these — that was never a
-			// closed set, and any reason NOT in denialTable still
-			// fails safe (Permanent: true) through ClassifyDenial's
-			// unknown-reason fallback rather than being silently
-			// treated as retryable.
-			cls, _ := ClassifyDenial(denialReason)
-			denyMsg := denialPayloadJSON(ex.toolName, denialReason, cls)
-			ex.rx.rr.rq.ri.rf.rt.al.emitPolicyDenyAudit(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, "ask", denialReason)
-			// ADR-066 D4: denied results enter through the choke point on the
-			// builtin-failure surface (FR-009); it persists the line itself.
-			deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
-				Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-			}).Message
-			ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
-			// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-			// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-			// ends the turn typed with no further provider call (FR-032).
-			if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-				res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-				ex.rx.rr.rq.ri.turnStatus = status
-				ex.rx.ret0 = res
-				ex.rx.ret1 = exitErr
-				ex.ret0 = agentLoopRunTurnToolsReturn
-				return agentLoopRunTurnToolsExecuteReturn
-			}
-			ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
-				EventKindToolExecSkipped,
-				ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.skipped"),
-				ToolExecSkippedPayload{
-					Tool:   ex.toolName,
-					Reason: fmt.Sprintf("permission_denied (ask denied: %s)", denialReason),
-				},
-			)
-			// ADR-058 §3.5 (R5, Binding Rule 4 — the positive lower
-			// bound): cls.Permanent is false ONLY for "saturated" at
-			// THIS site, so recordToolDenial never quarantines it
-			// here — a later call to the same tool in the same turn
-			// is free to reach the approver and execute (AC-06).
-			if used, exhausted := ex.rx.rr.rq.ri.rf.rt.ts.recordToolDenial(ex.ledgerToolName, denialReason, cls.Permanent, denyMsg); exhausted {
-				ex.rx.rr.rq.ri.turnStatus = TurnEndStatusAborted
-				ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurnForToolDenialBudget(ex.rx.rr.rq.ri.rf.rt.ts, ex.ledgerToolName, denialReason, used)
-				ex.ret0 = agentLoopRunTurnToolsReturn
-				return agentLoopRunTurnToolsExecuteReturn
-			}
-			return agentLoopRunTurnToolsExecuteContinue
-		}
-		// Approved: fall through to execute.
+	rt := ex.rx.rr.rq.ri.rf.rt
+	ex.shellModePin = rt.al.bashShellModeFor(rt.ts, ex.toolName)
+	ex.autoPin = tools.AutoVerdict{}
+	ex.ruleAskSettled = false
+	if ex.toctouPolicy != "ask" {
+		return agentLoopRunTurnToolsExecuteNext
 	}
-	return agentLoopRunTurnToolsExecuteNext
+	// ADR-092 Auto-approve: a bash call resolved to Auto skips the upfront
+	// prompt. The bash tool itself then runs the D3 rules and the D7/D8
+	// pre-flights and asks, through the same approver, only for what the
+	// kernel sandbox cannot confine (shellModePin carries this decision onto
+	// the tool's context, guardAndDispatch). Every other tool asks the
+	// Auto-approve classifier (autoApproveFor); a RUNS verdict is pinned on
+	// the call and never reads or records a grant. D3 operator rules that
+	// already settle a bash call (all segments allowed, or any denied) skip
+	// the prompt too.
+	//
+	// A standing grant resolves without ever contacting a human (ADR-036
+	// §3.4), so it must NOT write a pending placeholder — that would render
+	// an "awaiting approval" card for a call nobody was asked about.
+	ex.autoPin = ex.autoApproveFor()
+	rules := bashCommandRuleVerdict(rt.ts, ex.toolName, ex.toolArgs)
+	ruleSettled := rules.settlesPrompt()
+	// §5.7 fix: the standing-grant lookup MUST fingerprint against the same
+	// argument object a "rule_ask" grant was actually recorded under. A bash
+	// call whose one upfront prompt also settles a D3 {action: ask} rule
+	// carries the adr092_kind:"rule_ask" + note augmentation
+	// (ruleAskRequestArgs) into BOTH the approval request and the recorded
+	// "Always Allow" grant (rest_tool_registry.go::approvalGrantRecorder
+	// records entry.Args verbatim) — looking this up against the tool's own
+	// bare ex.toolArgs, as this used to, fingerprints a DIFFERENT JSON object
+	// than the one actually granted, so a repeat of the exact same command
+	// could never find its own grant here and always fell through to
+	// requestAskApproval, which wrote a pending-approval placeholder for a
+	// call a grant already settles (confirmed: the placeholder write in
+	// requestAskApproval ran unconditionally, before its own
+	// CheckGrantOrRequestApproval call ever consulted the grant store).
+	ruleAsk := rules.needsRuleAsk(ex.shellModePin)
+	grantLookupArgs := ex.toolArgs
+	if ruleAsk {
+		grantLookupArgs = ruleAskRequestArgs(ex.toolArgs, rules.verdict)
+	}
+	approved := ex.shellModePin == tools.ShellModeAuto ||
+		ex.autoPin.Run ||
+		ruleSettled ||
+		rt.al.checkStandingGrant(rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, grantLookupArgs)
+	if rules.fullyAllowedSettlesPrompt() {
+		// Review finding #8(c) (LOW): a prompt an operator D3 ALLOW rule
+		// fully settled left no audit trail before this fix —
+		// indistinguishable, by event log, from an ordinary unprompted
+		// "allow"-ceiling execution.
+		//
+		// D-12 fix (MEDIUM, 2026-09-24 security review): gated on
+		// fullyAllowedSettlesPrompt(), NOT the broader ruleSettled
+		// (settlesPrompt(), which is ALSO true for a D3 deny verdict) — see
+		// that method's own doc comment for why the deny case must write
+		// nothing from here.
+		rt.al.emitShellRuleSettledAudit(rt.ts, ex.toolArgs)
+	}
+	if approved {
+		if ruleAsk {
+			// A standing grant settled the same rule_ask this call would
+			// otherwise need to ask about — pin it exactly as the
+			// interactive path does (below) so the bash tool's own D3
+			// enforcement does not ask a second time for this call.
+			ex.ruleAskSettled = true
+		}
+		return agentLoopRunTurnToolsExecuteNext
+	}
+	if rt.ts.opts.AutoDenyAsk {
+		// Headless auto-deny (issue #264, FR-009): a scheduled run has no
+		// operator to approve, so a call that still needs a human is denied
+		// without ever issuing an approval request — the run must never
+		// stall.
+		return ex.autoDenyHeadlessAsk(tc)
+	}
+	return ex.requestAskApproval(tc, rules)
+}
+
+// requestAskApproval blocks on a human for one ask-policy call no standing
+// authorisation settled. When the call is a bash command matching an
+// operator D3 ask rule, this one prompt carries the rule's context and, once
+// approved, settles the rule too (§5.7): the bash tool does not prompt a
+// second time.
+func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall, rules bashRuleVerdict) agentLoopRunTurnToolsExecuteFlow {
+	rt := ex.rx.rr.rq.ri.rf.rt
+	requestArgs := ex.toolArgs
+	decisionKind := "classic_ask"
+	ruleAsk := rules.needsRuleAsk(ex.shellModePin)
+	if ruleAsk {
+		requestArgs = ruleAskRequestArgs(ex.toolArgs, rules.verdict)
+		decisionKind = "rule_ask"
+	}
+	// §5.7 fix: re-check the standing grant, with the SAME args
+	// CheckGrantOrRequestApproval below would, BEFORE writing the pending
+	// placeholder — closing the window between resolveAskPolicy's own grant
+	// check (which may have missed, e.g. a grant recorded by a concurrent
+	// call between that check and this one) and CheckGrantOrRequestApproval's
+	// own internal grant check. Before this fix the placeholder was written
+	// unconditionally, ahead of any grant consultation at all, so a call a
+	// grant already settles could still flash an "awaiting approval" card
+	// for a human nobody was actually about to ask.
+	if rt.al.checkStandingGrant(rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, requestArgs) {
+		if ex.toolName == "bash" {
+			rt.al.emitShellClassicAskDecisionAudit(rt.ts, ex.toolArgs, decisionKind, true, "")
+		}
+		ex.ruleAskSettled = ruleAsk
+		return agentLoopRunTurnToolsExecuteNext
+	}
+	// About to block on a human, for up to the approval registry's timeout
+	// (600 s by default, configurable — pkg/gateway/gateway.go's
+	// defaultToolApprovalTimeout). The wait is server-side and needs no
+	// browser attached: a task run's approval waits exactly like a chat
+	// turn's (ADR-082; pinned by pkg/gateway/task_run_ask_approval_test.go).
+	// Record the call as `pending` FIRST so the thread shows what the turn is
+	// waiting on for the whole wait, and so a reload mid-wait still shows it:
+	// the tool_approval_required WS frame is live-only and does not survive a
+	// refresh. Reached only now that the standing-grant check above has
+	// already ruled out a grant settling this call without ever asking.
+	recordAskPendingToolCall(rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs)
+	// The third return (recordGrant, review finding #5) is consumed only by
+	// pkg/tools' D7/D8 pre-flight escalation call sites, reached through
+	// ShellPermissionGate.RequestShellApproval — this classic ask-policy
+	// branch records "Always Allow" grants via the separate
+	// rest_tool_registry.go::approvalGrantRecorder mechanism, driven directly
+	// by the wire action.
+	approved, denialReason, _ := rt.al.CheckGrantOrRequestApproval(
+		rt.turnCtx, rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, tc.ID, rt.ts.turnID, requestArgs,
+	)
+	if ex.toolName == "bash" {
+		// Review finding #8(b) (LOW): the classic ask-policy human decision
+		// for bash records its own shell.approval_decision event.
+		rt.al.emitShellClassicAskDecisionAudit(rt.ts, ex.toolArgs, decisionKind, approved, denialReason)
+	}
+	if approved {
+		ex.ruleAskSettled = ruleAsk
+		return agentLoopRunTurnToolsExecuteNext
+	}
+	return ex.denyAskedCall(tc, denialReason)
+}
+
+// autoDenyHeadlessAsk refuses an ask-policy call in a headless run that no
+// standing authorisation settled.
+func (ex *agentLoopRunTurnToolsExecute) autoDenyHeadlessAsk(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
+	// ADR-058: this literal is a DEDICATED denialTable row
+	// (agent.autoDenyHeadlessReason, tool_denial.go) with
+	// headless-specific wording, not the generic
+	// unknown-reason fallback — an earlier revision of this
+	// comment described the fallback path, which produced a
+	// stuttering message ("the tool call was refused (reason:
+	// auto-denied: ...)") with no headless-specific guidance
+	// and failed AC-01's "every driven reason must be known"
+	// guard. A headless scheduled run has no operator by
+	// construction, for the whole run, so Permanent: true is
+	// the correct classification (ADR D1 row 9).
+	const denialReason = autoDenyHeadlessReason
+	cls, _ := ClassifyDenial(denialReason)
+	denyMsg := denialPayloadJSON(ex.toolName, denialReason, cls)
+	// Build optional extra Details for the deny.attempted entry so
+	// both correlated records carry the schedule identity (O-3 / F-13
+	// / issue #342). scheduledJobContextFrom is a no-op read — safe to
+	// call even when no job info was injected.
+	var denyExtra map[string]any
+	if jobInfo, ok := scheduledJobContextFrom(ex.rx.rr.rq.ri.rf.rt.turnCtx); ok && jobInfo.JobID != "" {
+		denyExtra = map[string]any{
+			"schedule_job_id":   jobInfo.JobID,
+			"schedule_job_name": jobInfo.JobName,
+		}
+	}
+	ex.rx.rr.rq.ri.rf.rt.al.emitPolicyDenyAudit(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, "ask", denialReason, denyExtra)
+	// O-3 / F-13 / issue #342: emit the canonical tool.policy.ask.denied
+	// entry via EmitToolPolicyAskDenied (CRIT-6 compliant, INFO severity,
+	// reason=AskDenyReasonScheduled). See emitScheduledAutoDenyAudit.
+	ex.rx.rr.rq.ri.rf.rt.al.emitScheduledAutoDenyAudit(ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, tc.ID)
+	// Persist the refusal as a real tool_call entry. This path
+	// never blocks (there is no approver on a headless run), so
+	// there is no pending placeholder to settle — but without
+	// this the scheduled run's transcript showed the tool had
+	// simply never been called, with the reason living only in
+	// the audit log. settleAskToolCallTranscript appends when it
+	// finds no placeholder, which is exactly this case.
+	settleAskToolCallTranscript(
+		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, denialReason)
+	// ADR-066 D4: denied results enter through the choke point on the
+	// builtin-failure surface (FR-009); it persists the line itself.
+	deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+		Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
+	}).Message
+	ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
+	// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+	// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+	// ends the turn typed with no further provider call (FR-032).
+	if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
+		res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
+		ex.rx.rr.rq.ri.turnStatus = status
+		ex.rx.ret0 = res
+		ex.rx.ret1 = exitErr
+		ex.ret0 = agentLoopRunTurnToolsReturn
+		return agentLoopRunTurnToolsExecuteReturn
+	}
+	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
+		EventKindToolExecSkipped,
+		ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.skipped"),
+		ToolExecSkippedPayload{
+			Tool:   ex.toolName,
+			Reason: fmt.Sprintf("permission_denied (ask auto-denied: %s)", denialReason),
+		},
+	)
+	if used, exhausted := ex.rx.rr.rq.ri.rf.rt.ts.recordToolDenial(ex.ledgerToolName, denialReason, cls.Permanent, denyMsg); exhausted {
+		ex.rx.rr.rq.ri.turnStatus = TurnEndStatusAborted
+		ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurnForToolDenialBudget(ex.rx.rr.rq.ri.rf.rt.ts, ex.ledgerToolName, denialReason, used)
+		ex.ret0 = agentLoopRunTurnToolsReturn
+		return agentLoopRunTurnToolsExecuteReturn
+	}
+	return agentLoopRunTurnToolsExecuteContinue
+}
+
+// denyAskedCall records a human (or approver) refusal of an ask-policy call.
+func (ex *agentLoopRunTurnToolsExecute) denyAskedCall(tc providers.ToolCall, denialReason string) agentLoopRunTurnToolsExecuteFlow {
+	// Settle the placeholder to `denied` with the outcome
+	// reason, so "denied by the user" and "expired after five
+	// minutes with nobody watching" are distinguishable in the
+	// thread and on replay.
+	settleAskToolCallTranscript(
+		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, denialReason)
+	// ADR-058 site 3 — the original defect: denialReason here
+	// is verbatim from CheckGrantOrRequestApproval, so it is
+	// classified for real rather than assumed to be a user
+	// "no". ClassifyDenial handles every reason this call is
+	// KNOWN to be able to produce — not just the
+	// approvals.go-authored six (user, timeout, saturated,
+	// cancel, restart, batch_short_circuit), but also
+	// internal_error (policy_approver.go's nil-entry branch),
+	// no_approver_configured (tool_approver.go's nop
+	// fallback), the empty reason, and "session canceled"
+	// (verified end-to-end in this session:
+	// pkg/agent/cancel.go::AgentLoop.RequestCancel ->
+	// hooks.CancelPendingApprovals ->
+	// pkg/gateway/approvals.go::cancelAllPendingForSessions's
+	// ApprovalOutcome{Reason: "session canceled"} -> here,
+	// distinct from the single-word "cancel" reason above).
+	// An earlier revision of this comment claimed the table
+	// "covers every reason this call can produce" and
+	// enumerated only nine of these — that was never a
+	// closed set, and any reason NOT in denialTable still
+	// fails safe (Permanent: true) through ClassifyDenial's
+	// unknown-reason fallback rather than being silently
+	// treated as retryable.
+	cls, _ := ClassifyDenial(denialReason)
+	denyMsg := denialPayloadJSON(ex.toolName, denialReason, cls)
+	ex.rx.rr.rq.ri.rf.rt.al.emitPolicyDenyAudit(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, "ask", denialReason)
+	// ADR-066 D4: denied results enter through the choke point on the
+	// builtin-failure surface (FR-009); it persists the line itself.
+	deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+		Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
+	}).Message
+	ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
+	// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+	// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+	// ends the turn typed with no further provider call (FR-032).
+	if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
+		res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
+		ex.rx.rr.rq.ri.turnStatus = status
+		ex.rx.ret0 = res
+		ex.rx.ret1 = exitErr
+		ex.ret0 = agentLoopRunTurnToolsReturn
+		return agentLoopRunTurnToolsExecuteReturn
+	}
+	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
+		EventKindToolExecSkipped,
+		ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.skipped"),
+		ToolExecSkippedPayload{
+			Tool:   ex.toolName,
+			Reason: fmt.Sprintf("permission_denied (ask denied: %s)", denialReason),
+		},
+	)
+	// ADR-058 §3.5 (R5, Binding Rule 4 — the positive lower
+	// bound): cls.Permanent is false ONLY for "saturated" at
+	// THIS site, so recordToolDenial never quarantines it
+	// here — a later call to the same tool in the same turn
+	// is free to reach the approver and execute (AC-06).
+	if used, exhausted := ex.rx.rr.rq.ri.rf.rt.ts.recordToolDenial(ex.ledgerToolName, denialReason, cls.Permanent, denyMsg); exhausted {
+		ex.rx.rr.rq.ri.turnStatus = TurnEndStatusAborted
+		ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurnForToolDenialBudget(ex.rx.rr.rq.ri.rf.rt.ts, ex.ledgerToolName, denialReason, used)
+		ex.ret0 = agentLoopRunTurnToolsReturn
+		return agentLoopRunTurnToolsExecuteReturn
+	}
+	return agentLoopRunTurnToolsExecuteContinue
 }
 
 // prepareDispatch records dispatch metadata and prepares asynchronous result handling.
 func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
 	ts := ex.rx.rr.rq.ri.rf.rt.ts
-	// Temporary origin containment until the compiled per-turn publication
-	// policy replaces these distributed predicates. Automatic tool feedback is
-	// top-level only for root, non-task turns: delegated children inherit the
-	// parent route but must not publish standalone feedback there, while native
-	// task and verifier turns use internal webchat-labelled routes. depth and
-	// IsTaskRun are existing origin proxies, not new flags.
-	allowTopLevelToolFeedback := !ts.opts.SuppressToolFeedback && ts.depth == 0 && !ts.opts.IsTaskRun
+	feedbackReachesUser := ex.rx.rr.rq.ri.rf.rt.al.toolFeedbackReachesUser(
+		ex.rx.ctx, steer.BoundarySyncToolText, ts,
+	)
 
 	argsJSON, marshalErr := json.Marshal(ex.toolArgs)
 	if marshalErr != nil {
@@ -1043,23 +1170,22 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 			"tool":      ex.toolName,
 			"iteration": ex.rx.rr.rq.ri.rf.rt.iteration,
 		})
-	toolExecSID, toolExecProducingSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
+	toolExecSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
 	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 		EventKindToolExecStart,
 		ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.start"),
 		ToolExecStartPayload{
 			ToolCallID: session.ToolCallID(tc.ID),
 			ChatID:     ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-			// ADR-057 FR-011/FR-012/FR-013 (W4/W5d, U9): see
-			// u9ToolExecSessionIDs and
-			// ToolExecStartPayload.SessionID/.ProducingSessionID's doc
-			// comments (events.go, U23) for the full rationale.
-			SessionID:          toolExecSID,
-			Tool:               ex.toolName,
-			Arguments:          cloneEventArguments(ex.toolArgs),
-			ParentSpawnCallID:  session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
-			AgentID:            ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
-			ProducingSessionID: toolExecProducingSID,
+			// ADR-057 FR-011/FR-012 (W4/W5d, U9): see u9ToolExecSessionIDs
+			// and ToolExecStartPayload.SessionID's doc comments (events.go,
+			// U23) for the full rationale. The session ID is always the
+			// tool-producing session's own transcript identity.
+			SessionID:         toolExecSID,
+			Tool:              ex.toolName,
+			Arguments:         cloneEventArguments(ex.toolArgs),
+			ParentSpawnCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
+			AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
 		},
 	)
 
@@ -1069,7 +1195,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	// channels suppress feedback because the UI already renders tool calls
 	// inline or because the channel has no human recipient.
 	if ex.rx.rr.rq.ri.cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
-		allowTopLevelToolFeedback &&
+		feedbackReachesUser && !ts.opts.SuppressToolFeedback &&
 		isMessagingChannel(ts.channel) {
 		feedbackPreview := utils.Truncate(
 			string(argsJSON),
@@ -1094,7 +1220,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	asyncToolCallID := tc.ID
 	gate := &asyncToolCallbackGate{
 		handle: func(result *tools.ToolResult) {
-			ex.handleAsyncResult(result, asyncToolName, asyncToolCallID, toolIteration, allowTopLevelToolFeedback)
+			ex.handleAsyncResult(result, asyncToolName, asyncToolCallID, toolIteration)
 		},
 	}
 	ex.asyncCallbackGate = gate
@@ -1172,17 +1298,15 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 	toolName string,
 	toolCallID string,
 	toolIteration int,
-	allowTopLevelToolFeedback bool,
 ) {
 	ts := ex.rx.rr.rq.ri.rf.rt.ts
-	// Ordinary async feedback follows the captured top-level origin gate.
-	// System-woken roots are the one error-only exception: SendResponse
-	// distinguishes them from internal task/verifier turns, while depth and
-	// IsTaskRun keep delegated children and task work contained.
-	allowSuppressedErrorFeedback := result.IsError &&
-		ts.opts.SuppressToolFeedback && ts.opts.SendResponse &&
-		ts.depth == 0 && !ts.opts.IsTaskRun
-	if allowTopLevelToolFeedback || allowSuppressedErrorFeedback {
+	feedbackReachesUser := ex.rx.rr.rq.ri.rf.rt.al.toolFeedbackReachesUser(
+		ex.rx.ctx, steer.BoundaryAsyncToolFeedback, ts,
+	)
+	allowOrdinaryFeedback := feedbackReachesUser && !ts.opts.SuppressToolFeedback
+	allowSuppressedErrorFeedback := feedbackReachesUser && result.IsError &&
+		ts.opts.SuppressToolFeedback && ts.opts.SendResponse
+	if allowOrdinaryFeedback || allowSuppressedErrorFeedback {
 		// Send ForUser content directly to the user (immediate feedback),
 		// mirroring the synchronous tool execution path. This stays separate
 		// from AsyncNotifier, which owns the reactive continuation turn below.
@@ -1195,24 +1319,23 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 		if userContent != "" && result.IsError && ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback &&
 			ex.rx.rr.rq.ri.rf.rt.ts.channel == "webchat" {
 			persistAsyncToolErrorNotice(ex.rx.rr.rq.ri.rf.rt.ts, toolCallID, userContent)
-			callbackSID, callbackProducingSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
+			callbackSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
 			callbackNoticeID := fmt.Sprintf("%s:async-error:%d", toolCallID, time.Now().UnixNano())
 			ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 				EventKindToolExecEnd,
 				ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.async.error"),
 				ToolExecEndPayload{
-					ToolCallID:         session.ToolCallID(callbackNoticeID),
-					ChatID:             ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-					SessionID:          callbackSID,
-					Tool:               toolName,
-					ForLLMLen:          len(result.ContentForLLM()),
-					ForUserLen:         len(result.ForUser),
-					IsError:            true,
-					Async:              true,
-					Result:             userContent,
-					ParentSpawnCallID:  session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
-					AgentID:            ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(),
-					ProducingSessionID: callbackProducingSID,
+					ToolCallID:        session.ToolCallID(callbackNoticeID),
+					ChatID:            ex.rx.rr.rq.ri.rf.rt.ts.chatID,
+					SessionID:         callbackSID,
+					Tool:              toolName,
+					ForLLMLen:         len(result.ContentForLLM()),
+					ForUserLen:        len(result.ForUser),
+					IsError:           true,
+					Async:             true,
+					Result:            userContent,
+					ParentSpawnCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
+					AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(),
 				},
 			)
 		} else if userContent != "" {
@@ -1323,6 +1446,17 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	// the correlation anchor a spawned child sub-turn's transcript
 	// entries will carry back as ParentSpawnCallID.
 	execCtx = tools.WithToolCallID(execCtx, tc.ID)
+	// Stamp the turn's own ID (D-03 fix, UAT tester t5, 2026-09-24): a tool
+	// that raises its OWN interactive escalation — ADR-092's D3/D7/D8
+	// ShellApprovalRequester.RequestShellApproval call sites in
+	// pkg/tools/shell_permission_mode.go — has no other way to reach the
+	// calling turn's ID, unlike the classic ask-policy path
+	// (requestAskApproval, above) which already has rt.ts.turnID in hand
+	// directly. Before this stamp existed those call sites hardcoded turnID
+	// as "", which contracts/components/schemas/ToolApprovalRequiredFrame.yaml's
+	// minLength:1 on turn_id causes the SPA to silently drop on arrival —
+	// see tools.WithTurnID's doc comment for the full chain.
+	execCtx = tools.WithTurnID(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.turnID)
 	// Carry the turn's EXISTING AutoDenyAsk onto the tool context.
 	// The loop already uses it to auto-deny `ask`-policy calls; a
 	// tool that must refuse one ARGUMENT rather than the whole call
@@ -1331,10 +1465,23 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	// field, not a second discriminator: two independently-computed
 	// answers to "is anyone there" would eventually disagree.
 	execCtx = tools.WithAutoDenyAsk(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.opts.AutoDenyAsk)
+	if ex.shellModePin != "" {
+		execCtx = withPinnedShellMode(execCtx, ex.shellModePin)
+	}
+	if ex.ruleAskSettled {
+		execCtx = tools.WithRuleAskSettled(execCtx)
+	}
 	// Approval can wait while configuration changes. Recheck current authority
 	// immediately before dispatch, including connector assignments removed meanwhile.
 	if flow := ex.enforceExecutionPolicy(tc); flow != agentLoopRunTurnToolsExecuteNext {
 		return flow
+	}
+	if ex.autoPin.Run && ex.toctouPolicy == "ask" {
+		// ADR-092 D9 §5.3/§5.5: Auto ran this call without a prompt. Pin the
+		// decision so a RUNS-IF tool re-checks its final path against it,
+		// and record exactly one tool.auto_approved row.
+		execCtx = tools.WithAutoApproved(execCtx, tools.AutoPinForVerdict(ex.toolName, ex.autoPin))
+		ex.rx.rr.rq.ri.rf.rt.al.emitToolAutoApprovedAudit(execCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.autoPin)
 	}
 	ex.toolResult = ex.rx.rr.rq.ri.rf.rt.ts.agent.Tools.ExecuteWithContext(
 		execCtx,
@@ -1513,7 +1660,17 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 			SessionID:   ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID,
 			Parts:       parts,
 		}
-		if ex.rx.turnChannelManager != nil && ex.rx.rr.rq.ri.rf.rt.ts.channel != "" && !constants.IsInternalChannel(ex.rx.rr.rq.ri.rf.rt.ts.channel) {
+		// ADR-091 boundary 4 (FR-B-001): a steered
+		// session's media is persisted to its own transcript (untouched
+		// above) but never sent to a channel or published — this boundary
+		// was UNGATED before ADR-091 (sent whenever media was present).
+		// audienceFor also calls steer.BoundaryObserver.Observe before this
+		// decision is acted on (FR-B-014).
+		mediaAudience := ex.rx.rr.rq.ri.rf.rt.al.audienceFor(ex.rx.ctx, steer.BoundaryMedia, ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID)
+		if mediaAudience != steer.AudienceUser {
+			logger.DebugCF("agent", "Steered session: media contained (not sent to a channel)",
+				map[string]any{"tool": ex.toolName, "session_id": ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID})
+		} else if ex.rx.turnChannelManager != nil && ex.rx.rr.rq.ri.rf.rt.ts.channel != "" && !constants.IsInternalChannel(ex.rx.rr.rq.ri.rf.rt.ts.channel) {
 			if err := ex.rx.turnChannelManager.SendMedia(ex.rx.ctx, outboundMedia); err != nil {
 				logger.WarnCF("agent", "Failed to deliver tool media",
 					map[string]any{
@@ -1537,7 +1694,15 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 		ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback,
 		ex.toolResult,
 	)
-	if userContent != "" && ex.rx.rr.rq.ri.rf.rt.ts.opts.SendResponse {
+	// ADR-091 boundary 1 (FR-B-001): a steered session's
+	// audience is never the user, regardless of SendResponse. audienceFor
+	// also calls steer.BoundaryObserver.Observe before this decision is
+	// acted on (FR-B-014).
+	if userContent != "" &&
+		ex.rx.rr.rq.ri.rf.rt.ts.opts.SendResponse &&
+		ex.rx.rr.rq.ri.rf.rt.al.toolFeedbackReachesUser(
+			ex.rx.ctx, steer.BoundarySyncToolText, ex.rx.rr.rq.ri.rf.rt.ts,
+		) {
 		if pubErr := ex.rx.rr.rq.ri.rf.rt.al.bus.PublishOutbound(ex.rx.ctx, bus.OutboundMessage{
 			Channel: ex.rx.rr.rq.ri.rf.rt.ts.channel,
 			ChatID:  ex.rx.rr.rq.ri.rf.rt.ts.chatID,
@@ -1621,6 +1786,52 @@ func persistAsyncToolErrorNotice(ts *turnState, toolCallID, content string) {
 }
 
 // recordToolResult sanitizes and records the admitted tool result.
+
+// sanitizeUntrustedToolResult runs the prompt guard over a tool result
+// from an untrusted source (web fetch, web search, browser, read_file)
+// before it enters the LLM's context, and logs every actual mutation.
+//
+// Extracted from recordToolResult to hold that function inside the
+// 240-line budget. The guard runs BEFORE the sensitive-data filter and
+// the order matters: reversed, an injection payload that mentions a
+// secret pattern would be partially redacted, leaving the injection
+// prefix intact and feeding it to the model. Trusted tools (exec,
+// message, task_*, file writes) are never sanitized -- their output is
+// user-authored or produced by a peer inside the same trust boundary.
+func (ex *agentLoopRunTurnToolsExecute) sanitizeUntrustedToolResult() {
+	if ex.rx.rr.rq.ri.rf.rt.al.promptGuard == nil || !isUntrustedToolResult(ex.toolName) {
+		return
+	}
+	original := ex.contentForLLM
+	ex.contentForLLM = ex.rx.rr.rq.ri.rf.rt.al.promptGuard.Sanitize(ex.contentForLLM, false)
+	// Log every actual mutation to the operator stream AND to the
+	// audit log (when enabled). Mutation is the signal the security
+	// team cares about; logging no-op passes would drown real
+	// events. The operator-stream log is unconditional so that
+	// disabling audit logging does NOT hide prompt-guard rewrites.
+	if ex.contentForLLM != original {
+		details := map[string]any{
+			"action":          "prompt_guard_sanitize",
+			"strictness":      string(ex.rx.rr.rq.ri.rf.rt.al.promptGuard.Strictness()),
+			"original_bytes":  len(original),
+			"sanitized_bytes": len(ex.contentForLLM),
+			"tool":            ex.toolName,
+			"agent_id":        ex.rx.rr.rq.ri.rf.rt.ts.agent.ID,
+		}
+		logger.InfoCF("agent", "prompt guard sanitized tool result", details)
+		// CRIT-6: route through audit.EmitEntry — Log failure bumps the
+		// audit-skipped counter so /health audit_degraded surfaces gaps.
+		audit.EmitEntry(ex.rx.rr.rq.ri.rf.rt.al.auditLogger, &audit.Entry{
+			Event:    audit.EventPolicyEval,
+			Decision: audit.DecisionAllow,
+			AgentID:  ex.rx.rr.rq.ri.rf.rt.ts.agent.ID,
+			User:     ex.rx.rr.rq.ri.rf.rt.ts.auditUser(), // FR-017
+			Tool:     ex.toolName,
+			Details:  details,
+		})
+	}
+}
+
 func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) {
 	ex.contentForLLM = ex.toolResult.ContentForLLM()
 
@@ -1635,36 +1846,7 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 	// SECOND. Reversing the order would let an injection payload
 	// that mentions a secret pattern be partially redacted, leaving
 	// the injection prefix intact and feeding it to the LLM.
-	if ex.rx.rr.rq.ri.rf.rt.al.promptGuard != nil && isUntrustedToolResult(ex.toolName) {
-		original := ex.contentForLLM
-		ex.contentForLLM = ex.rx.rr.rq.ri.rf.rt.al.promptGuard.Sanitize(ex.contentForLLM, false)
-		// Log every actual mutation to the operator stream AND to the
-		// audit log (when enabled). Mutation is the signal the security
-		// team cares about; logging no-op passes would drown real
-		// events. The operator-stream log is unconditional so that
-		// disabling audit logging does NOT hide prompt-guard rewrites.
-		if ex.contentForLLM != original {
-			details := map[string]any{
-				"action":          "prompt_guard_sanitize",
-				"strictness":      string(ex.rx.rr.rq.ri.rf.rt.al.promptGuard.Strictness()),
-				"original_bytes":  len(original),
-				"sanitized_bytes": len(ex.contentForLLM),
-				"tool":            ex.toolName,
-				"agent_id":        ex.rx.rr.rq.ri.rf.rt.ts.agent.ID,
-			}
-			logger.InfoCF("agent", "prompt guard sanitized tool result", details)
-			// CRIT-6: route through audit.EmitEntry — Log failure bumps the
-			// audit-skipped counter so /health audit_degraded surfaces gaps.
-			audit.EmitEntry(ex.rx.rr.rq.ri.rf.rt.al.auditLogger, &audit.Entry{
-				Event:    audit.EventPolicyEval,
-				Decision: audit.DecisionAllow,
-				AgentID:  ex.rx.rr.rq.ri.rf.rt.ts.agent.ID,
-				User:     ex.rx.rr.rq.ri.rf.rt.ts.auditUser(), // FR-017
-				Tool:     ex.toolName,
-				Details:  details,
-			})
-		}
-	}
+	ex.sanitizeUntrustedToolResult()
 
 	// ADR-066 D4 (FR-009, FR-013): the sensitive-data filter now runs
 	// INSIDE the choke point, on the full content, before the cap —
@@ -1718,46 +1900,55 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		}
 		ex.rx.rr.rq.ri.rf.rt.inspectionImages[ex.toolCallID] = ex.toolResult.InspectionImages
 	}
-	endSID, endProducingSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
+	endSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
 	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 		EventKindToolExecEnd,
 		ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.end"),
 		ToolExecEndPayload{
 			ToolCallID: session.ToolCallID(ex.toolCallID),
 			ChatID:     ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-			// ADR-057 FR-011/FR-012/FR-013 (W4/W5d, U9): see the
-			// matching ToolExecStartPayload construction above —
-			// identical contract on the result frame.
-			SessionID:          endSID,
-			Tool:               ex.toolName,
-			Duration:           ex.toolDuration,
-			ForLLMLen:          len(ex.contentForLLM),
-			ForUserLen:         len(ex.toolResult.ForUser),
-			IsError:            ex.toolResult.IsError,
-			Async:              ex.toolResult.Async,
-			Result:             ex.contentForLLM,
-			ParentSpawnCallID:  session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
-			AgentID:            ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
-			ProducingSessionID: endProducingSID,
+			// ADR-057 FR-011/FR-012 (W4/W5d, U9): see the matching
+			// ToolExecStartPayload construction above — identical
+			// contract on the result frame.
+			SessionID:         endSID,
+			Tool:              ex.toolName,
+			Duration:          ex.toolDuration,
+			ForLLMLen:         len(ex.contentForLLM),
+			ForUserLen:        len(ex.toolResult.ForUser),
+			IsError:           ex.toolResult.IsError,
+			Async:             ex.toolResult.Async,
+			Result:            ex.contentForLLM,
+			ParentSpawnCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
+			AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
 		},
 	)
 	tcStatus := "success"
 	switch {
 	case ex.toolResult.ParksTurn:
-		// ADR-057 UAT defect C2 fix (2026-08-04): a SYNCHRONOUS
-		// delegate/spawn call whose child sub-turn parked awaiting
-		// the parent's answer (message_parent(kind="question",
-		// wait=true) — see pkg/agent/subturn.go's spawnSubTurn,
-		// the `if turnRes.status == TurnEndStatusParked` branch
-		// that sets ToolResult.ParksTurn, the single source of
-		// truth for this signal). Without this case, a parked
+		// ADR-057 UAT defect C2 fix (2026-08-04): pre-ADR-091, a
+		// SYNCHRONOUS delegate/spawn call (async=false, since deleted
+		// by ADR-091 D4 — every delegate call is now what that used to
+		// mean) whose child sub-turn parked awaiting the parent's
+		// answer (message_parent(kind="question", wait=true) — the
+		// deleted spawnSubTurn's `if turnRes.status ==
+		// TurnEndStatusParked` branch set ToolResult.ParksTurn, the
+		// single source of truth for this signal). ADR-091 fix lane
+		// RX-SUBTURN note: a delegate/spawn call cannot reach this
+		// specific scenario anymore since ADR-091 (delegate never waits
+		// inline for the child), but this `case` remains live and
+		// necessary for other ParksTurn producers today, notably
+		// ask_user_question (pkg/tools/CLAUDE.md: "NEVER returns the
+		// answer as a tool result... returns a ParksTurn stub").
+		// Without this case, a parked
 		// child's toolResult here has Interrupted==false and
 		// IsError==false (it is neither a failure nor a
 		// cancellation), so tcStatus fell through to the
 		// "success" initializer — persisting the OUTER delegate
 		// tool call's own tc.Status as "success" even though the
-		// live subagent_end WS frame (spawnSubTurn's endStatus
-		// switch, now SubTurnStatusParked) already correctly said
+		// live subagent_end WS frame (pre-ADR-091, the deleted
+		// spawnSubTurn's endStatus switch; today,
+		// steer_frames.go::deliverSubagentEnd, now SubTurnStatusParked)
+		// already correctly said
 		// "parked". That divergence meant a SESSION RELOAD
 		// (pkg/gateway/replay.go's resolveStatus(tc.Status), used
 		// to reconstruct the subagent_end frame from this exact
@@ -1773,11 +1964,17 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		// IsError cases.
 		tcStatus = "parked"
 	case ex.toolResult.Interrupted:
-		// Finding F (A-I4 round 5): a synchronous delegate/spawn call
-		// whose child sub-turn was interrupted by a parent-turn
-		// cancellation — see pkg/agent/subturn.go's spawnSubTurn
-		// cleanup defer, the single source of truth for this
-		// classification (ToolResult.Interrupted's doc comment).
+		// Finding F (A-I4 round 5): pre-ADR-091, a synchronous
+		// delegate/spawn call (since deleted, D4) whose child sub-turn
+		// was interrupted by a parent-turn cancellation — the deleted
+		// spawnSubTurn's cleanup defer was the single source of truth
+		// for this classification (ToolResult.Interrupted's doc
+		// comment). ADR-091 fix lane RX-SUBTURN finding (comment-only;
+		// code unchanged): unlike the ParksTurn case above (still fed
+		// by ask_user_question/message_parent), grep finds
+		// ToolResult.Interrupted set to true nowhere in production code
+		// today — this case appears unreachable now. Flagged for the
+		// team, not fixed here.
 		// Persisting "interrupted" here — rather than folding it into
 		// the generic "error" case below — is what lets a session
 		// reload's subagent_end frame (pkg/gateway/replay.go reads
@@ -1837,10 +2034,14 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		}
 		ex.tcRecord.Result = result
 	} else if r := buildSyncDelegateResult(ex.toolName, ex.contentForLLM, ex.toolResult.IsError, ex.toolResult.Async); r != nil {
-		// W4 (sync path): spawnSubTurn's async result-persistence defer
-		// (subturn.go) no-ops for SYNCHRONOUS delegation — it runs before
-		// this record exists and only retries when cfg.Async — so this
+		// W4 (sync path): pre-ADR-091, the deleted spawnSubTurn's async
+		// result-persistence defer (subturn.go) no-op'd for SYNCHRONOUS
+		// delegation (since deleted, D4) — it ran before
+		// this record exists and only retried when cfg.Async — so this
 		// write is the sync delegate tool_call's FINAL persisted state.
+		// See buildSyncDelegateResult's own doc comment (delegate_result.go)
+		// for the ADR-091 fix lane RX-SUBTURN finding that this branch's
+		// "sync-only" framing may no longer match current behavior.
 		// Populate Result with the same {"text":…}(+"error") shape the
 		// async defer produces, so a reloaded sync delegation shows what
 		// the delegate produced (matching the live WS stream and the

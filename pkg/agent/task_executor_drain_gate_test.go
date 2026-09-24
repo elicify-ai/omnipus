@@ -81,10 +81,13 @@ func TestDrainClosesIntakePermanently(t *testing.T) {
 // Source-level guard for the exemption in dispatchGate's doc comment. That
 // exemption ("goroutine-launch sites may Add directly") is only sound where
 // the launching call already holds a wg entry, so the counter cannot go
-// 0 -> 1. An adversarial review found notifyParentIfAllSiblingsDone violating
-// exactly that: it is reached from the task_update tool via AgentLoop's
-// SetOnComplete hook, an ordinary agent turn holding no count, so its bare
-// Add could still panic a parked wg.Wait during shutdown.
+// 0 -> 1. An adversarial review found the now-deleted
+// notifyParentIfAllSiblingsDone (ADR-091 D3/FR-B-003 — replaced by
+// deliverTaskCompletionUpward, task_executor_judge.go, which spawns no
+// goroutine at all) violating exactly that: it was reached from the
+// task_update tool via AgentLoop's SetOnComplete hook, an ordinary agent
+// turn holding no count, so its bare Add could still panic a parked
+// wg.Wait during shutdown.
 //
 // A behavioural test would need a full store/parent/sibling fixture; this
 // pins the invariant directly and cheaply instead, and fails the moment a new

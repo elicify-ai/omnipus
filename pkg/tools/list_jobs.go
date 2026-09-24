@@ -492,15 +492,11 @@ func (t *ListJobsTool) collectKind(kind, principal, workspaceID string, red reda
 		if t.getResolver != nil {
 			resolver = t.getResolver()
 		}
-		var labelResolver JobLabelResolver
-		if t.getLabelResolver != nil {
-			labelResolver = t.getLabelResolver()
-		}
 		var activityReader JobSessionActivityReader
 		if t.getActivityReader != nil {
 			activityReader = t.getActivityReader()
 		}
-		return collectSubagentRows(t.lifecycles, principal, workspaceID, red, ceiling, namer, resolver, labelResolver, activityReader)
+		return collectSubagentRows(t.lifecycles, principal, workspaceID, red, ceiling, namer, resolver, activityReader)
 	default:
 		return collectResult{err: fmt.Errorf("%s: unknown kind", kind)}
 	}

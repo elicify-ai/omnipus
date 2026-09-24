@@ -37,6 +37,18 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 	// — the same key that manifestSessionID returns when transcriptID != "".
 	al.forgetSession(sessionID)
 
+	// D-13 fix (2026-09-24 security review): revoke this session's egress-
+	// proxy token(s) — one per agent that used one — BEFORE ClearSession
+	// wipes ApprovalGrantStore's own copy below, so pkg/agent (which can
+	// see both pkg/security's store and pkg/sandbox's proxy, unlike either
+	// package on its own — see ApprovalGrantStore.ClearSession's doc
+	// comment) is the one place this cross-package cleanup can happen.
+	// al.sandboxEgressProxy is nil-safe (every EgressProxy method no-ops on
+	// a nil receiver) when no egress proxy started at boot.
+	for _, tok := range al.approvalGrants.NetworkTokensForSession(sessionID) {
+		al.sandboxEgressProxy.RevokeRunToken(tok)
+	}
+
 	// Clear every "Always Allow" tool-approval grant recorded for this
 	// session (all agents), unconditionally — same reasoning as
 	// forgetSession above: this is bounded per-session cleanup, not gated on
@@ -44,6 +56,8 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 	// NewAgentLoop, but ClearSession is nil-receiver-safe regardless (e.g.
 	// AgentLoop literals built directly in tests without NewAgentLoop).
 	al.approvalGrants.ClearSession(sessionID)
+	// ADR-092: the per-chat Auto-approve modifier ends with the chat too.
+	al.sessionModes.ClearSession(sessionID)
 
 	// ADR-051 Rev 4 (FR-007a, Wave 3 T9): decrement the manifest refcount
 	// for every workspace library file this session referenced. The matching

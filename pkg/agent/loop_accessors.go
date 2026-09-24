@@ -80,6 +80,34 @@ func (al *AgentLoop) ApprovalGrants() *security.ApprovalGrantStore {
 	return al.approvalGrants
 }
 
+// SessionModes returns the ADR-092 per-chat Auto-approve modifier store
+// written by the gateway's session_mode_update WS handler. Always non-nil
+// after NewAgentLoop (a nil AgentLoop returns nil; every SessionModeStore
+// method is nil-receiver-safe).
+func (al *AgentLoop) SessionModes() *SessionModeStore {
+	if al == nil {
+		return nil
+	}
+	return al.sessionModes
+}
+
+// SessionAutoApprove reports the resolved Auto-approve setting for
+// sessionID's chat driven by agentID: the global default, the agent's
+// off-switch, then the chat's own modifier (ResolveAutoApprove). This is the
+// value the session_mode_updated frame reports; it does not fold in whether
+// a kernel sandbox is active (the SPA combines it with
+// SandboxStatus.kernel_sandbox_active).
+func (al *AgentLoop) SessionAutoApprove(agentID, sessionID string) bool {
+	if al == nil {
+		return false
+	}
+	var chat *bool
+	if v, ok := al.sessionModes.Get(sessionID); ok {
+		chat = &v
+	}
+	return ResolveAutoApprove(al.GetConfig(), agentID, chat)
+}
+
 // SandboxBackend returns the active sandbox backend, or nil if sandboxing is
 // disabled. Used by gateway handlers that report sandbox status.
 func (al *AgentLoop) SandboxBackend() sandbox.SandboxBackend {

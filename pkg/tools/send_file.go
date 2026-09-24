@@ -11,6 +11,7 @@ import (
 	"github.com/h2non/filetype"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/media"
 )
 
@@ -88,6 +89,19 @@ func (t *SendFileTool) SetMediaStore(store media.MediaStore) {
 	t.mediaStore = store
 }
 
+// AutoApproveVerdict implements AutoApproveClassifier: send_file runs under
+// Auto only for a file inside the workspace or a mount (ADR-092 D9, founder
+// decision 2026-09-23). Such a file then leaves the machine to the chat
+// channel with no prompt; a file anywhere else asks.
+func (t *SendFileTool) AutoApproveVerdict(ctx context.Context, args map[string]any) AutoVerdict {
+	path, _ := args["path"].(string)
+	if strings.TrimSpace(path) == "" {
+		return autoAsks("send_file: path argument missing")
+	}
+	return autoWorkspaceVerdict(ctx, t.agentHome, t.restrict, t.Name(), FSOpSend, path, t.allowPaths,
+		fspolicy.PathGrantAccessRead)
+}
+
 func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	path, _ := args["path"].(string)
 	if strings.TrimSpace(path) == "" {
@@ -123,7 +137,7 @@ func (t *SendFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// carries no additional path restriction (FR-2.3: the operator rejected
 	// a path-based "publish" gate here as bypassable and misleading; tool
 	// policy is the real gate).
-	handle, err := ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpSend, path, t.allowPaths)
+	handle, err := resolveAutoCheckedPath(ctx, policy, t.Name(), FSOpSend, path, t.allowPaths, fspolicy.PathGrantAccessRead)
 	if err != nil {
 		return PermissionDeniedResult(t.Name(), err, err.Error())
 	}

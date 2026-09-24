@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,8 +59,8 @@ func TestDelegateCancel_KillsThatChildsShells(t *testing.T) {
 	lc := session.NewLifecycleStore(t.TempDir())
 	delegateTool.SetLifecycleStore(lc)
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: childID, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeHuman,
-		ParentDurableKey: "u14-w9a-parent", WorkspaceID: "ws-1", AgentID: "worker",
+		SessionID: childID, Generation: 1, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy: &session.SteeredBy{SteeringSessionID: "u14-w9a-parent", RootSessionID: "u14-w9a-parent"}, WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
 	}
@@ -68,8 +69,12 @@ func TestDelegateCancel_KillsThatChildsShells(t *testing.T) {
 	// test's focus is the SHELL-KILL side effect FR-028 adds, not the
 	// turn-cancel/steering mechanism itself (covered elsewhere).
 	delegateTool.SetCancelHooks(
-		func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
-		func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
+		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+			return []string{sessionID}, nil
+		},
+		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+			return []string{sessionID}, nil
+		},
 	)
 
 	callerCtx := WithTranscriptSessionID(context.Background(), "u14-w9a-parent")
