@@ -165,6 +165,14 @@ func actionRank(a Action) int {
 
 // evaluateSegment resolves seg's head, resolves-and-verifies it against
 // opts.ChildPath, and matches it against rules.
+//
+// R3 fix (CRITICAL, founder decision 2026-09-24: "look through wrappers and
+// fail closed"): before matching, the resolved head is followed through any
+// known command wrapper (unwrapWrappers) to the command it actually execs,
+// and an interpreter/eval form (`bash -c "…"`, `eval …`, …) — whose real
+// command this package can never resolve at all — is checked directly
+// against every DENY rule's binary name as a fail-closed special case. See
+// wrapper.go for the full rationale and the exact wrapper/interpreter lists.
 func evaluateSegment(seg string, rules []Rule, opts Options, resolve BinaryResolver) SegmentVerdict {
 	v := SegmentVerdict{Segment: seg}
 
@@ -177,7 +185,55 @@ func evaluateSegment(seg string, rules []Rule, opts Options, resolve BinaryResol
 	}
 	v.Head = head
 
-	resolvedHead, err := resolveHeadOrBuiltin(head, opts.ChildPath, resolve)
+	_, args, _ := splitHeadArgs(seg)
+
+	finalSeg, finalHead, finalArgs, wrapped, blind, blindReason := unwrapWrappers(seg, head, args, opts.HeadResolver)
+	if blind {
+		// A known wrapper resolved to nothing runnable (`sudo` alone, `env
+		// -i`), or one layer of it is itself a blind spot (an unbalanced
+		// quote, a shell expansion, …) — FR-020's fail-closed posture,
+		// extended through the wrapper chain: never silently treat the
+		// wrapper's own name as though it were the real command.
+		v.Blind = true
+		v.BlindReason = string(blindReason)
+		v.Action = ActionAsk
+		return v
+	}
+
+	if scriptText, isInterp := detectInterpreterForm(finalHead, finalArgs); isInterp {
+		if denyRule, ok := findDenyBinaryWordIn(scriptText, rules); ok {
+			// Founder decision: "if ANY deny rule exists whose binary
+			// appears as a word inside the interpreter's argument string,
+			// treat it as a deny match (fail closed)."
+			v.Head = finalHead
+			v.Action = ActionDeny
+			v.MatchedRule = denyRule
+			return v
+		}
+		if hasAskOrDenyRules(rules) {
+			// Founder decision: "Otherwise, if any ask or deny rule exists,
+			// route the segment to ask, not allow. It must never silently
+			// pass as 'no rule matched'." MatchedRule is set to a
+			// representative configured rule (never nil here) so
+			// VerdictHasGenuineAskRuleMatch treats this as a genuine
+			// operator-rule concern — it must produce a real approval
+			// prompt in every mode but God (pkg/tools/shell_permission_mode.
+			// go), not merely an inert Action value.
+			v.Head = finalHead
+			v.Blind = true
+			v.BlindReason = string(blindInterpreterForm)
+			v.Action = ActionAsk
+			v.MatchedRule = representativeAskOrDenyRule(rules)
+			return v
+		}
+		// No ask/deny rules configured at all: fall through to the normal
+		// resolve-and-match path below. finalHead is the interpreter itself
+		// ("bash", "eval", …) — an explicit ALLOW rule authored against it
+		// (ADR-092 D4's own "sh -c" suggested-prefix shape), or ActionNone
+		// with zero rules, behaves exactly as it did before this fix.
+	}
+
+	resolvedHead, err := resolveHeadOrBuiltin(finalHead, opts.ChildPath, resolve)
 	if err != nil {
 		// The command that will actually run does not resolve to anything
 		// on the child's own PATH — fail safe to ask, never to a rule
@@ -188,13 +244,31 @@ func evaluateSegment(seg string, rules []Rule, opts Options, resolve BinaryResol
 		return v
 	}
 	v.ResolvedPath = resolvedHead
+	if wrapped {
+		v.Head = finalHead
+	}
 
-	_, args, _ := splitHeadArgs(seg)
-	matched := matchRules(resolvedHead, args, seg, rules, opts, resolve)
+	matched := matchRules(resolvedHead, finalArgs, finalSeg, rules, opts, resolve)
 	v.Action = Decide(matched)
 	if v.Action != ActionNone {
 		if r := representativeRule(matched, v.Action); r != nil {
 			v.MatchedRule = r
+		}
+	} else if !wrapped {
+		// R3 residual blind-spot safety net (founder decision, 2026-09-24):
+		// an UNRECOGNISED head (not a known wrapper — those are handled
+		// above — and no rule matched it directly) may still be hiding a
+		// denied binary as a later argument word (`strace rm -rf x`). This
+		// cannot be listed exhaustively, so it is routed to ask rather than
+		// silently deferring to the ceiling. Gated on !wrapped: a KNOWN
+		// wrapper's own inner command was already fully evaluated above
+		// (finalHead/finalArgs), so re-scanning finalArgs here would only
+		// re-derive the same verdict a second time.
+		if denyRule, ok := findLaterArgDenyMatch(finalArgs, rules); ok {
+			v.Blind = true
+			v.BlindReason = string(blindLaterArgDenyWord)
+			v.Action = ActionAsk
+			v.MatchedRule = denyRule
 		}
 	}
 	v.Simple = IsSimpleSegment(seg, opts.Platform)

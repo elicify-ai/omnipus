@@ -210,6 +210,25 @@ func classifySegmentPathOperations(segment string) ([]PathOperation, bool) {
 		for _, p := range absShellPathArgs(args, redirectTargets) {
 			ops = append(ops, PathOperation{Path: p, Access: fspolicy.PathGrantAccessWrite})
 		}
+	case "curl":
+		// R4 fix (2026-09-24 security review): `-o`/`--output` name the
+		// LOCAL FILE curl writes the response body to — a write, not a
+		// read. Before this fix these fell through to the default branch
+		// below (a bare absolute-path argument classified as read), so a
+		// D7 write escalation never fired for `curl -o /etc/x https://a`.
+		ops = append(ops, writeOutputFlagOps(args, redirectTargets,
+			map[string]bool{"o": true}, map[string]bool{"output": true})...)
+	case "wget":
+		// R4 fix: `-O`/`--output-document` are wget's write-target flags,
+		// the same shape as curl's `-o`/`--output` above.
+		ops = append(ops, writeOutputFlagOps(args, redirectTargets,
+			map[string]bool{"O": true}, map[string]bool{"output-document": true})...)
+	case "aria2c":
+		// R4 fix: `-o`/`--out` names the output FILE, `-d`/`--dir` the
+		// output DIRECTORY — both are write targets aria2c creates/
+		// overwrites, never something it reads.
+		ops = append(ops, writeOutputFlagOps(args, redirectTargets,
+			map[string]bool{"o": true, "d": true}, map[string]bool{"out": true, "dir": true})...)
 	default:
 		for _, p := range absShellPathArgs(args, redirectTargets) {
 			ops = append(ops, PathOperation{Path: p, Access: fspolicy.PathGrantAccessRead})
@@ -217,6 +236,64 @@ func classifySegmentPathOperations(segment string) ([]PathOperation, bool) {
 	}
 
 	return ops, true
+}
+
+// writeOutputFlagOps extracts WRITE PathOperations for a network-fetch
+// command family (curl, wget, aria2c) whose output-destination flag names
+// the LOCAL FILE (or directory) the command writes the fetched content to —
+// R4's fix (2026-09-24 security review): these were previously invisible to
+// every command-specific case above and fell through to the default branch,
+// which classifies a bare absolute-path argument as a READ, so a D7 write
+// escalation never fired for `curl -o /etc/x https://a`.
+//
+// shortFlags/longFlags name the flag (without leading dashes) that takes
+// the write target as its value — either the NEXT argument word
+// (`-o /path`, `--output /path`) or, for a long flag, attached via `=`
+// (`--output=/path`). Only absolute-path values are recorded (isAbsShellPath
+// — matching every other case in this file, which is absolute-path-only
+// throughout).
+func writeOutputFlagOps(args []string, redirectTargets map[int]struct{}, shortFlags, longFlags map[string]bool) []PathOperation {
+	var ops []PathOperation
+	for i := 0; i < len(args); i++ {
+		if _, isRedir := redirectTargets[i]; isRedir {
+			continue
+		}
+		a := args[i]
+		switch {
+		case strings.HasPrefix(a, "--"):
+			name, val, hasEq := strings.Cut(a[2:], "=")
+			if !longFlags[name] {
+				continue
+			}
+			if hasEq {
+				if isAbsShellPath(val) {
+					ops = append(ops, PathOperation{Path: val, Access: fspolicy.PathGrantAccessWrite})
+				}
+				continue
+			}
+			if i+1 < len(args) && isAbsShellPath(args[i+1]) {
+				ops = append(ops, PathOperation{Path: args[i+1], Access: fspolicy.PathGrantAccessWrite})
+				i++
+			}
+		case strings.HasPrefix(a, "-") && len(a) >= 2:
+			name := a[1:2]
+			if !shortFlags[name] {
+				continue
+			}
+			if len(a) > 2 {
+				// Attached value with no separator (`-o/etc/x`).
+				if val := a[2:]; isAbsShellPath(val) {
+					ops = append(ops, PathOperation{Path: val, Access: fspolicy.PathGrantAccessWrite})
+				}
+				continue
+			}
+			if i+1 < len(args) && isAbsShellPath(args[i+1]) {
+				ops = append(ops, PathOperation{Path: args[i+1], Access: fspolicy.PathGrantAccessWrite})
+				i++
+			}
+		}
+	}
+	return ops
 }
 
 // tokenizeShellWords splits s on unquoted whitespace, honoring single and

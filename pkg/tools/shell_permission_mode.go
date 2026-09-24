@@ -838,11 +838,20 @@ func BashPrefixGrantCheck(grants *security.ApprovalGrantStore, sessionID, agentI
 	return grants.IsPrefixAllowed(sessionID, agentID, toolName, resolvedBinary, argWords, runInBackground)
 }
 
-// prefixGrantWrappers are the ADR-092 D4 wrapper heads (FR-026). A prefix
-// derived from one of them is the wrapper alone (or "sh -c"), which would
-// approve every later command run through that wrapper — so no prefix
-// grant is offered for them; the approval is recorded as exact instead.
-var prefixGrantWrappers = map[string]bool{"sudo": true, "env": true, "timeout": true, "xargs": true, "sh": true}
+// isPrefixGrantWrapperHead reports whether word is a wrapper head (ADR-092
+// D4 FR-026) a prefix grant must never be offered for: a prefix derived from
+// one of them is the wrapper alone (or "sh -c"), which would approve every
+// later command run through that wrapper — so the approval is recorded as
+// exact instead. Reuses shellrule.IsWrapperCommand — the R3 fix's single
+// canonical wrapper list — rather than a second, independently maintained
+// map; "sh" is checked separately because it is an INTERPRETER in R3's
+// taxonomy (its own real command is invisible to the rule engine, handled
+// by R3's interpreter fail-closed path), not a "command wrapper", but
+// SuggestedPrefix still special-cases "sh -c" into a two-word prefix that
+// must be excluded here the same way.
+func isPrefixGrantWrapperHead(word string) bool {
+	return shellrule.IsWrapperCommand(word) || word == "sh"
+}
 
 // BashPrefixGrantFor derives the D4 "prefix" scope grant for a bash call a
 // human approved with scope=prefix, from the approval's own recorded args
@@ -875,7 +884,7 @@ func BashPrefixGrantFor(args map[string]any) (security.ShellPrefixGrant, bool) {
 		return security.ShellPrefixGrant{}, false
 	}
 	words := strings.Fields(prefix)
-	if len(words) < 2 || prefixGrantWrappers[words[0]] {
+	if len(words) < 2 || isPrefixGrantWrapperHead(words[0]) {
 		return security.ShellPrefixGrant{}, false
 	}
 	return security.ShellPrefixGrant{

@@ -6,19 +6,6 @@ package shellrule
 
 import "strings"
 
-// wrapperTokens are the command wrappers ADR-092 D4/FR-026 names by name:
-// the suggested prefix is derived STARTING FROM the wrapper, never from
-// what it executes. Per the spec's pinned reading, the prefix stops at the
-// wrapper's first argument — for a bare single-word wrapper that means the
-// prefix IS just the wrapper word; "sh -c" is the one two-word wrapper
-// (the flag is part of identifying the wrapper, not "its first argument").
-var wrapperTokens = map[string]bool{
-	"sudo":    true,
-	"env":     true,
-	"timeout": true,
-	"xargs":   true,
-}
-
 // SuggestedPrefix implements ADR-092 D4/FR-026's suggested-prefix
 // algorithm for the approval dialog's "Allow" scope=prefix option:
 // resolved binary plus leading sub-command words, stopping at the first
@@ -30,6 +17,16 @@ var wrapperTokens = map[string]bool{
 // resolvable head — the same posture as FR-020's segment-matching blind
 // spots: never offer a prefix built from a head we could not confidently
 // resolve).
+//
+// Wrapper detection reuses IsWrapperCommand (wrapper.go) — the ADR-092 R3
+// fix's single canonical wrapper list — rather than a second, independently
+// maintained set: the suggested prefix for any of those wrappers is derived
+// STARTING FROM the wrapper, never from what it executes. The prefix stops
+// at the wrapper's first argument — for a bare single-word wrapper that
+// means the prefix IS just the wrapper word; "sh -c" is handled as its own
+// special case immediately below (the flag is part of identifying `sh -c`
+// as an interpreter form, not "its first argument", and `sh` is not itself
+// in the wrapper list — it is an interpreter, a different R3 concept).
 func SuggestedPrefix(command string, platform Platform, resolve HeadResolver) (string, bool) {
 	if platform == WindowsPlatform {
 		return "", false
@@ -42,7 +39,7 @@ func SuggestedPrefix(command string, platform Platform, resolve HeadResolver) (s
 	if head == "sh" && len(args) > 0 && args[0] == "-c" {
 		return "sh -c", true
 	}
-	if wrapperTokens[head] {
+	if IsWrapperCommand(head) {
 		return head, true
 	}
 

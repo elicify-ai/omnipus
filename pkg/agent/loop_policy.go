@@ -664,6 +664,17 @@ func bashCommandArg(args map[string]any) string {
 // session grant), so the outcome is ShellApprovalAllowOnce, matching the
 // same vocabulary pkg/tools' own D3 ask-rule branch already uses for an
 // equivalent "approved, no new grant" case.
+//
+// D-12 fix (MEDIUM, 2026-09-24 security review): this function hardcodes
+// ShellApprovalAllowOnce/"rule_fully_allowed" — correct ONLY for
+// settlesPrompt()'s allow case. The caller (loop_run_turn_tools.go's
+// resolveAskPolicy) MUST gate this call on bashRuleVerdict.
+// fullyAllowedSettlesPrompt(), never on the broader settlesPrompt() (which
+// is also true for a D3 DENY verdict) — calling this for a deny would write
+// a false "allow"/"rule_fully_allowed" shell.approval_decision row for a
+// command that is about to be refused. See fullyAllowedSettlesPrompt's own
+// doc comment for why writing NOTHING is the correct choice for the deny
+// case, rather than writing a second, separately-worded deny row here.
 func (al *AgentLoop) emitShellRuleSettledAudit(ts *turnState, args map[string]any) {
 	if ts == nil {
 		return
@@ -777,6 +788,32 @@ func bashCommandRuleVerdict(ts *turnState, toolName string, args map[string]any)
 // returns false and the normal prompt runs.
 func (v bashRuleVerdict) settlesPrompt() bool {
 	return v.ok && (v.verdict.Action == shellrule.ActionDeny || v.verdict.FullyAllowed())
+}
+
+// fullyAllowedSettlesPrompt reports whether settlesPrompt() is true because
+// of its ALLOW case specifically — every segment matched an ALLOW rule — as
+// opposed to settlesPrompt()'s OTHER case, a D3 deny verdict.
+//
+// D-12 fix (MEDIUM, 2026-09-24 security review): resolveAskPolicy must gate
+// its emitShellRuleSettledAudit call on THIS, narrower check, not
+// settlesPrompt() — emitShellRuleSettledAudit hardcodes an
+// "allow"/"rule_fully_allowed" shell.approval_decision row, which is a
+// FALSE record for a command a D3 deny rule is about to refuse.
+//
+// The deny case is deliberately left to write NOTHING from that call site:
+// ExecTool.enforceShellPermissionMode re-evaluates the SAME D3 rules
+// (bashCommandRuleVerdict's own "one rule list, one evaluator" contract —
+// this AgentLoop-side verdict and the tool's own are computed from
+// identical inputs) and, when it independently reaches the identical deny
+// verdict, its own emitAudit call (pkg/tools/shell.go, EventExec /
+// DecisionDeny) already writes an accurate exec-deny row for this exact
+// call before refusing to spawn it. Writing a SECOND, separately-worded
+// deny row here — instead of correcting the mislabeled one — would leave
+// two shell-permission audit rows for one decision instead of exactly one
+// truthful one; omitting this call entirely for the deny case is the
+// smaller, correct change.
+func (v bashRuleVerdict) fullyAllowedSettlesPrompt() bool {
+	return v.ok && v.verdict.FullyAllowed()
 }
 
 // needsRuleAsk reports whether the upfront prompt must also settle an

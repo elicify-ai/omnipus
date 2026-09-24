@@ -898,11 +898,17 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 		ex.autoPin.Run ||
 		ruleSettled ||
 		rt.al.checkStandingGrant(rt.ts.transcriptSessionID, rt.ts.agentID, ex.toolName, grantLookupArgs)
-	if ruleSettled {
+	if rules.fullyAllowedSettlesPrompt() {
 		// Review finding #8(c) (LOW): a prompt an operator D3 ALLOW rule
 		// fully settled left no audit trail before this fix —
 		// indistinguishable, by event log, from an ordinary unprompted
 		// "allow"-ceiling execution.
+		//
+		// D-12 fix (MEDIUM, 2026-09-24 security review): gated on
+		// fullyAllowedSettlesPrompt(), NOT the broader ruleSettled
+		// (settlesPrompt(), which is ALSO true for a D3 deny verdict) — see
+		// that method's own doc comment for why the deny case must write
+		// nothing from here.
 		rt.al.emitShellRuleSettledAudit(rt.ts, ex.toolArgs)
 	}
 	if approved {

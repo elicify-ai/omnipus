@@ -37,6 +37,18 @@ const (
 	blindNoResolvableHead blindSpotReason = "no resolvable command head"
 	blindFromExpansion    blindSpotReason = "command head built from a shell expansion"
 	blindNormalisedHead   blindSpotReason = "command head only resolves via normalisation"
+	// blindInterpreterForm is R3's fail-closed reason (founder decision,
+	// 2026-09-24) for an interpreter/eval form (`bash -c`, `eval`, ...) when
+	// an ask or deny rule is configured but none of them names a binary
+	// found as a word in the interpreter's own script text: the real
+	// command is invisible to this package, so the segment routes to ask
+	// rather than silently deferring to the ceiling as though no rule
+	// applied.
+	blindInterpreterForm blindSpotReason = "interpreter/eval form: real command not visible to the rule engine"
+	// blindLaterArgDenyWord is the R3 residual safety net's reason: an
+	// unrecognised head (not a known wrapper, no explicit rule match) whose
+	// LATER argument word equals a configured deny rule's binary name.
+	blindLaterArgDenyWord blindSpotReason = "an unrecognised command's argument word matches a deny rule's binary"
 )
 
 // classifySegment resolves seg's head via resolve and reports the blind-spot
