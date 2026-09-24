@@ -572,3 +572,70 @@ func TestAttach_N4_UnreadableHistory_NeverWipesTheClient(t *testing.T) {
 	assert.Equal(t, -1, indexOfType(frames, "catch_up_complete"))
 	assert.GreaterOrEqual(t, indexOfType(frames, "error"), 0)
 }
+
+// TestAttach_SeededTranscriptFreshHub_ReportsNoRunningTurn answers the
+// e2e replay-fidelity (e) investigation: a session whose history was written
+// straight to disk (never run through a live turn in this gateway process)
+// and opened with no cursor must be answered with a snapshot that carries
+// NOTHING a client could read as "a turn is running": no active_turn on
+// session_state, no token frame, no numbered frame, exactly one done (the
+// replay's own, with no turn_id), and catch_up_complete{snapshot} last.
+func TestAttach_SeededTranscriptFreshHub_ReportsNoRunningTurn(t *testing.T) {
+	h, _, al := newTestWSHandler(t)
+	t.Cleanup(h.Wait)
+	store := al.GetSessionStore()
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err)
+	base := time.Now().Add(-time.Hour).UTC()
+	for i := 0; i < 10; i++ {
+		require.NoError(t, store.AppendTranscriptStrict(meta.ID, session.TranscriptEntry{
+			ID: "entry-user-" + strconv.Itoa(i), Role: "user", Content: "Message " + strconv.Itoa(i),
+			Timestamp: base.Add(time.Duration(2*i) * time.Second),
+		}))
+		require.NoError(t, store.AppendTranscriptStrict(meta.ID, session.TranscriptEntry{
+			ID: "entry-asst-" + strconv.Itoa(i), Role: "assistant", AgentID: "mia",
+			Content:   "Response to message " + strconv.Itoa(i),
+			Timestamp: base.Add(time.Duration(2*i+1) * time.Second),
+			ToolCalls: []session.ToolCall{{
+				ID: session.ToolCallID("tc-" + strconv.Itoa(i)), Tool: "shell", Status: "success", DurationMS: 30,
+				Parameters: map[string]any{"cmd": "echo"}, Result: map[string]any{"stdout": "x"},
+			}},
+		}))
+	}
+	require.Nil(t, h.hubs.lookup(meta.ID), "precondition: no hub exists yet for the seeded session")
+
+	wc := &wsConn{sendCh: make(chan []byte, 512), doneCh: make(chan struct{})}
+	h.mu.Lock()
+	h.sessions["chat-seeded"] = wc
+	h.mu.Unlock()
+	h.handleAttachSession(context.Background(), "chat-seeded", meta.ID, nil, wc)
+	frames := drainWire(t, wc)
+	t.Logf("frames: %v", typesOf(frames))
+
+	require.NotEmpty(t, frames)
+	assert.Equal(t, "session_snapshot", frames[0].Type)
+	var dones, tokens int
+	for _, f := range frames {
+		switch f.Type {
+		case "session_state":
+			var st struct {
+				ActiveTurn any `json:"active_turn"`
+			}
+			require.NoError(t, json.Unmarshal(f.raw, &st))
+			assert.Nil(t, st.ActiveTurn, "a seeded, never-run session has no active turn")
+		case "token":
+			tokens++
+		case "done":
+			dones++
+			assert.Nil(t, f.TurnID, "the only done is the replay's own, with no turn_id")
+		}
+		if f.Type != "session_snapshot" && f.Type != "catch_up_complete" {
+			assert.Nil(t, f.Seq, "no numbered frame for a session with no live activity (%s)", f.Type)
+		}
+	}
+	assert.Zero(t, tokens, "no token frame — nothing is streaming")
+	assert.Equal(t, 1, dones, "exactly one done: the replay's closing done")
+	last := frames[len(frames)-1]
+	assert.Equal(t, "catch_up_complete", last.Type)
+	assert.Equal(t, "snapshot", last.Mode)
+}
