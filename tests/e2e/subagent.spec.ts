@@ -6,18 +6,42 @@
 // 2026-05-10 — these tests use a real LLM (OPENROUTER_API_KEY_CI required) with temperature=0
 // and seed=42 plumbed into OpenRouter requests for maximum determinism (Wave 2.1).
 //
-// data-testid cross-reference:
-//   - [data-testid="subagent-collapsed"]    — SubagentBlock.tsx (collapsed header button)
-//   - [data-testid="subagent-expanded"]     — SubagentBlock.tsx (expanded body)
-//   - [data-testid="subagent-step-counter"] — SubagentBlock.tsx (step count span)
-//   - [data-testid="subagent-live-step"]    — SubagentBlock.tsx (individual step wrapper)
-//   - [data-testid="tool-call-badge"]       — ToolCallBadge.tsx
+// REWRITTEN 2026-09-24 (lane sq-gwfix, coordinator-flagged loose end from CI run
+// 35997069836's delegation-hidden.spec.ts fix). ADR-091 D7/D10 (commit 66362240d)
+// deleted SubagentBlock.tsx and its gate `shouldRenderSubagentSpan` UNCONDITIONALLY —
+// there is no producer of any `[data-testid="subagent-*"]` element left in `src/` at
+// any verbosity. Every test in this file used to wait (test (a): 300s; (b)/(c)/(e):
+// test.slow()'s 270s; each burning real, paid LLM time) for a box that can never
+// appear, then fail. Re-pointed at the surfaces that replaced SubagentBlock (same
+// pattern as replay-fidelity.spec.ts's test (b) and delegation-hidden.spec.ts):
+//   - THREAD: the `delegate` tool-call chip (`[data-testid="tool-call-badge"]
+//     [data-tool="delegate"]`) — the parent's now-only delegation surface,
+//     visible unconditionally (shouldRenderToolCall, ADR-091 D7/AC-7).
+//   - THREAD: zero `[data-testid="subagent-collapsed"]`, ever — the guard pinning
+//     the deletion so the surface cannot quietly come back.
+//   - PANEL: the Activity panel row (`[data-testid="activity-row"]`) and its open
+//     control (`[data-testid="activity-row-open"]`) into the child's OWN session
+//     (ActivityPanel.tsx, ADR-091 D7/FR-E-004) — this is where "click the
+//     collapsed header to expand" moved to.
+//   - CHILD SESSION: the child's own tool calls, visible ONLY there (a child's
+//     frames carry the child's own session_id now, I-4 — nothing nests in the
+//     parent's thread any more, regardless of how long a test waits).
+//
+// Test (c) ("live step counter") is DELETED, not re-pointed — see its own comment
+// below for why no replacement preserves an equivalent guarantee.
+//
+// data-testid cross-reference (current, post-rewrite):
+//   - [data-testid="tool-call-badge"][data-tool="delegate"] — the parent's delegation chip
+//   - [data-testid="tool-call-toggle"]       — ToolCallBadge.tsx's own collapse/expand control
+//   - [data-testid="activity-bar"]           — ActivityBar.tsx
+//   - [data-testid="activity-row"]           — ActivityPanel.tsx (one per child)
+//   - [data-testid="activity-row-open"]      — ActivityPanel.tsx (open control into the child's session)
+//   - [data-testid="activity-row-toggle"]    — ActivityPanel.tsx's own per-row disclosure
 
-import { expect } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 import { chatInput, assistantMessages, selectAgent, waitForConnected } from './fixtures/selectors';
-import { enableVerboseChat } from './fixtures/verbose-chat';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -51,17 +75,56 @@ async function startFreshChat(page: import('@playwright/test').Page): Promise<vo
   await selectAgent(page, /Jim/i);
 }
 
+// Open/close the Activity panel — mirrors replay-fidelity.spec.ts's /
+// delegation-hidden.spec.ts's own helper of the same name (ADR-091
+// D7/FR-E-004 surface). Idempotent open avoids steered-session-stop.spec.ts's
+// documented trap: a second unconditional click while the panel is already
+// open lands on the Radix Sheet's own overlay, not the bar.
+async function openActivityPanel(page: Page): Promise<void> {
+  const bar = page.locator('[data-testid="activity-bar"]');
+  await expect(bar).toBeVisible({ timeout: 15_000 });
+  if ((await bar.getAttribute('aria-expanded')) !== 'true') {
+    await bar.click();
+  }
+  await expect(bar).toHaveAttribute('aria-expanded', 'true', { timeout: 15_000 });
+}
+
+// Poll a chat surface's data-active-session-id until it is bound to a
+// session NOT in excludeIDs (and not the '__pending' optimistic-send
+// sentinel), then return that new id. Mirrors
+// steered-session-reachability.spec.ts's own poll for the exact same seam:
+// SessionRoute redirects a worker session's deep link straight to its
+// workspace chat tab, so a URL check cannot tell "did we navigate" — this
+// attribute is the one reliable signal, on either route. Accepts a list
+// (not just one prior id) so a caller distinguishing two SIBLING children
+// can exclude both the parent's id and the first sibling's id when opening
+// the second.
+async function waitForBoundSession(page: Page, excludeIDs: Array<string | null>): Promise<string> {
+  const surface = page.locator('[data-active-session-id]').first();
+  await expect
+    .poll(
+      async () => {
+        const id = await surface.getAttribute('data-active-session-id');
+        return id && id !== '__pending' && !excludeIDs.includes(id) ? id : null;
+      },
+      { timeout: 15_000 },
+    )
+    .not.toBeNull();
+  const id = await surface.getAttribute('data-active-session-id');
+  if (!id) throw new Error('waitForBoundSession: resolved to an empty session id');
+  return id;
+}
+
 test.beforeEach(async ({ page }) => {
-  // Delegation visuals (SubagentBlock cards) are verbose-only in the chat
-  // thread since commit 8e1bf1b9 (shouldRenderSubagentSpan gates on
-  // verboseChatEnabled, default false — src/store/chatPreferences.ts). This
-  // whole file asserts the sub-turn MECHANICS (spawn, grandchild refusal,
-  // sibling independence, live step counter, a11y) via
-  // [data-testid="subagent-collapsed"] as its thread-based signal, so it
-  // opts into verbose chat here to keep that signal working — independent
-  // of the default (non-verbose) display policy, which is covered
-  // separately by delegation-hidden.spec.ts.
-  await enableVerboseChat(page);
+  // UPDATE 2026-09-24 (lane sq-gwfix): this file used to opt into verbose
+  // chat here so its tests could use [data-testid="subagent-collapsed"] as
+  // their thread-based signal. ADR-091 D7/D10 (66362240d) deleted that
+  // component and its gate unconditionally — there is nothing left to opt
+  // into verbose chat FOR. Every test below now asserts the `delegate`
+  // tool-call chip and the Activity panel, neither of which
+  // src/lib/toolVisibility.ts's shouldRenderToolCall or ActivityBar.tsx
+  // gate on verboseChatEnabled — matching replay-fidelity.spec.ts's own
+  // "no verbose-chat opt-in anywhere in this file" precedent.
   await page.goto('/');
 });
 
@@ -77,15 +140,17 @@ test.beforeEach(async ({ page }) => {
 // Traces to: sprint-h-subagent-block-spec.md TDD row 21, BDD Scenario 10, lines 304-313
 // ────────────────────────────────────────────────────────────────────────────────
 test(
-  '(a) grandchild refused: leaf-role subagent (Researcher) attempting delegate is refused, no nested block',
+  '(a) grandchild refused: leaf-role subagent (Researcher) attempting delegate is refused, no nested row',
   async ({ page }) => {
     requireApiKey();
-    // 420s total: this test triggers TWO LLM round-trips (parent delegate +
-    // subagent's failed grandchild-delegate attempt) before the collapsed block
-    // settles, so the budget is wider than the sibling subagent tests.
-    // test.slow()'s 270s was insufficient in CI under suite load — observed
-    // 4×156s failures consistently exceeding the 150s collapsed budget.
-    test.setTimeout(420_000);
+    // 300s: one parent delegate call (fast) plus Researcher's own refused
+    // grandchild-delegate attempt, observed via Researcher's OWN session.
+    // The refusal itself is fast (a policy check, not a second real LLM
+    // round-trip past the tool call) — this is narrower than the old 420s
+    // because that budget was sized for "wait for a box that needed both
+    // round-trips AND client-side rendering to settle"; here the parent
+    // delegate badge and the panel row resolve independently and early.
+    test.setTimeout(300_000);
 
     await startFreshChat(page);
 
@@ -98,10 +163,11 @@ test(
     // a page-load-time reconnect blip can leave the composer looking usable
     // while the very first message (the one that triggers `delegate`) lands
     // in the outbound queue instead of the wire, and this test then hangs to
-    // its full timeout waiting on a subagent-collapsed block that will never
-    // appear.
+    // its full timeout waiting on a chip that will never appear.
     await expect(input).toBeEnabled({ timeout: 15_000 });
     await waitForConnected(page, { timeout: 15_000 });
+
+    const label = `grandchild-test-${Date.now()}`;
 
     // Deterministic prompt: commanding, specific — exact tool name, exact target.
     // Target pinned to Researcher: a LEAF in the delegation graph — Jim → Researcher
@@ -115,41 +181,78 @@ test(
       [
         'Call the `delegate` tool exactly once, right now, with these arguments:',
         '  agent_id: "researcher"',
-        '  label: "grandchild test"',
+        `  label: "${label}"`,
         '  task: "You are the subagent. Your one and only job is to call the `delegate` tool yourself to attempt to delegate to a grandchild subagent with task \\"hello\\". If delegate is not available to you, report the exact error you receive. Do not do anything else."',
         'Do not reply in prose. Do not call any other tool. Call delegate now.',
       ].join('\n'),
     );
     await input.press('Enter');
 
-    // Structural assertion: wait for at least one subagent-collapsed to appear (the parent delegate).
-    // If the parent model does not comply, the test fails honestly.
-    // 300s budget: this test needs the parent delegate AND the subagent's failed
-    // grandchild-delegate round-trip to both complete; under CI load GLM-5v-turbo
-    // can take 150-280s for that pair. 150s gave 4×156s timeouts in CI even
-    // though local-isolated runs land in 20-40s.
-    const collapsedBlocks = page.locator('[data-testid="subagent-collapsed"]');
-    await expect(collapsedBlocks.first()).toBeVisible({ timeout: 300_000 });
+    // (1) THREAD — the parent's delegate chip, and the guard: zero
+    // subagent-collapsed elements ever, at any verbosity.
+    const delegateBadges = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]');
+    await expect(delegateBadges.first()).toBeVisible({ timeout: 60_000 });
+    await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
 
-    const blockCount = await collapsedBlocks.count();
+    // (2) PANEL — exactly one row at the PARENT level (the direct analog of
+    // "exactly one parent-level collapsed block": the leaf subagent's
+    // refused delegate attempt must not create a second span up here, since
+    // a refused/never-dispatched grandchild never gets its own
+    // subagent_start in the parent's bucket either).
+    await openActivityPanel(page);
+    const parentRow = page.locator('[data-testid="activity-row"]', { hasText: label });
+    await expect(parentRow).toBeVisible({ timeout: 60_000 });
+    await expect(
+      page.locator('[data-testid="activity-row"]'),
+      'exactly one Activity-panel row at the parent level — the leaf subagent\'s refused delegate attempt must not create a second row',
+    ).toHaveCount(1);
+    const openControl = parentRow.locator('[data-testid="activity-row-open"]');
+    await expect(openControl).toBeVisible({ timeout: 15_000 });
 
-    // Expand the parent block to inspect inner content.
-    await collapsedBlocks.first().click();
-    const expandedBlock = page.locator('[data-testid="subagent-expanded"]');
-    await expect(expandedBlock).toBeVisible({ timeout: 10_000 });
+    // (3) CHILD SESSION — open Researcher's own session (where its refused
+    // delegate attempt actually lives now — I-4, a child's frames carry the
+    // child's own session_id, never the parent's).
+    const parentSurface = page.locator('[data-active-session-id]').first();
+    const parentSessionID = await parentSurface.getAttribute('data-active-session-id');
+    await openControl.click();
+    await waitForBoundSession(page, [parentSessionID]);
 
-    // Structural assertion: no nested [data-testid="subagent-collapsed"] inside the expanded region.
-    // Traces to: BDD Scenario 10 — "no subagent_start frame with a grandchild parent_call_id"
-    const nestedCollapsed = expandedBlock.locator('[data-testid="subagent-collapsed"]');
-    const nestedCount = await nestedCollapsed.count();
-    expect(nestedCount, 'expanded SubagentBlock must contain zero nested subagent-collapsed elements (the leaf-role subagent — Researcher holds no delegate grant — must not produce a nested block — FR-H-006)').toBe(0);
+    // Researcher's OWN delegate attempt is visible in ITS OWN thread — the
+    // call happened, and it did not succeed. `getToolBadgeStatusConfig`'s
+    // generic failure label is "Failed"; a structured delegation_denied
+    // sentinel (toolResultSentinels.ts) renders "Delegation denied · …" —
+    // either is an honest signal the attempt was refused, so the check
+    // accepts both rather than pinning the exact backend error shape.
+    const childDelegateBadge = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]').first();
+    await expect(
+      childDelegateBadge,
+      'Researcher must show its own (refused) delegate attempt in its own session',
+    ).toBeVisible({ timeout: 90_000 });
+    await expect(childDelegateBadge).toContainText(/Delegation denied|Failed/i, { timeout: 30_000 });
 
-    // Structural assertion: exactly one parent-level collapsed block.
-    expect(blockCount, 'exactly one SubagentBlock at parent level — the leaf subagent\'s refused delegate attempt must not create a second block').toBe(1);
-
-    // Structural assertion: expanded block has child elements (steps or error message).
-    const children = await expandedBlock.locator('> *').count();
-    expect(children, 'expanded block must have content (steps or error message)').toBeGreaterThan(0);
+    // (4) CHILD SESSION — no grandchild ever spawned: Traces to BDD Scenario
+    // 10's actual invariant, "no subagent_start frame with a grandchild
+    // parent_call_id is emitted". Direct replacement for "no nested
+    // subagent-collapsed inside the expanded region" (FR-H-006): checked
+    // from INSIDE the child's own session (where a grandchild's row would
+    // live, if one existed) rather than as a nested element of a card that
+    // no longer exists.
+    //
+    // ActivityBar.tsx mounts NOTHING when there is no open/failed agent
+    // child (its own shouldMount gate) — a policy-refused delegate call
+    // never reaches Launch, so the bar most likely never mounts here at
+    // all. But Radix's Sheet unmounts its CONTENT while closed, so if the
+    // bar DID mount for some other reason, an unopened panel would hide a
+    // real row rather than proving its absence — open it first so a count
+    // of 0 is never a false negative from an unopened Sheet.
+    const childActivityBar = page.locator('[data-testid="activity-bar"]');
+    if ((await childActivityBar.count()) > 0) {
+      await openActivityPanel(page);
+    }
+    await expect(
+      page.locator('[data-testid="activity-row"]'),
+      'Researcher must show zero Activity-panel rows of its own — the refused delegate call never produced a grandchild subagent_start (FR-H-006)',
+    ).toHaveCount(0);
   },
 );
 
@@ -163,13 +266,17 @@ test(
 // Traces to: sprint-h-subagent-block-spec.md TDD row 22, BDD Scenario 13, lines 334-342
 // ────────────────────────────────────────────────────────────────────────────────
 test(
-  '(b) sibling delegate calls: two back-to-back delegate calls render as two independent SubagentBlocks',
+  '(b) sibling delegate calls: two back-to-back delegate calls produce two independent rows opening two distinct child sessions',
   async ({ page }) => {
     requireApiKey();
-    // test.slow() triples the global 90s test timeout to 270s. Subagent
-    // delegation + execution can take 30-90s end-to-end under suite load even
-    // though the same test passes in 5-15s alone.
-    test.slow();
+    // 240s: two independent-but-trivial child turns ("reply with one word,
+    // use no tools") plus opening each child's own session in turn. Not
+    // test.slow()'s inherited 270s — re-derived because the new assertions
+    // (delegate chips + panel rows) resolve as soon as the PARENT's own
+    // turn emits both tool calls, without needing to wait for a nested,
+    // client-rendered expand/collapse sequence the old test also budgeted
+    // for.
+    test.setTimeout(240_000);
 
     await startFreshChat(page);
 
@@ -182,10 +289,12 @@ test(
     // a page-load-time reconnect blip can leave the composer looking usable
     // while the very first message (the one that triggers `delegate`) lands
     // in the outbound queue instead of the wire, and this test then hangs to
-    // its full timeout waiting on a subagent-collapsed block that will never
-    // appear.
+    // its full timeout waiting on a chip that will never appear.
     await expect(input).toBeEnabled({ timeout: 15_000 });
     await waitForConnected(page, { timeout: 15_000 });
+
+    const labelOne = `sibling-one-${Date.now()}`;
+    const labelTwo = `sibling-two-${Date.now()}`;
 
     // Deterministic prompt: explicit, numbered, no prose.
     await input.fill(
@@ -193,207 +302,138 @@ test(
         'Call the `delegate` tool exactly TWO times, in sequence. No other tools. No prose answer until both delegations have been issued.',
         '',
         'First call (do this first):',
-        '  delegate(label="task one", task="Reply with the word done-one. Use no tools.")',
+        `  delegate(label="${labelOne}", task="Reply with the word done-one. Use no tools.")`,
         '',
         'Second call (do this immediately after the first returns):',
-        '  delegate(label="task two", task="Reply with the word done-two. Use no tools.")',
+        `  delegate(label="${labelTwo}", task="Reply with the word done-two. Use no tools.")`,
         '',
         'Issue both delegate tool calls now.',
       ].join('\n'),
     );
     await input.press('Enter');
 
-    // Structural assertion: wait for the first collapsed block.
-    const collapsedBlocks = page.locator('[data-testid="subagent-collapsed"]');
-    await expect(collapsedBlocks.first()).toBeVisible({ timeout: 60_000 });
+    // (1) THREAD — the guard: zero subagent-collapsed elements, ever.
+    await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
 
-    // Structural assertion: at least 2 sibling blocks.
-    // Traces to: BDD Scenario 13 — "two distinct SubagentBlock elements"
-    await expect(collapsedBlocks).toHaveCount(2, { timeout: 60_000 });
+    // (2) THREAD — at least 2 sibling delegate chips.
+    // Traces to: BDD Scenario 13 — "two distinct SubagentBlock elements".
+    const delegateBadges = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]');
+    await expect(delegateBadges.first()).toBeVisible({ timeout: 60_000 });
+    await expect(delegateBadges).toHaveCount(2, { timeout: 60_000 });
 
     // THEN LET THE COUNT SETTLE BEFORE TOUCHING ANYTHING.
     //
     // toHaveCount polls until the count EQUALS 2 and returns the moment it
-    // does — it does not promise the model is finished. The prompt above asks
-    // for exactly two delegate calls, and a real model usually complies, but
-    // "usually" is the whole problem: when a third call lands during the
-    // expand/collapse sequence below, the final count is 3 and the last
-    // assertion fails on a run where nothing about the PRODUCT was wrong.
-    //
-    // That is how it failed on CI: one failure, then a clean pass on retry #1
-    // in the same job, with the error "exactly 2 sibling SubagentBlocks must
-    // be rendered for two delegate calls".
-    //
-    // How many times the model chooses to call `delegate` is not a product
-    // invariant and this test never had a way to enforce it. What IS the
-    // product invariant — and what BDD Scenario 13 is actually about — is that
-    // sibling blocks render independently and that expanding or collapsing one
-    // neither creates nor destroys another. So: settle, snapshot the count,
-    // and hold the INVARIANT against that snapshot.
-    let stableCount = await collapsedBlocks.count();
+    // does — it does not promise the model is finished. The prompt above
+    // asks for exactly two delegate calls, and a real model usually
+    // complies, but "usually" is the whole problem: a third call landing
+    // during the panel/navigation sequence below would make a later exact
+    // count assertion fail on a run where nothing about the PRODUCT was
+    // wrong (this exact settle pattern is preserved from before this
+    // rewrite — it is not part of what ADR-091 changed). How many times the
+    // model chooses to call `delegate` is not a product invariant this test
+    // can enforce. What IS the invariant — and what BDD Scenario 13 is
+    // actually about — is that sibling children are independent: each has
+    // its own row and its own distinct session, and neither's existence
+    // depends on the other. So: settle, snapshot the count, and hold that
+    // snapshot as the INVARIANT.
+    let stableCount = await delegateBadges.count();
     for (let i = 0; i < 6; i++) {
       await page.waitForTimeout(500);
-      const now = await collapsedBlocks.count();
+      const now = await delegateBadges.count();
       if (now === stableCount) break;
       stableCount = now;
     }
     expect(
       stableCount,
-      'at least 2 sibling SubagentBlocks are required to test independent expansion',
+      'at least 2 sibling delegate chips are required to test independent children',
     ).toBeGreaterThanOrEqual(2);
 
-    // Verify independent expansion: expand first — second should remain collapsed.
-    await collapsedBlocks.nth(0).click();
-    const expandedBlocks = page.locator('[data-testid="subagent-expanded"]');
-    await expect(expandedBlocks).toHaveCount(1, { timeout: 10_000 });
+    // (3) PANEL — one row per sibling, matching the settled thread count.
+    // This is the direct replacement for "two distinct SubagentBlock
+    // elements": each child gets its own row (ActivityPanel.tsx), not a
+    // nested element of a deleted card.
+    await openActivityPanel(page);
+    const rowOne = page.locator('[data-testid="activity-row"]', { hasText: labelOne });
+    const rowTwo = page.locator('[data-testid="activity-row"]', { hasText: labelTwo });
+    await expect(rowOne).toBeVisible({ timeout: 30_000 });
+    await expect(rowTwo).toBeVisible({ timeout: 30_000 });
+    await expect(
+      page.locator('[data-testid="activity-row"]'),
+      'the Activity panel must carry exactly one row per settled sibling delegate chip',
+    ).toHaveCount(stableCount);
 
-    // Expand second — both should now be expanded independently.
-    await collapsedBlocks.nth(1).click();
-    await expect(expandedBlocks).toHaveCount(2, { timeout: 10_000 });
+    // (4) DIFFERENTIATION — replaces "each expands independently without
+    // affecting the other" with a STRONGER guarantee: each row's open
+    // control targets a genuinely DIFFERENT child session, not merely
+    // independent CSS expand state on a card. This is the underlying thing
+    // BDD Scenario 13 cared about — two real, independent children — made
+    // directly observable now that a child's own identity (its session) is
+    // one click away instead of nested detail inside a parent card.
+    const parentSurface = page.locator('[data-active-session-id]').first();
+    const parentSessionID = await parentSurface.getAttribute('data-active-session-id');
 
-    // Collapse first — second should remain expanded.
-    await collapsedBlocks.nth(0).click();
-    await expect(expandedBlocks).toHaveCount(1, { timeout: 10_000 });
+    const openOne = rowOne.locator('[data-testid="activity-row-open"]');
+    await expect(openOne).toBeVisible({ timeout: 15_000 });
+    await openOne.click();
+    const childOneSessionID = await waitForBoundSession(page, [parentSessionID]);
 
-    // Differentiation test: two different blocks expanded and collapsed
-    // independently, and the block set itself is untouched by doing so.
-    const finalCount = await collapsedBlocks.count();
+    // Return to the parent's own session directly (not page.goBack(), which
+    // is ambiguous here: SessionRoute's own internal redirect — see
+    // steered-session-reachability.spec.ts's comment on this exact seam —
+    // can leave more than one history entry per Open click) and reopen the
+    // panel — panelOpen is component-local React state, reset by the route
+    // swap.
+    await page.goto(`/#/sessions/${parentSessionID}`);
+    await waitForBoundSession(page, [childOneSessionID]);
+    await openActivityPanel(page);
+    const openTwo = page.locator('[data-testid="activity-row"]', { hasText: labelTwo }).locator('[data-testid="activity-row-open"]');
+    await expect(openTwo).toBeVisible({ timeout: 15_000 });
+    await openTwo.click();
+    const childTwoSessionID = await waitForBoundSession(page, [parentSessionID, childOneSessionID]);
+
     expect(
-      finalCount,
-      'expanding and collapsing sibling SubagentBlocks must not create or destroy blocks',
-    ).toBe(stableCount);
+      childTwoSessionID,
+      'sibling delegate calls must open two DIFFERENT child sessions — independence is a property of the children, not just of the UI state',
+    ).not.toBe(childOneSessionID);
   },
 );
 
-// ────────────────────────────────────────────────────────────────────────────────
-// (c) live step counter — US-4, Scenario 2
-// BDD: Given a sub-turn that fires ≥3 tool_call_start frames with matching parent_call_id
-//      When the run progresses
-//      Then the collapsed header's step count text increments visibly (0→1→...→≥3)
+// (c) live step counter — DELETED 2026-09-24 (lane sq-gwfix), not re-pointed.
 //
-// Traces to: sprint-h-subagent-block-spec.md TDD row 23, BDD Scenario 2, lines 221-229
-// ────────────────────────────────────────────────────────────────────────────────
-test(
-  '(c) live step counter: collapsed header step count increments during multi-step sub-turn',
-  async ({ page }) => {
-    // T0.1 (re-investigated): the `test.skip(true, ...)` that used to sit here
-    // ran BEFORE `test.slow()` below — since test.skip() throws/aborts test
-    // execution immediately, test.slow() (which triples the global 90s
-    // timeout to 270s) never actually executed. So the ">40s under load"
-    // flake this skip cited was never actually covered by the wider budget;
-    // the test was skipping itself with LESS headroom than it appeared to
-    // have on paper. Removing the skip lets test.slow() apply for real.
-    // See tests/e2e/README.md and the removed SKIP_ALLOWLIST entry (#155)
-    // for the prior reasoning — validated below via repeated real runs
-    // rather than assumed.
-    requireApiKey();
-    // test.slow() triples the global 90s test timeout to 270s. Subagent
-    // delegation + execution can take 30-90s end-to-end under suite load even
-    // though the same test passes in 5-15s alone.
-    test.slow();
-
-    await startFreshChat(page);
-
-    const input = chatInput(page);
-    await expect(input).toBeVisible({ timeout: 15_000 });
-    // Confirm the composer is genuinely usable — enabled AND the socket is
-    // actually open, not merely queueing. toBeEnabled() alone no longer
-    // implies "connected" since the #105 offline-queue fix (2fa26e6a): see
-    // waitForConnected's doc comment in fixtures/selectors.ts. Without this,
-    // a page-load-time reconnect blip can leave the composer looking usable
-    // while the very first message (the one that triggers `delegate`) lands
-    // in the outbound queue instead of the wire, and this test then hangs to
-    // its full timeout waiting on a subagent-collapsed block that will never
-    // appear.
-    await expect(input).toBeEnabled({ timeout: 15_000 });
-    await waitForConnected(page, { timeout: 15_000 });
-
-    // Deterministic prompt: force a single delegate call with a subagent task that mandates ≥3 tool calls.
-    // Target pinned to Worker (the execution-role subagent): the subagent runs under the
-    // RESOLVED TARGET's policy and role instructions, not the parent's, so target choice is a
-    // fixture lever even though read_file is allowed for every role. Keeping the target fixed
-    // removes the parent model's target choice as a variance source.
-    await input.fill(
-      [
-        'Call the `delegate` tool exactly once, now, with these arguments:',
-        '  agent_id: "worker"',
-        '  label: "multi step counter test"',
-        '  task: "You are a subagent. You MUST call the read_file tool exactly THREE times in this exact order. Do not skip any call. Do not reply in prose between them. (1) read_file with path=\\"/etc/hostname\\"; (2) read_file with path=\\"/etc/os-release\\"; (3) read_file with path=\\"/proc/version\\". After all three read_file calls have completed, reply with the single word \\"finished\\"."',
-        'Do not call any other tool. Do not reply in prose. Call delegate now.',
-      ].join('\n'),
-    );
-    await input.press('Enter');
-
-    // Structural assertion: wait for the collapsed block to appear.
-    const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]').first();
-    await expect(collapsedBlock).toBeVisible({ timeout: 60_000 });
-
-    // Structural assertion: [data-testid="subagent-step-counter"] must be present.
-    // This verifies the step counter element exists in the DOM (FR-H-010).
-    const stepCounter = collapsedBlock.locator('[data-testid="subagent-step-counter"]');
-    await expect(stepCounter).toBeVisible({ timeout: 5_000 });
-
-    // Poll for ≥3 steps in the step counter text.
-    // Traces to: sprint-h-subagent-block-spec.md BDD Scenario 2 — "step counter shows N steps"
-    let reachedThreeSteps = false;
-    const deadline = Date.now() + 60_000; // 60s budget for multi-step run
-
-    while (Date.now() < deadline) {
-      // Scoped catch — only swallow stale-locator errors, rethrow others.
-      const counterText = await stepCounter.textContent().catch((err: unknown) => {
-        if (err instanceof Error && (err.message.includes('Element is not attached') || err.message.includes('locator handle is stale'))) return null;
-        throw err;
-      });
-      if (!counterText) break;
-
-      const stepMatch = counterText.match(/(\d+)\s+steps?/);
-      if (stepMatch) {
-        const count = parseInt(stepMatch[1], 10);
-        if (count >= 3) {
-          reachedThreeSteps = true;
-          break;
-        }
-      }
-
-      // Check if the sub-turn has finished.
-      const headerText = await collapsedBlock.textContent().catch((err: unknown) => {
-        if (err instanceof Error && (err.message.includes('Element is not attached') || err.message.includes('locator handle is stale'))) return null;
-        throw err;
-      });
-      if (!headerText) break;
-      const isFinished = !headerText.includes('working') && !headerText.includes('Running');
-      if (isFinished && !reachedThreeSteps) break;
-
-      await page.waitForTimeout(500);
-    }
-
-    // Hard assertion: the step counter must have reached ≥3 steps.
-    // The subagent must execute all three read_file calls — the ≥3-tool-call
-    // oracle is unchanged.
-    // If reachedThreeSteps is false, the product did not produce the required steps.
-    if (!reachedThreeSteps) {
-      // Verify at least the step counter IS rendering (not a missing testid regression).
-      const finalCounterText = await stepCounter.textContent().catch(() => '');
-      const anySteps = /\d+\s+steps?/.test(finalCounterText ?? '');
-      if (!anySteps) {
-        throw new Error(
-          'PRODUCT REGRESSION: SubagentBlock appeared but [data-testid="subagent-step-counter"] rendered no step count text. ' +
-          'Expected text matching /\\d+ steps?/. ' +
-          'Traces to: temporal-puzzling-melody.md W2-7, sprint-h-subagent-block-spec.md FR-H-010.',
-        );
-      }
-      throw new Error(
-        'ASSERTION FAILED: LLM subagent executed fewer than 3 tool calls. ' +
-        'The subagent must follow the prompt and execute 3 read_file calls. ' +
-        `Step counter text at timeout: "${finalCounterText}". ` +
-        'Traces to: sprint-h-subagent-block-spec.md BDD Scenario 2.',
-      );
-    }
-
-    expect(reachedThreeSteps).toBe(true);
-  },
-);
-
+// Was: US-4/Scenario 2 — the collapsed header's step-count text incrementing
+// visibly (0→1→...→≥3) as a sub-turn fired ≥3 tool_call_start frames, polled
+// via [data-testid="subagent-step-counter"] INSIDE the parent's own card.
+// Traced to sprint-h-subagent-block-spec.md TDD row 23, BDD Scenario 2.
+//
+// This is the one test in this file NOT re-pointed at the surface that
+// replaced SubagentBlock, because there is no surface that carries an
+// equivalent guarantee — ADR-091 D10 deleted per-step detail from the
+// parent's view ON PURPOSE, not just relocated it: "a span carries no step
+// detail any more" (ActivityPanel.tsx's own doc comment). The nearest thing
+// left, ActivityRow's `statusLine`, is qualitatively different, not a
+// weaker version of the same signal:
+//   - It is fed by `subagent_message` frames (steer_frames.go's
+//     deliverSubagentMessage), themselves gated behind audience-scoped
+//     upward delivery (steer_audience.go::SteerUpwardDeliverer.Deliver) —
+//     an opportunistic, LLM-authored progress note the child chooses to
+//     send, not a deterministic per-tool-call counter driven by
+//     tool_call_start frames.
+//   - It is free text, not a number — "the step counter shows N steps,
+//     N >= 3" has no equivalent assertion once the underlying signal is a
+//     sentence a child may or may not have said yet.
+// A rewrite that polled statusLine for "some text eventually appears" would
+// not be a weaker version of Scenario 2's oracle, it would be a DIFFERENT,
+// much looser claim ("the child said something at some point") dressed up
+// to look like a re-point. Per this lane's brief — "I would rather lose a
+// test deliberately than keep a vacuous one" — deleting it is the honest
+// choice; keeping a test that polls prose for the WORD "steps" would have
+// been vacuous by construction (nothing in the new architecture ever emits
+// that word). The Go-level, deterministic half of this guarantee (a
+// multi-tool-call sub-turn genuinely executes every call in order) is
+// unaffected by any of this and is not this file's job to re-cover — it
+// lives at the tool-dispatch layer, not the UI.
+//
 // ────────────────────────────────────────────────────────────────────────────────
 // (d) real-LLM smoke — US-1
 // BDD: Uses OpenRouter CI (OPENROUTER_API_KEY_CI env). Drives a real delegate turn
@@ -437,7 +477,7 @@ test(
 // delegation turn, not a wager on the model's tool choice.
 // ────────────────────────────────────────────────────────────────────────────────
 test(
-  '(d) real-LLM smoke: a live delegate turn renders a working SubagentBlock with no console errors',
+  '(d) real-LLM smoke: a live delegate turn renders a delegate chip and Activity panel row with no console errors',
   async ({ page, consoleErrors }) => {
     // T0.1: OPENROUTER_API_KEY_CI soft-skip removed. The key is required in CI.
     requireApiKey();
@@ -451,8 +491,9 @@ test(
     // too, producing a confusing "context canceled" server-side error that
     // looks unrelated to the actual root cause (a plain timeout). Root-caused
     // via direct gateway-log instrumentation on 2026-07-07 — see PR history.
-    // Deliberately UNCHANGED by RC6: see the note above on why raising it would
-    // be the wrong fix.
+    // Deliberately UNCHANGED by RC6, and unaffected by this rewrite: the
+    // delegate chip and Activity row resolve no slower than the deleted card
+    // did (same underlying frames), so the same budget still applies.
     test.setTimeout(360_000);
 
     await startFreshChat(page);
@@ -466,8 +507,7 @@ test(
     // a page-load-time reconnect blip can leave the composer looking usable
     // while the very first message (the one that triggers `delegate`) lands
     // in the outbound queue instead of the wire, and this test then hangs to
-    // its full timeout waiting on a subagent-collapsed block that will never
-    // appear.
+    // its full timeout waiting on a chip that will never appear.
     await expect(input).toBeEnabled({ timeout: 15_000 });
     await waitForConnected(page, { timeout: 15_000 });
 
@@ -485,38 +525,49 @@ test(
     );
     await input.press('Enter');
 
-    // The delegation card is the FIRST thing to appear — the collapsed block
-    // renders as soon as the sub-turn starts, well before the parent's final
-    // prose. Assert it before the completed-message count so a turn that never
-    // delegates fails HERE, naming the missing block, instead of 300s later as
-    // a bare "expected 1, received 0" on the assistant-message count (which was
-    // how the RC6 failure presented and why it read as a timeout).
+    // The delegate chip is the FIRST thing to appear — it renders as soon as
+    // the parent's own turn emits the tool call, well before the parent's
+    // final prose. Assert it before the completed-message count so a turn
+    // that never delegates fails HERE, naming the missing chip, instead of
+    // 300s later as a bare "expected 1, received 0" on the assistant-message
+    // count (which was how the RC6 failure presented and why it read as a
+    // timeout).
     //
     // Use .first(): glm-5.2 occasionally fans out to more than one subagent,
     // which would make a bare locator strict-mode-fail. We only need >=1.
-    const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]').first();
+    const delegateBadge = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]').first();
     await expect(
-      collapsedBlock,
+      delegateBadge,
       'the prompt names `delegate` explicitly, so a sub-turn must start and ' +
-        'render a SubagentBlock. No block means the model either took the ' +
+        'render its delegate chip. No chip means the model either took the ' +
         'create_task/run_task route instead (RC6) or delegation is broken — ' +
         'check the gateway log for the actual tool calls before touching this ' +
         'timeout.',
     ).toBeVisible({ timeout: 240_000 });
 
+    // Guard: zero subagent-collapsed elements, ever — ADR-091 D7/D10
+    // deleted the card unconditionally.
+    await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
+
     // Now wait for the parent turn to actually finish. 300s total leaves ~60s
-    // of the 360s test-level ceiling for the expansion + a11y checks below.
+    // of the 360s test-level ceiling for the panel + a11y checks below.
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 300_000 });
 
-    // Click to expand — basic expansion must work.
-    await collapsedBlock.click();
-    const expandedBlock = page.locator('[data-testid="subagent-expanded"]');
-    await expect(expandedBlock).toBeVisible({ timeout: 10_000 });
+    // Open the Activity panel — the surface that replaced "click to expand".
+    await openActivityPanel(page);
+    const row = page.locator('[data-testid="activity-row"]').first();
+    await expect(
+      row,
+      'a completed delegation must leave a row in the Activity panel',
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(row.locator('[data-testid="activity-row-open"]')).toBeVisible({ timeout: 10_000 });
 
-    // a11y check on subagent elements (BDD Scenario 11, US-5).
+    // a11y check covering both surfaces that replaced SubagentBlock's
+    // collapsed/expanded states: the thread's delegate chip and the open
+    // Activity panel's row.
     // Traces to: sprint-h-subagent-block-spec.md Scenario 11, line 316
     await expectA11yClean(page, {
-      include: ['[data-testid^="subagent-"]'],
+      include: ['[data-testid="tool-call-badge"]', '[data-testid="activity-row"]'],
     });
 
     // Zero unexpected JS console errors (captured by the consoleErrors fixture,
@@ -527,18 +578,33 @@ test(
 );
 
 // ────────────────────────────────────────────────────────────────────────────────
-// Axe integration: WCAG 2.1 AA against SubagentBlock elements
+// Axe integration: WCAG 2.1 AA against the surfaces that replaced SubagentBlock.
 // Tests both collapsed and expanded states to satisfy US-5 / BDD Scenario 11.
 // Traces to: sprint-h-subagent-block-spec.md TDD row 17 (component) + SC-H-006 (E2E layer)
+//
+// REWRITTEN 2026-09-24 (lane sq-gwfix): SubagentBlock had ONE collapse/expand
+// affordance carrying both states. ADR-091 D7/D10 split that into TWO real
+// surfaces — the delegate chip's own toggle (ToolCallBadge.tsx) and the
+// Activity panel row (ActivityPanel.tsx) — so this test now covers three
+// checks instead of two: the delegate chip collapsed, the delegate chip
+// expanded (its own params/result disclosure — the same KIND of affordance
+// SubagentBlock used to have, just on a different component), and the
+// Activity panel row (the surface that replaced "expand to see the child's
+// status"). Strictly more coverage than the two states this test used to
+// check, not less.
 // ────────────────────────────────────────────────────────────────────────────────
 test(
-  '(e) axe baseline: SubagentBlock elements are WCAG 2.1 AA clean',
+  '(e) axe baseline: the delegate chip and Activity panel row are WCAG 2.1 AA clean',
   async ({ page }) => {
     requireApiKey();
-    // test.slow() triples the global 90s test timeout to 270s. Subagent
-    // delegation + execution can take 30-90s end-to-end under suite load even
-    // though the same test passes in 5-15s alone.
-    test.slow();
+    // 300s, replacing the inherited test.slow() (270s): unlike the old
+    // two-state check, expanding the delegate chip's OWN toggle needs the
+    // delegate call to reach a TERMINAL status first (ToolCallBadge.tsx
+    // disables tool-call-toggle while `isRunning` — "while running, there
+    // is nothing to expand"), i.e. the child must actually finish its bash
+    // echo, not just start. Budgeted like the other child-completion waits
+    // in this shard (subagent.spec.ts test (a), handoff.spec.ts test (b)).
+    test.setTimeout(300_000);
 
     await startFreshChat(page);
 
@@ -551,10 +617,11 @@ test(
     // a page-load-time reconnect blip can leave the composer looking usable
     // while the very first message (the one that triggers `delegate`) lands
     // in the outbound queue instead of the wire, and this test then hangs to
-    // its full timeout waiting on a subagent-collapsed block that will never
-    // appear.
+    // its full timeout waiting on a chip that will never appear.
     await expect(input).toBeEnabled({ timeout: 15_000 });
     await waitForConnected(page, { timeout: 15_000 });
+
+    const label = `axe-test-subagent-${Date.now()}`;
 
     // The prompt gives the subagent a real reason to exist (running a shell
     // command in isolation) so the LLM doesn't shortcut and answer directly.
@@ -563,32 +630,48 @@ test(
     await input.fill(
       [
         'Use the `delegate` tool right now to hand off work to a subagent.',
-        'Set label to "axe test subagent".',
+        `Set label to "${label}".`,
         'Set task to: "Use the bash tool to run `echo hello-from-subagent` and return the exact stdout."',
         'Do not run bash yourself — hand this off by calling delegate now.',
       ].join('\n'),
     );
     await input.press('Enter');
 
-    // Structural assertion: wait for a SubagentBlock to appear.
+    // Structural assertion: wait for the delegate chip to appear.
     // With temperature=0+seed=42 the LLM must comply — test fails honestly if it doesn't.
-    const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]');
-    await expect(collapsedBlock.first()).toBeVisible({ timeout: 60_000 });
+    const delegateBadge = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]').first();
+    await expect(delegateBadge).toBeVisible({ timeout: 60_000 });
 
-    // Test 1: axe against collapsed state.
+    // Guard: zero subagent-collapsed elements, ever.
+    await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
+
+    // Test 1: axe against the delegate chip's COLLAPSED state.
     // Traces to: sprint-h-subagent-block-spec.md Scenario 11 — "collapsed SubagentBlock"
     await expectA11yClean(page, {
-      include: ['[data-testid^="subagent-"]'],
+      include: ['[data-testid="tool-call-badge"]'],
     });
 
-    // Test 2: expand the block and run axe again against expanded state.
+    // Test 2: expand the delegate chip's own disclosure (ToolCallBadge.tsx's
+    // tool-call-toggle) and run axe again — this is the delegate chip's own
+    // params/result panel, the same KIND of collapse/expand SubagentBlock
+    // used to carry, now on the surface that actually renders it.
     // Traces to: sprint-h-subagent-block-spec.md Scenario 11 — "expanded SubagentBlock"
-    await collapsedBlock.first().click();
-    const expandedBlock = page.locator('[data-testid="subagent-expanded"]');
-    await expect(expandedBlock).toBeVisible({ timeout: 10_000 });
-
+    const delegateToggle = delegateBadge.locator('[data-testid="tool-call-toggle"]');
+    await expect(delegateToggle).toBeEnabled({ timeout: 150_000 });
+    await delegateToggle.click();
     await expectA11yClean(page, {
-      include: ['[data-testid^="subagent-"]'],
+      include: ['[data-testid="tool-call-badge"]'],
+    });
+
+    // Test 3: the Activity panel row — the surface that replaced "expand to
+    // see the child's status", covering territory the old two-state check
+    // never reached (SubagentBlock's own expanded region showed nested
+    // steps, not a durable per-child status row).
+    await openActivityPanel(page);
+    const row = page.locator('[data-testid="activity-row"]', { hasText: label });
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await expectA11yClean(page, {
+      include: ['[data-testid="activity-row"]'],
     });
   },
 );
