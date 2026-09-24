@@ -10,6 +10,7 @@ import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { emptySessionState } from './session'
+import { inFlightReattachSids } from './runtime-state'
 import type { ChatMessage } from './types'
 import type { WsReceiveFrame } from '@/lib/ws'
 
@@ -23,6 +24,10 @@ beforeEach(() => {
     messagesById: {},
   } as never)
   useConnectionStore.setState({ connection: null } as never)
+  // Module-scoped state (runtime-state.ts) survives across tests in the same
+  // file/worker — clear it so item 7's in-flight re-attach guard doesn't
+  // leak between tests that reuse SID.
+  inFlightReattachSids.clear()
 })
 
 function bucket() {
@@ -255,6 +260,37 @@ describe('applySeqGate gap recovery (§6.2 "gap" row) — the re-attach SIDE EFF
       since_seq: 5,
       boot_id: 'boot-gap',
     }])
+  })
+
+  it('D8c (Opus review round 2 item 7): a burst of frames during the SAME unresolved gap sends attach_session only ONCE, not once per frame', () => {
+    const sent: unknown[] = []
+    useConnectionStore.setState({
+      connection: { send: (frame: unknown) => { sent.push(frame); return true } },
+    } as never)
+
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
+    } as WsReceiveFrame)
+
+    // Three more gapped frames arrive in a row, all still ahead of the same
+    // unresolved gap (cursor never advances past 5) — only the FIRST should
+    // trigger a re-attach.
+    for (const seq of [9, 10, 11]) {
+      useChatStore.getState().handleFrame({
+        type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq,
+      } as WsReceiveFrame)
+    }
+    expect(sent).toHaveLength(1)
+
+    // Once the gap resolves (a cursor-minting frame arrives), the guard
+    // clears — a LATER, genuinely new gap sends again.
+    useChatStore.getState().handleFrame({
+      type: 'catch_up_complete', session_id: SID, seq: 5, boot_id: 'boot-gap', mode: 'incremental',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'GAP2', turn_id: 't1', message_id: 'm3', seq: 20,
+    } as WsReceiveFrame)
+    expect(sent).toHaveLength(2)
   })
 
   it('D8b: no gap (seq === cursor.seq + 1) never sends attach_session', () => {

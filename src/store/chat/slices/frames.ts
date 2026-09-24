@@ -26,7 +26,7 @@ import {
 } from '@/lib/llm-error'
 import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { bufferForSpan, hasOpenSpanFast, markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
-import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, pendingCancelAckSids, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
+import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, inFlightReattachSids, pendingCancelAckSids, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
 import { gateFrameBySeq, cursorFromTerminalFrame, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
 import { ORPHAN_BUFFER_TTL_MS, orphanTimers, pendingByParentCallId } from '../types'
@@ -126,22 +126,38 @@ function applySeqGate(
 ): 'apply' | 'drop-or-gap' {
   const f = frame as SeqFrameLike & { type?: string }
   if (f.seq === undefined || f.seq === null || !targetSid) return 'apply'
-  if (f.type && CURSOR_MINTING_FRAME_TYPES.has(f.type)) return 'apply'
+  if (f.type && CURSOR_MINTING_FRAME_TYPES.has(f.type)) {
+    // The cursor is about to be re-minted from this frame — any re-attach
+    // that was in flight for this session is now resolved (Opus review
+    // round 2 item 7).
+    inFlightReattachSids.delete(targetSid)
+    return 'apply'
+  }
   const bucket = get().sessionsById[targetSid]
   const decision = gateFrameBySeq(bucket?.cursor ?? null, f)
   if (decision.kind === 'apply') {
     withBucket(targetSid, () => ({ cursor: decision.cursor }))
+    inFlightReattachSids.delete(targetSid)
     return 'apply'
   }
   if (decision.kind === 'gap') {
-    console.warn('[chat] sequence gap — re-attaching', { sessionId: targetSid, have: decision.cursor.seq, got: f.seq })
-    logDiagnostic('chatSeqGapReattach', { sessionId: targetSid, have: decision.cursor.seq, got: f.seq })
-    useConnectionStore.getState().connection?.send({
-      type: 'attach_session',
-      session_id: targetSid,
-      since_seq: decision.cursor.seq,
-      boot_id: decision.cursor.bootId,
-    })
+    // #823 catch-up redesign, Opus review round 2 item 7 (LOW): without this
+    // guard, every gapped frame that arrives before the server responds to
+    // the FIRST attach_session — a burst of tokens, for instance — sent
+    // another one, once per frame. Only the first frame of a gap actually
+    // triggers a re-attach; the rest are silently dropped as before
+    // (still correct — they're still gapped — just without re-sending).
+    if (!inFlightReattachSids.has(targetSid)) {
+      inFlightReattachSids.add(targetSid)
+      console.warn('[chat] sequence gap — re-attaching', { sessionId: targetSid, have: decision.cursor.seq, got: f.seq })
+      logDiagnostic('chatSeqGapReattach', { sessionId: targetSid, have: decision.cursor.seq, got: f.seq })
+      useConnectionStore.getState().connection?.send({
+        type: 'attach_session',
+        session_id: targetSid,
+        since_seq: decision.cursor.seq,
+        boot_id: decision.cursor.bootId,
+      })
+    }
   }
   return 'drop-or-gap'
 }

@@ -29,6 +29,18 @@ export const sawReplayMessageThisTurn: Record<string, boolean> = {}
 // misattribute to whatever session happens to be foreground — see F-S3 below.
 export const pendingCancelAckSids = new Set<string>()
 
+// #823 catch-up redesign, Opus review round 2 item 7 (LOW): applySeqGate's
+// gap branch (frames.ts) sends `attach_session{S, cursor}` to recover from a
+// sequence gap. Without a guard, EVERY subsequent gapped frame that arrives
+// before the server responds — a burst of tokens, for instance — re-sends
+// the same attach_session again, once per frame. Session ids in this set
+// already have a re-attach in flight; the gap branch skips sending a second
+// one while a session is a member. Cleared once the session's cursor is
+// healthy again — either a normal 'apply' decision (gateFrameBySeq.ts) or a
+// cursor-minting frame (session_snapshot/catch_up_complete/session_started)
+// resolves it.
+export const inFlightReattachSids = new Set<string>()
+
 export const EMPTY_BUCKET = emptySessionState()
 
 // F-S1: all server→client frames that must carry session_id.

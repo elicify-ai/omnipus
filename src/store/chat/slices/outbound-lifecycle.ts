@@ -11,7 +11,7 @@ import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
-import { EMPTY_BUCKET, pendingCancelAckSids, replayingClearTimers } from '../runtime-state'
+import { EMPTY_BUCKET, inFlightReattachSids, pendingCancelAckSids, replayingClearTimers } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
 
@@ -896,6 +896,12 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // outstanding cancel — stale entries here would otherwise persist across
       // reconnects and could misattribute an unrelated later frame.
       pendingCancelAckSids.clear()
+      // Opus review round 2 item 7: any gap re-attach in flight for this
+      // connection is moot the instant it drops — reconnecting goes through
+      // the normal attach_session path (session.ts::attachToSession), not
+      // this guard, so a stale entry here would just block the NEXT gap's
+      // re-attach forever after a future reconnect.
+      inFlightReattachSids.clear()
       // S6: a socket drop means no more frames — done, error, or otherwise —
       // are coming on THIS connection for any outstanding replay either. A
       // bucket that is mid-replay (isReplaying:true) but not yet
