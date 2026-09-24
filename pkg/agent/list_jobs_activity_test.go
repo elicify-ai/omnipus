@@ -56,7 +56,7 @@ func TestListJobs_SubagentLastActivityAdvancesWithTranscript(t *testing.T) {
 		WorkspaceID:    "workspace-1",
 		AgentID:        "worker",
 		ParentAgentID:  "mia",
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: parent.ID},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parent.ID, RootSessionID: parent.ID},
 	}
 	require.NoError(t, lifecycle.Persist(rec))
 	lifecycleAt := rec.UpdatedAt
@@ -113,7 +113,7 @@ func TestListJobs_SubagentLastActivityAdvancesWithTranscript(t *testing.T) {
 		WorkspaceID:    "workspace-1",
 		AgentID:        "worker",
 		ParentAgentID:  "mia",
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: parent.ID},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parent.ID, RootSessionID: parent.ID},
 	}
 	require.NoError(t, lifecycle.Persist(missing))
 	const olderActivityID = "delegate-older-session-activity"
@@ -141,7 +141,7 @@ func TestListJobs_SubagentLastActivityAdvancesWithTranscript(t *testing.T) {
 		WorkspaceID:    "workspace-1",
 		AgentID:        "worker",
 		ParentAgentID:  "mia",
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: parent.ID},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parent.ID, RootSessionID: parent.ID},
 	}
 	require.NoError(t, lifecycle.Persist(olderLifecycle))
 	const mismatchedID = "delegate-wrong-owner"
@@ -168,7 +168,7 @@ func TestListJobs_SubagentLastActivityAdvancesWithTranscript(t *testing.T) {
 		WorkspaceID:    "workspace-1",
 		AgentID:        "worker",
 		ParentAgentID:  "mia",
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: parent.ID},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parent.ID, RootSessionID: parent.ID},
 	}
 	require.NoError(t, lifecycle.Persist(mismatchedLifecycle))
 

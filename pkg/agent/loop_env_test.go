@@ -110,6 +110,7 @@ func TestDelegationWiring_PerformanceDepthControlsOwnershipWalk(t *testing.T) {
 		id := fmt.Sprintf("depth-%d", i)
 		if err := lifecycle.Persist(&session.LifecycleRecord{
 			SessionID:      id,
+			Generation:     1,
 			AgentID:        "worker",
 			WorkspaceID:    wsID,
 			OwnerScopeKind: session.OwnerScopeParentSession,

@@ -91,6 +91,7 @@ func TestDelegateCancel_WiredThroughRealAgentLoop_ReachesGrandchild(t *testing.T
 	lifecycleStore := session.NewLifecycleStore(t.TempDir())
 	require.NoError(t, lifecycleStore.Persist(&session.LifecycleRecord{
 		SessionID:      child.sessionKey,
+		Generation:     1,
 		State:          session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeParentSession,
 		OwnerScopeID:   parent.sessionKey,
@@ -102,6 +103,7 @@ func TestDelegateCancel_WiredThroughRealAgentLoop_ReachesGrandchild(t *testing.T
 	// has one — Launch writes it before the child's first turn exists.
 	require.NoError(t, lifecycleStore.Persist(&session.LifecycleRecord{
 		SessionID:      grandchild.sessionKey,
+		Generation:     1,
 		State:          session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeParentSession,
 		OwnerScopeID:   child.sessionKey,
@@ -180,19 +182,19 @@ func TestCollectDescendantSessionIDs_PartialFailureReturnsErrorAndPartialSet(t *
 		badGrandkid  = "sess_fix5_bad_grandkid"  // badChild's child — unreachable once badChild's list fails
 	)
 	require.NoError(t, ls.Persist(&session.LifecycleRecord{
-		SessionID: healthyChild, State: session.LifecycleRunning,
+		SessionID: healthyChild, Generation: 1, State: session.LifecycleRunning,
 		Origin: &session.Origin{Kind: session.OriginKindDelegate}, SteeredBy: &session.SteeredBy{
 			SteeringSessionID: root, RootSessionID: root,
 		}, OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: root,
 	}))
 	require.NoError(t, ls.Persist(&session.LifecycleRecord{
-		SessionID: badChild, State: session.LifecycleRunning,
+		SessionID: badChild, Generation: 1, State: session.LifecycleRunning,
 		Origin: &session.Origin{Kind: session.OriginKindDelegate}, SteeredBy: &session.SteeredBy{
 			SteeringSessionID: root, RootSessionID: root,
 		}, OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: root,
 	}))
 	require.NoError(t, ls.Persist(&session.LifecycleRecord{
-		SessionID: badGrandkid, State: session.LifecycleRunning,
+		SessionID: badGrandkid, Generation: 1, State: session.LifecycleRunning,
 		Origin: &session.Origin{Kind: session.OriginKindDelegate}, SteeredBy: &session.SteeredBy{
 			SteeringSessionID: badChild, RootSessionID: root,
 		}, OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: badChild,

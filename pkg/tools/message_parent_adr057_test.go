@@ -69,14 +69,17 @@ func TestMessageParent_DrainedByDirectParentAtDepth3(t *testing.T) {
 	const grandchildD = "u14-mp-grandchild-D"
 
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: childB, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
-		OwnerScopeID: chatA, SteeredBy: &session.SteeredBy{SteeringSessionID: chatA}, WorkspaceID: "ws-1", AgentID: "worker",
+		SessionID: childB, Generation: 1, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		OwnerScopeID: chatA, SteeredBy: &session.SteeredBy{SteeringSessionID: chatA, RootSessionID: chatA}, WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed B failed: %v", err)
 	}
+	// D's real (walked) root is chatA — B is only D's direct parent, not
+	// itself a root — mirroring production's launchSteered, which always
+	// resolves and stamps the TRUE root, not the immediate parent.
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: grandchildD, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
-		OwnerScopeID: childB, SteeredBy: &session.SteeredBy{SteeringSessionID: childB}, WorkspaceID: "ws-1", AgentID: "worker",
+		SessionID: grandchildD, Generation: 1, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		OwnerScopeID: childB, SteeredBy: &session.SteeredBy{SteeringSessionID: childB, RootSessionID: chatA}, WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed D failed: %v", err)
 	}
@@ -145,8 +148,8 @@ func TestPerChildMessageCeiling_IsPerDirectParent(t *testing.T) {
 
 	for _, id := range []string{childB1, childB2} {
 		if err := lc.Persist(&session.LifecycleRecord{
-			SessionID: id, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
-			OwnerScopeID: chatA, SteeredBy: &session.SteeredBy{SteeringSessionID: chatA}, WorkspaceID: "ws-1", AgentID: "worker",
+			SessionID: id, Generation: 1, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+			OwnerScopeID: chatA, SteeredBy: &session.SteeredBy{SteeringSessionID: chatA, RootSessionID: chatA}, WorkspaceID: "ws-1", AgentID: "worker",
 		}); err != nil {
 			t.Fatalf("seed %s failed: %v", id, err)
 		}

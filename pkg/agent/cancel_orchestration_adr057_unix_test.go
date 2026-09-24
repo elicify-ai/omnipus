@@ -124,7 +124,7 @@ func TestU15Cancel_KillsChildShellsNotSiblings_RealPIDs(t *testing.T) {
 	// B is a durable child of the root; C (the sibling) has no lifecycle
 	// record at all — an unrelated chat, exactly BDD-28's "under a different
 	// chat" framing.
-	u15PersistLifecycleRecord(t, lifecycleStore, childID, rootID, session.LifecycleRunning)
+	u15PersistLifecycleRecord(t, lifecycleStore, childID, rootID, rootID, session.LifecycleRunning)
 
 	sm := tools.NewSessionManager()
 	childPID := u15SpawnRealSleep(t, 30)

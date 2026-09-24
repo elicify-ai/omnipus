@@ -12,6 +12,7 @@ import (
 func adr091SteeredRecord(id, parent string) *session.LifecycleRecord {
 	return &session.LifecycleRecord{
 		SessionID:      id,
+		Generation:     1,
 		AgentID:        "worker",
 		ParentAgentID:  "parent-agent",
 		WorkspaceID:    "ws-1",

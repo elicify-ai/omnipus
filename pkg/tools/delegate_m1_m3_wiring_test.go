@@ -43,8 +43,8 @@ func TestDelegateInboxAck_TruthfulCountAndUnknownIDs(t *testing.T) {
 	tool, lc, inbox, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-ack", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
+		SessionID: "child-ack", Generation: 1, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -103,8 +103,8 @@ func TestDelegateInboxAck_AllUnknown_ZeroAcknowledged(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-2")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-ack-2", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-2"},
+		SessionID: "child-ack-2", Generation: 1, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-2", RootSessionID: "parent-2"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)

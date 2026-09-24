@@ -25,14 +25,19 @@ import (
 )
 
 // seedChainRecord persists one lifecycle record for a delegated session with
-// the given direct-parent durable key.
-func seedChainRecord(t *testing.T, lc *session.LifecycleStore, sessionID, parentDurableKey string) {
+// the given direct-parent durable key and the chain's real (walked) root —
+// production's launchSteered always resolves and stamps the TRUE root, not
+// the immediate parent, on every hop (pkg/agent/steer_launcher.go's
+// walkVerifiedRoot), so a session two or more hops below the root carries a
+// RootSessionID that differs from its own direct SteeringSessionID.
+func seedChainRecord(t *testing.T, lc *session.LifecycleStore, sessionID, parentDurableKey, rootSessionID string) {
 	t.Helper()
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID:      sessionID,
+		Generation:     1,
 		State:          session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman,
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentDurableKey},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentDurableKey, RootSessionID: rootSessionID},
 		WorkspaceID:    "ws-1",
 		AgentID:        "worker",
 	}); err != nil {
@@ -58,8 +63,8 @@ func TestDelegateInboxAck_AncestorAck_KeyedByTargetParent_NoRedelivery(t *testin
 	const rootA = "sess-A"
 	const midB = "sess-B"
 	const leafC = "sess-C"
-	seedChainRecord(t, lc, midB, rootA)
-	seedChainRecord(t, lc, leafC, midB)
+	seedChainRecord(t, lc, midB, rootA, rootA)
+	seedChainRecord(t, lc, leafC, midB, rootA)
 
 	// C appends its message under its OWN direct parent's key — this is
 	// what message_parent.go does in production (ownerKeyFor(rec)).
@@ -137,7 +142,7 @@ func TestDelegateInboxAck_DirectParentStillWorks(t *testing.T) {
 	tool, lc, inbox, _ := newADR053TestTool(t)
 	const parent = "parent-direct"
 	const child = "child-direct"
-	seedChainRecord(t, lc, child, parent)
+	seedChainRecord(t, lc, child, parent, parent)
 
 	if _, err := inbox.Append(parent, progressMsgForDelegateTest(t, child, "pm-direct-1")); err != nil {
 		t.Fatalf("seed inbox message failed: %v", err)
@@ -166,7 +171,7 @@ func TestDelegateInboxAck_UnrelatedCallerDenied(t *testing.T) {
 	tool, lc, inbox, _ := newADR053TestTool(t)
 	const victimParent = "victim-parent"
 	const victimChild = "victim-child"
-	seedChainRecord(t, lc, victimChild, victimParent)
+	seedChainRecord(t, lc, victimChild, victimParent, victimParent)
 
 	if _, err := inbox.Append(victimParent, progressMsgForDelegateTest(t, victimChild, "pm-victim-1")); err != nil {
 		t.Fatalf("seed inbox message failed: %v", err)

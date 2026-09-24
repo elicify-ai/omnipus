@@ -104,7 +104,7 @@ func TestDelegateStatus_FromRecordNotStreaming(t *testing.T) {
 		if err := lifecycle.Persist(&session.LifecycleRecord{
 			SessionID: id, Generation: 1, State: session.LifecycleRunning,
 			OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: "parent-status",
-			SteeredBy:   &session.SteeredBy{SteeringSessionID: "parent-status"},
+			SteeredBy:   &session.SteeredBy{SteeringSessionID: "parent-status", RootSessionID: "parent-status"},
 			WorkspaceID: "ws-status", AgentID: "worker", ParentAgentID: "orchestrator",
 			CreatedAt: createdAt,
 		}); err != nil {

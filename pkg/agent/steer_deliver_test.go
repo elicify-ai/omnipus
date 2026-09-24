@@ -58,7 +58,8 @@ func seedParentAndChild(t *testing.T, lifecycle *session.LifecycleStore, parentI
 		SessionID: parentID, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, WorkspaceID: "ws-1", AgentID: "parent-agent",
 		OriginChannel: "webchat", OriginChatID: parentID,
-		Origin: &session.Origin{Kind: session.OriginKindChat},
+		Origin:     &session.Origin{Kind: session.OriginKindChat},
+		Generation: 1,
 	}); err != nil {
 		t.Fatalf("seed parent: %v", err)
 	}
