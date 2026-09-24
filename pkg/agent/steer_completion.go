@@ -99,6 +99,11 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 		Outcome:        outcome,
 		Message:        message,
 	}
+	// Snapshot the Stop marker BEFORE Deliver's I/O window so the Mutate
+	// below can tell "a Stop raced my write" from "the Stop that caused
+	// my write". See the closure for why the distinction matters.
+	stopBeforeDelivery := rec.Stop
+
 	delivery, err := deliverer.Deliver(ctx, event)
 	if err != nil {
 		return fmt.Errorf("steer: complete: deliver %q: %w", rec.SessionID, err)
@@ -133,11 +138,42 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 		if cur.Terminal() {
 			return errCompleteAlreadyTerminal
 		}
-		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
+		// A current-generation Stop marker means one of two DIFFERENT
+		// things, and conflating them strands the session forever:
+		//
+		//   (a) a Stop landed WHILE Deliver was doing I/O -- a genuine
+		//       race. The cascade owns finishing this session; refuse
+		//       and let it, exactly as before.
+		//
+		//   (b) the Stop is the REASON this turn is completing. The
+		//       cascade cancelled a live turn, the turn unwound with
+		//       context.Canceled, and we are now writing the terminal
+		//       state that the Stop asked for. Refusing here left the
+		//       record `running` with its marker FOREVER, and
+		//       hasRunningOrQueuedDescendant kept the parent waiting --
+		//       the exact hang ADR-091 exists to remove, on the most
+		//       common Stop path (a session that HAD a live turn).
+		//
+		// stopBeforeDelivery is the pre-Deliver snapshot, so
+		// stopLandedDuringDelivery distinguishes them the same way
+		// steer_cancel.go::reportSteeredSessionTerminalUpward does.
+		// Keeping the two paths symmetric is the point: they are the
+		// only two writers that land a terminal state on a stopped
+		// session.
+		if stopLandedDuringDelivery(stopBeforeDelivery, cur) {
 			return errCompleteStoppedDuringDelivery
 		}
 		cur.State = nextState
 		cur.NeedsInput = nil
+		// The Stop has now been carried out, so the marker is spent --
+		// clear it (founder decision, 2026-09-24), mirroring
+		// reportSteeredSessionTerminalUpward. persistLocked REJECTS a
+		// terminal record that still carries a current-generation
+		// marker, so leaving it would fail the write outright. An OLDER
+		// marker is inert history a revival deliberately keeps.
+		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
+			cur.Stop = nil
+		}
 		if nextState == session.LifecycleFailed {
 			cur.FailedReason = failureReason
 		}

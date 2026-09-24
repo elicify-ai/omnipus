@@ -133,3 +133,79 @@ func TestComplete_ReviveLandingDuringDeliveryIsNotRolledBack(t *testing.T) {
 		t.Errorf("persisted State = %q, want running (Revive's own write) — a stale completion must not overwrite a live revival", got.State)
 	}
 }
+
+// TestComplete_StopThatCausedThisCompletionLandsTerminal proves the OTHER
+// half of the Stop rule, and the half that used to hang forever.
+//
+// When the cascade stops a session that HAS a live turn, it stamps the Stop
+// marker and cancels the turn's context. The turn unwinds with
+// context.Canceled and completeSteeredTurn is the only writer that can land
+// its terminal state. Before the fix, the blanket refusal
+// "cur.Stop != nil && cur.Stop.Generation == cur.Generation" fired on the
+// marker the cascade had JUST stamped, so the write was refused and treated
+// as a legitimate no-op: the record stayed `running` with its marker
+// forever, and hasRunningOrQueuedDescendant kept the parent waiting.
+//
+// That is the most common Stop path -- a session that was actually working --
+// and it is the exact hang ADR-091 exists to remove. The never-ran path
+// (terminaliseNeverRanStop) was the only one that terminalised correctly.
+//
+// The distinction is the PRE-DELIVERY snapshot: a marker already present
+// before Deliver is the reason for this completion, not a race against it.
+// The sibling test above pins the race half; deleting either one leaves the
+// rule half-enforced.
+func TestComplete_StopThatCausedThisCompletionLandsTerminal(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	wireSteerCompletionDeps(t, al)
+	parentID := newTestSteeringSession(t, al, "ws-stop-cause")
+	rec := launchRunningChild(t, al, parentID, "call-complete-stop-cause")
+
+	lifecycle := al.GetSessionLifecycleStore()
+	if err := lifecycle.Mutate(rec.SessionID, func(r *session.LifecycleRecord) error {
+		r.SteeredBy.ReportingTarget = session.ReportingTarget{Channel: "webchat", ChatID: parentID}
+		return nil
+	}); err != nil {
+		t.Fatalf("Mutate(reporting target): %v", err)
+	}
+
+	// The cascade stamps the marker, then cancels the turn. Reload so the
+	// snapshot completeSteeredTurn works from carries the marker, exactly
+	// as it does in production.
+	canceller := NewSteerCanceller(lifecycle)
+	if _, err := canceller.CancelSubtree(context.Background(), rec.SessionID,
+		steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"}); err != nil {
+		t.Fatalf("CancelSubtree: %v", err)
+	}
+	stopped, err := lifecycle.Load(rec.SessionID)
+	if err != nil {
+		t.Fatalf("Load after cancel: %v", err)
+	}
+	if stopped.Terminal() {
+		t.Skip("the cascade already terminalised this child; the live-turn path is what this test covers")
+	}
+	if stopped.Stop == nil || stopped.Stop.Generation != stopped.Generation {
+		t.Fatalf("premise failed: want a live current-generation Stop marker before completion, got %+v", stopped.Stop)
+	}
+
+	// The turn unwinds with context.Canceled, as a cancelled live turn does.
+	if err := al.completeSteeredTurn(context.Background(), stopped,
+		turnResult{finalContent: ""}, context.Canceled); err != nil {
+		t.Fatalf("completeSteeredTurn(stopped live turn): %v", err)
+	}
+
+	got, err := lifecycle.Load(rec.SessionID)
+	if err != nil {
+		t.Fatalf("Load(child): %v", err)
+	}
+	if !got.Terminal() {
+		t.Fatalf("a stopped session with a live turn was left NON-terminal (state=%q) — "+
+			"its parent's hasRunningOrQueuedDescendant will wait for it forever, "+
+			"which is the hang ADR-091 removes", got.State)
+	}
+	if got.Stop != nil && got.Stop.Generation == got.Generation {
+		t.Fatalf("the spent Stop marker survived onto a terminal record (state=%q, stop.gen=%d) — "+
+			"persistLocked rejects that shape, so the write could not have landed",
+			got.State, got.Stop.Generation)
+	}
+}
