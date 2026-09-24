@@ -14,6 +14,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // supersedeTaskSession closes out a retry-attempt's own session when the
@@ -370,6 +371,8 @@ func (te *TaskExecutor) onTaskComplete(t *task.Task) {
 		logger.WarnCF("task_executor", "Could not advance blocked dependents",
 			map[string]any{"completed_task_id": t.ID, "error": err.Error()})
 	}
+	// D-08/FR-057: stamped at advanceBlockedTasks itself (see its own doc
+	// comment) — a plain context.Background() here carries nothing to stamp.
 	te.advanceBlockedTasks(context.Background(), t.ID)
 }
 
@@ -452,6 +455,13 @@ func (te *TaskExecutor) notifyParentIfAllSiblingsDone(parentID string) {
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
+		// D-08/FR-057: this is a parent-agent follow-up turn fired automatically
+		// once every child task completes — nobody clicked anything, so it must
+		// never open a live approval card. This call site bypasses
+		// ExecuteTask/executeTask entirely (goes straight to processTaskDirect),
+		// so it has to stamp AutoDenyAsk itself rather than inherit it from a
+		// dispatcher upstream.
+		ctx = tools.WithAutoDenyAsk(ctx, true)
 		_, ferr := te.agentLoop.processTaskDirect(ctx, parent.AgentID, followUp, sessionKey, parentChatID)
 		if ferr != nil {
 			logger.WarnCF("task_executor", "Parent follow-up failed",
@@ -522,6 +532,12 @@ func (te *TaskExecutor) readyBlockedCandidates(completedTaskID string) []string 
 // function dispatch its now-unblocked dependents just because they satisfy
 // their BlockedBy set — ExecuteTask itself now refuses that dispatch.
 func (te *TaskExecutor) advanceBlockedTasks(ctx context.Context, completedTaskID string) {
+	// D-08/FR-057: an auto-advance dispatch is the orchestrator reacting to a
+	// dependency completing — never a person watching this specific new
+	// dispatch, regardless of how completedTaskID itself was started. Stamp
+	// unconditionally at this one chokepoint (advanceBlockedTasks' sole caller
+	// is onTaskComplete).
+	ctx = tools.WithAutoDenyAsk(ctx, true)
 	for _, taskID := range te.readyBlockedCandidates(completedTaskID) {
 		if err := te.ExecuteTask(ctx, taskID, nil); err != nil {
 			if !isRoutineAutoDispatchRefusal(err) {

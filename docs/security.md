@@ -136,7 +136,7 @@ Auto-approve does not check what a command means. A command that deletes files i
 
 ### Scheduled and unattended runs
 
-A scheduled task runs with nobody present to answer a prompt. The same rule applies there as in a chat: anything Auto-approve would run in a chat also runs in a scheduled run. Anything that would need a person is refused straight away, with a clear error in the task's transcript:
+An unattended run has nobody present to answer a prompt. The same rule applies there as in a chat: anything Auto-approve would run in a chat also runs in an unattended run. Anything that would need a person is refused straight away, with a clear error in the task's transcript:
 
 ```
 Not run: this is a headless scheduled run with no operator available to approve ask-policy tools.
@@ -144,7 +144,19 @@ Not run: this is a headless scheduled run with no operator available to approve 
 
 A shell command that would need a prompt (for example one that needs the network) is refused the same way; its error ends with `auto-denied: no operator attached to this headless/scheduled run to approve it`.
 
-For example, with Auto-approve on, a scheduled agent can write its report into the workspace, but a `delete_task` call is refused. If a scheduled agent must use a tool that still asks, set that tool to Allow for that agent. See [tools](tools.md).
+For example, with Auto-approve on, an unattended agent can write its report into the workspace, but a `delete_task` call is refused. If an unattended agent must use a tool that still asks, set that tool to Allow for that agent. See [tools](tools.md).
+
+**What counts as unattended (founder decision, 2026-09-24).** This is not only the Schedules feature. It is every run nobody sent live:
+
+- a task fired by its own Calendar trigger on a workspace Board (once, recurring, or an RRULE occurrence);
+- a queued task the task drain picks up on its own polling cycle;
+- a task's auto-advance dispatch, fired the moment a dependency it was blocked on finishes;
+- a plan's own member-task dispatch, driven by the plan engine's promotion loop;
+- a plan's automatic wake of its owner or supervisor agent, reacting to a plan-state change;
+- a parent task's automatic follow-up turn, fired once every child task reaches a terminal state;
+- the Schedules feature and per-agent heartbeats, both running on the cron engine.
+
+None of these ever shows a live approval card, even to an operator who happens to have that agent's chat window open at that moment — "someone was online" does not make a run attended. Only a turn a person actually started stays attended: a chat message, or clicking **Run now** on a task (`POST /api/v1/tasks/{id}/runs`, and the Board's "Start Task"/"Create & Run now" actions) while watching for the result. A task dispatched through the `run_task` or `execute_plan` agent tools inherits whichever of these two states the *calling* turn was already in — a chat-started delegation to `run_task` stays attended, one fired from inside an already-unattended run stays unattended.
 
 ### Approve a request
 

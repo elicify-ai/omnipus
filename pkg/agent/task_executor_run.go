@@ -55,7 +55,17 @@ func (te *TaskExecutor) runTask(
 			// own runTask call reopens (not duplicates) the still-open run this
 			// attempt leaves behind — only the task's final outcome closes it
 			// (completeTaskWithResult); an intermediate restart never does.
-			if err := te.ExecuteTask(context.Background(), redispatchTaskID, occurrenceMs); err != nil && !isRoutineAutoDispatchRefusal(err) {
+			//
+			// D-08/FR-057: ExecuteTask always stamps kind=RunKindScheduled
+			// internally regardless of what THIS attempt's own kind was — that
+			// is pre-existing, unrelated to attended-ness — but the redispatch
+			// must still carry forward THIS run's own AutoDenyAsk (read off ctx,
+			// the attempt this goroutine was launched with), not silently reset
+			// to attended just because context.Background() has none of its
+			// own: an unattended (Calendar-triggered) run's steering retry must
+			// stay unattended, and a Run-now retry must stay attended.
+			redispatchCtx := tools.WithAutoDenyAsk(context.Background(), tools.ToolAutoDenyAsk(ctx))
+			if err := te.ExecuteTask(redispatchCtx, redispatchTaskID, occurrenceMs); err != nil && !isRoutineAutoDispatchRefusal(err) {
 				logger.WarnCF("task_executor", "goal-loop: re-dispatch failed",
 					map[string]any{"task_id": redispatchTaskID, "error": err.Error()})
 			}
@@ -407,7 +417,13 @@ func (te *TaskExecutor) runTaskFromInProgress(
 		if redispatchTaskID != "" {
 			// occurrenceMs is always nil here — see this function's own doc
 			// comment (no recurring-fire context reaches StartTaskNow).
-			if err := te.ExecuteTask(context.Background(), redispatchTaskID, nil); err != nil && !isRoutineAutoDispatchRefusal(err) {
+			//
+			// D-08/FR-057: carry this run's own AutoDenyAsk (read off ctx, the
+			// attempt this goroutine was launched with — StartTaskNow already
+			// stamped it before detaching) into the redispatch — see runTask's
+			// identical redispatch fix for the full rationale.
+			redispatchCtx := tools.WithAutoDenyAsk(context.Background(), tools.ToolAutoDenyAsk(ctx))
+			if err := te.ExecuteTask(redispatchCtx, redispatchTaskID, nil); err != nil && !isRoutineAutoDispatchRefusal(err) {
 				logger.WarnCF("task_executor", "goal-loop: re-dispatch failed",
 					map[string]any{"task_id": redispatchTaskID, "error": err.Error()})
 			}
@@ -583,6 +599,9 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 		// workspace.FindForAgentPreferring(..., childTS.opts.WorkspaceID) call
 		// sees it — that field reads ts.opts, not the context.
 		WorkspaceID: tools.ToolWorkspaceID(ctx),
+		// D-08/FR-057: mirrors processTaskDirect's identical field — see its
+		// doc comment (task_executor.go) for the full contract.
+		AutoDenyAsk: tools.ToolAutoDenyAsk(ctx),
 	}
 	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, sessionKey))
 	ts.depth = delegationDepth
