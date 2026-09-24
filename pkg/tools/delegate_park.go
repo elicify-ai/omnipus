@@ -267,8 +267,35 @@ func (dt *delegateToolExecuteRespond) resumeNative() *ToolResult {
 		return ErrorResult(fmt.Sprintf("delegate: respond: failed to resume session: %v", merr)).WithError(merr)
 	}
 
+	// [ADR-091 fix lane RX-OUTCOME] REFUSE to resume when the answer did not
+	// land. appendFollowUpInstruction's error was discarded here while the
+	// sibling call site (delegate_followup.go::executeFollowUp) already acts
+	// on it — the identical defect, with the identical consequence:
+	// steer_reconstruct.go::reconstructSteeredTurn rebuilds the resumed turn
+	// from the last `user` transcript entry, so a dropped answer means the
+	// child confidently re-runs the instruction it was working on BEFORE it
+	// asked its question, and reports THAT answer upward as if it were the
+	// reply to the parent's response. Silent, and indistinguishable from a
+	// real answer downstream.
+	//
+	// The record is landed `failed` rather than left `running` for the same
+	// reason the sibling does it: the Mutate above has already flipped this
+	// session out of needs_input and cleared NeedsInput, so the correlation
+	// id respond() re-checks is gone and the call can never be retried;
+	// leaving it `running` with no live turn would strand it AND block its
+	// parent's own completion for ever (steer_completion.go::
+	// hasRunningOrQueuedDescendant).
 	instruction := fmt.Sprintf("Answer to your question (correlation_id=%s): %s", dt.correlationID, dt.text)
-	dt.t.appendFollowUpInstruction(dt.sessionID, instruction)
+	if err := dt.t.appendFollowUpInstruction(dt.sessionID, instruction); err != nil {
+		dt.t.transitionLifecycle(dt.sessionID, session.LifecycleFailed, err.Error())
+		slog.Error("delegate: respond: answer did not land; resume refused",
+			"session_id", dt.sessionID,
+			"correlation_id", dt.correlationID,
+			"generation", dt.rec.Generation,
+			"agent_id", dt.rec.AgentID,
+			"error", err)
+		return ErrorResult(fmt.Sprintf("delegate: respond: %v", err)).WithError(err)
+	}
 	if _, err := dt.t.launcher.Dispatch(dt.ctx, dt.sessionID, dt.rec.Generation); err != nil {
 		return ErrorResult(fmt.Sprintf("delegate: respond: dispatch: %v", err)).WithError(err)
 	}

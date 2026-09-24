@@ -464,10 +464,22 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 		return
 	}
 
-	if _, err := deliverer.Deliver(ctx, steer.UpwardEvent{ChildSessionID: t.SessionID, Outcome: outcome, Message: sm}); err != nil {
+	event := steer.UpwardEvent{ChildSessionID: t.SessionID, Outcome: outcome, Message: sm}
+	delivery, err := deliverer.Deliver(ctx, event)
+	if err != nil {
 		logger.WarnCF("task_executor", "deliverTaskCompletionUpward: Deliver failed",
 			map[string]any{"task_id": t.ID, "session_id": t.SessionID, "error": err.Error()})
+		return
 	}
+	// [ADR-091 fix lane RX-OUTCOME, HIGH] Every outcome that reaches this
+	// point is TERMINAL (the switch above returns for anything else), so a
+	// stored_not_woken here means the task is finished and gone and its
+	// steering session was never told. The parent/generation pair is read
+	// from the child's own lifecycle record rather than the task, because
+	// the task record carries neither — a best-effort read on the
+	// diagnostic path only, never on the success path.
+	parentSessionID, generation := steerDeliveryEdge(te.agentLoop.GetSessionLifecycleStore(), t.SessionID)
+	reportUndeliveredWake("steer: task completion", event, parentSessionID, generation, delivery)
 }
 
 // readyBlockedCandidates returns the IDs of all `next` tasks that list

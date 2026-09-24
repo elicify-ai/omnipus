@@ -151,12 +151,28 @@ const (
 	// turn; the wake was enqueued as a steering message into it — no
 	// second turn.
 	DeliveryQueuedIntoLiveTurn DeliveryOutcome = "queued_into_live_turn"
-	// DeliveryStoredNotWoken means the entry was stored but the recipient
-	// itself carries a Stop marker; it is acknowledged at revival.
+	// DeliveryStoredNotWoken means the entry was durably stored but the
+	// recipient was NOT woken. It is the outcome for every non-wake path:
+	// a recipient carrying a Stop marker for its current generation (it is
+	// acknowledged at revival), a message kind that is not wake-eligible
+	// (progress/checkpoint/non-fatal error), a missing recipient record, an
+	// already-acked deterministic duplicate, a wake that failed, and a
+	// process with no async notifier wired — see
+	// pkg/agent/steer_audience.go::SteerUpwardDeliverer.Deliver for the
+	// complete list.
+	//
+	// ADR-091 fix lane RX-OUTCOME: there used to be a fourth value here,
+	// DeliverySuppressed, for "the wake was throttled away by the debounce
+	// or the hourly cap". It had ZERO producers and ZERO consumers
+	// repo-wide and was DELETED rather than implemented (founder decision).
+	// It could not be produced even in principle: a wake-eligible kind
+	// bypasses the debounce entirely (async_notifier.go::WakeParentAlways
+	// never consults allowWake), and a non-wake-eligible kind never reaches
+	// a wake at all — it returns stored_not_woken above. The spec
+	// (docs/internal/specs/adr-091-wp-b-audience-delivery-spec.md) was
+	// corrected to describe that behaviour instead of promising this value.
+	// Do NOT reintroduce it as an alias or a shim.
 	DeliveryStoredNotWoken DeliveryOutcome = "stored_not_woken"
-	// DeliverySuppressed is possible only for progress/checkpoint and
-	// non-fatal error kinds — never for a wake-eligible kind.
-	DeliverySuppressed DeliveryOutcome = "suppressed"
 )
 
 // Delivery is UpwardDeliverer.Deliver's output (I-5). MessageID is the

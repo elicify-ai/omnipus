@@ -350,12 +350,30 @@ func relaySteeredQuestions(deliverer steer.UpwardDeliverer, set *PendingSet) err
 	}); err != nil {
 		return fmt.Errorf("askuser: encode delegated question relay: %w", err)
 	}
-	if _, err := deliverer.Deliver(context.Background(), steer.UpwardEvent{
+	delivery, err := deliverer.Deliver(context.Background(), steer.UpwardEvent{
 		ChildSessionID: set.TranscriptSessionID,
 		Outcome:        steer.OutcomeParkedQuestion,
 		Message:        message,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("askuser: relay delegated question upward: %w", err)
+	}
+	// [ADR-091 fix lane RX-OUTCOME, HIGH] This call site used to discard the
+	// Delivery with `_, err :=`. A `question` is always wake-eligible (I-5),
+	// so stored_not_woken here means the entry is durable but the steering
+	// session was NOT woken — and this child has parked itself waiting for
+	// an answer that nothing is going to produce until boot recovery
+	// re-nudges the parent. Logged, not returned as an error: the question
+	// IS durably stored, and failing the relay would tell the caller its
+	// question was lost when it was not. The parent session id is not
+	// resolvable from here (this package holds no lifecycle store) — the
+	// child id and message id are what an operator greps for.
+	if delivery.Outcome == steer.DeliveryStoredNotWoken {
+		slog.Error("askuser: delegated question stored but the steering session was NOT woken — the child stays parked until boot recovery re-nudges it",
+			"child_session_id", set.TranscriptSessionID,
+			"card_id", set.CardID,
+			"message_id", delivery.MessageID,
+			"delivery_outcome", string(delivery.Outcome))
 	}
 	return nil
 }

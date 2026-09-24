@@ -135,7 +135,7 @@ func (te *TaskExecutor) runTask(
 	// tools.WithRunningTaskID's doc comment).
 	taskCtx = tools.WithRunningTaskID(taskCtx, t.ID)
 
-	sessionKey := fmt.Sprintf("agent:%s:task:%s", t.AgentID, t.ID)
+	sessionKey := taskTurnSessionKey(t.AgentID, t.ID)
 
 	taskChatID := taskSessionID
 	if taskChatID == "" {
@@ -145,6 +145,78 @@ func (te *TaskExecutor) runTask(
 		return te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
 	}
 	redispatchTaskID = te.executeTaskRun(ctx, t, taskSessionID, "", run, turn)
+}
+
+// taskTurnSessionKey is the al.activeTurnStates key a task run's turns are
+// registered under. It is the ONE definition of that format — both dispatch
+// entry points (runTask above and runTaskFromInProgress below) call it, and
+// nothing reconstructs the string by hand.
+//
+// It is deliberately NOT the child's own session.LifecycleRecord.SessionID.
+// A task run is keyed by (agent, task) because the run owns the agent's task
+// conversation across every turn of that run; the durable session id names
+// only the transcript. That distinction is the reason
+// steer_completion.go::hasRunningOrQueuedDescendant cannot ask
+// getActiveTurnState(child.SessionID) whether a task-origin child is alive —
+// the answer is unconditionally nil for the whole run. It must not call this
+// function to "fix" that either: a task RUN spans MANY turns
+// (task_run_loop.go::executeTaskRun loops until the claim is adjudicated),
+// and between two of those turns no turnState is registered under any key at
+// all, so a turn-registry lookup would report a genuinely-working task as
+// idle. Run liveness is a different question with a different answer —
+// taskRunInFlight below.
+func taskTurnSessionKey(agentID, taskID string) string {
+	return fmt.Sprintf("agent:%s:task:%s", agentID, taskID)
+}
+
+// taskRunInFlight reports whether rec names a TASK-ORIGIN steered child whose
+// task run the executor is currently holding — the origin-correct liveness
+// signal steer_completion.go::hasRunningOrQueuedDescendant needs and could
+// not get from the turn registry.
+//
+// [ADR-091 fix lane RX-OUTCOME] Background: a task-origin child used to block
+// its parent's completion UNCONDITIONALLY while `running`, because the turn
+// registry is keyed by taskTurnSessionKey rather than the child's SessionID
+// (see that function). That was safe but too coarse: a task-origin child left
+// `running` by its own tool-iteration lifecycle notice — its turn long
+// finished, its record deliberately kept resumable — blocked its parent for
+// ever. The parent WAS woken (message_inbox.go::classifyEnvelope's fix is
+// origin-agnostic); it simply could never complete past that child.
+//
+// The dispatch slot is the right authority, and the only one that is right:
+//
+//   - It is taken BEFORE the `running` lifecycle write, not after
+//     (ExecuteTask/StartTaskNow/dispatchLaunchedTask all insert into
+//     te.running under te.mu before launching the goroutine, and the
+//     goroutine writes LifecycleRunning only once it is genuinely executing),
+//     so there is no window in which the record says `running` and this says
+//     "idle" at the start of a run. A turn-registry lookup HAS such a window,
+//     and a wide one — hooks and MCP initialisation run between the two.
+//   - It is released only in the run goroutine's outermost defer, after the
+//     terminal lifecycle write, so it also covers the gaps BETWEEN a run's
+//     turns, which a turn-registry lookup cannot.
+//   - It is keyed by rec.Origin.TaskID, which is the same id
+//     task_executor.go::dispatchLaunchedTask loads the task by and which
+//     pkg/session/lifecycle.go validates as non-empty for this origin kind.
+//     Nothing is reconstructed and nothing can drift.
+//
+// Known narrow window, accepted deliberately: a goal-loop restart
+// (runTask's trailing `redispatchTaskID` re-entry) deletes the slot and then
+// calls ExecuteTask, which re-reserves it — a few in-process instructions
+// during which this returns false. It is a real but microscopic exposure,
+// and the alternative is the permanent hang this replaces.
+//
+// Fails CLOSED — "still working", the pre-fix behaviour — for a record whose
+// task id is missing or whose executor is not wired, rather than letting a
+// parent complete on an unanswerable question.
+func (al *AgentLoop) taskRunInFlight(rec *session.LifecycleRecord) bool {
+	if rec == nil || rec.Origin == nil || rec.Origin.Kind != session.OriginKindTask {
+		return false
+	}
+	if al == nil || al.taskExecutor == nil || rec.Origin.TaskID == "" {
+		return true
+	}
+	return taskExecutorHoldsDispatchSlot(al.taskExecutor, rec.Origin.TaskID)
 }
 
 // resumeWorkDirFor returns the materialized Play-from-commit resume tree for t,
@@ -470,7 +542,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	// tools.WithRunningTaskID's doc comment.
 	taskCtx = tools.WithRunningTaskID(taskCtx, t.ID)
 
-	sessionKey := fmt.Sprintf("agent:%s:task:%s", t.AgentID, t.ID)
+	sessionKey := taskTurnSessionKey(t.AgentID, t.ID)
 
 	taskChatID := taskSessionID
 	if taskChatID == "" {

@@ -87,13 +87,23 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 	// carried all the way through by Finding B's exit-path fix
 	// (disposeSteeredTurnResult, steer_launcher.go/loop_inbound.go), is that
 	// re-entry. There is no second, shortcut path to the parent.
-	if _, err := deliverer.Deliver(ctx, steer.UpwardEvent{
+	//
+	// [ADR-091 fix lane RX-OUTCOME, HIGH] The Delivery this returns is no
+	// longer thrown away. This is THE normal completion path: a
+	// stored-not-woken outcome here means the parent silently never learns
+	// its child finished, and it stays that way until a gateway restart runs
+	// boot recovery. reportUndeliveredWake below makes that visible —
+	// nothing else in the system would.
+	event := steer.UpwardEvent{
 		ChildSessionID: rec.SessionID,
 		Outcome:        outcome,
 		Message:        message,
-	}); err != nil {
+	}
+	delivery, err := deliverer.Deliver(ctx, event)
+	if err != nil {
 		return fmt.Errorf("steer: complete: deliver %q: %w", rec.SessionID, err)
 	}
+	reportUndeliveredWake("steer: complete", event, steerParentSessionID(rec), rec.Generation, delivery)
 
 	if completeStateWriteTestHook != nil {
 		completeStateWriteTestHook(rec.SessionID)
@@ -167,6 +177,82 @@ var (
 // dispatchStateWriteTestHook; always nil in production, never set outside a
 // _test.go file.
 var completeStateWriteTestHook func(sessionID string)
+
+// reportUndeliveredWake is the ONE place every pkg/agent `Deliver` call site
+// ACTS on steer.Delivery.Outcome.
+//
+// [ADR-091 fix lane RX-OUTCOME, HIGH] That field carries the single fact
+// separating "the parent knows" (DeliveryWoke / DeliveryQueuedIntoLiveTurn)
+// from "the parent will never know" (DeliveryStoredNotWoken), and until this
+// lane every caller in this package threw it away with
+// `_, err := deliverer.Deliver(...)`. A stored-not-woken outcome on a
+// wake-eligible message means the entry IS durable but nothing will re-enter
+// the recipient until boot recovery re-nudges it — an indefinite, completely
+// invisible stall. We spent hours chasing exactly this class of silent hang;
+// it is now an ERROR line naming child, parent, message id and generation.
+//
+// It deliberately only LOGS. The inbox entry is already durable by the time
+// Deliver returns, so refusing the caller's own follow-on write (the terminal
+// lifecycle write, the frames, the tool result) would add a SECOND
+// inconsistency on top of the first rather than repair anything — the same
+// posture steer_cancel.go::deliverTerminalReport settled on for the identical
+// question, and the same reason steer_audience.go::Deliver itself treats a
+// failed wake as non-fatal.
+//
+// Wake-eligibility, not the outcome kind, is what makes a stored-not-woken
+// result newsworthy: for `progress`, `checkpoint` and a non-fatal `error`,
+// stored-not-woken IS the contract (FR-B-010) and must stay silent, or the
+// log fills with non-events. Classification is read from the message itself
+// via session.ClassifySessionMessage — the SAME authority Deliver used to
+// decide whether to wake at all — so the two can never drift apart. An
+// unclassifiable message is reported, never swallowed.
+func reportUndeliveredWake(op string, event steer.UpwardEvent, parentSessionID string, generation int, delivery steer.Delivery) {
+	if delivery.Outcome != steer.DeliveryStoredNotWoken {
+		return
+	}
+	if class, err := session.ClassifySessionMessage(event.Message); err == nil && !class.WakeEligible {
+		return
+	}
+	if parentSessionID == "" {
+		parentSessionID = "(unknown)"
+	}
+	logger.ErrorCF("agent", op+": stored but the recipient was NOT woken — it learns nothing until boot recovery re-nudges it",
+		map[string]any{
+			"session_id":        event.ChildSessionID,
+			"parent_session_id": parentSessionID,
+			"message_id":        delivery.MessageID,
+			"generation":        generation,
+			"outcome":           string(event.Outcome),
+			"delivery_outcome":  string(delivery.Outcome),
+			"terminal":          isTerminalOutcome(event.Outcome),
+		})
+}
+
+// steerParentSessionID returns rec's steering session id, or "" when rec
+// carries no edge. Nil-safe on purpose: reportUndeliveredWake's diagnostic
+// must never be the thing that panics on an already-degraded record.
+func steerParentSessionID(rec *session.LifecycleRecord) string {
+	if rec == nil || rec.SteeredBy == nil {
+		return ""
+	}
+	return rec.SteeredBy.SteeringSessionID
+}
+
+// steerDeliveryEdge best-effort reads (parent session id, generation) for
+// childSessionID straight from the lifecycle store, for the call sites that
+// hold a task or a goal record rather than the child's LifecycleRecord.
+// Returns ("", 0) when the record cannot be read — a diagnostic lookup never
+// fails its caller, and reportUndeliveredWake still logs without them.
+func steerDeliveryEdge(lifecycle *session.LifecycleStore, childSessionID string) (string, int) {
+	if lifecycle == nil || childSessionID == "" {
+		return "", 0
+	}
+	rec, err := lifecycle.Load(childSessionID)
+	if err != nil || rec == nil {
+		return "", 0
+	}
+	return steerParentSessionID(rec), rec.Generation
+}
 
 // finishSteeredGoalTurn sends a goal-bearing child through the same
 // session-owned claim/Judge pipeline used by an interactive goal turn. The
@@ -367,7 +453,9 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 
 // hasRunningOrQueuedDescendant reports whether parentID has any descendant
 // that is genuinely still working — a `queued` child (admitted or not, it
-// WILL run) or a `running` child with a live turn actually in flight.
+// WILL run), or a `running` child that is actually executing: a live turn
+// registered under its own SessionID, or (task-origin only) a task run the
+// executor is still holding.
 //
 // ADR-091 fix lane RX-HANG: a `running` child is deliberately NOT enough on
 // its own. completionDisposition's steer.OutcomeLifecycleNotice case keeps
@@ -384,44 +472,47 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 // in-turn-queue vs. async wake — a `running` record with no live turn is
 // idle, not executing, and must not block its parent's completion.
 //
-// TASK-ORIGIN EXCLUSION (round-2 correctness fix, coordinator-caught):
-// al.getActiveTurnState is keyed by turnState.sessionKey, which is NOT
-// always the LifecycleRecord's own SessionID. steer_launcher.go::
-// dispatchSteeredSessionWithReservation's task-origin branch
-// (rec.Origin.Kind == session.OriginKindTask) never calls
+// TASK-ORIGIN LIVENESS (ADR-091 fix lane RX-OUTCOME, replacing RX-HANG's
+// round-2 unconditional exclusion): al.getActiveTurnState is keyed by
+// turnState.sessionKey, which is NOT always the LifecycleRecord's own
+// SessionID. steer_launcher.go::dispatchSteeredSessionWithReservation's
+// task-origin branch (rec.Origin.Kind == session.OriginKindTask) never calls
 // registerTurnIfAbsent at all — it hands off to
-// TaskExecutor.dispatchLaunchedTask, which runs the turn through
-// processTaskDirect/processTaskDirectExternalCLI
-// (task_executor_run.go) under sessionKey =
-// fmt.Sprintf("agent:%s:task:%s", t.AgentID, t.ID) — a DIFFERENT string
-// than the child's own SessionID. So for a task-origin child,
-// getActiveTurnState(child.SessionID) returns nil UNCONDITIONALLY, for
-// the entire lifetime of its first (and typically only) turn, whether or
-// not that turn is genuinely still executing — not a narrow race window,
-// a permanent miss. Treating that nil as "idle" would let a parent
-// complete WHILE its task-origin child is still genuinely running,
-// producing a silently wrong/premature answer — strictly worse than the
-// hang this lane fixes. Reconstructing that "agent:...:task:..." key here
-// to look it up under the right name was considered and rejected: the
-// format string is owned by task_executor_run.go (outside this lane's 3
-// owned files) and duplicating it as a correctness-critical signal would
-// silently reopen this exact hole the moment that format ever changes,
-// with no compiler or test in THIS package able to catch the drift.
-// Every non-task-origin dispatch path this lane found (the generic
-// steer_launcher.go Path B AND the wake/follow-up re-entry path,
-// loop_inbound.go's processSteeredSystemWake) calls registerTurnIfAbsent
-// BEFORE writing LifecycleRunning, using the record's own SessionID —
-// getActiveTurnState is a reliable signal there, so only task-origin
-// children fall back to the old, safe, unconditional-block rule. This
-// means a task-origin child stuck `running` after its OWN tool-iteration
-// notice still blocks its parent's completion (a narrower version of the
-// original bug, scoped to that one origin kind) — the parent IS still
-// correctly woken (message_inbox.go's classifyEnvelope fix is
-// origin-agnostic), it just cannot yet complete past that child. Closing
-// that fully needs task_executor_run.go to register under the child's
-// own SessionID (or a new durable LifecycleRecord field) — both outside
-// this lane's owned files; flagged in this lane's final report rather
-// than worked around with a fragile duplicated string.
+// TaskExecutor.dispatchLaunchedTask, which runs the turn under
+// task_executor_run.go::taskTurnSessionKey, a DIFFERENT string from the
+// child's own SessionID. So for a task-origin child on its ORIGINAL run,
+// getActiveTurnState(child.SessionID) returns nil unconditionally, for the
+// entire lifetime of the run, whether or not it is genuinely still
+// executing — not a narrow race window, a permanent miss.
+//
+// RX-HANG closed that by making a `running` task-origin child block its
+// parent unconditionally. Safe, but too coarse: a task-origin child left
+// `running` by its own tool-iteration lifecycle notice (its turn long
+// finished, its record deliberately kept resumable) then blocked its parent
+// FOR EVER — a narrower version of the same hang. The parent was woken and
+// still could not complete past that child.
+//
+// The fix is to ask the right authority instead of excluding the origin:
+// al.taskRunInFlight (task_executor_run.go, which OWNS the task dispatch
+// path) reports whether the executor is currently holding that task's run.
+// The two checks compose rather than compete — either a live turn under the
+// child's own SessionID, or a task run in flight, counts as working:
+//
+//   - The wake/follow-up re-entry path (loop_inbound.go::
+//     processSteeredSystemWake) and the generic steer_launcher.go Path B DO
+//     call registerTurnIfAbsent under the record's own SessionID BEFORE
+//     writing LifecycleRunning, so getActiveTurnState is a reliable signal
+//     there — including for a task-origin child that was later re-woken.
+//   - The original task run is covered by the dispatch slot, which is taken
+//     before the `running` write and released only after the terminal one,
+//     and therefore also spans the gaps between a multi-turn run's turns
+//     that no turn-registry lookup could see.
+//
+// Reconstructing the "agent:...:task:..." key here to look the turn up under
+// its real name was considered and rejected twice: the format is owned by
+// task_executor_run.go, duplicating it as a correctness-critical signal
+// would silently reopen this hole the moment it drifts, and it would STILL
+// be the wrong question — a run between turns has no registered turn at all.
 func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error) {
 	lifecycle := al.GetSessionLifecycleStore()
 	seen := map[string]bool{parentID: true}
@@ -443,20 +534,21 @@ func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error)
 			case session.LifecycleQueued:
 				return true, nil
 			case session.LifecycleRunning:
-				taskOrigin := child.Origin != nil && child.Origin.Kind == session.OriginKindTask
-				if taskOrigin {
-					// No reliable liveness signal for this origin kind
-					// (see the task-origin exclusion note above) — fall
-					// back to the old, safe, unconditional block.
-					return true, nil
-				}
 				if ts := al.getActiveTurnState(child.SessionID); ts != nil && ts.IsAlive() {
 					return true, nil
 				}
-				// A `running` record with no live turn (e.g. a tool-
-				// iteration lifecycle notice) is idle, not executing —
-				// fall through and keep walking its own descendants
-				// instead of blocking on it.
+				if al.taskRunInFlight(&child) {
+					// A task-origin child whose run the executor still
+					// holds — genuinely executing under a key this
+					// registry cannot be asked about (see the
+					// task-origin liveness note above). Always false
+					// for every other origin kind.
+					return true, nil
+				}
+				// A `running` record with no live turn and no run in
+				// flight (e.g. a tool-iteration lifecycle notice) is
+				// idle, not executing — fall through and keep walking
+				// its own descendants instead of blocking on it.
 			}
 			queue = append(queue, child.SessionID)
 		}
