@@ -15,9 +15,9 @@
 // (2) the message text is actually present in the provider request the
 // child's next round sends.
 //
-// Run: CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 \
-//        -run '^TestSteerDelegatedChild_EnqueuedAgainstChildSessionInjectsIntoChildsNextRound$' \
-//        ./pkg/agent/
+//	Run: CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 \
+//	       -run '^TestSteerDelegatedChild_EnqueuedAgainstChildSessionInjectsIntoChildsNextRound$' \
+//	       ./pkg/agent/
 package agent
 
 import (
