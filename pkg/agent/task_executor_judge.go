@@ -57,7 +57,7 @@ func (te *TaskExecutor) supersedeTaskSession(agentID, taskSessionID string) {
 	if taskSessionID == "" {
 		return
 	}
-	if sessStore := te.agentLoop.GetAgentStore(agentID); sessStore != nil {
+	if sessStore := te.agentLoop.taskSessionStore(taskSessionID, agentID); sessStore != nil {
 		statusInterrupted := session.StatusInterrupted
 		if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusInterrupted}); setErr != nil {
 			logger.WarnCF("task_executor",
@@ -121,7 +121,12 @@ func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID 
 	if taskSessionID == "" || verdict == nil {
 		return
 	}
-	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+	// Resolved by SESSION, not by agent: an ADR-091 launcher-minted task
+	// session lives in the shared store, and writing it through the agent's
+	// own legacy store drops the verdict (AppendTranscriptStrict refuses a
+	// session it does not hold) — after which GET /tasks/{id}/verdicts has
+	// nothing to read back. See AgentLoop.taskSessionStore.
+	sessStore := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
 	if sessStore == nil {
 		return
 	}
@@ -202,7 +207,7 @@ func (te *TaskExecutor) completeTaskWithResult(
 		status = task.StatusFailed
 		result = "empty_answer: the task produced no result"
 	}
-	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+	sessStore := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
 	now := time.Now().UTC().Format(time.RFC3339)
 	final, uerr := te.store.UpdateIfStatus(t.ID, expected, task.Patch{
 		Status:      &status,
