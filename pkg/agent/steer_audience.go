@@ -104,7 +104,8 @@ func isTerminalOutcome(o steer.Outcome) bool {
 }
 
 func validateOutcomeMessage(outcome steer.Outcome, class session.SessionMessageDeliveryClass) error {
-	wantKind, wantFatal := "", false
+	var wantKind string
+	var wantFatal bool
 	switch outcome {
 	case steer.OutcomeFinalAnswer:
 		wantKind = "handback"

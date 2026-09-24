@@ -1640,6 +1640,52 @@ func persistAsyncToolErrorNotice(ts *turnState, toolCallID, content string) {
 }
 
 // recordToolResult sanitizes and records the admitted tool result.
+
+// sanitizeUntrustedToolResult runs the prompt guard over a tool result
+// from an untrusted source (web fetch, web search, browser, read_file)
+// before it enters the LLM's context, and logs every actual mutation.
+//
+// Extracted from recordToolResult to hold that function inside the
+// 240-line budget. The guard runs BEFORE the sensitive-data filter and
+// the order matters: reversed, an injection payload that mentions a
+// secret pattern would be partially redacted, leaving the injection
+// prefix intact and feeding it to the model. Trusted tools (exec,
+// message, task_*, file writes) are never sanitized -- their output is
+// user-authored or produced by a peer inside the same trust boundary.
+func (ex *agentLoopRunTurnToolsExecute) sanitizeUntrustedToolResult() {
+	if ex.rx.rr.rq.ri.rf.rt.al.promptGuard == nil || !isUntrustedToolResult(ex.toolName) {
+		return
+	}
+	original := ex.contentForLLM
+	ex.contentForLLM = ex.rx.rr.rq.ri.rf.rt.al.promptGuard.Sanitize(ex.contentForLLM, false)
+	// Log every actual mutation to the operator stream AND to the
+	// audit log (when enabled). Mutation is the signal the security
+	// team cares about; logging no-op passes would drown real
+	// events. The operator-stream log is unconditional so that
+	// disabling audit logging does NOT hide prompt-guard rewrites.
+	if ex.contentForLLM != original {
+		details := map[string]any{
+			"action":          "prompt_guard_sanitize",
+			"strictness":      string(ex.rx.rr.rq.ri.rf.rt.al.promptGuard.Strictness()),
+			"original_bytes":  len(original),
+			"sanitized_bytes": len(ex.contentForLLM),
+			"tool":            ex.toolName,
+			"agent_id":        ex.rx.rr.rq.ri.rf.rt.ts.agent.ID,
+		}
+		logger.InfoCF("agent", "prompt guard sanitized tool result", details)
+		// CRIT-6: route through audit.EmitEntry — Log failure bumps the
+		// audit-skipped counter so /health audit_degraded surfaces gaps.
+		audit.EmitEntry(ex.rx.rr.rq.ri.rf.rt.al.auditLogger, &audit.Entry{
+			Event:    audit.EventPolicyEval,
+			Decision: audit.DecisionAllow,
+			AgentID:  ex.rx.rr.rq.ri.rf.rt.ts.agent.ID,
+			User:     ex.rx.rr.rq.ri.rf.rt.ts.auditUser(), // FR-017
+			Tool:     ex.toolName,
+			Details:  details,
+		})
+	}
+}
+
 func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) {
 	ex.contentForLLM = ex.toolResult.ContentForLLM()
 
@@ -1654,36 +1700,7 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 	// SECOND. Reversing the order would let an injection payload
 	// that mentions a secret pattern be partially redacted, leaving
 	// the injection prefix intact and feeding it to the LLM.
-	if ex.rx.rr.rq.ri.rf.rt.al.promptGuard != nil && isUntrustedToolResult(ex.toolName) {
-		original := ex.contentForLLM
-		ex.contentForLLM = ex.rx.rr.rq.ri.rf.rt.al.promptGuard.Sanitize(ex.contentForLLM, false)
-		// Log every actual mutation to the operator stream AND to the
-		// audit log (when enabled). Mutation is the signal the security
-		// team cares about; logging no-op passes would drown real
-		// events. The operator-stream log is unconditional so that
-		// disabling audit logging does NOT hide prompt-guard rewrites.
-		if ex.contentForLLM != original {
-			details := map[string]any{
-				"action":          "prompt_guard_sanitize",
-				"strictness":      string(ex.rx.rr.rq.ri.rf.rt.al.promptGuard.Strictness()),
-				"original_bytes":  len(original),
-				"sanitized_bytes": len(ex.contentForLLM),
-				"tool":            ex.toolName,
-				"agent_id":        ex.rx.rr.rq.ri.rf.rt.ts.agent.ID,
-			}
-			logger.InfoCF("agent", "prompt guard sanitized tool result", details)
-			// CRIT-6: route through audit.EmitEntry — Log failure bumps the
-			// audit-skipped counter so /health audit_degraded surfaces gaps.
-			audit.EmitEntry(ex.rx.rr.rq.ri.rf.rt.al.auditLogger, &audit.Entry{
-				Event:    audit.EventPolicyEval,
-				Decision: audit.DecisionAllow,
-				AgentID:  ex.rx.rr.rq.ri.rf.rt.ts.agent.ID,
-				User:     ex.rx.rr.rq.ri.rf.rt.ts.auditUser(), // FR-017
-				Tool:     ex.toolName,
-				Details:  details,
-			})
-		}
-	}
+	ex.sanitizeUntrustedToolResult()
 
 	// ADR-066 D4 (FR-009, FR-013): the sensitive-data filter now runs
 	// INSIDE the choke point, on the full content, before the cap —

@@ -424,14 +424,6 @@ func (ts *turnState) appendClassifiedError(kind, stage string, llm LLMError) {
 	ts.writeErrorTranscript(kind, stage, llm.Message, llm.Code)
 }
 
-// appendDetachedTerminalError is the controller-owned timeout write allowed after
-// MarkAbandoned. The abandoned flag suppresses writes from the detached child
-// goroutine; it must not suppress the coordinator's single terminal timeout,
-// or a session reload would lose the reason the child stopped.
-func (ts *turnState) appendDetachedTerminalError(kind, stage string, llm LLMError) {
-	ts.writeErrorTranscriptWithAbandonment(kind, stage, llm.Message, llm.Code, true)
-}
-
 func (ts *turnState) writeErrorTranscript(kind, stage, message string, code LLMErrorCode, pe ...*ProviderError) {
 	ts.writeErrorTranscriptWithAbandonment(kind, stage, message, code, false, pe...)
 }

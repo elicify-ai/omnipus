@@ -216,35 +216,10 @@ type turnState struct {
 	// finishedByHardAbort distinguishes a parent's hard-abort cascade from a
 	// normal Finish(false). Both set isFinished, but only the former makes a
 	// child's terminal cancellation an interruption caused by its parent.
-	finishedByHardAbort atomic.Bool
-	// subTurnRecordPersisted: pre-ADR-091, true once this sub-turn's OWN
-	// spawning "delegate"/"spawn" tool-call record (on the PARENT's
-	// transcript) had been corrected with the real terminal status/duration
-	// — or it had been determined that no correction attempt was
-	// needed/possible (no transcript store, no session ID). isFinished
-	// flips the instant runTurn returns (its own deferred Finish call), but
-	// the deleted spawnSubTurn's cleanup defer — which performed the
-	// correction via the also-deleted updateToolCallStatusWithRetry, up to
-	// ~935ms of retry backoff for async delegation — only ran AFTER that
-	// point, once spawnSubTurn itself returned. A reload/replay landing in
-	// that window previously read isFinished==true as "safe to trust the
-	// persisted record" and served the still-stale async placeholder ack
-	// (Status="success", DurationMS≈0) as genuine. The also-deleted
-	// IsSubTurnActiveForSpawnCall treated "finished but not yet persisted"
-	// as still active so callers withheld a terminal frame/replay snapshot
-	// until BOTH were true (pkg/gateway/replay.go now uses
-	// persistedSubagentStartSpans/persistedSubagentEndSpans instead — see
-	// that file's header comment, "the dead isSpanActive/
-	// IsSubTurnActiveForSpawnCall").
-	//
-	// ADR-091 fix lane RX-SUBTURN note (comment-only; code unchanged): grep
-	// finds this field read or written nowhere else in the repo — it is
-	// declared, always zero-value, and otherwise unused today. Flagged for
-	// the team (candidate for removal) rather than deleted here.
-	subTurnRecordPersisted atomic.Bool
-	session                session.SessionStore // Session store reference
-	initialHistoryLength   int                  // Snapshot of window (GetHistory) length at turn start
-	initialArchiveLen      int                  // Snapshot of archive (ReadArchive) line count at turn start — for Skip-preserving rollback
+	finishedByHardAbort  atomic.Bool
+	session              session.SessionStore // Session store reference
+	initialHistoryLength int                  // Snapshot of window (GetHistory) length at turn start
+	initialArchiveLen    int                  // Snapshot of archive (ReadArchive) line count at turn start — for Skip-preserving rollback
 
 	// injectedRecallSpan is the recall span whose messages are currently
 	// present in this turn's in-memory message slice (ADR-066 D5.4,

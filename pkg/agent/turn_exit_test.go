@@ -50,7 +50,6 @@ func TestFinishedChannelClosedState(t *testing.T) {
 
 	// Verify Finish() is idempotent
 	ts.Finish(false) // Should not panic
-
 }
 
 // TestFinish_ConcurrentCalls verifies that calling Finish() concurrently from multiple

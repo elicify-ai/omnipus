@@ -263,7 +263,7 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 ) (steer.LaunchResult, error) {
 	meta, identityErr := sessions.NewSession(sessionType, "", req.TargetAgentID)
 	if identityErr != nil {
-		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: identity: %v", steer.ErrStoreWrite, identityErr)
+		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: identity: %w", steer.ErrStoreWrite, identityErr)
 	}
 	childID := meta.ID
 	rollback := func() { _ = sessions.DeleteSession(childID) }
@@ -305,7 +305,7 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 	if persistErr := lifecycle.Persist(rec); persistErr != nil {
 		rollbackGoal()
 		rollback()
-		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: edge: %v", steer.ErrStoreWrite, persistErr)
+		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: edge: %w", steer.ErrStoreWrite, persistErr)
 	}
 	return steer.LaunchResult{SessionID: childID, Generation: 1}, nil
 }
@@ -335,7 +335,7 @@ func (l *SteerLauncher) launchSteered(
 
 	childID, idErr := session.NewSessionID()
 	if idErr != nil {
-		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: mint session id: %v", steer.ErrStoreWrite, idErr)
+		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: mint session id: %w", steer.ErrStoreWrite, idErr)
 	}
 
 	// Resolve the ancestor chain before taking the direct parent's shard
@@ -347,7 +347,7 @@ func (l *SteerLauncher) launchSteered(
 	preParent, preParentErr := lifecycle.Load(req.SteeringSessionID)
 	preParentExisted := preParentErr == nil
 	if preParentErr != nil && !errors.Is(preParentErr, session.ErrLifecycleNotFound) {
-		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: resolve steering lifecycle: %v",
+		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: resolve steering lifecycle: %w",
 			steer.ErrInvalidEdge, preParentErr)
 	}
 	rootID := req.SteeringSessionID
@@ -356,7 +356,7 @@ func (l *SteerLauncher) launchSteered(
 		var walkErr error
 		rootID, parentDepth, walkErr = l.walkVerifiedRoot(req.SteeringSessionID, preParent)
 		if walkErr != nil {
-			return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: %v", steer.ErrInvalidEdge, walkErr)
+			return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: %w", steer.ErrInvalidEdge, walkErr)
 		}
 	}
 
@@ -369,7 +369,7 @@ func (l *SteerLauncher) launchSteered(
 			}
 			steererMeta, metaErr := sessions.GetMeta(req.SteeringSessionID)
 			if metaErr != nil {
-				return nil, fmt.Errorf("steer: launch: %w: resolve steering session %q: %v",
+				return nil, fmt.Errorf("steer: launch: %w: resolve steering session %q: %w",
 					steer.ErrInvalidEdge, req.SteeringSessionID, metaErr)
 			}
 			parentAgentID := strings.TrimSpace(steererMeta.ActiveAgentID)
@@ -424,7 +424,7 @@ func (l *SteerLauncher) launchSteered(
 			}
 
 			if _, err := sessions.CreateSessionWithID(childID, req.SteeringSessionID, sessionType, "", req.TargetAgentID); err != nil {
-				return nil, fmt.Errorf("steer: launch: %w: identity: %v", steer.ErrStoreWrite, err)
+				return nil, fmt.Errorf("steer: launch: %w: identity: %w", steer.ErrStoreWrite, err)
 			}
 			if err := l.writeChildMetaAndHistory(sessions, childID, title, workspaceID, "", req.SteeringSessionID, req); err != nil {
 				_ = sessions.DeleteSession(childID)
@@ -554,17 +554,17 @@ func (l *SteerLauncher) createLaunchGoal(
 		now,
 	)
 	if err != nil {
-		return "", fmt.Errorf("steer: launch: %w: goal: %v", steer.ErrStoreWrite, err)
+		return "", fmt.Errorf("steer: launch: %w: goal: %w", steer.ErrStoreWrite, err)
 	}
 	store := resolveGoalRecordStore()
 	if err := store.Create(g); err != nil {
-		return "", fmt.Errorf("steer: launch: %w: create goal: %v", steer.ErrStoreWrite, err)
+		return "", fmt.Errorf("steer: launch: %w: create goal: %w", steer.ErrStoreWrite, err)
 	}
 	if _, err := store.Update(g.GoalID, func(current *goal.Goal) error {
 		return current.Activate(childID, now)
 	}); err != nil {
 		_ = store.Delete(g.GoalID)
-		return "", fmt.Errorf("steer: launch: %w: activate goal: %v", steer.ErrStoreWrite, err)
+		return "", fmt.Errorf("steer: launch: %w: activate goal: %w", steer.ErrStoreWrite, err)
 	}
 	return g.GoalID, nil
 }
@@ -631,7 +631,7 @@ func (l *SteerLauncher) writeChildMetaAndHistory(
 		patch.ParentSessionID = &steeringSessionID
 	}
 	if setErr := sessions.SetMeta(childID, patch); setErr != nil {
-		return fmt.Errorf("steer: launch: %w: owner/workspace/title: %v", steer.ErrStoreWrite, setErr)
+		return fmt.Errorf("steer: launch: %w: owner/workspace/title: %w", steer.ErrStoreWrite, setErr)
 	}
 
 	if req.Task != "" {
@@ -644,7 +644,7 @@ func (l *SteerLauncher) writeChildMetaAndHistory(
 			Timestamp: time.Now().UTC(),
 		}
 		if appendErr := sessions.AppendTranscriptStrict(childID, taskEntry); appendErr != nil {
-			return fmt.Errorf("steer: launch: %w: task transcript: %v", steer.ErrStoreWrite, appendErr)
+			return fmt.Errorf("steer: launch: %w: task transcript: %w", steer.ErrStoreWrite, appendErr)
 		}
 	}
 	return nil
@@ -792,7 +792,7 @@ func commitSteeredDispatchState(
 		if refusal != nil {
 			return nil, refusal
 		}
-		return nil, fmt.Errorf("steer: dispatch: %w: %v", steer.ErrStoreWrite, err)
+		return nil, fmt.Errorf("steer: dispatch: %w: %w", steer.ErrStoreWrite, err)
 	}
 	return committed, nil
 }
@@ -853,7 +853,7 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil {
 		rollbackReservation()
-		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %v", steer.ErrStoreWrite, err)
+		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %w", steer.ErrStoreWrite, err)
 	}
 	if ok, reason := reserveDispatch(rec, gen); !ok {
 		rollbackReservation()
@@ -892,7 +892,7 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 	ts, buildErr := al.reconstructSteeredTurn(rec, nil)
 	if buildErr != nil {
 		al.drainSteerQueue(sessionID, gen)
-		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: reconstruct: %v", steer.ErrStoreWrite, buildErr)
+		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: reconstruct: %w", steer.ErrStoreWrite, buildErr)
 	}
 	if !al.registerTurnIfAbsent(ts) {
 		// Another dispatch already won the race for this sessionKey; ours

@@ -159,6 +159,39 @@ type runExternalCLISubTurnState struct {
 // spawnSubTurn sourced Workspace/Model/MaxIterations/Subagents the same way
 // when dispatch resolved to external-cli), so every field read below already
 // reflects the delegate's own identity, not the delegating parent's.
+// reportWorkspaceRefusal emits the typed error frame and stamps the
+// transcript for a workspace resolution that refused, then returns the
+// wrapped error for the caller to return.
+//
+// Extracted from runExternalCLISubTurn to keep it inside the 240-line
+// function budget. It is the same defect class the native runTurn path
+// fixed: the sentinel was known and the driver never started, but nothing
+// TYPED reached the user -- and because a parent's delegate is hidden on
+// failure, the thread stayed silent unless the parent happened to narrate
+// it. Emitting the catalogue frame AND appending the classified error is
+// what makes the refusal visible in the child's own view and as a status
+// line in the parent's side panel.
+func (ed *runExternalCLISubTurnState) reportWorkspaceRefusal(wsErr error) error {
+	llm := TranslateTurnError(wsErr)
+	chatID := ed.childTS.chatID
+	if chatID == "" {
+		chatID = ed.childTS.opts.ChatID
+	}
+	ed.al.emitEvent(
+		EventKindError,
+		ed.childTS.eventMeta("runTurn", "turn.error"),
+		ErrorPayload{
+			Stage:     "workspace",
+			ChatID:    chatID,
+			SessionID: string(ed.childTS.routingSessionID),
+			Code:      string(llm.Code),
+			Message:   llm.Message,
+		},
+	)
+	ed.childTS.appendClassifiedError(EventKindError.String(), "workspace", llm)
+	return fmt.Errorf("external-cli dispatch: %w", wsErr)
+}
+
 func runExternalCLISubTurn(
 	ctx context.Context,
 	al *AgentLoop,
@@ -232,29 +265,7 @@ func runExternalCLISubTurn(
 	//    outside their root, not merely guarded against.
 	workDir, wsErr := resolveTurnWorkDirOrRefuse(ctx, ed.agent.ID, ed.agent.Home, ed.childTS.opts.WorkspaceID)
 	if wsErr != nil {
-		// Same defect class as native runTurn: the sentinel was known and
-		// the driver never started, but nothing typed reached the user.
-		// Parent delegate is hidden on failure, so the thread stayed silent
-		// unless the parent happened to narrate. Emit the catalogue frame
-		// and stamp the transcript the way runTurn now does.
-		llm := TranslateTurnError(wsErr)
-		chatID := ed.childTS.chatID
-		if chatID == "" {
-			chatID = ed.childTS.opts.ChatID
-		}
-		ed.al.emitEvent(
-			EventKindError,
-			ed.childTS.eventMeta("runTurn", "turn.error"),
-			ErrorPayload{
-				Stage:     "workspace",
-				ChatID:    chatID,
-				SessionID: string(ed.childTS.routingSessionID),
-				Code:      string(llm.Code),
-				Message:   llm.Message,
-			},
-		)
-		ed.childTS.appendClassifiedError(EventKindError.String(), "workspace", llm)
-		return nil, fmt.Errorf("external-cli dispatch: %w", wsErr)
+		return nil, ed.reportWorkspaceRefusal(wsErr)
 	}
 
 	// FIX 1 (cancel propagation, BLOCK finding on the 7-reviewer gate): create

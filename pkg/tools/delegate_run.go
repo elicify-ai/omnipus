@@ -154,17 +154,16 @@ func ValidateContextSnapshot(snap *ContextSnapshot, maxBytes, maxRefs int) error
 
 // delegateToolExecuteRun carries the shared state of executeRun across its stages.
 type delegateToolExecuteRun struct {
-	t                 *DelegateTool
-	ctx               context.Context
-	args              map[string]any
-	task              string
-	label             string
-	agentID           string
-	timeout           time.Duration
-	requestedSkill    string
-	snap              *ContextSnapshot
-	delegateSessionID string
-	goal              *steer.GoalSpec
+	t              *DelegateTool
+	ctx            context.Context
+	args           map[string]any
+	task           string
+	label          string
+	agentID        string
+	timeout        time.Duration
+	requestedSkill string
+	snap           *ContextSnapshot
+	goal           *steer.GoalSpec
 }
 
 func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
