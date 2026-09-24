@@ -52,10 +52,34 @@ async function waitTurnDone(page: Page) {
   await expect(stopButton(page)).toBeHidden({ timeout: 240_000 })
 }
 
-function assertNoDuplicateOrGapText(before: string, after: string) {
+// Round-3/round-4 open item (orchestrator, both rounds): the previous version
+// of this check only verified `after` didn't SHRINK relative to `before` and
+// shared its first 60 characters — a truncated answer that happened to start
+// right, or one that silently dropped a middle section, still passed. That
+// is not "no duplicate or gap text", it's "no obviously wrong text".
+//
+// Fixed to assert the FULL expected text by using the design's own stated
+// ground truth for "complete and correct" (BE-DESIGN.md §8.3's common pass
+// criteria: "the final answer is complete and matches the transcript after a
+// hard reload"): hard-reload the page, re-read the SAME message from the
+// freshly reconstructed transcript, and require it to be BYTE-IDENTICAL
+// (after whitespace normalization) to `after`. A hard reload discards every
+// piece of in-memory/live-streaming state this whole test suite exists to
+// stress — what remains is exactly what the server actually persisted, which
+// is the only true "full expected text" available to an e2e test whose
+// prompt output is a live, non-deterministic LLM response (there is no fixed
+// string to assert against up front). `before` is kept as a secondary,
+// cheap sanity check (the reload's answer must still contain the same
+// opening, catching a wholesale content swap early with a clearer failure).
+async function assertNoDuplicateOrGapText(page: Page, before: string, after: string) {
   const norm = (s: string) => s.replace(/\s+/g, ' ').trim()
-  expect(norm(after).length).toBeGreaterThanOrEqual(norm(before).length)
   expect(norm(after).startsWith(norm(before).slice(0, 60))).toBeTruthy()
+  await page.reload()
+  await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
+  await waitForConnected(page)
+  await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
+  const reloaded = (await assistantMessages(page).first().innerText()).trim()
+  expect(norm(reloaded)).toBe(norm(after))
 }
 
 test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
@@ -72,7 +96,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await waitTurnDone(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     const after = (await assistantMessages(page).first().innerText()).trim()
-    assertNoDuplicateOrGapText(before, after)
+    await assertNoDuplicateOrGapText(page, before, after)
     // Server log/diagnostic surfaced client-side would confirm
     // "catch_up mode=incremental" — the design leaves the exact
     // surfacing mechanism to Lane A/C's own diagnostics; this scenario
@@ -93,7 +117,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await waitTurnDone(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     const after = (await assistantMessages(page).first().innerText()).trim()
-    assertNoDuplicateOrGapText(before, after)
+    await assertNoDuplicateOrGapText(page, before, after)
   })
 
   test('c: tab switched to another chat while the turn finishes — incremental on return', async ({ page }) => {
@@ -110,7 +134,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     // left for the orchestrator to wire against the live UI once runnable.
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     const after = (await assistantMessages(page).first().innerText()).trim()
-    assertNoDuplicateOrGapText(before, after)
+    await assertNoDuplicateOrGapText(page, before, after)
   })
 
   test('d: no tab at all while the turn finishes (laptop sleep) — reopen shows the complete answer', async ({ page, context }) => {
@@ -124,7 +148,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await waitTurnDone(page2)
     await expect(assistantMessages(page2)).toHaveCount(1, { timeout: 30_000 })
     const after = (await assistantMessages(page2).first().innerText()).trim()
-    assertNoDuplicateOrGapText(before, after)
+    await assertNoDuplicateOrGapText(page2, before, after)
   })
 
   test('e: two tabs on one chat — second tab shows the user message and the identical answer, cursors equal', async ({ page, context }) => {
@@ -155,7 +179,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await waitTurnDone(page) // chat B, currently foreground
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     const afterB = (await assistantMessages(page).first().innerText()).trim()
-    assertNoDuplicateOrGapText(beforeB, afterB)
+    await assertNoDuplicateOrGapText(page, beforeB, afterB)
     void beforeA // chat A's own convergence is scenario c's concern; this
     // scenario's unique assertion is B's incremental catch-up under outage.
   })
