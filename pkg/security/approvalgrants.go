@@ -22,8 +22,11 @@ package security
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -130,6 +133,27 @@ type ApprovalGrantStore struct {
 	// bash child once granted).
 	networkGrants map[grantKey]struct{}
 
+	// networkHosts holds the D-13 fix's (2026-09-24 security review)
+	// per-session set of HOST names a D8 network escalation's "Always
+	// Allow" approved — session-scoped, "for this chat session only,
+	// never written to the global config" (founder decision B, point 2).
+	// This is layered ON TOP of networkGrants (the existing port-level
+	// kernel widening): networkGrants alone used to leave the SEPARATE
+	// egress proxy still 403'ing every request ("host not in allow-list"),
+	// since the proxy's own static cfg.Sandbox.EgressAllowList never
+	// changes at runtime. networkHosts is what
+	// sandbox.EgressProxy.GrantRunHosts actually receives (via
+	// networkTokens' token, below).
+	networkHosts map[grantKey]map[string]struct{}
+
+	// networkTokens holds one opaque, unguessable credential per (session,
+	// agent) pair once it has been minted (SessionEgressToken) — reused for
+	// every subsequent D8 "Always Allow" in that session rather than
+	// re-minted, so a session's egress-proxy grant (sandbox.EgressProxy.
+	// runHosts, keyed by this SAME token) accumulates hosts under one
+	// stable key instead of orphaning earlier grants under a discarded one.
+	networkTokens map[grantKey]string
+
 	// inheritSourceMiss counts InheritFrom calls whose four key components
 	// were all non-empty but whose SOURCE key held no grants, so nothing was
 	// copied (ADR-057 FR-079). Read via InheritSourceMissCount.
@@ -200,6 +224,8 @@ func NewApprovalGrantStore() *ApprovalGrantStore {
 		prefixGrants:  make(map[grantKey]map[string][]ShellPrefixGrant),
 		pathGrants:    make(map[grantKey][]fspolicy.PathGrant),
 		networkGrants: make(map[grantKey]struct{}),
+		networkHosts:  make(map[grantKey]map[string]struct{}),
+		networkTokens: make(map[grantKey]string),
 	}
 }
 
@@ -482,6 +508,127 @@ func (s *ApprovalGrantStore) HasNetworkGrant(sessionID, agentID string) bool {
 	return ok
 }
 
+// SessionEgressToken returns the opaque, unguessable D-13 credential for
+// (sessionID, agentID) — minting a fresh one (32 random hex bytes,
+// crypto/rand) the first time it is needed for this key, and returning the
+// SAME value on every later call for the same key so a session's egress
+// grants accumulate under one stable sandbox.EgressProxy.runHosts entry
+// rather than a fresh, orphaned one per call. Returns "" for a nil store or
+// an empty sessionID/agentID (fail-closed: no token means the caller mints
+// nothing and the egress proxy grants nothing for that call).
+func (s *ApprovalGrantStore) SessionEgressToken(sessionID, agentID string) string {
+	if s == nil || sessionID == "" || agentID == "" {
+		return ""
+	}
+	key := grantKey{sessionID: sessionID, agentID: agentID}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tok, ok := s.networkTokens[key]; ok {
+		return tok
+	}
+	tok := newEgressToken()
+	if s.networkTokens == nil {
+		s.networkTokens = make(map[grantKey]string)
+	}
+	s.networkTokens[key] = tok
+	return tok
+}
+
+// newEgressToken mints a fresh 32-hex-character (16-byte) random token.
+// crypto/rand failure is treated the same as every other fail-closed path
+// in this file: an empty result, which SessionEgressToken's callers (and
+// EgressProxy.GrantRunHosts) treat as "grant nothing" rather than a panic
+// or a predictable fallback value.
+func newEgressToken() string {
+	buf := make([]byte, 16)
+	if _, err := cryptorand.Read(buf); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(buf)
+}
+
+// RecordNetworkHosts is the D-13 fix's "Always Allow" write path: adds
+// hosts to the SESSION-scoped set already recorded for (sessionID,
+// agentID) — union, not replace, so approving a second, different host
+// later in the same session does not drop the first. Returns false (no-op)
+// for a nil store, an empty sessionID/agentID, or an empty hosts slice.
+func (s *ApprovalGrantStore) RecordNetworkHosts(sessionID, agentID string, hosts []string) bool {
+	if s == nil || sessionID == "" || agentID == "" || len(hosts) == 0 {
+		return false
+	}
+	key := grantKey{sessionID: sessionID, agentID: agentID}
+	s.mu.Lock()
+	if s.networkHosts == nil {
+		s.networkHosts = make(map[grantKey]map[string]struct{})
+	}
+	set := s.networkHosts[key]
+	if set == nil {
+		set = make(map[string]struct{}, len(hosts))
+		s.networkHosts[key] = set
+	}
+	added := false
+	for _, h := range hosts {
+		if h == "" {
+			continue
+		}
+		if _, dup := set[h]; !dup {
+			set[h] = struct{}{}
+			added = true
+		}
+	}
+	s.mu.Unlock()
+
+	if added {
+		s.emitGrantRecorded(audit.ShellGrantScopeNetworkWidening, "", agentID, sessionID, bashToolName,
+			map[string]any{"hosts": hosts})
+	}
+	return true
+}
+
+// NetworkHostsFor returns the session-scoped set of hosts (D-13's "Always
+// Allow") already recorded for (sessionID, agentID), sorted for a
+// deterministic result. Fail-safe: a nil store or an empty sessionID/
+// agentID always returns nil.
+func (s *ApprovalGrantStore) NetworkHostsFor(sessionID, agentID string) []string {
+	if s == nil || sessionID == "" || agentID == "" {
+		return nil
+	}
+	key := grantKey{sessionID: sessionID, agentID: agentID}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	set := s.networkHosts[key]
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(set))
+	for h := range set {
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// NetworkTokensForSession returns every D-13 egress token minted for
+// sessionID, across every agent that used it — called by AgentLoop.
+// CloseSession BEFORE ClearSession wipes this store's own copy, so the
+// caller can also revoke each token on the (separate-package)
+// sandbox.EgressProxy it lives on. Fail-safe: a nil store or an empty
+// sessionID always returns nil.
+func (s *ApprovalGrantStore) NetworkTokensForSession(sessionID string) []string {
+	if s == nil || sessionID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for key, tok := range s.networkTokens {
+		if key.sessionID == sessionID && tok != "" {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
 // InheritFrom copies the grant set currently recorded under the SOURCE key
 // {srcSessionID, srcAgentID} into the DESTINATION key {dstSessionID,
 // dstAgentID} — a union, not a replace, so any grant the destination already
@@ -637,6 +784,20 @@ func (s *ApprovalGrantStore) InheritFrom(srcSessionID, srcAgentID, dstSessionID,
 			}
 			s.networkGrants[dstKey] = struct{}{}
 		}
+		// D-13 fix: networkHosts/networkTokens are DELIBERATELY NOT
+		// inherited here, unlike every other grant kind above. Both this
+		// store's HasNetworkGrant/PathGrantsFor-style "already granted"
+		// signal AND the sandbox.EgressProxy's own runHosts map (keyed by
+		// TOKEN, not session id) would have to agree for a delegate to
+		// actually pass traffic — copying only the host SET into the
+		// store without also pushing it to the proxy under the delegate's
+		// own token would leave enforceNetworkPreflight reporting
+		// "already granted" (skipping its own escalation, which is the
+		// ONLY call site that pushes to the proxy) while the proxy itself
+		// still 403s the delegate's first request. A delegate therefore
+		// re-asks and re-grants its own hosts on its own first need,
+		// exactly like a brand-new session — a clean fail-closed gap
+		// rather than a "shows granted, silently 403s anyway" one.
 	}
 	s.mu.Unlock()
 }
@@ -696,6 +857,22 @@ func (s *ApprovalGrantStore) ClearSession(sessionID string) {
 	for key := range s.networkGrants {
 		if key.sessionID == sessionID {
 			delete(s.networkGrants, key)
+		}
+	}
+	// D-13 fix: the two new maps die with the session the same way — this
+	// only clears THIS store's own bookkeeping; the caller (AgentLoop.
+	// CloseSession) is responsible for calling NetworkTokensForSession
+	// BEFORE ClearSession and revoking each token on the sandbox.
+	// EgressProxy separately, since this package cannot reach that one
+	// (pkg/sandbox already imports pkg/security; the reverse would cycle).
+	for key := range s.networkHosts {
+		if key.sessionID == sessionID {
+			delete(s.networkHosts, key)
+		}
+	}
+	for key := range s.networkTokens {
+		if key.sessionID == sessionID {
+			delete(s.networkTokens, key)
 		}
 	}
 }

@@ -509,6 +509,21 @@ type Limits struct {
 	// is NOT covered. Documented as a trusted-prompt-feature limitation.
 	EgressProxyAddr string
 
+	// EgressProxyToken (D-13 fix, 2026-09-24 security review) is an opaque
+	// per-run or per-session credential, embedded as the proxy URL's
+	// userinfo (`http://<token>@host:port`), that a D8 network-preflight
+	// approval mints so the child's traffic is recognised as the SPECIFIC
+	// approved run/session by EgressProxy.hostAllowed's Proxy-Authorization
+	// check (pkg/sandbox/egress_proxy.go) — the fix for an approved D8
+	// escalation only widening the KERNEL port rule while the egress
+	// proxy's own, separate host allow-list still 403'd every request.
+	// Empty for every non-bash caller of BuildLimits/ResolveLimits (web_
+	// serve, environment_setup, …) and for a bash call with no approved
+	// hosts — those continue to rely solely on the proxy's static,
+	// operator-configured cfg.Sandbox.EgressAllowList, exactly as before
+	// this fix.
+	EgressProxyToken string
+
 	// KernelPolicy is the PER-TURN kernel-enforcement policy for this child,
 	// typically produced by sandbox.DeriveKernelPolicy from the turn's
 	// authored fspolicy.FSPolicy (spec unified-file-access-and-mounts FR-4.0).
@@ -896,6 +911,14 @@ func mergeEnv(env []string, lim Limits) []string {
 	// http.Transport uses both via httpproxy.FromEnvironment).
 	if lim.EgressProxyAddr != "" {
 		proxyURL := "http://" + lim.EgressProxyAddr
+		if lim.EgressProxyToken != "" {
+			// D-13 fix: userinfo on the proxy URL becomes a Basic
+			// Proxy-Authorization header (RFC 7617) that curl, wget, npm,
+			// and Go's own http.ProxyFromEnvironment all send automatically
+			// — no child-side configuration needed beyond the env var it
+			// was already reading.
+			proxyURL = "http://" + lim.EgressProxyToken + "@" + lim.EgressProxyAddr
+		}
 		merged = append(merged,
 			"HTTP_PROXY="+proxyURL,
 			"HTTPS_PROXY="+proxyURL,

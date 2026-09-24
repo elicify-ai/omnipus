@@ -37,6 +37,7 @@ package tools
 
 import (
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
@@ -569,6 +570,121 @@ func ClassifyNetworkNeed(command string) bool {
 	return false
 }
 
+// urlHostRe extracts the host portion of a literal http(s):// token —
+// ExtractNetworkHosts's primary source. Stops at the first byte that ends a
+// hostname in a URL (`/`, `:`, `?`, `#`, whitespace, or a quote/backtick a
+// shell word could still be carrying) without needing a full URL parse,
+// matching ClassifyNetworkNeed's own "literal http(s):// token anywhere in
+// the command text" scan (it does not require the URL to be a clean,
+// standalone shell word either).
+var urlHostRe = regexp.MustCompile(`(?i)https?://([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?:[:/?#'"` + "`" + `]|\s|$)`)
+
+// ExtractNetworkHosts is the D-13 fix's (2026-09-24 security review)
+// best-effort hostname extractor: founder decision B point 1, "The D8
+// classifier extracts the hosts the command names (from URLs, or host:port
+// args of known network binaries) and puts them on the approval card."
+//
+// Two sources, deliberately independent of ClassifyNetworkNeed's own
+// networkCapableBinaries membership test (a host can be extracted from a
+// binary ClassifyNetworkNeed did not flag by name, e.g. a plain
+// `some-tool https://example.com`, and equally a flagged binary may carry
+// no extractable host at all, e.g. `npm install` — see BlindHostNeed):
+//
+//  1. every literal `http://`/`https://` URL's host (urlHostRe);
+//  2. for ssh/scp/rsync specifically, the remote side of a
+//     `[user@]host[:path]` argument (hostFromRemoteSpec) — the one shape
+//     those three commands use to name a network endpoint that is NOT a
+//     URL at all.
+//
+// Returns hosts lower-cased and de-duplicated, in first-seen order. This is
+// explicitly NOT exhaustive (see BlindHostNeed's own doc comment and the
+// ADR-092 D8 "honest gap" section) — a host built at runtime (variable
+// expansion, a config file, DNS discovered by the program itself) is
+// invisible to a text scan by construction.
+func ExtractNetworkHosts(command string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	add := func(h string) {
+		h = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), "."))
+		if h == "" || seen[h] {
+			return
+		}
+		seen[h] = true
+		out = append(out, h)
+	}
+
+	for _, m := range urlHostRe.FindAllStringSubmatch(command, -1) {
+		add(m[1])
+	}
+
+	for _, seg := range splitShellSegments(command) {
+		seg = strings.TrimSpace(seg)
+		if seg == "" {
+			continue
+		}
+		words, ok := tokenizeShellWords(seg)
+		if !ok {
+			continue
+		}
+		head, args := resolveShellHead(words)
+		switch strings.ToLower(head) {
+		case "ssh", "scp", "rsync":
+			for _, a := range args {
+				if h, ok := hostFromRemoteSpec(a); ok {
+					add(h)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// hostFromRemoteSpec extracts the hostname from an ssh/scp/rsync remote
+// endpoint argument: `[user@]host[:path]`. Returns ok=false for a flag
+// (`-p`), a bare local path (no `@`, and starting with `/`, `.`, or `~`),
+// or an empty result — the caller must not guess in any of those cases.
+func hostFromRemoteSpec(spec string) (string, bool) {
+	if spec == "" || strings.HasPrefix(spec, "-") {
+		return "", false
+	}
+	s := spec
+	if at := strings.IndexByte(s, '@'); at >= 0 {
+		s = s[at+1:]
+	} else if strings.HasPrefix(s, "/") || strings.HasPrefix(s, ".") || strings.HasPrefix(s, "~") {
+		// No "@" and shaped like a local path (scp/rsync's own source or
+		// destination argument, not a remote endpoint) — not a host.
+		return "", false
+	}
+	if colon := strings.IndexByte(s, ':'); colon >= 0 {
+		s = s[:colon]
+	}
+	if s == "" || strings.ContainsAny(s, "/\\") {
+		return "", false
+	}
+	return s, true
+}
+
+// allHostsApproved reports whether every host in needed already appears in
+// approved (case-insensitive; both are expected pre-lowercased by this
+// file's own callers, but the comparison does not assume it). An empty
+// needed slice is never "approved" — the caller (EvaluateNetworkPreflight)
+// only calls this when hosts were actually extracted.
+func allHostsApproved(needed, approved []string) bool {
+	if len(needed) == 0 {
+		return false
+	}
+	set := make(map[string]bool, len(approved))
+	for _, h := range approved {
+		set[strings.ToLower(h)] = true
+	}
+	for _, h := range needed {
+		if !set[strings.ToLower(h)] {
+			return false
+		}
+	}
+	return true
+}
+
 // NetworkPreflightVerdict is D8's per-command outcome (FR-042/FR-043/FR-044).
 type NetworkPreflightVerdict struct {
 	// Flagged is true when ClassifyNetworkNeed flagged the command.
@@ -583,6 +699,27 @@ type NetworkPreflightVerdict struct {
 
 	// PolicyRule explains the verdict.
 	PolicyRule string
+
+	// Hosts is the D-13 fix's (2026-09-24 security review) best-effort
+	// extraction of the literal hostnames this command names — from a
+	// literal http(s):// URL, or the remote side of an ssh/scp/rsync
+	// `[user@]host[:path]` argument (ExtractNetworkHosts). Empty when
+	// Flagged is true but no host could be extracted (a "blind" network
+	// need — the command was recognised as network-capable by binary name
+	// alone, e.g. `npm install`, with no literal host anywhere in its
+	// text) — see BlindHostNeed.
+	Hosts []string
+}
+
+// BlindHostNeed reports whether v is a flagged, escalation-needing command
+// with NO extractable host at all — founder decision B, point 3: "If no
+// host can be extracted... the card must say so, and approval must not
+// silently open everything. Keep today's behaviour (ports only) and state
+// it on the card." A blind-host approval therefore widens ONLY the kernel
+// port rule (applyAutoNetworkPosture, unchanged) — never the egress
+// proxy's host allow-list, since there is no host to grant there.
+func (v NetworkPreflightVerdict) BlindHostNeed() bool {
+	return v.NeedsEscalation() && len(v.Hosts) == 0
 }
 
 // NeedsEscalation reports whether v requires the D8 Auto escalation prompt.
@@ -592,25 +729,49 @@ func (v NetworkPreflightVerdict) NeedsEscalation() bool {
 
 // EvaluateNetworkPreflight decides whether a bash command needs the D8
 // escalation prompt before it spawns. granted is the caller's own record of
-// whether this session already holds the network-widening grant (FR-044) —
-// this evaluator does not read ApprovalGrantStore itself; that store is
-// owned by a different lane (pkg/security/approvalgrants.go, L4).
-func EvaluateNetworkPreflight(command string, granted bool) NetworkPreflightVerdict {
-	flagged := ClassifyNetworkNeed(command)
-	if !flagged {
+// whether this session already holds the network-widening (port-level)
+// grant (FR-044); approvedHosts is the session's own D-13 host set
+// (security.ApprovalGrantStore.NetworkHostsFor) — this evaluator does not
+// read ApprovalGrantStore itself; that store is owned by a different lane
+// (pkg/security/approvalgrants.go, L4).
+//
+// D-13 fix (2026-09-24 security review): before this fix, `granted` alone
+// decided Contained — a session that had EVER approved network access ran
+// every later network-capable command silently, regardless of which host it
+// named. Now, when ExtractNetworkHosts finds at least one host, Contained
+// additionally requires every one of THIS command's hosts to already be in
+// approvedHosts — a session approved for example.com does not silently run
+// a later command against other.test. A BLIND network need (Hosts empty —
+// see BlindHostNeed) keeps the ORIGINAL ports-only behaviour unchanged
+// (founder decision B, point 3: "Keep today's behaviour (ports only)").
+func EvaluateNetworkPreflight(command string, granted bool, approvedHosts []string) NetworkPreflightVerdict {
+	if !ClassifyNetworkNeed(command) {
 		return NetworkPreflightVerdict{
 			Contained:  true,
 			PolicyRule: "command not classified as network-capable — bash's Auto per-turn deny-by-default stands unchallenged (an unclassified raw socket is still kernel-denied, FR-044's honest gap)",
 		}
 	}
-	if granted {
+	hosts := ExtractNetworkHosts(command)
+	if len(hosts) == 0 {
+		if granted {
+			return NetworkPreflightVerdict{
+				Flagged: true, Contained: true,
+				PolicyRule: "command classified as network-capable with no extractable host (blind network need), and a network grant is already recorded for this session (FR-044) — no re-prompt, ports only",
+			}
+		}
 		return NetworkPreflightVerdict{
-			Flagged: true, Contained: true,
-			PolicyRule: "command classified as network-capable, and a network grant is already recorded for this session (FR-044) — no re-prompt",
+			Flagged:    true,
+			PolicyRule: "command classified as network-capable with no extractable host (blind network need) and no network grant recorded — Auto escalation required (FR-042/FR-043), ports only",
+		}
+	}
+	if granted && allHostsApproved(hosts, approvedHosts) {
+		return NetworkPreflightVerdict{
+			Flagged: true, Contained: true, Hosts: hosts,
+			PolicyRule: "command classified as network-capable, and every named host is already approved for this session (FR-044/D-13) — no re-prompt",
 		}
 	}
 	return NetworkPreflightVerdict{
-		Flagged:    true,
-		PolicyRule: "command classified as network-capable and no network grant recorded — Auto escalation required (FR-042/FR-043)",
+		Flagged: true, Hosts: hosts,
+		PolicyRule: "command classified as network-capable and names a host not yet approved for this session — Auto escalation required (FR-042/FR-043/D-13)",
 	}
 }

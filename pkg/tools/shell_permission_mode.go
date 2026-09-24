@@ -33,6 +33,8 @@ package tools
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -158,6 +160,13 @@ type shellPermissionResult struct {
 	mode           ShellMode
 	pathGrants     []fspolicy.PathGrant
 	networkGranted bool
+
+	// egressToken is the D-13 fix's (2026-09-24 security review) proxy
+	// credential for THIS call's child, if any host was granted through
+	// sandbox.EgressProxy (grantEgressHosts). "" when there is nothing to
+	// present — the child then relies solely on the proxy's static,
+	// operator-configured allow-list, exactly as before this fix.
+	egressToken string
 }
 
 // grants returns r.pathGrants, nil-safe — the document probe and every
@@ -422,7 +431,13 @@ const headlessShellDenyReason = "auto-denied: no operator attached to this headl
 // requestPreflightApproval is FR-039's third new CheckGrantOrRequestApproval
 // call site: a D7 or D8 pre-flight verdict needs more than the sandbox's
 // current grant already covers.
-func (t *ExecTool) requestPreflightApproval(ctx context.Context, sessionID, agentID, toolCallID, command, kind, note string) (approved bool, reason string, recordGrant bool) {
+// hosts (D-13 fix, 2026-09-24 security review) is the D8 network preflight's
+// extracted host list (ExtractNetworkHosts) — carried onto the card as its
+// own "hosts" field, alongside note's human-readable sentence, so the SPA
+// can render it as a real list rather than parsing prose (founder decision
+// B, point 1: "puts them on the approval card: args note + field"). Always
+// nil for the D7 (filesystem) call sites — hosts is a network-only concept.
+func (t *ExecTool) requestPreflightApproval(ctx context.Context, sessionID, agentID, toolCallID, command, kind, note string, hosts []string) (approved bool, reason string, recordGrant bool) {
 	if ToolAutoDenyAsk(ctx) {
 		// Finding #7: see headlessShellDenyReason's doc comment.
 		return false, headlessShellDenyReason, false
@@ -434,6 +449,9 @@ func (t *ExecTool) requestPreflightApproval(ctx context.Context, sessionID, agen
 		"command":     command,
 		"adr092_kind": kind,
 		"note":        note,
+	}
+	if len(hosts) > 0 {
+		args["hosts"] = hosts
 	}
 	return t.approvalRequester.RequestShellApproval(ctx, sessionID, agentID, t.Name(), toolCallID, ToolTurnID(ctx), args)
 }
@@ -493,7 +511,7 @@ func (t *ExecTool) enforceFSPreflight(ctx context.Context, command, sessionID, a
 			"the command could not be parsed for filesystem references (FR-020 blind spot)",
 			"unknown — classifier could not extract path/operation references")
 		approved, reason, _ := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command,
-			"fs_preflight_blind", "the command could not be parsed for filesystem references")
+			"fs_preflight_blind", "the command could not be parsed for filesystem references", nil)
 		// willRecordGrant=false: a blind-spot approval is single-call only —
 		// no PathGrant is recorded (there is no resolved {path, access} to
 		// record one for), so the next call re-evaluates from scratch. This
@@ -530,7 +548,7 @@ func (t *ExecTool) enforceFSPreflight(ctx context.Context, command, sessionID, a
 		t.emitPreflightEscalation(ctx, sessionID, agentID, command, audit.ShellPreflightFilesystem,
 			verdict.PolicyRule, fmt.Sprintf("%s access to %s", accessLabel(op.Access), resolved))
 		approved, reason, recordGrant := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command, "fs_preflight",
-			fmt.Sprintf("%s needs %s access the sandbox does not currently grant: %s", resolved, accessLabel(op.Access), verdict.PolicyRule))
+			fmt.Sprintf("%s needs %s access the sandbox does not currently grant: %s", resolved, accessLabel(op.Access), verdict.PolicyRule), nil)
 		// willRecordGrant now reflects the human's ACTUAL choice (review
 		// finding #5): "Allow once" (recordGrant=false) widens the policy
 		// for THIS call only — the PathGrant below is still applied to the
@@ -559,22 +577,91 @@ func (t *ExecTool) enforceFSPreflight(ctx context.Context, command, sessionID, a
 	return policy.PathGrants, nil
 }
 
+// networkEscalationNote is the D8/D-13 approval card's human-readable
+// sentence (founder decision B, point 1: "Allows network access to:
+// example.com"). A BLIND network need (no host extracted at all) says so
+// explicitly rather than implying a host that was never identified (point
+// 3: "If no host can be extracted... the card must say so").
+func networkEscalationNote(hosts []string) string {
+	if len(hosts) == 0 {
+		return "this command needs outbound network access the sandbox does not currently grant — no specific host could be identified from the command text, so approving widens network access generally (kernel ports only), not to any named host"
+	}
+	return "Allows network access to: " + strings.Join(hosts, ", ")
+}
+
+// onceEgressTokenPrefix marks a token minted by newOnceEgressToken so
+// shell.go's foreground revocation path (executeRun) can tell a single-use
+// "Approve Once" token apart from a session's stable one
+// (security.ApprovalGrantStore.SessionEgressToken, hex-only, no prefix)
+// without threading a second bool through shellPermissionResult.
+const onceEgressTokenPrefix = "once-"
+
+// newOnceEgressToken mints a single-use, crypto/rand D-13 credential for an
+// "Approve Once" network escalation — deliberately NOT the session's own
+// stable token (security.ApprovalGrantStore.SessionEgressToken), so this
+// grant cannot be looked up or reused by a later call in the same session
+// (founder decision B, point 2: "Approve Once lets exactly those hosts
+// through... for that one command run"). Returns "" on a crypto/rand
+// failure — the caller treats that as "grant nothing", same fail-closed
+// posture as every token-minting path in this file.
+func newOnceEgressToken() string {
+	buf := make([]byte, 16)
+	if _, err := cryptorand.Read(buf); err != nil {
+		return ""
+	}
+	return onceEgressTokenPrefix + hex.EncodeToString(buf)
+}
+
+// grantEgressHosts is the D-13 fix's write side into sandbox.EgressProxy:
+// pushes hosts onto the proxy's dynamic allow-list under the appropriate
+// token — the session's own STABLE token (sessionScoped=true: "Always
+// Allow", or a command whose hosts were already covered by an earlier
+// session approval) so later calls in the same session reuse it, or a
+// freshly-minted single-use token (sessionScoped=false: "Approve Once") —
+// and returns that token so the caller can embed it into THIS call's own
+// child environment (sandbox.Limits.EgressProxyToken). Returns "" — no
+// token, no proxy push — when there is nothing to grant: no proxy wired
+// (t.proxy nil, e.g. God Mode or a test fixture), no hosts extracted (a
+// blind network need widens the kernel port rule only, never the proxy),
+// or token minting itself failed.
+func (t *ExecTool) grantEgressHosts(sessionID, agentID string, hosts []string, sessionScoped bool) string {
+	if t.proxy == nil || len(hosts) == 0 {
+		return ""
+	}
+	token := newOnceEgressToken()
+	if sessionScoped {
+		token = t.approvalGrants.SessionEgressToken(sessionID, agentID)
+	}
+	if token == "" {
+		return ""
+	}
+	t.proxy.GrantRunHosts(token, hosts)
+	return token
+}
+
 // enforceNetworkPreflight is ADR-092 D8's Auto-mode orchestration: classify
 // whether the command needs outbound network (FR-043) and, if so, escalate
-// unless the session already holds the D8 network grant (FR-044). Returns
-// whether the session's per-turn kernel policy should render
+// unless the session already holds the D8 network grant AND (D-13 fix) every
+// host the command names is already approved for this session (FR-044).
+// Returns whether the session's per-turn kernel policy should render
 // DefaultConnectPorts (true) or stay empty (false) — the caller
-// (turnKernelPolicy) applies this via applyAutoNetworkPosture.
-func (t *ExecTool) enforceNetworkPreflight(ctx context.Context, command, sessionID, agentID, toolCallID string) (bool, *ToolResult) {
-	granted := t.approvalGrants.HasNetworkGrant(sessionID, agentID)
-	verdict := EvaluateNetworkPreflight(command, granted)
+// (turnKernelPolicy) applies this via applyAutoNetworkPosture — and the D-13
+// egress-proxy token (see grantEgressHosts) this call's child should present,
+// "" when there is none to present.
+func (t *ExecTool) enforceNetworkPreflight(ctx context.Context, command, sessionID, agentID, toolCallID string) (granted bool, egressToken string, result *ToolResult) {
+	hasGrant := t.approvalGrants.HasNetworkGrant(sessionID, agentID)
+	approvedHosts := t.approvalGrants.NetworkHostsFor(sessionID, agentID)
+	verdict := EvaluateNetworkPreflight(command, hasGrant, approvedHosts)
 	if !verdict.NeedsEscalation() {
-		return granted, nil
+		// Re-push (idempotent) rather than assume a prior call already
+		// registered this session's hosts with the proxy — cheap, and
+		// correct even if the proxy process were ever replaced mid-session.
+		return hasGrant, t.grantEgressHosts(sessionID, agentID, verdict.Hosts, true), nil
 	}
 	t.emitPreflightEscalation(ctx, sessionID, agentID, command, audit.ShellPreflightNetwork,
-		verdict.PolicyRule, "outbound network access")
+		verdict.PolicyRule, networkEscalationNote(verdict.Hosts))
 	approved, reason, recordGrant := t.requestPreflightApproval(ctx, sessionID, agentID, toolCallID, command, "network_preflight",
-		"this command needs outbound network access the sandbox does not currently grant")
+		networkEscalationNote(verdict.Hosts), verdict.Hosts)
 	// willRecordGrant now reflects the human's actual choice (review
 	// finding #5): "Allow once" widens THIS command's network posture
 	// (the true return below) without persisting a session-wide grant;
@@ -582,12 +669,20 @@ func (t *ExecTool) enforceNetworkPreflight(ctx context.Context, command, session
 	// FR-032(c) shell.grant_recorded event.
 	t.emitApprovalDecision(ctx, sessionID, agentID, command, "network_preflight", approved, reason, recordGrant)
 	if !approved {
-		return false, ErrorResult(preflightDenialMessage("network", reason))
+		return false, "", ErrorResult(preflightDenialMessage("network", reason))
 	}
 	if recordGrant {
 		t.approvalGrants.RecordNetworkGrant(sessionID, agentID)
+		if len(verdict.Hosts) > 0 {
+			// D-13 fix: "Always Allow adds them for this chat session
+			// only, never written to the global config" (founder decision
+			// B, point 2) — ApprovalGrantStore is in-memory-only, cleared
+			// on session close (ClearSession), same lifetime as every
+			// other ADR-092 session grant.
+			t.approvalGrants.RecordNetworkHosts(sessionID, agentID, verdict.Hosts)
+		}
 	}
-	return true, nil
+	return true, t.grantEgressHosts(sessionID, agentID, verdict.Hosts, recordGrant), nil
 }
 
 // enforceShellPermissionMode is ADR-092's entry point, called once per
@@ -712,11 +807,12 @@ func (t *ExecTool) enforceShellPermissionMode(ctx context.Context, command strin
 	}
 	result.pathGrants = pathGrants
 
-	networkGranted, netErr := t.enforceNetworkPreflight(ctx, command, sessionID, agentID, toolCallID)
+	networkGranted, egressToken, netErr := t.enforceNetworkPreflight(ctx, command, sessionID, agentID, toolCallID)
 	if netErr != nil {
 		return nil, netErr
 	}
 	result.networkGranted = networkGranted
+	result.egressToken = egressToken
 	return result, nil
 }
 

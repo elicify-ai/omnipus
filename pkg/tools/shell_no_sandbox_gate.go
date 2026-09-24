@@ -160,7 +160,8 @@ func (t *ExecTool) commandTriggersExistingPreflight(ctx context.Context, command
 		// would otherwise duplicate.
 	}
 	granted := t.approvalGrants.HasNetworkGrant(sessionID, agentID)
-	return EvaluateNetworkPreflight(command, granted).NeedsEscalation()
+	approvedHosts := t.approvalGrants.NetworkHostsFor(sessionID, agentID)
+	return EvaluateNetworkPreflight(command, granted, approvedHosts).NeedsEscalation()
 }
 
 // noSandboxAskNote is founder decision A(2)'s exact operator-facing

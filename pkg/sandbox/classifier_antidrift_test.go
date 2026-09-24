@@ -138,7 +138,7 @@ func TestLevel2_NetworkClassifier_MatchesSpecDataset(t *testing.T) {
 	}
 
 	t.Run("N5_honest_gap_documented_not_classifier_testable", func(t *testing.T) {
-		verdict := tools.EvaluateNetworkPreflight("./raw-socket-tool", false)
+		verdict := tools.EvaluateNetworkPreflight("./raw-socket-tool", false, nil)
 		if verdict.NeedsEscalation() {
 			t.Fatal("an unclassified binary must NOT be flagged by the pre-flight — FR-044's honest gap is the kernel's empty ConnectPortRules, not a prompt")
 		}

@@ -546,6 +546,31 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 		return ErrorResult(fmt.Sprintf("sandbox limits error: %v", limErr))
 	}
 	lim.WorkspaceDir = cwd
+	// D-13 fix (2026-09-24 security review): a D8 network escalation that
+	// widened this call's kernel port rule also (grantEgressHosts) pushed
+	// its named hosts onto the shared egress proxy's dynamic allow-list
+	// under a token — embed that SAME token into THIS child's own proxy
+	// URL (hardened_exec.go's Limits.EgressProxyToken) so its traffic is
+	// recognised. perm is nil for the document probe and for Ask/God Mode
+	// (never Auto), so egressToken is "" there — unaffected, exactly as
+	// before this fix.
+	if perm != nil {
+		lim.EgressProxyToken = perm.egressToken
+		if !runInBackground && strings.HasPrefix(perm.egressToken, onceEgressTokenPrefix) {
+			// D-13 fix: a single-use "Approve Once" token is scoped to
+			// exactly this one foreground run — revoke it once the
+			// command completes so it can never be reused by a later
+			// call, and so sandbox.EgressProxy's runHosts map does not
+			// grow without bound across many one-off approvals.
+			// Background/persistent runs are deliberately NOT covered
+			// here: their process outlives this function returning, so
+			// revoking on this return would cut off a still-running
+			// child. That token instead lingers harmlessly (it can never
+			// be guessed or reused by anything else) until the gateway
+			// restarts — an accepted, documented gap, not a silent one.
+			defer t.proxy.RevokeRunToken(perm.egressToken)
+		}
+	}
 
 	// ADR-090 environment-setup: resolve the per-turn runtime layers ONCE per
 	// run call — the generic prefixes (storage's RuntimeEnvPaths over the
