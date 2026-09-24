@@ -274,6 +274,12 @@ type TurnStartPayload struct {
 	// otherwise a child's own turn-start would reopen the arming hole for
 	// later-arriving sibling spawn events.
 	IsRoot bool
+	// SessionID is the ROUTING session id — the same value TurnEndPayload
+	// and the sub-agent span payloads carry (ADR-057 FR-011). The WS session
+	// hub keys the root-turn-ended latch by it; without it a background turn
+	// (keeper, goal loop, scheduled run) whose chat id is bound to no browser
+	// connection could never reset the latch (#823 review item 8).
+	SessionID string
 }
 
 // TurnEndPayload describes the completion of a turn.

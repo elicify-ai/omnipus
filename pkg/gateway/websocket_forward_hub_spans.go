@@ -68,19 +68,16 @@ func (h *WSHandler) hubTurnStart(evt agent.Event) {
 	if !ok || !p.IsRoot || h.hubs == nil {
 		return
 	}
-	sid := h.hubResolveSessionIDForChat(p.ChatID)
-	var hub *sessionHub
-	if sid != "" {
-		hub = h.hubs.getOrCreate(sid)
-	} else if evt.Meta.SessionKey != "" {
-		// TurnStartPayload carries no session id; a turn whose chat id is not
-		// bound to any connection can still have a hub from earlier activity
-		// under its session key. Never CREATE one on this weaker signal.
-		hub = h.hubs.lookup(evt.Meta.SessionKey)
-	}
-	if hub == nil {
+	// The payload's routing session id (#823 review item 8) — the same key
+	// hubTurnEnd latches under. The chat binding is only a fallback for an
+	// emitter that predates the field: a background turn's chat id is bound
+	// to no browser connection, and its event SessionKey
+	// ("agent:<id>:session:<sid>") is not a session id at all.
+	sid := h.hubResolveSpanSession(p.SessionID, p.ChatID)
+	if sid == "" {
 		return
 	}
+	hub := h.hubs.getOrCreate(sid)
 	hub.spanMu.Lock()
 	hub.rootTurnEnded = false
 	hub.rootTurnEndReason = ""

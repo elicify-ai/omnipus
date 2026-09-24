@@ -334,6 +334,11 @@ func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel() (agentLoopRunTurnC
 			UserMessage: rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage,
 			MediaCount:  len(rp.rc.rx.rr.rq.ri.rf.rt.ts.media),
 			IsRoot:      rp.rc.rx.rr.rq.ri.rf.rt.ts.parentTurnID == "",
+			// #823 review item 8: the routing session id, exactly as
+			// TurnEndPayload carries it, so the WS session hub can reset
+			// the root-turn-ended latch for a background turn whose chat id
+			// is bound to no browser connection.
+			SessionID: string(rp.rc.rx.rr.rq.ri.rf.rt.ts.routingSessionID),
 		},
 	)
 

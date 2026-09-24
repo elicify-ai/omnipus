@@ -537,9 +537,12 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	// force-cancel is the exit a timed-out child took through typedTurnExit
 	// before the force-cancel existed, so sharing the emitter adds no
 	// consumer, and the emitter never hands the value back to a caller.
-	if got := counts[u19BucketWSStamping]; got != 22 {
-		t.Errorf("WS-payload-stamping reads = %d, want 22 (loop.go x7 after the 2026-09-16 stage-conductor "+
-			"split, its four loop_run_turn*.go siblings x11, external_dispatch.go x2, subturn.go x2: "+
+	if got := counts[u19BucketWSStamping]; got != 23 {
+		t.Errorf("WS-payload-stamping reads = %d, want 23 (loop.go x7 after the 2026-09-16 stage-conductor "+
+			"split, its four loop_run_turn*.go siblings x12, external_dispatch.go x2, subturn.go x2: "+
+			"SubTurnSpawnPayload + SubTurnEndPayload; 22 -> 23 on 2026-09-24 when #823 review item 8 "+
+			"stamped TurnStartPayload.SessionID in loop_run_turn.go, the same WS-stamping shape as "+
+			"TurnEndPayload's). "+
 			"SubTurnSpawnPayload + SubTurnEndPayload). loop.go's count grew from 2 to 13 in the 2026-08 UAT "+
 			"remediation, then to 14 when ADR-066 D7 (T066-11) added typedTurnExit's ErrorPayload stamp for "+
 			"the typed turn exits, then to 15 when ADR-066 D3 (T066-09) added runTurn's context_window_unknown "+
@@ -595,7 +598,9 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	// ADR-066 D3's context_window_unknown refusal stamp (T066-09), 30
 	// before ADR-067 FR-016's needs_provider refusal stamp (T067-09), and
 	// 31 before ADR-068 FR-015's model_unassigned refusal stamp (T068-12).
-	const wantTotal = 34
+	// 34 -> 35 on 2026-09-24: #823 review item 8 stamps TurnStartPayload's
+	// SessionID (WS-stamping bucket, loop_run_turn.go).
+	const wantTotal = 35
 	if len(all) != wantTotal {
 		t.Fatalf("total routingSessionID reads = %d, want exactly %d (the closed consumer set) — "+
 			"either a new read was added outside the four named buckets, or one of the buckets "+
