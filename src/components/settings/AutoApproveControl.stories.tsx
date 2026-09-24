@@ -61,7 +61,7 @@ export const EnforcingSandbox: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
     const caveat = await canvas.findByText(
-      /without a kernel sandbox \(for example on windows\), shell commands are checked by reading the command text only/i,
+      /without a kernel sandbox \(for example on windows\), shell commands ask first, except read-only ones and commands an operator rule allows/i,
     )
     await expect(caveat.className).toContain('text-[var(--color-muted)]')
   },
@@ -81,7 +81,7 @@ export const NoSandboxCaution: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
     const caveat = await canvas.findByText(
-      /without a kernel sandbox \(for example on windows\), shell commands are checked by reading the command text only/i,
+      /without a kernel sandbox \(for example on windows\), shell commands ask first, except read-only ones and commands an operator rule allows/i,
     )
     await expect(caveat.className).toContain('text-[var(--color-warning)]')
   },

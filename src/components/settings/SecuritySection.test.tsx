@@ -396,8 +396,12 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     expect(screen.queryByText(/needs the sandbox/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/not available on windows/i)).not.toBeInTheDocument()
     expect(
-      screen.getByText(/without a kernel sandbox \(for example on windows\), shell commands are checked by reading the command text only/i),
+      screen.getByText(/without a kernel sandbox \(for example on windows\), shell commands ask first, except read-only ones and commands an operator rule allows/i),
     ).toBeInTheDocument()
+    // The old "checked by reading the command text only" wording described
+    // stale behaviour (2026-09-24 shell-no-sandbox-gate rewording: shell
+    // commands with no kernel sandbox now ask first) and must never reappear.
+    expect(screen.queryByText(/checked by reading the command text only/i)).not.toBeInTheDocument()
   })
 
   it('shows the no-sandbox caveat as a caution (warning-colored) when the server reports no enforcing kernel sandbox', async () => {
@@ -408,7 +412,7 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     await screen.findByTestId('auto-approve-global-switch')
 
     const caveat = await screen.findByText(
-      /without a kernel sandbox \(for example on windows\), shell commands are checked by reading the command text only/i,
+      /without a kernel sandbox \(for example on windows\), shell commands ask first, except read-only ones and commands an operator rule allows/i,
     )
     await waitFor(() => {
       expect(caveat.className).toContain('text-[var(--color-warning)]')
@@ -422,7 +426,7 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     renderSection()
 
     const caveat = await screen.findByText(
-      /without a kernel sandbox \(for example on windows\), shell commands are checked by reading the command text only/i,
+      /without a kernel sandbox \(for example on windows\), shell commands ask first, except read-only ones and commands an operator rule allows/i,
     )
     await waitFor(() => {
       expect(caveat.className).toContain('text-[var(--color-muted)]')
@@ -499,8 +503,9 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     expect(dialog).not.toHaveTextContent(/needs the sandbox/i)
     expect(dialog).not.toHaveTextContent(/not available on windows/i)
     expect(dialog).toHaveTextContent(
-      /without a kernel sandbox \(for example on windows\), shell commands are checked by reading the command text only/i,
+      /without a kernel sandbox \(for example on windows\), shell commands ask first, except read-only ones and commands an operator rule allows/i,
     )
+    expect(dialog).not.toHaveTextContent(/checked by reading the command text only/i)
   })
 
   it('a real save failure surfaces exactly one toast, from the mutation onError — the outer step-up catch never adds a second one', async () => {

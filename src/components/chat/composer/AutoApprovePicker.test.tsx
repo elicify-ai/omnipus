@@ -300,8 +300,12 @@ describe('AutoApprovePicker — no-sandbox caution (2026-09-24)', () => {
     const tooltip = screen.getByRole('tooltip')
     expect(tooltip).toHaveTextContent('applies from the next step')
     expect(tooltip).toHaveTextContent(
-      'No kernel sandbox is enforcing — shell commands are checked by reading the command text only.',
+      'No kernel sandbox — shell commands ask first unless read-only or operator-allowed.',
     )
+    // The old "checked by reading the command text only" wording described
+    // stale behaviour (2026-09-24 shell-no-sandbox-gate rewording) and must
+    // never reappear.
+    expect(tooltip).not.toHaveTextContent('checked by reading the command text only')
   })
 
   it('does NOT show the caution when Auto is off, even with no kernel sandbox enforcing', async () => {

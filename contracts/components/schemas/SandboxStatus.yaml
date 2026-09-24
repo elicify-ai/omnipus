@@ -119,9 +119,10 @@ properties:
       applies to every tool, bash included, whether or not this value is
       true. It is now purely informational — the input the UI uses to show
       the "Auto — no sandbox" warning badge/tooltip: without a kernel
-      sandbox, shell commands under Auto are checked by reading the command
-      text only (the D7/D8 pre-flights plus the surviving text-based guards),
-      which a disguised command can slip past. Always present from this
+      sandbox, shell commands under Auto now ask first (the D7/D8
+      pre-flights plus the founder-decision-A no-sandbox gate,
+      pkg/tools/shell_no_sandbox_gate.go) unless the command is read-only or
+      fully covered by an operator allow rule. Always present from this
       gateway.
     example: true
   auto_approve_effective:
@@ -144,9 +145,10 @@ properties:
       shows "God Mode" whatever the other two fields say; else
       auto_approve_effective=false shows "Ask"; else kernel_sandbox_active=
       true shows "Auto"; else kernel_sandbox_active=false shows "Auto — no
-      sandbox" with a warning tooltip (Auto is on and DOES clear "ask" calls,
-      but only the text-based D7/D8 pre-flights and guards are checking them
-      — there is no kernel confining what a disguised command can reach).
+      sandbox" with a warning tooltip (Auto is on and DOES clear "ask" calls
+      for every tool except the shell; a shell command now asks first unless
+      it is read-only or fully covered by an operator allow rule — there is
+      no kernel confining what a disguised command can reach either way).
       There is no more "Auto → Ask" degraded state: Auto never silently
       becomes Ask for lack of a kernel sandbox. Always present from this
       gateway.

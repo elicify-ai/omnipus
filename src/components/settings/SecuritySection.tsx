@@ -167,7 +167,8 @@ function GlobalToolPoliciesSection() {
 // every platform (Windows too), whether or not the sandbox is enforcing.
 // `kernel_sandbox_active` (read from the same ['sandbox-status'] query the
 // chat-header badge uses) is WARNING-ONLY here: with no enforcing sandbox,
-// shell commands are checked by reading the command text only, and the
+// shell commands now ask first unless they are read-only or covered by an
+// operator allow rule (see pkg/tools/shell_no_sandbox_gate.go), and the
 // card's platform caveat line is shown as a caution instead of muted.
 //
 // Lives on the same SandboxConfig the Process Sandbox (Advanced) section
@@ -226,7 +227,7 @@ export function AutoApproveControl() {
       .gate((token) => saveAsync({ next, token }), {
         title: next ? 'Turn Auto-approve on?' : 'Turn Auto-approve off?',
         body: next
-          ? 'Tools set to “ask” will run without a prompt when it’s safe — they stay inside your workspace. See “Always asks when set to Ask” on this card for the short list of things that never skip the prompt once set to Ask. Without a kernel sandbox (for example on Windows), shell commands are checked by reading the command text only.'
+          ? 'Tools set to “ask” will run without a prompt when it’s safe — they stay inside your workspace. See “Always asks when set to Ask” on this card for the short list of things that never skip the prompt once set to Ask. Without a kernel sandbox (for example on Windows), shell commands ask first, except read-only ones and commands an operator rule allows.'
           : 'Every tool set to “ask” will prompt every time again, with no auto-approval.',
         confirmLabel: next ? 'Turn Auto-approve on' : 'Turn Auto-approve off',
       })
@@ -290,8 +291,8 @@ export function AutoApproveControl() {
           noSandboxCaution ? 'text-[var(--color-warning)]' : 'text-[var(--color-muted)]',
         )}
       >
-        Without a kernel sandbox (for example on Windows), shell commands are checked by reading the command text
-        only.
+        Without a kernel sandbox (for example on Windows), shell commands ask first, except read-only ones and
+        commands an operator rule allows.
       </p>
 
       {/* This control's OWN useStepUp() instance — its dialogs must be

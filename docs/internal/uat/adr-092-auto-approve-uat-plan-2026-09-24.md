@@ -25,7 +25,7 @@ the citation, that is a finding, not a reason to change the expectation.
 | **God Mode** | Removes the sandbox for this install. Tools on "Ask" still show a card (Auto is off under God Mode). A red banner says so. |
 | **Where Auto is switched** | Global default (Settings → Security → Auto-approve), an agent's own "Never auto-approve for this agent" box (can only turn it off), and a per-chat switch in the message box (can turn it on or off for that one chat). |
 | **When a flip takes effect** | New chat: from the first message — the whole first reply already follows the choice. Running chat: from the very next step, even in the middle of a reply (founder rulings 2026-09-24). |
-| **No sandbox** | Auto still works, shell included; the chat badge reads "Auto — no sandbox" and warns that shell commands are only checked by reading the command text (founder ruling 2026-09-24). |
+| **No sandbox** | Auto still works, shell included; the chat badge reads "Auto — no sandbox" and warns that shell commands ask first, except read-only ones and commands an operator rule allows (founder ruling 2026-09-24, reworded by founder decision A the same day). |
 | **Command rules** | An operator's rule can force a shell command to ask, deny it, or allow it. A command matching an "ask" rule shows exactly **one** card. |
 | **Approval buttons** | Approve Once (runs once, remembers nothing), Always Allow (the identical call no longer asks in this chat), Deny (does not run). |
 | **Unattended runs** | A scheduled task follows the same Auto rules; anything that would need a human is refused instead of waiting. |
@@ -97,7 +97,7 @@ global default (ON) and the tool named is on "Ask" for your agent.
 | T1-01 | Settings → Security. Find Auto-approve. | One short summary sentence, a switch, a collapsed "Still asks every time" list, and a small caveat line about running without a sandbox. No wall of text. | founder ruling 2026-09-24 (redesign) | |
 | T1-02 | Expand "Still asks every time". | 8 groups, one per line, plain words, no raw tool names. Collapses again. | FR-053; founder list | |
 | T1-03 | Read the list against step 4 of setup: on a fresh install `send_email`, `run_doctor`, `install_skill` are on **Allow**. Does "Still asks every time" tell the truth for these? Judge as a newcomer. | The heading must not promise a card for a tool that never asks. If it does, record a **copy defect** with the exact wording. | FR-052 (Auto only acts on "Ask") | Neg |
-| T1-04 | Read the caveat line. | Says in plain words that without a kernel sandbox shell commands are only checked by reading the command text. No mention of Auto being unavailable on Windows. | founder ruling 2026-09-24 | |
+| T1-04 | Read the caveat line. | Says in plain words that without a kernel sandbox shell commands ask first, except read-only ones and commands an operator rule allows. No mention of Auto being unavailable on Windows. | founder ruling 2026-09-24 (rewording, founder decision A) | |
 | T1-05 | In your agent's policy table, look at the markers next to `write_file`, `create_task`, `send_email`, and `bash`. | `write_file`: "Auto: runs inside workspace". `create_task`: "Auto: runs". `send_email`: "Auto: asks". `bash`: no marker. Tools on Allow/Deny: no marker. | FR-060, D9 | |
 | T1-06 | Chat header badge, sandbox enforcing. | Reads **Auto**. Hover: explains what Auto does. | FR-001 | |
 | T1-07 | Composer: hover the Auto switch in a new chat, then in a running chat. | New chat: "…applies from your first message". Running chat: "…applies from the next step". | founder rulings 2026-09-24 | |
@@ -213,20 +213,21 @@ global default (ON) and the tool named is on "Ask" for your agent.
 
 ### Phase 3 — Operator: compare with and without a kernel sandbox
 
-N-01…N-07 are read on **Fly** (no sandbox). Then the operator repeats T1-06, T5-01, T5-03, T5-04 and N-03 on a **local macOS install** (Seatbelt enforcing): the badge must read "Auto" (not "Auto — no sandbox"), and the audit entry must show a kernel sandbox was enforcing.
+N-01…N-08 (including N-04b) are read on **Fly** (no sandbox). Then the operator repeats T1-06, T5-01, T5-03, T5-04 and N-03 on a **local macOS install** (Seatbelt enforcing): the badge must read "Auto" (not "Auto — no sandbox"), and the audit entry must show a kernel sandbox was enforcing.
 
 | ID | Steps | Expected result | Source | Neg |
 |---|---|---|---|---|
-| N-01 | Chat header badge with Auto ON. | "Auto — no sandbox"; tooltip warns shell commands are only checked by reading the text. | founder 2026-09-24 | |
-| N-02 | Security card. | The caveat line shows as a caution. | founder 2026-09-24 | |
+| N-01 | Chat header badge with Auto ON. | "Auto — no sandbox"; tooltip reads "No kernel sandbox is enforcing. Safe tool calls still run without asking; shell commands ask first, except read-only ones and commands an operator rule allows." | founder 2026-09-24 (rewording, founder decision A) | |
+| N-02 | Security card. | The caveat line shows as a caution and reads "Without a kernel sandbox (for example on Windows), shell commands ask first, except read-only ones and commands an operator rule allows." | founder 2026-09-24 (rewording, founder decision A) | |
 | N-03 | `write_file notes/n1.md`. | No card. | founder 2026-09-24; FR-054 | |
-| N-04 | bash `echo hi`. | No card. | founder 2026-09-24 | |
+| N-04 | bash `echo hi`. | No card — `echo` is on the no-sandbox read-only allowlist. | founder 2026-09-24, founder decision A | |
+| N-04b | bash `touch notes/x`. | A card — a write via a relative path is neither read-only nor on an operator allow rule, so founder decision A's no-sandbox gate asks (`pkg/tools/shell_no_sandbox_gate.go`); this did NOT ask before founder decision A, since D7's classifier is absolute-path-only. | founder 2026-09-24, founder decision A | Neg |
 | N-05 | bash `touch /etc/n-probe`. | A card (the text check still catches it). | founder 2026-09-24; FR-009 | Neg |
 | N-06 | `delete_task`. | A card (always-ask list unchanged). | FR-053 | Neg |
 | N-07 | Audit log entry for N-03. | Shows that no kernel sandbox was enforcing. | founder 2026-09-24 | |
 | N-08 | Security health page. | Record what it says about the sandbox (known issue #853 — note only). | issue #853 | |
 
-**Totals:** 94 cases — 52 positive, 42 negative/edge (45%).
+**Totals:** 95 cases — 52 positive, 43 negative/edge (45%).
 
 ---
 
