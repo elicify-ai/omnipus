@@ -189,9 +189,9 @@ func TestComplete_StopThatCausedThisCompletionLandsTerminal(t *testing.T) {
 	}
 
 	// The turn unwinds with context.Canceled, as a cancelled live turn does.
-	if err := al.completeSteeredTurn(context.Background(), stopped,
-		turnResult{finalContent: ""}, context.Canceled); err != nil {
-		t.Fatalf("completeSteeredTurn(stopped live turn): %v", err)
+	if completeErr := al.completeSteeredTurn(context.Background(), stopped,
+		turnResult{finalContent: ""}, context.Canceled); completeErr != nil {
+		t.Fatalf("completeSteeredTurn(stopped live turn): %v", completeErr)
 	}
 
 	got, err := lifecycle.Load(rec.SessionID)

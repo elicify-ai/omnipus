@@ -221,7 +221,7 @@ func TestContract_ADR091_SubagentStartFrameWithoutChildSessionId(t *testing.T) {
 // Helper to validate against AsyncAPI schema raw JSON
 func validateAgainstAsyncAPISchemaRawJSON(t *testing.T, schemaName string, jsonData []byte) error {
 	t.Helper()
-	var data interface{}
+	var data any
 	if err := json.Unmarshal(jsonData, &data); err != nil {
 		t.Fatalf("failed to unmarshal JSON: %v", err)
 	}
@@ -328,10 +328,10 @@ func TestContract_ADR091_DeleteSessionResponseWithStopReport(t *testing.T) {
 	// DELETE session response (WP-E step 3) now carries the Stop report fields.
 	// Test that the structure with partial: true marshals correctly (proves the
 	// fields are now present in the schema).
-	deleteResp := map[string]interface{}{
+	deleteResp := map[string]any{
 		"success": true,
 		"reached": []string{"sid-root", "sid-a"},
-		"unreachable": []map[string]interface{}{
+		"unreachable": []map[string]any{
 			{"id": "sid-b", "reason": "lifecycle record unreadable"},
 		},
 		"skipped_newer_generation": []string{"sid-c"},
@@ -342,7 +342,7 @@ func TestContract_ADR091_DeleteSessionResponseWithStopReport(t *testing.T) {
 	require.NoError(t, err, "should marshal DELETE response with Stop report")
 
 	// Verify the JSON is well-formed and contains expected fields
-	var unmarshaled map[string]interface{}
+	var unmarshaled map[string]any
 	err = json.Unmarshal(jsonData, &unmarshaled)
 	require.NoError(t, err, "should unmarshal DELETE response")
 	success, ok := unmarshaled["success"].(bool)
