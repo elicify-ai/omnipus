@@ -29,14 +29,22 @@ import (
 // readOnlyShellCommands (ADR-068's read-classifier allowlist — the SAME
 // severe membership criterion: a binary with NO flag, in any common
 // implementation, that writes to a filesystem path named on its own command
-// line) with three more commands that criterion also cleanly admits but
-// ADR-068 never needed to list (they never take a path argument to
-// classify): `echo`/`pwd` print, never open, anything; `which` only
-// searches PATH. This is the ONE place this addition lives — the
-// no-sandbox gate below reads readOnlyShellCommands directly rather than
-// forking a second copy of it.
+// line) with commands that criterion also cleanly admits but ADR-068 never
+// needed to list: `echo`/`pwd` print, never open, anything; `which` only
+// searches PATH; `true`/`false`/`:` are POSIX no-op builtins that ignore
+// every argument and touch nothing; `test`/`[` only stat a path to report a
+// boolean (never open for write, never create); `exit` takes only a numeric
+// status. None of the six can write a file or reach the network by
+// themselves — exactly this list's membership bar — which is why a chain
+// like `true; echo $?` (2026-09-24 fix: the exact idiom
+// conformance-design-chat-e2e.spec.ts's t0 goal-claim steer asks a worker to
+// run) belongs on the no-prompt fast path with no kernel sandbox enforcing.
+// This is the ONE place this addition lives — the no-sandbox gate below
+// reads readOnlyShellCommands directly rather than forking a second copy of
+// it.
 var noSandboxExtraReadOnlyCommands = map[string]bool{
 	"echo": true, "pwd": true, "which": true,
+	"true": true, "false": true, ":": true, "test": true, "[": true, "exit": true,
 }
 
 // noSandboxReadOnlyGitSubcommands are the `git` subcommands founder
