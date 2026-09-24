@@ -398,13 +398,17 @@ type AgentLoop struct {
 	// grant kinds — path/network/prefix grants, pkg/tools/shell_*.go) and,
 	// pre-ADR-091, the deleted spawnSubTurn's async/await paths (InheritFrom,
 	// pkg/security/approvalgrants.go, U17a). ADR-091 fix lane RX-SUBTURN
-	// finding (comment-only; code unchanged): grep finds no production
-	// caller of ApprovalGrantStore.InheritFrom today except through
-	// AgentLoop.inheritSessionPermissions (loop_policy.go), which is itself
-	// currently uncalled since subturn.go's deletion — flagged for the team
-	// (a delegated child may no longer inherit the parent's tool-approval
-	// grants, including ADR-092 Auto-approve/shell-permission state), not
-	// fixed here.
+	// finding (comment-only, 2026-09-23): grep found no production caller of
+	// ApprovalGrantStore.InheritFrom except through
+	// AgentLoop.inheritSessionPermissions (loop_policy.go), which was itself
+	// uncalled since subturn.go's deletion — a delegated child no longer
+	// inherited the parent's tool-approval grants or ADR-092 Auto-approve/
+	// shell-permission state. RECONNECTED (Q13 A, 2026-09-24):
+	// steer_launcher.go::SteerLauncher.Launch calls
+	// inheritDelegatePermissions immediately after launchSteered commits a
+	// steered child's lifecycle record, before Dispatch can reconstruct a
+	// turn for it — the launch path both production callers (the `delegate`
+	// tool and run_task's live-chat path) funnel through.
 	approvalGrants *security.ApprovalGrantStore
 
 	sessionModes *SessionModeStore    // ADR-092 per-chat Auto-approve; see SessionModes

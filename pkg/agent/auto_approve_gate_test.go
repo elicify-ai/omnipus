@@ -15,15 +15,19 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // goldenAutoAskList is the founder file's 28 catalog "asks" entries (§3),
@@ -269,28 +273,114 @@ func TestAutoApprove_T14_GodModeStillPrompts(t *testing.T) {
 	assert.Equal(t, 1, approver.countFor("write_file"), "Auto is inactive under God Mode, so Ask prompts")
 }
 
-// delegateUnderAutoChat spawns a real delegated sub-turn to "worker" from a
-// parent chat whose per-chat Auto modifier is on (global Auto is off). The
-// worker calls knowledge_edit — an unconditional RUNS tool — on Ask.
+// delegateUnderAutoChat spawns a real delegated child session (SteerLauncher.
+// Launch + Dispatch — pkg/agent/steer_launcher.go, the production launch
+// path the deleted subturn.go used to own) to agent "worker" from a parent
+// chat whose per-chat Auto modifier is ON while the GLOBAL Auto default is
+// OFF. The worker calls knowledge_edit — an unconditional RUNS tool — on
+// Ask. workerAutoApproveDisabled sets the worker's OWN AgentConfig.
+// AutoApproveDisabled: true is T15's "own off-switch wins" case, false is
+// the "ordinary delegate still inherits" control.
 //
-// MERGE TODO (release/v0.1.1 → feat/adr-092-shell-permissions,
-// 2026-09-24): this helper drove its child turn through the pre-ADR-091
-// spawnSubTurn/SubTurnConfig synchronous API, which release commit
-// d5f5d7c82 "refactor(delegate): delete retired subturn mechanism" deleted
-// along with stiMintParentSession, testMaxConcurrentSubTurns and
-// ephemeralSessionStore (subturn.go / subturn_test.go /
-// subturn_target_identity_test.go). Delegation now goes through
-// SteerLauncher.Launch/Dispatch (see steering_test.go's
-// launchSteeredChild/newTestSteeringSession/runDelegateSteer helpers for the
-// new async pattern). Skipped rather than guessed at under merge pressure —
-// T15 covers a real ADR-092 security property (a delegate's own
-// auto_approve_disabled switch overriding an inherited parent Auto mode) and
-// deserves a correct port, not a rushed one. Tracked for follow-up; do not
-// delete this test without restoring equivalent coverage.
-func delegateUnderAutoChat(t *testing.T, _ bool) (*autoRecordingApprover, *autoStubTool) {
+// This is a functional/reachability proof, not a direct call into
+// inheritSessionPermissions the way inherit_session_permissions_test.go
+// already unit-tests the copy semantics: it drives a REAL turn through the
+// REAL launch path so it also proves the ADR-092 FR-005 hand-over is wired
+// into steer_launcher.go::SteerLauncher.Launch (inheritDelegatePermissions),
+// not merely reachable in isolation. Before that wiring existed, this
+// helper's parent-chat modifier never reached the child at all — the worker
+// always resolved Auto from its own agent/global defaults only, so the
+// "ordinary delegate inherits" case (workerAutoApproveDisabled=false) would
+// have wrongly prompted every time (global Auto is OFF here) instead of
+// running the RUNS tool unprompted.
+//
+// MERGE TODO note this replaces (release/v0.1.1 → feat/adr-092-shell-
+// permissions, 2026-09-24): the original helper drove its child turn
+// through the pre-ADR-091 spawnSubTurn/SubTurnConfig synchronous API,
+// deleted by release commit d5f5d7c82 "refactor(delegate): delete retired
+// subturn mechanism" along with stiMintParentSession,
+// testMaxConcurrentSubTurns and ephemeralSessionStore. Ported onto
+// SteerLauncher.Launch/Dispatch, following steering_test.go/
+// steer_dispatch_race_test.go's own async pattern (launchSteeredChild,
+// newTestSteeringSession, waitFor) — Dispatch runs the child's turn on a
+// detached goroutine (admission.go::goSteeredTurn), so the assertions below
+// poll rather than assume synchronous completion.
+func delegateUnderAutoChat(t *testing.T, workerAutoApproveDisabled bool) (*autoRecordingApprover, *autoStubTool) {
 	t.Helper()
-	t.Skip("MERGE TODO: port off deleted spawnSubTurn/SubTurnConfig to SteerLauncher.Launch (ADR-091 retirement, release d5f5d7c82) — see doc comment")
-	return nil, nil
+
+	home := filepath.Join(t.TempDir(), "home")
+	require.NoError(t, os.MkdirAll(home, 0o700))
+	provider := testutil.NewScenario().WithToolCalls([]providers.ToolCall{
+		autoToolCall("t15-knowledge-edit", "knowledge_edit", `{}`),
+	}).WithText("done")
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:              home,
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+			List: []config.AgentConfig{
+				{ID: testDefaultAgentID, Home: home},
+				{ID: "worker", Home: home, AutoApproveDisabled: workerAutoApproveDisabled},
+			},
+		},
+	}
+	// Global Auto is OFF: the only way the worker ever resolves Auto=true is
+	// by inheriting the parent chat's own per-chat modifier (below) — this
+	// is the exact hole named in loop.go's approvalGrants doc comment before
+	// inheritDelegatePermissions was wired in.
+	cfg.Sandbox.AutoApprove = false
+
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
+	t.Cleanup(func() { al.Close() })
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
+	al.SetSessionMessagingStores(inbox, lifecycle)
+
+	stubs := installAutoStubs(t, al, "worker", []string{"knowledge_edit"})
+	stub := stubs["knowledge_edit"]
+
+	approver := &autoRecordingApprover{approve: false}
+	al.SetToolApprover(approver)
+
+	parentID := newTestSteeringSession(t, al, "")
+	// A human turned Auto ON for THIS chat only — the parent's own agent
+	// (testDefaultAgentID) never has AutoApproveDisabled set, so this is the
+	// per-chat modifier ResolveAutoApprove documents as "may loosen".
+	al.SessionModes().Set(parentID, true)
+
+	launcher := NewSteerLauncher(al)
+	launch, err := launcher.Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: parentID,
+		TargetAgentID:     "worker",
+		Task:              "edit the knowledge base",
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-t15"},
+	})
+	require.NoError(t, err, "Launch(worker delegate)")
+	if _, dispatchErr := launcher.Dispatch(context.Background(), launch.SessionID, launch.Generation); dispatchErr != nil {
+		t.Fatalf("Dispatch(worker delegate): %v", dispatchErr)
+	}
+
+	// The child's turn runs on a detached goroutine; wait for its one tool
+	// call to either run (stub) or be prompted (approver) — whichever this
+	// case resolves to is the only tool call the scripted turn ever makes.
+	waitFor(t, 10*time.Second, func() bool {
+		return stub.calls.Load() > 0 || approver.countFor("knowledge_edit") > 0
+	})
+	// Give the turn a moment to finish writing its final text response after
+	// the tool call resolves, so a caller reading stub.pinned right after
+	// this return sees the settled value, not a write still in flight.
+	if ts := al.getActiveTurnState(launch.SessionID); ts != nil {
+		select {
+		case <-ts.Finished():
+		case <-time.After(10 * time.Second):
+			t.Fatal("the worker delegate's turn did not finish within 10s of its tool call resolving")
+		}
+	}
+	return approver, stub
 }
 
 // T15: a delegate whose own auto_approve_disabled is set still prompts for a

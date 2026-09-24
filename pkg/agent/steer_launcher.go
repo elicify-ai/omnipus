@@ -193,9 +193,63 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 	}
 	result, err := l.launchSteered(sessions, lifecycle, req, title, sessionType)
 	if err == nil {
+		l.inheritDelegatePermissions(lifecycle, req.SteeringSessionID, result.SessionID)
 		l.publishSteeredLaunch(req, result)
 	}
 	return result, err
+}
+
+// inheritDelegatePermissions reconnects ADR-092's per-chat permission
+// hand-over (FR-005/FR-058: "the session modifier inherits to a delegate via
+// ApprovalGrantStore.InheritFrom; delegate resolves the tightest of (parent
+// modifier, own override)") to the launch path that replaced the deleted
+// subturn.go. Before this delivery, AgentLoop.inheritSessionPermissions
+// existed and was tested in isolation (inherit_session_permissions_test.go)
+// but had ZERO production callers — loop.go's own approvalGrants doc comment
+// names the gap: "a delegated child may no longer inherit the parent's
+// tool-approval grants, including ADR-092 Auto-approve/shell-permission
+// state." The consequence named there: global Auto ON + a parent chat that
+// turned Auto OFF for itself produced a delegate that still auto-approved
+// workspace-safe calls, looser than the human's own per-chat choice.
+//
+// Called once per steered launch, immediately after launchSteered commits
+// the child's lifecycle record and before Dispatch can ever reconstruct a
+// turn for it (dispatchSteeredSessionWithReservation, below) — so the
+// child's very first tool-policy resolution already sees the parent's
+// per-chat Auto-approve modifier and standing grants. This is the ONLY
+// production path both of Launch's callers funnel through when a steering
+// session is set: pkg/tools/delegate_run.go's launchAndDispatch (the
+// `delegate` tool, always steered — SteeringSessionID is always the calling
+// turn's own transcript session) and
+// pkg/agent/task_executor.go::startTaskNowViaLauncher (the `run_task` tool
+// and the "Run now"/"Start Task" REST click, steered only when the task
+// carries a live OriginSessionID). A task-origin launch with no steering
+// session (launchOrdinaryRoot's branch, above) has no parent chat to inherit
+// from and is unaffected.
+//
+// Reads the child's own record rather than threading a second value through
+// LaunchResult: ParentAgentID is exactly the value launchSteered resolved
+// and persisted under the parent's own record lock (steererMeta.
+// ActiveAgentID at launch time), so this reads the committed truth instead
+// of re-resolving a possibly-stale copy. Best-effort, matching
+// publishSteeredLaunch's own lifecycle.Load immediately below it: a read
+// failure here leaves the child on its own agent-level/global Auto defaults
+// rather than failing an already-committed launch.
+func (l *SteerLauncher) inheritDelegatePermissions(lifecycle *session.LifecycleStore, parentSessionID, childSessionID string) {
+	if l == nil || l.al == nil || lifecycle == nil || parentSessionID == "" || childSessionID == "" {
+		return
+	}
+	rec, err := lifecycle.Load(childSessionID)
+	if err != nil {
+		logger.WarnCF("agent", "steer: launch: could not load child record for ADR-092 permission inheritance",
+			map[string]any{
+				"parent_session_id": parentSessionID,
+				"child_session_id":  childSessionID,
+				"error":             err.Error(),
+			})
+		return
+	}
+	l.al.inheritSessionPermissions(parentSessionID, rec.ParentAgentID, childSessionID, rec.AgentID)
 }
 
 // subagentSpanTaskLabel resolves the live subagent_start frame's task_label
