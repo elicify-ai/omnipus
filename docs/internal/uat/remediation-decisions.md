@@ -426,8 +426,12 @@ God-mode = **Claude Code "bypass-permissions" as ONE global switch.** It removes
 gives agents full freedom.
 - **Effect (locked):**
   - **Every agent's tools flip "ask" → "allow"** (no permission prompts) — the #1 effect. **[Narrowed 2026-09-20, issue #761 — see the last bullet of O14: this is the *global* tool policy only; a per-agent `deny` or `ask` survives god-mode.]**
-  - **Kernel sandbox → off** (full host fs + syscalls); **network egress → open**; **shell guard /
-    deny-patterns → off**.
+  - **Kernel sandbox → off** (full host fs + syscalls); **network egress → open**; ~~**shell guard /
+    deny-patterns → off**~~. **[Corrected 2026-09-25: false — God Mode does not switch off the shell
+    guard or deny rules. The shell's outside-workspace write refusal still fires, and operator deny
+    rules refuse in every mode (`pkg/tools/shell.go::Execute` → `shell_path_guard.go::guardCommand`;
+    `pkg/tools/shell_permission_mode.go`). The deny-pattern list itself was deleted outright by
+    ADR-092 D2; the operator deny rules that replaced it stay in force. See docs/security.md.]**
   - **Audit logging stays ON** (proposed — confirm).
 - **Two enablement routes:**
   1. **UI switch** in **Settings → Gateway**, flipped via **password re-entry** (step-up auth — there are no
