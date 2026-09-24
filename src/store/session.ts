@@ -460,20 +460,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     if (connection) {
       const sent = connection.send({ type: 'attach_session', session_id: sessionId })
       if (!sent) {
-        // Wave-1 Bug 2 contract: a failed send leaves ALL store state
-        // untouched, including any pending Auto choice — the attach never
-        // happened, so the chat the user is still looking at (whatever it
-        // was) has not changed, and its pending choice (if any) is still
-        // legitimately theirs. Clearing here would be its own regression.
+        // Wave-1 Bug 2: leave ALL state, pending Auto choice included, untouched.
         useConnectionStore.getState().setConnectionError(
           'Could not attach to session — connection dropped. Please reconnect and try again.'
         )
         return false
       }
       // Only wipe the chat bucket once the attach frame is confirmed sent —
-      // resetting first (as before) would permanently lose the bucket's
-      // contents if send() failed (e.g. during a reconnect window), since
-      // there was no rollback for the pre-reset state.
+      // resetting first would lose the bucket with no rollback if send() failed.
       resetChatBucketForReplay(sessionId)
       set((state) => ({
         activeSessionId: sessionId,
@@ -504,24 +498,12 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       setChatReplaying(true)
       return true
     } else {
-      // Single clear point for this branch: unlike the failed-send path
-      // above, this branch DOES change state below (activeSessionId,
-      // sessionByWorkspace, …) — it's a genuine attach, just a locally
-      // recorded one pending the reconnect that finishes the job
-      // (WsLifecycle.onConnected -> reattachActiveSession). Previously only
-      // the connected/success branch's resetChatBucketForReplay call cleared
-      // a pending Auto choice, so an offline attach (or a page that never
-      // reconnects before the user's next message) leaked it into this
-      // session — clear it here too, unconditionally, before any of the
-      // state below is written.
-      clearPendingAutoApproveOnSessionChange()
+      clearPendingAutoApproveOnSessionChange() // unlike failed-send, this branch changes state
       console.warn('[session] attachToSession: no connection — attach_session not sent')
       logDiagnostic('sessionAttachToSessionNoConnection', { sessionId, type })
-      // The click otherwise looks like it "succeeded" (activeSessionId updates,
-      // the UI navigates) but the transcript replay never happens because the
-      // attach_session frame was never sent — surface that to the user rather
-      // than failing silently. Reattach happens automatically once the
-      // connection is restored (WsLifecycle.onConnected → reattachActiveSession).
+      // The click would otherwise look like it "succeeded" with no replay ever
+      // arriving — surface it. Reattach retries automatically on reconnect
+      // (WsLifecycle.onConnected → reattachActiveSession).
       useUiStore.getState().addToast({
         message: 'Not connected — this session will finish loading once your connection is restored.',
         variant: 'warning',
@@ -637,17 +619,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   // (resolveRememberedSessionFromServer) — see the "D4 fix, revised" note
   // further down this file.
   enterWorkspaceChat: async (workspaceId: string) => {
-    // Single clear point for EVERY workspace switch, whatever branch below
-    // ends up taken — including the branches that never mint or attach a
-    // session at all (a brand-new/never-decided workspace, or a workspace
-    // whose descriptor is explicitly null with no active session to walk
-    // away from). Those branches used to rely on startNewSession()'s own
-    // clear, which is gated on `activeSessionId !== null` — so switching
-    // FROM a session-less unsent chat (activeSessionId already null) INTO a
-    // workspace that also resolves to no session skipped the clear
-    // entirely, leaking a pending Auto choice from the OLD workspace's chat
-    // into the new one's first message. Unconditional and first, so no
-    // branch below needs its own copy of this call.
+    // Unconditional, first — covers every branch below, session-less included.
     clearPendingAutoApproveOnSessionChange()
     // Precedence rule 2 is scoped to the workspace the pick was made in.
     // Every workspace has its own team roster, so carrying a pick from
