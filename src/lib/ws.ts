@@ -9,8 +9,13 @@ import { logError } from '@/lib/telemetry'
 // All wire-format frame types are sourced from the generated AsyncAPI types.
 // Hand-written interface declarations for wire-format frames are FORBIDDEN —
 // see CLAUDE.md hard-constraint #8.
-
-import { WsFrame as WsFrameSchema, WsFrameType as WsFrameTypeSchema } from '@/lib/api/generated/schemas'
+//
+// The runtime (value) Zod schemas come from the self-contained ws-schemas.ts,
+// not from schemas.ts — schemas.ts also carries the entire REST Zodios
+// `makeApi([...])` call, which references every REST schema and defeats
+// tree-shaking, so importing a WS value from there pulls the whole REST
+// schema set into this module's bundle (bundle-budget incident, PR #860).
+import { WsFrame as WsFrameSchema, WsFrameType as WsFrameTypeSchema } from '@/lib/api/generated/ws-schemas'
 import { ClientFrameTypes } from '@/lib/api/generated/asyncapi-types'
 
 import type {

@@ -1,15 +1,29 @@
 /**
  * _gen-asyncapi-types.mjs
  *
- * Generates three files from contracts/asyncapi.yaml:
+ * Generates four files from contracts/asyncapi.yaml:
  *
  *   1. src/lib/api/generated/asyncapi-types.ts
  *      TypeScript interfaces for every AsyncAPI component schema.
  *
  *   2. src/lib/api/generated/_asyncapi-zod-schemas.generated.ts
- *      Zod runtime schemas for every AsyncAPI component schema.
+ *      Zod runtime schemas for every AsyncAPI component schema, as a FRAGMENT
+ *      concatenated into schemas.ts by _gen-ts.sh (kept for the existing
+ *      schemas.ts consumers/tests that already import WS names from there —
+ *      not meant to be imported on its own, see its own header comment).
  *
- *   3. src/lib/api/generated/llm-error-messages.ts
+ *   3. src/lib/api/generated/ws-schemas.ts
+ *      The SAME Zod runtime schemas as #2, but as a genuinely self-contained,
+ *      standalone module (its own `import { z } from "zod"`, no dependency on
+ *      schemas.ts's REST-derived prefix). This is what SPA WS-frame code
+ *      (src/lib/ws.ts, src/workers/ws-parser.worker.ts, src/lib/browserLiveWs.ts,
+ *      and other runtime WS-frame validators) should import — importing the
+ *      WS value schemas from schemas.ts instead pulls in that file's entire
+ *      REST Zodios `makeApi([...])` call, which references every REST schema
+ *      and defeats tree-shaking, bloating every chunk that imports it
+ *      (bundle-budget incident, PR #860 / issue #823 follow-up).
+ *
+ *   4. src/lib/api/generated/llm-error-messages.ts
  *      The LLMError user-facing copy catalogue, from the x-user-messages
  *      extension on components.schemas.LLMError. src/lib/llm-error.ts consumes
  *      it instead of hand-maintaining `codeToDisplay`; the Go half of the same
@@ -103,6 +117,7 @@ const CONTRACTS_DIR = resolveContractsDir();
 const asyncapiPath = resolve(CONTRACTS_DIR, "asyncapi.yaml");
 const outPath = resolve(ROOT, "src/lib/api/generated/asyncapi-types.ts");
 const zodOutPath = resolve(ROOT, "src/lib/api/generated/_asyncapi-zod-schemas.generated.ts");
+const wsSchemasOutPath = resolve(ROOT, "src/lib/api/generated/ws-schemas.ts");
 const messagesOutPath = resolve(ROOT, "src/lib/api/generated/llm-error-messages.ts");
 
 const doc = yaml.load(readFileSync(asyncapiPath, "utf8"));
@@ -550,6 +565,38 @@ zodLines.push("export type WsFrame = z.infer<typeof WsFrame>;");
 const zodOutput = zodLines.join("\n");
 writeFileSync(zodOutPath, zodOutput, "utf8");
 console.log(`Generated ${zodOutPath} (${zodOutput.split("\n").length} lines)`);
+
+// ── Generate the self-contained ws-schemas.ts ─────────────────────────────────
+//
+// Same schema body as the fragment above (everything after its banner — the
+// banner is the 8 lines seeded into `zodLines` before the loop), but with its
+// own `import { z } from "zod"` so it can be imported directly without pulling
+// in schemas.ts's REST Zodios `makeApi([...])` call. See the file-header note
+// above (item 3) for why this module exists.
+const WS_ZOD_BANNER_LINE_COUNT = 8;
+const zodBodyLines = zodLines.slice(WS_ZOD_BANNER_LINE_COUNT);
+const wsSchemasOutput = [
+  "/**",
+  " * This file was auto-generated from contracts/asyncapi.yaml.",
+  " * Do not make direct changes to the file.",
+  " * Re-run: node scripts/_gen-asyncapi-types.mjs",
+  " *",
+  " * Self-contained AsyncAPI (WebSocket frame) Zod runtime schemas — safe to",
+  " * import directly. Unlike src/lib/api/generated/schemas.ts (REST + WS,",
+  " * concatenated), importing from here does NOT pull in the REST Zodios",
+  " * `makeApi([...])` call, which references every REST schema and defeats",
+  " * tree-shaking. WS-frame runtime validation (src/lib/ws.ts,",
+  " * src/workers/ws-parser.worker.ts, src/lib/browserLiveWs.ts, and any other",
+  " * SPA code that validates a live WS frame at runtime) MUST import from",
+  " * here, not from schemas.ts.",
+  " */",
+  "",
+  'import { z } from "zod";',
+  "",
+  ...zodBodyLines,
+].join("\n");
+writeFileSync(wsSchemasOutPath, wsSchemasOutput, "utf8");
+console.log(`Generated ${wsSchemasOutPath} (${wsSchemasOutput.split("\n").length} lines)`);
 
 // ── Generate the LLMError user-facing copy catalogue ─────────────────────────
 //

@@ -38,7 +38,11 @@ import type {
   FileExistsRefusal,
   PermissionDenied,
 } from '@/lib/api/generated/asyncapi-types'
-import { PermissionDenied as PermissionDeniedSchema } from '@/lib/api/generated/schemas'
+// Runtime (value) schema from the self-contained ws-schemas.ts, not
+// schemas.ts — the latter also carries the REST Zodios `makeApi([...])`
+// call, which references every REST schema and defeats tree-shaking
+// (bundle-budget incident, PR #860).
+import { PermissionDenied as PermissionDeniedSchema } from '@/lib/api/generated/ws-schemas'
 import { statusDot, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 
 /**

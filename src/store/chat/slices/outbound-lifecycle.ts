@@ -7,7 +7,11 @@ import { generateId } from '@/lib/constants'
 import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
-import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
+// Runtime (value) schema from the self-contained ws-schemas.ts, not
+// schemas.ts — the latter also carries the REST Zodios `makeApi([...])`
+// call, which references every REST schema and defeats tree-shaking
+// (bundle-budget incident, PR #860).
+import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/ws-schemas'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
