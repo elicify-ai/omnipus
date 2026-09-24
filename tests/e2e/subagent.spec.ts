@@ -42,6 +42,7 @@ import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 import { chatInput, assistantMessages, selectAgent, waitForConnected } from './fixtures/selectors';
+import type { DelegationFrame } from './fixtures/delegation-completion';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -115,6 +116,10 @@ async function waitForBoundSession(page: Page, excludeIDs: Array<string | null>)
   return id;
 }
 
+// Per-page WS-frame capture (registered in beforeEach BEFORE page.goto('/'),
+// see below) — read by test (b) for its wire-level child-session checks.
+const framesByPage = new WeakMap<Page, DelegationFrame[]>();
+
 test.beforeEach(async ({ page }) => {
   // UPDATE 2026-09-24 (lane sq-gwfix): this file used to opt into verbose
   // chat here so its tests could use [data-testid="subagent-collapsed"] as
@@ -125,6 +130,22 @@ test.beforeEach(async ({ page }) => {
   // src/lib/toolVisibility.ts's shouldRenderToolCall or ActivityBar.tsx
   // gate on verboseChatEnabled — matching replay-fidelity.spec.ts's own
   // "no verbose-chat opt-in anywhere in this file" precedent.
+  // Per-page WS-frames capture, for test (b)'s wire-level child-session
+  // checks. Registered BEFORE page.goto('/') so it catches the chat
+  // WebSocket the SPA opens on mount — a listener attached after the goto
+  // would miss an already-open socket (page.on('websocket') only fires for
+  // sockets opened after registration). Mirrors delegation-hidden.spec.ts's
+  // per-page capture. Test (b) reads it via framesByPage.
+  const frames: DelegationFrame[] = [];
+  framesByPage.set(page, frames);
+  page.on('websocket', socket => {
+    if (!new URL(socket.url()).pathname.endsWith('/chat/ws')) return;
+    socket.on('framereceived', ({ payload }) => {
+      let frame: DelegationFrame;
+      try { frame = JSON.parse(payload.toString()) as DelegationFrame; } catch { return; }
+      if (frame['type'] === 'subagent_start' || frame['type'] === 'subagent_end') frames.push(frame);
+    });
+  });
   await page.goto('/');
 });
 
@@ -217,18 +238,38 @@ test(
     await openControl.click();
     await waitForBoundSession(page, [parentSessionID]);
 
-    // Researcher's OWN delegate attempt is visible in ITS OWN thread — the
-    // call happened, and it did not succeed. `getToolBadgeStatusConfig`'s
-    // generic failure label is "Failed"; a structured delegation_denied
-    // sentinel (toolResultSentinels.ts) renders "Delegation denied · …" —
-    // either is an honest signal the attempt was refused, so the check
-    // accepts both rather than pinning the exact backend error shape.
-    const childDelegateBadge = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]').first();
+    // Researcher's OWN refused delegate attempt is visible in ITS OWN thread.
+    // CI run 36026415761 (gateway log, all four attempts of this test —
+    // 16:46:49 / 16:48:27 / 16:50:07): the leaf Researcher's policy denies
+    // `delegate` at the ToolSearch LOAD step — "ToolSearch(load): delegate —
+    // denied by this agent's policy" — so the delegate call itself NEVER
+    // happens (a denied load means the tool never becomes callable), and the
+    // bare `delegate` tool-call badge this test used to wait 90s for CANNOT
+    // exist. The refusal DOES have a visible surface, one layer up: the
+    // denied ToolSearch call renders as an errored tool-call badge
+    // (toolVisibility.ts's ToolSearch case forces visibility on error — a
+    // denied load has no other narrator), and GenericToolCall marks it
+    // "Failed" in the collapsed header (toolStatusConfig's error label).
+    // The BDD guarantee ("the tool dispatcher refuses a leaf's delegate
+    // attempt by policy") is intact — it is enforced one step EARLIER than
+    // the old assertion assumed (at load, not at dispatch) — and the
+    // zero-rows guard at the end of this test still proves no grandchild
+    // subagent_start ever fires. The assertion accepts BOTH refusal surfaces
+    // so the spec stays true if the backend ever moves the denial to
+    // dispatch time: a `delegate` badge (denied at dispatch — the old
+    // assertion's exact shape) OR the denied ToolSearch badge (denied at
+    // load — the gateway-log-verified shape today).
+    const refusedDelegateAttempt = page
+      .locator('[data-testid="tool-call-badge"][data-tool="delegate"]')
+      .or(page.locator('[data-testid="tool-call-badge"][data-tool="ToolSearch"]'))
+      .first()
     await expect(
-      childDelegateBadge,
-      'Researcher must show its own (refused) delegate attempt in its own session',
+      refusedDelegateAttempt,
+      'Researcher must show its own (refused) delegate attempt in its own session — ' +
+        'as a denied `delegate` badge if policy denies at dispatch, or as the denied ' +
+        'ToolSearch(load) badge if policy denies at load (the gateway-log-verified shape today)',
     ).toBeVisible({ timeout: 90_000 });
-    await expect(childDelegateBadge).toContainText(/Delegation denied|Failed/i, { timeout: 30_000 });
+    await expect(refusedDelegateAttempt).toContainText(/denied|failed/i, { timeout: 30_000 });
 
     // (4) CHILD SESSION — no grandchild ever spawned: Traces to BDD Scenario
     // 10's actual invariant, "no subagent_start frame with a grandchild
@@ -266,7 +307,7 @@ test(
 // Traces to: sprint-h-subagent-block-spec.md TDD row 22, BDD Scenario 13, lines 334-342
 // ────────────────────────────────────────────────────────────────────────────────
 test(
-  '(b) sibling delegate calls: two back-to-back delegate calls produce two independent rows opening two distinct child sessions',
+  '(b) sibling delegate calls: two back-to-back delegate calls produce two independent rows and two distinct gateway-registered child sessions (first open control clicked through and cross-checked against subagent_start frames)',
   async ({ page }) => {
     requireApiKey();
     // 240s: two independent-but-trivial child turns ("reply with one word,
@@ -312,31 +353,58 @@ test(
     );
     await input.press('Enter');
 
-    // (1) THREAD — the guard: zero subagent-collapsed elements, ever.
+    // (1) WIRE — child identity from the gateway's own frames, not only
+    // from the UI. pkg/agent/steer_frames.go::deliverSubagentStart puts
+    // task_label and child_session_id on every subagent_start frame
+    // (session_id there is the PARENT's session). Captured per page in
+    // beforeEach (before page.goto('/'), see it) and read via framesByPage.
+    const frames = framesByPage.get(page)!;
+    const childStart = (label: string): string | null => {
+      const start = frames.find(
+        (f) => f['type'] === 'subagent_start' && f['task_label'] === label,
+      );
+      if (!start) return null;
+      const child = start['child_session_id'];
+      return typeof child === 'string' ? child : null;
+    };
+
+    // (2) THREAD — the guard: zero subagent-collapsed elements, ever.
     await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
 
-    // (2) THREAD — at least 2 sibling delegate chips.
+    // (3) THREAD — at least 2 sibling delegate chips.
     // Traces to: BDD Scenario 13 — "two distinct SubagentBlock elements".
     const delegateBadges = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]');
     await expect(delegateBadges.first()).toBeVisible({ timeout: 60_000 });
-    await expect(delegateBadges).toHaveCount(2, { timeout: 60_000 });
 
-    // THEN LET THE COUNT SETTLE BEFORE TOUCHING ANYTHING.
-    //
-    // toHaveCount polls until the count EQUALS 2 and returns the moment it
-    // does — it does not promise the model is finished. The prompt above
-    // asks for exactly two delegate calls, and a real model usually
-    // complies, but "usually" is the whole problem: a third call landing
-    // during the panel/navigation sequence below would make a later exact
-    // count assertion fail on a run where nothing about the PRODUCT was
-    // wrong (this exact settle pattern is preserved from before this
-    // rewrite — it is not part of what ADR-091 changed). How many times the
-    // model chooses to call `delegate` is not a product invariant this test
-    // can enforce. What IS the invariant — and what BDD Scenario 13 is
-    // actually about — is that sibling children are independent: each has
-    // its own row and its own distinct session, and neither's existence
-    // depends on the other. So: settle, snapshot the count, and hold that
+    // (4) PANEL — open the panel at the FIRST in-flight moment: the first
+    // chip renders the instant the parent emits the call; the child's
+    // subagent_start arrives ~immediately after, putting an agent item in
+    // `running` — ActivityBar.tsx's shouldMount (= hasOpenAgentChildren ||
+    // panelOpen || hasFailedRecent, ActivityBar.tsx:94) is satisfied and the
+    // bar is mounted. Once panelOpen is set it keeps the bar mounted through
+    // every later gap in child activity on this same ChatScreen mount (the
+    // panel is component-local React state; nothing navigates before the
+    // openOne click below). The children here are trivial ("reply with one
+    // word", no tools) and CI run 36026415761 shows them completing within
+    // ~20s — faster than the old open-after-settle-loop position could
+    // reliably catch (its 4/4 failures at ~22s were exactly this race lost).
+    await openActivityPanel(page);
+
+    // (5) THREAD — with the panel open (which does not touch the thread),
+    // require both sibling chips. toHaveCount polls until the count EQUALS 2
+    // and returns the moment it does — it does not promise the model is
+    // finished. The prompt asks for exactly two delegate calls, and a real
+    // model usually complies, but "usually" is the whole problem: a third
+    // call landing during the assertions below would make the row-count
+    // assertion fail on a run where nothing about the PRODUCT was wrong
+    // (this settle pattern is preserved from before this rewrite — it is
+    // not part of what ADR-091 changed). How many times the model chooses to
+    // call `delegate` is not a product invariant this test can enforce. What
+    // IS the invariant — and what BDD Scenario 13 is actually about — is
+    // that sibling children are independent: each has its own row and its
+    // own distinct session. So: settle, snapshot the count, and hold that
     // snapshot as the INVARIANT.
+    await expect(delegateBadges).toHaveCount(2, { timeout: 60_000 });
     let stableCount = await delegateBadges.count();
     for (let i = 0; i < 6; i++) {
       await page.waitForTimeout(500);
@@ -349,11 +417,12 @@ test(
       'at least 2 sibling delegate chips are required to test independent children',
     ).toBeGreaterThanOrEqual(2);
 
-    // (3) PANEL — one row per sibling, matching the settled thread count.
-    // This is the direct replacement for "two distinct SubagentBlock
-    // elements": each child gets its own row (ActivityPanel.tsx), not a
-    // nested element of a deleted card.
-    await openActivityPanel(page);
+    // (6) PANEL — one row per sibling, matching the settled thread count.
+    // The direct replacement for "two distinct SubagentBlock elements":
+    // each child has its own row (ActivityPanel.tsx). A row enters at its
+    // child's subagent_start (running) and is RETAINED after completion —
+    // useRunningActivity's recentlyFinished keeps finished items (successes
+    // included, cap 8), so an early-finishing child still has its row here.
     const rowOne = page.locator('[data-testid="activity-row"]', { hasText: labelOne });
     const rowTwo = page.locator('[data-testid="activity-row"]', { hasText: labelTwo });
     await expect(rowOne).toBeVisible({ timeout: 30_000 });
@@ -363,39 +432,60 @@ test(
       'the Activity panel must carry exactly one row per settled sibling delegate chip',
     ).toHaveCount(stableCount);
 
-    // (4) DIFFERENTIATION — replaces "each expands independently without
-    // affecting the other" with a STRONGER guarantee: each row's open
-    // control targets a genuinely DIFFERENT child session, not merely
-    // independent CSS expand state on a card. This is the underlying thing
-    // BDD Scenario 13 cared about — two real, independent children — made
-    // directly observable now that a child's own identity (its session) is
-    // one click away instead of nested detail inside a parent card.
+    // (7) DIFFERENTIATION — each row's open control targets a genuinely
+    // DIFFERENT child session; independence is a property of the children,
+    // not just of the UI state (BDD Scenario 13's underlying invariant).
     const parentSurface = page.locator('[data-active-session-id]').first();
     const parentSessionID = await parentSurface.getAttribute('data-active-session-id');
 
     const openOne = rowOne.locator('[data-testid="activity-row-open"]');
+    const openTwo = rowTwo.locator('[data-testid="activity-row-open"]');
     await expect(openOne).toBeVisible({ timeout: 15_000 });
+    await expect(openTwo).toBeVisible({ timeout: 15_000 });
+
+    // (8) CHILD SESSION — click the FIRST sibling's open control live: the
+    // chat surface must bind to a session that is neither the parent's nor
+    // the '__pending' sentinel, and the bound id must equal the
+    // child_session_id the gateway itself put on the subagent_start frame
+    // for the first sibling — the open control's navigation cross-checked
+    // against wire identity (steer_frames.go).
     await openOne.click();
     const childOneSessionID = await waitForBoundSession(page, [parentSessionID]);
-
-    // Return to the parent's own session directly (not page.goBack(), which
-    // is ambiguous here: SessionRoute's own internal redirect — see
-    // steered-session-reachability.spec.ts's comment on this exact seam —
-    // can leave more than one history entry per Open click) and reopen the
-    // panel — panelOpen is component-local React state, reset by the route
-    // swap.
-    await page.goto(`/#/sessions/${parentSessionID}`);
-    await waitForBoundSession(page, [childOneSessionID]);
-    await openActivityPanel(page);
-    const openTwo = page.locator('[data-testid="activity-row"]', { hasText: labelTwo }).locator('[data-testid="activity-row-open"]');
-    await expect(openTwo).toBeVisible({ timeout: 15_000 });
-    await openTwo.click();
-    const childTwoSessionID = await waitForBoundSession(page, [parentSessionID, childOneSessionID]);
-
+    await expect
+      .poll(() => childStart(labelOne), { timeout: 30_000 })
+      .not.toBeNull();
+    const wireChildOne = childStart(labelOne);
     expect(
-      childTwoSessionID,
-      'sibling delegate calls must open two DIFFERENT child sessions — independence is a property of the children, not just of the UI state',
-    ).not.toBe(childOneSessionID);
+      childOneSessionID,
+      'the open control must bind the chat surface to the gateway-registered child session for the first sibling',
+    ).toBe(wireChildOne);
+
+    // (9) WIRE DISTINCTNESS — the second sibling must be a genuinely
+    // different session. The old test proved distinctness by navigating back
+    // with page.goto(parent) and issuing a SECOND openActivityPanel — a
+    // bar-dependent re-open that cannot run at idle (shouldMount false: both
+    // children done, panelOpen reset by the navigation remount, nothing
+    // failed) and that failed 4/4 at ~22s in CI run 36026415761. The
+    // distinctness invariant itself moves to the wire: two subagent_start
+    // frames with different child_session_id values (registered under
+    // different task_labels) ARE two independent children — the underlying
+    // fact the old double click-through indirectly established. openTwo is
+    // asserted rendered above; its click exercises the same handler as
+    // openOne (same ActivityPanel row component), so the second live
+    // navigation would only re-prove an already-proven mechanism while
+    // reintroducing the bar-dependency that broke this test.
+    await expect
+      .poll(() => childStart(labelTwo), { timeout: 60_000 })
+      .not.toBeNull();
+    const wireChildTwo = childStart(labelTwo);
+    expect(
+      wireChildTwo,
+      'the second sibling must have its own child session (gateway-registered)',
+    ).not.toBe(parentSessionID);
+    expect(
+      wireChildTwo,
+      'sibling delegate calls must produce two DIFFERENT child sessions — independence is a property of the children, not just of the UI state',
+    ).not.toBe(wireChildOne);
   },
 );
 
@@ -549,12 +639,28 @@ test(
     // deleted the card unconditionally.
     await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
 
-    // Now wait for the parent turn to actually finish. 300s total leaves ~60s
-    // of the 360s test-level ceiling for the panel + a11y checks below.
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 300_000 });
-
-    // Open the Activity panel — the surface that replaced "click to expand".
+    // Open the Activity panel NOW, while the delegation is in flight — the
+    // moment the delegate chip is visible the child's span is open (or its
+    // subagent_start is within a second of arriving), which satisfies
+    // ActivityBar.tsx's shouldMount (= hasOpenAgentChildren || panelOpen ||
+    // hasFailedRecent, ActivityBar.tsx:94), and panelOpen then keeps the bar
+    // mounted on this same ChatScreen mount for the rest of the test. The OLD
+    // position — after the assistantMessages(1) completion wait — is why this
+    // test failed 4/4 at ~25s in CI run 36026415761: by the time the parent
+    // turn finished, the child was done too, nothing had failed, and the
+    // panel was still closed — shouldMount false, the bar mounts NOTHING, and
+    // the helper's 15s bar wait burns out. (The ~25s failure time is a FAST
+    // model completing, not a slow one.)
     await openActivityPanel(page);
+
+    // Now wait for the parent turn to actually finish. 300s total leaves ~60s
+    // of the 360s test-level ceiling for the row + a11y checks below. The
+    // panel stays open across this wait (panelOpen is React state on the
+    // UNCHANGED ChatScreen mount — nothing between the open above and the row
+    // checks below navigates), and the child's row is retained through
+    // completion by useRunningActivity's recentlyFinished (successes
+    // included, cap 8).
+    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 300_000 });
     const row = page.locator('[data-testid="activity-row"]').first();
     await expect(
       row,

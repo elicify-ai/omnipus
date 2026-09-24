@@ -425,17 +425,40 @@ test(
     // The child's own bash call, visible in its OWN session (bash is
     // foreground-by-default and therefore unconditionally visible per
     // toolVisibility.ts — no verbose-chat opt-in needed here either).
-    const childBashBadge = page.locator('[data-testid="tool-call-badge"][data-tool="bash"]');
+    //
+    // CI run 36026415761 root cause (all 4 attempts, decisive failure
+    // screenshot + a11y snapshot): the old locator
+    // `[data-testid="tool-call-badge"][data-tool="bash"]` assumed the
+    // REPLAY renderer, but a freshly-bound child session view hydrates its
+    // parts through the LIVE thread primitives — and the LIVE path renders
+    // bash via the tool's registered UI (makeBashUI('bash') →
+    // BashOutput.tsx::BashOutputBlock), whose toggle carries
+    // data-testid="bash-output-toggle" and NO tool-call-badge. The generic
+    // badge shape is what the REPLAY path (VirtualAssistantMessageRow →
+    // GenericToolCall, ChatScreen.tsx) gives the same call. Both are real
+    // renderings of the same call, so accept either — the assertion keeps
+    // its full strength (the child's own bash call, pinned to the mandated
+    // `echo hello` command, in the child's own session).
+    const childBashChip = page
+      .locator('[data-testid="bash-output-toggle"]')
+      .filter({ hasText: 'echo hello' })
+      .or(page.locator('[data-testid="tool-call-badge"][data-tool="bash"]'))
+      .first();
     await expect(
-      childBashBadge.first(),
+      childBashChip,
       'the child\'s own bash call must be visible in the child\'s own session — this is where the deleted nested-tool-call-badge assertion moved to',
     ).toBeVisible({ timeout: 150_000 });
 
     // a11y baseline check on the child's own bash chip, now that the chat
     // surface is bound to the child's session — completes the Scenario 11
     // coverage the two checks in this test now split across both surfaces.
+    // The include must cover BOTH chip shapes (live-path bash-output-toggle
+    // AND replay-path tool-call-badge): an include matching zero elements
+    // makes axe scan nothing and pass silently, which would be a false
+    // green for exactly the surface this check exists to guard. Axe unions
+    // its top-level include selectors.
     await expectA11yClean(page, {
-      include: ['[data-testid="tool-call-badge"]'],
+      include: ['[data-testid="bash-output-toggle"]', '[data-testid="tool-call-badge"]'],
     });
   },
 );

@@ -126,7 +126,22 @@ test('steered session is reachable in its own live view without leaking child ou
   await waitForConnected(page, { timeout: 15_000 })
   await childInput.fill('Steering update: acknowledge with "steer received" in this child session only.')
   await childInput.press('Enter')
-  await expect(page.getByText('steer received', { exact: false })).toBeVisible({ timeout: 120_000 })
+  // CI run 36026415761 evidence (all 4 attempts): the old bare
+  // page.getByText('steer received') was a strict-mode failure waiting to
+  // happen — it resolved to TWO elements the moment the message was sent:
+  // the sent message's own <p> in [data-testid="virtualized-message-list"]
+  // (the user echo CONTAINS the phrase "steer received" verbatim) and the
+  // chat-input textarea, which still held the typed text. toBeVisible on a
+  // multi-match locator is an instant strict-mode violation, so the
+  // assertion never even waited for the child's ack. Scope to the message
+  // list (excludes the composer textarea) and exclude the user's own echo
+  // (it is the only matching element that also carries "Steering update")
+  // so the only thing this can now match is the CHILD's ack message.
+  const steerAck = page
+    .getByTestId('virtualized-message-list')
+    .getByText('steer received', { exact: false })
+    .filter({ hasNotText: 'Steering update' })
+  await expect(steerAck).toBeVisible({ timeout: 120_000 })
 
   const parentView = await context.newPage()
   await parentView.goto(parentURL)
@@ -136,8 +151,28 @@ test('steered session is reachable in its own live view without leaking child ou
   await expect(parentView.locator('[data-testid="tool-call-badge"][data-tool="delegate"]')).toHaveCount(1)
 
   await parentView.reload()
-  const replayedActivityBar = parentView.locator('[data-testid="activity-bar"]')
-  await expect(replayedActivityBar).toBeVisible({ timeout: 30_000 })
-  await replayedActivityBar.click()
-  await expect(parentView.locator('[data-testid="activity-row"]').filter({ hasText: LABEL_A })).toBeVisible()
+  // CI run 36026415761: this segment used to wait 30s for the Activity bar to
+  // reappear after a RELOAD of the completed parent session. It cannot: a
+  // fresh mount of ActivityBar (src/components/chat/ActivityBar.tsx) renders
+  // NOTHING unless hasOpenAgentChildren || panelOpen || hasFailedRecent (its
+  // shouldMount gate, ActivityBar.tsx:94) — a completed, purely-successful
+  // delegation satisfies none of the three, and the visual-qa decision that
+  // produced that gate is regression-protected by ActivityBar.test.tsx
+  // ("renders nothing when there is no running activity"). The delegation
+  // stays visible through the surface ADR-091 D7/AC-7 designates for it at
+  // idle: the delegate tool-call chip, which shouldRenderToolCall renders
+  // unconditionally for a run action (toolVisibility.ts `delegate` case) —
+  // proven to survive replay by the identical pre-reload assertion above.
+  await expect(
+    parentView.locator('[data-testid="tool-call-badge"][data-tool="delegate"]'),
+    'the parent\'s delegate chip is the delegation surface that persists across reload at idle',
+  ).toHaveCount(1)
+  // And the inverse of the old assertion is itself part of the design
+  // contract: an idle, purely-successful parent deliberately mounts no bar
+  // (same shouldMount gate; pins the /visual-qa decision so an
+  // always-visible idle bar cannot quietly come back).
+  await expect(
+    parentView.locator('[data-testid="activity-bar"]'),
+    'ActivityBar mounts nothing when idle after a purely-successful delegation (shouldMount: no open child, no panel, no failure)',
+  ).toHaveCount(0)
 })

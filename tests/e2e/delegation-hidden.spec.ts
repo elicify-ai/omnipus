@@ -40,6 +40,19 @@
  * own comments for the replacement assertions. This mirrors the fix already
  * applied to replay-fidelity.spec.ts test (b) for the identical root cause.
  *
+ * UPDATE (2026-09-25, e2efix lane, CI run 36026415761): CI exposed a
+ * LIFETIME bug in this test's own structure — the panel is unreachable at
+ * idle. ActivityBar.tsx mounts NOTHING when hasOpenAgentChildren ||
+ * panelOpen || hasFailedRecent is false (shouldMount, ActivityBar.tsx:94);
+ * after the settings round-trip the panel state is gone, the delegation is
+ * complete, and the old post-goBack openActivityPanel could only ever pass
+ * by racing the child's completion. The panel is now opened IN FLIGHT
+ * (right after the delegate chip renders) and held open through the
+ * completedDelegation wait; the row/status/open-control assertions run
+ * there, BEFORE the toggle. The post-toggle tail keeps the assertions that
+ * need no panel (zero subagent-collapsed, exactly one delegate chip);
+ * closeActivityPanel is gone with its only call site.
+ *
  * UPDATE (2026-07-17): the two root causes the history block below
  * documents are now BOTH fixed.
  *   (1) `src/routes/_app/sessions.$sessionId.tsx`'s loader no longer
@@ -150,8 +163,11 @@ import { completedDelegation, type DelegationFrame } from './fixtures/delegation
 // Deliberately does NOT call enableVerboseChat — this spec asserts the
 // DEFAULT (verbose-off) policy for its first half.
 
-// Open/close the Activity panel — mirrors replay-fidelity.spec.ts's own
-// helper of the same name (ADR-091 D7/FR-E-004 surface). Idempotent open
+// Open the Activity panel — mirrors replay-fidelity.spec.ts's own helper of
+// the same name (ADR-091 D7/FR-E-004 surface). (Its closeActivityPanel
+// companion was removed 2026-09-25 with its only call site: after the
+// settings round-trip the bar is not mounted at idle to receive an Escape
+// — see the test tail's comment.) Idempotent open
 // avoids steered-session-stop.spec.ts's documented trap: a second
 // unconditional click while the panel is already open lands on the Radix
 // Sheet's own overlay/backdrop (a modal), not the bar, and the click is lost.
@@ -164,11 +180,6 @@ async function openActivityPanel(page: Page): Promise<void> {
   await expect(bar).toHaveAttribute('aria-expanded', 'true', { timeout: 15_000 });
 }
 
-async function closeActivityPanel(page: Page): Promise<void> {
-  const bar = page.locator('[data-testid="activity-bar"]');
-  await page.keyboard.press('Escape');
-  await expect(bar).toHaveAttribute('aria-expanded', 'false', { timeout: 15_000 });
-}
 
 const framesByPage = new WeakMap<Page, DelegationFrame[]>();
 
@@ -214,7 +225,7 @@ test(
   // RENAMED 2026-09-24 (lane sq-gwfix, CI run 35997069836): the old title
   // ("...then shows one once verbose chat is turned on") described behaviour
   // ADR-091 D7/D10 deleted — see the file's 2026-09-24 UPDATE comment above.
-  'default policy: a completed live delegation never shows a subagent-collapsed card (deleted by ADR-091), before or after the verbose-chat toggle; the delegate line and Activity panel row/open control persist across it (no reload)',
+  'default policy: a completed live delegation never shows a subagent-collapsed card (deleted by ADR-091); the Activity panel row + open control are verified while the panel is held open from in-flight through completion, and the delegate line + zero-card rule persist across the verbose-chat toggle (no reload)',
   async ({ page }) => {
     requireApiKey();
     // 300s budget: one live delegate round-trip (parent delegate + subagent's
@@ -251,6 +262,25 @@ test(
     );
     await input.press('Enter');
 
+    // IN-FLIGHT ANCHOR: the delegate chip renders the instant the parent
+    // emits the call — while the child's span is still open. It is the
+    // earliest reliably-mountable moment for the Activity bar: subagent_start
+    // puts an agent item in `running`, satisfying ActivityBar.tsx's
+    // shouldMount (= hasOpenAgentChildren || panelOpen || hasFailedRecent,
+    // ActivityBar.tsx:94). This test's child ("echo hello" then "reply
+    // done") can complete in well under 30s under a fast model — CI run
+    // 36026415761: attempt 1 lost the old post-settings panel-open race at
+    // 28.9s, retry #1 won it at 27.2s; that coin flip is what this
+    // reordering removes.
+    const delegateChip = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]');
+    await expect(delegateChip.first()).toBeVisible({ timeout: 60_000 });
+
+    // Open the panel WHILE the delegation is in flight; panelOpen (React
+    // state on this unchanged ChatScreen mount) then keeps the bar mounted
+    // through the completedDelegation wait below and up to the settings
+    // navigation.
+    await openActivityPanel(page);
+
     // One background delegation can produce multiple parent prose messages.
     // Require the matching child to succeed and its parent turn to complete;
     // neither model prose nor a bubble count proves that contract.
@@ -265,6 +295,24 @@ test(
     await expect(collapsedBlocks).toHaveCount(0);
     await page.waitForTimeout(1_000);
     await expect(collapsedBlocks).toHaveCount(0);
+
+    // And: the surface that actually replaced the deleted card — the
+    // Activity panel's row for this delegation, plus its open control into
+    // the child's own session (ActivityPanel.tsx, ADR-091 D7/FR-E-004) — is
+    // reachable and reports success. The panel is ALREADY OPEN: it was
+    // opened in flight (right after the delegate chip first rendered, while
+    // the child's span was open) and stays open across the
+    // completedDelegation wait above — panelOpen is component-local React
+    // state on an unchanged ChatScreen mount, and nothing between the open
+    // and this check navigates. The row is retained through completion by
+    // useRunningActivity's recentlyFinished (successes included, cap 8).
+    // Verifying the row BEFORE the toggle (not after) is the structural fix
+    // for CI run 36026415761 — see the tail comment below for why the panel
+    // is unreachable after the settings round-trip.
+    const row = page.locator('[data-testid="activity-row"]', { hasText: label });
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    await expect(row).toHaveAttribute('data-status', 'success', { timeout: 15_000 });
+    await expect(row.locator('[data-testid="activity-row-open"]')).toBeVisible();
 
     // When: verbose chat is turned ON via the real user-facing toggle
     // (Settings -> Chat) — a client-side HashRouter route change, NOT a
@@ -308,18 +356,19 @@ test(
       page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]'),
     ).toHaveCount(1);
 
-    // And: the surface that actually replaced the deleted card — the
-    // Activity panel's row for this delegation, plus its open control into
-    // the child's own session (ActivityPanel.tsx, ADR-091 D7/FR-E-004) — is
-    // reachable and reports success. This is the differentiation this file
-    // exists to prove now: not "verbose reveals a card" (that card is gone
-    // for good) but "the completed delegation's detail lives in the panel,
-    // reachable independently of the verbose-chat toggle".
-    await openActivityPanel(page);
-    const row = page.locator('[data-testid="activity-row"]', { hasText: label });
-    await expect(row).toBeVisible({ timeout: 15_000 });
-    await expect(row).toHaveAttribute('data-status', 'success');
-    await expect(row.locator('[data-testid="activity-row-open"]')).toBeVisible();
-    await closeActivityPanel(page);
+    // The panel is deliberately NOT re-opened after the toggle: the
+    // settings round-trip is a cross-pattern route swap that unmounts
+    // ChatScreen, so panelOpen is reset — and with the delegation complete,
+    // no open child and no failure, ActivityBar.tsx's shouldMount
+    // (= hasOpenAgentChildren || panelOpen || hasFailedRecent,
+    // ActivityBar.tsx:94) is false: the bar mounts NOTHING at idle and the
+    // panel has no other entry point in the SPA (ActivityBar.tsx's panel
+    // render is its only one). The old tail (openActivityPanel + row checks
+    // + closeActivityPanel here) could only pass by racing the child's
+    // completion before the settings round-trip — exactly the flakiness CI
+    // run 36026415761 exposed (attempt 1 lost at 28.9s, retry #1 won at
+    // 27.2s). The row + status + open-control assertions above now hold the
+    // panel open from in-flight through completion, BEFORE the toggle; this
+    // tail keeps the two post-toggle assertions that need no panel.
   },
 );
