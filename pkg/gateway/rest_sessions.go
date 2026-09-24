@@ -671,9 +671,16 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 	// [Finding 3, ADR-091 fix lane 2] SkippedNewerGeneration also refuses
 	// deletion: a descendant whose live turn had already advanced past the
 	// generation this Stop stamped is STILL RUNNING, exactly the "may still
-	// be running" case this guard exists to catch.
+	// be running" case this guard exists to catch. That is deliberately a
+	// WIDER condition than the `partial` flag on the cancel_stage frame,
+	// which per WP-D FR-D-001 means "unreachable" alone: a newer generation
+	// taking over is a CORRECT Stop outcome, but it is still a live turn, and
+	// deleting its session data is what this guard refuses. Hence
+	// cancelIncompleteSubtreeSummary, not cancelPartialSummary — the latter
+	// is empty in the skipped-only case and would leave this 500 with no
+	// reason in its body.
 	if cascaded && (len(report.Unreachable) > 0 || len(report.SkippedNewerGeneration) > 0) {
-		summary := cancelPartialSummary(report)
+		summary := cancelIncompleteSubtreeSummary(report)
 		slog.Warn("rest: delete session: Stop cascade incomplete; deletion refused",
 			"session_id", id, "summary", summary,
 			"unreachable", report.Unreachable, "skipped_newer_generation", report.SkippedNewerGeneration)
