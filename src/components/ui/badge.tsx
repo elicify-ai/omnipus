@@ -10,19 +10,19 @@ const badgeVariants = cva(
         default:
           'border-transparent bg-[var(--color-accent)] text-[var(--color-primary)] forced-colors:border-[CanvasText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText]',
         secondary:
-          'border-transparent bg-[var(--color-surface-2)] text-[var(--color-secondary)]',
+          'border-transparent bg-[var(--color-surface-2)] text-[var(--color-secondary)] forced-colors:border-[CanvasText] forced-colors:bg-[Canvas] forced-colors:text-[CanvasText]',
         outline:
-          'border-[var(--color-border)] text-[var(--color-secondary)]',
+          'border-[var(--color-border)] text-[var(--color-secondary)] forced-colors:border-[CanvasText] forced-colors:bg-[Canvas] forced-colors:text-[CanvasText]',
         success:
-          'border-transparent bg-[var(--color-success)]/20 text-[var(--color-success)]',
+          'border-transparent bg-[var(--color-success)]/20 text-[var(--color-success)] forced-colors:border-[CanvasText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText]',
         error:
-          'border-transparent bg-[var(--color-error)]/20 text-[color:var(--badge-error-foreground)]',
+          'border-transparent bg-[var(--color-error)]/20 text-[color:var(--badge-error-foreground)] forced-colors:border-[CanvasText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText]',
         destructive:
-          'border-transparent bg-[var(--color-error)]/20 text-[color:var(--badge-error-foreground)]',
+          'border-transparent bg-[var(--color-error)]/20 text-[color:var(--badge-error-foreground)] forced-colors:border-[CanvasText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText]',
         warning:
-          'border-transparent bg-[var(--color-warning)]/20 text-[var(--color-warning)]',
+          'border-transparent bg-[var(--color-warning)]/20 text-[var(--color-warning)] forced-colors:border-[CanvasText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText]',
         muted:
-          'border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-muted)]',
+          'border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-muted)] forced-colors:border-[CanvasText] forced-colors:bg-[Canvas] forced-colors:text-[CanvasText]',
       },
     },
     defaultVariants: {

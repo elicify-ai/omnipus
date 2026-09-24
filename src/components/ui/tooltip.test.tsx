@@ -205,4 +205,24 @@ describe('Tooltip — accessibility contract', () => {
     )
     expect(screen.getByLabelText('Mode status')).toBe(screen.getByTestId('trigger'))
   })
+
+  // The [check:tooltip-forced-colors] browser check failed against a
+  // Badge child (`.items-center`, from badgeVariants' base class), not the
+  // bubble — the bubble itself already carries a system-color repaint from
+  // 67757688f. This locks that repaint in at the unit level so a future
+  // change to the bubble's className can't silently drop it again.
+  it('gives the open bubble its own forced-colors system-color repaint', () => {
+    render(
+      <Tooltip content="Explanation text" data-testid="trigger">
+        <span>Auto → Ask</span>
+      </Tooltip>,
+    )
+    fireEvent.mouseEnter(screen.getByTestId('trigger'))
+    expect(screen.getByRole('tooltip')).toHaveClass(
+      'forced-colors:border-[CanvasText]',
+      'forced-colors:bg-[Canvas]',
+      'forced-colors:text-[CanvasText]',
+      'forced-colors:[forced-color-adjust:none]',
+    )
+  })
 })
