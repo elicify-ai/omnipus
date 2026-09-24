@@ -255,13 +255,30 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
   if (resolvedId) {
     const existing = draft.messagesById[resolvedId]
     if (existing.status === 'interrupted' || existing.status === 'error') return
-    // §4.2/§6.3 overlap rule: a bubble already finalized (status 'done', not
-    // streaming) ignores any further token for its message_id outright —
-    // this is what makes a snapshot's persisted-between-bind-and-read race
-    // safe (F4's own scenario): the replayed history already shows the full
-    // text, and live tokens with seq > W for the SAME message_id that
-    // arrive afterward must never re-open or duplicate it.
-    if (existing.status === 'done' && !existing.isStreaming) return
+    if (existing.status === 'done' && !existing.isStreaming) {
+      // Opus review round 3 item N2 (MEDIUM-HIGH, DO-NOT-SHIP,
+      // browser-confirmed: sending a message mid-answer dropped the rest of
+      // the CURRENT step — the agent doesn't reach a step boundary the
+      // instant a steer message is sent, so the SAME turn/message_id keeps
+      // streaming tokens for it afterward): a bubble closed only by
+      // `closedBySteer` (outbound-lifecycle.ts's sendMessage mid-turn
+      // branch, ADR-070 §2.1) for the SAME turn_id is not actually
+      // finished — it was closed early so the user's new message could sit
+      // after it in the thread, not because the step itself ended. Reopen
+      // it and keep appending instead of discarding these tokens.
+      if (existing.closedBySteer && existing.turnId === frame.turn_id) {
+        existing.closedBySteer = false
+      } else {
+        // §4.2/§6.3 overlap rule: a bubble already finalized (status 'done',
+        // not streaming) ignores any further token for its message_id
+        // outright — this is what makes a snapshot's persisted-between-
+        // bind-and-read race safe (F4's own scenario): the replayed history
+        // already shows the full text, and live tokens with seq > W for
+        // the SAME message_id that arrive afterward must never re-open or
+        // duplicate it.
+        return
+      }
+    }
     applyTokenContentTo(draft, resolvedId, frame)
     return
   }
@@ -279,12 +296,16 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       if (m?.role !== 'assistant' || m.turnId !== turnId) continue
       if (frame.agent_id && m.agentId && m.agentId !== frame.agent_id) continue
       if (m.status === 'interrupted' || m.status === 'error') continue
-      if (m.status === 'done' && !m.isStreaming) continue // closed by done(turn_id) — do not reopen
+      // N2 (see Step 1's identical fix above for the full "why"): a bubble
+      // closed only by a mid-turn steer is not actually finished for its
+      // own turn — eligible to receive this turn's NEXT message_id too.
+      if (m.status === 'done' && !m.isStreaming && !m.closedBySteer) continue // closed by done(turn_id) — do not reopen
       turnBubbleId = id
       break
     }
     if (turnBubbleId) {
       const m = draft.messagesById[turnBubbleId]
+      m.closedBySteer = false
       m.mergedReplayIds = [...(m.mergedReplayIds ?? []), messageId]
       draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
       applyTokenContentTo(draft, turnBubbleId, frame)

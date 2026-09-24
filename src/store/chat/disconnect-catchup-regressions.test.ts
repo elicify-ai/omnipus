@@ -361,3 +361,70 @@ describe('BE-DESIGN.md §6.2/§6.3 — frames for a NON-VIEWED session must stil
     expect(sAsst[0].status).toBe('done')
   })
 })
+
+// Opus review round 3, N2 (MEDIUM-HIGH, DO-NOT-SHIP, browser-confirmed):
+// sending a message mid-answer froze the FIRST answer at whatever text had
+// streamed so far (t006) and put the server's continuation (t007..t060) in
+// a NEW bubble instead — the release build's behavior, and a real
+// regression against it. Root cause: sendMessage's mid-turn steer branch
+// (outbound-lifecycle.ts) closes the open bubble (`closedBySteer: true`,
+// ADR-070 §2.1) the instant the steer reaches the gateway, but the agent
+// does not reach a step boundary at that same instant — it keeps writing
+// the CURRENT step's tokens for the SAME turn_id/message_id afterward.
+// resolveTokenBubbleByMessageId's step-1 overlap rule then discarded every
+// one of those, exactly like it discards a genuinely-finished bubble's
+// stale duplicates.
+describe('BE-DESIGN.md §6.3, Opus review round 3 N2 — a bubble closed only by closedBySteer keeps receiving its own step\'s tokens', () => {
+  it('the first answer is NOT frozen at the send point; the rest of its step keeps appending, and the steer message still lands after it', () => {
+    const sent: unknown[] = []
+    const conn = { send: (f: unknown) => { sent.push(f); return true }, close: () => {}, isConnected: true }
+    useConnectionStore.setState({ connection: conn, isConnected: true } as never)
+    useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'mia' })
+    useChatStore.setState({ sessionsById: {}, messages: [], messagesById: {}, isStreaming: false } as never)
+
+    // t001..t006 stream in for the first answer.
+    for (let i = 1; i <= 6; i++) {
+      useChatStore.getState().handleFrame(token(324 + i, `t${String(i).padStart(3, '0')} `))
+    }
+    // Flat isStreaming mirrors the bucket — sendMessage's steer branch reads
+    // THIS (get().isStreaming), not the bucket's own field.
+    useChatStore.setState({ isStreaming: true })
+    let bubbles = assistantBubbles()
+    expect(bubbles).toHaveLength(1)
+    expect(bubbles[0].content).toBe('t001 t002 t003 t004 t005 t006 ')
+
+    // User sends a new message mid-answer (real sendMessage — this is what
+    // actually sets closedBySteer; driving handleFrame alone never
+    // exercises it).
+    useChatStore.getState().sendMessage('a follow-up question')
+    expect(sent).toHaveLength(1) // the steer frame reached "the gateway"
+
+    bubbles = assistantBubbles()
+    expect(bubbles).toHaveLength(1)
+    expect(bubbles[0].status).toBe('done') // closed by the steer, not by done(T)
+    expect(bubbles[0].closedBySteer).toBe(true)
+
+    // The server keeps streaming this SAME step's remaining tokens for the
+    // SAME message_id/turn_id — real-world behavior N2 is about.
+    for (let i = 7; i <= 60; i++) {
+      useChatStore.getState().handleFrame(token(324 + i, `t${String(i).padStart(3, '0')} `))
+    }
+    useChatStore.getState().handleFrame({
+      type: 'done', session_id: SID, message_id: MSG_ID, turn_id: TURN_ID, seq: 385, stats: { tokens: 60, cost: 0.01 },
+    } as WsReceiveFrame)
+
+    const b = useChatStore.getState().sessionsById[SID]!
+    const order = b.messageOrder.map((id) => b.messagesById[id])
+    const asst = order.filter((m) => m.role === 'assistant')
+    const users = order.filter((m) => m.role === 'user')
+    // Still ONE assistant bubble — no second one for the continuation.
+    expect(asst).toHaveLength(1)
+    const expected = Array.from({ length: 60 }, (_, i) => `t${String(i + 1).padStart(3, '0')} `).join('')
+    expect(asst[0].content).toBe(expected)
+    expect(asst[0].status).toBe('done')
+    expect(asst[0].closedBySteer).toBe(false) // reopened, then genuinely finalized by done(T)
+    // The steer message still sits AFTER the (reopened, now-complete) answer.
+    expect(users).toHaveLength(1)
+    expect(b.messageOrder.indexOf(users[0].id)).toBeGreaterThan(b.messageOrder.indexOf(asst[0].id))
+  })
+})
