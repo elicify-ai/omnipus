@@ -704,4 +704,68 @@ describe('BE-DESIGN.md §6.3, Opus review round 7 — a user message mid-turn en
     expect(idxRound1).toBeLessThan(idxSteer)
     expect(idxSteer).toBeLessThan(idxRound2)
   })
+
+  // Real wire capture (orchestrator, item 1/2 follow-up): a turn that opens
+  // with a tool call and NO preamble text. tool_call_start/tool_call_result
+  // carry neither turn_id nor message_id (the model hasn't named the turn
+  // yet) — the bubble they open has no turn identity. The first token then
+  // arrives WITH turn_id/message_id. It must adopt that same still-open,
+  // not-yet-turn-stamped bubble (same segment, no user message in between),
+  // not open a second one. Release build produces one bubble; the redo
+  // produced two (['Remember Failed' tool card], ['t001...t010' text]).
+  it('a turn that opens with a tool call and no preamble text still ends up as ONE bubble once the first token names the turn', () => {
+    const SID = 'sess-regress'
+    const TURN = 'mia-turn-6'
+    const MSG_ID = 'msg-8969'
+    useSessionStore.setState({ activeSessionId: SID })
+    let seq = 383
+
+    seq += 1
+    useChatStore.getState().handleFrame({
+      type: 'session_started', session_id: SID, boot_id: 'boot-regress', seq,
+    } as WsReceiveFrame)
+    seq += 1
+    useChatStore.getState().handleFrame({
+      type: 'user_message', session_id: SID, id: 'um-1', content: 'remember this', timestamp: new Date().toISOString(), seq,
+    } as WsReceiveFrame)
+    seq += 1
+    useChatStore.getState().handleFrame({
+      type: 'message_status', session_id: SID, id: 'um-1', client_message_id: 'um-1', state: 'received', seq,
+    } as WsReceiveFrame)
+    seq += 1
+    useChatStore.getState().handleFrame({
+      type: 'message_status', session_id: SID, id: 'um-1', client_message_id: 'um-1', state: 'working', seq,
+    } as WsReceiveFrame)
+    // tool_call_start / tool_call_result: NO turn_id, NO message_id on the wire.
+    seq += 1
+    useChatStore.getState().handleFrame({
+      type: 'tool_call_start', session_id: SID, call_id: 'call_1', tool: 'remember', params: {}, agent_id: 'mia', seq,
+    } as WsReceiveFrame)
+    seq += 1
+    useChatStore.getState().handleFrame({
+      type: 'tool_call_result', session_id: SID, call_id: 'call_1', status: 'error', result: 'memory store unavailable', seq,
+    } as WsReceiveFrame)
+    // First token: now the turn is named.
+    for (let i = 1; i <= 10; i++) {
+      seq += 1
+      useChatStore.getState().handleFrame({
+        type: 'token', session_id: SID, content: `t${String(i).padStart(3, '0')} `, message_id: MSG_ID, turn_id: TURN, agent_id: 'mia', seq,
+      } as WsReceiveFrame)
+    }
+    seq += 1
+    useChatStore.getState().handleFrame({
+      type: 'done', session_id: SID, message_id: MSG_ID, turn_id: TURN, seq, stats: { tokens: 10, cost: 0.01 },
+    } as WsReceiveFrame)
+
+    const b = useChatStore.getState().sessionsById[SID]!
+    const order = b.messageOrder.map((id) => b.messagesById[id])
+    const asst = order.filter((m) => m.role === 'assistant')
+
+    expect(asst).toHaveLength(1)
+    expect((asst[0].tool_calls ?? []).some((tc) => tc.id === 'call_1')).toBe(true)
+    const expected = Array.from({ length: 10 }, (_, i) => `t${String(i + 1).padStart(3, '0')} `).join('')
+    expect(asst[0].content).toBe(expected)
+    expect(asst[0].status).toBe('done')
+    expect(asst[0].isStreaming).toBe(false)
+  })
 })

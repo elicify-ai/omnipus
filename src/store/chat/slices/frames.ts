@@ -373,7 +373,20 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       if (i < lastUserIdx) break // crossed the segment boundary — stop looking
       const id = draft.messageOrder[i]
       const m = draft.messagesById[id]
-      if (m?.role !== 'assistant' || m.turnId !== turnId) continue
+      if (m?.role !== 'assistant') continue
+      // Opus review round 7 follow-up (real wire capture): a turn that
+      // opens with a tool call and NO preamble text. tool_call_start /
+      // tool_call_result carry neither turn_id nor message_id (the model
+      // hasn't named the turn yet), so the bubble they open has turnId
+      // undefined. The first token then arrives WITH turn_id/message_id —
+      // it must ADOPT that trailing, not-yet-turn-stamped bubble of the
+      // current segment (stamping it now that the turn is known) rather
+      // than opening a second one. An unstamped bubble can only belong to
+      // the CURRENT segment (Step 2's own lastUserIdx scan above already
+      // stopped looking past the last user message), so matching ANY
+      // unstamped bubble here is safe — there is at most one.
+      const unstamped = m.turnId === undefined
+      if (!unstamped && m.turnId !== turnId) continue
       if (frame.agent_id && m.agentId && m.agentId !== frame.agent_id) continue
       if (m.status === 'interrupted' || m.status === 'error') continue
       // N2/N5 (see Step 1's identical fixes above for the full "why"): a
@@ -381,13 +394,14 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       // reconstructed bubble belonging to the server-confirmed active
       // turn, is not actually finished for its own turn — eligible to
       // receive this turn's NEXT message_id too.
-      const stillEligible = m.closedBySteer || (m.turnId === draft.activeTurnId && draft.activeTurnId != null)
+      const stillEligible = unstamped || m.closedBySteer || (m.turnId === draft.activeTurnId && draft.activeTurnId != null)
       if (m.status === 'done' && !m.isStreaming && !stillEligible) continue // closed by done(turn_id) — do not reopen
       turnBubbleId = id
       break
     }
     if (turnBubbleId) {
       const m = draft.messagesById[turnBubbleId]
+      if (m.turnId === undefined) m.turnId = turnId // now that a token has named the turn
       m.closedBySteer = false
       m.mergedReplayIds = [...(m.mergedReplayIds ?? []), messageId]
       draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
