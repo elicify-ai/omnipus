@@ -874,7 +874,7 @@ func (as *applySandboxState) degradeAfterLandlockFailure(applyErr error) (*Sandb
 			"requested_abi", originalABI,
 			"requested_mode", string(as.mode),
 			"original_apply_error", applyErr)
-		return as.result, fmt.Errorf("sandbox: Landlock rejected ruleset (%w) and FallbackBackend.Apply failed: %w", applyErr, fbErr)
+		return as.result, fmt.Errorf("sandbox: Landlock rejected ruleset (%w) and FallbackBackend.Apply failed: %v", applyErr, fbErr)
 	}
 
 	as.backend = fallback
