@@ -14,6 +14,7 @@ import type {
   UserMessageFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { applySnapshotHistoryWipe, cursorFromTerminalFrame } from '../cursor'
+import { findLastAssistantMessageId } from '../messages'
 import { replayErrorRetryAttempts, replayErrorRetryTimers } from '../runtime-state'
 import type { ChatMessage, ChatStore, SessionChatState } from '../types'
 
@@ -110,11 +111,26 @@ export function handleCatchUpFrame({ frame, targetSid, withBucket }: CatchUpFram
         // is judged, once, right here — never re-derived reactively by the
         // render layer, which cannot tell "mid-stream, never disconnected"
         // from "genuinely ended without a done()" the way this moment can.
+        // Opus review round 3 (F7 test-writing finding): a `replay_message`
+        // reconstruction ALWAYS sets status:'done' (session.ts's own newMsg
+        // literal), even for the LAST entry of a turn a gateway restart
+        // interrupted mid-answer — replay has no way to know the turn never
+        // actually finished, it only knows what was persisted. The ordinary
+        // "still open" sweep above therefore can never flag a
+        // snapshot-rebuilt unfinished answer (F7's own scenario: boot_id
+        // mismatch forces a full rebuild, the interrupted answer replays as
+        // an ordinary 'done' entry). Scoped to ONLY the last assistant
+        // message — the sole candidate a turn could possibly still concern,
+        // since every earlier message is, by definition, already-resolved
+        // history — so this can never mislabel genuinely old, correctly
+        // completed turns the way sweeping every message would.
+        const lastAssistantId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
         for (const id of draft.messageOrder) {
           const m = draft.messagesById[id]
           if (m?.role !== 'assistant') continue
           if (m.status === 'interrupted' || m.status === 'error') continue
-          if (m.status === 'done' && !m.isStreaming) continue
+          const isLast = id === lastAssistantId
+          if (m.status === 'done' && !m.isStreaming && !isLast) continue
           if (m.turnId && m.turnId !== draft.activeTurnId) {
             m.confirmedUnfinished = true
           }

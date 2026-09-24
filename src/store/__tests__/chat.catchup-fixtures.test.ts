@@ -19,6 +19,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useChatStore } from '../chat/store'
 import { useSessionStore } from '../session'
+import { useConnectionStore } from '../connection'
 import type { WsReceiveFrame } from '@/lib/ws'
 import f1 from '../__fixtures__/catchup/F1.json'
 import f2 from '../__fixtures__/catchup/F2.json'
@@ -261,6 +262,27 @@ describe('F7 — gateway restart: the cursor\'s boot id no longer matches', () =
     expect(bucket(SID)?.awaitingCatchUp).toBe(false)
     const users = userMessages(SID)
     expect(users.some((m) => m.content === fixture.expect.user_message)).toBe(true)
+
+    // Opus review round 3 (requested test additions): the recording's own
+    // session_snapshot frame carries the scenario's ground-truth reason —
+    // oracle-independence (§8.2): read from the SCENARIO's own recorded
+    // frame, not derived from the reducer.
+    const snapshotFrame = fixture.tabs
+      .flatMap((t) => t.events)
+      .map((e) => e.frame)
+      .find((f) => (f as { type?: string } | undefined)?.type === 'session_snapshot') as { reason?: string } | undefined
+    expect(snapshotFrame?.reason).toBe(fixture.expect.snapshot_reason)
+
+    // F7's own recording never replays a SINGLE assistant token — the
+    // gateway restarted before the turn produced any output at all (only
+    // the user's question survives, per replay_message above). There is
+    // therefore no message for ChatMessage.confirmedUnfinished (BUG 1/N1's
+    // per-message flag) to attach to; §6.5's "unfinished_answer: true" here
+    // means the session-level facts alone: the composer must NOT be stuck
+    // waiting on a turn that no longer exists.
+    expect(fixture.expect.unfinished_answer).toBe(true)
+    expect(assistantMessages(SID)).toHaveLength(0)
+    expect(bucket(SID)?.isStreaming).toBe(false)
   })
 })
 
@@ -276,5 +298,72 @@ describe('F8 — message typed while offline', () => {
     const asst = assistantMessages(SID)
     expect(asst.map((m) => m.content)).toEqual(fixture.expect.assistant_messages)
     expect(bucket(SID)?.isStreaming).toBe(false)
+  })
+
+  it('Opus review round 3 (requested test addition): the pending bubble sendMessage actually creates is the one the server echo resolves — not a hand-built frame standing in for it', () => {
+    // Reproduces F8's exact shape (first question -> answer, then offline,
+    // second question, reconnect, answer) but drives the SECOND message
+    // through the REAL sendMessage() — this is what "F8 must create a real
+    // pending bubble via sendMessage" means: driving handleFrame alone (as
+    // the fixture-replay test above does) never exercises sendMessage's own
+    // optimistic-bubble creation, which is exactly the mechanism
+    // pending_bubble_resolved is about.
+    const SID = 'sess-1'
+    useSessionStore.setState({ activeSessionId: SID })
+    useChatStore.setState({ sessionsById: {}, messages: [], messagesById: {}, isStreaming: false } as never)
+    useConnectionStore.setState({ connection: null, isConnected: false } as never)
+
+    // First question/answer — hand-fed, matching F8's own recording; not
+    // what this test is about.
+    useChatStore.getState().handleFrame({ type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-09-24T00:00:00Z' } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'session_started', session_id: SID, agent_id: 'mia', seq: 1, boot_id: 'boot-1' } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'user_message', session_id: SID, id: 'id-1', client_message_id: 'client-1', content: 'first question', timestamp: '2026-09-24T00:00:00Z', seq: 2 } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'message_status', session_id: SID, client_message_id: 'client-1', state: 'received', seq: 3 } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'message_status', session_id: SID, client_message_id: 'client-1', state: 'working', seq: 4 } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'token', session_id: SID, content: 'First ', message_id: 'msg-1', seq: 5 } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'token', session_id: SID, content: 'answer.', message_id: 'msg-1', seq: 6 } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, message_id: 'msg-1', seq: 7, stats: { tokens: 2, cost: 0.01 } } as WsReceiveFrame)
+
+    // Connection lost — the user types the second question OFFLINE. The
+    // REAL sendMessage() queues it (isConnected is false), same as
+    // ChatScreen's composer would.
+    useChatStore.getState().clearStreamingState()
+    useChatStore.getState().sendMessage('second question')
+    // Not yet in the thread — queued, not sent, while offline.
+    expect(userMessages(SID).map((m) => m.content)).toEqual(['first question'])
+
+    // Back online: reconnect, then the real drain actually sends it —
+    // capturing the client_message_id sendMessage/beginSend minted so the
+    // "server" echo below can resolve the SAME bubble, exactly as a real
+    // gateway round-trip would.
+    const sent: { client_message_id?: string; content?: string }[] = []
+    useConnectionStore.setState({ connection: { send: (f: unknown) => { sent.push(f as never); return true }, close: () => {}, isConnected: true }, isConnected: true } as never)
+    useChatStore.getState().handleFrame({ type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-09-24T00:00:10Z' } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'catch_up_complete', session_id: SID, seq: 7, boot_id: 'boot-1', mode: 'incremental' } as WsReceiveFrame)
+    useChatStore.getState().drainOutboundQueue()
+
+    const queuedFrame = sent.find((f) => f.content === 'second question')
+    expect(queuedFrame?.client_message_id).toBeTruthy()
+    const cmid = queuedFrame!.client_message_id!
+    // The optimistic bubble exists, keyed by that same id — this IS the
+    // "real pending bubble" the request is about.
+    expect(bucket(SID)?.messagesById[cmid]).toBeDefined()
+    expect(bucket(SID)?.messagesById[cmid]?.deliveryStatus).toBe('sending')
+
+    // The server's echo resolves it in place — pending_bubble_resolved.
+    useChatStore.getState().handleFrame({ type: 'user_message', session_id: SID, id: 'id-2', client_message_id: cmid, content: 'second question', timestamp: '2026-09-24T00:00:11Z', seq: 8 } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'message_status', session_id: SID, client_message_id: cmid, state: 'received', seq: 9 } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'message_status', session_id: SID, client_message_id: cmid, state: 'working', seq: 10 } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'token', session_id: SID, content: 'Second ', message_id: 'msg-2', seq: 11 } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'token', session_id: SID, content: 'answer.', message_id: 'msg-2', seq: 12 } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, message_id: 'msg-2', seq: 13, stats: { tokens: 2, cost: 0.01 } } as WsReceiveFrame)
+
+    const users = userMessages(SID)
+    expect(users.map((m) => m.content)).toEqual((f8 as Fixture).expect.user_messages)
+    expect(users).toHaveLength(2) // never duplicated — the SAME bubble, resolved
+    expect(bucket(SID)?.messagesById[cmid]?.deliveryStatus).toBe('working')
+
+    const asst = assistantMessages(SID)
+    expect(asst.map((m) => m.content)).toEqual((f8 as Fixture).expect.assistant_messages)
   })
 })
