@@ -23,13 +23,31 @@ test('steered session is reachable in its own live view without leaking child ou
   await expect(input).toBeEnabled({ timeout: 15_000 })
   await waitForConnected(page, { timeout: 15_000 })
 
+  // Prompt shape fixed 2026-09-24 (lane sq-gwfix), root-caused against real
+  // CI evidence, not a guess: gateway.log from GitHub run 35997069836
+  // (gateway-logs-llm-agents/omnipus.log, both retries of this exact spec —
+  // response_preview quotes this prompt's own text verbatim) shows Jim
+  // replying in PROSE that narrates/echoes the instructions — one retry
+  // even wrote the literal string `delegate(agent_id="worker", label=...)`
+  // as text — instead of ever issuing a real `delegate` tool call. Neither
+  // attempt logs a subagent_start; the session simply goes idle. The old
+  // prompt never told the model to stop narrating and act, unlike every
+  // OTHER live-delegation spec in this shard (subagent.spec.ts,
+  // handoff.spec.ts, delegation-hidden.spec.ts), which all share one
+  // working idiom: "Call the `delegate` tool exactly once, right now, with
+  // these arguments: ... Do not reply in prose. Do not call any other
+  // tool. Call delegate now." Re-pointed at that same idiom for the top-
+  // level call to Jim (the level the log evidence actually covers) and
+  // reinforced with an explicit "do not narrate it" clause at each nested
+  // level too — the A->B and B->C delegate calls were never reached by
+  // either failed attempt, so that reinforcement is inferred from the same
+  // failure class, not independently confirmed by a log line.
   await input.fill([
-    'Call delegate exactly once with agent_id="worker" and label="ADR-091 child A".',
-    'Give it this task verbatim:',
-    `Call delegate exactly once with agent_id="worker" and label="${LABEL_B}".`,
-    'The B task must call delegate exactly once with agent_id="worker" and',
-    `label="${LABEL_C}". C must work for at least two tool steps, report progress,`,
-    `and finish with exactly ${CHILD_ONLY_SENTINEL}.`,
+    'Call the `delegate` tool exactly once, right now, with these arguments:',
+    '  agent_id: "worker"',
+    `  label: "${LABEL_A}"`,
+    `  task: "Call the \`delegate\` tool exactly once with agent_id=\\"worker\\" and label=\\"${LABEL_B}\\" -- call the tool directly, do not describe it in prose. Give it this task verbatim: Call the \`delegate\` tool exactly once with agent_id=\\"worker\\" and label=\\"${LABEL_C}\\" -- call the tool directly, do not describe it in prose. Give it this task verbatim: Work for at least two tool steps, report progress, then finish with exactly ${CHILD_ONLY_SENTINEL}."`,
+    'Do not reply in prose. Do not call any other tool. Call delegate now.',
     'Do not repeat or paraphrase any child output in this parent chat.',
   ].join('\n'))
   await input.press('Enter')
