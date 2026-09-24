@@ -5,8 +5,8 @@
 #   all-no-e2e = `all` minus go-race/e2e, with setup (npm ci + verify-contracts) done once and
 #   the remaining checks fanned out over three parallel groups — see run_all_no_e2e.
 # Requires env GIT_REMOTE (authenticated clone URL), set as a Fly secret.
-#   The `e2e` gate additionally requires OPENROUTER_API_KEY (Fly secret) — set on ci-omnipus via
-#   `fly secrets set OPENROUTER_API_KEY=<value> --app ci-omnipus`.
+#   The `e2e` gate additionally requires OPENROUTER_API_KEY (Fly secret) — set on ci-omnipus-1 via
+#   `fly secrets set OPENROUTER_API_KEY=<value> --app ci-omnipus-1`.
 #   Optional for faster sharded e2e: OPENROUTER_API_KEY_B / OPENROUTER_API_KEY_C give the
 #   concurrent LLM shards their own rate-limit windows; unset ⇒ they fall back to the primary
 #   key (the run still works, just at single-key parallelism). See run_e2e below.

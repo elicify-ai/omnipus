@@ -92,6 +92,51 @@ mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/inde
 
 **Never run the full Go test suite locally — CI is the authority for Go test/build results.** `go test ./...` OOM-kills this environment; push and read the checks instead. At most one narrowly-scoped local test when you must (`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/<one>/`); never run multiple Go test suites in parallel.
 
+**Remote CI cluster — run heavy gates here, not locally.** `ci-omnipus-1` (Fly, `sin`) is
+**5 machines** of `performance-8x`/16 GB, each a TIER with its own `/cache` volume (repo
+clone, Go build cache, `node_modules`) and its own `/tmp/runci.lock`. Scaled to zero when
+idle; a stopped machine bills nothing for compute. One command fans the gates out and stops
+every machine it started, on every exit path including Ctrl-C:
+
+```bash
+deploy/ci-worker/ci-cluster.sh <git-ref>            # full fan-out (ref must be PUSHED)
+deploy/ci-worker/ci-cluster.sh <git-ref> go node    # restrict to tiers
+```
+
+| Tier | Gates | ~time |
+|---|---|---|
+| `go` | `gofmt go-build go-vet lint go-test go-race` | ~43 min (`go-race` alone ~25) |
+| `node` | `contracts spa` | ~12 min |
+| `xplat` | `embed-build records-no-sqlite cli-verb-guard` | ~8 min |
+
+Gates run **sequentially within a tier** (that machine's warm cache is the point; the lock
+would queue a second run for up to 90 min) and **tiers run concurrently**. One tier per
+machine is enforced — the dispatcher refuses a map that assigns a machine twice. Do NOT
+split a tier across machines: tiers are dependency clusters sharing a warm cache, so
+splitting buys N cold caches rebuilding the same thing. Override the whole map with
+`CI_CLUSTER_TIERS` (`<name>|<machine-id>|<gates>` per line); machine ids are DATA, never
+hardcoded — get them from `fly machines list -a ci-omnipus-1`.
+
+**`e2e` is deliberately NOT in the default map** — it needs the OpenRouter secret, runs
+~20-30 min, and would pin a machine for the whole run. Give it its own machine when you
+want it (`ci-cluster.sh` with a custom tier, or by hand:
+`fly ssh console -a ci-omnipus-1 --machine <id> -C "/cache/runci.sh <ref> e2e"`). Inside
+that one gate the Playwright suite fans out across the 24 shards in `tests/e2e/shards.json`
+— the same plan `.github/workflows/pr.yml` uses, so the two surfaces cannot drift —
+capped 2-wide for render-bound shards (a **measured** cap: a 5-wide run failed 17 specs a
+1-wide run passed 16/17) and 4-wide for I/O-bound `llm-*`, with `solo` shards strictly
+serial and listed last. `all` is refused outright (exit 2): it would serialise every gate
+on one machine.
+
+Three traps that produce a **wrong verdict**, not an error: (1) the `fly ssh console`
+wrapper's exit code is NOT the gate's — parse the log for `RESULT:` / `GATE FAILURE(S)`;
+(2) `/cache/runci.sh` is deployed per machine, so the dispatcher md5-checks every machine
+against the repo copy first and refuses on mismatch — `fly ssh sftp put` has silently
+written an **empty** file and truncated another, so repair it from the machine's own git
+objects (`git show FETCH_HEAD:deploy/ci-worker/runci.sh`) instead; (3) logs live in `/tmp`
+and die with the machine — collect before stopping. Full detail and the remaining traps:
+`deploy/ci-worker/CLAUDE.md` and `docs/internal/architecture/ci-cluster-design.md`.
+
 **Typecheck trap:** `tsconfig.json` is a project-references root with no `include`/`files` — bare `tsc --noEmit` is a silent no-op that always exits 0. Use `npm run typecheck` (wired to `tsc -b --noEmit`).
 
 **Design system (MANDATORY):** before touching anything under `src/components/`,
