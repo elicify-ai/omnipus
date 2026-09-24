@@ -17,15 +17,15 @@ const meta = {
   title: 'Design System/Tooltip',
   component: Tooltip,
   args: {
-    content: 'Auto has no active kernel sandbox on this platform, so it behaves like Ask.',
+    content: 'No kernel sandbox is enforcing. Safe tool calls still run without asking, but shell commands are checked by reading the command text only.',
     // Satisfies TooltipProps' required `children` for CSF3's story-arg
     // typing — the render below supplies the actual trigger JSX directly
     // and never reads `args.children`.
-    children: <Badge>Auto → Ask</Badge>,
+    children: <Badge variant="warning">Auto — no sandbox</Badge>,
   },
   render: (args) => (
     <Tooltip {...args} data-testid="tooltip-trigger">
-      <Badge>Auto → Ask</Badge>
+      <Badge variant="warning">Auto — no sandbox</Badge>
     </Tooltip>
   ),
   // Matches the Popover/Dialog overlay stories' own convention

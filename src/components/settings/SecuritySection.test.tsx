@@ -36,10 +36,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchAppState: vi.fn(),
     // ADR-092: AutoApproveControl mounts in the primary (always-rendered)
     // layer, unlike SandboxSection (Advanced, collapsed by default) — its
-    // ['sandbox-config'] query fires on every render, so it needs a mock
-    // here too, not just inside SandboxSection's own test file.
+    // ['sandbox-config'] and ['sandbox-status'] queries fire on every
+    // render, so both need a mock here too, not just inside SandboxSection's
+    // own test file.
     fetchSandboxConfig: vi.fn(),
     updateSandboxConfig: vi.fn(),
+    fetchSandboxStatus: vi.fn(),
   }
 })
 
@@ -71,6 +73,7 @@ import {
   fetchAppState,
   fetchSandboxConfig,
   updateSandboxConfig,
+  fetchSandboxStatus,
 } from '@/lib/api'
 import type { AppState } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -184,6 +187,10 @@ beforeEach(() => {
   vi.mocked(fetchSkillTrust).mockResolvedValue(SKILL_TRUST_RESPONSE)
   vi.mocked(fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
   vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+  // Default: a kernel sandbox IS enforcing, so the platform caveat renders
+  // muted, not as a caution — individual tests override this to exercise
+  // the no-sandbox caution path.
+  vi.mocked(fetchSandboxStatus).mockResolvedValue({ kernel_sandbox_active: true } as never)
 })
 
 // ── US-B1: Two-layer IA ───────────────────────────────────────────────────────
@@ -356,7 +363,18 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
   // grouped ask-list collapsed by default behind "Still asks every time";
   // a small muted platform caveat. Written against the copy, not the
   // implementation, so it fails if the old paragraph comes back.
-  it('shows a short always-visible summary — not the old long paragraph', async () => {
+  //
+  // Founder decision (2026-09-24, same day): Auto no longer needs the
+  // sandbox — the old "Needs the sandbox — not available on Windows" line
+  // (which implied Auto is switched OFF without one) is replaced by a
+  // caveat that Auto still works, just checks shell commands by text only.
+  //
+  // Founder correction (2026-09-24, later same day): the summary sentence's
+  // own "and the sandbox" clause is also gone — under the new design Auto
+  // runs with no sandbox at all, so claiming tools "stay inside ... the
+  // sandbox" is false whenever no sandbox is enforcing. The sentence now
+  // says only "they stay inside your workspace."
+  it('shows a short always-visible summary — not the old long paragraph, and the new no-sandbox caveat, not the old "not available on Windows" line', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
     renderSection()
 
@@ -367,8 +385,46 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     // always-visible summary — it now lives in the collapsed list instead.
     expect(screen.queryByText(/asking for a mounted folder; installing a skill/i)).not.toBeInTheDocument()
     expect(screen.getByText(/tools set to .ask. run without a prompt when it.s safe/i)).toBeInTheDocument()
-    expect(screen.getByText(/they stay inside your workspace and the sandbox/i)).toBeInTheDocument()
-    expect(screen.getByText(/not available on windows/i)).toBeInTheDocument()
+    expect(screen.getByText(/they stay inside your workspace\./i)).toBeInTheDocument()
+    // The old "and the sandbox" clause is gone — it claimed a guarantee
+    // that no longer holds once Auto works without an enforcing sandbox.
+    expect(screen.queryByText(/workspace and the sandbox/i)).not.toBeInTheDocument()
+    // The old "Needs the sandbox — not available on Windows" line is gone.
+    expect(screen.queryByText(/needs the sandbox/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/not available on windows/i)).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/without a kernel sandbox \(for example on windows\), shell commands are checked by reading the command text only/i),
+    ).toBeInTheDocument()
+  })
+
+  it('shows the no-sandbox caveat as a caution (warning-colored) when the server reports no enforcing kernel sandbox', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    vi.mocked(fetchSandboxStatus).mockResolvedValue({ kernel_sandbox_active: false } as never)
+    renderSection()
+
+    await screen.findByTestId('auto-approve-global-switch')
+
+    const caveat = await screen.findByText(
+      /without a kernel sandbox \(for example on windows\), shell commands are checked by reading the command text only/i,
+    )
+    await waitFor(() => {
+      expect(caveat.className).toContain('text-[var(--color-warning)]')
+    })
+    expect(caveat.className).not.toContain('text-[var(--color-muted)]')
+  })
+
+  it('shows the no-sandbox caveat muted (not a caution) when the server reports an enforcing kernel sandbox', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({ auto_approve: false } as never)
+    vi.mocked(fetchSandboxStatus).mockResolvedValue({ kernel_sandbox_active: true } as never)
+    renderSection()
+
+    const caveat = await screen.findByText(
+      /without a kernel sandbox \(for example on windows\), shell commands are checked by reading the command text only/i,
+    )
+    await waitFor(() => {
+      expect(caveat.className).toContain('text-[var(--color-muted)]')
+    })
+    expect(caveat.className).not.toContain('text-[var(--color-warning)]')
   })
 
   it('the ask-list is collapsed by default and expands to show every group on click', async () => {
@@ -419,7 +475,19 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     expect(dialog).not.toHaveTextContent(/deleting a task, workspace, or agent/i)
     expect(dialog).not.toHaveTextContent(/mounted folder/i)
     expect(dialog).toHaveTextContent(/still asks every time/i)
-    expect(dialog).toHaveTextContent(/not available on windows/i)
+    // Founder correction (2026-09-24): the dialog's own summary clause
+    // must use the same wording as the card — "stay inside your
+    // workspace", with no "and the sandbox" (false once Auto runs with no
+    // sandbox enforcing).
+    expect(dialog).toHaveTextContent(/they stay inside your workspace\./i)
+    expect(dialog).not.toHaveTextContent(/workspace and the sandbox/i)
+    // The old "not available on Windows" wording is gone — replaced by the
+    // same no-sandbox caveat the card itself shows.
+    expect(dialog).not.toHaveTextContent(/needs the sandbox/i)
+    expect(dialog).not.toHaveTextContent(/not available on windows/i)
+    expect(dialog).toHaveTextContent(
+      /without a kernel sandbox \(for example on windows\), shell commands are checked by reading the command text only/i,
+    )
   })
 
   it('a real save failure surfaces exactly one toast, from the mutation onError — the outer step-up catch never adds a second one', async () => {
