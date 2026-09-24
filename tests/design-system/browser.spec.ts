@@ -608,9 +608,11 @@ for (const manifest of manifests) {
           }
           const enabled = await nativeMiddleClick('[data-testid="enabled-link"]')
           expect(enabled.event).toEqual({ matches: true, trusted: true, button: 1, prevented: false })
-          if (testInfo.project.use.browserName === 'webkit') {
-            // This WebKit runtime dispatches trusted auxclick but does not open a
-            // tab for an unmodified middle click, including on plain anchors.
+          if (testInfo.project.use.browserName === 'webkit' && process.platform === 'darwin') {
+            // Playwright's macOS WebKit dispatches trusted auxclick but does not open a
+            // tab for an unmodified middle click, including on plain anchors. Its Linux
+            // build (the CI runner) does open one, so Linux WebKit takes the branch below
+            // and must prove the tab opens at the link's own URL.
             expect(enabled.newPage).toBeNull()
           } else {
             expect(enabled.newPage, 'enabled middle click must open a tab in this engine').not.toBeNull()

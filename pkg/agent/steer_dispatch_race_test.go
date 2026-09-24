@@ -87,14 +87,52 @@ func TestDispatch_FinishedTurnReleasesItsSlotAndPromotesTheQueue(t *testing.T) {
 	if firstTS == nil {
 		t.Fatal("no turn registered for the first child after a `running` Dispatch")
 	}
+
+	// Observe the promotion at REGISTRATION time, not by polling afterwards.
+	// The promoted second turn is registered and can run to completion within
+	// a few milliseconds — inside one poll gap — so sampling
+	// getActiveTurnState after the first turn finished can miss the edge
+	// entirely and spin the full timeout against a promotion that DID happen
+	// (the CI failure this replaced). The hook (armed before the first child
+	// is allowed to finish) hands over the turnState at the registration
+	// instant and then HOLDS the promoted dispatch — the gate's slot release
+	// happens only in runDispatchedSteeredTurn's deferred drain, so while the
+	// hook is held the gate is frozen at exactly the state just after
+	// promotion, making the D9 assertions below deterministic.
+	promoted := make(chan *turnState, 1)
+	resume := make(chan struct{})
+	done := make(chan struct{})
+	turnRegisteredTestHook = func(hookSessionID string, ts *turnState) {
+		if hookSessionID != secondID {
+			return
+		}
+		promoted <- ts
+		select {
+		case <-resume:
+		case <-done:
+		}
+	}
+	// done closes BEFORE cleanup() (defers run LIFO), so a hook still holding
+	// the dispatch goroutine unblocks before AgentLoop.Close drains the gate's
+	// turn WaitGroup — a promotion landing while the test is already failing
+	// must not deadlock the teardown.
+	defer close(done)
+	t.Cleanup(func() { turnRegisteredTestHook = nil })
+
 	select {
 	case <-firstTS.Finished():
 	case <-time.After(30 * time.Second):
 		t.Fatal("the first child's turn did not finish within 30s")
 	}
 
+	var secondTS *turnState
+	select {
+	case secondTS = <-promoted:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the queued second child was never promoted into a registered turn within 30s — the queue never moved")
+	}
+
 	gate := al.steerAdmission()
-	secondTS := waitForActiveTurn(t, al, secondID, 30*time.Second)
 	if gate.hasReservation(firstID, firstGen) {
 		t.Errorf("the finished first child still holds an admission slot (D9: a session whose turn has ended holds no slot)")
 	}
@@ -108,8 +146,9 @@ func TestDispatch_FinishedTurnReleasesItsSlotAndPromotesTheQueue(t *testing.T) {
 		t.Errorf("active admission slots = %d, want exactly 1 (the promoted second child)", got)
 	}
 
-	// Let the promoted child finish before the harness tears its temp dir
-	// down underneath an in-flight write.
+	// Release the held dispatch, then let the promoted child finish before the
+	// harness tears its temp dir down underneath an in-flight write.
+	close(resume)
 	select {
 	case <-secondTS.Finished():
 	case <-time.After(30 * time.Second):
