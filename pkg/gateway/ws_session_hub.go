@@ -162,6 +162,11 @@ type hubRegistry struct {
 	// once per minute") — submit is the hottest path in the whole hub, so
 	// this check must be a single atomic load on every call, never a lock.
 	lastEvictSweepUnixNano atomic.Int64
+
+	// onEvict, when set, is told which sessions evictIdle just removed, on
+	// its own goroutine (evictIdle can run under a publisher's locks), so
+	// per-session state kept outside the hub can be released too.
+	onEvict func(sessionIDs []string)
 }
 
 // hubIdleSweepInterval bounds how often submit's piggybacked sweep actually
@@ -270,6 +275,15 @@ func (r *hubRegistry) lookup(id string) *sessionHub {
 // It is also gated on the hub's active-turn projection being empty (no
 // unfinished turn, no open delegate span — §3.2).
 func (r *hubRegistry) evictIdle(now time.Time) []string {
+	evicted := r.evictIdleLocked(now)
+	if len(evicted) > 0 && r.onEvict != nil {
+		go r.onEvict(evicted)
+	}
+	return evicted
+}
+
+// evictIdleLocked is evictIdle's sweep, under the registry lock.
+func (r *hubRegistry) evictIdleLocked(now time.Time) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var evicted []string

@@ -134,3 +134,18 @@ func (hcm *wsHandlerHandleChatMessage) answerRetriedMessage() bool {
 	}
 	return true
 }
+
+// releaseEvictedSessions drops the accepted-id memory of sessions whose hub
+// was evicted (final-review N7).
+// It runs after the eviction, on its own goroutine, so it re-checks that no
+// new hub was created for the session in the meantime.
+func (h *WSHandler) releaseEvictedSessions(sessionIDs []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, id := range sessionIDs {
+		if h.hubs != nil && h.hubs.lookup(id) != nil {
+			continue
+		}
+		delete(h.acceptedClientMsgs, id)
+	}
+}

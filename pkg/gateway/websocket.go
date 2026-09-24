@@ -527,6 +527,9 @@ func newWSHandler(
 	if agentLoop != nil {
 		agentLoop.SetEventSyncTap(h.hubSyncTap)
 	}
+	// Per-session state kept outside the hub is released with the hub
+	// (final-review N7).
+	h.hubs.onEvict = h.releaseEvictedSessions
 	return h
 }
 

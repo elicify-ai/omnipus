@@ -222,3 +222,30 @@ func TestHub_N6_RebuildDropsAnOrphanToolResult(t *testing.T) {
 	}}, map[string]bool{})
 	assert.Empty(t, frames, "a result without its call must not be rebuilt")
 }
+
+// TestHub_N7_EvictionReleasesAcceptedClientMessages pins final-review N7:
+// the per-session memory of accepted client_message_ids is released when
+// the session's hub is evicted, instead of living until a restart.
+func TestHub_N7_EvictionReleasesAcceptedClientMessages(t *testing.T) {
+	h := makeMinimalHandler()
+	h.hubs.onEvict = h.releaseEvictedSessions
+	hub := h.hubs.getOrCreate("sess-n7")
+	hub.publishBytes([]byte(`{"type":"message_status"}`))
+	h.rememberAcceptedMessage("sess-n7", "client-1", []byte(`{}`))
+	h.rememberAcceptedMessage("sess-other", "client-2", []byte(`{}`))
+	hub.mu.Lock()
+	hub.lastActive = time.Now().Add(-time.Hour)
+	hub.mu.Unlock()
+	require.Equal(t, []string{"sess-n7"}, h.hubs.evictIdle(time.Now()))
+
+	require.Eventually(t, func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		_, still := h.acceptedClientMsgs["sess-n7"]
+		return !still
+	}, 2*time.Second, 5*time.Millisecond, "the evicted session's accepted ids must be released")
+	h.mu.Lock()
+	_, other := h.acceptedClientMsgs["sess-other"]
+	h.mu.Unlock()
+	assert.True(t, other, "other sessions keep theirs")
+}
