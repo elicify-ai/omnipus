@@ -260,6 +260,18 @@ linters:
           - staticcheck
         path: ^pkg/task/dod_distinct\.go$
         text: 'ST1005'
+      # ST1005 — steer_launcher.go's Goal-criteria refusals are, by the
+      # function's own doc comment, meant to be BYTE-IDENTICAL to
+      # pkg/tools/task.go::validateRequest's ErrorResult text (US-1/AS-5:
+      # "a LaunchRequest.Goal that create_task would reject is rejected with
+      # an identical message"). task.go's copy never trips ST1005 because it
+      # is a plain string, not an error — but the two must read the same
+      # capitalized, period-terminated prose to a human either way. Same
+      # exemption reasoning as dod_distinct.go above.
+      - linters:
+          - staticcheck
+        path: ^pkg/agent/steer_launcher\.go$
+        text: 'ST1005'
       # SA2001 — a deliberate lock-probe idiom (Lock immediately followed by
       # Unlock) proving the lock is acquirable / not deadlocked. The "empty
       # critical section" IS the test.
