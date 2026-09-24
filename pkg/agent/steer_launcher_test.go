@@ -12,15 +12,18 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 type dispatchContextProvider struct {
@@ -70,6 +73,37 @@ func newTestSteeringSession(t *testing.T, al *AgentLoop, workspaceID string) str
 		}
 	}
 	return meta.ID
+}
+
+// newSteerALWithSkills is newSteerAL (steered-launch wiring), parameterized
+// on testDefaultAgentID's skill grant list — ADR-072 D9's requested_skill
+// gate (Launch, above) resolves against the TARGET agent's own
+// ContextBuilder, and its allowlist is snapshotted from AgentConfig.Skills
+// at AGENT CONSTRUCTION time (D5: prepareIdentity's WithSkillAllowlist
+// call), not read live. Callers MUST create any skill fixture (writeSkill/
+// writeSkillWithName) under home BEFORE calling this, mirroring
+// loop_test.go's TestProcessMessage_SkillCommandLoadsRequestedSkill fixture
+// order.
+func newSteerALWithSkills(t *testing.T, home string, grantedSkills []string) (*AgentLoop, func()) {
+	t.Helper()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:              home,
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+			List: []config.AgentConfig{{ID: testDefaultAgentID, Home: home, Skills: grantedSkills}},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	provider := &mockProvider{}
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
+	al.SetSessionMessagingStores(inbox, lifecycle)
+	return al, func() {}
 }
 
 func TestLaunch_TitleRequired(t *testing.T) {
@@ -998,5 +1032,171 @@ func TestWake_AppliesConfiguredTimeout(t *testing.T) {
 	}
 	if rec.State != session.LifecycleTimedOut {
 		t.Fatalf("child state after a wake that exceeded its configured timeout = %q, want timed_out", rec.State)
+	}
+}
+
+// --- ADR-072 D9 / FR-050/FR-053/FR-054: requested_skill gate on the real
+// launch path (fix lane RX-SKILL, 2026-09-24) ---
+//
+// The delegate tool's own schema promises requested_skill is "a hard
+// request, not a hint": if the target is not granted it, the whole
+// delegation call fails instead of silently proceeding without it. Before
+// this fix, steer.LaunchRequest carried no such field at all, so Launch
+// could never enforce it — the promise was false. These three tests are the
+// exit-proof red-then-green trio: each FAILED before RequestedSkill was
+// threaded through and gated here, because Launch simply ignored it and
+// proceeded every time.
+
+// TestLaunch_RequestedSkillGranted_Proceeds proves the happy path is
+// unaffected: a skill the target agent IS granted lets the launch proceed
+// exactly as an unrequested launch would.
+func TestLaunch_RequestedSkillGranted_Proceeds(t *testing.T) {
+	home := t.TempDir()
+	writeSkill(t, home, "finance-news")
+	al, cleanup := newSteerALWithSkills(t, home, []string{"finance-news"})
+	defer cleanup()
+	l := NewSteerLauncher(al)
+
+	res, err := l.Launch(context.Background(), steer.LaunchRequest{
+		TargetAgentID:  testDefaultAgentID,
+		Task:           "pull the latest finance headlines",
+		RequestedSkill: "finance-news",
+	})
+	if err != nil {
+		t.Fatalf("Launch(granted requested_skill) = %v, want nil error", err)
+	}
+	if res.SessionID == "" || res.Generation != 1 {
+		t.Fatalf("Launch(granted requested_skill) result = %+v, want a real session and Generation 1", res)
+	}
+}
+
+// TestLaunch_RequestedSkillDenied_RefusesAndPersistsNoSession is the core
+// defect fix: the slug exists on disk but testDefaultAgentID's own grant
+// list does not include it. The call must fail with
+// tools.ErrRequestedSkillDenied (the sentinel pkg/tools/delegate_run.go
+// discriminates on via errors.Is), AND no child lifecycle record may be
+// persisted for it — the gate runs before launchOrdinaryRoot/launchSteered
+// ever mint or write one.
+func TestLaunch_RequestedSkillDenied_RefusesAndPersistsNoSession(t *testing.T) {
+	home := t.TempDir()
+	writeSkill(t, home, "finance-news")
+	// Installed on disk, but the agent's OWN grant list names a different
+	// skill — ADR-072 D9: "the receiver's grant is the real gate", the
+	// caller's intent to request it is not enough.
+	al, cleanup := newSteerALWithSkills(t, home, []string{"some-other-skill"})
+	defer cleanup()
+	l := NewSteerLauncher(al)
+
+	before, err := al.GetSessionLifecycleStore().List(session.LifecycleFilter{})
+	if err != nil {
+		t.Fatalf("List(before): %v", err)
+	}
+
+	res, err := l.Launch(context.Background(), steer.LaunchRequest{
+		TargetAgentID:  testDefaultAgentID,
+		Task:           "pull the latest finance headlines",
+		RequestedSkill: "finance-news",
+	})
+	if !errors.Is(err, tools.ErrRequestedSkillDenied) {
+		t.Fatalf("Launch(denied requested_skill) error = %v, want errors.Is(..., tools.ErrRequestedSkillDenied)", err)
+	}
+	if res != (steer.LaunchResult{}) {
+		t.Fatalf("Launch(denied requested_skill) result = %+v, want the zero value (no session)", res)
+	}
+
+	after, err := al.GetSessionLifecycleStore().List(session.LifecycleFilter{})
+	if err != nil {
+		t.Fatalf("List(after): %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("lifecycle record count = %d after a denied requested_skill launch, want %d unchanged — "+
+			"NO child session may be persisted for a refused launch", len(after), len(before))
+	}
+}
+
+// TestLaunch_RequestedSkillUnknown_DistinctFailure is FR-054: a slug that
+// resolves to nothing on any shelf visible to the target agent at all is a
+// DIFFERENT failure from a denial (installed-but-ungranted) — never
+// conflated. The two sentinels (tools.ErrRequestedSkillNotFound vs.
+// tools.ErrRequestedSkillDenied) must not both match.
+func TestLaunch_RequestedSkillUnknown_DistinctFailure(t *testing.T) {
+	home := t.TempDir()
+	// Nothing installed at all, nothing granted.
+	al, cleanup := newSteerALWithSkills(t, home, nil)
+	defer cleanup()
+	l := NewSteerLauncher(al)
+
+	res, err := l.Launch(context.Background(), steer.LaunchRequest{
+		TargetAgentID:  testDefaultAgentID,
+		Task:           "pull the latest finance headlines",
+		RequestedSkill: "totally-unresolvable-zzz",
+	})
+	if !errors.Is(err, tools.ErrRequestedSkillNotFound) {
+		t.Fatalf("Launch(unresolvable requested_skill) error = %v, want errors.Is(..., tools.ErrRequestedSkillNotFound)", err)
+	}
+	if errors.Is(err, tools.ErrRequestedSkillDenied) {
+		t.Fatalf("Launch(unresolvable requested_skill) error = %v must NOT also satisfy ErrRequestedSkillDenied "+
+			"(FR-054: not-found and denied are distinct outcomes)", err)
+	}
+	if res != (steer.LaunchResult{}) {
+		t.Fatalf("Launch(unresolvable requested_skill) result = %+v, want the zero value (no session)", res)
+	}
+}
+
+// --- Reviewer finding, same landing-order gap (fix lane RX-SKILL,
+// 2026-09-24): the live subagent_start frame's task_label was never
+// truncated ---
+//
+// The deleted subturn.go truncated the task-text label fallback to 60
+// runes; the ADR-091 rewrite of Launch dropped that truncation while
+// pkg/gateway/replay.go::resolveTaskLabel kept its own copy, so live and
+// replay silently disagreed. contracts/components/schemas/
+// SubagentStartFrame.yaml caps task_label at maxLength 100 and
+// src/lib/ws.ts DROPS (not just warns on) any frame that fails safeParse —
+// so delegate(task="<a task longer than 100 chars>") with no label, the
+// common case, silently discarded the live frame client-side: the parent's
+// side panel showed no row at all until the next page reload.
+func TestLaunch_LongTaskNoLabel_SubagentStartTaskLabelSurvivesContractCap(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	l := NewSteerLauncher(al)
+	steerer := newTestSteeringSession(t, al, "ws-1")
+
+	longTask := strings.Repeat("a", 300) // far past the 100-char contract cap
+	res, err := l.Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: steerer,
+		TargetAgentID:     testDefaultAgentID,
+		Task:              longTask,
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-long-task"},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if res.SessionID == "" {
+		t.Fatal("Launch: empty SessionID")
+	}
+
+	entries, err := al.GetSessionStore().ReadTranscript(steerer)
+	if err != nil {
+		t.Fatalf("ReadTranscript(steerer): %v", err)
+	}
+	var frame *generated.SubagentStartFrame
+	for i := range entries {
+		if entries[i].SystemSubtype == session.SystemSubtypeSubagentStart {
+			frame = entries[i].SubagentStart
+			break
+		}
+	}
+	if frame == nil {
+		t.Fatal("no subagent_start frame was persisted for the steering session")
+	}
+	if n := len([]rune(frame.TaskLabel)); n > 100 {
+		t.Fatalf("task_label = %d runes, want <= 100 (SubagentStartFrame.yaml maxLength: 100) — an "+
+			"over-cap label fails Zod validation client-side and src/lib/ws.ts silently drops the live frame", n)
+	}
+	wantLabel := string([]rune(longTask)[:60])
+	if frame.TaskLabel != wantLabel {
+		t.Fatalf("task_label = %q, want %q (60-rune truncation matching pkg/gateway/replay.go::resolveTaskLabel, "+
+			"so live and replay agree)", frame.TaskLabel, wantLabel)
 	}
 }

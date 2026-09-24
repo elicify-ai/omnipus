@@ -42,6 +42,14 @@ type LaunchRequest struct {
 	// Limits, ToolExclusions are as I-1's SteeredBy fields.
 	Limits         Limits
 	ToolExclusions []string
+	// RequestedSkill is delegate.run's optional `requested_skill` (ADR-072
+	// D9, spec FR-050/FR-053/FR-054): "a hard request, not a hint". Empty
+	// means no skill was requested. When non-empty, Launch resolves it
+	// against the TARGET agent's own grant — never the caller's — and
+	// refuses the launch outright (no session created) when the target is
+	// not granted it or the slug does not resolve at all, rather than
+	// silently proceeding without it.
+	RequestedSkill string
 }
 
 // LaunchResult is SessionLauncher.Launch's output (I-2).
