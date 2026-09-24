@@ -216,8 +216,10 @@ func (r *AgentRegistry) IsWorker(agentID string) bool {
 // CLI runner: claude-code/codex/opencode) delegation target — i.e.
 // runner.ResolveDispatch classifies the agent's own Subagents.Executor
 // config as runner.DispatchKindExternalCLI, the same resolution
-// pkg/agent/subturn.go's spawnSubTurn performs before choosing between the
-// native and runExternalCLISubTurn dispatch paths (see executorConfigOf).
+// task_executor_run.go's dispatchesExternalCLI performs before choosing
+// between the native and runExternalCLISubTurn dispatch paths (see
+// executorConfigOf) — pre-ADR-091 this same check lived in the deleted
+// spawnSubTurn (pkg/agent/subturn.go).
 // Returns false for an unknown/empty agentID or a nil executor; a
 // ResolveDispatch error is also reported false.
 //

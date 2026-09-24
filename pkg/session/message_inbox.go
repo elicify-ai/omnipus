@@ -142,9 +142,10 @@ type envelopePeek struct {
 	Depth           int     `json:"depth"`
 	CorrelationID   string  `json:"correlation_id"`
 	// Fatal is only meaningful (and only ever present) on kind=error — see
-	// wakeEligibleForAdmission, which needs it to tell a fatal error (I-5
-	// wake-eligible) from a non-fatal one (not wake-eligible). Absent/false
-	// on every other kind, which is the correct default for them too.
+	// classifyEnvelope (this file), which needs it to tell a fatal error
+	// (I-5 wake-eligible) from a non-fatal one (not wake-eligible).
+	// Absent/false on every other kind, which is the correct default for
+	// them too.
 	Fatal bool `json:"fatal"`
 	// Text is only read for kind=error, by isSteeringLifecycleNoticeText
 	// below (ADR-091 fix lane RX-HANG) — it never affects any other kind's
@@ -525,9 +526,10 @@ func (s *MessageInboxStore) rateAllow(ownerKey, childSessionID string) bool {
 // event) turns it into a tool error / a real error, never a silent drop.
 //
 // ADR-091 FR-B-010 (I-5): a wake-eligible kind — handback, question,
-// blocker, a FATAL error, or goal_status (wakeEligibleForAdmission) — is
-// always admitted: it bypasses the unacked-cap and rate checks (but never
-// the D15 per-type ceiling, which still bounds every kind).
+// blocker, a FATAL error, or goal_status (classifyEnvelope's
+// WakeEligible verdict, this file) — is always admitted: it bypasses the
+// unacked-cap and rate checks (but never the D15 per-type ceiling, which
+// still bounds every kind).
 func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage) (*AppendResult, error) {
 	if strings.TrimSpace(ownerKey) == "" {
 		return nil, ErrInboxEmptyOwnerKey

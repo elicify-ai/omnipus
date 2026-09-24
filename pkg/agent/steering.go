@@ -694,8 +694,10 @@ func (al *AgentLoop) InterruptGraceful(hint string) error {
 //
 // ADR-057 FR-015 (role-B predicate, one of the seven post-W13): rebased from
 // transcriptSessionID onto routingSessionID — see turnState.routingSessionID's
-// doc comment (turn.go) for the full identity-split rationale. Pre-D1 (before
-// pkg/agent/subturn.go, ADR-057 U7, overwrites a child's routingSessionID
+// doc comment (turn.go) for the full identity-split rationale, including the
+// post-ADR-091 derivation that replaced the direct copy this paragraph
+// describes. Pre-D1 (before the deleted spawnSubTurn, pkg/agent/subturn.go,
+// ADR-057 U7, overwrote a child's routingSessionID
 // onto its root's) this is behaviourally IDENTICAL to the old
 // transcriptSessionID match: routingSessionID defaults to a turn's own
 // transcriptSessionID at construction (newTurnState, turn.go), and every
@@ -777,10 +779,12 @@ func (s InterruptScope) String() string {
 //
 //  1. A direct point Load keyed by sessionKey — the exact mechanism
 //     InterruptBySessionKey/InterruptBySessionKeyHard used. Hits when id is
-//     a delegate's own sessionKey: pkg/agent/subturn.go registers a
-//     delegated child's turnState under its own child session id
-//     (SessionKey: childID), which is always unique per delegation
-//     regardless of the transcriptSessionID/routingSessionID identity split.
+//     a delegate's own sessionKey: turn.go's registerActiveTurn/
+//     registerTurnIfAbsent register a delegated child's turnState under its
+//     own child session id (SessionKey: childID; pre-ADR-091, the deleted
+//     spawnSubTurn did this same registration), which is always unique per
+//     delegation regardless of the transcriptSessionID/routingSessionID
+//     identity split.
 //  2. Only if that misses, a Range matching string(ts.routingSessionID) ==
 //     id — the exact mechanism InterruptSession/InterruptSessionHard used
 //     (ADR-057 FR-015 role-B predicate, rebased from transcriptSessionID).
@@ -976,13 +980,16 @@ func (al *AgentLoop) Interrupt(id string, scope InterruptScope, hint string) (de
 	// [Chain-reaction supersession of ADR-057 FR-024 — the GATE half] Mark
 	// every resolved target as cancelling FIRST, before anything else in this
 	// function — see turnState.cancelling's doc comment (turn.go) for the
-	// full mechanism. This is what actually closes the "a new child born
+	// full mechanism, INCLUDING the ADR-091 fix lane RX-SUBTURN finding that
+	// grep finds no current reader of this flag (cancelling.Load()) anywhere
+	// in the repo. This was what actually closed the "a new child born
 	// during cancellation escapes it" race: recursion (the fresh re-scan/
 	// chain-reaction-latch machinery elsewhere in this file and cancel.go)
 	// only ever reaches a child that has ALREADY registered, or is ALREADY
 	// known to be imminent — it cannot stop a spawn that has not even been
-	// attempted yet. spawnSubTurn (subturn.go) checks this flag, walking the
-	// parentTurnState ancestor chain, before creating any new child.
+	// attempted yet. Pre-ADR-091, the deleted spawnSubTurn (subturn.go)
+	// checked this flag, walking the parentTurnState ancestor chain, before
+	// creating any new child.
 	markTurnsCancelling(targets)
 	for _, ts := range targets {
 		descendants = append(descendants, ts.turnID)

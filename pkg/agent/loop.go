@@ -396,8 +396,13 @@ type AgentLoop struct {
 	// per-SESSION (via CloseSession), not per-connection, so the grant
 	// survives reconnects while still expiring with the session it belongs
 	// to. Shared by the gateway's tool-approval REST path (IsAllowed/Record —
-	// see AgentLoop.CheckGrantOrRequestApproval) and the delegate tool's
-	// async/await paths (Inherit — pkg/agent/subturn.go).
+	// see AgentLoop.CheckGrantOrRequestApproval) and, pre-ADR-091, the
+	// deleted spawnSubTurn's async/await paths (InheritFrom,
+	// pkg/security/approvalgrants.go, U17a). ADR-091 fix lane RX-SUBTURN
+	// finding (comment-only; code unchanged): grep finds no production
+	// caller of ApprovalGrantStore.InheritFrom today — flagged for the team
+	// (a delegated child may no longer inherit the parent's tool-approval
+	// grants), not fixed here.
 	approvalGrants *security.ApprovalGrantStore
 
 	// asyncNotifier is the single process-wide AsyncNotifier instance
@@ -643,9 +648,19 @@ type processOptions struct {
 	// UserID/gatewayPrincipal already establishes) to decide whether /goal
 	// and /loop action or pass through inert as ordinary text. Every
 	// processOptions literal NOT built from userInitiated(msg) — ProcessScheduled,
-	// processTaskDirect, processTaskDirectExternalCLI, processSystemMessage,
-	// spawnSubTurn — leaves this at its zero value (false), which is the
-	// correct fail-closed answer for every one of those non-user origins.
+	// processTaskDirect, processTaskDirectExternalCLI, processSystemMessage —
+	// leaves this at its zero value (false), which is the correct fail-closed
+	// answer for every one of those non-user origins. Pre-ADR-091, the
+	// deleted spawnSubTurn did too, for a delegated child. ADR-091 fix lane
+	// RX-SUBTURN finding (comment-only; code unchanged): today's replacement
+	// entry point, steer_reconstruct.go::reconstructSteeredTurn, instead sets
+	// `UserInitiated: wake == nil` — TRUE for a steered session's first turn
+	// (delegate child, task child, etc.), by its own doc comment's
+	// deliberate design ("mark it as user-originated for the session-owned
+	// goal loop"). Whether that is an intentional broadening of this field's
+	// fail-closed contract for a launched child, or an unreviewed departure
+	// from the invariant this comment states, needs a team check — flagged,
+	// not resolved here.
 	UserInitiated bool
 }
 
@@ -695,8 +710,9 @@ var ErrReloadNotConfigured = errors.New("reload not configured")
 // is always workspace-scoped: agents are metadata until added to a workspace's
 // team, and a turn for an unassigned agent MUST be refused rather than
 // silently falling through to the agent's own private home directory. This
-// applies uniformly to top-level and delegated (spawnSubTurn) turns alike,
-// since both resolve ts.agent.ID the same way in the re-root block below.
+// applies uniformly to top-level and delegated (steer_launcher.go's
+// SteerLauncher; pre-ADR-091, the deleted spawnSubTurn) turns alike, since
+// both resolve ts.agent.ID the same way in the re-root block below.
 var ErrAgentNotWorkspaceMember = errors.New("agent is not a member of any workspace; turn refused")
 
 // ErrWorkspaceWorkDirUnavailable is returned when the agent belongs to a

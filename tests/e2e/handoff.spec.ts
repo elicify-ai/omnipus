@@ -292,7 +292,11 @@ test(
 
     // Deterministic prompt: explicit tool name, exact arguments, no prose allowed.
     // The subagent's tool policy is the RESOLVED TARGET agent's policy, never the
-    // parent's (pkg/agent/subturn.go StoreToolPolicy(execSource.LoadToolPolicy())).
+    // parent's (pre-ADR-091: pkg/agent/subturn.go
+    // StoreToolPolicy(execSource.LoadToolPolicy()), since deleted; today the
+    // target's own AgentInstance/toolPolicy is what
+    // steer_reconstruct.go::reconstructSteeredTurn resolves via
+    // al.GetRegistry().GetAgent(rec.AgentID) and hands to newTurnState).
     // Worker (id "worker") is the only target in Jim's delegation graph whose
     // ADR-090 policy allows bash, so the delegate call pins agent_id="worker" —
     // the mandated bash call would be denied under any other target. The subagent

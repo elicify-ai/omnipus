@@ -1865,8 +1865,10 @@ func (al *AgentLoop) processTaskDirect(
 	// Fix C: a task assigned to a subagent_3p (external-CLI) worker must
 	// dispatch through the SAME external-CLI machinery the agent-to-agent
 	// delegation path uses (runner.ResolveDispatch / runExternalCLISubTurn —
-	// see subturn.go's identical gate ahead of spawnSubTurn's native/external
-	// branch) rather than unconditionally falling into runAgentLoop below.
+	// see task_executor_run.go's dispatchesExternalCLI for the identical
+	// gate; pre-ADR-091 this lived in subturn.go's now-deleted spawnSubTurn
+	// native/external branch) rather than unconditionally falling into
+	// runAgentLoop below.
 	// Running a subagent_3p's task on the native engine would silently
 	// mis-execute it with full system-level Omnipus tool access instead of the
 	// configured external CLI — exactly the gap the assignment-time guards in

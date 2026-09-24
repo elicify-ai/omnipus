@@ -70,9 +70,9 @@ func (te *TaskExecutor) runTask(
 	//
 	// L5 (operator decision 2026-07-20): the ADR-050 RD10 stuck-run reaper was
 	// removed — there is no backstop besides this goroutine's own top-level
-	// recover (matching the pattern in session_end.go's runRecap,
-	// subturn.go's spawnSubTurn, hooks.go's runObserver, and this file's own
-	// deliverTaskCompletionUpward). A panic here that left an open TaskRun
+	// recover (matching the pattern in session_end.go's runRecap, hooks.go's
+	// runObserver, this file's own deliverTaskCompletionUpward, and — pre-
+	// ADR-091 — the deleted spawnSubTurn, subturn.go). A panic here that left an open TaskRun
 	// un-closed would strand it in_progress forever. Logs and returns rather
 	// than re-panicking — this goroutine has no caller to propagate to
 	// (launched via `go te.runTask(...)`).
@@ -556,8 +556,10 @@ func (te *TaskExecutor) runTaskFromInProgress(
 
 // processTaskDirectExternalCLI runs a task assigned to a subagent_3p
 // (external-CLI) worker through runExternalCLISubTurn — the same dispatch
-// machinery spawnSubTurn uses for agent-to-agent delegation (subturn.go). A
-// task run has no parent turnState to derive a child from (unlike a delegated
+// machinery task_executor_run.go's dispatchesExternalCLI check and the
+// delegate tool's own dispatch path share for agent-to-agent delegation
+// today (pre-ADR-091, the deleted spawnSubTurn, subturn.go). A task run has
+// no parent turnState to derive a child from (unlike a delegated
 // sub-turn), so this builds a minimal turnState directly for the target agent
 // via newTurnState, wiring the agent snapshot, the task's transcript session
 // (so the run is replayable on reload, same as the native task path), and the
@@ -758,8 +760,9 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 
 	// FIX 2 (7-reviewer gate, persona dropped): compose the same (soul, task)
 	// pair the native delegation path uses ahead of its own
-	// runExternalCLISubTurn call (subturn.go composeDelegateInput call site)
-	// so the target's own soul/persona travels with a TASK-mode dispatch too,
+	// runExternalCLISubTurn call (subturn_identity.go's composeDelegateInput,
+	// also called just below in this file, ahead of THIS file's own
+	// runExternalCLISubTurn call) so the target's own soul/persona travels with a TASK-mode dispatch too,
 	// not just an agent-to-agent delegate call. An empty soul (a soul-less
 	// custom agent — a seeded worker's compiled prompt is non-empty as of
 	// the RC-6 fix, coreagent's "worker" prompts-map entry) yields

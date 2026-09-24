@@ -225,10 +225,18 @@ agentLoopRunTurnToolsExecuteLoop1:
 		// appendToolCallTranscript (which persists tcRecord, including
 		// this Error field) is not — it only requires a wired
 		// transcriptStore/transcriptSessionID (turn.go's
-		// appendToolCallTranscript). So on a NoHistory turn (e.g. a
-		// delegated sub-turn's ephemeral history — see subturn.go), this
-		// durable transcript write is the ONLY copy of the failure reason
-		// that survives the turn at all.
+		// appendToolCallTranscript). So on a NoHistory turn (pre-ADR-091,
+		// e.g. a delegated sub-turn's ephemeral history — see the deleted
+		// spawnSubTurn, subturn.go), this durable transcript write is the
+		// ONLY copy of the failure reason that survives the turn at all.
+		// ADR-091 fix lane RX-SUBTURN finding (comment-only; code
+		// unchanged): grep finds NoHistory:true set nowhere in production
+		// code today — every delegated/task child is now a durable
+		// session.SessionTypeDelegate/SessionTypeTask session with its own
+		// real transcript (steer_launcher.go), so "ephemeral history" may no
+		// longer be this architecture's concept for a delegate child; this
+		// paragraph's own NoHistory example is likely stale for that reason,
+		// separate from the symbol-citation fix. Not resolved here.
 
 		switch ex.finishCall(i) {
 		case agentLoopRunTurnToolsExecuteReturn:
@@ -1754,20 +1762,30 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 	tcStatus := "success"
 	switch {
 	case ex.toolResult.ParksTurn:
-		// ADR-057 UAT defect C2 fix (2026-08-04): a SYNCHRONOUS
-		// delegate/spawn call whose child sub-turn parked awaiting
-		// the parent's answer (message_parent(kind="question",
-		// wait=true) — see pkg/agent/subturn.go's spawnSubTurn,
-		// the `if turnRes.status == TurnEndStatusParked` branch
-		// that sets ToolResult.ParksTurn, the single source of
-		// truth for this signal). Without this case, a parked
+		// ADR-057 UAT defect C2 fix (2026-08-04): pre-ADR-091, a
+		// SYNCHRONOUS delegate/spawn call (async=false, since deleted
+		// by ADR-091 D4 — every delegate call is now what that used to
+		// mean) whose child sub-turn parked awaiting the parent's
+		// answer (message_parent(kind="question", wait=true) — the
+		// deleted spawnSubTurn's `if turnRes.status ==
+		// TurnEndStatusParked` branch set ToolResult.ParksTurn, the
+		// single source of truth for this signal). ADR-091 fix lane
+		// RX-SUBTURN note: a delegate/spawn call cannot reach this
+		// specific scenario anymore since ADR-091 (delegate never waits
+		// inline for the child), but this `case` remains live and
+		// necessary for other ParksTurn producers today, notably
+		// ask_user_question (pkg/tools/CLAUDE.md: "NEVER returns the
+		// answer as a tool result... returns a ParksTurn stub").
+		// Without this case, a parked
 		// child's toolResult here has Interrupted==false and
 		// IsError==false (it is neither a failure nor a
 		// cancellation), so tcStatus fell through to the
 		// "success" initializer — persisting the OUTER delegate
 		// tool call's own tc.Status as "success" even though the
-		// live subagent_end WS frame (spawnSubTurn's endStatus
-		// switch, now SubTurnStatusParked) already correctly said
+		// live subagent_end WS frame (pre-ADR-091, the deleted
+		// spawnSubTurn's endStatus switch; today,
+		// steer_frames.go::deliverSubagentEnd, now SubTurnStatusParked)
+		// already correctly said
 		// "parked". That divergence meant a SESSION RELOAD
 		// (pkg/gateway/replay.go's resolveStatus(tc.Status), used
 		// to reconstruct the subagent_end frame from this exact
@@ -1783,11 +1801,17 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		// IsError cases.
 		tcStatus = "parked"
 	case ex.toolResult.Interrupted:
-		// Finding F (A-I4 round 5): a synchronous delegate/spawn call
-		// whose child sub-turn was interrupted by a parent-turn
-		// cancellation — see pkg/agent/subturn.go's spawnSubTurn
-		// cleanup defer, the single source of truth for this
-		// classification (ToolResult.Interrupted's doc comment).
+		// Finding F (A-I4 round 5): pre-ADR-091, a synchronous
+		// delegate/spawn call (since deleted, D4) whose child sub-turn
+		// was interrupted by a parent-turn cancellation — the deleted
+		// spawnSubTurn's cleanup defer was the single source of truth
+		// for this classification (ToolResult.Interrupted's doc
+		// comment). ADR-091 fix lane RX-SUBTURN finding (comment-only;
+		// code unchanged): unlike the ParksTurn case above (still fed
+		// by ask_user_question/message_parent), grep finds
+		// ToolResult.Interrupted set to true nowhere in production code
+		// today — this case appears unreachable now. Flagged for the
+		// team, not fixed here.
 		// Persisting "interrupted" here — rather than folding it into
 		// the generic "error" case below — is what lets a session
 		// reload's subagent_end frame (pkg/gateway/replay.go reads
@@ -1847,10 +1871,14 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		}
 		ex.tcRecord.Result = result
 	} else if r := buildSyncDelegateResult(ex.toolName, ex.contentForLLM, ex.toolResult.IsError, ex.toolResult.Async); r != nil {
-		// W4 (sync path): spawnSubTurn's async result-persistence defer
-		// (subturn.go) no-ops for SYNCHRONOUS delegation — it runs before
-		// this record exists and only retries when cfg.Async — so this
+		// W4 (sync path): pre-ADR-091, the deleted spawnSubTurn's async
+		// result-persistence defer (subturn.go) no-op'd for SYNCHRONOUS
+		// delegation (since deleted, D4) — it ran before
+		// this record exists and only retried when cfg.Async — so this
 		// write is the sync delegate tool_call's FINAL persisted state.
+		// See buildSyncDelegateResult's own doc comment (delegate_result.go)
+		// for the ADR-091 fix lane RX-SUBTURN finding that this branch's
+		// "sync-only" framing may no longer match current behavior.
 		// Populate Result with the same {"text":…}(+"error") shape the
 		// async defer produces, so a reloaded sync delegation shows what
 		// the delegate produced (matching the live WS stream and the

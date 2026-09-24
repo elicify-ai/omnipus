@@ -149,26 +149,38 @@ type turnState struct {
 	abandoned      atomic.Bool               // true once a controller detaches a stuck turn goroutine
 	onCancelFinish func(cancelMethod string) // called exactly once by Finish when cancelFired
 
-	// cancelling is the GATE half of the chain-reaction cancellation fix
+	// cancelling was the GATE half of the chain-reaction cancellation fix
 	// (ADR-057 FR-024, superseded 2026-08-04): set true by markTurnsCancelling
 	// (steering.go) for every turn Interrupt/InterruptSessionHard resolves as
 	// a target — the ANCHOR and every currently-known live descendant — as
 	// the VERY FIRST thing either function does, before any interrupt signal
-	// is actually fired. spawnSubTurn (subturn.go) walks parentTS's own
-	// ancestor chain via parentTurnState, checking THIS flag at every level,
-	// before creating a new child; any hit refuses the spawn outright
-	// (ErrSessionCancelling).
+	// is actually fired. Pre-ADR-091, the deleted spawnSubTurn walked
+	// parentTS's own ancestor chain via parentTurnState, checking THIS flag
+	// at every level, before creating a new child; any hit refused the spawn
+	// outright (the also-deleted ErrSessionCancelling — zero definitions
+	// repo-wide today).
 	//
-	// This exists because recursion (re-scanning/re-arming for a child that
+	// ADR-091 fix lane RX-SUBTURN note (comment-only; code unchanged): grep
+	// finds markTurnsCancelling still calls cancelling.Store(true) (write
+	// side, live), but no call to cancelling.Load() anywhere in the repo —
+	// nothing currently reads this flag before minting a new steered child
+	// (steer_launcher.go's launchSteered checks the PERSISTED Stop marker on
+	// the parent's LifecycleRecord instead, which is a related but distinct
+	// mechanism with different timing). Whether that closes the same race
+	// this flag existed for is outside a comment-only lane's scope to
+	// determine — flagged for the team, not fixed here.
+	//
+	// This existed because recursion (re-scanning/re-arming for a child that
 	// ALREADY registered, or is ALREADY marked as about to via
 	// pendingSpawns) fixes the ORDER cancellation reaches existing/imminent
 	// descendants but cannot, by itself, stop a BRAND NEW child from being
-	// born after cancellation has begun: the child's own context is
-	// deliberately NOT derived from the parent's (spawnSubTurn's childCtx is
-	// context.WithTimeout(context.Background(), ...) so a Critical async
-	// delegate can outlive its parent's own graceful finish — re-parenting it
-	// would break that), so Go's ordinary context-cancellation propagation
-	// gives no signal here at all. This flag is that signal, checked
+	// born after cancellation has begun: the child's own context was
+	// deliberately NOT derived from the parent's (the deleted spawnSubTurn's
+	// childCtx was context.WithTimeout(context.Background(), ...) so a
+	// Critical async delegate could outlive its parent's own graceful
+	// finish — re-parenting it would have broken that), so Go's ordinary
+	// context-cancellation propagation gave no signal here at all. This flag
+	// was that signal, checked
 	// explicitly at the one place a new child is actually created.
 	//
 	// Never explicitly cleared: each turnState is a fresh object per turn
@@ -205,23 +217,30 @@ type turnState struct {
 	// normal Finish(false). Both set isFinished, but only the former makes a
 	// child's terminal cancellation an interruption caused by its parent.
 	finishedByHardAbort atomic.Bool
-	// subTurnRecordPersisted is true once this sub-turn's OWN spawning
-	// "delegate"/"spawn" tool-call record (on the PARENT's transcript) has
-	// been corrected with the real terminal status/duration — or it has been
-	// determined that no correction attempt was needed/possible (no
-	// transcript store, no session ID). isFinished flips the instant runTurn
-	// returns (its own deferred Finish call), but spawnSubTurn's cleanup
-	// defer — which performs the correction via updateToolCallStatusWithRetry,
-	// up to ~935ms of retry backoff for async delegation — only runs AFTER
-	// that point, once spawnSubTurn itself returns. A reload/replay landing
-	// in that window previously read isFinished==true as "safe to trust the
+	// subTurnRecordPersisted: pre-ADR-091, true once this sub-turn's OWN
+	// spawning "delegate"/"spawn" tool-call record (on the PARENT's
+	// transcript) had been corrected with the real terminal status/duration
+	// — or it had been determined that no correction attempt was
+	// needed/possible (no transcript store, no session ID). isFinished
+	// flips the instant runTurn returns (its own deferred Finish call), but
+	// the deleted spawnSubTurn's cleanup defer — which performed the
+	// correction via the also-deleted updateToolCallStatusWithRetry, up to
+	// ~935ms of retry backoff for async delegation — only ran AFTER that
+	// point, once spawnSubTurn itself returned. A reload/replay landing in
+	// that window previously read isFinished==true as "safe to trust the
 	// persisted record" and served the still-stale async placeholder ack
-	// (Status="success", DurationMS≈0) as genuine. IsSubTurnActiveForSpawnCall
-	// treats "finished but not yet persisted" as still active so callers
-	// withhold a terminal frame/replay snapshot until BOTH are true. Zero
-	// value (false) is correct for turns with no parentSpawnCallID too — they
-	// are never matched by IsSubTurnActiveForSpawnCall, which requires a
-	// non-empty parentSpawnCallID equality match first.
+	// (Status="success", DurationMS≈0) as genuine. The also-deleted
+	// IsSubTurnActiveForSpawnCall treated "finished but not yet persisted"
+	// as still active so callers withheld a terminal frame/replay snapshot
+	// until BOTH were true (pkg/gateway/replay.go now uses
+	// persistedSubagentStartSpans/persistedSubagentEndSpans instead — see
+	// that file's header comment, "the dead isSpanActive/
+	// IsSubTurnActiveForSpawnCall").
+	//
+	// ADR-091 fix lane RX-SUBTURN note (comment-only; code unchanged): grep
+	// finds this field read or written nowhere else in the repo — it is
+	// declared, always zero-value, and otherwise unused today. Flagged for
+	// the team (candidate for removal) rather than deleted here.
 	subTurnRecordPersisted atomic.Bool
 	session                session.SessionStore // Session store reference
 	initialHistoryLength   int                  // Snapshot of window (GetHistory) length at turn start
@@ -243,9 +262,21 @@ type turnState struct {
 	injectedRecallAt   int
 	injectedRecallLen  int
 	// parentSpawnCallID is the ToolCall.ID of the spawn tool call in the parent turn that
-	// triggered this sub-turn. Set by spawnSubTurn at child construction (FR-H-003).
-	// Empty for root turns. Used to populate ParentSpawnCallID on ToolExec* payloads
-	// emitted by this child turn, enabling the WS forwarder to tag frames with parent_call_id.
+	// triggered this sub-turn. Pre-ADR-091 this was set by the deleted spawnSubTurn at
+	// child construction (FR-H-003); ADR-091 deleted subturn.go, its only writer, and
+	// nothing assigns this field today — confirmed elsewhere in the repo
+	// (pkg/gateway/replay.go's "FIX (finding 1, CRITICAL)" doc comment and
+	// pkg/gateway/websocket_replay.go's "Finding 1 fix": both call out
+	// "turnState.parentSpawnCallID... never assigned" / "had zero real callers" and
+	// describe the working replacement, buildPersistedSubagentSpanIndexes/
+	// classifyToolCall in replay.go). Every read of ts.parentSpawnCallID in this
+	// package (loop_run_turn_tools.go, turn_transcript.go, turn_stream.go) therefore
+	// reads the permanent zero value "" today. Flagged for the team rather than
+	// changed here (comment-only lane) — related: withSpawnToolCallID (below) still
+	// injects a spawn tool call's ID into ctx at each tool dispatch (loop_run_turn_tools.go),
+	// but spawnToolCallIDFromContext, the only reader that would turn that into a
+	// parentSpawnCallID assignment, has zero callers outside tests — the value is
+	// injected and never consumed in production.
 	parentSpawnCallID string
 
 	// Additional SubTurn fields
@@ -397,16 +428,20 @@ type turnState struct {
 	// Set by newTurnState below to this turn's OWN transcriptSessionID,
 	// which is the correct value for every root turn (FR-011: "for a root
 	// turn it MUST equal the turn's own session id") and requires no caller
-	// action. spawnSubTurn (pkg/agent/subturn.go, ADR-057 U7) is responsible
-	// for OVERWRITING this field on the freshly constructed child —
-	// `childTS.routingSessionID = parentTS.routingSessionID` — immediately
-	// after its own `newTurnState(...)` call, mirroring the existing
-	// `childTS.parentTurnState = parentTS` same-package direct-field-set
-	// pattern a few lines below that same call (both fields are unexported
-	// but pkg/agent is one package, so no accessor is needed). Skipping that
-	// overwrite would silently leave a child's routingSessionID equal to its
-	// OWN session id instead of the root's — the exact conflation this field
-	// exists to end.
+	// action. Pre-ADR-091, the deleted spawnSubTurn (pkg/agent/subturn.go,
+	// ADR-057 U7) was responsible for OVERWRITING this field on the freshly
+	// constructed child by direct assignment — `childTS.routingSessionID =
+	// parentTS.routingSessionID`. ADR-091/D2 replaced that direct copy: a
+	// steered child's routingSessionID is now DERIVED from the edge's own
+	// verified cascade root rather than inherited verbatim —
+	// steer_reconstruct.go::reconstructSteeredTurn sets
+	// `ts.routingSessionID = session.RoutingSessionID(rec.SteeredBy.RootSessionID)`,
+	// where RootSessionID was resolved and persisted at launch time by
+	// steer_launcher.go::walkVerifiedRoot. At depth one the two coincide, so
+	// this change is invisible in the common case; skipping the assignment
+	// would still leave a child's routingSessionID equal to its OWN session
+	// id instead of the root's — the exact conflation this field exists to
+	// end.
 	//
 	// CLOSED CONSUMER SET (FR-014): this field MUST NOT be read for any
 	// purpose other than routing/interrupt scoping — never as a session
@@ -424,8 +459,9 @@ type turnState struct {
 	// The remaining closed-set readers have all LANDED (U7/U8/U9/U15, this
 	// same branch) — do not go looking for unfinished work here: the
 	// steering.go role-B predicates (U8), the pre-arm latch keys in
-	// subturn.go/cancel_prearm.go (U7/U15), and the WS payload stamping in
-	// loop.go (U9) all read routingSessionID today.
+	// cancel_prearm.go (U7/U15 — pre-ADR-091 also read from the since-deleted
+	// subturn.go), and the WS payload stamping in loop.go (U9) all read
+	// routingSessionID today.
 	routingSessionID session.RoutingSessionID
 
 	// askPendingToolCalls holds the tool-call IDs for which a "pending"
@@ -822,9 +858,11 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 
 	// ADR-057 FR-011: default routingSessionID to this turn's own session
 	// id. Correct as-is for every root turn (byte-identical to today's
-	// single-id behavior — AC scenario US-3/AS-1); spawnSubTurn overwrites
-	// it post-construction for a delegated child — see routingSessionID's
-	// field doc comment above for the full contract.
+	// single-id behavior — AC scenario US-3/AS-1); a delegated child's
+	// routingSessionID is then derived from its edge's verified cascade root
+	// (steer_reconstruct.go::reconstructSteeredTurn, post-ADR-091/D2 — see
+	// routingSessionID's field doc comment above for the full contract,
+	// including the pre-ADR-091 spawnSubTurn history).
 	ts.routingSessionID = session.RoutingSessionID(ts.transcriptSessionID)
 
 	return ts
@@ -846,12 +884,16 @@ func (al *AgentLoop) clearActiveTurn(ts *turnState) {
 	// later, unrelated turn while this one's own cleanup is still unwinding
 	// (the concrete case: a native `delegate follow_up` warm-resume reuses
 	// its childID verbatim once the prior generation's LifecycleRecord
-	// reaches a terminal state — see spawnCorrectiveFollowUp, pkg/tools/
-	// delegate.go — and spawnSubTurn deliberately re-Stores the finished
-	// childTS under that same key for a further ~935ms after THIS function
-	// already ran once during runTurn's own unwind, specifically so
-	// IsSubTurnActiveForSpawnCall can still find it — see subturn.go's
-	// "Re-register childTS in activeTurnStates" comment). If a new
+	// reaches a terminal state — see spawnCorrectiveFollowUp,
+	// pkg/tools/delegate_followup.go, still live). Pre-ADR-091, the deleted
+	// spawnSubTurn deliberately re-Stored the finished childTS under that
+	// same key for a further ~935ms after THIS function already ran once
+	// during runTurn's own unwind, specifically so the also-deleted
+	// IsSubTurnActiveForSpawnCall could still find it (its own "Re-register
+	// childTS in activeTurnStates" comment lived in the now-gone subturn.go).
+	// That specific re-Store no longer happens (its only caller is deleted);
+	// this function's CompareAndDelete-not-bare-Delete discipline is kept
+	// for the reuse race described below, which is independent of it. If a new
 	// generation's registerActiveTurn lands in that window, a bare
 	// Delete(ts.sessionKey) here would unconditionally erase whichever
 	// turnState is CURRENTLY stored under that key — which may by then be the
@@ -885,12 +927,16 @@ func (al *AgentLoop) clearActiveTurn(ts *turnState) {
 // entry registered under sessionKey: the entry is removed ONLY if it is still
 // the given ts, so a newer turnState reusing the same key (a native
 // `delegate follow_up` warm-resume — see spawnCorrectiveFollowUp,
-// pkg/tools/delegate.go) is left untouched.
+// pkg/tools/delegate_followup.go) is left untouched.
 //
-// This is the spawnSubTurn-side cleanup seam (subturn.go's deferred
-// `clearActiveTurnStateEntry(childID, childTS)`), factored out so the
-// invariant is testable in isolation: spawnSubTurn's defer is otherwise locked
-// inside a function whose full execution requires a delegation dispatch.
+// Pre-ADR-091 this was the deleted spawnSubTurn's cleanup seam (subturn.go's
+// deferred `clearActiveTurnStateEntry(childID, childTS)`), factored out so
+// the invariant was testable in isolation: that defer was otherwise locked
+// inside a function whose full execution required a delegation dispatch.
+// ADR-091 fix lane RX-SUBTURN note (comment-only; code unchanged): grep
+// finds no production caller today — every remaining call site is a
+// t.Cleanup helper in a _test.go file.
+//
 // clearActiveTurn (above) performs the SAME compare-and-delete for the
 // parent's own ts.sessionKey plus the cancelPreArm bookkeeping that only
 // applies to a finished whole turn — use THIS helper when you only need the
@@ -1154,14 +1200,20 @@ func (al *AgentLoop) ProgressForSession(sessionKey string) (tools.ToolCallProgre
 	}
 	// A finished turn is not "generating", whatever it last recorded.
 	//
-	// activeTurnStates can legitimately hold a COMPLETED turnState: spawnSubTurn
-	// deliberately re-registers the child after runTurn returns, for a persist-
-	// retry window of roughly a second. During that window the delegate task is
-	// still marked running, so the caller's own status guard does not exclude
-	// it. At the poll rate the incident actually exhibited — 75 polls in 46
-	// seconds, roughly one every 600ms — a window that size is hit routinely,
-	// not rarely. Every other cross-goroutine reader of this registry checks
-	// IsAlive; this one must too.
+	// activeTurnStates can legitimately hold a COMPLETED turnState: pre-ADR-091,
+	// the deleted spawnSubTurn deliberately re-registered the child after runTurn
+	// returned, for a persist-retry window of roughly a second. During that
+	// window the delegate task was still marked running, so the caller's own
+	// status guard did not exclude it. At the poll rate the incident actually
+	// exhibited — 75 polls in 46 seconds, roughly one every 600ms — a window
+	// that size was hit routinely, not rarely. ADR-091 deleted that re-register
+	// call along with spawnSubTurn, so the specific window this guard was
+	// written for no longer recurs the same way; kept anyway (comment-only
+	// lane, code unchanged) as defensive practice — every other cross-goroutine
+	// reader of this registry checks IsAlive, and a completed-but-still-stored
+	// turnState remains a reachable state in principle (e.g. clearActiveTurn's
+	// CompareAndDelete racing a new generation's registerActiveTurn — see
+	// clearActiveTurn's own doc comment).
 	if !ts.IsAlive() {
 		return tools.ToolCallProgressSnapshot{}, false
 	}
@@ -1646,8 +1698,11 @@ func TurnStateFromContext(ctx context.Context) *turnState {
 }
 
 // spawnToolCallIDKeyType is the context key for the current spawn tool call's ToolCall.ID.
-// Injected by loop.go before tool execution so that spawnSubTurn can read it and set
-// the child turnState.parentSpawnCallID (FR-H-003).
+// Injected by loop_run_turn_tools.go before tool execution — pre-ADR-091, so the deleted
+// spawnSubTurn could read it and set the child turnState.parentSpawnCallID (FR-H-003).
+// Today nothing reads it back out in production (spawnToolCallIDFromContext has no
+// non-test caller); see parentSpawnCallID's own field doc comment (above) for the
+// full finding.
 type spawnToolCallIDKeyType struct{}
 
 var spawnToolCallIDKey = spawnToolCallIDKeyType{}
