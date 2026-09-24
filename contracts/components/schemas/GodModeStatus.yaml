@@ -2,12 +2,16 @@ type: object
 title: GodModeStatus
 description: >
   O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode. God
-  mode is the single global "bypass-permissions" switch: when enabled every
-  agent's tool policy is floored at "allow" (no prompts), the kernel sandbox
-  is off, network egress is open, and the shell guard is off — regardless of
-  per-agent profiles. Audit logging, the prompt-injection guard, and rate
-  limiting are never disabled. The per-agent overrides are non-destructive:
-  switching god mode off restores prior behavior exactly.
+  mode is the single global "bypass-permissions" switch: when enabled, every
+  agent's tool policy is floored at "allow" (no prompts), the kernel
+  sandbox's filesystem confinement and network port controls are off, and
+  outbound network access is open for the shell tool — regardless of
+  per-agent profiles. An agent's own stricter tool policy, an operator deny
+  command rule, and the shell's own outside-workspace write refusal are
+  never overridden — that refusal still applies, it just never prompts.
+  Audit logging, the prompt-injection guard, and rate limiting are never
+  disabled. The override is non-destructive: switching god mode off restores
+  prior behavior exactly.
 required:
   - enabled
   - available

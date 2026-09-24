@@ -85,6 +85,63 @@ The badge at the top of a chat shows which state applies to that chat right now.
 
 *(Before 2026-09-24 this badge read "Auto → Ask" and Auto-approve had no effect at all in that state. That is no longer how it works — see "Auto-approve and the kernel sandbox" above.)*
 
+### God Mode
+
+God Mode is Omnipus's strongest override. It is one switch for the whole gateway, not a per-agent or per-chat setting — turning it on applies to every agent and every conversation at once. Change it under **Settings**, **Gateway**, **Danger zone**.
+
+**In practice:** with God Mode on, an agent's shell commands can read or change any file your account can reach on this machine — not just the files inside its workspace, and, because God Mode turns off the kernel-level filesystem confinement for the shell specifically, that includes files elsewhere on your account (for example another agent's saved credentials) if your account has permission to read them. Shell commands can also talk to any address on the network, including ones a firewall or an internal service would otherwise block. Treat it the same as handing an agent an unrestricted terminal on your computer, for as long as it stays on.
+
+#### Two switches, not one
+
+| Switch | Question it answers | How it is set |
+|---|---|---|
+| **Available** | Can this installation use God Mode at all? | Starting the gateway with the `--allow-god-mode` flag, or your first-ever enable through this screen |
+| **On** | Is it active right now? | The Danger-zone toggle, once available |
+
+The first time you turn God Mode on through this screen, on an installation that was never started with `--allow-god-mode`, Omnipus saves that choice but needs a gateway restart before God Mode actually takes effect. The toggle shows "Authorized but not yet active — restart the gateway to activate god-mode," with a "Cancel authorization" link if you change your mind first, and Omnipus opens a dialog offering to restart right away or later. After that first restart — or on any installation already started with `--allow-god-mode` — switching God Mode on or off again applies immediately, with no restart. **Turning God Mode off never needs a restart**, on any installation.
+
+#### What changes
+
+| Area | Under God Mode |
+|---|---|
+| Tool policies | Every tool's global (installation-wide) policy is treated as Allow — no prompt from that policy, for any tool. |
+| Shell approval | No approval dialog before a shell command runs, ever. |
+| Kernel filesystem confinement | Off for the shell's own commands: they can reach any file your account can, not just the workspace. |
+| Kernel network-port controls | Off for the shell's own commands: they can bind or connect to any port, not just an allowed list. |
+| Outbound network filtering | The shell's commands are not filtered against the address block list that otherwise stops them reaching your internal network or cloud-metadata services. |
+| Per-command process limits | The extra process-count and memory limits normally placed on a shell command (and the platform equivalents on macOS and Windows) are not applied. |
+| Auto-approve | Switched off outright, everywhere — there is nothing left for it to add. |
+
+#### What does not change
+
+| Protection | Still applies under God Mode |
+|---|---|
+| An agent's own tool policy | A tool an agent has itself set to Ask still asks; one it has denied stays denied. An agent's own setting can only make a tool stricter than the global one, and God Mode does not remove that limit. |
+| Operator deny rules | A `deny` command rule still refuses a matching command outright — this is the one check God Mode does not turn off. |
+| The shell's outside-workspace write refusal | **Still fires.** God Mode removes only the prompt that would otherwise let you widen this refusal — not the refusal itself. A shell command that tries to write outside the workspace is refused outright, silently, with nothing to click. |
+| Other tools' own protected-path check | A write through `write_file` or a similar tool to one of Omnipus's own protected files — for example your account's `USER.md` profile — is refused outright, never prompted, never widenable. This check runs at the application level, independent of the kernel sandbox God Mode turns off, so it does not depend on whether the sandbox is on. It does not, by itself, protect the shell tool the same way — see "In practice," above. |
+| The syscall filter (Linux) | Installed once when the gateway starts and shared by every process it spawns afterward — there is no way to switch it off for one command, so it applies to a God-Mode shell command exactly as it does to any other. |
+| Audit logging | Every God-Mode call is still recorded. |
+| The prompt-injection guard | Unaffected. |
+| Rate limiting | Unaffected. |
+| Connected-server (MCP) tool assignment | A tool from a server your agent is not assigned to is still hidden, God Mode or not. |
+| The block on agents changing sandbox settings | An agent can never grant itself God Mode, or widen it, by editing its own configuration — see "Agents cannot change these rules," below. |
+
+*(Corrected 2026-09-25 — an earlier version of this page said God Mode disables the "shell guard," the outside-workspace write refusal, along with the sandbox. It does not: that refusal is the one filesystem check God Mode never turns off. Only the prompt that would otherwise offer to widen it is gone.)*
+
+God Mode is one flag for the whole gateway process, so a delegated or steered sub-agent inherits it automatically — there is no separate delegation setting. A scheduled or unattended run behaves the same way a live chat does: a tool call that would still ask, because that agent itself set it to Ask, has nobody present to answer it, so it is refused outright rather than left waiting on an approval card no one will see.
+
+#### Turning it on or off
+
+Changing God Mode always asks you to re-type your password. After that:
+
+- Turning it on shows a warning-styled "God-mode enabled" message — or, on a boot not yet authorized, "God-mode authorized — restart the gateway to activate it."
+- Turning it off shows "God-mode disabled."
+
+While God Mode is on, a banner reading "God-mode is active" is shown on every screen, with its own "Turn off" button — not only on the Gateway settings page, since an agent can trip it from anywhere.
+
+The Security screen's health summary also raises a high-severity "God-mode is armed" warning whenever it is switched on, or authorized and waiting for a restart, with a link back to **Settings**, **Security**, **Danger zone**.
+
 In an agent's **Tools & Permissions** panel and in **Tool Access — Global Policies**, each tool set to Ask carries a small marker showing what Auto-approve does with it:
 
 | Marker | Meaning |
@@ -403,7 +460,7 @@ The viewer refreshes every 30 seconds. The log includes security events, policy 
 - Removing a credential is permanent. Services that refer to it may stop working.
 - Losing the master key makes the encrypted credential store permanently inaccessible.
 - Omnipus overwrites the master key in memory at shutdown and when a command finishes, best-effort only — nothing in this programming environment can guarantee that every copy of a value in memory is erased, so a memory dump taken while the key was in use may still contain it.
-- **God-mode** under **Settings**, **Gateway** disables the kernel sandbox, outbound-network restrictions, and shell guard for every agent. For tools, it sets the **global** policy to Allow for every tool and removes the permission prompts that come from that global policy — including Auto-approve's: Auto-approve only ever matters for a tool set to Ask, and God Mode leaves none set to Ask globally, and is also explicitly switched off in God Mode regardless *(as of 2026-09-24, this is no longer "because there is no sandbox left" — Auto-approve does not need a sandbox any more; God Mode turns it off by its own design, D1)*. It does **not** override an agent's own tool policy: a tool an agent denies itself stays denied, and a tool that agent asks about still asks. Audit logging, prompt protection, and rate limiting remain active. Enabling it requires your password and may require a gateway restart.
+- **God-mode**, under **Settings**, **Gateway**, is Omnipus's strongest override — it removes almost every permission prompt and most of the sandbox's protection for every agent at once, but never the shell's outside-workspace write refusal, an operator deny rule, or an agent's own stricter setting. See "God Mode," above, for exactly what changes, the two-switch (allowed vs. on) model, and what happens when you turn it on or off.
 
 ## Related pages
 

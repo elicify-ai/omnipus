@@ -154,16 +154,19 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 	// cfg.Sandbox.GodMode true covers both S1 (armed via the UI, pending
 	// restart — the config write already happened even though this boot
 	// hasn't activated it) and S2 (live-active): either way an operator has
-	// committed to disabling the kernel sandbox, egress restrictions, and
-	// the shell guard, which is strictly worse than the sandbox-disabled
-	// check above (that one only concerns the sandbox; god mode disables
-	// three controls simultaneously), hence "high" not "medium".
+	// committed to disabling the kernel sandbox's filesystem confinement and
+	// network port controls and opening egress, which is strictly worse than
+	// the sandbox-disabled check above (that one only concerns the sandbox;
+	// god mode disables multiple controls simultaneously and floors every
+	// tool's global policy at allow), hence "high" not "medium". It does NOT
+	// disable the shell's outside-workspace write refusal — that refusal
+	// still fires under god mode, it just never prompts first.
 	if cfg.Sandbox.GodMode {
 		issues = append(issues, map[string]any{
 			"id":             "god-mode-armed",
 			"severity":       "high",
 			"title":          "God-mode is armed",
-			"description":    "God-mode is enabled or pending activation. It bypasses every permission prompt and disables the kernel sandbox, outbound-network restrictions, and the shell guard for every agent.",
+			"description":    "God-mode is enabled or pending activation. It bypasses every permission prompt and disables the kernel sandbox's filesystem confinement and network port controls, and opens outbound network access, for every agent's shell tool.",
 			"recommendation": "Go to Settings → Security → Danger zone and turn god-mode off, unless this is intentional.",
 			"action_link":    "/settings?tab=security",
 			"action_label":   "Open security settings",

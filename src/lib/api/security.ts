@@ -257,11 +257,15 @@ export function gatewayRestart(): Promise<GatewayRestartResponse> {
 // ── God-mode (O14) ─────────────────────────────────────────────────────────────
 //
 // God-mode is the single global "bypass-permissions" switch: flipping it ON
-// floors every agent's tool policy at "allow" (no prompts), turns the kernel
-// sandbox off, opens network egress, and disables the shell guard — regardless
-// of per-agent profiles. Audit logging, the prompt-injection guard, and rate
-// limiting STAY ON. The per-agent overrides are non-destructive: switching god
-// mode off restores prior behaviour exactly.
+// floors every agent's tool policy at "allow" (no prompts), turns off the
+// kernel sandbox's filesystem confinement and network port controls, and
+// opens outbound network access for the shell tool — regardless of
+// per-agent profiles. An agent's own stricter tool policy, an operator deny
+// command rule, and the shell's own outside-workspace write refusal are
+// never overridden — that refusal still applies, it just never prompts.
+// Audit logging, the prompt-injection guard, and rate limiting STAY ON. The
+// override is non-destructive: switching god mode off restores prior
+// behaviour exactly.
 //
 // GodModeStatus / GodModeUpdateRequest / GodModeUpdateResponse are the
 // generated contract types (#8); see contracts/components/schemas/GodMode*.yaml.

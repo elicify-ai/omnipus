@@ -82,6 +82,8 @@ Concrete combinations:
 
 A tool blocked globally is greyed out in each agent's tool list, so you can see where the ceiling sits while you work.
 
+**God-mode** (Settings → Gateway → Danger zone) overrides every tool's global policy to Allow at once, for every agent — see [security](security.md#god-mode) for what that does and does not change.
+
 ## Tools from connected servers
 
 A connected server adds tools Omnipus was not born with — a company wiki, a design app, a database. One server can add several tools.
