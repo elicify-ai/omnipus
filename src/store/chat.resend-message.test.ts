@@ -73,7 +73,6 @@ function bucketFor(msgs: ChatMessage[]): SessionChatState {
     lastUserMessageAt: null,
     cancelStage: null,
     lastReceivedEventTime: null,
-    spanByParentCallId: {},
   }
 }
 
