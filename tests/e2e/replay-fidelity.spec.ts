@@ -21,8 +21,12 @@ import * as path from 'path'
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { expectA11yClean } from './fixtures/a11y'
+// No verbose-chat opt-in anywhere in this file: ADR-091 D7/AC-7 makes a
+// delegation visible in the DEFAULT, non-verbose thread (the delegate/spawn
+// tool call is the parent chat's only delegation surface now that
+// SubagentBlock and shouldRenderSubagentSpan are deleted), so test (b)
+// asserts the default policy directly — see its own comment.
 import { chatInput, sendButton, waitForConnected } from './fixtures/selectors'
-import { enableVerboseChat } from './fixtures/verbose-chat'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -365,40 +369,232 @@ test(
 
 // ── Test (b): subagent span round-trip ────────────────────────────────────────
 
+/**
+ * Append the persisted `subagent_start` + `subagent_state(running)` pair that
+ * pkg/agent/steer_frames.go's `deliverSubagentStart` writes into the PARENT's
+ * OWN transcript (ADR-091 D7/I-4: "persisted as events in the PARENT's own
+ * transcript ... so the existing since-cursor replay returns them after a
+ * reload with no new store").
+ *
+ * Deliberately appended AFTER `seedTranscript` (which truncates the file) and
+ * kept byte-shape-identical to
+ * `steered-session-stop.spec.ts::seedSubagentFramesInParentTranscript` — one
+ * on-disk shape, two specs, so a transcript-format change breaks both
+ * together instead of leaving one silently seeding a shape the gateway no
+ * longer reads.
+ *
+ * `span_id` MUST be `"span_" + <originating tool-call id>`: that is
+ * `pkg/agent/steer_frames.go::subagentSpanID`'s convention, and
+ * `pkg/gateway/replay.go::classifyToolCall` recomputes it the same way to
+ * decide whether this span already has a persisted start/end
+ * (`persistedSubagentStartSpans` / `persistedSubagentEndSpans`). Get it wrong
+ * and replay silently falls back to the reconstructed, child_session_id-less
+ * frame instead.
+ */
+function appendPersistedSubagentStart(
+  parentSessionId: string,
+  childSessionId: string,
+  callId: string,
+  taskLabel: string,
+  agentId: string,
+): void {
+  const sessionDir = path.join(OMNIPUS_HOME, 'sessions', parentSessionId)
+  if (!fs.existsSync(sessionDir)) {
+    throw new Error(
+      `Session directory does not exist: ${sessionDir}. ` +
+        'Create the session via REST API before seeding the transcript.',
+    )
+  }
+  const now = new Date().toISOString()
+  const spanId = `span_${callId}`
+  const entries = [
+    {
+      id: `${callId}:start`,
+      type: 'system',
+      system_subtype: 'subagent_start',
+      timestamp: now,
+      agent_id: agentId,
+      subagent_start: {
+        type: 'subagent_start',
+        session_id: parentSessionId,
+        child_session_id: childSessionId,
+        span_id: spanId,
+        parent_call_id: callId,
+        task_label: taskLabel,
+        agent_id: agentId,
+      },
+    },
+    {
+      id: `${callId}:state`,
+      type: 'system',
+      system_subtype: 'subagent_state',
+      timestamp: now,
+      agent_id: agentId,
+      subagent_state: {
+        type: 'subagent_state',
+        session_id: parentSessionId,
+        child_session_id: childSessionId,
+        span_id: spanId,
+        state: 'running',
+        created_at: now,
+      },
+    },
+  ]
+  fs.appendFileSync(
+    path.join(sessionDir, 'transcript.jsonl'),
+    entries.map((e) => JSON.stringify(e)).join('\n') + '\n',
+    { encoding: 'utf-8' },
+  )
+}
+
+/**
+ * Open the Activity panel, tolerating an already-open one, and close it again
+ * once the caller is done.
+ *
+ * `ActivityBar`'s `panelOpen` is component-local React state and the panel is
+ * a Radix `Dialog` with `modal` defaulting to true (src/components/ui/sheet.tsx),
+ * which puts `pointer-events: none` on the document while open. A navigation
+ * that only changes the hash (`page.goto('/#/sessions/<id>')`, and `goto('/')`
+ * from one) is a SAME-document navigation, so the bar is never unmounted and
+ * the panel never closes by itself — an unconditional second click on the bar
+ * would then be blocked forever by the modal behind it. That exact trap cost
+ * `steered-session-stop.spec.ts` a 90s timeout in CI (2026-09-24); see
+ * `openActivityPanel` there.
+ */
+async function openActivityPanel(page: Page): Promise<void> {
+  const bar = page.locator('[data-testid="activity-bar"]')
+  await expect(bar).toBeVisible({ timeout: 15_000 })
+  if ((await bar.getAttribute('aria-expanded')) !== 'true') {
+    await bar.click()
+  }
+  // `aria-expanded` is bound directly to `panelOpen` (ActivityBar.tsx), so it
+  // is the panel's own open signal rather than a proxy for it.
+  await expect(bar).toHaveAttribute('aria-expanded', 'true', { timeout: 15_000 })
+}
+
+async function closeActivityPanel(page: Page): Promise<void> {
+  const bar = page.locator('[data-testid="activity-bar"]')
+  await page.keyboard.press('Escape')
+  await expect(bar).toHaveAttribute('aria-expanded', 'false', { timeout: 15_000 })
+}
+
+/**
+ * Assert the WHOLE post-ADR-091 delegation contract for a parent session that
+ * is showing one in-flight delegation. Called once on the first open and again
+ * after the close/reopen — the round trip is "these two calls agree", so every
+ * clause below is a round-trip assertion, not just the panel row.
+ */
+async function expectParentDelegationSurface(page: Page, taskLabel: string): Promise<void> {
+  // (1) THREAD — the delegation tool call itself is the parent chat's ONLY
+  // delegation surface (ADR-091 D7/AC-7, src/lib/toolVisibility.ts's
+  // `shouldRenderToolCall` header), and AC-7 requires it in the DEFAULT,
+  // non-verbose thread. This test therefore does NOT opt into verbose chat:
+  // needing verbose to see a delegation is itself the regression.
+  await expect(
+    page.locator('[data-testid="tool-call-badge"][data-tool="spawn"]'),
+  ).toHaveCount(1, { timeout: 15_000 })
+
+  // (2) THREAD — no span card, at any verbosity. `SubagentBlock` and its gate
+  // `shouldRenderSubagentSpan` were deleted by ADR-091 D7/D10 (commit
+  // 66362240d); `data-testid="subagent-collapsed"` has no producer left in
+  // `src/`. Asserted as a contract so the card cannot quietly come back and
+  // re-nest a child's steps under the parent.
+  await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0)
+
+  // (3) THREAD — the child's OWN recorded step never renders in the parent.
+  // The seeded dataset is a pre-ADR-091 transcript that DOES nest a child tool
+  // call under the spawn call; `pkg/gateway/replay.go::classifyToolCall` drops
+  // such a nested call from replay outright ("greenfield migration, §6 ... it
+  // is simply dropped from replay rather than mis-rendered as a flat top-level
+  // call"). This is the behaviour that replaced the old "correct step count"
+  // assertion: the count is not merely zero on the parent's span, the step is
+  // not in the parent's thread at all.
+  await expect(
+    page.locator('[data-testid="tool-call-badge"][data-tool="shell"]'),
+  ).toHaveCount(0)
+
+  // (4) PANEL — the parent's row for this child, the surface that replaced
+  // the deleted card. `data-status` is the SPAN axis (`item.status`); the
+  // delegation was still in flight when the transcript was written (a
+  // persisted `subagent_start` with no matching `subagent_end`), so
+  // `replay.go::classifyToolCall`'s `stillActive` withholds the terminal
+  // frames and the span must come back RUNNING rather than a fabricated
+  // "done".
+  await openActivityPanel(page)
+  const row = page.locator('[data-testid="activity-row"]', { hasText: taskLabel })
+  await expect(row).toBeVisible({ timeout: 15_000 })
+  await expect(row).toHaveAttribute('data-status', 'running')
+
+  // (5) PANEL — the way INTO the child's own session. ADR-091 D7/I-4 gave
+  // `subagent_start` its `child_session_id` precisely "so the open control
+  // knows where to go"; the control renders only when the span carries one
+  // (ActivityPanel.tsx). Its presence after a reopen is what proves the
+  // persisted start frame — not the reconstructed, child_session_id-less
+  // fallback — survived the round trip.
+  await expect(row.locator('[data-testid="activity-row-open"]')).toBeVisible()
+
+  await closeActivityPanel(page)
+}
+
 test(
-  '(b) subagent span round-trip: SubagentBlock renders on reopen with correct step count',
+  "(b) subagent span round-trip: the parent's delegation row survives a reopen and still opens the child's own session",
   // Traces to: sprint-i-historical-replay-fidelity-spec.md BDD Scenario 5; TDD row 24.
-  // Unskipped after Sprint H SubagentBlock UI + Sprint I streamReplay landed on the same branch.
+  //
+  // REWRITTEN 2026-09-24 (lane FX-E2E). This test used to be
+  // "(b) subagent span round-trip: SubagentBlock renders on reopen with
+  // correct step count" and failed 4/4 in CI (shard ui-heavy) at its very
+  // first assertion, before any reopen. It was asserting behaviour ADR-091
+  // D7/D10 deliberately DELETED, not a replay regression: commit 66362240d
+  // ("delete the nested child-step rendering — SubagentBlock, its ChatScreen
+  // mounts, and shouldRenderSubagentSpan") removed the component, and a
+  // repo-wide search finds no producer of `data-testid="subagent-collapsed"`
+  // in `src/` at all. A child's own frames now carry the CHILD's session_id
+  // (I-4) and land in the child's own bucket, so "step count on the PARENT's
+  // span" is not a number the system computes any more.
+  //
+  // The round-trip coverage is NOT dropped — it is re-pointed at the surfaces
+  // that replaced the card: the delegation tool call in the parent's default
+  // thread, the absence of any span card or nested child step, and the
+  // Activity panel row with its open control into the child's own session.
+  // See `expectParentDelegationSurface` above, which is asserted identically
+  // before and after the close/reopen.
+  //
+  // Coverage genuinely removed, and why: the old assertion
+  // `expect(replayedStepText).toBe(liveStepText)` compared a step-count
+  // string rendered by a component that no longer exists, on a span that no
+  // longer accumulates steps. There is nothing left to point it at. Clause
+  // (3) below is its replacement in spirit — it pins the child's step to
+  // being absent from the parent, which is the contract the deletion created.
   async ({ page }) => {
-    // Delegation visuals (SubagentBlock cards) are verbose-only in the chat
-    // thread since commit 8e1bf1b9 (shouldRenderSubagentSpan gates on
-    // verboseChatEnabled, default false — src/store/chatPreferences.ts).
-    // This test asserts the sub-turn MECHANICS (replay round-trip: live
-    // step count survives a close/reopen) via
-    // [data-testid="subagent-collapsed"] as its thread-based signal, so it
-    // opts into verbose chat to keep that signal working across BOTH the
-    // initial open and the reopen navigation below — independent of the
-    // default (non-verbose) display policy, which is covered separately by
-    // delegation-hidden.spec.ts. addInitScript persists for the rest of
-    // this page's lifetime, so one call here covers the later `page.goto('/')`
-    // reopen too.
-    await enableVerboseChat(page)
     await page.goto('/')
     await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
 
     const sessionId = await createSession(page)
+    // A REAL child session, so the open control has a live route to land on
+    // at the end of this test rather than a fabricated id.
+    const childSessionId = await createSession(page)
     const sessionTitle = `replay-fidelity-test-b-${Date.now()}`
     await renameSession(page, sessionId, sessionTitle)
 
-    // Dataset D2: spawn call + nested tool with ParentToolCallID.
+    const callId = 'c1'
+    const taskLabel = `replay-fidelity-b-${Date.now()}`
+
+    // Dataset D2: a delegation that was still in flight when the transcript
+    // was last written, plus a nested child tool call.
+    //
     // NOTE (ADR-036, 2026-07-04): tool: 'spawn' is deliberately kept as the
     // legacy pre-merge delegation tool name, NOT updated to 'delegate'. This
     // dataset exercises the replay backend's historical-transcript compat path
-    // (pkg/gateway/replay.go's buildSpawnIDsWithChildren explicitly checks
-    // tc.Tool == "spawn" || tc.Tool == "delegate" so sessions recorded before
-    // the rename still reconstruct a subagent span correctly). Changing this
-    // to 'delegate' would silently drop e2e coverage of that back-compat branch.
-    // Traces to: BDD Scenario 5.
+    // (pkg/gateway/replay.go's buildSpawnIDsWithChildren and classifyToolCall
+    // both check `tc.Tool == "spawn" || tc.Tool == "delegate" ||
+    // tc.Tool == "create_task"` so sessions recorded before the rename still
+    // reconstruct a subagent span correctly). Changing this to 'delegate'
+    // would silently drop e2e coverage of that back-compat branch.
+    //
+    // The spawn call carries no result and status 'running': its terminal
+    // frames are withheld by `stillActive` anyway, and recording a "success"
+    // for a call the transcript also says is still open would be an
+    // incoherent fixture.
     seedTranscript(sessionId, [
       {
         id: 'entry-asst-spawn',
@@ -408,12 +604,10 @@ test(
         agent_id: 'mia',
         tool_calls: [
           {
-            id: 'c1',
+            id: callId,
             tool: 'spawn',
-            status: 'success',
-            duration_ms: 500,
-            parameters: { task: 'do nested work' },
-            result: { status: 'done' },
+            status: 'running',
+            parameters: { task: taskLabel },
           },
         ],
       },
@@ -431,47 +625,36 @@ test(
             duration_ms: 20,
             parameters: { cmd: 'echo nested' },
             result: { stdout: 'nested\n' },
-            parent_tool_call_id: 'c1',
+            parent_tool_call_id: callId,
           },
         ],
       },
     ])
+    appendPersistedSubagentStart(sessionId, childSessionId, callId, taskLabel, 'mia')
 
     await openSession(page, sessionId)
     await waitForReplayDone(page)
+    await expectParentDelegationSurface(page, taskLabel)
 
-    // Assert SubagentBlock is present.
-    const subagentBlock = page.locator('[data-testid="subagent-collapsed"]').first()
-    await expect(subagentBlock).toBeVisible({ timeout: 15_000 })
-
-    // Capture live step count from collapsed header.
-    const liveStepText = await subagentBlock.textContent()
-
-    // Expand the block.
-    await subagentBlock.click()
-
-    // Assert the nested tool call badge is present.
-    const nestedBadge = page.locator('[data-testid="tool-call-badge"][data-tool="shell"]').first()
-    await expect(nestedBadge).toBeVisible({ timeout: 5_000 })
-
-    // Close and reopen the session to validate replay round-trip.
-    // Navigate away then back.
+    // Close and reopen the session to validate the replay round-trip.
     await page.goto('/')
     await openSession(page, sessionId)
     await waitForReplayDone(page)
+    await expectParentDelegationSurface(page, taskLabel)
 
-    const replayedBlock = page.locator('[data-testid="subagent-collapsed"]').first()
-    await expect(replayedBlock).toBeVisible({ timeout: 15_000 })
-    const replayedStepText = await replayedBlock.textContent()
-
-    // Same step count as live.
-    expect(replayedStepText).toBe(liveStepText)
-
-    // Expand replayed block; nested badge still present.
-    await replayedBlock.click()
+    // Finally, take the open control: the row must not merely LOOK navigable,
+    // it must actually land on the child's own session (FR-046 / ADR-091
+    // D7/I-4 — "the child's steps are visible only in the child's own
+    // session, opened via childSessionId"). Left last so nothing above
+    // depends on the navigation.
+    await openActivityPanel(page)
+    await page
+      .locator('[data-testid="activity-row"]', { hasText: taskLabel })
+      .locator('[data-testid="activity-row-open"]')
+      .click()
     await expect(
-      page.locator('[data-testid="tool-call-badge"][data-tool="shell"]').first(),
-    ).toBeVisible({ timeout: 5_000 })
+      page.locator(`[data-active-session-id="${childSessionId}"]`),
+    ).toBeVisible({ timeout: 15_000 })
   },
 )
 
