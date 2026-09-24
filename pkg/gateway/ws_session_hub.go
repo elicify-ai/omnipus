@@ -144,6 +144,12 @@ type hubRegistry struct {
 	// from config.json.
 	idleEvictAfter time.Duration
 
+	// streamTokenDelay is the e2e scenario-h test-only pause the web
+	// streamer takes after publishing each token (see
+	// streamTokenDelayEnvOverrideVar). Zero — no pause, no cost beyond one
+	// field read per token — in every normal process.
+	streamTokenDelay time.Duration
+
 	// lastEvictSweepUnixNano rate-limits the piggybacked idle-eviction
 	// sweep (BE-DESIGN.md §3.2: "a sweep piggybacked on submit, at most
 	// once per minute") — submit is the hottest path in the whole hub, so
@@ -213,6 +219,37 @@ const hubIdleSweepInterval = time.Minute
 // operator-facing docs — a real operator has no way to discover or set it.
 const hubIdleEvictAfterEnvOverrideVar = "OMNIPUS_TEST_ONLY_HUB_IDLE_EVICT_SECONDS"
 
+// streamTokenDelayEnvOverrideVar is a test-only shortcut in the same style
+// as hubIdleEvictAfterEnvOverrideVar: unset in every normal install, read
+// once at hubRegistry construction, and only ever set by an e2e test's own
+// gateway process launch. When set to a positive number of milliseconds, the
+// web streamer pauses that long after publishing each token frame, so a
+// turn stays mid-answer long enough for the #823 e2e scenario h to kill the
+// gateway between the first token and done (a fast model otherwise finishes
+// before the kill lands). Deliberately not a config.json key, not exposed via
+// any REST endpoint or the SPA, and not documented in the operator-facing
+// docs — a real operator has no way to discover or set it.
+const streamTokenDelayEnvOverrideVar = "OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS"
+
+// streamTokenDelayFromEnv reads streamTokenDelayEnvOverrideVar once.
+func streamTokenDelayFromEnv() time.Duration {
+	raw := os.Getenv(streamTokenDelayEnvOverrideVar)
+	if raw == "" {
+		return 0
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms < 0 {
+		logsafeError("ws: invalid "+streamTokenDelayEnvOverrideVar+", ignoring", "value", raw)
+		return 0
+	}
+	if ms == 0 {
+		return 0
+	}
+	logsafeWarn("ws: web streamer token pause enabled — this must NEVER be set in a production install",
+		"env_var", streamTokenDelayEnvOverrideVar, "ms", ms)
+	return time.Duration(ms) * time.Millisecond
+}
+
 func newHubRegistry(bootID string) *hubRegistry {
 	idleEvictAfter := 10 * time.Minute
 	if raw := os.Getenv(hubIdleEvictAfterEnvOverrideVar); raw != "" {
@@ -228,6 +265,8 @@ func newHubRegistry(bootID string) *hubRegistry {
 		m:              make(map[string]*sessionHub),
 		bootID:         bootID,
 		idleEvictAfter: idleEvictAfter,
+
+		streamTokenDelay: streamTokenDelayFromEnv(),
 	}
 	// Start the process-wide counter at 1, not 0, so every hub's head — and
 	// therefore every seq a session_snapshot / catch_up_complete /

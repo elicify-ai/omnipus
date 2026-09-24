@@ -623,6 +623,11 @@ func (s *wsStreamer) Update(ctx context.Context, content string) error {
 			agentID:   producerAgentID,
 			content:   content,
 		}, data, nil)
+		// Test-only (streamTokenDelayEnvOverrideVar): zero in every normal
+		// process. Taken after the publish, outside every lock.
+		if h.hubs != nil && h.hubs.streamTokenDelay > 0 {
+			time.Sleep(h.hubs.streamTokenDelay)
+		}
 	}
 	return nil
 }
