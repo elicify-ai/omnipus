@@ -372,8 +372,8 @@ func TestSteerGenerationCancel_NeverRanChildUnblocksParent(t *testing.T) {
 	}
 
 	canceller := al.steerCanceller()
-	if _, err := canceller.CancelSubtree(context.Background(), queuedID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"}); err != nil {
-		t.Fatalf("CancelSubtree(queued): %v", err)
+	if _, cancelErr := canceller.CancelSubtree(context.Background(), queuedID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"}); cancelErr != nil {
+		t.Fatalf("CancelSubtree(queued): %v", cancelErr)
 	}
 
 	after, err := lifecycle.Load(queuedID)

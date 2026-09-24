@@ -110,8 +110,8 @@ func TestPublishChildUnderParentLock_ChildWriteFailureRestoresExistingParent(t *
 	}
 
 	childID := "child-write-fails-existing"
-	if err := os.MkdirAll(store.path(childID), 0o755); err != nil {
-		t.Fatal(err)
+	if mkdirErr := os.MkdirAll(store.path(childID), 0o755); mkdirErr != nil {
+		t.Fatal(mkdirErr)
 	}
 	err = store.PublishChildUnderParentLock(parent.SessionID, func(current *LifecycleRecord, existed bool) (*LifecycleRecord, error) {
 		if !existed {

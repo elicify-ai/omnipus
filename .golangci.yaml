@@ -347,6 +347,19 @@ linters:
           - errorlint
         path: ^pkg/sandbox/dev_servers_test\.go$
         source: 'err\.\(GatewayCapError\)'
+      # errorlint: PublishChildUnderParentLock's own doc comment
+      # (pkg/session/lifecycle.go) states fn's error is passed through
+      # UNCHANGED — "a non-nil error aborts both [writes]" — and
+      # PublishChildUnderParentLock itself never wraps fnErr (returns it
+      # directly). This test proves that passthrough by checking IDENTITY,
+      # the same pattern as the ten cases above: converting to errors.Is
+      # would still pass today but would also silently start passing if a
+      # future change wrapped the error, hiding exactly the regression this
+      # assertion exists to catch.
+      - linters:
+          - errorlint
+        path: ^pkg/session/lifecycle_publish_child_test\.go$
+        source: 'err != wantErr'
       # nilnil: three deliberate "callable unconditionally; a nil result means
       # no per-turn override, so fall back to the boot/global policy" contracts.
       # Each is documented at its declaration and every caller assigns the
@@ -376,6 +389,48 @@ linters:
       - linters:
           - nilnil
         path: ^pkg/providers/oauth_token_source\.go$
+      # nilnil: PublishChildUnderParentLock's fn callback (pkg/session/
+      # lifecycle.go) documents nil child + nil error as "a parent-only
+      # write — e.g. nothing to launch this call", NOT an ambiguous
+      # not-found. This test's callback exercises exactly that documented
+      # branch.
+      - linters:
+          - nilnil
+        path: ^pkg/session/lifecycle_publish_child_test\.go$
+        source: 'return nil, nil // no child to publish this call'
+      # nilnil: MessageInboxStore.Latest deliberately returns (nil, nil) for
+      # "no message found for this child" — its doc comment says so, and its
+      # sole caller (pkg/tools/delegate_status.go's executeDurableStatus)
+      # already checks err separately before branching on latest == nil, so
+      # there is no ambiguity to resolve: nil unambiguously means not-found
+      # here, the same way a map lookup's zero value would.
+      - linters:
+          - nilnil
+        path: ^pkg/session/message_inbox\.go$
+        source: 'return nil, nil$'
+      # nilnil: parseDelegateGoal's own doc comment says neither
+      # criteria-nor-dod supplied "means no goal at all — the default, and
+      # the only case that returns (nil, nil)" — deliberate, not an
+      # ambiguous not-found; every caller already treats a nil *GoalSpec as
+      # "no goal".
+      - linters:
+          - nilnil
+        path: ^pkg/tools/delegate_goal\.go$
+        source: '^\t\treturn nil, nil$'
+      # nilerr: Deliver's "best-effort wake" contract — the upward message is
+      # already durably stored by the time a wake/notify attempt is made, so
+      # a wake-transport failure is logged (WarnCF) and swallowed rather than
+      # failing the whole Deliver call; the boot re-nudge (WP-D) covers a
+      # missed wake later. Documented at both return sites and mirrored
+      # deliberately by the test fake below (its own comment says so).
+      - linters:
+          - nilerr
+        path: ^pkg/agent/steer_audience\.go$
+        source: 'return steer\.Delivery\{MessageID: res\.MessageID, Outcome: steer\.DeliveryStoredNotWoken\}, nil'
+      - linters:
+          - nilerr
+        path: ^pkg/tools/message_parent_test\.go$
+        source: 'return steer\.Delivery\{MessageID: res\.MessageID, Outcome: steer\.DeliveryWoke\}, nil'
       - linters:
           - lll
         source: '^//go:generate '

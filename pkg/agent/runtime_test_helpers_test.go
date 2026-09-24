@@ -5,22 +5,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-func newPersistentTestSession(t testing.TB) session.SessionStore {
-	t.Helper()
-	store, err := session.NewUnifiedStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("new persistent test session store: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	return store
-}
+// newPersistentTestSession was deleted 2026-09-24 as an unreachable
+// ADR-091 leftover (golangci unused): grep found no caller anywhere in
+// the repo.
 
 type eventCollector struct {
 	mu     sync.Mutex
@@ -46,16 +38,8 @@ func newEventCollector(t *testing.T, al *AgentLoop) (*eventCollector, func()) {
 	}
 }
 
-func (c *eventCollector) hasEventOfKind(kind EventKind) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, event := range c.events {
-		if event.Kind == kind {
-			return true
-		}
-	}
-	return false
-}
+// hasEventOfKind was deleted 2026-09-24 as an unreachable ADR-091
+// leftover (golangci unused): grep found no caller anywhere in the repo.
 
 type blockingExternalDriver struct {
 	startOnce   sync.Once
@@ -88,27 +72,12 @@ func (d *blockingExternalDriver) Test(context.Context) runner.ConnectionTestResu
 	return runner.ConnectionTestResult{OK: true}
 }
 
-func waitCtxCanceled(t *testing.T, driver *blockingExternalDriver, label string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if driver.ctxCanceled.Load() {
-			return
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	t.Errorf("%s: external driver context was not cancelled", label)
-}
-
-func withBlockingDriver(t *testing.T) (*blockingExternalDriver, func()) {
-	t.Helper()
-	driver := newBlockingExternalDriver()
-	previous := newExternalDriver
-	newExternalDriver = func(string, runner.ConsentHandler) (runner.ExternalAgentRunner, error) {
-		return driver, nil
-	}
-	return driver, func() { newExternalDriver = previous }
-}
+// waitCtxCanceled and withBlockingDriver were deleted 2026-09-24 as
+// unreachable ADR-091 leftovers (golangci unused): grep found no caller
+// of either anywhere in the repo. blockingExternalDriver itself and its
+// other methods stay — cancel_stress_test.go's driverRegistry still
+// constructs it directly via newBlockingExternalDriver, and the interface
+// assertion below keeps Run/Decide/Cancel/Input/Resume/Test reachable.
 
 var _ runner.ExternalAgentRunner = (*blockingExternalDriver)(nil)
 

@@ -429,66 +429,16 @@ func pendingSpawnKeys(sessionID, channel, chatID string) []string {
 	return keys
 }
 
-// markPendingSpawn records, for each of keys, that a delegate sub-turn spawn
-// is about to be dispatched — self-locking (unlike recentlySettledLocked/
-// hasPendingSpawnLocked below). Pre-ADR-091, its only caller was
-// AgentLoopSpawner.MarkPendingDelegateSpawn (subturn.go, since deleted),
-// running on the delegating parent's own tool-execution goroutine, which
-// did NOT already hold al.cancelPreArm.mu (contrast with
-// turnImminentForIdentity, which is only ever reached from inside
-// armCancelOrFindActiveTurn's own critical section). ADR-091 fix lane
-// RX-SUBTURN note: grep finds no caller of this method anywhere in the
-// repo today — flagged, not fixed, since fixing the call site is a code
-// change outside this lane's scope. Opportunistically evicts stale entries
-// past cancelPreArmTTL on every call (mirrors armLocked's and
-// markSettled's own opportunistic-sweep shape) so a leaked marker — the
-// goroutine that was supposed to clear it never even got scheduled —
-// cannot grow this map unbounded across a long-running process.
-//
-// Safe to call with a nil receiver (no-op), matching markSettled's own
-// nil-safety, so a bare turnState-only unit test's al.cancelPreArm being nil
-// never needs its own guard at this call site.
-func (p *cancelPreArm) markPendingSpawn(now time.Time, keys ...string) {
-	if p == nil {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for k, t := range p.pendingSpawns {
-		if now.Sub(t) > cancelPreArmTTL {
-			delete(p.pendingSpawns, k)
-		}
-	}
-	for _, key := range keys {
-		if key == "" {
-			continue
-		}
-		p.pendingSpawns[key] = now
-	}
-}
-
-// clearPendingSpawn removes any pending-spawn marker filed under each of
-// keys. Self-locking (see markPendingSpawn's doc comment for why) and a
-// harmless no-op for a key that was never marked (an ordinary map delete on
-// an absent key) — pre-ADR-091, safe to call unconditionally from the
-// deleted spawnSubTurn's cleanup regardless of whether THIS specific spawn
-// ever had a marker set for it (e.g. a non-delegate caller of the deleted
-// SpawnSubTurn/spawnSubTurn, which never called MarkPendingDelegateSpawn
-// in the first place). Like markPendingSpawn above, grep finds no caller
-// of this method in the repo today.
-func (p *cancelPreArm) clearPendingSpawn(keys ...string) {
-	if p == nil {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, key := range keys {
-		if key == "" {
-			continue
-		}
-		delete(p.pendingSpawns, key)
-	}
-}
+// markPendingSpawn and clearPendingSpawn (the writers for pendingSpawns,
+// keyed the same way as pendingSpawnKeys above) were deleted 2026-09-24 as
+// unreachable ADR-091 sub-turn leftovers (golangci unused): grep across
+// pkg/, tests/ and cmd/ found no caller of either anywhere in the repo —
+// only comments referencing them, per the RX-SUBTURN note this doc comment
+// used to carry. pendingSpawns itself and hasPendingSpawnLocked (below)
+// stay: hasPendingSpawnLocked is still read from turnImminentForIdentity,
+// it just now always observes an empty map (no code path writes to it
+// anymore) until a live delegate-spawn caller is wired back in — a
+// behavior change outside this lane's scope.
 
 // hasPendingSpawnLocked reports whether any of keys has a live (not
 // TTL-expired) pending-spawn marker, as of now. Callers MUST hold p.mu —

@@ -38,11 +38,22 @@ func gatewaySteerCanceller(al *agent.AgentLoop) steer.Canceller {
 		return nil
 	}
 	if value, ok := gatewaySteerCancellers.Load(al); ok {
-		return value.(steer.Canceller)
+		if c, ok := value.(steer.Canceller); ok {
+			return c
+		}
+		// gatewaySteerCancellers is private to this file; every writer
+		// (setGatewaySteerCanceller's Store, and the LoadOrStore below)
+		// stores a steer.Canceller — unreachable in practice. Fall through
+		// to mint a fresh canceller instead of trusting that blindly.
 	}
 	canceller := agent.NewSteerCanceller(al.GetSessionLifecycleStore())
 	actual, _ := gatewaySteerCancellers.LoadOrStore(al, steer.Canceller(canceller))
-	return actual.(steer.Canceller)
+	c, ok := actual.(steer.Canceller)
+	if !ok {
+		// Same guarantee as above — unreachable in practice.
+		return canceller
+	}
+	return c
 }
 
 // sendCancelStageFrame marshals a generated.CancelStageFrame and delivers it via wc.sendCh.

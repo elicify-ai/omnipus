@@ -127,8 +127,8 @@ func TestLaunch_GrandchildRemainingDepth_InheritsFromParentBudget_NotRecomputedF
 		t.Fatalf("load A: %v", err)
 	}
 	aRec.SteeredBy.Authorization.RemainingDepth = 1
-	if err := lifecycle.Persist(aRec); err != nil {
-		t.Fatalf("persist tightened A: %v", err)
+	if persistErr := lifecycle.Persist(aRec); persistErr != nil {
+		t.Fatalf("persist tightened A: %v", persistErr)
 	}
 
 	resB, err := l.Launch(ctx, steer.LaunchRequest{

@@ -16,7 +16,7 @@ import (
 type fixtureT interface {
 	Helper()
 	Fatalf(format string, args ...any)
-	Cleanup(func())
+	Cleanup(f func())
 }
 
 // TreeNode identifies one real session in a DelegationTree.

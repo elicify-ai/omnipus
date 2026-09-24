@@ -411,8 +411,8 @@ func TestLaunch_SteeredPersistsRequiredMetadataAndActiveGoal(t *testing.T) {
 		t.Fatalf("NewChannelSession(steerer): %v", err)
 	}
 	workspaceID := "ws-1"
-	if err := al.GetSessionStore().SetMeta(steererMeta.ID, session.MetaPatch{WorkspaceID: &workspaceID}); err != nil {
-		t.Fatalf("SetMeta(steerer).WorkspaceID: %v", err)
+	if setMetaErr := al.GetSessionStore().SetMeta(steererMeta.ID, session.MetaPatch{WorkspaceID: &workspaceID}); setMetaErr != nil {
+		t.Fatalf("SetMeta(steerer).WorkspaceID: %v", setMetaErr)
 	}
 
 	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{

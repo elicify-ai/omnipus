@@ -442,8 +442,8 @@ func TestCompletion_LastChildCompletesWaitingParent(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("lastChild's completion never woke waitingParent — Finding A's ReportingTarget fix did not take effect")
 	}
-	if _, err := al.processSystemMessage(context.Background(), wake); err != nil {
-		t.Fatalf("processSystemMessage(wake waitingParent): %v", err)
+	if _, wakeErr := al.processSystemMessage(context.Background(), wake); wakeErr != nil {
+		t.Fatalf("processSystemMessage(wake waitingParent): %v", wakeErr)
 	}
 
 	// Finding B: waitingParent's own turn must have completed on this exit
@@ -559,8 +559,8 @@ func TestCompletion_ToolIterationLimit_WakesAndUnblocksParent(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("lastChild's tool-iteration notice never woke waitingParent — the parent is never told anything happened and hangs forever (ADR-091 RX-HANG)")
 	}
-	if _, err := al.processSystemMessage(context.Background(), wake); err != nil {
-		t.Fatalf("processSystemMessage(wake waitingParent): %v", err)
+	if _, wakeErr := al.processSystemMessage(context.Background(), wake); wakeErr != nil {
+		t.Fatalf("processSystemMessage(wake waitingParent): %v", wakeErr)
 	}
 
 	// waitingParent must actually LAND terminal — proving
@@ -936,8 +936,8 @@ func TestGoalDelegation_Judged(t *testing.T) {
 		t.Fatalf("Load(child): %v", err)
 	}
 	rec.State = session.LifecycleRunning
-	if err := lifecycle.Persist(rec); err != nil {
-		t.Fatalf("Persist(running): %v", err)
+	if persistErr := lifecycle.Persist(rec); persistErr != nil {
+		t.Fatalf("Persist(running): %v", persistErr)
 	}
 
 	g, err := resolveGoalRecordStore().Get(rec.GoalRef)
@@ -1043,8 +1043,8 @@ func TestFinishSteeredGoalTurn_BareClaimFollowUpRoutesThroughAsyncNotifier(t *te
 		t.Fatalf("Load(child): %v", err)
 	}
 	rec.State = session.LifecycleRunning
-	if err := lifecycle.Persist(rec); err != nil {
-		t.Fatalf("Persist(running): %v", err)
+	if persistErr := lifecycle.Persist(rec); persistErr != nil {
+		t.Fatalf("Persist(running): %v", persistErr)
 	}
 
 	ts, err := al.reconstructSteeredTurn(rec, nil)

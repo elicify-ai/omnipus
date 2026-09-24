@@ -251,8 +251,8 @@ func newE2EHarnessCustom(
 	if err != nil {
 		t.Fatalf("marshal fixture workspace: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workspaceDir, "adr091-fixture-workspace.json"), workspaceRecord, 0o600); err != nil {
-		t.Fatalf("write fixture workspace: %v", err)
+	if writeErr := os.WriteFile(filepath.Join(workspaceDir, "adr091-fixture-workspace.json"), workspaceRecord, 0o600); writeErr != nil {
+		t.Fatalf("write fixture workspace: %v", writeErr)
 	}
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
@@ -622,11 +622,11 @@ func TestE2E_StopSurvivesRestart(t *testing.T) {
 		t.Fatalf("B stop marker = %+v at generation %d, want current-generation marker", stopped.Stop, stopped.Generation)
 	}
 	oldGeneration := stopped.Generation
-	if err := h.tree.Crash(); err != nil {
-		t.Fatalf("Crash: %v", err)
+	if crashErr := h.tree.Crash(); crashErr != nil {
+		t.Fatalf("Crash: %v", crashErr)
 	}
-	if err := h.tree.Reboot(context.Background()); err != nil {
-		t.Fatalf("Reboot: %v", err)
+	if rebootErr := h.tree.Reboot(context.Background()); rebootErr != nil {
+		t.Fatalf("Reboot: %v", rebootErr)
 	}
 	reopened, err := h.tree.Deps().LifecycleStore.Load(h.tree.B.SessionID)
 	if err != nil {
@@ -671,11 +671,11 @@ func TestE2E_Restart_ParentToldOnce(t *testing.T) {
 	if first.MessageID == "" {
 		t.Fatal("first terminal delivery has empty message id")
 	}
-	if err := h.tree.Crash(); err != nil {
-		t.Fatalf("Crash: %v", err)
+	if crashErr := h.tree.Crash(); crashErr != nil {
+		t.Fatalf("Crash: %v", crashErr)
 	}
-	if err := h.tree.Reboot(context.Background()); err != nil {
-		t.Fatalf("Reboot: %v", err)
+	if rebootErr := h.tree.Reboot(context.Background()); rebootErr != nil {
+		t.Fatalf("Reboot: %v", rebootErr)
 	}
 	second, err := h.tree.QueueWake(h.tree.B.SessionID, h.tree.B.Generation)
 	if err != nil {

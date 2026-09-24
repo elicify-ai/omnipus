@@ -345,6 +345,10 @@ func TestContract_ADR091_DeleteSessionResponseWithStopReport(t *testing.T) {
 	var unmarshaled map[string]interface{}
 	err = json.Unmarshal(jsonData, &unmarshaled)
 	require.NoError(t, err, "should unmarshal DELETE response")
-	require.True(t, unmarshaled["success"].(bool))
-	require.True(t, unmarshaled["partial"].(bool))
+	success, ok := unmarshaled["success"].(bool)
+	require.True(t, ok, "success field should decode as a bool")
+	require.True(t, success)
+	partial, ok := unmarshaled["partial"].(bool)
+	require.True(t, ok, "partial field should decode as a bool")
+	require.True(t, partial)
 }

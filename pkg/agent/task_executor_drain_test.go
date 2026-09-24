@@ -25,8 +25,6 @@ package agent
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -35,44 +33,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
-// newDrainTestExecutorWithProvider mirrors newNoPerAgentCapExecutor
-// (task_executor_no_per_agent_cap_test.go) but takes an explicit provider —
-// needed here so TestTaskExecutor_Drain_GoalLoopRedispatchChainTerminatesAtNextHop
-// can synchronously flip te.draining from INSIDE the worker's own Chat call,
-// something goroutineCtxHook's short-circuit-before-the-run-loop seam cannot
-// reach (it returns before the goal-loop's redispatch decision is ever made).
-func newDrainTestExecutorWithProvider(t *testing.T, provider providers.LLMProvider) (*TaskExecutor, *task.Store, *AgentLoop) {
-	t.Helper()
-	tmpDir := filepath.Join(t.TempDir(), "home")
-	require.NoError(t, os.MkdirAll(tmpDir, 0o700))
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096, MaxToolIterations: 10,
-			},
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
-		},
-	}
-	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
-	t.Cleanup(al.Close)
-
-	dir := t.TempDir()
-	store := task.New(dir + "/tasks")
-
-	te := &TaskExecutor{
-		agentLoop:    al,
-		store:        store,
-		running:      make(map[string]*taskSlot),
-		dispatchSema: newDispatchSemaphore(100),
-	}
-	return te, store, al
-}
+// newDrainTestExecutorWithProvider was deleted 2026-09-24 as an
+// unreachable ADR-091 leftover (golangci unused): grep found no caller
+// anywhere in the repo.
 
 // --- (a) Drain waits for a genuinely in-flight task-dispatch goroutine -----
 
