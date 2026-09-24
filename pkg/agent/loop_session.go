@@ -210,6 +210,46 @@ func (al *AgentLoop) ResolveSessionStore(sessionID string) *session.UnifiedStore
 	return nil
 }
 
+// taskSessionStore resolves the UnifiedStore that actually holds a TASK run's
+// session, instead of assuming the agent the task is assigned to also owns the
+// store its session lives in.
+//
+// The two shapes a task session can have, and why only the session id can tell
+// them apart:
+//
+//   - ADR-091 (task_executor.go::startTaskNowViaLauncher ->
+//     SteerLauncher.Launch -> launchOrdinaryRoot): the session is minted in the
+//     SHARED store, GetSessionStore() at $OMNIPUS_HOME/sessions.
+//   - Pre-ADR-091, still live for the ExecuteTask path
+//     (task_executor.go::createTaskSessionSync and StartTaskNow's launcher-less
+//     branch): the session is minted in the agent's OWN legacy store,
+//     GetAgentStore(agentID) at <agent workspace>/sessions.
+//
+// Both stores refuse a write against a session they do not hold
+// (UnifiedStore.AppendTranscript/AppendTranscriptStrict check meta.json first)
+// and ReadTranscript answers with an EMPTY slice and no error, so resolving by
+// agent against a launcher-minted session drops every write and reads back
+// nothing — silently, with no status code to notice. That is the defect this
+// helper closes at its root: the store follows the SESSION, never the agent.
+//
+// Behaviour-preserving for the legacy shape: ResolveSessionStore falls back to
+// scanning the per-agent stores, so a session that lives in the agent's own
+// store still resolves to exactly the store GetAgentStore would have returned.
+// An id that resolves to no store at all (no session yet, or the "task:<id>"
+// placeholder the run path uses when a task has no session) falls back to
+// GetAgentStore, leaving those callers exactly as they were.
+func (al *AgentLoop) taskSessionStore(sessionID, agentID string) *session.UnifiedStore {
+	if al == nil {
+		return nil
+	}
+	if sessionID != "" {
+		if store := al.ResolveSessionStore(sessionID); store != nil {
+			return store
+		}
+	}
+	return al.GetAgentStore(agentID)
+}
+
 // ListAllSessions returns a stably-ordered, paginated window of sessions from
 // the shared store merged with legacy per-agent stores, deduplicated
 // (ADR-057 FR-092/FR-098, W16b, owner U9 — the loop layer of the four-layer

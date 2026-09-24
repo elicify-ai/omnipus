@@ -652,7 +652,7 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 		SenderID:            "task-executor",
 		UserMessage:         prompt,
 		TranscriptSessionID: taskChatID,
-		TranscriptStore:     al.GetAgentStore(agent.ID),
+		TranscriptStore:     al.taskSessionStore(taskChatID, agent.ID),
 		// WorkspaceID is already on ctx via tools.WithWorkspaceID (set by the
 		// task executor before calling processTaskDirect); thread it through
 		// processOptions explicitly too so runExternalCLISubTurn's
