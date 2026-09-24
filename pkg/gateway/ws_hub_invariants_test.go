@@ -71,15 +71,15 @@ func TestHub_H7_PersistBeforeDone(t *testing.T) {
 // ADR-091 D1/D7 (merge of release/v0.1.1): a steered child is a session of
 // its own, and every frame it produces carries ITS OWN session id
 // (producing_session_id is retired). So a child's tool frame is numbered in
-// the CHILD's hub — never the parent's — and the child's own streamed text
-// is published there too (the parentSpawnCallID shadow gate is deleted), so
-// a tab that opens the child sees it live and catches it up like any other
-// session. The parent's hub receives none of it; the parent only gets its
-// own subagent_* lifecycle frames (TestHub_H12_SpanFramesOncePerSession_TwoTabs).
+// the CHILD's hub — never the parent's — so a tab that opens the child sees
+// its tool calls live and catches them up like any other session. The
+// parent's hub receives none of it; the parent only gets its own subagent_*
+// lifecycle frames (TestHub_H12_SpanFramesOncePerSession_TwoTabs).
 func TestHub_H14_DelegationRouting(t *testing.T) {
 	h := makeMinimalHandler()
 	h.hubSyncTap(agent.Event{
 		Kind: agent.EventKindToolExecStart,
+		Meta: agent.EventMeta{TurnID: "child-turn"},
 		Payload: agent.ToolExecStartPayload{
 			ToolCallID: session.ToolCallID("child-call"),
 			SessionID:  "child-session",
@@ -98,14 +98,23 @@ func TestHub_H14_DelegationRouting(t *testing.T) {
 	require.True(t, ok, "the child's frame carries its own hub's seq")
 	assert.GreaterOrEqual(t, seq, float64(1))
 
-	child := &wsStreamer{sessionID: "child-session", chatID: "chat-c", h: h}
-	child.SetTurnID("child-turn")
-	child.SetParentSpawnCallID("spawn-call")
-	require.NoError(t, child.Update(context.Background(), "child narration"))
-	tokens := journalFramesOfType(t, childHub, "token")
-	require.Len(t, tokens, 1, "the child's own tokens are published once, in its own hub")
-	assert.Equal(t, "child narration", tokens[0]["content"])
-	assert.Nil(t, h.hubs.lookup("parent-session"), "and still nothing in the parent's hub")
+	// A steered child has no web streamer (the launcher gives it no
+	// channel), so it never streams tokens or publishes a done anywhere. Its
+	// turn still ends with an EventKindTurnEnd whose payload SessionID is the
+	// ROUTING (root) session — that must neither create nor write into the
+	// parent's hub, and must add no frame to the child's own journal (it only
+	// forgets the child's finished items, merge-review F1).
+	headBefore := childHub.snapshotHead()
+	h.hubSyncTap(agent.Event{
+		Kind:    agent.EventKindTurnEnd,
+		Meta:    agent.EventMeta{TurnID: "child-turn"},
+		Payload: agent.TurnEndPayload{Status: agent.TurnEndStatusCompleted, SessionID: "parent-session"},
+	})
+	assert.Nil(t, h.hubs.lookup("parent-session"), "a child's turn end never reaches the parent's hub")
+	assert.Equal(t, headBefore, childHub.snapshotHead(), "a child's turn end publishes no frame")
+	assert.Empty(t, journalFramesOfType(t, childHub, "token"), "a steered child streams no tokens")
+	assert.Empty(t, journalFramesOfType(t, childHub, "done"), "a steered child publishes no done")
+	assert.False(t, hubProjActive(childHub), "the child's finished turn no longer pins its hub")
 }
 
 // TestHub_H15_ProjectionOverBudget_KeepsTheCurrentAnswerWhole pins §3.1's
