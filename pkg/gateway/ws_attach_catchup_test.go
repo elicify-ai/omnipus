@@ -504,3 +504,50 @@ func TestSend_H17_FallbackTurnNumberedWithNoTabAttached(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, tokenSeq+1, doneSeq)
 }
+
+// TestAttach_FailedRebuild_NoCatchUpComplete pins #823 review item 9b: when a
+// snapshot rebuild cannot be completed (history unreadable, replay aborted),
+// the gateway must NOT send catch_up_complete{W} — that would move the
+// client's cursor past a history it never received, so a later reconnect
+// would resume from W and the missing part would be lost for good. It sends
+// the error (+ done{replay_error}) instead, drops the connection's binding
+// and its held live frames, and the client retries the attach.
+func TestAttach_FailedRebuild_NoCatchUpComplete(t *testing.T) {
+	f := newAttachFixture(t, "turn-fail", "msg-fail")
+	require.NoError(t, f.streamer.Update(context.Background(), "before "))
+	setAttachHook(t, func(string) {
+		// A live frame published after the bind — it must not be delivered
+		// behind a failed catch-up.
+		require.NoError(t, f.streamer.Update(context.Background(), "after"))
+	})
+	wc := f.newConn("chat-fail")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the replay aborts on the cancelled context
+	f.h.handleAttachSession(ctx, "chat-fail", f.sid, nil, wc)
+
+	frames := drainWire(t, wc)
+	assert.Equal(t, -1, indexOfType(frames, "catch_up_complete"),
+		"a failed rebuild must never end with catch_up_complete: %v", typesOf(frames))
+	assert.GreaterOrEqual(t, indexOfType(frames, "error"), 0, "the client is told the rebuild failed")
+	for _, fr := range frames {
+		if fr.Type == "session_snapshot" {
+			continue // carries W as its position, it is not a numbered frame
+		}
+		assert.Nil(t, fr.Seq, "no numbered live frame may follow a failed catch-up (%s)", fr.Type)
+	}
+	assert.False(t, f.h.connBoundToSession(wc, f.sid), "the connection is unbound until it re-attaches")
+}
+
+// drainWire reads whatever else arrives within a short quiet period.
+func drainWire(t *testing.T, wc *wsConn) []wireFrame {
+	t.Helper()
+	var out []wireFrame
+	for {
+		select {
+		case raw := <-wc.sendCh:
+			out = append(out, decodeWire(t, raw))
+		case <-time.After(200 * time.Millisecond):
+			return out
+		}
+	}
+}

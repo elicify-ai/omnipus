@@ -158,3 +158,32 @@ func TestHub_IdleEvictionWaitsForUnfinishedTurn(t *testing.T) {
 	assert.NotSame(t, hub, live)
 	assert.Equal(t, live.snapshotHead(), seq)
 }
+
+// TestHub_AbandonedTurn_ClearsItsToolCardsToo pins #823 review item 9a: an
+// abandoned turn (the B4 path: no done will ever come) must leave nothing of
+// itself in the active-turn projection — its streamed text AND its tool
+// cards. The first version only dropped the text, so every later snapshot
+// showed the dead turn's tool calls "running" forever and the hub could
+// never be evicted.
+func TestHub_AbandonedTurn_ClearsItsToolCardsToo(t *testing.T) {
+	f := newAttachFixture(t, "turn-abandoned", "msg-abandoned")
+	require.NoError(t, f.streamer.Update(context.Background(), "working on it"))
+	f.h.hubSyncTap(agent.Event{
+		Kind: agent.EventKindToolExecStart,
+		Meta: agent.EventMeta{TurnID: "turn-abandoned"},
+		Payload: agent.ToolExecStartPayload{
+			ToolCallID: session.ToolCallID("call-stuck"), SessionID: f.sid, Tool: "bash",
+		},
+	})
+	hub := f.h.hubs.lookup(f.sid)
+	require.NotNil(t, hub)
+
+	f.streamer.ReleaseStreamOwnership() // B4: abandoned, no Finalize
+
+	hub.mu.Lock()
+	items := hub.proj.snapshot()
+	active := hub.proj.active()
+	hub.mu.Unlock()
+	assert.Empty(t, items, "nothing of an abandoned turn may stay in the projection")
+	assert.False(t, active, "an abandoned turn must not pin the hub against idle eviction")
+}

@@ -586,11 +586,11 @@ func (h *sessionHub) bindLive(c hubConn) (head uint64, ok bool) {
 	return h.head, true
 }
 
-// forgetTurnText removes an abandoned turn's streamed text from the
-// active-turn projection (see activeTurnProjection.forgetTurnText).
-func (h *sessionHub) forgetTurnText(turnID string) {
+// forgetTurn removes an abandoned turn's items from the active-turn
+// projection (see activeTurnProjection.forgetTurn).
+func (h *sessionHub) forgetTurn(turnID string) {
 	h.mu.Lock()
-	h.proj.forgetTurnText(turnID)
+	h.proj.forgetTurn(turnID)
 	h.mu.Unlock()
 }
 

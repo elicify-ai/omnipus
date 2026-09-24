@@ -267,6 +267,15 @@ func (c *wsConn) releaseHold() {
 	}
 }
 
+// discardHold ends hold mode dropping the held frames — for an attach whose
+// catch-up failed and whose connection was unbound: the held frames are all
+// in the session journal, and the client re-attaches from its cursor.
+func (c *wsConn) discardHold() {
+	c.qmu.Lock()
+	c.held, c.heldBytes, c.holding = nil, 0, false
+	c.qmu.Unlock()
+}
+
 // queuedFrames reports how many frames are waiting beyond sendCh plus how
 // many are held (tests and diagnostics).
 func (c *wsConn) queuedFrames() (queued, held int) {

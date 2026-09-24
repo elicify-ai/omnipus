@@ -144,6 +144,9 @@ func (p *activeTurnProjection) update(meta hubFrameMeta, frame []byte, sessionID
 		it := p.item("tool:"+meta.key, meta.key, hubKindToolStart)
 		p.bytes += len(frame) - len(it.start)
 		it.start = frame
+		if meta.turnID != "" {
+			it.turnID = meta.turnID
+		}
 		touched = "tool:" + meta.key
 	case hubKindToolResult:
 		it := p.item("tool:"+meta.key, meta.key, hubKindToolStart)
@@ -166,6 +169,9 @@ func (p *activeTurnProjection) update(meta hubFrameMeta, frame []byte, sessionID
 		it := p.item("item:"+meta.key, meta.key, hubKindItem)
 		p.bytes += len(frame) - len(it.start)
 		it.start = frame
+		if meta.turnID != "" {
+			it.turnID = meta.turnID
+		}
 		touched = "item:" + meta.key
 	case hubKindDone:
 		// done(T) is published only after T's final answer was persisted
@@ -230,19 +236,22 @@ func (p *activeTurnProjection) evictOlder(keep string) int {
 	return evicted
 }
 
-// forgetTurnText drops the streamed text of turnID's messages. Used only
-// for a turn abandoned without a done (ADR-082 review CR4/F2): its text was
-// never persisted and no done will ever close it, so keeping it would show
-// every later snapshot a phantom, never-finishing message.
-func (p *activeTurnProjection) forgetTurnText(turnID string) {
+// forgetTurn drops everything turnID left in the projection — its streamed
+// text, its tool calls, its media and errors (open delegate spans are the
+// delegate's own and stay). Used only for a turn abandoned without a done
+// (ADR-082 review CR4/F2, #823 review item 9): nothing of it was persisted
+// and no done will ever close it, so keeping it would show every later
+// snapshot a message and tool cards that never finish, and would pin the
+// hub against idle eviction forever.
+func (p *activeTurnProjection) forgetTurn(turnID string) {
 	if turnID == "" {
 		return
 	}
 	keepOrder := p.order[:0]
 	for _, key := range p.order {
 		it := p.items[key]
-		if it != nil && it.kind == hubKindToken && it.turnID == turnID {
-			p.bytes -= len(it.text)
+		if it != nil && it.turnID == turnID && it.kind != hubKindSpanStart {
+			p.bytes -= len(it.text) + len(it.start) + len(it.end)
 			delete(p.items, key)
 			continue
 		}

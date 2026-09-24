@@ -923,8 +923,9 @@ func (s *wsStreamer) ReleaseStreamOwnership() {
 	// [ADR-082 review CR4/F2, re-expressed for #823] This exported path is
 	// the B4 abandoned-turn early return (and the defensive Cancel): the
 	// turn will never send a done and never persist this round's text, so
-	// the session hub must forget the text too — otherwise every later
-	// snapshot would show a phantom message that never finishes. Finalize
+	// the session hub must forget its text and tool cards too — otherwise
+	// every later snapshot would show a phantom message and "running" tools
+	// that never finish, and the hub could never be evicted. Finalize
 	// does NOT come through here (it releases the claim only, then persists
 	// and publishes done, which clears the projection in order).
 	s.statsMu.Lock()
@@ -932,7 +933,7 @@ func (s *wsStreamer) ReleaseStreamOwnership() {
 	s.statsMu.Unlock()
 	if h := s.wsHandler(); h != nil && h.hubs != nil && s.sessionID != "" {
 		if hub := h.hubs.lookup(s.sessionID); hub != nil {
-			hub.forgetTurnText(turnID)
+			hub.forgetTurn(turnID)
 		}
 	}
 }

@@ -213,7 +213,7 @@ func (h *WSHandler) hubToolExecStart(evt agent.Event) {
 		return
 	}
 	h.hubPublishMetaAlsoTo(startSID, string(generated.WsFrameTypeToolCallStart),
-		hubFrameMeta{kind: hubKindToolStart, key: string(p.ToolCallID)}, data, nil)
+		hubFrameMeta{kind: hubKindToolStart, key: string(p.ToolCallID), turnID: evt.Meta.TurnID}, data, nil)
 }
 
 func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
@@ -286,7 +286,7 @@ func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
 		return
 	}
 	h.hubPublishMetaAlsoTo(evtSID, string(generated.WsFrameTypeToolCallResult),
-		hubFrameMeta{kind: hubKindToolResult, key: string(p.ToolCallID)}, data, nil)
+		hubFrameMeta{kind: hubKindToolResult, key: string(p.ToolCallID), turnID: evt.Meta.TurnID}, data, nil)
 
 	if p.Tool == "switch_agent" && status == "success" {
 		h.hubEmitAgentSwitched(evtSID, producingSIDForResult)
@@ -428,7 +428,10 @@ func (h *WSHandler) hubError(evt agent.Event) {
 	// A turn-level error stays in the active-turn projection until the
 	// turn's done, so a snapshot taken meanwhile still shows it.
 	h.hubPublishMetaAlsoTo(errSID, string(generated.WsFrameTypeError),
-		hubFrameMeta{kind: hubKindItem, key: "error:" + evt.Meta.TurnID + ":" + strconv.FormatInt(evt.Time.UnixNano(), 10)},
+		hubFrameMeta{
+			kind: hubKindItem, key: "error:" + evt.Meta.TurnID + ":" + strconv.FormatInt(evt.Time.UnixNano(), 10),
+			turnID: evt.Meta.TurnID,
+		},
 		data, nil)
 }
 

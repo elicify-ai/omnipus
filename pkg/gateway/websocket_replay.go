@@ -33,6 +33,7 @@ type wsHandlerHandleAttachSession struct {
 	wc       *wsConn
 	store    *session.UnifiedStore
 	res      attachResult
+	failed   bool // the catch-up failed; nothing else of this attach runs
 }
 
 // attachAfterBindHook, when set, runs right after an attach has bound the
@@ -84,6 +85,9 @@ func (h *WSHandler) handleAttachSession(
 		wh.sendIncremental()
 	} else {
 		wh.sendSnapshot()
+	}
+	if wh.failed {
+		return
 	}
 	wh.wc.releaseHold()
 	wh.resumeLiveSession()
@@ -171,13 +175,7 @@ func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
 	entries, err := wh.store.ReadTranscript(wh.attachID)
 	if err != nil {
 		slog.Warn("ws: attach_session: could not read transcript", "session_id", wh.attachID, "error", err)
-		sid := wh.attachID
-		sendConnGenFrameDirect(wh.wc, generated.ErrorFrame{
-			Type:      string(generated.WsFrameTypeError),
-			SessionId: &sid,
-			Message:   "could not read session transcript",
-		})
-		wh.sendCatchUpComplete("snapshot")
+		wh.failCatchUp("could not read session transcript")
 		return
 	}
 	emitted, ok := wh.replayTranscript(entries)
@@ -275,12 +273,8 @@ func recordEmittedIDs(emitted map[string]bool, f any) {
 
 // abortCatchUp ends an attach whose catch-up could not be delivered. A
 // connection too slow to take its own catch-up is closed with 4008 so it
-// reconnects and tries again; a connection already closed gets nothing.
-// Any other failure (including a cancelled context) is reported to the
-// client (error +
-// done{replay_error}, the pre-#823 contract the SPA already handles) and the
-// catch-up is closed off, so the client is never left waiting for a
-// catch_up_complete that will not come.
+// reconnects and tries again; a connection already closed gets nothing. Any
+// other failure (including a cancelled context) goes through failCatchUp.
 func (wh *wsHandlerHandleAttachSession) abortCatchUp(err error) {
 	switch {
 	case errors.Is(err, errSendTimeout):
@@ -289,11 +283,28 @@ func (wh *wsHandlerHandleAttachSession) abortCatchUp(err error) {
 	case errors.Is(err, errConnClosed):
 		return
 	}
+	wh.failCatchUp("replay aborted: " + err.Error())
+}
+
+// failCatchUp ends an attach whose history could not be rebuilt (#823 review
+// item 9). It must NOT send catch_up_complete{W}: that would set the
+// client's cursor to W over a history it never fully received, and a later
+// reconnect would resume from W with the missing part lost for good.
+// Instead the connection is unbound from the session and its held live
+// frames are dropped (they are all in the journal), and the client is told
+// with an error plus done{replay_error} — the contract it already handles by
+// leaving catch-up mode — so it can retry the attach.
+func (wh *wsHandlerHandleAttachSession) failCatchUp(message string) {
+	wh.h.mu.Lock()
+	wh.h.unbindConnHubLocked(wh.wc)
+	wh.h.mu.Unlock()
+	wh.wc.discardHold()
+	wh.failed = true
 	sid := wh.attachID
 	sendConnGenFrameDirect(wh.wc, generated.ErrorFrame{
 		Type:      string(generated.WsFrameTypeError),
 		SessionId: &sid,
-		Message:   "replay aborted: " + err.Error(),
+		Message:   message,
 	})
 	replayErr := true
 	sendConnGenFrameDirect(wh.wc, generated.DoneFrame{
@@ -301,7 +312,6 @@ func (wh *wsHandlerHandleAttachSession) abortCatchUp(err error) {
 		SessionId: wh.attachID,
 		Stats:     &generated.DoneStats{ReplayError: &replayErr},
 	})
-	wh.sendCatchUpComplete("snapshot")
 }
 
 // sendCatchUpComplete ends the catch-up: the client's cursor for the
