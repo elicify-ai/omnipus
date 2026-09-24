@@ -126,6 +126,16 @@ describe('chat streaming integration (test #24) — token rendering', () => {
     render(<ChatThread />, { wrapper })
 
     act(() => {
+      // ADR-091 D7/FR-E-002 removed the test-mode FALLBACK_SID: appendMessage()
+      // and the 'error' frame's targetSid resolution both route through
+      // getActiveSid(), which now returns null (and silently no-ops / falls
+      // back to the global connection-error banner) unless a session is
+      // explicitly active. Without this, appendMessage() below is a no-op —
+      // no assistant message ever lands in any bucket — so handleFrame's
+      // targetSid resolves to null and the frame is treated as a genuine
+      // connection-level error instead of a message-level one. Mirrors the
+      // sibling tests above, which already set this before appending.
+      useSessionStore.setState({ activeSessionId: 'sess_test' })
       useChatStore.getState().appendMessage({
         id: 'asst_3',
         session_id: 'sess_test',
