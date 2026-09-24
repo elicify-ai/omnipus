@@ -5,12 +5,12 @@
 // it exists, derive orders from the design and mark them provisional" rule —
 // PROVISIONAL, see SQUAD-REPORT-BEC.md.
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { emptySessionState } from './session'
-import { inFlightReattachSids } from './runtime-state'
+import { inFlightReattachSids, replayErrorRetryAttempts, replayErrorRetryTimers } from './runtime-state'
 import type { ChatMessage } from './types'
 import type { WsReceiveFrame } from '@/lib/ws'
 
@@ -28,6 +28,10 @@ beforeEach(() => {
   // file/worker — clear it so item 7's in-flight re-attach guard doesn't
   // leak between tests that reuse SID.
   inFlightReattachSids.clear()
+  // N4's backoff state (runtime-state.ts) is also module-scoped — clear it
+  // for the same reason as inFlightReattachSids just above.
+  for (const sid of Object.keys(replayErrorRetryAttempts)) delete replayErrorRetryAttempts[sid]
+  for (const sid of Object.keys(replayErrorRetryTimers)) { clearTimeout(replayErrorRetryTimers[sid]); delete replayErrorRetryTimers[sid] }
 })
 
 function bucket() {
@@ -69,7 +73,31 @@ describe('session_snapshot (§6.2/§4.6)', () => {
     expect(b.activeTurnId).toBe('turn-live')
     expect(b.activeTurnAgentId).toBe('agent-1')
     expect(b.awaitingCatchUp).toBe(true)
-    expect(b.cursor).toEqual({ bootId: 'boot-A', seq: 42 })
+    // Opus review round 3 item N4 (LOW-MEDIUM): session_snapshot no longer
+    // sets the cursor — it used to mint one from this frame's own seq/
+    // boot_id BEFORE the transcript this snapshot promises had actually
+    // been read, which left the cursor advanced to a position never really
+    // reconstructed on a failed rebuild (done{stats.replay_error:true}, no
+    // catch_up_complete ever arrives). The cursor is left exactly as it was
+    // before the wipe (null here — this bucket never had one) —
+    // catch_up_complete (see that describe block below) is now the sole
+    // cursor-setter, firing only once the rebuild genuinely succeeded.
+    expect(b.cursor).toBeNull()
+  })
+
+  it('N4: a session that already HAD a cursor keeps it through the wipe (unchanged, not advanced) — catch_up_complete alone decides where it lands next', () => {
+    useChatStore.setState({
+      sessionsById: {
+        [SID]: { ...emptySessionState(), cursor: { bootId: 'boot-prior', seq: 7 } },
+      },
+    } as never)
+
+    useChatStore.getState().handleFrame({
+      type: 'session_snapshot', session_id: SID, seq: 99, boot_id: 'boot-new', reason: 'boot_mismatch',
+    } as WsReceiveFrame)
+
+    // Still the OLD cursor — not the snapshot's own seq:99/boot_id:'boot-new'.
+    expect(bucket().cursor).toEqual({ bootId: 'boot-prior', seq: 7 })
   })
 })
 
@@ -313,5 +341,68 @@ describe('applySeqGate gap recovery (§6.2 "gap" row) — the re-attach SIDE EFF
     } as WsReceiveFrame)
 
     expect(send).not.toHaveBeenCalled()
+  })
+})
+
+describe('Opus review round 3 N4 — done{replay_error} re-attaches WITHOUT since_seq, with backoff', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('re-attaches with no since_seq/boot_id after the base delay, and increases the delay on a second failure', () => {
+    const sent: unknown[] = []
+    useConnectionStore.setState({
+      connection: { send: (f: unknown) => { sent.push(f); return true } },
+    } as never)
+    useChatStore.setState({ sessionsById: { [SID]: emptySessionState() } } as never)
+
+    useChatStore.getState().handleFrame({
+      type: 'done', session_id: SID, stats: { replay_error: true },
+    } as WsReceiveFrame)
+
+    // Not sent yet — backoff hasn't elapsed.
+    expect(sent).toHaveLength(0)
+    vi.advanceTimersByTime(999)
+    expect(sent).toHaveLength(0)
+    vi.advanceTimersByTime(1)
+    expect(sent).toEqual([{ type: 'attach_session', session_id: SID }])
+
+    // A SECOND failure backs off longer (2x base), not the same delay again.
+    useChatStore.getState().handleFrame({
+      type: 'done', session_id: SID, stats: { replay_error: true },
+    } as WsReceiveFrame)
+    vi.advanceTimersByTime(1999)
+    expect(sent).toHaveLength(1) // still not sent — needs 2000ms this time
+    vi.advanceTimersByTime(1)
+    expect(sent).toHaveLength(2)
+    expect(sent[1]).toEqual({ type: 'attach_session', session_id: SID })
+  })
+
+  it('a genuine catch_up_complete resets the backoff — a LATER failure starts at the base delay again, not a longer one', () => {
+    const sent: unknown[] = []
+    useConnectionStore.setState({
+      connection: { send: (f: unknown) => { sent.push(f); return true } },
+    } as never)
+    useChatStore.setState({ sessionsById: { [SID]: emptySessionState() } } as never)
+
+    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, stats: { replay_error: true } } as WsReceiveFrame)
+    vi.advanceTimersByTime(1_000)
+    expect(sent).toHaveLength(1)
+
+    // Rebuild genuinely succeeds this time.
+    useChatStore.getState().handleFrame({
+      type: 'catch_up_complete', session_id: SID, seq: 10, boot_id: 'boot-1', mode: 'snapshot',
+    } as WsReceiveFrame)
+
+    // A LATER, unrelated failure — should back off from the BASE delay
+    // again (1000ms), not continue counting from the earlier incident.
+    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, stats: { replay_error: true } } as WsReceiveFrame)
+    vi.advanceTimersByTime(999)
+    expect(sent).toHaveLength(1)
+    vi.advanceTimersByTime(1)
+    expect(sent).toHaveLength(2)
   })
 })

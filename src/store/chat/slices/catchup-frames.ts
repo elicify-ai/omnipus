@@ -10,11 +10,11 @@
 import type { StoreApi } from 'zustand'
 import { produce } from 'immer'
 import type {
-  SessionSnapshotFrame,
   CatchUpCompleteFrame,
   UserMessageFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { applySnapshotHistoryWipe, cursorFromTerminalFrame } from '../cursor'
+import { replayErrorRetryAttempts, replayErrorRetryTimers } from '../runtime-state'
 import type { ChatMessage, ChatStore, SessionChatState } from '../types'
 
 type Frame = Parameters<ChatStore['handleFrame']>[0]
@@ -38,11 +38,22 @@ export function handleCatchUpFrame({ frame, targetSid, withBucket }: CatchUpFram
     // forward defensively.
     case 'session_snapshot': {
       if (!targetSid) return true
-      const snapshotFrame = frame as SessionSnapshotFrame
-      withBucket(targetSid, (b) => ({
-        ...applySnapshotHistoryWipe(b),
-        cursor: cursorFromTerminalFrame(snapshotFrame, b.cursor?.bootId),
-      }))
+      // Opus review round 3 item N4 (LOW-MEDIUM): the cursor is NOT set
+      // here anymore. It used to be minted from this frame's own seq/boot_id
+      // — i.e. BEFORE the transcript this snapshot promises has actually
+      // been read and applied. On a failed rebuild (the gateway now sends
+      // `error` + `done{stats.replay_error:true}` and unbinds instead of
+      // ever reaching catch_up_complete — see the 'done' case's own
+      // replay_error branch below) that left the cursor advanced to a
+      // position this client never actually reconstructed anything for,
+      // and the tab stuck blank with nothing to retry from. `catch_up_complete`
+      // is the ONLY frame that ever fires once the rebuild has genuinely
+      // succeeded (this file's own doc comment on that case), so it is now
+      // the sole cursor-setter — applySnapshotHistoryWipe's own
+      // `cursor: bucket.cursor` default (unchanged, preserved-as-is) applies
+      // here instead, meaning a failed rebuild simply leaves the cursor
+      // wherever it already was (null on a first-ever attach).
+      withBucket(targetSid, (b) => applySnapshotHistoryWipe(b))
       return true
     }
 
@@ -58,6 +69,15 @@ export function handleCatchUpFrame({ frame, targetSid, withBucket }: CatchUpFram
     case 'catch_up_complete': {
       if (!targetSid) return true
       const completeFrame = frame as CatchUpCompleteFrame
+      // N4: a genuinely successful catch-up resets the replay_error retry
+      // counter — a LATER, unrelated failure for this session must start
+      // its own backoff from scratch, not continue counting up from a
+      // previous, now-resolved incident.
+      delete replayErrorRetryAttempts[targetSid]
+      if (replayErrorRetryTimers[targetSid]) {
+        clearTimeout(replayErrorRetryTimers[targetSid])
+        delete replayErrorRetryTimers[targetSid]
+      }
       withBucket(targetSid, (b) => produce(b, (draft) => {
         draft.cursor = cursorFromTerminalFrame(completeFrame, draft.cursor?.bootId)
         draft.awaitingCatchUp = false

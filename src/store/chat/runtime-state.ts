@@ -41,6 +41,20 @@ export const pendingCancelAckSids = new Set<string>()
 // resolves it.
 export const inFlightReattachSids = new Set<string>()
 
+// #823 catch-up redesign, Opus review round 3 item N4 (LOW-MEDIUM): a
+// failed rebuild (`done{stats.replay_error:true}`, the gateway unbinding
+// instead of ever reaching catch_up_complete) must re-attach WITHOUT a
+// since_seq/boot_id — the whole point is that the cursor this client had
+// (if any) is untrustworthy for a snapshot that never actually finished
+// rebuilding. Retried with backoff, not immediately, so a gateway that
+// keeps failing this same rebuild doesn't get hammered in a tight loop.
+// Keyed per session so an unrelated session's failure/retry timing never
+// interferes with this one's.
+export const replayErrorRetryAttempts: Record<string, number> = {}
+export const replayErrorRetryTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+export const REPLAY_ERROR_BASE_DELAY_MS = 1_000
+export const REPLAY_ERROR_MAX_DELAY_MS = 30_000
+
 export const EMPTY_BUCKET = emptySessionState()
 
 // F-S1: all server→client frames that must carry session_id.

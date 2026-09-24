@@ -11,7 +11,7 @@ import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
-import { EMPTY_BUCKET, inFlightReattachSids, pendingCancelAckSids, replayingClearTimers } from '../runtime-state'
+import { EMPTY_BUCKET, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
 
@@ -902,6 +902,14 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // this guard, so a stale entry here would just block the NEXT gap's
       // re-attach forever after a future reconnect.
       inFlightReattachSids.clear()
+      // N4: any replay_error retry timer scheduled for a PREVIOUS connection
+      // would send its eventual attach_session over a connection that no
+      // longer exists — the SAME "reconnect goes through the normal path,
+      // not this side channel" reasoning as inFlightReattachSids just above.
+      for (const sid of Object.keys(replayErrorRetryTimers)) {
+        clearTimeout(replayErrorRetryTimers[sid])
+        delete replayErrorRetryTimers[sid]
+      }
       // S6: a socket drop means no more frames — done, error, or otherwise —
       // are coming on THIS connection for any outstanding replay either. A
       // bucket that is mid-replay (isReplaying:true) but not yet

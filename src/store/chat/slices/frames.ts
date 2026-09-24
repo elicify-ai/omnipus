@@ -26,7 +26,7 @@ import {
 } from '@/lib/llm-error'
 import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { bufferForSpan, hasOpenSpanFast, markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
-import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, inFlightReattachSids, pendingCancelAckSids, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
+import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
 import { gateFrameBySeq, cursorFromTerminalFrame, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
 import { ORPHAN_BUFFER_TTL_MS, orphanTimers, pendingByParentCallId } from '../types'
@@ -232,6 +232,26 @@ function findBubbleIdForMessageId(draft: SessionChatState, messageId: string): s
     if (m?.role === 'assistant' && m.mergedReplayIds?.includes(messageId)) return id
   }
   return null
+}
+
+// Opus review round 3 item N4 (LOW-MEDIUM): a failed session rebuild — the
+// gateway sends `error` + `done{stats.replay_error:true}` and unbinds,
+// instead of ever reaching catch_up_complete. Re-attach WITHOUT
+// since_seq/boot_id (see replayErrorRetryAttempts' own doc comment in
+// runtime-state.ts for why a cursor is untrustworthy here), with
+// exponential backoff so a gateway that keeps failing this same rebuild
+// isn't hammered in a tight loop. Extracted purely to keep handleFrame
+// under its line budget (scripts/budgets/functions.txt) — no behavior
+// change from the inline version it replaces.
+function scheduleReplayErrorRetry(sid: string): void {
+  const attempt = (replayErrorRetryAttempts[sid] ?? 0) + 1
+  replayErrorRetryAttempts[sid] = attempt
+  if (replayErrorRetryTimers[sid]) clearTimeout(replayErrorRetryTimers[sid])
+  const delay = Math.min(REPLAY_ERROR_BASE_DELAY_MS * 2 ** (attempt - 1), REPLAY_ERROR_MAX_DELAY_MS)
+  replayErrorRetryTimers[sid] = setTimeout(() => {
+    delete replayErrorRetryTimers[sid]
+    useConnectionStore.getState().connection?.send({ type: 'attach_session', session_id: sid })
+  }, delay)
 }
 
 function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: TokenFrameType): void {
@@ -995,6 +1015,8 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // even a zero-token turn). Tell them apart PURELY by this stats
             // shape.
             const doneStats = frame.stats
+            // N4 — see scheduleReplayErrorRetry's own doc comment.
+            if (doneStats?.replay_error === true) { scheduleReplayErrorRetry(sid); break }
             const isReplayTerminatorDone =
               doneStats?.frames_emitted !== undefined &&
               doneStats?.tokens === undefined &&
