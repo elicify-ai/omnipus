@@ -35,7 +35,7 @@
 # row. A move to another package, or a rename, needs a hand re-key here.
 # Sorted by complexity descending, then path.
 pkg/utils/markdown.go	converter.walk	70
-pkg/gateway/replay.go	streamReplay	63
+pkg/gateway/replay.go	streamReplay	43
 pkg/gateway/task_occurrences_test.go	TestOccurrences_BucketingAndCaps	61
 pkg/knowledge/knowledge_edit.go	EditTool.execEmbed	59
 pkg/gateway/browser_dedicated_input.go	BrowserWSHandler.dispatchDedicatedControl	58

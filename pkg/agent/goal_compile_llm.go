@@ -12,8 +12,9 @@
 //     today's deterministic, immediate, zero-LLM path for them (US-3 S3), and
 //     stay byte-identical: compileGoalIntent (goal_compile.go) is untouched.
 //   - A prose/mixed goal runs ONE bounded provider call under the goal-bearing
-//     agent's own identity/model, in its own fresh context (never a
-//     spawnSubTurn — no delegation semantics), with the `define-goal` skill
+//     agent's own identity/model, in its own fresh context (never a delegated
+//     sub-turn — no steer.SessionLauncher involved, no delegation semantics),
+//     with the `define-goal` skill
 //     content injected engine-side when the seeded file exists (the skill's
 //     3-part statement/criteria/DoD pattern is the quality bar the compile
 //     prompt elicits — ADR-080 D-SKILL renamed the skill define-done→

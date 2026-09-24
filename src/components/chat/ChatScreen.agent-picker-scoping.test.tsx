@@ -85,7 +85,6 @@ vi.mock('@tanstack/react-router', () => ({
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
-vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 vi.mock('./ActivityBar', () => ({ ActivityBar: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 // Real IconRenderer is unnecessary noise here — both seeded agents pass icon:null anyway,
@@ -181,7 +180,6 @@ function seedMiaHistoryAndLiveTurnThenPickJim(): void {
         lastUserMessageAt: null,
         cancelStage: null,
         lastReceivedEventTime: null,
-        spanByParentCallId: {},
         trimmedCount: 0,
       },
     },

@@ -16,7 +16,7 @@ properties:
     maxLength: 200
     description: New plan title.
     example: "v1.0 Launch (delayed)"
-  goal:
+  objective:
     type: string
     maxLength: 2000
     description: New plain-prose objective.

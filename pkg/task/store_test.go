@@ -913,22 +913,6 @@ func TestClaimForRunRejectsNonNext(t *testing.T) {
 	}
 }
 
-func TestClaimParentFollowUpOnce(t *testing.T) {
-	s := newStore(t)
-	p := mkTask("parent", "ws")
-	if err := s.Create(p); err != nil {
-		t.Fatal(err)
-	}
-	first, err := s.ClaimParentFollowUp(p.ID)
-	if err != nil || !first {
-		t.Fatalf("first claim should win: %v %v", first, err)
-	}
-	second, err := s.ClaimParentFollowUp(p.ID)
-	if err != nil || second {
-		t.Fatalf("second claim should lose: %v %v", second, err)
-	}
-}
-
 func mustUpdate(t *testing.T, s *Store, id string, p Patch) {
 	t.Helper()
 	if _, err := s.Update(id, p); err != nil {

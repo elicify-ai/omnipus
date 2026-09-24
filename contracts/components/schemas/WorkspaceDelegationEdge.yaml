@@ -4,7 +4,9 @@ description: >
   is the per-workspace source of truth for who-delegates-to-whom (M5): each edge
   authorizes from_agent to delegate work to to_agent, in the listed modes, bounded
   by depth. Membership in the workspace team is the union of all agents referenced
-  by any edge plus the workspace's core_team roster.
+  by any edge plus the workspace's core_team roster. Delegation never awaits —
+  a delegating agent hands work to the target and continues; the child runs
+  in parallel and reports back through upward delivery (ADR-091 D4).
 required:
   - from_agent
   - to_agent

@@ -70,9 +70,9 @@ func (te *TaskExecutor) runTask(
 	//
 	// L5 (operator decision 2026-07-20): the ADR-050 RD10 stuck-run reaper was
 	// removed — there is no backstop besides this goroutine's own top-level
-	// recover (matching the pattern in session_end.go's runRecap,
-	// subturn.go's spawnSubTurn, hooks.go's runObserver, and this file's own
-	// notifyParentIfAllSiblingsDone). A panic here that left an open TaskRun
+	// recover (matching the pattern in session_end.go's runRecap, hooks.go's
+	// runObserver, this file's own deliverTaskCompletionUpward, and — pre-
+	// ADR-091 — the deleted spawnSubTurn, subturn.go). A panic here that left an open TaskRun
 	// un-closed would strand it in_progress forever. Logs and returns rather
 	// than re-panicking — this goroutine has no caller to propagate to
 	// (launched via `go te.runTask(...)`).
@@ -90,7 +90,7 @@ func (te *TaskExecutor) runTask(
 		map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "session_id": taskSessionID})
 	// FR-118/G-13: the goroutine is now genuinely executing this attempt —
 	// mirrors pkg/tools/delegate.go's transitionLifecycle(..., LifecycleRunning,
-	// "") at the start of its own executeAsync/executeSync.
+	// "") at the start of its own dispatch path.
 	te.transitionTaskLifecycle(taskSessionID, session.LifecycleRunning, "")
 
 	// Test seam: when goroutineCtxHook is set, invoke it and return without
@@ -125,7 +125,8 @@ func (te *TaskExecutor) runTask(
 	// it back to seed the root turnState depth (so the per-agent depth gate trips
 	// inside the run) and to stamp any nested task_create as generation + 1. This
 	// is what bounds an A→B→A task-mode delegation chain — without it every task
-	// run starts at depth 0 and the gate never trips (see maxTaskDepth).
+	// run starts at depth 0 and the gate never trips (see taskCreate's
+	// SetMaxDelegationDepth bound, resolved from performance.max_delegation_depth).
 	taskCtx = tools.WithDelegationDepth(taskCtx, t.DelegationDepth)
 	// review r2 Chunk 1: mark this turn as THIS task's own executor run so
 	// TaskUpdateTool refuses any status write on it and goal_claim accepts
@@ -134,7 +135,7 @@ func (te *TaskExecutor) runTask(
 	// tools.WithRunningTaskID's doc comment).
 	taskCtx = tools.WithRunningTaskID(taskCtx, t.ID)
 
-	sessionKey := fmt.Sprintf("agent:%s:task:%s", t.AgentID, t.ID)
+	sessionKey := taskTurnSessionKey(t.AgentID, t.ID)
 
 	taskChatID := taskSessionID
 	if taskChatID == "" {
@@ -144,6 +145,78 @@ func (te *TaskExecutor) runTask(
 		return te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
 	}
 	redispatchTaskID = te.executeTaskRun(ctx, t, taskSessionID, "", run, turn)
+}
+
+// taskTurnSessionKey is the al.activeTurnStates key a task run's turns are
+// registered under. It is the ONE definition of that format — both dispatch
+// entry points (runTask above and runTaskFromInProgress below) call it, and
+// nothing reconstructs the string by hand.
+//
+// It is deliberately NOT the child's own session.LifecycleRecord.SessionID.
+// A task run is keyed by (agent, task) because the run owns the agent's task
+// conversation across every turn of that run; the durable session id names
+// only the transcript. That distinction is the reason
+// steer_completion.go::hasRunningOrQueuedDescendant cannot ask
+// getActiveTurnState(child.SessionID) whether a task-origin child is alive —
+// the answer is unconditionally nil for the whole run. It must not call this
+// function to "fix" that either: a task RUN spans MANY turns
+// (task_run_loop.go::executeTaskRun loops until the claim is adjudicated),
+// and between two of those turns no turnState is registered under any key at
+// all, so a turn-registry lookup would report a genuinely-working task as
+// idle. Run liveness is a different question with a different answer —
+// taskRunInFlight below.
+func taskTurnSessionKey(agentID, taskID string) string {
+	return fmt.Sprintf("agent:%s:task:%s", agentID, taskID)
+}
+
+// taskRunInFlight reports whether rec names a TASK-ORIGIN steered child whose
+// task run the executor is currently holding — the origin-correct liveness
+// signal steer_completion.go::hasRunningOrQueuedDescendant needs and could
+// not get from the turn registry.
+//
+// [ADR-091 fix lane RX-OUTCOME] Background: a task-origin child used to block
+// its parent's completion UNCONDITIONALLY while `running`, because the turn
+// registry is keyed by taskTurnSessionKey rather than the child's SessionID
+// (see that function). That was safe but too coarse: a task-origin child left
+// `running` by its own tool-iteration lifecycle notice — its turn long
+// finished, its record deliberately kept resumable — blocked its parent for
+// ever. The parent WAS woken (message_inbox.go::classifyEnvelope's fix is
+// origin-agnostic); it simply could never complete past that child.
+//
+// The dispatch slot is the right authority, and the only one that is right:
+//
+//   - It is taken BEFORE the `running` lifecycle write, not after
+//     (ExecuteTask/StartTaskNow/dispatchLaunchedTask all insert into
+//     te.running under te.mu before launching the goroutine, and the
+//     goroutine writes LifecycleRunning only once it is genuinely executing),
+//     so there is no window in which the record says `running` and this says
+//     "idle" at the start of a run. A turn-registry lookup HAS such a window,
+//     and a wide one — hooks and MCP initialisation run between the two.
+//   - It is released only in the run goroutine's outermost defer, after the
+//     terminal lifecycle write, so it also covers the gaps BETWEEN a run's
+//     turns, which a turn-registry lookup cannot.
+//   - It is keyed by rec.Origin.TaskID, which is the same id
+//     task_executor.go::dispatchLaunchedTask loads the task by and which
+//     pkg/session/lifecycle.go validates as non-empty for this origin kind.
+//     Nothing is reconstructed and nothing can drift.
+//
+// Known narrow window, accepted deliberately: a goal-loop restart
+// (runTask's trailing `redispatchTaskID` re-entry) deletes the slot and then
+// calls ExecuteTask, which re-reserves it — a few in-process instructions
+// during which this returns false. It is a real but microscopic exposure,
+// and the alternative is the permanent hang this replaces.
+//
+// Fails CLOSED — "still working", the pre-fix behaviour — for a record whose
+// task id is missing or whose executor is not wired, rather than letting a
+// parent complete on an unanswerable question.
+func (al *AgentLoop) taskRunInFlight(rec *session.LifecycleRecord) bool {
+	if rec == nil || rec.Origin == nil || rec.Origin.Kind != session.OriginKindTask {
+		return false
+	}
+	if al == nil || al.taskExecutor == nil || rec.Origin.TaskID == "" {
+		return true
+	}
+	return taskExecutorHoldsDispatchSlot(al.taskExecutor, rec.Origin.TaskID)
 }
 
 // resumeWorkDirFor returns the materialized Play-from-commit resume tree for t,
@@ -321,7 +394,7 @@ func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.Ru
 // Fix 2, 2026-07-20): runTask's own top-level panic-recovery defer
 // (~line 218) closes over the SAME *activeRun completeTaskWithResult already
 // closed, and re-invokes closeRun if a panic occurs in POST-completion
-// housekeeping (onTaskComplete / notifyParentIfAllSiblingsDone) that runs
+// housekeeping (onTaskComplete / deliverTaskCompletionUpward) that runs
 // AFTER completeTaskWithResult's own successful closeRun call. That second
 // call hits task.ErrRunAlreadyClosed — the record is correctly terminal, not
 // stranded — so it is logged at Info, not Error: an ERROR log here reading
@@ -469,7 +542,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	// tools.WithRunningTaskID's doc comment.
 	taskCtx = tools.WithRunningTaskID(taskCtx, t.ID)
 
-	sessionKey := fmt.Sprintf("agent:%s:task:%s", t.AgentID, t.ID)
+	sessionKey := taskTurnSessionKey(t.AgentID, t.ID)
 
 	taskChatID := taskSessionID
 	if taskChatID == "" {
@@ -483,8 +556,10 @@ func (te *TaskExecutor) runTaskFromInProgress(
 
 // processTaskDirectExternalCLI runs a task assigned to a subagent_3p
 // (external-CLI) worker through runExternalCLISubTurn — the same dispatch
-// machinery spawnSubTurn uses for agent-to-agent delegation (subturn.go). A
-// task run has no parent turnState to derive a child from (unlike a delegated
+// machinery task_executor_run.go's dispatchesExternalCLI check and the
+// delegate tool's own dispatch path share for agent-to-agent delegation
+// today (pre-ADR-091, the deleted spawnSubTurn, subturn.go). A task run has
+// no parent turnState to derive a child from (unlike a delegated
 // sub-turn), so this builds a minimal turnState directly for the target agent
 // via newTurnState, wiring the agent snapshot, the task's transcript session
 // (so the run is replayable on reload, same as the native task path), and the
@@ -519,7 +594,8 @@ func (te *TaskExecutor) runTaskFromInProgress(
 // FIX 5 (7-reviewer gate, visibility): this turnState IS now registered in
 // al.activeTurnStates for the run's duration (register/defer-clear below,
 // mirroring native runTurn's registerActiveTurn/clearActiveTurn pair and
-// spawnSubTurn's childTS registration, subturn.go:880-881) — ts.depth is read
+// the pre-ADR-091 subturn.go's own childTS registration (since deleted) —
+// ts.depth is read
 // by cancel.go's activeTurnStates.Range-based readers now that the turn is
 // reachable there (it previously was not: an unregistered turnState made
 // ts.depth dead for every purpose except this function's own local seeding).
@@ -562,9 +638,9 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// attribution + RunOptions.Model) — a read/write race with SwitchModel.
 	// snapshotForExternalDispatch takes a single RLock and copies the whole
 	// mutex-protected quad together into a private AgentInstance value
-	// nothing else can mutate, mirroring spawnSubTurn's execSource-snapshot
-	// pattern (subturn.go ~603-662, which the native delegation path already
-	// relies on for the identical reason). Every field below (opts,
+	// nothing else can mutate, mirroring the same execSource-snapshot
+	// pattern the pre-ADR-091 native delegation path (subturn.go, since
+	// deleted) relied on for the identical reason. Every field below (opts,
 	// newTurnState, composeDelegateInput) reads from this snapshot, never
 	// liveAgent directly.
 	agent := liveAgent.snapshotForExternalDispatch()
@@ -586,7 +662,7 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	}
 	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, sessionKey))
 	ts.depth = delegationDepth
-	ts.al = al // FIX 5: back-ref for hard-abort cascade (mirrors subturn.go:831)
+	ts.al = al // FIX 5: back-ref for hard-abort cascade (mirrors the pre-ADR-091 subturn.go, since deleted)
 
 	// FIX 5: register for the run's duration — see this function's doc
 	// comment for the full reachability analysis.
@@ -656,7 +732,7 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	defer func() { ts.Finish(ts.hardAbortRequested()) }()
 	defer al.clearActiveTurn(ts)
 
-	rtCfg := al.getSubTurnConfig()
+	delegationTimeout := al.effectiveDelegationTimeout()
 
 	// ADDITIONAL FINDING (surfaced while writing pr-test-analyzer's T2, not
 	// one of the 11 numbered fixes): runExternalCLISubTurn never wraps its
@@ -665,13 +741,13 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// rtCfg.defaultTimeout to the DRIVER as RunOptions.TimeoutSeconds, a hint
 	// each real driver applies itself (driver_claude.go/driver_codex.go/
 	// driver_opencode.go all do `context.WithTimeout(runCtx,
-	// TimeoutSeconds*time.Second)` internally). spawnSubTurn's native
-	// delegation path already has its OWN Go-level safety-net timeout
-	// (subturn.go ~458-473: `context.WithTimeout(context.Background(),
+	// TimeoutSeconds*time.Second)` internally). The pre-ADR-091 native
+	// delegation path (subturn.go, since deleted) already had its OWN
+	// Go-level safety-net timeout (`context.WithTimeout(context.Background(),
 	// timeout)`) precisely so a driver that never honors/emits an end event
 	// cannot hang the dispatch forever; this task-mode dispatch had no
 	// equivalent — a stuck external CLI would tie up a dispatch-semaphore
-	// slot indefinitely with nothing to notice. Unlike spawnSubTurn's
+	// slot indefinitely with nothing to notice. Unlike that path's
 	// Background()-rooted child (deliberately independent so a Critical
 	// sub-turn survives its parent's graceful finish), this derives the
 	// deadline FROM the incoming ctx — consistent with the native task path,
@@ -679,20 +755,21 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// (loop.go) — so a TaskExecutor-level cancel (te.running[taskID].cancel(),
 	// ExecuteTask/StartTaskNow) still takes effect immediately in addition to
 	// this deadline.
-	dispatchCtx, dispatchCancel := context.WithTimeout(ctx, rtCfg.defaultTimeout)
+	dispatchCtx, dispatchCancel := context.WithTimeout(ctx, delegationTimeout)
 	defer dispatchCancel()
 
 	// FIX 2 (7-reviewer gate, persona dropped): compose the same (soul, task)
 	// pair the native delegation path uses ahead of its own
-	// runExternalCLISubTurn call (subturn.go composeDelegateInput call site)
-	// so the target's own soul/persona travels with a TASK-mode dispatch too,
+	// runExternalCLISubTurn call (subturn_identity.go's composeDelegateInput,
+	// also called just below in this file, ahead of THIS file's own
+	// runExternalCLISubTurn call) so the target's own soul/persona travels with a TASK-mode dispatch too,
 	// not just an agent-to-agent delegate call. An empty soul (a soul-less
 	// custom agent — a seeded worker's compiled prompt is non-empty as of
 	// the RC-6 fix, coreagent's "worker" prompts-map entry) yields
 	// task-only input, identical to the pre-fix behavior.
 	externalInput := composeDelegateInput(al, prompt, "", agent.ID)
 
-	result, err := runExternalCLISubTurn(dispatchCtx, al, ts, externalInput, rtCfg.defaultTimeout)
+	result, err := runExternalCLISubTurn(dispatchCtx, al, ts, externalInput, delegationTimeout)
 	if err != nil {
 		return "", fmt.Errorf("processTaskDirect: external-cli dispatch: %w", err)
 	}

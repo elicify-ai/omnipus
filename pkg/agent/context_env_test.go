@@ -266,43 +266,70 @@ func TestContextBuilder_Cache_InvalidatesOnLastSessionWrite(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// #63 — TestSubturn_ContextBuilderPointerShared
-// Traces to: env-awareness-and-memory-spec.md, subturn.go.
-// Child agent struct literal assigns ContextBuilder from execSource.ContextBuilder
-// — execSource is the resolved delegation TARGET when one was named, else
-// baseAgent for self-delegation (operator-confirmed no-inheritance principle:
-// a delegated sub-turn runs as the target's own instance, not a clone of the
-// parent's). We verify pointer equality by directly mirroring the
-// struct-literal assignment pattern.
-// ---------------------------------------------------------------------------
-
-func TestSubturn_ContextBuilderPointerShared(t *testing.T) {
-	// Two assertions, both needed:
-	//
-	// 1. Source-level: the subturn build site must still assign
-	//    ContextBuilder *by reference* (not by clone). A grep on subturn.go
-	//    catches refactors that switch to CloneContextBuilder(...) or
-	//    similar — that would be a design change requiring a new FR per the
-	//    spec, so we fail closed on any variant we don't recognize.
-	//
-	// 2. Runtime: when we do mirror the same struct-literal shape, pointer
-	//    equality holds. This guards against changes to AgentInstance that
-	//    make ContextBuilder a value type or a wrapping struct.
-	subturnPath := findRepoFile(t, "pkg/agent/subturn.go")
-	src, err := os.ReadFile(subturnPath)
+// #63 — TestSteeredChild_ContextBuilderPointerShared
+// Traces to: env-awareness-and-memory-spec.md, pkg/agent/instance.go::
+// snapshotForExternalDispatch.
+//
+// Was TestSubturn_ContextBuilderPointerShared, and grepped the now-deleted
+// pkg/agent/subturn.go for a struct literal assigning
+// `ContextBuilder: execSource.ContextBuilder,`. ADR-091 deleted subturn.go
+// and its whole "is this a delegate?" per-site ring — a worker is now just a
+// normal session another session steered (pkg/agent/CLAUDE.md, "Delegation —
+// a worker is a session steered by another session"). The successor of that
+// build site is AgentInstance.snapshotForExternalDispatch (instance.go),
+// whose own doc comment says outright that it "mirrors the same
+// execSource-snapshot pattern the pre-ADR-091 native delegation path
+// (subturn.go, since deleted) relied on for the identical reason". It is
+// called on the resolved target agent's own live *AgentInstance — by
+// steer_reconstruct.go::agentInstanceWithToolExclusions (steered-turn
+// reconstruction) and task_executor_run.go (task execution) — and copies
+// ContextBuilder by reference into the new, independent, copylocks-safe
+// instance value, exactly preserving the old no-inheritance invariant: the
+// turn runs as the target's own instance, sharing its live ContextBuilder,
+// not a clone of it. That invariant is still real today; this test now pins
+// the current site instead of the deleted one.
+//
+// Two assertions, both needed:
+//
+//  1. Source-level: snapshotForExternalDispatch's struct literal must still
+//     assign ContextBuilder *by reference* (not by clone). A regex scoped to
+//     that function's body in instance.go catches refactors that switch to
+//     a CloneContextBuilder(...) or similar — that would be a design change
+//     requiring a new FR per the spec, so we fail closed on any variant we
+//     don't recognize.
+//
+//  2. Runtime: when we mirror the same struct-literal shape, pointer
+//     equality holds. This guards against changes to AgentInstance that make
+//     ContextBuilder a value type or a wrapping struct.
+func TestSteeredChild_ContextBuilderPointerShared(t *testing.T) {
+	instancePath := findRepoFile(t, "pkg/agent/instance.go")
+	src, err := os.ReadFile(instancePath)
 	if err != nil {
-		t.Fatalf("read subturn.go: %v", err)
+		t.Fatalf("read instance.go: %v", err)
+	}
+	// Isolate snapshotForExternalDispatch's body so the regex can't
+	// accidentally match an unrelated ContextBuilder assignment elsewhere in
+	// the file (e.g. assembleInstance's own first-construction assignment,
+	// which is a different invariant — building an agent's OWN
+	// ContextBuilder, not sharing a live one into a snapshot).
+	funcRe := regexp.MustCompile(
+		`(?s)func \(a \*AgentInstance\) snapshotForExternalDispatch\(\) \*AgentInstance \{.*?\n\}`,
+	)
+	body := funcRe.Find(src)
+	if body == nil {
+		t.Fatalf("instance.go: could not locate snapshotForExternalDispatch's function body — " +
+			"has it been renamed or moved? update this test's locator")
 	}
 	// Must contain the exact share-by-reference assignment.
-	re := regexp.MustCompile(`ContextBuilder\s*:\s*(?:[A-Za-z_]\w*\.)?execSource\.ContextBuilder\s*,`)
-	if !re.Match(src) {
-		t.Fatalf("subturn.go no longer shares the source agent's ContextBuilder by reference — " +
+	re := regexp.MustCompile(`ContextBuilder\s*:\s*(?:[A-Za-z_]\w*\.)?ContextBuilder\s*,`)
+	if !re.Match(body) {
+		t.Fatalf("snapshotForExternalDispatch no longer shares the source agent's ContextBuilder by reference — " +
 			"this is a design change; update FR-058 or restore the assignment")
 	}
 	// Must NOT contain a cloning variant.
 	cloneRe := regexp.MustCompile(`ContextBuilder\s*:\s*[A-Za-z_]*[Cc]lone[A-Za-z_]*\(.*ContextBuilder`)
-	if cloneRe.Match(src) {
-		t.Fatalf("subturn.go appears to clone the source agent's ContextBuilder; " +
+	if cloneRe.Match(body) {
+		t.Fatalf("snapshotForExternalDispatch appears to clone the source agent's ContextBuilder; " +
 			"pointer-sharing contract (FR-058) is broken")
 	}
 

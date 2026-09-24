@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
@@ -571,6 +573,9 @@ func (al *AgentLoop) processSystemMessage(
 			msg.Channel,
 		)
 	}
+	if msg.AsyncTranscriptSessionID != "" && inboundMetadata(msg, "steer_message_id") != "" {
+		return al.processSteeredSystemWake(ctx, msg)
+	}
 
 	logger.InfoCF("agent", "Processing system message",
 		map[string]any{
@@ -606,93 +611,15 @@ func (al *AgentLoop) processSystemMessage(
 		return "", nil
 	}
 
-	// FIX 5d (#1): resolve the TRUE originating agent when the message carries
-	// one (AsyncNotifier.Notify sets AsyncOriginAgentID for an async tool/
-	// delegate result) — never guess GetDefaultAgent() when the real producer
-	// is known. This is the confirmed, exact cause of a live "Worker vs Jim"
-	// speaker-attribution flip: an async result from a non-default agent used
-	// to be silently reattributed to whichever agent happens to be default.
-	// GetDefaultAgent() remains the fallback ONLY for messages with no async
-	// origin at all — a genuine last resort, not the primary path.
-	//
-	// UAT E-3: a NAMED origin that no longer resolves (the agent was deleted)
-	// is NOT re-homed onto the default agent any more. That fallback handed a
-	// deleted agent's goal-keeper push to Mia, who then worked and parked a
-	// goal that was never hers, delegating real work in the process — the
-	// same "no inheritance" identity violation ADR-032 forbids for delegation.
-	// The result is discarded, loudly: a WARN naming the missing agent, and a
-	// system note in the originating session so the user sees that a
-	// background update was dropped and why.
-	var agent *AgentInstance
-	if msg.AsyncOriginAgentID != "" {
-		named, ok := al.GetRegistry().GetAgent(msg.AsyncOriginAgentID)
-		if !ok || named == nil {
-			logger.WarnCF(
-				"agent",
-				"processSystemMessage: async origin agent no longer exists; background result discarded rather than handed to another agent",
-				map[string]any{
-					"agent_id":   msg.AsyncOriginAgentID,
-					"sender_id":  msg.Sender.CanonicalID,
-					"session_id": msg.AsyncTranscriptSessionID,
-				},
-			)
-			if msg.AsyncTranscriptSessionID != "" {
-				if store := al.ResolveSessionStore(msg.AsyncTranscriptSessionID); store != nil {
-					now := time.Now().UTC()
-					if werr := store.AppendTranscriptStrict(msg.AsyncTranscriptSessionID, session.TranscriptEntry{
-						ID:   fmt.Sprintf("async-origin-missing-%s-%d", msg.AsyncTranscriptSessionID, now.UnixNano()),
-						Type: session.EntryTypeSystem,
-						Role: "system",
-						Content: fmt.Sprintf(
-							"A background update for agent %q was not delivered: that agent no longer exists, "+
-								"so the update was discarded instead of being handed to a different agent.",
-							msg.AsyncOriginAgentID),
-						Timestamp: now,
-					}); werr != nil {
-						logger.WarnCF("agent", "processSystemMessage: could not record the discarded-update note in the session",
-							map[string]any{"session_id": msg.AsyncTranscriptSessionID, "error": werr.Error()})
-					}
-				} else {
-					logger.WarnCF("agent", "processSystemMessage: discarded update's session not found; no note written",
-						map[string]any{"session_id": msg.AsyncTranscriptSessionID})
-				}
-			}
-			return "", nil
-		}
-		agent = named
+	agent, discarded, err := al.resolveSystemMessageAgent(msg)
+	if err != nil {
+		return "", err
 	}
-	if agent == nil {
-		agent = al.GetRegistry().GetDefaultAgent()
-	}
-	if agent == nil {
-		return "", fmt.Errorf("no default agent for system message")
+	if discarded {
+		return "", nil
 	}
 
-	// FIX 5d (#2): resolve the originating turn's transcript session/store so
-	// this reconstructed turn persists into the SAME session the producing
-	// turn was writing to — the same "run a turn that must land in a
-	// specific, pre-existing session" pattern ProcessScheduled and
-	// spawnSubTurn already use (al.ResolveSessionStore /
-	// TranscriptSessionID+TranscriptStore threading). Without this,
-	// persistence depended ENTIRELY on a live WebSocket connection still
-	// being open when the async result landed — if it had already closed,
-	// the result was silently, permanently lost. A session ID that no longer
-	// resolves to a store (deleted session) degrades to "not persisted" —
-	// the same outcome as before this fix, not a new failure mode.
-	var transcriptSessionID string
-	var transcriptStore *session.UnifiedStore
-	if msg.AsyncTranscriptSessionID != "" {
-		if store := al.ResolveSessionStore(msg.AsyncTranscriptSessionID); store != nil {
-			transcriptSessionID = msg.AsyncTranscriptSessionID
-			transcriptStore = store
-		} else {
-			logger.WarnCF(
-				"agent",
-				"processSystemMessage: async transcript session not found; result will not be persisted to a session",
-				map[string]any{"session_id": msg.AsyncTranscriptSessionID},
-			)
-		}
-	}
+	transcriptSessionID, transcriptStore := al.resolveSystemMessageTranscript(msg)
 
 	// A-I4 round 6, Priority 2: scope the reconstructed turn's SessionKey to
 	// the SPECIFIC originating session (mirroring agentSessionKey's
@@ -741,39 +668,7 @@ func (al *AgentLoop) processSystemMessage(
 		sessionKey = fmt.Sprintf("agent:%s:session:%s", agent.ID, transcriptSessionID)
 	}
 
-	// FIX 1 (re-review): mirror processMessage's WorkspaceID resolution
-	// (loop.go, "M4" comment ~line 5332) so a delegate-completion / async-
-	// notify turn reconstructed here also stamps bus.OutboundMediaMessage
-	// with the real workspace instead of silently falling back to the
-	// private/global room. originChannel is parsed straight from msg.ChatID
-	// above and can be ANY external channel the producing turn was bound to
-	// — the same class of gap ProcessScheduled has. The session this turn
-	// persists into (transcriptSessionID, already resolved above by FIX 5d)
-	// is the authoritative source: it is the SAME session the producing turn
-	// wrote to, so its meta.WorkspaceID (stamped at session-creation time via
-	// resolveOrCreateChannelSession's channel-binding lookup) is exactly the
-	// workspace this reconstructed turn should inherit. Falls back to the
-	// inbound metadata key, matching processMessage's own final fallback, for
-	// callers that stamp workspace_id directly on the system message instead.
-	workspaceID := ""
-	if transcriptStore != nil && transcriptSessionID != "" {
-		// FIX 1 (re-review of the re-review): distinguish a real meta-read
-		// failure from "no workspace bound" — see
-		// resolveWorkspaceIDForContinuation's doc comment (above,
-		// ~line 3099) for the full rationale.
-		if meta, mErr := transcriptStore.GetMeta(transcriptSessionID); mErr != nil {
-			if !errors.Is(mErr, os.ErrNotExist) {
-				logger.WarnCF("agent",
-					"delegate-completion: could not read session meta while resolving workspace; workspace unresolved",
-					map[string]any{"session_id": transcriptSessionID, "error": mErr.Error()})
-			}
-		} else if meta != nil {
-			workspaceID = meta.WorkspaceID
-		}
-	}
-	if workspaceID == "" {
-		workspaceID = inboundMetadata(msg, "workspace_id")
-	}
+	workspaceID := al.resolveSystemMessageWorkspaceID(msg, transcriptStore, transcriptSessionID)
 
 	return al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey: sessionKey,
@@ -800,6 +695,292 @@ func (al *AgentLoop) processSystemMessage(
 		TranscriptStore:      transcriptStore,
 		WorkspaceID:          workspaceID,
 	})
+}
+
+// resolveSystemMessageAgent resolves the TRUE originating agent for a system
+// message, extracted from processSystemMessage to keep it under the
+// founder's function-size budget (scripts/budgets/functions.txt) with no
+// behavior change.
+//
+// FIX 5d (#1): resolve the TRUE originating agent when the message carries
+// one (AsyncNotifier.Notify sets AsyncOriginAgentID for an async tool/
+// delegate result) — never guess GetDefaultAgent() when the real producer
+// is known. This is the confirmed, exact cause of a live "Worker vs Jim"
+// speaker-attribution flip: an async result from a non-default agent used
+// to be silently reattributed to whichever agent happens to be default.
+// GetDefaultAgent() remains the fallback ONLY for messages with no async
+// origin at all — a genuine last resort, not the primary path.
+//
+// UAT E-3: a NAMED origin that no longer resolves (the agent was deleted)
+// is NOT re-homed onto the default agent any more. That fallback handed a
+// deleted agent's goal-keeper push to Mia, who then worked and parked a
+// goal that was never hers, delegating real work in the process — the
+// same "no inheritance" identity violation ADR-032 forbids for delegation.
+// The result is discarded, loudly: a WARN naming the missing agent, and a
+// system note in the originating session so the user sees that a
+// background update was dropped and why.
+//
+// discarded=true means the message was fully handled here (or could not be
+// routed to any agent, but is not itself an error — the caller returns
+// ("", nil) either way); a non-nil error means processSystemMessage must
+// fail outright (no default agent configured at all).
+func (al *AgentLoop) resolveSystemMessageAgent(msg bus.InboundMessage) (agent *AgentInstance, discarded bool, err error) {
+	if msg.AsyncOriginAgentID != "" {
+		named, ok := al.GetRegistry().GetAgent(msg.AsyncOriginAgentID)
+		if !ok || named == nil {
+			logger.WarnCF(
+				"agent",
+				"processSystemMessage: async origin agent no longer exists; background result discarded rather than handed to another agent",
+				map[string]any{
+					"agent_id":   msg.AsyncOriginAgentID,
+					"sender_id":  msg.Sender.CanonicalID,
+					"session_id": msg.AsyncTranscriptSessionID,
+				},
+			)
+			if msg.AsyncTranscriptSessionID != "" {
+				if store := al.ResolveSessionStore(msg.AsyncTranscriptSessionID); store != nil {
+					now := time.Now().UTC()
+					if werr := store.AppendTranscriptStrict(msg.AsyncTranscriptSessionID, session.TranscriptEntry{
+						ID:   fmt.Sprintf("async-origin-missing-%s-%d", msg.AsyncTranscriptSessionID, now.UnixNano()),
+						Type: session.EntryTypeSystem,
+						Role: "system",
+						Content: fmt.Sprintf(
+							"A background update for agent %q was not delivered: that agent no longer exists, "+
+								"so the update was discarded instead of being handed to a different agent.",
+							msg.AsyncOriginAgentID),
+						Timestamp: now,
+					}); werr != nil {
+						logger.WarnCF("agent", "processSystemMessage: could not record the discarded-update note in the session",
+							map[string]any{"session_id": msg.AsyncTranscriptSessionID, "error": werr.Error()})
+					}
+				} else {
+					logger.WarnCF("agent", "processSystemMessage: discarded update's session not found; no note written",
+						map[string]any{"session_id": msg.AsyncTranscriptSessionID})
+				}
+			}
+			return nil, true, nil
+		}
+		agent = named
+	}
+	if agent == nil {
+		agent = al.GetRegistry().GetDefaultAgent()
+	}
+	if agent == nil {
+		return nil, false, fmt.Errorf("no default agent for system message")
+	}
+	return agent, false, nil
+}
+
+// resolveSystemMessageTranscript resolves the originating turn's transcript
+// session/store, extracted from processSystemMessage to keep it under the
+// founder's function-size budget with no behavior change.
+//
+// FIX 5d (#2): resolve the originating turn's transcript session/store so
+// this reconstructed turn persists into the SAME session the producing
+// turn was writing to — the same "run a turn that must land in a
+// specific, pre-existing session" pattern ProcessScheduled (loop.go) and
+// steer_reconstruct.go::reconstructSteeredTurn already use: resolve the
+// store, then thread processOptions.TranscriptSessionID and
+// .TranscriptStore together. (This used to cite `spawnSubTurn`, which
+// died with subturn.go and has zero definitions today.) Without this,
+// persistence depended ENTIRELY on a live WebSocket connection still
+// being open when the async result landed — if it had already closed,
+// the result was silently, permanently lost. A session ID that no longer
+// resolves to a store (deleted session) degrades to "not persisted" —
+// the same outcome as before this fix, not a new failure mode.
+func (al *AgentLoop) resolveSystemMessageTranscript(msg bus.InboundMessage) (transcriptSessionID string, transcriptStore *session.UnifiedStore) {
+	if msg.AsyncTranscriptSessionID != "" {
+		if store := al.ResolveSessionStore(msg.AsyncTranscriptSessionID); store != nil {
+			transcriptSessionID = msg.AsyncTranscriptSessionID
+			transcriptStore = store
+		} else {
+			logger.WarnCF(
+				"agent",
+				"processSystemMessage: async transcript session not found; result will not be persisted to a session",
+				map[string]any{"session_id": msg.AsyncTranscriptSessionID},
+			)
+		}
+	}
+	return transcriptSessionID, transcriptStore
+}
+
+// resolveSystemMessageWorkspaceID resolves the workspace a reconstructed
+// system-message turn should inherit, extracted from processSystemMessage
+// to keep it under the founder's function-size budget with no behavior
+// change.
+//
+// FIX 1 (re-review): mirror processMessage's WorkspaceID resolution
+// (loop_process_message.go::agentLoopProcessMessage.resolveWorkspace, the
+// "M4" comment) so a delegate-completion / async-
+// notify turn reconstructed here also stamps bus.OutboundMediaMessage
+// with the real workspace instead of silently falling back to the
+// private/global room. The session this turn persists into
+// (transcriptSessionID, already resolved by resolveSystemMessageTranscript,
+// FIX 5d) is the authoritative source: it is the SAME session the producing
+// turn wrote to, so its meta.WorkspaceID (stamped at session-creation time
+// via resolveOrCreateChannelSession's channel-binding lookup) is exactly
+// the workspace this reconstructed turn should inherit. Falls back to the
+// inbound metadata key, matching processMessage's own final fallback, for
+// callers that stamp workspace_id directly on the system message instead.
+func (al *AgentLoop) resolveSystemMessageWorkspaceID(msg bus.InboundMessage, transcriptStore *session.UnifiedStore, transcriptSessionID string) string {
+	workspaceID := ""
+	if transcriptStore != nil && transcriptSessionID != "" {
+		// FIX 1 (re-review of the re-review): distinguish a real meta-read
+		// failure from "no workspace bound" — see
+		// loop_inbound.go::AgentLoop.resolveWorkspaceIDForContinuation's doc
+		// comment (this same file, near the top) for the full rationale.
+		if meta, mErr := transcriptStore.GetMeta(transcriptSessionID); mErr != nil {
+			if !errors.Is(mErr, os.ErrNotExist) {
+				logger.WarnCF("agent",
+					"delegate-completion: could not read session meta while resolving workspace; workspace unresolved",
+					map[string]any{"session_id": transcriptSessionID, "error": mErr.Error()})
+			}
+		} else if meta != nil {
+			workspaceID = meta.WorkspaceID
+		}
+	}
+	if workspaceID == "" {
+		workspaceID = inboundMetadata(msg, "workspace_id")
+	}
+	return workspaceID
+}
+
+// processSteeredSystemWake reconstructs a durable steering-session turn from
+// its lifecycle record. The consumed marker is the idempotency boundary: a
+// replayed wake is acknowledged without starting another turn.
+func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.InboundMessage) (string, error) {
+	sessionID := msg.AsyncTranscriptSessionID
+	messageID := inboundMetadata(msg, "steer_message_id")
+	generation, err := strconv.Atoi(inboundMetadata(msg, "steer_generation"))
+	if err != nil || generation < 0 {
+		return "", fmt.Errorf("steer: wake %q has invalid generation", messageID)
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return "", fmt.Errorf("steer: wake: lifecycle store is not configured")
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		return "", fmt.Errorf("steer: wake: load %q: %w", sessionID, err)
+	}
+	store := al.ResolveSessionStore(sessionID)
+	if store == nil {
+		return "", fmt.Errorf("steer: wake: transcript store for %q is not available", sessionID)
+	}
+	marker := "consumed " + messageID
+	entries, readErr := store.ReadTranscript(sessionID)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return "", fmt.Errorf("steer: wake: read transcript: %w", readErr)
+	}
+	for _, entry := range entries {
+		if entry.Content == marker {
+			if inbox := al.GetMessageInboxStore(); inbox != nil {
+				_ = inbox.Ack(sessionID, []string{messageID})
+			}
+			return "", nil
+		}
+	}
+
+	ts, err := al.reconstructSteeredTurn(rec, &steer.WakeInput{MessageID: messageID, Generation: generation})
+	if err != nil {
+		return "", err
+	}
+
+	// A wake is an ENTRY PATH, so it owes the same two checks
+	// steer_launcher.go::dispatchSteeredSessionWithReservation owes, in the
+	// same order and through the same primitives:
+	//
+	//   - I-3 "Admission": the concurrency counter counts TURNS EXECUTING
+	//     RIGHT NOW (D9; founder round 9, "live turns only"). A woken turn
+	//     that never called tryAdmit ran entirely outside the gate, so
+	//     max_parallel_agents counted dispatches rather than work.
+	//   - I-6's reservation: commitSteeredDispatchState re-runs
+	//     reserveDispatch against the record's LIVE tail inside one atomic
+	//     read-modify-write. steer_audience.go::Deliver's FR-B-013 check
+	//     reads the recipient's record at SEND time; a Stop landing between
+	//     that read and this turn was caught nowhere, and the stopped
+	//     session went back to work.
+	//
+	// Both are scoped to STEERED sessions — steerAdmission's own population
+	// (admission.go) and the one I-3 governs. An ordinary root woken here is
+	// a human's own chat, not a delegated worker; it is neither gated nor
+	// state-written by this path.
+	release := func() {}
+	if rec.SteeredBy != nil {
+		gate := al.steerAdmission()
+		admitted, _, _ := gate.tryAdmit(sessionID, generation)
+		if !admitted {
+			// At the cap. The wake entry is deliberately left UNCONSUMED —
+			// no marker, no acknowledgement — so the turn the FIFO promotion
+			// eventually starts (admission.go::drainSteerQueue ->
+			// dispatchSteeredSessionReserved) still finds it pending.
+			if _, commitErr := commitSteeredDispatchState(lifecycle, sessionID, generation, session.LifecycleQueued); commitErr != nil {
+				gate.removeQueued(sessionID, generation)
+				return "", commitErr
+			}
+			return "", nil
+		}
+		release = func() { al.drainSteerQueue(sessionID, generation) }
+	}
+
+	ts.opts.UserMessage = msg.Content
+	ts.userMessage = msg.Content
+	if !al.registerTurnIfAbsent(ts) {
+		release()
+		return "", steer.ErrStaleGeneration
+	}
+	abort := func() {
+		al.activeTurnStates.CompareAndDelete(sessionID, ts)
+		release()
+	}
+	if rec.SteeredBy != nil {
+		if dispatchStateWriteTestHook != nil {
+			dispatchStateWriteTestHook(sessionID, generation)
+		}
+		running, commitErr := commitSteeredDispatchState(lifecycle, sessionID, generation, session.LifecycleRunning)
+		if commitErr != nil {
+			abort()
+			return "", commitErr
+		}
+		// commitSteeredDispatchState returns post-write truth (edge, goal
+		// reference, created-at) — the same reason runDispatchedSteeredTurn
+		// (steer_launcher.go) uses its own commit's return value rather than
+		// its stale pre-write snapshot for the completion disposition below.
+		rec = running
+	}
+
+	// The consumed marker and the acknowledgement are written only once the
+	// turn is certain to run: a wake refused above must leave its entry
+	// pending for I-6's Revive (FR-B-013), never swallow it.
+	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
+		ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system",
+		Content: marker, AgentID: rec.AgentID, Timestamp: time.Now().UTC(),
+	}); err != nil {
+		abort()
+		return "", fmt.Errorf("steer: wake: append consumed marker: %w", err)
+	}
+	if inbox := al.GetMessageInboxStore(); inbox != nil {
+		if err := inbox.Ack(sessionID, []string{messageID}); err != nil {
+			abort()
+			return "", fmt.Errorf("steer: wake: acknowledge %q: %w", messageID, err)
+		}
+	}
+	defer release()
+
+	// Finding B (ADR-091 fix lane 1, CRITICAL, latent): this wake is an EXIT
+	// path exactly like runDispatchedSteeredTurn's dispatch goroutine — it
+	// owes the SAME post-turn disposition (completeSteeredTurn/
+	// finishSteeredGoalTurn), or a successfully woken session ends its turn
+	// still marked `running` forever (nothing else ever calls completion for
+	// it), stalling its parent's quiet-subtree check indefinitely. Finding E
+	// (MEDIUM): the same shared helper applies the edge's configured
+	// timeout to THIS re-entry too — D9 scopes it to "the session's lifetime
+	// across re-entries", not just the first dispatch.
+	runCtx, cancel := steeredTurnRunContext(ctx, rec)
+	defer cancel()
+	result, err := al.runTurn(runCtx, ts)
+	al.disposeSteeredTurnResult(ts, rec, generation, result, err)
+	return result.finalContent, err
 }
 
 // extractPeer extracts the routing peer from the inbound message's structured Peer field.

@@ -15,7 +15,10 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/google/uuid"
 )
 
 // SteeringMode controls how queued steering messages are dequeued.
@@ -47,13 +50,24 @@ func parseSteeringMode(s string) SteeringMode {
 // into a running agent loop to interrupt it between tool calls.
 type steeringQueue struct {
 	mu     sync.Mutex
-	queues map[string][]providers.Message
+	queues map[string][]steeringQueueItem
 	mode   SteeringMode
+}
+
+type steeringQueueItem struct {
+	message providers.Message
+	wake    *steeringWake
+}
+
+type steeringWake struct {
+	messageID           string
+	transcriptSessionID string
+	agentID             string
 }
 
 func newSteeringQueue(mode SteeringMode) *steeringQueue {
 	return &steeringQueue{
-		queues: make(map[string][]providers.Message),
+		queues: make(map[string][]steeringQueueItem),
 		mode:   mode,
 	}
 }
@@ -73,6 +87,14 @@ func (sq *steeringQueue) push(msg providers.Message) error {
 
 // pushScope enqueues a steering message for the provided scope.
 func (sq *steeringQueue) pushScope(scope string, msg providers.Message) error {
+	return sq.pushItemScope(scope, steeringQueueItem{message: msg})
+}
+
+func (sq *steeringQueue) pushWakeScope(scope string, msg providers.Message, wake steeringWake) error {
+	return sq.pushItemScope(scope, steeringQueueItem{message: msg, wake: &wake})
+}
+
+func (sq *steeringQueue) pushItemScope(scope string, item steeringQueueItem) error {
 	sq.mu.Lock()
 	defer sq.mu.Unlock()
 
@@ -81,7 +103,7 @@ func (sq *steeringQueue) pushScope(scope string, msg providers.Message) error {
 	if len(queue) >= MaxQueueSize {
 		return fmt.Errorf("steering queue is full")
 	}
-	sq.queues[scope] = append(queue, msg)
+	sq.queues[scope] = append(queue, item)
 	return nil
 }
 
@@ -97,7 +119,7 @@ func (sq *steeringQueue) dequeueScope(scope string) []providers.Message {
 	sq.mu.Lock()
 	defer sq.mu.Unlock()
 
-	return sq.dequeueLocked(normalizeSteeringScope(scope))
+	return steeringMessages(sq.dequeueItemsLocked(normalizeSteeringScope(scope)))
 }
 
 // dequeueScopeWithFallback drains the scoped queue first and falls back to the
@@ -108,15 +130,15 @@ func (sq *steeringQueue) dequeueScopeWithFallback(scope string) []providers.Mess
 
 	scope = strings.TrimSpace(scope)
 	if scope != "" {
-		if msgs := sq.dequeueLocked(scope); len(msgs) > 0 {
-			return msgs
+		if items := sq.dequeueItemsLocked(scope); len(items) > 0 {
+			return steeringMessages(items)
 		}
 	}
 
-	return sq.dequeueLocked(manualSteeringScope)
+	return steeringMessages(sq.dequeueItemsLocked(manualSteeringScope))
 }
 
-func (sq *steeringQueue) dequeueLocked(scope string) []providers.Message {
+func (sq *steeringQueue) dequeueItemsLocked(scope string) []steeringQueueItem {
 	queue := sq.queues[scope]
 	if len(queue) == 0 {
 		return nil
@@ -124,20 +146,65 @@ func (sq *steeringQueue) dequeueLocked(scope string) []providers.Message {
 
 	switch sq.mode {
 	case SteeringAll:
-		msgs := append([]providers.Message(nil), queue...)
+		items := append([]steeringQueueItem(nil), queue...)
 		delete(sq.queues, scope)
-		return msgs
+		return items
 	default:
-		msg := queue[0]
-		queue[0] = providers.Message{} // Clear reference for GC
+		item := queue[0]
+		queue[0] = steeringQueueItem{} // Clear reference for GC
 		queue = queue[1:]
 		if len(queue) == 0 {
 			delete(sq.queues, scope)
 		} else {
 			sq.queues[scope] = queue
 		}
-		return []providers.Message{msg}
+		return []steeringQueueItem{item}
 	}
+}
+
+func (sq *steeringQueue) dequeueItemsScope(scope string) (string, []steeringQueueItem) {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	scope = normalizeSteeringScope(scope)
+	return scope, sq.dequeueItemsLocked(scope)
+}
+
+func (sq *steeringQueue) dequeueItemsScopeWithFallback(scope string) (string, []steeringQueueItem) {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+
+	scope = strings.TrimSpace(scope)
+	if scope != "" {
+		if items := sq.dequeueItemsLocked(scope); len(items) > 0 {
+			return scope, items
+		}
+	}
+	return manualSteeringScope, sq.dequeueItemsLocked(manualSteeringScope)
+}
+
+func (sq *steeringQueue) prependItemsScope(scope string, items []steeringQueueItem) {
+	if len(items) == 0 {
+		return
+	}
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	scope = normalizeSteeringScope(scope)
+	queue := sq.queues[scope]
+	restored := make([]steeringQueueItem, 0, len(items)+len(queue))
+	restored = append(restored, items...)
+	restored = append(restored, queue...)
+	sq.queues[scope] = restored
+}
+
+func steeringMessages(items []steeringQueueItem) []providers.Message {
+	if len(items) == 0 {
+		return nil
+	}
+	msgs := make([]providers.Message, 0, len(items))
+	for _, item := range items {
+		msgs = append(msgs, item.message)
+	}
+	return msgs
 }
 
 // len returns the number of queued messages across all scopes.
@@ -200,6 +267,29 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 	if err != nil || ag == nil {
 		return fmt.Errorf("enqueueSteeringFromMessage: route resolution failed: %w", err)
 	}
+	// [Finding 1, ADR-091 fix lane 2 — Q17/D8] The human writing into an
+	// open child (D5/Q9): sessionWorker.enqueue only reaches this path while
+	// w.inTurn is still true, but a Stop's durable marker lands before its
+	// cooperative grace window elapses — a message arriving in that window
+	// would otherwise be enqueued into a steering queue whose consumer is
+	// about to disappear for good, exactly the false-success failure mode
+	// Finding 1 closes for the delegate tool's own steer/respond. Only a
+	// NEWER instruction revives a durably-stopped session, as a new
+	// generation — never the steering queue.
+	if sessionID := strings.TrimSpace(msg.SessionID); sessionID != "" {
+		if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
+			if rec, lerr := lifecycle.Load(sessionID); lerr == nil && rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+				revived, rerr := al.ReviveStoppedSession(context.Background(), sessionID,
+					steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}, msg.Content)
+				if rerr != nil {
+					return fmt.Errorf("enqueueSteeringFromMessage: revive stopped session %q: %w", sessionID, rerr)
+				}
+				if revived {
+					return nil
+				}
+			}
+		}
+	}
 	// The steering queue uses route.SessionKey ("agent:<id>:<sid>") — the same
 	// key that runTurn registered the active turn under in activeTurnStates.
 	pmsg := providers.Message{
@@ -210,24 +300,159 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 	return al.enqueueSteeringMessage(route.SessionKey, ag.ID, pmsg)
 }
 
-// EnqueueSteeringMessage is the exported wrapper around enqueueSteeringMessage
-// for callers outside this package (pkg/tools/delegate.go's `steer` action —
-// tools cannot reach the unexported method directly, mirroring the existing
-// SubTurnSpawner-interface pattern used to avoid a tools<->agent import
-// cycle). Behavior is byte-for-byte identical to the internal method.
+// ReviveStoppedSession implements Finding 1's fix (ADR-091 fix lane 2 —
+// founder decision Q17/D8): "a Stop survives a restart; only a newer
+// instruction revives the session, as a new generation." Before this,
+// SteerCanceller.Revive had zero production callers — a session durably
+// stopped at its current generation (a queued child the cascade stamped, or
+// a parked child caught by a Stop) could never run again, and the delegate
+// tool's own steer/respond enqueued into a steering queue no live turn would
+// ever drain, silently orphaning the message.
+//
+// Returns (false, nil) when sessionID is not durably stopped at its current
+// generation — the caller's ordinary path applies instead. instruction, when
+// non-blank, is appended to the session's durable history BEFORE dispatch,
+// exactly like follow_up's own appendFollowUpInstruction
+// (pkg/tools/delegate_followup.go), so the reconstructed turn actually sees
+// it.
+func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error) {
+	if al == nil {
+		return false, fmt.Errorf("steer: revive %q: no AgentLoop wired", sessionID)
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return false, session.ErrLifecycleNotFound
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		return false, err
+	}
+	if rec.Stop == nil || rec.Stop.Generation != rec.Generation {
+		return false, nil
+	}
+	// [Defect 4, ADR-091 fix lane RX-DELIVERY, HIGH] The instruction lands
+	// BEFORE the generation is minted, and a failure refuses the revive
+	// outright. Both halves matter:
+	//   - Ordering: nothing in the lifecycle record is touched until the new
+	//     instruction is durable, so a refusal cannot strand a record at a
+	//     freshly minted generation in `running` with no turn behind it.
+	//   - Refusal: the append used to be fire-and-forget, so a revival whose
+	//     new instruction never landed still dispatched — and
+	//     reconstructSteeredTurn (wake == nil) then rebuilt the turn from the
+	//     last `user` TRANSCRIPT entry, i.e. the ORIGINAL pre-Stop
+	//     instruction. The user typed "stop, do X instead" and the session
+	//     confidently answered the OLD question, then reported that answer
+	//     upward as a real result. Failing the revive is strictly better than
+	//     running the wrong instruction.
+	if trimmed := strings.TrimSpace(instruction); trimmed != "" {
+		if aerr := al.appendSteeredInstruction(sessionID, rec.AgentID, trimmed); aerr != nil {
+			return false, fmt.Errorf("steer: revive %q: %w", sessionID, aerr)
+		}
+	}
+	newGeneration, rerr := al.steerCanceller().Revive(ctx, sessionID, by)
+	if rerr != nil {
+		return false, fmt.Errorf("steer: revive %q: %w", sessionID, rerr)
+	}
+	// al.dispatchSteeredSession IS steer.SessionLauncher.Dispatch's own body
+	// (SteerLauncher.Dispatch, steer_launcher.go: "a thin delegate onto
+	// AgentLoop.dispatchSteeredSession") — called directly here, exactly as
+	// admission.go::drainSteerQueue already does for its own redispatch, so
+	// revival works whether or not the optional externally-injected
+	// steer.SessionLauncher (SetSteerSessionLauncher, wired post-boot for
+	// pkg/tools callers that cannot import pkg/agent) has been set.
+	if _, derr := al.dispatchSteeredSession(ctx, sessionID, newGeneration); derr != nil {
+		return false, fmt.Errorf("steer: revive %q: dispatch generation %d: %w", sessionID, newGeneration, derr)
+	}
+	return true, nil
+}
+
+// appendSteeredInstruction is ReviveStoppedSession's analogue of
+// pkg/tools/delegate_followup.go::appendFollowUpInstruction, for the two
+// AgentLoop-native revival paths (a human's message into an open child, and
+// the delegate tool's own steer via the steerReviver capability it type-
+// asserts al into) rather than the tools-package follow_up flow.
+//
+// [Defect 4, ADR-091 fix lane RX-DELIVERY] It writes BOTH halves of the pair
+// SteerLauncher.Launch already writes for the launch instruction
+// (steer_launcher.go: sessions.AddMessage AND
+// sessions.AppendTranscriptStrict), and reports whether the instruction
+// actually landed. Before this it did neither:
+//
+//   - The TRANSCRIPT write did not exist. AddMessage writes context.jsonl
+//     (the model's history) only, but the turn a revival reconstructs takes
+//     its UserMessage from the TRANSCRIPT — steer_reconstruct.go::
+//     reconstructSteeredTurn scans transcript.jsonl backwards for the last
+//     non-blank `user` entry when wake == nil. So the revived turn re-ran the
+//     ORIGINAL pre-Stop instruction even when AddMessage had succeeded.
+//   - The ERROR return did not exist. UnifiedStore.AddMessage has no return
+//     value at all (it logs internally and tells the caller nothing) and a
+//     nil store was a silent no-op, so the caller dispatched regardless.
+//
+// AppendTranscriptStrict is the strict variant on purpose: it refuses to
+// write against a session that does not exist rather than minting an orphan
+// directory, and it propagates its transcript.jsonl error — so it is both the
+// write the reconstructed turn actually reads AND the one that can report.
+// The entry id is fresh per call (a repeat revive is a new instruction, never
+// a duplicate of the last one).
+func (al *AgentLoop) appendSteeredInstruction(sessionID, agentID, instruction string) error {
+	store := al.ResolveSessionStore(sessionID)
+	if store == nil {
+		return fmt.Errorf("record the new instruction for %q: no session store owns this session", sessionID)
+	}
+	store.AddMessage(sessionID, "user", instruction)
+	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
+		ID:      sessionID + "-instruction-" + uuid.NewString(),
+		Role:    "user",
+		AgentID: agentID,
+		Content: instruction,
+	}); err != nil {
+		return fmt.Errorf("record the new instruction for %q in the transcript the revived turn reads: %w", sessionID, err)
+	}
+	return nil
+}
+
+// EnqueueSteeringMessage is the exported wrapper used by the delegate tool
+// after it has synchronously verified the caller's authority for the target
+// session. The queue only transports the resulting user message.
 func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error {
 	return al.enqueueSteeringMessage(scope, agentID, msg)
 }
 
 func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message) error {
+	return al.enqueueSteeringItem(scope, agentID, steeringQueueItem{message: msg})
+}
+
+// EnqueueSteeringWake queues an upward wake into an already-live turn while
+// retaining the inbox message identity needed by I-3's consumed marker.
+func (al *AgentLoop) EnqueueSteeringWake(scope, agentID, transcriptSessionID, messageID string, msg providers.Message) error {
+	if strings.TrimSpace(transcriptSessionID) == "" || strings.TrimSpace(messageID) == "" {
+		return fmt.Errorf("steering wake requires transcript session id and message id")
+	}
+	return al.enqueueSteeringItem(scope, agentID, steeringQueueItem{
+		message: msg,
+		wake: &steeringWake{
+			messageID:           messageID,
+			transcriptSessionID: transcriptSessionID,
+			agentID:             agentID,
+		},
+	})
+}
+
+func (al *AgentLoop) enqueueSteeringItem(scope, agentID string, item steeringQueueItem) error {
 	if al.steering == nil {
 		return fmt.Errorf("steering queue is not initialized")
 	}
 
-	if err := al.steering.pushScope(scope, msg); err != nil {
+	var err error
+	if item.wake == nil {
+		err = al.steering.pushScope(scope, item.message)
+	} else {
+		err = al.steering.pushWakeScope(scope, item.message, *item.wake)
+	}
+	if err != nil {
 		logger.WarnCF("agent", "Failed to enqueue steering message", map[string]any{
 			"error": err.Error(),
-			"role":  msg.Role,
+			"role":  item.message.Role,
 			"scope": normalizeSteeringScope(scope),
 		})
 		return err
@@ -235,9 +460,9 @@ func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers
 
 	queueDepth := al.steering.lenScope(scope)
 	logger.DebugCF("agent", "Steering message enqueued", map[string]any{
-		"role":        msg.Role,
-		"content_len": len(msg.Content),
-		"media_count": len(msg.Media),
+		"role":        item.message.Role,
+		"content_len": len(item.message.Content),
+		"media_count": len(item.message.Media),
 		"queue_len":   queueDepth,
 		"scope":       normalizeSteeringScope(scope),
 	})
@@ -270,8 +495,8 @@ func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers
 		meta,
 		InterruptReceivedPayload{
 			Kind:       InterruptKindSteering,
-			Role:       msg.Role,
-			ContentLen: len(msg.Content),
+			Role:       item.message.Role,
+			ContentLen: len(item.message.Content),
 			QueueDepth: queueDepth,
 		},
 	)
@@ -301,21 +526,57 @@ func (al *AgentLoop) dequeueSteeringMessages() []providers.Message {
 	if al.steering == nil {
 		return nil
 	}
-	return al.steering.dequeue()
+	scope, items := al.steering.dequeueItemsScope(manualSteeringScope)
+	return al.consumeDequeuedSteering(scope, items)
 }
 
 func (al *AgentLoop) dequeueSteeringMessagesForScope(scope string) []providers.Message {
 	if al.steering == nil {
 		return nil
 	}
-	return al.steering.dequeueScope(scope)
+	actualScope, items := al.steering.dequeueItemsScope(scope)
+	return al.consumeDequeuedSteering(actualScope, items)
 }
 
 func (al *AgentLoop) dequeueSteeringMessagesForScopeWithFallback(scope string) []providers.Message {
 	if al.steering == nil {
 		return nil
 	}
-	return al.steering.dequeueScopeWithFallback(scope)
+	actualScope, items := al.steering.dequeueItemsScopeWithFallback(scope)
+	return al.consumeDequeuedSteering(actualScope, items)
+}
+
+func (al *AgentLoop) consumeDequeuedSteering(scope string, items []steeringQueueItem) []providers.Message {
+	if len(items) == 0 {
+		return nil
+	}
+	msgs := make([]providers.Message, 0, len(items))
+	for i, item := range items {
+		if item.wake != nil {
+			if err := al.writeSteeringConsumedMarker(*item.wake); err != nil {
+				al.steering.prependItemsScope(scope, items[i:])
+				slog.Error("agent: steering wake not consumed; restored to queue",
+					"scope", scope, "message_id", item.wake.messageID, "error", err)
+				return msgs
+			}
+		}
+		msgs = append(msgs, item.message)
+	}
+	return msgs
+}
+
+func (al *AgentLoop) writeSteeringConsumedMarker(wake steeringWake) error {
+	store := al.ResolveSessionStore(wake.transcriptSessionID)
+	if store == nil {
+		return fmt.Errorf("no transcript store for session %q", wake.transcriptSessionID)
+	}
+	return store.AppendTranscriptStrict(wake.transcriptSessionID, session.TranscriptEntry{
+		ID:      "consumed-" + wake.messageID,
+		Type:    session.EntryTypeSystem,
+		Role:    "system",
+		Content: "consumed " + wake.messageID,
+		AgentID: wake.agentID,
+	})
 }
 
 func (al *AgentLoop) pendingSteeringCountForScope(scope string) int {
@@ -433,8 +694,10 @@ func (al *AgentLoop) InterruptGraceful(hint string) error {
 //
 // ADR-057 FR-015 (role-B predicate, one of the seven post-W13): rebased from
 // transcriptSessionID onto routingSessionID — see turnState.routingSessionID's
-// doc comment (turn.go) for the full identity-split rationale. Pre-D1 (before
-// pkg/agent/subturn.go, ADR-057 U7, overwrites a child's routingSessionID
+// doc comment (turn.go) for the full identity-split rationale, including the
+// post-ADR-091 derivation that replaced the direct copy this paragraph
+// describes. Pre-D1 (before the deleted spawnSubTurn, pkg/agent/subturn.go,
+// ADR-057 U7, overwrote a child's routingSessionID
 // onto its root's) this is behaviourally IDENTICAL to the old
 // transcriptSessionID match: routingSessionID defaults to a turn's own
 // transcriptSessionID at construction (newTurnState, turn.go), and every
@@ -516,10 +779,12 @@ func (s InterruptScope) String() string {
 //
 //  1. A direct point Load keyed by sessionKey — the exact mechanism
 //     InterruptBySessionKey/InterruptBySessionKeyHard used. Hits when id is
-//     a delegate's own sessionKey: pkg/agent/subturn.go registers a
-//     delegated child's turnState under its own child session id
-//     (SessionKey: childID), which is always unique per delegation
-//     regardless of the transcriptSessionID/routingSessionID identity split.
+//     a delegate's own sessionKey: turn.go's registerActiveTurn/
+//     registerTurnIfAbsent register a delegated child's turnState under its
+//     own child session id (SessionKey: childID; pre-ADR-091, the deleted
+//     spawnSubTurn did this same registration), which is always unique per
+//     delegation regardless of the transcriptSessionID/routingSessionID
+//     identity split.
 //  2. Only if that misses, a Range matching string(ts.routingSessionID) ==
 //     id — the exact mechanism InterruptSession/InterruptSessionHard used
 //     (ADR-057 FR-015 role-B predicate, rebased from transcriptSessionID).
@@ -593,7 +858,7 @@ func (al *AgentLoop) resolveInterruptAnchors(id string) []*turnState {
 // in that case. It is a real, narrower gap for ScopeSubtree rooted at a
 // NON-root delegate whose own subtree contains a mid-chain orphan; no
 // FR/BDD/AC in ADR-057's W13 scope exercises that combination, and the
-// durable ParentDurableKey walk (D3/D7) — which does not have this gap,
+// durable SteeringSessionID walk (D3/D7) — which does not have this gap,
 // because it is not in-memory — is reserved by D4 for non-turn resources
 // off the escalation path, not for this in-memory turn cascade.
 func (al *AgentLoop) collectLiveDescendantTurnStates(rootTurnID string) []*turnState {
@@ -611,8 +876,8 @@ func (al *AgentLoop) collectLiveDescendantTurnStates(rootTurnID string) []*turnS
 	})
 
 	// Fixed-point BFS from rootTurnID over the in-memory snapshot's
-	// parentTurnID edges. N (concurrently active turns) is small (bounded by
-	// agents.defaults.subturn.max_concurrent), so the repeated O(N) passes
+	// parentTurnID edges. N is bounded by the shared performance admission
+	// limit, so the repeated O(N) passes
 	// below cost nothing in practice.
 	reached := map[string]bool{rootTurnID: true}
 	var result []*turnState
@@ -715,13 +980,16 @@ func (al *AgentLoop) Interrupt(id string, scope InterruptScope, hint string) (de
 	// [Chain-reaction supersession of ADR-057 FR-024 — the GATE half] Mark
 	// every resolved target as cancelling FIRST, before anything else in this
 	// function — see turnState.cancelling's doc comment (turn.go) for the
-	// full mechanism. This is what actually closes the "a new child born
+	// full mechanism, INCLUDING the ADR-091 fix lane RX-SUBTURN finding that
+	// grep finds no current reader of this flag (cancelling.Load()) anywhere
+	// in the repo. This was what actually closed the "a new child born
 	// during cancellation escapes it" race: recursion (the fresh re-scan/
 	// chain-reaction-latch machinery elsewhere in this file and cancel.go)
 	// only ever reaches a child that has ALREADY registered, or is ALREADY
 	// known to be imminent — it cannot stop a spawn that has not even been
-	// attempted yet. spawnSubTurn (subturn.go) checks this flag, walking the
-	// parentTurnState ancestor chain, before creating any new child.
+	// attempted yet. Pre-ADR-091, the deleted spawnSubTurn (subturn.go)
+	// checked this flag, walking the parentTurnState ancestor chain, before
+	// creating any new child.
 	markTurnsCancelling(targets)
 	for _, ts := range targets {
 		descendants = append(descendants, ts.turnID)
@@ -881,141 +1149,6 @@ func (al *AgentLoop) sessionTurnsStillAlive(sessionID string) []*turnState {
 		return true
 	})
 	return alive
-}
-
-// IsSubTurnActiveForSpawnCall reports whether a sub-turn spawned by the spawn
-// tool call identified by parentSpawnCallID is currently registered as an
-// active turn — meaning either not-yet-finished, OR finished but its
-// persisted spawn-call record has not yet been corrected with the real
-// terminal status (see the "Active therefore covers TWO distinct states"
-// paragraph below). Returns false for an empty ID or when no matching
-// turnState is found in activeTurnStates.
-//
-// Root cause this closes: async delegation (DelegateTool.executeAsync)
-// persists a placeholder ack — Status="success", DurationMS≈0 — on the
-// spawning ToolCall record the instant the tool call itself returns, well
-// before the delegate's own sub-turn actually finishes (see
-// session.UnifiedStore.UpdateToolCallStatus's doc comment). That placeholder
-// is only corrected once the real EventKindSubTurnEnd fires, at the END of
-// spawnSubTurn's cleanup defer. A session reload/replay landing in the
-// window between the placeholder write and that correction previously read
-// the placeholder literally and presented a fabricated "done 0ms" snapshot
-// for a delegate that was, in truth, still working — invisible before
-// 7dd9e7a5 ("background delegate's final answer lost when parent finishes
-// first") because a delegate needing more than one LLM turn used to exit its
-// loop early the instant its parent turn ended, closing this window almost
-// immediately; Critical:true now lets it run for its full, genuine duration
-// (sometimes tens of seconds), making the window routinely observable.
-//
-// Callers (pkg/gateway/replay.go's isSpanActive, pkg/gateway/websocket.go's
-// orphan watchdog) use this to distinguish "genuinely still running" from
-// "genuinely finished" before trusting a persisted terminal snapshot or
-// synthesizing one of their own.
-//
-// "Active" therefore covers TWO distinct states, not one: genuinely still
-// running (ts.IsAlive()), OR finished but the spawning tool-call's placeholder
-// record has not yet been corrected with the real terminal status/duration
-// (!ts.subTurnRecordPersisted.Load()). Collapsing those into a single
-// "isFinished" check reopens the exact bug this primitive exists to close:
-// runTurn's own deferred Finish call (loop.go) flips isFinished true and
-// fully returns BEFORE spawnSubTurn's own cleanup defer (subturn.go) even
-// begins correcting the placeholder ToolCall record written earlier by
-// DelegateTool.executeAsync — a correction that can take up to ~935ms of
-// retry backoff plus real I/O. A reload/replay landing in that gap must still
-// see "active" so it withholds the fabricated "done 0ms" snapshot rather than
-// serving it as genuine. See turnState.subTurnRecordPersisted's doc comment
-// (turn.go) for the full mechanics.
-//
-// A span whose EventKindSubTurnEnd has not been emitted yet is also active,
-// whatever activeTurnStates says at that instant — see markSubTurnSpanOpen.
-func (al *AgentLoop) IsSubTurnActiveForSpawnCall(parentSpawnCallID string) bool {
-	if parentSpawnCallID == "" {
-		return false
-	}
-	if al.subTurnSpanOpen(parentSpawnCallID) {
-		return true
-	}
-	active := false
-	al.activeTurnStates.Range(func(_, value any) bool {
-		ts, ok := value.(*turnState)
-		if !ok {
-			return true
-		}
-		ts.mu.RLock()
-		matches := ts.parentSpawnCallID == parentSpawnCallID
-		ts.mu.RUnlock()
-		if matches && (ts.IsAlive() || !ts.subTurnRecordPersisted.Load()) {
-			active = true
-			return false // stop — found a live or persistence-pending match
-		}
-		return true
-	})
-	return active
-}
-
-// markSubTurnSpanOpen records that spawnSubTurn is about to emit
-// EventKindSubTurnSpawn for parentSpawnCallID; markSubTurnSpanEnded removes
-// that record only AFTER the span's EventKindSubTurnEnd has been emitted.
-// Between the two, IsSubTurnActiveForSpawnCall reports the span active.
-//
-// Why the turn registry alone cannot answer "is this span still running": it
-// stops reporting a finished child as active BEFORE the child's end event
-// exists, in two places.
-//
-//  1. runTurn's own deferred clearActiveTurn removes the child from
-//     activeTurnStates during its unwind, and spawnSubTurn re-stores it only
-//     after runTurn has returned (subturn.go, "Re-register childTS"). For that
-//     whole unwind the Range scan finds nothing.
-//  2. spawnSubTurn's cleanup defer sets subTurnRecordPersisted, and only then
-//     emits EventKindSubTurnEnd.
-//
-// The WS forwarder's orphan watchdog (pkg/gateway/websocket.go,
-// startOrphanWatchdog) asks this question to decide whether a span still open
-// after its parent ended is orphaned. Answered "not active" in either gap, it
-// synthesized subagent_end{status:"interrupted"} for a delegation that was
-// completing normally, ahead of (or right after) the real success frame.
-//
-// EventBus.Emit hands the end event to every subscriber's buffer on the
-// emitting goroutine (a bounded blocking retry for this must-not-drop kind,
-// then a counted drop). So once this record is gone, the end event is already
-// queued for every subscriber that did not drop it — which is what lets a
-// subscriber decide an orphan only after consuming what was already queued.
-//
-// A count, not a set, so two spawns sharing one call ID cannot end each other.
-func (al *AgentLoop) markSubTurnSpanOpen(parentSpawnCallID string) {
-	if parentSpawnCallID == "" {
-		return
-	}
-	al.subTurnSpansMu.Lock()
-	defer al.subTurnSpansMu.Unlock()
-	if al.openSubTurnSpans == nil {
-		al.openSubTurnSpans = make(map[string]int)
-	}
-	al.openSubTurnSpans[parentSpawnCallID]++
-}
-
-// markSubTurnSpanEnded is markSubTurnSpanOpen's counterpart; see its doc
-// comment. Called only after EventKindSubTurnEnd has been emitted.
-func (al *AgentLoop) markSubTurnSpanEnded(parentSpawnCallID string) {
-	if parentSpawnCallID == "" {
-		return
-	}
-	al.subTurnSpansMu.Lock()
-	defer al.subTurnSpansMu.Unlock()
-	if n := al.openSubTurnSpans[parentSpawnCallID]; n > 1 {
-		al.openSubTurnSpans[parentSpawnCallID] = n - 1
-		return
-	}
-	delete(al.openSubTurnSpans, parentSpawnCallID)
-}
-
-// subTurnSpanOpen reports whether parentSpawnCallID has a span whose spawn
-// event was emitted and whose end event has not been; see
-// markSubTurnSpanOpen.
-func (al *AgentLoop) subTurnSpanOpen(parentSpawnCallID string) bool {
-	al.subTurnSpansMu.Lock()
-	defer al.subTurnSpansMu.Unlock()
-	return al.openSubTurnSpans[parentSpawnCallID] > 0
 }
 
 func (al *AgentLoop) InterruptHard() error {

@@ -271,8 +271,11 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// in contracts/. Empty on every card created before this field existed —
 	// a session-scoped caller simply does not match those legacy cards.
 	OriginSessionID string `json:"origin_session_id,omitempty"`
-	Action          Action `json:"action"`
-	Status          Status `json:"status"`
+	// OriginCallID is the creating tool call. It is disk-only launch metadata
+	// and is deliberately absent from the REST contract.
+	OriginCallID string `json:"origin_call_id,omitempty"`
+	Action       Action `json:"action"`
+	Status       Status `json:"status"`
 	// CancelReason is set on a Status=failed task cancelled via a user Stop
 	// (ADR-052 FR-028); empty for a genuine failure (e.g. attempt-limit
 	// exhaustion) and for every non-failed status. Cleared on restart/re-run.
@@ -439,17 +442,14 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	UpdatedAt   string `json:"updated_at"`
 	StartedAt   string `json:"started_at,omitempty"`
 	CompletedAt string `json:"completed_at,omitempty"`
-	// FollowedUp is set true once the parent follow-up notification has been
-	// launched for this (parent) task — makes the "all children done → resume
-	// parent" follow-up fire exactly once under concurrent sibling completion.
-	FollowedUp bool `json:"followed_up,omitempty"`
 	// DelegationDepth is the task-mode delegation generation counter. A task
 	// created from a normal (root) chat/agent turn has depth 0; a task created
 	// from *within* a running task carries its spawning run's depth + 1. The
 	// task executor seeds the run's root turnState depth from this value so the
 	// per-workspace delegation-graph edge's depth gate (and the global subturn
 	// ceiling) bounds onward delegation, and task_create rejects a create that
-	// would exceed maxTaskDepth. This is an internal recursion-bound counter —
+	// would exceed its resolved delegation-depth bound (ADR-091 D9). This is an
+	// internal recursion-bound counter —
 	// it is NOT part of the gen.Task wire contract and never crosses the
 	// gateway/SPA boundary (the REST task mapper does not copy it).
 	DelegationDepth int `json:"delegation_depth,omitempty"`

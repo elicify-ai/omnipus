@@ -5,6 +5,7 @@
 package askuser
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +14,9 @@ import (
 	"sync"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // Sentinel errors — the tool and the future frame handler branch on these.
@@ -121,6 +124,17 @@ type Registry struct {
 	audit  AuditSink
 
 	now func() time.Time
+
+	// steerAudience/steerObserver are ADR-091 I-5's injected
+	// steer.AudienceResolver/BoundaryObserver ("injected
+	// into every package that hosts a boundary ... pkg/askuser for
+	// boundary 12"). Nil until SetSteerAudienceResolver is called —
+	// CreatePending's existing ParentSessionID-based EC-9 rejection is
+	// unaffected when unwired; wiring adds the Observe instrumentation and
+	// a second, edge-based confirmation of the same verdict.
+	steerAudience  steer.AudienceResolver
+	steerObserver  steer.BoundaryObserver
+	steerDeliverer steer.UpwardDeliverer
 }
 
 // Options configures a Registry.
@@ -168,9 +182,29 @@ func NewRegistry(meta MetaStore, resume ResumeDispatcher, opts Options) *Registr
 	}
 }
 
+// SetSteerAudienceResolver injects ADR-091 I-5's steer.AudienceResolver and
+// steer.BoundaryObserver (boundary 12, FR-B-012). A nil observer defaults to
+// steer.NopBoundaryObserver{}.
+func (r *Registry) SetSteerAudienceResolver(resolver steer.AudienceResolver, observer steer.BoundaryObserver, deliverers ...steer.UpwardDeliverer) {
+	if observer == nil {
+		observer = steer.NopBoundaryObserver{}
+	}
+	r.mu.Lock()
+	r.steerAudience = resolver
+	r.steerObserver = observer
+	r.steerDeliverer = nil
+	if len(deliverers) > 0 {
+		r.steerDeliverer = deliverers[0]
+	}
+	r.mu.Unlock()
+}
+
 // CreatePending admits a validated pending set: enforces owner-session-only
 // (via the durable ParentSessionID field — a delegated child session always
-// carries one), one-per-routing-session, and the global cap; persists the
+// carries one, AND, when wired, ADR-091's edge-based audience classification
+// — a steered session's question is relayed to its steering session via
+// message_parent, never broadcast as this tool's own card, boundary 12,
+// FR-B-012), one-per-routing-session, and the global cap; persists the
 // set into the owner session's UnifiedMeta; arms the default-safe timers;
 // and emits the card via the sink. Implements the pkg/tools
 // AskUserQuestionRegistry seam.
@@ -181,17 +215,45 @@ func (r *Registry) CreatePending(set *PendingSet) error {
 	if err := ValidateQuestions(set.Questions); err != nil {
 		return err
 	}
+
+	r.mu.Lock()
+	resolver, observer, deliverer := r.steerAudience, r.steerObserver, r.steerDeliverer
+	r.mu.Unlock()
+	if observer == nil {
+		observer = steer.NopBoundaryObserver{}
+	}
+	steered := false
+	if resolver != nil {
+		audience, _, aerr := resolver.Audience(context.Background(), set.TranscriptSessionID)
+		if aerr != nil {
+			audience = steer.AudienceNone
+		}
+		observer.Observe(steer.BoundaryQuestionCard, set.TranscriptSessionID, audience)
+		steered = audience == steer.AudienceSteeringSession
+	}
+
 	// Owner-session gate on DURABLE state (EC-9 second layer; the tool also
 	// rejects on the ctx delegation-depth seam): a delegated child session
-	// records its parent in SessionMeta.ParentSessionID.
+	// records its parent in SessionMeta.ParentSessionID. `steered` (above)
+	// is a second, edge-based confirmation of the same verdict — belt and
+	// suspenders, since ParentSessionID is DERIVED from the edge at
+	// creation (I-1) and the two should always agree.
 	if r.meta != nil {
 		meta, err := r.meta.GetMeta(set.TranscriptSessionID)
 		if err != nil {
 			return fmt.Errorf("askuser: CreatePending: cannot resolve session %s: %w", set.TranscriptSessionID, err)
 		}
-		if meta.ParentSessionID != "" {
+		if meta.ParentSessionID != "" || steered {
+			if relayErr := relaySteeredQuestions(deliverer, set); relayErr != nil {
+				return relayErr
+			}
 			return ErrDelegatedChild
 		}
+	} else if steered {
+		if relayErr := relaySteeredQuestions(deliverer, set); relayErr != nil {
+			return relayErr
+		}
+		return ErrDelegatedChild
 	}
 
 	set = set.Clone()
@@ -249,6 +311,70 @@ func (r *Registry) CreatePending(set *PendingSet) error {
 		"question_count", len(snapshot.Questions),
 		"default_safe_count", defaultSafeCount)
 	r.sink.EmitCard(snapshot.Clone())
+	return nil
+}
+
+func relaySteeredQuestions(deliverer steer.UpwardDeliverer, set *PendingSet) error {
+	if deliverer == nil {
+		return fmt.Errorf("askuser: delegated question relay is not wired")
+	}
+	parts := make([]string, 0, len(set.Questions))
+	for _, question := range set.Questions {
+		line := strings.TrimSpace(question.Header + ": " + question.Question)
+		if len(question.Options) > 0 {
+			labels := make([]string, 0, len(question.Options))
+			for _, option := range question.Options {
+				labels = append(labels, option.Label)
+			}
+			line += " Options: " + strings.Join(labels, "; ")
+		}
+		parts = append(parts, line)
+	}
+	authority := generated.SessionMessageQuestionAuthority("self_ok")
+	created := set.CreatedAt
+	if created.IsZero() {
+		created = time.Now().UTC()
+	}
+	var message generated.SessionMessage
+	if err := message.FromSessionMessageQuestion(generated.SessionMessageQuestion{
+		Authority:       &authority,
+		CorrelationId:   set.CardID,
+		CreatedAt:       created,
+		Depth:           1,
+		MessageId:       set.CardID + ":question",
+		SenderIdentity:  set.AgentID,
+		SessionId:       set.TranscriptSessionID,
+		Text:            strings.Join(parts, "\n"),
+		UntrustedOrigin: true,
+		Wait:            true,
+	}); err != nil {
+		return fmt.Errorf("askuser: encode delegated question relay: %w", err)
+	}
+	delivery, err := deliverer.Deliver(context.Background(), steer.UpwardEvent{
+		ChildSessionID: set.TranscriptSessionID,
+		Outcome:        steer.OutcomeParkedQuestion,
+		Message:        message,
+	})
+	if err != nil {
+		return fmt.Errorf("askuser: relay delegated question upward: %w", err)
+	}
+	// [ADR-091 fix lane RX-OUTCOME, HIGH] This call site used to discard the
+	// Delivery with `_, err :=`. A `question` is always wake-eligible (I-5),
+	// so stored_not_woken here means the entry is durable but the steering
+	// session was NOT woken — and this child has parked itself waiting for
+	// an answer that nothing is going to produce until boot recovery
+	// re-nudges the parent. Logged, not returned as an error: the question
+	// IS durably stored, and failing the relay would tell the caller its
+	// question was lost when it was not. The parent session id is not
+	// resolvable from here (this package holds no lifecycle store) — the
+	// child id and message id are what an operator greps for.
+	if delivery.Outcome == steer.DeliveryStoredNotWoken {
+		slog.Error("askuser: delegated question stored but the steering session was NOT woken — the child stays parked until boot recovery re-nudges it",
+			"child_session_id", set.TranscriptSessionID,
+			"card_id", set.CardID,
+			"message_id", delivery.MessageID,
+			"delivery_outcome", string(delivery.Outcome))
+	}
 	return nil
 }
 

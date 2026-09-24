@@ -91,10 +91,14 @@ func (al *AgentLoop) handleCommand(
 // (pkg/tools/skill.go) replaces. A turn's active skills are now only what was
 // explicitly loaded this turn: via opts.ForcedSkills, which the Skill tool's
 // "load" outcome and the pre-existing /<slug> slash-command
-// (applyExplicitSkillCommand) and delegate's requested_skill (D9,
-// spawnSubTurn's ForcedSkills append) all populate one-shot, per turn — never
-// via the agent's static grant list, which only gates WHICH skills may be
-// loaded (skillAllowed/D5), not which ones are.
+// (applyExplicitSkillCommand) and, pre-ADR-091, delegate's requested_skill
+// (D9, the deleted spawnSubTurn's ForcedSkills append) all populated
+// one-shot, per turn — never via the agent's static grant list, which only
+// gates WHICH skills may be loaded (skillAllowed/D5), not which ones are.
+// See pkg/agent/subturn_identity.go::resolveRequestedSkillForChild's own doc
+// comment for the ADR-091 fix lane RX-SUBTURN finding that requested_skill's
+// grant/deny/unresolvable enforcement has no confirmed production caller
+// today — this ForcedSkills append may be part of the same gap.
 func activeSkillNames(agent *AgentInstance, opts processOptions) []string {
 	if agent == nil {
 		return nil

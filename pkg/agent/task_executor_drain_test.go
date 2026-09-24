@@ -289,81 +289,11 @@ func TestTaskExecutor_Drain_GoalLoopRedispatchChainTerminatesAtNextHop(t *testin
 			"never advanced to `in_progress` by a second dispatch that should have been refused")
 }
 
-// --- notifyParentIfAllSiblingsDone's follow-up goroutine is wg-tracked -----
-
-// gatedParentFollowUpProvider blocks the parent's follow-up turn on a gate
-// channel, signaling entry once — the same "hold it open, release on a
-// timer" technique as TestTaskExecutor_Drain_WaitsForInFlightGoroutine,
-// applied to notifyParentIfAllSiblingsDone's own goroutine (task_executor.go)
-// rather than runTask's.
-type gatedParentFollowUpProvider struct {
-	enteredOnce sync.Once
-	entered     chan struct{}
-	gate        chan struct{}
-}
-
-func (g *gatedParentFollowUpProvider) Chat(
-	_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any,
-) (*providers.LLMResponse, error) {
-	g.enteredOnce.Do(func() { close(g.entered) })
-	<-g.gate
-	return &providers.LLMResponse{Content: "ack"}, nil
-}
-
-func (g *gatedParentFollowUpProvider) GetDefaultModel() string { return "gated-parent-followup-model" }
-
-// TestTaskExecutor_Drain_WaitsForParentFollowUpGoroutine proves the second
-// half of finding #1: notifyParentIfAllSiblingsDone's own `go func(){...}()`
-// (task_executor.go, calling processTaskDirect) is now wg-tracked, so Drain
-// waits for it exactly like it waits for a runTask goroutine — before this
-// fix, this goroutine had NO wg tracking at all and Drain could return while
-// it was still writing through stores Close() was about to tear down.
-func TestTaskExecutor_Drain_WaitsForParentFollowUpGoroutine(t *testing.T) {
-	provider := &gatedParentFollowUpProvider{entered: make(chan struct{}), gate: make(chan struct{})}
-	te, store, _ := newDrainTestExecutorWithProvider(t, provider)
-
-	parent := &task.Task{
-		Title: "parent", Prompt: "parent", Action: task.ActionLLM,
-		AgentID: "mia", Priority: 3, WorkspaceID: "default", Status: task.StatusInProgress,
-	}
-	require.NoError(t, store.Create(parent))
-	child := &task.Task{
-		Title: "child", Prompt: "child", Action: task.ActionLLM,
-		AgentID: "mia", Priority: 3, WorkspaceID: "default", Status: task.StatusDone,
-		ParentTaskID: parent.ID,
-	}
-	require.NoError(t, store.Create(child))
-
-	// Drives the exact same call onTaskComplete makes for a just-completed
-	// child (task_executor.go) — every sibling is terminal, the parent is
-	// in_progress and not yet followed-up, so this launches the tracked
-	// goroutine under test.
-	te.notifyParentIfAllSiblingsDone(parent.ID)
-
-	select {
-	case <-provider.entered:
-	case <-time.After(5 * time.Second):
-		t.Fatal("parent follow-up goroutine never reached the provider within 5s")
-	}
-
-	const hold = 300 * time.Millisecond
-	var released atomic.Bool
-	go func() {
-		time.Sleep(hold)
-		released.Store(true)
-		close(provider.gate)
-	}()
-
-	start := time.Now()
-	te.Drain(5 * time.Second)
-	elapsed := time.Since(start)
-
-	if !released.Load() {
-		t.Fatalf("Drain() returned in %v while the parent follow-up goroutine was still blocked in the "+
-			"provider — it is not wg-tracked", elapsed)
-	}
-	if elapsed < hold {
-		t.Fatalf("Drain() returned after %v but the follow-up goroutine was held for %v — Drain did not "+
-			"actually wait for it", elapsed, hold)
-	}
-}
+// notifyParentIfAllSiblingsDone (and its dedicated wg-tracked follow-up
+// goroutine) is DELETED by ADR-091 D3/FR-B-003: "the system MUST wake per
+// child; task_executor_judge.go::notifyParentIfAllSiblingsDone is deleted."
+// Its replacement, deliverTaskCompletionUpward (task_executor_judge.go),
+// calls steer.UpwardDeliverer.Deliver synchronously — no goroutine, so the
+// wg-tracking regression this test file's former
+// TestTaskExecutor_Drain_WaitsForParentFollowUpGoroutine guarded no longer
+// applies (there is nothing left to leak past Drain).

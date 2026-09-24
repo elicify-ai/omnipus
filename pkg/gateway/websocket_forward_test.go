@@ -660,7 +660,8 @@ func TestEventForwarder_InternalRateLimitDenial_EmitsExactlyOneFrame(t *testing.
 	al := mustAgentLoop(t, cfg, msgBus, provider)
 
 	sub := al.SubscribeEvents(256)
-	h := makeMinimalHandlerWithAgentLoop(al)
+	h := makeMinimalHandler()
+	h.agentLoop = al
 	wc, ch := makeForwarderTestConn(256)
 	done := make(chan struct{})
 	go h.eventForwarder(wc, chatID, sub, done)

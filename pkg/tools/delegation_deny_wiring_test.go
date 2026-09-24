@@ -4,12 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -62,11 +59,8 @@ func TestDelegateTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 
 	// A spawner that records whether it ran — it MUST NOT run on a denied delegate.
-	spawned := false
-	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
-		spawned = true
-		return NewToolResult("ran"), nil
-	}))
+	launcher := &recordingSessionLauncher{}
+	tool.SetSessionLauncher(launcher)
 
 	var gotTarget string
 	tool.SetDelegationDenyCheckerBackground(func(_ context.Context, targetAgentID string) *DelegationDenial {
@@ -102,8 +96,8 @@ func TestDelegateTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	if gotTarget != "evil-agent" {
 		t.Errorf("expected checker to receive target 'evil-agent', got %q", gotTarget)
 	}
-	if spawned {
-		t.Error("spawner must NOT run when delegation is denied")
+	if launcher.launchReq.Task != "" {
+		t.Error("launcher must NOT run when delegation is denied")
 	}
 }
 
@@ -112,42 +106,20 @@ func TestDelegateTool_DelegationDenyChecker_Aborts(t *testing.T) {
 // spawner.
 func TestDelegateTool_DelegationDenyChecker_Allows(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
-	// atomic.Bool, not a plain bool: the spawner runs on the async goroutine
-	// while the test body is still executing, so a plain flag is a genuine
-	// data race — `go test -race ./pkg/tools/...` reports it. The old comment
-	// below said the race "is not asserted", which is true and beside the
-	// point: the detector flags the unsynchronised ACCESS, not the assertion.
-	var spawned atomic.Bool
-	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
-		spawned.Store(true)
-		return NewToolResult("ran"), nil
-	}))
+	launcher := &recordingSessionLauncher{}
+	tool.SetSessionLauncher(launcher)
 	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
-	// ADR-057 FR-021/BDD-20 (W7a): a real delegation now requires a
-	// lifecycle store and a resolvable calling-agent identity — neither is
-	// this test's concern (it exercises the deny-checker wiring), so both
-	// are wired past.
-	tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
-	t.Cleanup(tool.WaitForAsyncTasks)
 
-	result := tool.Execute(WithAgentID(context.Background(), "test-caller"), map[string]any{
+	ctx := WithAgentID(WithTranscriptSessionID(context.Background(), "parent-session"), "test-caller")
+	result := tool.Execute(ctx, map[string]any{
 		"task":     "do the thing",
 		"agent_id": "trusted-agent",
 	})
 	if result == nil || result.IsError {
 		t.Fatalf("expected allowed delegate call to succeed, got %+v", result)
 	}
-	// DelegateTool launches the spawner in a goroutine for async=true
-	// (default), so the spawn has not necessarily happened yet — this asserts
-	// only that the call was ACCEPTED. Whether the spawner actually ran is
-	// checked after the async work drains, below.
-	if !result.Async {
-		t.Error("expected an async result for an allowed background delegate call")
-	}
-	tool.WaitForAsyncTasks()
-	if !spawned.Load() {
-		t.Error("the allowed delegate call never reached the spawner — the deny-checker's " +
-			"allow path is what this test exists to prove, and it was previously not asserted at all")
+	if launcher.dispatchSessionID == "" {
+		t.Error("the allowed delegate call never reached the session launcher")
 	}
 }
 
@@ -203,190 +175,12 @@ func TestTaskCreateTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	}
 }
 
-// TestDelegateTool_AwaitDelegationDenyChecker_Aborts proves the await-mode
-// (async=false) deny-checker aborts a delegate call: the structured failure
-// carries Tool=="delegate" and the spawner never runs (no sub-turn).
-func TestDelegateTool_AwaitDelegationDenyChecker_Aborts(t *testing.T) {
-	tool := NewDelegateTool("test-model", 0, 0)
-
-	spawned := false
-	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
-		spawned = true
-		return NewToolResult("ran"), nil
-	}))
-
-	tool.SetDelegationDenyCheckerAwait(func(_ context.Context, _ string) *DelegationDenial {
-		return &DelegationDenial{
-			Reason:        "delegation depth cap reached",
-			Policy:        DenyDepth,
-			TargetAgentID: "deep-agent",
-		}
-	})
-
-	result := tool.Execute(context.Background(), map[string]any{
-		"task":  "do the thing",
-		"label": "deep work",
-		"async": false,
-	})
-
-	if result == nil || !result.IsError {
-		t.Fatalf("expected denied delegate (await) call to return an error result, got %+v", result)
-	}
-	failure := decodeDelegationFailure(t, result)
-	if failure.Tool != "delegate" {
-		t.Errorf("expected structured failure tool 'delegate', got %q", failure.Tool)
-	}
-	if failure.Policy != string(DenyDepth) {
-		t.Errorf("expected policy %q, got %q", DenyDepth, failure.Policy)
-	}
-	if !strings.Contains(failure.Reason, "depth cap reached") {
-		t.Errorf("expected the checker's reason to surface, got: %s", failure.Reason)
-	}
-	if targetAgentID(failure) != "deep-agent" {
-		t.Errorf("expected target_agent_id 'deep-agent', got %q", targetAgentID(failure))
-	}
-	if spawned {
-		t.Error("spawner must NOT run when delegation is denied")
-	}
-}
-
-// TestSyncDelegateWait_Rejected pins FR-130/MIN-3: a synchronous delegate.run
-// (wait=true, i.e. async=false) whose child question would block the caller is
-// REJECTED by default with a clear tool error (never a silent deadlock); the
-// bounded human route is available ONLY via the explicit opt-in (the await-mode
-// deny-checker approving), which routes the call through executeSync — the
-// bounded sync wait. The default-reject posture is implemented by the
-// delegationDenyAwait gate (the matrix row 56 claimed this test; it did not
-// exist). US-6/AS-2.
-func TestSyncDelegateWait_Rejected(t *testing.T) {
-	t.Run("default_rejects_wait_true_no_silent_deadlock", func(t *testing.T) {
-		tool := NewDelegateTool("test-model", 0, 0)
-		spawned := false
-		tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
-			spawned = true
-			return NewToolResult("ran"), nil
-		}))
-		// The DEFAULT posture: the await deny-checker DENIES a sync (wait=true)
-		// delegation whose child would block the caller — no opt-in recorded.
-		tool.SetDelegationDenyCheckerAwait(func(_ context.Context, target string) *DelegationDenial {
-			return &DelegationDenial{
-				Reason:        "sync wait=true question rejected by default (use the bounded human-route opt-in)",
-				Policy:        DenyTrustSet,
-				TargetAgentID: target,
-			}
-		})
-
-		// wait=true <=> async=false.
-		result := tool.Execute(context.Background(), map[string]any{
-			"task":     "block on a child question",
-			"agent_id": "child-agent",
-			"async":    false,
-		})
-
-		if result == nil || !result.IsError {
-			t.Fatalf("expected wait=true delegate to be REJECTED by default (clear tool error, never a silent deadlock), got %+v", result)
-		}
-		failure := decodeDelegationFailure(t, result)
-		if failure.Tool != "delegate" {
-			t.Errorf("expected structured failure tool 'delegate', got %q", failure.Tool)
-		}
-		if !strings.Contains(failure.Reason, "rejected by default") {
-			t.Errorf("expected the default-reject reason to surface, got: %s", failure.Reason)
-		}
-		if spawned {
-			t.Error("spawner must NOT run on a rejected sync delegate (no blocking wait can occur)")
-		}
-	})
-
-	t.Run("explicit_opt_in_permits_bounded_wait", func(t *testing.T) {
-		// The bounded human-route opt-in — the await deny-checker APPROVING —
-		// is the ONLY way a sync wait=true delegation proceeds: it routes to
-		// executeSync (the bounded sync wait), never a silent allow-through.
-		tool := NewDelegateTool("test-model", 0, 0)
-		spawned := false
-		tool.SetSpawner(spawnerFunc(func(_ context.Context, cfg SubTurnConfig) (*ToolResult, error) {
-			spawned = true
-			if cfg.Async {
-				t.Error("opt-in sync delegation must run via executeSync (Async=false), not the async path")
-			}
-			return NewToolResult("child answer"), nil
-		}))
-		tool.SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial { return nil })
-		// ADR-057 FR-021/BDD-20 (W7a): a real delegation now requires a
-		// lifecycle store and a resolvable calling-agent identity — neither
-		// is this test's concern (it exercises the opt-in deny-checker
-		// routing), so both are wired past.
-		tool.SetLifecycleStore(session.NewLifecycleStore(t.TempDir()))
-
-		result := tool.Execute(WithAgentID(context.Background(), "test-caller"), map[string]any{
-			"task":     "bounded wait on a child question",
-			"agent_id": "child-agent",
-			"async":    false, // wait=true
-		})
-
-		if result == nil || result.IsError {
-			t.Fatalf("expected the opt-in to PERMIT the bounded sync wait, got %+v", result)
-		}
-		if result.Async {
-			t.Error("an opt-in sync (wait=true) delegation must return a non-async (bounded wait) result")
-		}
-		if !spawned {
-			t.Error("the opt-in must route to executeSync (spawner runs the bounded wait)")
-		}
-	})
-}
-
-// TestDelegateTool_AwaitNilDenyChecker_FailsClosed proves that with NO
-// await-mode deny checker installed (SetDelegationDenyCheckerAwait never
-// called), an await (async=false) delegate call is DENIED, not silently
-// allowed. 7-reviewer-gate follow-up (silent-failure-hunter): the original
-// ADR-037 removal deleted the legacy allowlistCheck/delegateChecker fallback
-// AND, as an unintended side effect, the deny-by-default safety net those
-// fallbacks provided when unwired. An unwired checker is a configuration
-// error, not a permission grant — this test pins the corrected fail-CLOSED
-// behavior. Production always wires SetDelegationDenyCheckerAwait
-// (pkg/agent/loop.go), so this path is unreachable there today; the test
-// exists to protect the NEXT wiring bug (new construction path, v0.3 plugin
-// entry point, refactor slip), the same way the tests it replaces used to
-// characterize the (undetected) fail-open regression.
-func TestDelegateTool_AwaitNilDenyChecker_FailsClosed(t *testing.T) {
-	tool := NewDelegateTool("test-model", 0, 0)
-	spawned := false
-	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
-		spawned = true
-		return NewToolResult("ran"), nil
-	}))
-
-	// No SetDelegationDenyCheckerAwait installed at all.
-	result := tool.Execute(context.Background(), map[string]any{
-		"task":     "do the thing",
-		"agent_id": "some-agent",
-		"async":    false,
-	})
-	if result == nil || !result.IsError {
-		t.Fatalf("expected an unwired await deny-checker to fail CLOSED (deny), got %+v", result)
-	}
-	failure := decodeDelegationFailure(t, result)
-	if failure.Tool != "delegate" {
-		t.Errorf("expected structured failure tool 'delegate', got %q", failure.Tool)
-	}
-	if failure.Policy != string(DenyTrustSet) {
-		t.Errorf("expected policy %q, got %q", DenyTrustSet, failure.Policy)
-	}
-	if spawned {
-		t.Error("spawner must NOT run when no deny-checker is installed (fail-closed-when-unwired)")
-	}
-}
-
 // TestDelegateTool_BackgroundNilDenyChecker_FailsClosed mirrors the await
 // test above for the background (async=true, default) mode.
 func TestDelegateTool_BackgroundNilDenyChecker_FailsClosed(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
-	spawned := make(chan struct{}, 1)
-	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
-		spawned <- struct{}{}
-		return NewToolResult("ran"), nil
-	}))
+	launcher := &recordingSessionLauncher{}
+	tool.SetSessionLauncher(launcher)
 
 	// No SetDelegationDenyCheckerBackground installed at all.
 	result := tool.Execute(context.Background(), map[string]any{
@@ -403,11 +197,8 @@ func TestDelegateTool_BackgroundNilDenyChecker_FailsClosed(t *testing.T) {
 	if failure.Policy != string(DenyTrustSet) {
 		t.Errorf("expected policy %q, got %q", DenyTrustSet, failure.Policy)
 	}
-	select {
-	case <-spawned:
-		t.Error("spawner must NOT run when no deny-checker is installed (fail-closed-when-unwired)")
-	case <-time.After(200 * time.Millisecond):
-		// spawner did not run within the window, as expected for fail-closed.
+	if launcher.launchReq.Task != "" {
+		t.Error("launcher must NOT run when no deny-checker is installed (fail-closed-when-unwired)")
 	}
 }
 
@@ -509,11 +300,4 @@ func TestDelegationDeniedResult_DefaultsInvariant(t *testing.T) {
 	if failure.Tool != "delegate" {
 		t.Errorf("expected tool 'delegate', got %q", failure.Tool)
 	}
-}
-
-// spawnerFunc adapts a function to the SubTurnSpawner interface for tests.
-type spawnerFunc func(ctx context.Context, cfg SubTurnConfig) (*ToolResult, error)
-
-func (f spawnerFunc) SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*ToolResult, error) {
-	return f(ctx, cfg)
 }

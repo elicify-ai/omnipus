@@ -433,6 +433,17 @@ func TestCreatePending_DelegatedChildRejected(t *testing.T) {
 	}
 	reg := NewRegistry(store, &fakeResume{}, Options{})
 	t.Cleanup(reg.Quiesce)
+	// fix(askuser): relay child questions upward (8932d09ff) made the
+	// meta.ParentSessionID branch relay the question via
+	// steer.UpwardDeliverer BEFORE returning ErrDelegatedChild — an unwired
+	// deliverer now fails closed with its own error rather than reaching
+	// ErrDelegatedChild. Production wires SetSteerAudienceResolver's
+	// resolver/observer/deliverer together (registry.go's own "belt and
+	// suspenders" comment: ParentSessionID and the resolver-derived
+	// `steered` bool should always agree), so this test wires the same
+	// recordingUpwardDeliverer registry_steer_test.go's steered-session
+	// coverage uses, matching that production invariant.
+	reg.SetSteerAudienceResolver(nil, nil, &recordingUpwardDeliverer{})
 	if err := reg.CreatePending(testSet(child.ID)); !errors.Is(err, ErrDelegatedChild) {
 		t.Fatalf("want ErrDelegatedChild, got %v", err)
 	}

@@ -1504,7 +1504,7 @@ func TestPlanCorrect_SchemaExposesNoDoDOrOwner(t *testing.T) {
 	if !ok {
 		t.Fatal("parameters have no properties object")
 	}
-	for _, forbidden := range []string{"dod", "owner_agent_id", "bounds", "goal", "state"} {
+	for _, forbidden := range []string{"dod", "owner_agent_id", "bounds", "objective", "state"} {
 		if _, present := props[forbidden]; present {
 			t.Errorf("schema exposes %q", forbidden)
 		}

@@ -10,13 +10,22 @@
 //     counts were discarded after a log line. Fixed by returning
 //     (killed, failed) from killChildBackgroundShells and folding a real
 //     failure into the result message.
-//   - Defect 2 (MAJOR): taskCap() was dead code (zero references outside
-//     its own definition) — evictStaleTasksLocked enforced only TTL, so
+//   - Defect 2 (MAJOR, ADR-091: machinery deleted, tests below removed with
+//     it) — was: taskCap() was dead code (zero references outside its own
+//     definition) — evictStaleTasksLocked enforced only TTL, so
 //     SetTaskRetentionPolicy's cap argument had no effect at any value.
 //     Compounding: listTaskCopies mutated the STORED record's
 //     LastStatusRead on every bare list-all read, refreshing the eviction
 //     clock on every task in the map (not just the one(s) the caller
-//     cared about) and starving eviction indefinitely.
+//     cared about) and starving eviction indefinitely. ADR-091's launcher
+//     migration deleted the last writer of the in-memory task-state index
+//     (t.tasks/t.sessionIndex) this whole defect and its fix lived in —
+//     SetTaskRetentionPolicy, taskCap, taskTTL, evictStaleTasksLocked,
+//     getTaskCopy and listTaskCopies were deleted with it (see delegate.go's
+//     package doc comment); the two regression tests that pinned this fix
+//     (TestEvictStaleTasksLocked_CapEnforced_IndependentOfTTL,
+//     TestListTaskCopies_DoesNotMutateStoredLastStatusRead) went with them
+//     rather than being left to seed a map that no longer exists.
 //   - Defect 3 (MAJOR): verifyCallerOwnsSession collapsed every ancestor
 //     Load error into the same silent chain-end as the expected not-found
 //     case, so a genuine I/O error (corrupt/truncated record, disk-full
@@ -33,12 +42,12 @@ package tools
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // ---------------------------------------------------------------------
@@ -51,12 +60,13 @@ import (
 // shape delegate_adr057_unix_test.go's real-process precedent uses.
 func fix6NewLifecycleRecord(sessionID, parentDurableKey string) *session.LifecycleRecord {
 	return &session.LifecycleRecord{
-		SessionID:        sessionID,
-		State:            session.LifecycleRunning,
-		OwnerScopeKind:   session.OwnerScopeHuman,
-		ParentDurableKey: parentDurableKey,
-		WorkspaceID:      "ws-1",
-		AgentID:          "worker",
+		SessionID:      sessionID,
+		Generation:     1,
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentDurableKey, RootSessionID: parentDurableKey},
+		WorkspaceID:    "ws-1",
+		AgentID:        "worker",
 	}
 }
 
@@ -155,8 +165,12 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 			t.Fatalf("seed lifecycle record failed: %v", err)
 		}
 		tool.SetCancelHooks(
-			func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
-			func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
+			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+				return []string{sessionID}, nil
+			},
+			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+				return []string{sessionID}, nil
+			},
 		)
 
 		callerCtx := WithTranscriptSessionID(context.Background(), "fix6-cancel-parent-fail")
@@ -196,8 +210,12 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 			t.Fatalf("seed lifecycle record failed: %v", err)
 		}
 		tool.SetCancelHooks(
-			func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
-			func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
+			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+				return []string{sessionID}, nil
+			},
+			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+				return []string{sessionID}, nil
+			},
 		)
 
 		callerCtx := WithTranscriptSessionID(context.Background(), "fix6-cancel-parent-fail-soft")
@@ -231,8 +249,12 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 			t.Fatalf("seed lifecycle record failed: %v", err)
 		}
 		tool.SetCancelHooks(
-			func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
-			func(sessionID, hint string) ([]string, error) { return []string{sessionID}, nil },
+			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+				return []string{sessionID}, nil
+			},
+			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+				return []string{sessionID}, nil
+			},
 		)
 
 		callerCtx := WithTranscriptSessionID(context.Background(), "fix6-cancel-parent-clean")
@@ -244,150 +266,6 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 			t.Errorf("must NOT add a kill-failure warning when there was nothing to kill, got: %s", result.ForLLM)
 		}
 	})
-}
-
-// ---------------------------------------------------------------------
-// Defect 2: taskCap must actually bound t.tasks/t.sessionIndex, and
-// listTaskCopies must not mutate stored state.
-// ---------------------------------------------------------------------
-
-// TestEvictStaleTasksLocked_CapEnforced_IndependentOfTTL isolates FR-087
-// (the retention cap) from FR-045 (the TTL) — the pre-existing
-// TestDelegateTaskMaps_BoundedAfterNCompletions (delegate_adr057_test.go)
-// ages every task past its TTL before asserting the bound, so it could
-// pass even with taskCap() completely unreferenced (as it, in fact, was —
-// golangci-lint flagged it `unused`). Here the TTL is set to an hour and
-// the whole test completes in a couple of simulated minutes, so ANY bound
-// this test observes can only come from cap enforcement.
-func TestEvictStaleTasksLocked_CapEnforced_IndependentOfTTL(t *testing.T) {
-	tool, _ := u14PermissiveTool(t)
-	lc := session.NewLifecycleStore(t.TempDir())
-	tool.SetLifecycleStore(lc)
-
-	fakeNow := time.Now()
-	tool.SetClock(func() time.Time { return fakeNow })
-
-	const capN = 3
-	tool.SetTaskRetentionPolicy(capN, time.Hour) // TTL far larger than this test's simulated span
-
-	const n = 5 // n > capN
-	for i := 0; i < n; i++ {
-		ctx := WithAgentID(WithTranscriptSessionID(context.Background(), fmt.Sprintf("fix6-cap-parent-%d", i)), "fix6-agent")
-		if r := tool.Execute(ctx, map[string]any{"task": "old", "async": false}); r.IsError {
-			t.Fatalf("dispatch %d failed: %s", i, r.ForLLM)
-		}
-	}
-
-	tool.mu.Lock()
-	var sessionIDs []string
-	for sid, taskID := range tool.sessionIndex {
-		if st, ok := tool.tasks[taskID]; ok && st.Task == "old" {
-			sessionIDs = append(sessionIDs, sid)
-		}
-	}
-	beforeCount := len(tool.tasks)
-	tool.mu.Unlock()
-	if len(sessionIDs) == 0 {
-		t.Fatal("precondition: expected at least one 'old' task to still be registered")
-	}
-	// Positive lower bound (Rule 4): registration alone (no TTL elapsed at
-	// all — every task's LastStatusRead is still fresh) must already have
-	// pushed the map past the cap, or the bounded assertion below would
-	// pass vacuously even with cap enforcement still dead code.
-	if beforeCount <= capN {
-		t.Fatalf("precondition: expected t.tasks to have grown past the cap (%d) via registration alone "+
-			"(TTL never elapsed), got %d — the fixture does not exercise the cap at all", capN, beforeCount)
-	}
-
-	// Actively poll ONE surviving task, giving it a strictly later
-	// LastStatusRead than every other task — proves cap eviction removes
-	// the LEAST-recently-read tasks first, the same "actively polled
-	// survives" invariant BDD-52 already established for TTL-driven
-	// eviction, now also holding for cap-driven eviction.
-	survivorSID := sessionIDs[0]
-	fakeNow = fakeNow.Add(time.Minute)
-	if r := tool.Execute(context.Background(), map[string]any{"action": "status", "session_id": survivorSID}); r.IsError {
-		t.Fatalf("status poll for survivor failed: %s", r.ForLLM)
-	}
-
-	// Run the exact same eviction pass every registration triggers
-	// (FR-045/FR-087's bookkeeping-driven trigger), directly — no new task
-	// is added here, so the resulting count is exactly what cap
-	// enforcement leaves behind.
-	tool.mu.Lock()
-	tool.evictStaleTasksLocked()
-	gotTasks := len(tool.tasks)
-	gotIndex := len(tool.sessionIndex)
-	tool.mu.Unlock()
-
-	if gotTasks > capN {
-		t.Errorf("FR-087: expected len(t.tasks) <= %d after eviction — none of these %d tasks had aged past "+
-			"the 1-hour TTL, so this bound can ONLY come from cap enforcement — got %d", capN, n, gotTasks)
-	}
-	if gotIndex > capN {
-		t.Errorf("FR-087: expected len(t.sessionIndex) <= %d after eviction, got %d", capN, gotIndex)
-	}
-
-	statusResult := tool.Execute(context.Background(), map[string]any{"action": "status", "session_id": survivorSID})
-	if statusResult.IsError {
-		t.Errorf("expected the actively-polled task to survive cap eviction (least-recently-read evicted "+
-			"first), got error: %s", statusResult.ForLLM)
-	}
-}
-
-// TestListTaskCopies_DoesNotMutateStoredLastStatusRead is a direct,
-// surgical reproduction of the second half of defect 2: a bare list-all
-// read (listTaskCopies, backing action:"status" with no task_id/
-// session_id) must not reset ANY task's own eviction clock — only a
-// targeted single-task read (getTaskCopy) legitimately does that.
-func TestListTaskCopies_DoesNotMutateStoredLastStatusRead(t *testing.T) {
-	tool, _ := u14PermissiveTool(t)
-	fakeNow := time.Now()
-	tool.SetClock(func() time.Time { return fakeNow })
-
-	const wantStamp = int64(123456789000)
-	tool.mu.Lock()
-	tool.tasks["fix6-probe"] = &DelegateTaskState{
-		ID: "fix6-probe", Status: "completed", Created: wantStamp, LastStatusRead: wantStamp,
-	}
-	tool.mu.Unlock()
-
-	// Advance the clock so a mutating listTaskCopies would produce an
-	// OBSERVABLY different stamp than wantStamp — a bug that happened to
-	// read "now" as the same instant would otherwise pass vacuously.
-	fakeNow = fakeNow.Add(time.Hour)
-
-	copies := tool.listTaskCopies()
-	if len(copies) != 1 {
-		t.Fatalf("expected exactly 1 task copy, got %d", len(copies))
-	}
-	if copies[0].LastStatusRead != wantStamp {
-		t.Errorf("returned copy's LastStatusRead changed from %d to %d — listTaskCopies must not fabricate "+
-			"a new stamp", wantStamp, copies[0].LastStatusRead)
-	}
-
-	tool.mu.Lock()
-	gotStored := tool.tasks["fix6-probe"].LastStatusRead
-	tool.mu.Unlock()
-	if gotStored != wantStamp {
-		t.Errorf("BLOCKER-adjacent (defect 2): listTaskCopies must NOT mutate the STORED task's "+
-			"LastStatusRead — a bare list-all action:\"status\" poll would otherwise refresh the eviction "+
-			"clock on EVERY task in the map, including other conversations', starving eviction indefinitely "+
-			"regardless of the configured retention policy. stored LastStatusRead changed from %d to %d",
-			wantStamp, gotStored)
-	}
-
-	// Positive control: a SECOND call, after another clock advance, must
-	// still leave the stored value untouched — proves this isn't a
-	// first-call-only coincidence.
-	fakeNow = fakeNow.Add(time.Hour)
-	_ = tool.listTaskCopies()
-	tool.mu.Lock()
-	gotStored2 := tool.tasks["fix6-probe"].LastStatusRead
-	tool.mu.Unlock()
-	if gotStored2 != wantStamp {
-		t.Errorf("second listTaskCopies call mutated stored LastStatusRead: got %d, want %d", gotStored2, wantStamp)
-	}
 }
 
 // ---------------------------------------------------------------------
@@ -435,7 +313,7 @@ func TestVerifyCallerOwnsSession_LogsIOErrorDistinctFromNotFound(t *testing.T) {
 			t.Fatal("expected ownership denial when the ancestor chain hits a genuine I/O error — the walk " +
 				"MUST stay fail-closed, not just diagnosable")
 		}
-		if !strings.Contains(err.Error(), "not owned by the calling session") {
+		if !strings.Contains(err.Error(), "not steered by the calling principal") {
 			t.Errorf("expected the standard fail-closed denial message, got: %v", err)
 		}
 		logs := getLogs()

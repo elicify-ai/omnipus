@@ -1,4 +1,4 @@
-// delegate_status.go: Poll and report on a delegation — task status, live activity, child inbox messages, and checkpoint peek.
+// delegate_status.go: Poll and report on a delegation — session status, live activity, child inbox messages, and checkpoint peek.
 
 package tools
 
@@ -7,73 +7,56 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-// ResolvableSessionIDs implements tools.JobSessionResolver (#583): it reports
-// which of the given delegate session ids (ADR-053 durable session_id, the
-// same id space as DelegateTaskState.DelegateSessionID/t.sessionIndex's keys)
-// are still resolvable in THIS process's in-memory delegate index — the
-// signal list_jobs uses to decide whether a subagent row's session_id can
-// actually be acted on right now (status/inbox/steer/respond/cancel/
-// follow_up/peek) rather than failing on use. A durable LifecycleRecord can
-// survive a process restart while this in-memory index does not; such a
-// session is correctly reported unresolvable here (FR-011).
+// ResolvableSessionIDs implements tools.JobSessionResolver (#583). It used
+// to report which delegate session ids were still resolvable in this
+// process's in-memory legacy task-state index (t.tasks/t.sessionIndex,
+// keyed by the now-deleted task_id) — the signal list_jobs' collectSubagentRows
+// once used to decide whether a subagent row's session_id could actually be
+// acted on. ADR-091's launcher migration deleted that index outright
+// (delegate.go's package doc comment has the full history); the durable
+// session.LifecycleRecord is now the only store a session's liveness is
+// read from, and collectSubagentRows (pkg/tools/list_jobs_sources.go)
+// derives Actionable from the record's own status instead of calling this
+// method's result at all — "whether an old in-memory delegate index
+// happens to contain the id cannot make a running or parked session
+// unactionable" (see that function's own comment).
 //
-// Single lock acquisition for the WHOLE batch (FR-028, matching the
-// JobSessionResolver interface's own doc comment): the underlying index is
-// guarded by t.mu, the same mutex every delegate status/inbox/steer/respond/
-// cancel call already takes, so resolving one id per row would put a
-// read-only visibility tool in contention with the live dispatch path.
+// Kept only so *DelegateTool continues to satisfy tools.JobSessionResolver
+// for pkg/agent's existing wiring (loop_wire.go's SetSessionResolver); every
+// id is now reported unresolvable, which is the honest answer for an index
+// that no longer exists, and matches the value this method already
+// returned for every id once the launcher migration stopped writing it.
 func (t *DelegateTool) ResolvableSessionIDs(ids []string) map[string]bool {
 	out := make(map[string]bool, len(ids))
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	for _, id := range ids {
-		_, ok := t.sessionIndex[id]
-		out[id] = ok
+		out[id] = false
 	}
 	return out
 }
 
-// ResolvableLabels implements tools.JobLabelResolver (UAT M3, 2026-08-03):
-// for each delegate session id given, it reports the caller-supplied `label`
-// argument (delegate(..., label:"...")) recorded in THIS process's
-// in-memory task-state index at dispatch time — see JobLabelResolver's own
-// doc comment (pkg/tools/list_jobs_sources.go) for why no durable field
-// exists to read instead (session.LifecycleRecord carries no Label at all;
-// DelegateTaskState.Label plus a one-shot subagent_start WS payload are the
-// only places a custom label ever lives).
+// ResolvableLabels implements tools.JobLabelResolver (UAT M3, 2026-08-03).
+// It used to report the caller-supplied `delegate(label=...)` value from
+// the same now-deleted in-memory task-state index ResolvableSessionIDs'
+// doc comment describes; list_jobs' collectSubagentRows never actually
+// passed a label resolver into that read path even before the index was
+// deleted (there is no labelResolver parameter on collectSubagentRows), so
+// this was already unreachable from production.
 //
-// Mirrors ResolvableSessionIDs exactly: a single t.mu acquisition for the
-// WHOLE batch (FR-028 — the same contract JobSessionResolver's own doc
-// comment documents), so this read-only visibility call never contends with
-// the live dispatch path over the same lock.
-//
-// A session id absent from t.sessionIndex, or whose task has no Label set,
-// is simply omitted from the returned map — never an error; list_jobs falls
-// back to the row's already-resolved agent display name for that case (see
-// JobLabelResolver's doc comment).
+// Kept only so *DelegateTool continues to satisfy tools.JobLabelResolver
+// for pkg/agent's existing wiring (loop_wire.go's SetLabelResolver); a
+// session id absent from the returned map means no custom label is
+// available, which is now unconditionally true — list_jobs' label_contains
+// filter falls back to the row's agent display name for every subagent row
+// (see JobLabelResolver's doc comment).
 func (t *DelegateTool) ResolvableLabels(ids []string) map[string]string {
-	out := make(map[string]string, len(ids))
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for _, id := range ids {
-		taskID, ok := t.sessionIndex[id]
-		if !ok {
-			continue
-		}
-		task, ok := t.tasks[taskID]
-		if !ok || task.Label == "" {
-			continue
-		}
-		out[id] = task.Label
-	}
-	return out
+	return map[string]string{}
 }
 
 // delegateTaskVisibleToCaller decides whether the caller identified by
@@ -93,284 +76,152 @@ func (t *DelegateTool) ResolvableLabels(ids []string) map[string]string {
 // list_jobs, which key off the durable session id, kept reporting it
 // correctly the whole time).
 //
-// The durable identity that DOES survive a reconnect is the ADR-053 session
-// id: the client resends the SAME session_id on every reconnect
-// (websocket.go's `sessionID` local only ever gets a NEW session minted when
-// the frame carries none at all — see websocket.go:1489 vs :1563), and
-// DelegateTaskState.SessionID already captures it at dispatch time (this
-// file's executeAsync, via ToolTranscriptSessionID(ctx) — the parent
-// turn's own durable transcript session id).
-//
-// So: when BOTH the caller and the task carry a durable session id, that id
-// is the authoritative scope check — it survives the caller's chatID
-// rotating out from under it, and (being an unguessable, per-conversation
-// identifier, unlike the shared "webchat" channel literal) is at least as
-// strong an isolation boundary as the legacy channel/chatID pair for the
-// cross-conversation case. When either side lacks a durable session id (a
-// direct programmatic Execute call, a task registered before any transcript
-// session was bound, or a non-webchat channel that never threads one
-// through), this falls back to the pre-existing channel+chatID comparison
-// unchanged — preserving check_spawn_status's original scoping exactly for
-// every caller this fix does not need to touch.
-func delegateTaskVisibleToCaller(callerSessionID, callerChannel, callerChatID string, task *DelegateTaskState) bool {
-	if callerSessionID != "" && task.SessionID != "" {
-		return callerSessionID == task.SessionID
-	}
-	if callerChannel != "" && task.OriginChannel != "" && task.OriginChannel != callerChannel {
-		return false
-	}
-	if callerChatID != "" && task.OriginChatID != "" && task.OriginChatID != callerChatID {
-		return false
-	}
-	return true
-}
-
-// executeStatus implements action:"status". It resolves against the exact
-// same t.tasks map the async path writes to (FR-D2) and preserves
-// check_spawn_status's channel/chatID scoping exactly: a lookup or listing is
-// restricted to tasks that originated from the SAME conversation, and all
-// tasks are listed only when no channel/chat context is injected at all
-// (e.g. direct programmatic Execute calls). C3 (UAT 2026-07-31): the scope
-// check now prefers the durable ADR-053 session id (delegateTaskVisibleToCaller)
-// whenever both sides have one, since that identity survives a WebSocket
-// reconnect where callerChatID does not — see that function's doc comment
-// for the full rationale.
+// executeStatus implements action:"status". session_id is the only way to
+// address a child (ADR-091 deleted the legacy task_id/in-memory-task-index
+// addressing scheme this action used to also accept — see delegate.go's
+// package doc comment for the history): it resolves the child's own durable
+// session.LifecycleRecord directly, which survives a process restart and a
+// caller's WebSocket reconnect alike, so there is no separate reconnect- or
+// conversation-scoping question left for this action to answer — ownership
+// is verified against the record itself (verifyCallerOwnsSession, called
+// inside executeDurableStatus below).
 func (t *DelegateTool) executeStatus(ctx context.Context, args map[string]any) *ToolResult {
-	callerChannel := ToolChannel(ctx)
-	callerChatID := ToolChatID(ctx)
-	callerSessionID := ToolTranscriptSessionID(ctx)
-
-	var taskID string
-	if rawTaskID, ok := args["task_id"]; ok && rawTaskID != nil {
-		taskIDStr, ok := rawTaskID.(string)
-		if !ok {
-			return ErrorResult("task_id must be a string")
-		}
-		taskID = strings.TrimSpace(taskIDStr)
+	sessionID, err := requiredStringArg(args, "session_id")
+	if err != nil {
+		return ErrorResult(err.Error())
 	}
-	// session_id (ADR-053) wins when both are present (DelegateStatusAction's
-	// documented precedence); task_id survives as a deprecated alias.
-	if rawSessionID, ok := args["session_id"]; ok && rawSessionID != nil {
-		sessionIDStr, ok := rawSessionID.(string)
-		if !ok {
-			return ErrorResult("session_id must be a string")
-		}
-		if sid := strings.TrimSpace(sessionIDStr); sid != "" {
-			t.mu.Lock()
-			resolved, found := t.sessionIndex[sid]
-			t.mu.Unlock()
-			if !found {
-				return ErrorResult(fmt.Sprintf("No subagent found with session ID: %s", sid))
-			}
-			taskID = resolved
-		}
-	}
-
-	if taskID != "" {
-		taskCopy, ok := t.getTaskCopy(taskID)
-		if !ok {
-			// Genuine absence: log distinctly from the scope-mismatch branch
-			// below so an operator can tell the two apart, even though the
-			// caller-visible message is identical for both (UAT 2026-07-31 —
-			// the two paths were previously indistinguishable to anyone
-			// debugging a "status went blind" report).
-			slog.Debug("delegate: status lookup — task not found", "task_id", taskID)
-			return ErrorResult(fmt.Sprintf("No subagent found with task ID: %s", taskID))
-		}
-
-		// Restrict lookup to tasks visible to this conversation — see
-		// delegateTaskVisibleToCaller's doc comment (C3 fix: the durable
-		// session id takes priority over the legacy channel/chatID pair
-		// whenever both sides have one, since only the session id survives a
-		// WebSocket reconnect).
-		if !delegateTaskVisibleToCaller(callerSessionID, callerChannel, callerChatID, &taskCopy) {
-			// Deliberately the SAME caller-visible "not found" message a
-			// genuine miss returns above — never confirm to an untrusted
-			// caller that a task exists in a DIFFERENT conversation — but
-			// logged distinctly for diagnosability.
-			slog.Debug("delegate: status lookup — task exists but is not visible to this caller (scope mismatch)",
-				"task_id", taskID,
-				"caller_session_id", callerSessionID,
-				"task_session_id", taskCopy.SessionID,
-				"caller_channel", callerChannel,
-				"task_channel", taskCopy.OriginChannel,
-			)
-			return ErrorResult(fmt.Sprintf("No subagent found with task ID: %s", taskID))
-		}
-
-		return NewToolResult(delegateFormatTask(&taskCopy, t.delegateStatusExtra(&taskCopy)))
-	}
-
-	origTasks := t.listTaskCopies()
-	if len(origTasks) == 0 {
-		return NewToolResult("No subagents have been spawned yet.")
-	}
-
-	taskList := make([]*DelegateTaskState, 0, len(origTasks))
-	for i := range origTasks {
-		cpy := &origTasks[i]
-
-		// Filter to tasks visible to the current conversation only — see
-		// delegateTaskVisibleToCaller's doc comment.
-		if !delegateTaskVisibleToCaller(callerSessionID, callerChannel, callerChatID, cpy) {
-			continue
-		}
-
-		taskList = append(taskList, cpy)
-	}
-
-	if len(taskList) == 0 {
-		return NewToolResult("No subagents found for this conversation.")
-	}
-
-	// Order by creation time (ascending) so spawning order is preserved.
-	// Fall back to ID string for tasks created in the same millisecond.
-	sort.Slice(taskList, func(i, j int) bool {
-		if taskList[i].Created != taskList[j].Created {
-			return taskList[i].Created < taskList[j].Created
-		}
-		return taskList[i].ID < taskList[j].ID
-	})
-
-	counts := map[string]int{}
-	for _, task := range taskList {
-		counts[task.Status]++
-	}
-
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "Subagent status report (%d total):\n", len(taskList))
-	for _, status := range []string{"running", "completed", "failed", "canceled"} {
-		if n := counts[status]; n > 0 {
-			label := strings.ToUpper(status[:1]) + status[1:] + ":"
-			fmt.Fprintf(&sb, "  %-10s %d\n", label, n)
-		}
-	}
-	sb.WriteString("\n")
-
-	for _, task := range taskList {
-		sb.WriteString(delegateFormatTask(task, t.delegateStatusExtra(task)))
-		sb.WriteString("\n\n")
-	}
-
-	return NewToolResult(strings.TrimRight(sb.String(), "\n"))
+	return t.executeDurableStatus(ctx, sessionID)
 }
 
-// getTaskCopy returns a copy of the task with the given ID, taken under the
-// lock, so the caller receives a consistent snapshot with no data race.
-// ADR-057 FR-045: this is action:"status"'s single-task read path, so it
-// also stamps LastStatusRead — resetting the eviction clock on the task's
-// own stored record (not just the returned copy) so a task under active
-// polling is never reclaimed by evictStaleTasksLocked out from under the
-// caller (BDD-52's "But" clause, test #93).
-func (t *DelegateTool) getTaskCopy(taskID string) (DelegateTaskState, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	task, ok := t.tasks[taskID]
-	if !ok {
-		return DelegateTaskState{}, false
-	}
-	task.LastStatusRead = t.now().UnixMilli()
-	return *task, true
+type delegateInboxLatestStore interface {
+	Latest(ownerKey, childSessionID string) (*generated.SessionMessage, error)
 }
 
-// listTaskCopies returns value copies of all tasks, taken under the lock, so
-// callers receive consistent snapshots with no data race. ADR-057 FR-045:
-// this backs action:"status"'s list-all-tasks path (no task_id/session_id
-// given).
-//
-// Deliberately does NOT stamp LastStatusRead, unlike getTaskCopy. getTaskCopy
-// is a targeted lookup by task_id/session_id — a genuine "I am actively
-// polling THIS task" signal that legitimately resets its own eviction clock
-// (BDD-52's "But" clause). A bare list-all read is not scoped to any one
-// task the caller is following; it previously stamped EVERY task in the
-// entire map (including other conversations' — the channel/chatID filter
-// executeStatus applies happens AFTER this call returns) on every plain
-// action:"status" call with no target, refreshing the eviction clock on the
-// whole fleet and starving evictStaleTasksLocked (and the taskCap it now
-// also enforces) indefinitely regardless of the configured retention
-// policy. Copies are returned exactly as stored.
-func (t *DelegateTool) listTaskCopies() []DelegateTaskState {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	copies := make([]DelegateTaskState, 0, len(t.tasks))
-	for _, task := range t.tasks {
-		copies = append(copies, *task)
-	}
-	return copies
+type delegateStatusMessageEnvelope struct {
+	CreatedAt   time.Time `json:"created_at"`
+	Kind        string    `json:"kind"`
+	Text        string    `json:"text"`
+	Summary     string    `json:"summary"`
+	ResultSoFar string    `json:"result_so_far"`
+	Condition   string    `json:"condition"`
+	Note        string    `json:"note"`
 }
 
-// delegateFormatTask renders a single DelegateTaskState as a human-readable
-// block. extra, when non-empty, is appended as a trailing "\n"+extra section
-// — used by action:"status" (W2) to attach either a running native task's
-// recent transcript activity or a running external-CLI task's
-// no-live-progress note (see delegateStatusExtra). Pass "" for a task with
-// nothing to add (a non-running task, or a running native task with no
-// activity captured yet) — this keeps the function's output identical to
-// its pre-W2 shape for those cases.
-func delegateFormatTask(task *DelegateTaskState, extra string) string {
-	var sb strings.Builder
+func (t *DelegateTool) executeDurableStatus(ctx context.Context, sessionID string) *ToolResult {
+	if t.lifecycle == nil {
+		return ErrorResult("delegate: no lifecycle store configured")
+	}
+	rec, err := t.lifecycle.Load(sessionID)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("No subagent found with session ID: %s", sessionID))
+	}
+	if err := t.verifyCallerOwnsSession(ctx, rec); err != nil {
+		return ErrorResult(fmt.Sprintf("No subagent found with session ID: %s", sessionID))
+	}
 
-	header := fmt.Sprintf("[%s] status=%s", task.ID, task.Status)
-	if task.Label != "" {
-		header += fmt.Sprintf("  label=%q", task.Label)
+	state := string(rec.State)
+	// extra is the G1-fix trailing annotation (live tool-call-argument
+	// progress plus recent transcript activity) for a running child — see
+	// delegateStatusExtra's own doc comment. Computed once and appended to
+	// whichever of the return points below fires; "" for every non-running
+	// state, so it is a no-op append there.
+	extra := t.delegateStatusExtra(rec, sessionID)
+	if t.inbox == nil {
+		return NewToolResult(fmt.Sprintf("%s, no message yet, started %s ago", state, formatDelegateStatusAge(t.now().Sub(rec.CreatedAt))) + extra)
 	}
-	if task.AgentID != "" {
-		header += fmt.Sprintf("  agent=%s", task.AgentID)
-	}
-	if task.Created > 0 {
-		created := time.UnixMilli(task.Created).UTC().Format("2006-01-02 15:04:05 UTC")
-		header += fmt.Sprintf("  created=%s", created)
-	}
-	sb.WriteString(header)
 
-	if task.Task != "" {
-		fmt.Fprintf(&sb, "\n  task:   %s", task.Task)
-	}
-	if task.Result != "" {
-		result := task.Result
-		const maxResultLen = 300
-		runes := []rune(result)
-		if len(runes) > maxResultLen {
-			result = string(runes[:maxResultLen]) + "…"
+	var latest *generated.SessionMessage
+	if store, ok := t.inbox.(delegateInboxLatestStore); ok {
+		latest, err = store.Latest(rec.SteeringSessionID(), sessionID)
+	} else {
+		var msgs []generated.SessionMessage
+		msgs, _, _, err = t.inbox.Drain(rec.SteeringSessionID(), sessionID, "", 0)
+		if len(msgs) > 0 {
+			latest = &msgs[len(msgs)-1]
 		}
-		fmt.Fprintf(&sb, "\n  result: %s", result)
 	}
-	if extra != "" {
-		sb.WriteString("\n")
-		sb.WriteString(extra)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: status: %v", err)).WithError(err)
+	}
+	if latest == nil {
+		return NewToolResult(fmt.Sprintf("%s, no message yet, started %s ago", state, formatDelegateStatusAge(t.now().Sub(rec.CreatedAt))) + extra)
 	}
 
-	return sb.String()
+	raw, err := json.Marshal(latest)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: status: encode latest inbox entry: %v", err))
+	}
+	var envelope delegateStatusMessageEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: status: decode latest inbox entry: %v", err))
+	}
+	line := firstNonBlank(envelope.Text, envelope.Summary, envelope.ResultSoFar, envelope.Condition, envelope.Note, envelope.Kind)
+	return NewToolResult(fmt.Sprintf("%s, %s, %s ago", state, line, formatDelegateStatusAge(t.now().Sub(envelope.CreatedAt))) + extra)
 }
 
-// maxStatusActivityLines caps how many of a running native task's most
-// recent transcript entries action:"status" surfaces (W2). Fixed at ~5 per
-// spec — enough to convey what the delegate is currently doing without
-// flooding the calling LLM's context on every poll.
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return "message received"
+}
+
+func formatDelegateStatusAge(age time.Duration) string {
+	if age < 0 {
+		age = 0
+	}
+	seconds := int(age / time.Second)
+	switch {
+	case seconds < 60:
+		return fmt.Sprintf("%d s", seconds)
+	case seconds < 60*60:
+		return fmt.Sprintf("%d min", seconds/60)
+	case seconds < 24*60*60:
+		return fmt.Sprintf("%d h", seconds/(60*60))
+	default:
+		return fmt.Sprintf("%d d", seconds/(24*60*60))
+	}
+}
+
+// maxStatusActivityLines caps how many of a running child's most recent
+// transcript entries action:"status" surfaces (W2). Fixed at ~5 per spec —
+// enough to convey what the delegate is currently doing without flooding
+// the calling LLM's context on every poll.
 const maxStatusActivityLines = 5
 
 // delegate3PStatusNote is the fixed action:"status" annotation for a running
-// external-CLI (subagent_3p) task — see DelegateTaskState.Is3P's doc comment
-// for why no live snapshot is attempted for these.
+// external-CLI (subagent_3p) session — see session.LifecycleRecord.Is3P's
+// own doc comment for why no live snapshot is attempted for these.
 const delegate3PStatusNote = "  note:   external agent — no live progress; results on completion"
 
-// delegateStatusExtra computes the action:"status" trailing annotation for
-// task (W2). Only a "running" task gets anything:
-//   - a native task gets up to maxStatusActivityLines of its own recent
-//     transcript activity (recentActivityLines), or "" if the child sub-turn
-//     hasn't written anything yet;
-//   - an external-CLI (Is3P) task gets the fixed delegate3PStatusNote instead
-//     of any attempted snapshot (batch/report-on-completion by design).
+// delegateStatusExtra computes action:"status"'s trailing annotation for the
+// child addressed by sessionID, whose own durable record is rec (W2, G1).
+// Only a running session gets anything:
+//   - a native session gets up to maxStatusActivityLines of its own recent
+//     transcript activity (recentActivityLines), plus live tool-call-argument
+//     progress when a progress reader is wired, or "" if neither has
+//     anything yet;
+//   - an external-CLI (Is3P) session gets the fixed delegate3PStatusNote
+//     instead of any attempted snapshot (batch/report-on-completion by
+//     design).
 //
-// Every non-running task (completed/failed/canceled) returns "" — its
-// Result field already carries the final answer, so nothing is added.
-func (t *DelegateTool) delegateStatusExtra(task *DelegateTaskState) string {
-	if task.Status != "running" {
+// Every non-running session (queued/needs_input/completed/failed/canceled)
+// returns "" — the durable inbox message executeDurableStatus's caller
+// already renders carries whatever there is to say for those.
+//
+// sessionID doubles as the ADR-053 durable session_id every consumer here
+// keys its own state by — the progress reader's ProgressForSession and
+// recentActivityLines' own transcript read both address a child by this
+// exact id, so no separate "delegate session id" field is needed once
+// session_id is the only way to address a child (ADR-091).
+func (t *DelegateTool) delegateStatusExtra(rec *session.LifecycleRecord, sessionID string) string {
+	if rec.State != session.LifecycleRunning {
 		return ""
 	}
-	if task.Is3P {
-		return delegate3PStatusNote
+	if rec.Is3P {
+		return "\n" + delegate3PStatusNote
 	}
 
 	var sb strings.Builder
@@ -383,21 +234,26 @@ func (t *DelegateTool) delegateStatusExtra(task *DelegateTaskState) string {
 	// cannot see, and precisely the window that got a genuinely-working
 	// child killed as "hung" in production.
 	if t.progressReader != nil {
-		if snap, ok := t.progressReader.ProgressForSession(task.DelegateSessionID); ok {
+		if snap, ok := t.progressReader.ProgressForSession(sessionID); ok {
 			sb.WriteString(formatToolCallProgressLine(snap))
 		}
 	}
 
-	// ADR-057 FR-043: read the child's OWN durable session (DelegateSessionID),
-	// not task.SessionID (the delegating PARENT's own transcript id — see
-	// its doc comment). Post-FR-007 a delegated child writes its own
-	// narration into its own session, so reading task.SessionID here always
-	// found nothing the moment FR-007 landed elsewhere in this change set —
-	// BDD-49/BDD-50 (a sync or async delegation's status snapshot must be
-	// non-empty) were silently broken until this re-point.
-	lines := t.recentActivityLines(task.DelegateSessionID, task.SpawnCallID, maxStatusActivityLines)
+	// rec.Origin.CallID is the durable equivalent of the pre-ADR-091
+	// DelegateTaskState.SpawnCallID: the originating delegate tool-call's own
+	// id, stamped once at launch time (steer.Origin's own doc comment) and
+	// carried on the record itself rather than in a per-process index that
+	// cannot survive a restart. Empty on a record written before ADR-091.
+	spawnCallID := ""
+	if rec.Origin != nil {
+		spawnCallID = rec.Origin.CallID
+	}
+	lines := t.recentActivityLines(sessionID, spawnCallID, maxStatusActivityLines)
 	if len(lines) == 0 {
-		return sb.String()
+		if sb.Len() == 0 {
+			return ""
+		}
+		return "\n" + sb.String()
 	}
 	if sb.Len() > 0 {
 		sb.WriteString("\n")
@@ -407,7 +263,7 @@ func (t *DelegateTool) delegateStatusExtra(task *DelegateTaskState) string {
 		sb.WriteString("\n    - ")
 		sb.WriteString(line)
 	}
-	return sb.String()
+	return "\n" + sb.String()
 }
 
 // maxToolCallProgressStaleness caps how long ago a recorded tool-call
@@ -562,7 +418,7 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 		maxMessages = n
 	}
 
-	// MEDIUM-2 (14-reviewer sign-off): key the Drain by rec.ParentDurableKey
+	// MEDIUM-2 (14-reviewer sign-off): key the Drain by rec.SteeringSessionID()
 	// (the target session's own DIRECT parent — the key its messages were
 	// actually Appended under), NOT the calling ownerKey. verifyCallerOwnsSession
 	// above already grants an authorized ANCESTOR (grandparent, etc., up to
@@ -573,9 +429,9 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 	// authorized-ancestor case FR-039 exists to permit — the ownerKey
 	// variable above and its own presence check remain (a caller must still
 	// have SOME resolvable session identity to reach this far at all), but
-	// the store key must be the target's own ParentDurableKey. executeRespond
+	// the store key must be the target's own SteeringSessionID. executeRespond
 	// already uses this correct key (see its own Drain call).
-	msgs, nextCursor, hasMore, derr := t.inbox.Drain(rec.ParentDurableKey, sessionID, sinceCursor, maxMessages)
+	msgs, nextCursor, hasMore, derr := t.inbox.Drain(rec.SteeringSessionID(), sessionID, sinceCursor, maxMessages)
 	if derr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox: %v", derr)).WithError(derr)
 	}
@@ -611,11 +467,11 @@ func (t *DelegateTool) executeInboxAck(ctx context.Context, args map[string]any)
 		return ErrorResult("delegate: no session context available to resolve the inbox owner key")
 	}
 	// HIGH (nested-delegation message leak, 2026-08): the READ path
-	// (executeInbox/executePeek) was re-keyed to rec.ParentDurableKey but the
+	// (executeInbox/executePeek) was re-keyed to rec.SteeringSessionID() but the
 	// ACK path was left on the calling ownerKey, so read and ack disagreed
 	// for every caller that is not the target's DIRECT parent. Because
 	// verifyCallerOwnsSession deliberately permits an ANCESTOR (FR-039) —
-	// whose key is by definition NOT rec.ParentDurableKey — an A -> B -> C
+	// whose key is by definition NOT rec.SteeringSessionID() — an A -> B -> C
 	// chain let A drain C's question successfully and then ack it against
 	// A's OWN inbox file: every id came back Unknown, nothing was actually
 	// acknowledged, the messages were redelivered on every subsequent drain,
@@ -628,7 +484,7 @@ func (t *DelegateTool) executeInboxAck(ctx context.Context, args map[string]any)
 	// Appended under.
 	//
 	// Loading the record also closes a second gap this action had: keying by
-	// rec.ParentDurableKey without an ownership check would let any caller
+	// rec.SteeringSessionID() without an ownership check would let any caller
 	// ack messages in an inbox it does not own, so the same MANDATORY,
 	// fail-closed verification executeInbox performs is applied here (a Load
 	// error denies — it never falls through to whatever session_id the
@@ -644,7 +500,7 @@ func (t *DelegateTool) executeInboxAck(ctx context.Context, args map[string]any)
 		return ErrorResult(fmt.Sprintf("delegate: inbox_ack: %v", verr))
 	}
 
-	result, err := t.inbox.AckDetailed(rec.ParentDurableKey, ids)
+	result, err := t.inbox.AckDetailed(rec.SteeringSessionID(), ids)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox_ack: %v", err)).WithError(err)
 	}
@@ -693,12 +549,12 @@ func (t *DelegateTool) executePeek(ctx context.Context, args map[string]any) *To
 	}
 	state := string(rec.State)
 
-	// MEDIUM-2 (14-reviewer sign-off): key the Peek by rec.ParentDurableKey,
+	// MEDIUM-2 (14-reviewer sign-off): key the Peek by rec.SteeringSessionID(),
 	// not the calling ownerKey — see executeInbox's identical fix above for
 	// the full rationale (FR-039 grants an authorized ancestor reach beyond
 	// the direct parent, but messages are always stored under the target's
 	// own direct parent's key).
-	snap, perr := t.inbox.Peek(rec.ParentDurableKey, sessionID)
+	snap, perr := t.inbox.Peek(rec.SteeringSessionID(), sessionID)
 	if perr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: peek: %v", perr)).WithError(perr)
 	}

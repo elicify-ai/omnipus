@@ -411,8 +411,8 @@ func TestSupervisionWake_ActuallyDispatchesATurn(t *testing.T) {
 // the owner agent and be delivered into the conversation the plan came from.
 //
 // It also carries the sibling assertion that the fix did NOT widen the
-// internal-channel guard: genuinely internal cli/subagent system traffic must
-// still start no turn at all.
+// internal-channel guard: genuinely internal system traffic must still start
+// no turn at all.
 func TestOwnerWake_ReachesATurnAndTheOriginChat(t *testing.T) {
 	h := newPlanWakeHarness(t)
 	p := runningPlanWithDoD("p1", "telegram", "chat-1")
@@ -447,24 +447,56 @@ func TestOwnerWake_ReachesATurnAndTheOriginChat(t *testing.T) {
 	waitForOutbound(t, h.msgBus, "telegram", "chat-1")
 
 	// Sibling assertion (regression): genuinely internal traffic is still
-	// dropped. Widening the internal-channel guard would make every cli /
-	// subagent completion start a spurious turn.
-	before := h.owner.callCount()
-	for _, internal := range []string{"cli", "subagent"} {
+	// dropped at loop_inbound.go::processSystemMessage's internal-channel
+	// guard. Widening that guard would make every internal completion start a
+	// spurious turn.
+	//
+	// The list below is the internal-channel set as
+	// pkg/constants/channels.go::internalChannels actually defines it: `cli`
+	// and `system`. It used to read {"cli", "subagent"}. ADR-091 D10 ("the
+	// UNUSED `"subagent"` entry in pkg/constants/channels.go::internalChannels
+	// — other `subagent` literals are job-category values and are kept")
+	// deleted that third member, and WP-F landed two artifacts that now
+	// enforce its absence: tests/adr091/residual_audit_test.go's "Internal
+	// channel" row and scripts/check-no-subagent-special-case.sh. The premise
+	// of that decision holds in this tree — no production code has ever set a
+	// Channel or a ChatID prefix of "subagent" (the pre-ADR delegation path
+	// BORROWED the parent's channel, per D10's deleted "borrowed Channel /
+	// ChatID"), so `subagent:whatever` is a shape production cannot emit. It
+	// is replaced here by `system`, which IS in the set and was never covered.
+	//
+	// Do NOT re-add "subagent" to make this pass: restoring the constant is
+	// what would satisfy it, and that breaks the two WP-F guards above.
+	publishInternal := func(originChannel string) {
+		t.Helper()
 		if err := h.msgBus.PublishInbound(context.Background(), bus.InboundMessage{
 			Channel:            "system",
 			Sender:             bus.SenderInfo{CanonicalID: "async:test"},
-			ChatID:             internal + ":whatever",
+			ChatID:             originChannel + ":whatever",
 			Content:            "internal chatter",
 			AsyncOriginAgentID: testPlanOwnerAgentID,
 		}); err != nil {
-			t.Fatalf("publish %s system message: %v", internal, err)
+			t.Fatalf("publish %s system message: %v", originChannel, err)
 		}
+	}
+
+	before := h.owner.callCount()
+	for _, internal := range []string{"cli", "system"} {
+		publishInternal(internal)
 	}
 	time.Sleep(250 * time.Millisecond)
 	if after := h.owner.callCount(); after != before {
-		t.Fatalf("internal cli/subagent system messages must start NO turn; owner turns went %d -> %d", before, after)
+		t.Fatalf("internal cli/system system messages must start NO turn; owner turns went %d -> %d", before, after)
 	}
+
+	// Positive control for the assertion above. "No turn ran" is satisfied for
+	// free by any breakage that stops the fixture reaching runTurn at all — a
+	// dead bus, an unresolvable AsyncOriginAgentID, a harness that never wires
+	// the owner. The SAME publish shape on a NON-internal origin must still
+	// start a turn, which is what makes the negative result attributable to
+	// the internal-channel guard and nothing else.
+	publishInternal("telegram")
+	waitForTurn(t, h.owner, before+1, "a non-internal system-message origin")
 }
 
 // --- FR-012c: an INTERNAL origin is not a deliverable origin ---------------

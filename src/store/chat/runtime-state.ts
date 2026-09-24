@@ -68,20 +68,26 @@ export const SESSION_SCOPED_FRAME_TYPES = new Set([
   // Goal outcome line (founder decision 2026-09-14): GoalOutcomeFrame carries
   // a required, min(1) `session_id` — session-scoped like goal_status.
   'goal_outcome',
+  // ADR-091 D7/I-4 (FR-E-002): subagent_message/subagent_state always carry
+  // a required `session_id` — the producing span's own session, reduced
+  // onto the span record (frames.ts's `case 'subagent_message'`/
+  // `'subagent_state'`). Session-scoped like subagent_start/_end above.
+  'subagent_message', 'subagent_state',
 ])
 
 // F-S3: frame types that can carry a turn-cancellation acknowledgment
-// ("Error processing message: turn canceled" and similar) — the only types
-// eligible for the pendingCancelAckSids disambiguation fallback below. This
-// is deliberately a NARROW subset of SESSION_SCOPED_FRAME_TYPES (plus
-// 'error', a global type): every other session-scoped frame missing
-// session_id keeps its existing strict drop-in-production behaviour, and
-// every other global frame keeps falling back to the active session.
-export const CANCEL_ACK_FRAME_TYPES = new Set(['token', 'done', 'error'])
-
-// F-S2: FALLBACK_SID exists only in test mode so tests that don't establish a session
-// still route frames to a consistent bucket. In production getActiveSid() returns null
-// when no session is active; frame writers must early-return on null.
-export const FALLBACK_SID = import.meta.env.MODE === 'test' ? '__default' : null
+// ("Error processing message: turn canceled" and similar) — the only type
+// eligible for the pendingCancelAckSids disambiguation fallback below.
+//
+// ADR-091 D7/FR-E-002 (cross-family review finding 18): this used to also
+// list 'token' and 'done', but both are session-scoped
+// (SESSION_SCOPED_FRAME_TYPES) — reassigning a session-scoped frame to a
+// guessed session instead of dropping it is exactly the bug the finding
+// reported (an untagged 'done' could be silently attributed to whatever
+// session had a lone pending cancel, before the mandatory drop check ever
+// ran). handleFrame now drops every session-scoped frame missing
+// session_id at the very top, unconditionally, before this set is ever
+// consulted — so only 'error' (a global frame type) remains eligible here.
+export const CANCEL_ACK_FRAME_TYPES = new Set(['error'])
 
 export const UNKNOWN_FRAME_TOAST_THRESHOLD = 5

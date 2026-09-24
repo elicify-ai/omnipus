@@ -1179,7 +1179,7 @@ func TestAppendCorrection_AbandonRejectsWorkAndBareAbandon(t *testing.T) {
 // travel. This test fails the moment anyone adds one.
 func TestCorrectionRequest_CarriesNoDoDField(t *testing.T) {
 	rt := reflect.TypeOf(CorrectionRequest{})
-	forbidden := []string{"dod", "definitionofdone", "criteria", "acceptance", "owner", "goal", "bounds", "state"}
+	forbidden := []string{"dod", "definitionofdone", "criteria", "acceptance", "owner", "objective", "bounds", "state"}
 	for i := 0; i < rt.NumField(); i++ {
 		name := strings.ToLower(rt.Field(i).Name)
 		jsonTag := strings.ToLower(strings.Split(rt.Field(i).Tag.Get("json"), ",")[0])

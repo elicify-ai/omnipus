@@ -43,7 +43,7 @@ properties:
     maxLength: 200
     description: Human-readable plan title.
     example: "v1.0 Launch"
-  goal:
+  objective:
     type: string
     maxLength: 2000
     description: >
@@ -280,7 +280,7 @@ properties:
       Plan-level Definition of Done, evaluated by the plan judge each round.
       Required (non-empty) before `draft -> approved` for agent-authored
       plans (strict tier); may be empty for human/UI-authored plans (soft
-      tier — the judge then evaluates against `title` + `goal`, ADR D5).
+      tier — the judge then evaluates against `title` + `objective`, ADR D5).
   rationale:
     type: string
     maxLength: 4000

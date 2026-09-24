@@ -175,8 +175,106 @@ type Message = {
   descendants_canceled?: Array<string> | undefined;
   model?: string | undefined;
   verdict?: JudgeVerdict | undefined;
-  system_subtype?: ("browser_handover_notice" | "goal_outcome") | undefined;
+  system_subtype?:
+    | (
+        | "browser_handover_notice"
+        | "goal_outcome"
+        | "subagent_start"
+        | "subagent_state"
+        | "subagent_message"
+        | "subagent_end"
+      )
+    | undefined;
   goal_outcome?: GoalOutcome | undefined;
+  subagent_start?:
+    | {
+        type: "subagent_start";
+        session_id: string;
+        span_id: string;
+        parent_call_id: string;
+        task_label: string;
+        agent_id?: string | undefined;
+        child_session_id?: string | undefined;
+      }
+    | undefined;
+  subagent_state?:
+    | {
+        type: "subagent_state";
+        session_id: string;
+        child_session_id?: string | undefined;
+        span_id: string;
+        state:
+          | "queued"
+          | "running"
+          | "needs_input"
+          | "paused"
+          | "completed"
+          | "failed"
+          | "cancelled"
+          | "timed_out";
+        steering_receipt?:
+          | {
+              correlation_id: string;
+              applied_at: string;
+            }
+          | undefined;
+        created_at: string;
+      }
+    | undefined;
+  subagent_message?:
+    | {
+        type: "subagent_message";
+        session_id: string;
+        child_session_id?: string | undefined;
+        span_id: string;
+        message_id: string;
+        kind:
+          | "progress"
+          | "checkpoint"
+          | "artifact"
+          | "blocker"
+          | "question"
+          | "decision_request"
+          | "error"
+          | "handback"
+          | "steer"
+          | "respond"
+          | "goal_status";
+        text?: string | undefined;
+        pct?: number | undefined;
+        correlation_id?: string | undefined;
+        sender_identity: string;
+        untrusted_origin: boolean;
+        created_at: string;
+      }
+    | undefined;
+  subagent_end?:
+    | {
+        type: "subagent_end";
+        session_id: string;
+        span_id: string;
+        status:
+          | "success"
+          | "error"
+          | "cancelled"
+          | "interrupted"
+          | "timeout"
+          | "parked";
+        duration_ms?: number | undefined;
+        final_result?: string | undefined;
+        reason?:
+          | (
+              | "parent_timeout"
+              | "parent_cancelled"
+              | "parent_done_early"
+              | "unknown"
+            )
+          | undefined;
+        agent_id?: string | undefined;
+        parent_call_id?: string | undefined;
+        message?: string | undefined;
+      }
+    | undefined;
 };
 type Attachment = {
   type: "image" | "audio" | "video" | "file";
@@ -2122,7 +2220,7 @@ type Plan = {
   id: string;
   workspace_id: string;
   title: string;
-  goal?: string | undefined;
+  objective?: string | undefined;
   description?: string | undefined;
   state: "draft" | "approved" | "running" | "done" | "failed";
   plan_phase?:
@@ -2184,7 +2282,7 @@ type Plan = {
 type PlanCreateRequest = {
   workspace_id: string;
   title: string;
-  goal?: string | undefined;
+  objective?: string | undefined;
   description?: string | undefined;
   owner_agent_id: string;
   dod?: Array<AcceptanceCriterionInput> | undefined;
@@ -2200,7 +2298,7 @@ type PlanCreateRequest = {
 };
 type PlanUpdateRequest = Partial<{
   title: string;
-  goal: string;
+  objective: string;
   description: string;
   state: "draft" | "approved" | "running" | "done" | "failed";
   owner_agent_id: string;
@@ -2402,13 +2500,22 @@ type SessionMessageGoalStatus = {
   session_id: string;
   parent_session_id?: (string | null) | undefined;
   generation?: number | undefined;
-  direction: "session_to_ui";
+  direction: "session_to_ui" | "session_to_parent";
   kind: "goal_status";
   depth: number;
   created_at: string;
   sender_identity: string;
   untrusted_origin: boolean;
-  condition: "met" | "waiting_on_user";
+  condition: "met" | "not_met" | "waiting_on_user";
+  evidence?:
+    | Array<
+        Partial<{
+          criterion: string;
+          met: boolean;
+          note: string;
+        }>
+      >
+    | undefined;
   goal_id: string;
 };
 type SessionMessageSteer = {
@@ -2509,8 +2616,6 @@ type DelegateRunAction = {
   target_agent_id: string;
   task: string;
   label?: string | undefined;
-  wait?: boolean | undefined;
-  allow_blocking_question?: boolean | undefined;
   critical?: boolean | undefined;
   timeout_seconds?: number | undefined;
   snapshot?:
@@ -2519,6 +2624,7 @@ type DelegateRunAction = {
         notes: string;
       }>
     | undefined;
+  goal?: Goal | undefined;
 };
 type DelegateStatusAction = {
   action: "status";
@@ -2614,6 +2720,55 @@ type SessionLifecycleRecord = {
   failed_reason?: string | undefined;
   created_at: string;
   updated_at: string;
+  origin?:
+    | {
+        kind:
+          | "delegate"
+          | "task"
+          | "chat"
+          | "channel"
+          | "scheduled"
+          | "heartbeat"
+          | "verifier"
+          | "plan"
+          | "human";
+        call_id?: string | undefined;
+        task_id?: string | undefined;
+      }
+    | undefined;
+  steered_by?:
+    | {
+        steering_session_id: string;
+        root_session_id: string;
+        reporting_target?:
+          | Partial<{
+              session_id: string;
+              channel: string;
+              chat_id: string;
+            }>
+          | undefined;
+        authorization: {
+          mode: "direct" | "task";
+          remaining_depth: number;
+        };
+        limits?:
+          | Partial<{
+              timeout_seconds: number;
+            }>
+          | undefined;
+        tool_exclusions?: Array<string> | undefined;
+      }
+    | undefined;
+  stop?:
+    | {
+        at: string;
+        generation: number;
+        by: Partial<{
+          kind: "agent" | "human";
+          id: string;
+        }>;
+      }
+    | undefined;
 };
 type DelegateInboxResponse = {
   messages: Array<SessionMessage>;
@@ -2627,6 +2782,7 @@ type DelegateRespondResponse = {
 type DelegateSessionResponse = {
   session_id: string;
   generation: number;
+  queue_position?: number | undefined;
   resumed_from?: (string | null) | undefined;
   is_3p: boolean;
   state:
@@ -3040,9 +3196,108 @@ export const Message: z.ZodType<Message> = z.object({
   model: z.string().optional(),
   verdict: JudgeVerdict.optional(),
   system_subtype: z
-    .enum(["browser_handover_notice", "goal_outcome"])
+    .enum([
+      "browser_handover_notice",
+      "goal_outcome",
+      "subagent_start",
+      "subagent_state",
+      "subagent_message",
+      "subagent_end",
+    ])
     .optional(),
   goal_outcome: GoalOutcome.optional(),
+  subagent_start: z
+    .object({
+      type: z.literal("subagent_start"),
+      session_id: z.string().min(1),
+      span_id: z.string().min(1),
+      parent_call_id: z.string().min(1),
+      task_label: z.string().min(1).max(100),
+      agent_id: z.string().optional(),
+      child_session_id: z.string().min(1).optional(),
+    })
+    .optional(),
+  subagent_state: z
+    .object({
+      type: z.literal("subagent_state"),
+      session_id: z.string().min(1),
+      child_session_id: z.string().min(1).optional(),
+      span_id: z.string().min(1),
+      state: z.enum([
+        "queued",
+        "running",
+        "needs_input",
+        "paused",
+        "completed",
+        "failed",
+        "cancelled",
+        "timed_out",
+      ]),
+      steering_receipt: z
+        .object({
+          correlation_id: z.string(),
+          applied_at: z.string().datetime({ offset: true }),
+        })
+        .optional(),
+      created_at: z.string().datetime({ offset: true }),
+    })
+    .optional(),
+  subagent_message: z
+    .object({
+      type: z.literal("subagent_message"),
+      session_id: z.string().min(1),
+      child_session_id: z.string().min(1).optional(),
+      span_id: z.string().min(1),
+      message_id: z.string().min(1),
+      kind: z.enum([
+        "progress",
+        "checkpoint",
+        "artifact",
+        "blocker",
+        "question",
+        "decision_request",
+        "error",
+        "handback",
+        "steer",
+        "respond",
+        "goal_status",
+      ]),
+      text: z.string().optional(),
+      pct: z.number().int().gte(0).lte(100).optional(),
+      correlation_id: z.string().optional(),
+      sender_identity: z.string().min(1),
+      untrusted_origin: z.boolean(),
+      created_at: z.string().datetime({ offset: true }),
+    })
+    .optional(),
+  subagent_end: z
+    .object({
+      type: z.literal("subagent_end"),
+      session_id: z.string().min(1),
+      span_id: z.string().min(1),
+      status: z.enum([
+        "success",
+        "error",
+        "cancelled",
+        "interrupted",
+        "timeout",
+        "parked",
+      ]),
+      duration_ms: z.number().int().gte(0).optional(),
+      final_result: z.string().optional(),
+      reason: z
+        .enum([
+          "parent_timeout",
+          "parent_cancelled",
+          "parent_done_early",
+          "unknown",
+        ])
+        .optional(),
+      agent_id: z.string().optional(),
+      parent_call_id: z.string().optional(),
+      message: z.string().optional(),
+    })
+    .optional(),
 });
 export const SessionDetail: z.ZodType<SessionDetail> = z.object({
   session: Session,
@@ -5522,7 +5777,7 @@ export const Plan: z.ZodType<Plan> = z.object({
   id: z.string(),
   workspace_id: z.string(),
   title: z.string().min(1).max(200),
-  goal: z.string().max(2000).optional(),
+  objective: z.string().max(2000).optional(),
   description: z.string().max(2000).optional(),
   state: z.enum(["draft", "approved", "running", "done", "failed"]),
   plan_phase: z
@@ -5591,7 +5846,7 @@ export const PlanListResponse: z.ZodType<PlanListResponse> = z.object({
 export const PlanCreateRequest: z.ZodType<PlanCreateRequest> = z.object({
   workspace_id: z.string(),
   title: z.string().min(1).max(200),
-  goal: z.string().max(2000).optional(),
+  objective: z.string().max(2000).optional(),
   description: z.string().max(2000).optional(),
   owner_agent_id: z.string().min(1),
   dod: z.array(AcceptanceCriterionInput).optional(),
@@ -5609,7 +5864,7 @@ export const PlanCreateRequest: z.ZodType<PlanCreateRequest> = z.object({
 export const PlanUpdateRequest: z.ZodType<PlanUpdateRequest> = z
   .object({
     title: z.string().min(1).max(200),
-    goal: z.string().max(2000),
+    objective: z.string().max(2000),
     description: z.string().max(2000),
     state: z.enum(["draft", "approved", "running", "done", "failed"]),
     owner_agent_id: z.string().min(1),
@@ -6199,13 +6454,20 @@ export const SessionMessageGoalStatus =
     session_id: z.string().min(1),
     parent_session_id: z.string().nullish(),
     generation: z.number().int().gte(0).optional(),
-    direction: z.literal("session_to_ui"),
+    direction: z.enum(["session_to_ui", "session_to_parent"]),
     kind: z.literal("goal_status"),
     depth: z.number().int().gte(0).lte(5),
     created_at: z.string().datetime({ offset: true }),
     sender_identity: z.string().min(1),
     untrusted_origin: z.boolean(),
-    condition: z.enum(["met", "waiting_on_user"]),
+    condition: z.enum(["met", "not_met", "waiting_on_user"]),
+    evidence: z
+      .array(
+        z
+          .object({ criterion: z.string(), met: z.boolean(), note: z.string() })
+          .partial()
+      )
+      .optional(),
     goal_id: z.string().min(1),
   }) satisfies z.ZodType<SessionMessageGoalStatus>;
 export const SessionMessageSteer = z.object({
@@ -6258,7 +6520,7 @@ export const SessionMessage = z.discriminatedUnion(
 export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
   z.object({
     session_id: z.string().min(1),
-    generation: z.number().int().gte(0),
+    generation: z.number().int().gte(1),
     resumed_from: z.string().nullish(),
     state: z.enum([
       "queued",
@@ -6290,6 +6552,55 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
     failed_reason: z.string().optional(),
     created_at: z.string().datetime({ offset: true }),
     updated_at: z.string().datetime({ offset: true }),
+    origin: z
+      .object({
+        kind: z.enum([
+          "delegate",
+          "task",
+          "chat",
+          "channel",
+          "scheduled",
+          "heartbeat",
+          "verifier",
+          "plan",
+          "human",
+        ]),
+        call_id: z.string().optional(),
+        task_id: z.string().optional(),
+      })
+      .optional(),
+    steered_by: z
+      .object({
+        steering_session_id: z.string(),
+        root_session_id: z.string(),
+        reporting_target: z
+          .object({
+            session_id: z.string(),
+            channel: z.string(),
+            chat_id: z.string(),
+          })
+          .partial()
+          .optional(),
+        authorization: z.object({
+          mode: z.enum(["direct", "task"]),
+          remaining_depth: z.number().int().gte(0),
+        }),
+        limits: z
+          .object({ timeout_seconds: z.number().int().gte(0) })
+          .partial()
+          .optional(),
+        tool_exclusions: z.array(z.string()).optional(),
+      })
+      .optional(),
+    stop: z
+      .object({
+        at: z.string().datetime({ offset: true }),
+        generation: z.number().int().gte(1),
+        by: z
+          .object({ kind: z.enum(["agent", "human"]), id: z.string() })
+          .partial(),
+      })
+      .optional(),
   });
 export const Goal: z.ZodType<Goal> = z.object({
   goal_id: z.string().min(1),
@@ -6362,14 +6673,13 @@ export const DelegateRunAction = z.object({
   target_agent_id: z.string().min(1),
   task: z.string().min(1).max(10000),
   label: z.string().max(100).optional(),
-  wait: z.boolean().optional(),
-  allow_blocking_question: z.boolean().optional(),
   critical: z.boolean().optional(),
   timeout_seconds: z.number().int().gte(0).optional(),
   snapshot: z
     .object({ references: z.array(z.string()), notes: z.string().max(8192) })
     .partial()
     .optional(),
+  goal: Goal.optional(),
 }) satisfies z.ZodType<DelegateRunAction>;
 export const DelegateStatusAction = z.object({
   action: z.literal("status"),
@@ -6433,6 +6743,7 @@ export const DelegateSessionResponse: z.ZodType<DelegateSessionResponse> =
   z.object({
     session_id: z.string().min(1),
     generation: z.number().int().gte(0),
+    queue_position: z.number().int().gte(0).optional(),
     resumed_from: z.string().nullish(),
     is_3p: z.boolean(),
     state: z.enum([
@@ -11823,7 +12134,16 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: z.string(),
       },
     ],
-    response: z.object({ success: z.boolean() }).passthrough(),
+    response: z.object({
+      success: z.boolean(),
+      reached: z.array(z.string()).optional(),
+      unreachable: z
+        .array(z.object({ id: z.string().min(1), reason: z.string() }))
+        .optional(),
+      skipped_newer_generation: z.array(z.string()).optional(),
+      skipped_terminal: z.array(z.string()).optional(),
+      partial: z.boolean().optional(),
+    }),
     errors: [
       {
         status: 400,
@@ -14101,7 +14421,6 @@ export const SessionStartedFrame = z
     type: z.literal("session_started"),
     session_id: z.string().min(1),
     agent_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -14120,7 +14439,6 @@ export const TokenFrame = z
     session_id: z.string().min(1).max(128),
     content: z.string().max(65536),
     agent_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -14146,7 +14464,6 @@ export const DoneFrame = z
     type: z.literal("done"),
     session_id: z.string().min(1),
     stats: DoneStats.optional(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -14189,7 +14506,6 @@ export const ToolCallStartFrame = z
     params: z.record(z.unknown()),
     parent_call_id: z.string().optional(),
     agent_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -14287,7 +14603,6 @@ export const ToolCallResultFrame = z
     error: z.string().optional(),
     parent_call_id: z.string().optional(),
     agent_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -14299,7 +14614,7 @@ export const SubagentStartFrame = z
     parent_call_id: z.string().min(1),
     task_label: z.string().max(100),
     agent_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
+    child_session_id: z.string().optional(),
   })
   .strict();
 
@@ -14315,7 +14630,6 @@ export const SubagentEndFrame = z
     agent_id: z.string().optional(),
     parent_call_id: z.string().optional(),
     message: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -14323,9 +14637,10 @@ export const SubagentMessageFrame = z
   .object({
     type: z.literal("subagent_message"),
     session_id: z.string().min(1),
+    child_session_id: z.string().optional(),
     span_id: z.string().min(1),
     message_id: z.string().min(1),
-    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond"]),
+    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond", "goal_status"]),
     text: z.string().optional(),
     pct: z.number().int().min(0).max(100).optional(),
     correlation_id: z.string().optional(),
@@ -14339,6 +14654,7 @@ export const SubagentStateFrame = z
   .object({
     type: z.literal("subagent_state"),
     session_id: z.string().min(1),
+    child_session_id: z.string().optional(),
     span_id: z.string().min(1),
     state: z.enum(["queued", "running", "needs_input", "paused", "completed", "failed", "cancelled", "timed_out"]),
     steering_receipt: z
@@ -14358,7 +14674,6 @@ export const TaskStatusChangedFrame = z
     task_id: z.string().min(1),
     status: z.enum(["inbox", "next", "in_progress", "blocked", "done", "failed"]),
     agent_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -14383,7 +14698,6 @@ export const ReplayMessageFrame = z
     agent_id: z.string().optional(),
     model: z.string().max(256).optional(),
     turn_id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
   })
@@ -14414,7 +14728,6 @@ export const ToolResultProjectionFrame = z
     archive_line: z.number().int().min(0),
     content_state: z.enum(["capped", "emptied"]),
     mark: z.string().max(2048).optional(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -14455,7 +14768,6 @@ export const MediaFrame = z
     type: z.literal("media"),
     session_id: z.string().min(1),
     parts: z.array(MediaPart).min(1).max(32),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -14465,7 +14777,6 @@ export const AgentSwitchedFrame = z
     session_id: z.string().min(1),
     agent_id: z.string().optional(),
     message: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -14480,7 +14791,6 @@ export const ToolApprovalRequiredFrame = z
     session_id: z.string().min(1),
     turn_id: z.string().min(1),
     expires_in_ms: z.number().int().min(0).max(86400000),
-    producing_session_id: z.string().min(1).optional(),
     workspace_id: z.string().min(1).max(128).optional(),
   })
   .strict();
@@ -14591,7 +14901,6 @@ export const SystemOverloadFrame = z
     type: z.literal("system_overload"),
     session_id: z.string().min(1),
     message: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -14615,7 +14924,16 @@ export const CancelStageFrame = z
     type: z.literal("cancel_stage"),
     session_id: z.string().min(1),
     stage: z.enum(["graceful", "hard", "detached"]),
-    producing_session_id: z.string().min(1).optional(),
+    reached: z.array(z.string()).optional(),
+    unreachable: z.array(z
+    .object({
+      id: z.string().min(1),
+      reason: z.string(),
+    })
+    .strict()).optional(),
+    skipped_newer_generation: z.array(z.string()).optional(),
+    skipped_terminal: z.array(z.string()).optional(),
+    partial: z.boolean().optional(),
   })
   .strict();
 
@@ -14624,7 +14942,6 @@ export const SessionCloseAckFrame = z
     type: z.literal("session_close_ack"),
     session_id: z.string().min(1),
     id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 
@@ -14912,7 +15229,6 @@ export const GoalStatusFrame = z
     active_loops: z.number().int().min(0),
     cap: z.number().int().min(1),
     state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed", "cleared", "judge_cas_loss", "blocked", "claim_overturned", "expired"]),
-    producing_session_id: z.string().min(1).optional(),
     criteria: z.array(z
     .object({
       id: z.string().optional(),
@@ -14987,7 +15303,6 @@ export const LoopStatusFrame = z
     max_runs: z.number().int().min(1),
     next_delay: z.number().int().optional(),
     state: z.string(),
-    producing_session_id: z.string().min(1).optional(),
   })
   .strict();
 

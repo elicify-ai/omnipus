@@ -166,10 +166,38 @@ func (n *NeedsInput) Expired(now time.Time) bool {
 // not-wire-format: internal disk record; a caller (pkg/tools/delegate.go)
 // maps it onto generated.SessionLifecycleRecord at the tool-result boundary.
 type LifecycleRecord struct {
-	SessionID   string         `json:"session_id"`
+	SessionID string `json:"session_id"`
+	// Generation starts at 1. Pre-ADR-091 it was purely persistLocked's
+	// same-generation-write guard (L-3): a new generation is minted only by
+	// a follow_up/Play. ADR-091 I-1 ADDS a second reason it
+	// moves — a stopped session revived by a newer instruction (I-6
+	// Canceller.Revive) — alongside the existing one (a terminal session
+	// given a follow-up; delegate_followup.go::spawnCorrectiveFollowUp
+	// already increments it today, carried over unchanged). It never moves
+	// on an ordinary re-entry. persistLocked's terminal-immutability guard
+	// below is exactly why both cases must bump Generation before writing
+	// again.
 	Generation  int            `json:"generation"`
 	ResumedFrom string         `json:"resumed_from,omitempty"`
 	State       LifecycleState `json:"state"`
+
+	// Origin names what created this record and, for a delegate/task
+	// origin, the originating tool-call id (ADR-091 I-1).
+	// Present on every record written by ADR-091 code; nil on a record
+	// written before ADR-091 — I-8's classifier reads that absence as one
+	// of the signals distinguishing a legacy_delegate record from a fresh
+	// one. See lifecycle_edge.go for the type and for why it (and
+	// SteeredBy, Stop below) live in this package rather than pkg/steer.
+	Origin *Origin `json:"origin,omitempty"`
+	// SteeredBy is the durable edge naming who steers this session (I-1);
+	// nil for a session nobody steers (an ordinary_root). See Origin's own
+	// doc comment for how the two combine under I-8's classifier.
+	SteeredBy *SteeredBy `json:"steered_by,omitempty"`
+	// Stop is the durable Stop marker on THIS session's own record (D8);
+	// nil means no Stop has been stamped for the record's current
+	// generation. Written by the cascade (I-6 Canceller.CancelSubtree) on
+	// the stopped node and every reachable non-terminal descendant.
+	Stop *Stop `json:"stop,omitempty"`
 
 	OwnerScopeKind OwnerScopeKind `json:"owner_scope_kind"`
 	OwnerScopeID   string         `json:"owner_scope_id,omitempty"`
@@ -181,6 +209,10 @@ type LifecycleRecord struct {
 	// correction on the named plan.
 	OwnsPlanID string `json:"owns_plan_id,omitempty"`
 
+	// Title is the launch-time lifecycle label. It is kept on the durable
+	// record so status/listing paths do not have to reopen mutable session
+	// metadata merely to name a child.
+	Title       string `json:"title,omitempty"`
 	GoalRef     string `json:"goal_ref,omitempty"`
 	WorkspaceID string `json:"workspace_id"`
 	AgentID     string `json:"agent_id"`
@@ -188,9 +220,9 @@ type LifecycleRecord struct {
 
 	// ParentAgentID is the id of the agent that DELEGATED this session into
 	// existence — the CALLER of `delegate.run`, captured at mint time from
-	// tools.ToolAgentID(ctx) (FR-013). It is the ONLY parent linkage on this
-	// record, and therefore the sole legal predicate for "the subagents I
-	// started" (list_jobs). Not part of the generated wire shape: this is a
+	// tools.ToolAgentID(ctx) (FR-013). It is the sole legal predicate for
+	// "the subagents I started" (list_jobs); the separate SteeredBy edge
+	// records session hierarchy, not agent identity. Not part of the generated wire shape: this is a
 	// disk-only internal scoping predicate with no SPA consumer, and
 	// contracts/components/schemas/SessionLifecycleRecord.yaml deliberately
 	// does NOT declare it.
@@ -203,9 +235,9 @@ type LifecycleRecord struct {
 	// with no counter anywhere. Do not add `omitempty` to this tag.
 	//
 	// MUST NOT be inferred from any other field, ever:
-	//   - ParentDurableKey (D1) is the caller's own live routing/session id
-	//     at spawn time. Post-ADR-057 it is a STRICT direct-parent EDGE
-	//     (LifecycleFilter.ParentDurableKey, FR-019/FR-020, answers
+	//   - SteeredBy.SteeringSessionID is the caller's own live routing/session
+	//     id at launch time. It is a STRICT direct-parent EDGE
+	//     (LifecycleFilter.SteeringSessionID, FR-019/FR-020, answers
 	//     "children of X" one level deep) — but it says nothing about WHICH
 	//     AGENT delegated, and it is legitimately shared by every SIBLING a
 	//     single parent starts. Inferring ParentAgentID from it would
@@ -216,31 +248,6 @@ type LifecycleRecord struct {
 	// The mint site fails closed on an empty value, so an empty
 	// ParentAgentID on disk is never expected on a greenfield install.
 	ParentAgentID string `json:"parent_agent_id"`
-
-	// ParentDurableKey is the durable chat/plan id (D16) this session's
-	// PARENT inbox is keyed to — ALWAYS populated at spawn time with the
-	// caller's own live transcript/routing session id, regardless of
-	// OwnerScopeKind (unlike OwnerScopeID, which per the wire contract is
-	// empty when OwnerScopeKind==human — see that field's own doc comment).
-	// A durable inbox routing key must always resolve to something
-	// addressable even for a human-owned top-level parent, which is exactly
-	// the case OwnerScopeID cannot serve.
-	//
-	// Post-ADR-057 (D1) this is ALSO the durable PARENTAGE edge:
-	// LifecycleFilter.ParentDurableKey (FR-019) matches records whose OWN
-	// ParentDurableKey equals a given session id, and List maintains a
-	// secondary in-memory index keyed on it (FR-020, lifecycle_index.go) so
-	// "children of X" is one indexed lookup rather than a full-store scan.
-	// A child's ParentDurableKey names its DIRECT parent only — it is NOT
-	// re-inherited down the chain, so a grandchild's value is its own
-	// parent's id, never the grandparent's (this is what makes "children of
-	// X" return exactly depth-1, never siblings' descendants). It IS,
-	// correctly, shared by every SIBLING a single parent starts — that is
-	// the mechanism, not a defect — which is why this remains a
-	// parentage-by-SESSION predicate and is never a substitute for
-	// ParentAgentID's parentage-by-AGENT predicate (see that field's own doc
-	// comment). Not part of the generated wire shape.
-	ParentDurableKey string `json:"parent_durable_key,omitempty"`
 
 	// OriginChannel/OriginChatID are the channel + chat_id the delegating
 	// `delegate.run` call originated FROM (the PARENT's own live
@@ -299,12 +306,15 @@ type LifecycleStore struct {
 	lock *lifecycleStripedLock
 
 	// parentIndex is the ADR-057 W6/FR-020 secondary parent index: an
-	// in-memory map from ParentDurableKey to its direct children's
+	// in-memory map from SteeringSessionID to its direct children's
 	// session_ids, maintained inside Persist (persistLocked) and consulted
-	// by List when LifecycleFilter.ParentDurableKey is set — see
+	// by List when LifecycleFilter.SteeringSessionID is set — see
 	// lifecycle_index.go. It is a property of THIS store instance (like
-	// lock), not shared across LifecycleStore values.
-	parentIndex *lifecycleParentIndex
+	// lock), not shared across LifecycleStore values. ADR-091 I-9 adds an
+	// exported LifecycleIndex.Report(), which is why the type itself
+	// (formerly the unexported lifecycleParentIndex) is now exported; the
+	// unexported field name and every existing accessor are unchanged.
+	parentIndex *LifecycleIndex
 }
 
 // NewLifecycleStore creates a LifecycleStore rooted at dir. By convention
@@ -316,12 +326,20 @@ func NewLifecycleStore(dir string) *LifecycleStore {
 	return &LifecycleStore{
 		dir:         dir,
 		lock:        &lifecycleStripedLock{},
-		parentIndex: newLifecycleParentIndex(),
+		parentIndex: newLifecycleIndex(),
 	}
 }
 
 // Dir returns the store's root directory.
 func (s *LifecycleStore) Dir() string { return s.dir }
+
+// IndexReport returns the parent index's most recent unreadable-record
+// report (ADR-091 I-9) — the accessor boot_sweep.go
+// reads "through the store it already holds" rather than reaching into the
+// unexported parentIndex field itself. Equivalent to
+// s.parentIndex.Report(); `pkg/steer` refers to the return type via
+// `type IndexReport = session.IndexReport`.
+func (s *LifecycleStore) IndexReport() IndexReport { return s.parentIndex.Report() }
 
 func (s *LifecycleStore) path(sessionID string) string {
 	return filepath.Join(s.dir, sessionID+".jsonl")
@@ -459,6 +477,40 @@ func (s *LifecycleStore) persistLocked(rec *LifecycleRecord) error {
 		return fmt.Errorf("session: lifecycle: invalid owner_scope_kind %q", rec.OwnerScopeKind)
 	}
 
+	// ADR-091 I-1 — validate the four durable fields the type-design review
+	// found enforced only at SteerLauncher.Launch (pkg/agent/steer_launcher.go),
+	// never at this store's own write choke point. persistLocked is the
+	// single funnel every durable write passes through (both Persist and
+	// Mutate fold into it), so this is where a caller other than Launch —
+	// today or in the future — is stopped from writing a damaged record.
+	if rec.Generation < 1 {
+		return fmt.Errorf("session: lifecycle: generation must be >= 1, got %d", rec.Generation)
+	}
+	if rec.Origin != nil {
+		if !IsValidOriginKind(rec.Origin.Kind) {
+			return fmt.Errorf("session: lifecycle: invalid origin kind %q", rec.Origin.Kind)
+		}
+		if rec.Origin.Kind == OriginKindTask && rec.Origin.TaskID == "" {
+			return fmt.Errorf("session: lifecycle: origin kind %q requires origin.task_id", OriginKindTask)
+		}
+	}
+	if rec.SteeredBy != nil {
+		if rec.SteeredBy.SteeringSessionID == "" {
+			return fmt.Errorf("session: lifecycle: steered_by requires a non-empty steering_session_id")
+		}
+		if rec.SteeredBy.RootSessionID == "" {
+			return fmt.Errorf("session: lifecycle: steered_by requires a non-empty root_session_id")
+		}
+	}
+	if rec.Stop != nil {
+		if rec.Stop.Generation > rec.Generation {
+			return fmt.Errorf("session: lifecycle: stop.generation %d must not exceed record generation %d", rec.Stop.Generation, rec.Generation)
+		}
+		if rec.Terminal() && rec.Stop.Generation == rec.Generation {
+			return fmt.Errorf("session: lifecycle: terminal record (state %q) cannot carry a current-generation stop marker", rec.State)
+		}
+	}
+
 	prev, found, err := s.tail(rec.SessionID)
 	if err != nil {
 		return err
@@ -493,11 +545,11 @@ func (s *LifecycleStore) persistLocked(rec *LifecycleRecord) error {
 	}
 	// FR-020 — maintain the secondary parent index inside Persist, under the
 	// per-session striped lock persistLocked's caller (Persist/Mutate)
-	// already holds. add() itself is a no-op when ParentDurableKey is empty
+	// already holds. add() itself is a no-op when SteeringSessionID is empty
 	// (an unattributable record, FR-015's degraded-mode mint), and is
 	// idempotent across a session's later generations, which all carry the
-	// same ParentDurableKey.
-	s.parentIndex.add(rec.ParentDurableKey, rec.SessionID)
+	// same SteeringSessionID.
+	s.parentIndex.add(rec.SteeringSessionID(), rec.SessionID)
 	return nil
 }
 
@@ -554,6 +606,124 @@ func (s *LifecycleStore) Mutate(sessionID string, fn func(*LifecycleRecord) erro
 	return s.persistLocked(next)
 }
 
+// PublishChildUnderParentLock is ADR-091 I-1's launch
+// primitive: "the launcher reads the parent's record (for depth,
+// authorization and a current-generation Stop marker) and publishes the
+// child's record under the parent's record lock, so a cascade cannot
+// enumerate the parent's children between the check and the publication."
+//
+// fn receives a pointer to a COPY of parentID's current tail record
+// (existed=true) or a fresh record with only SessionID set (existed=false
+// — "no record yet", which fn must populate, e.g. to mint an ordinary_root
+// record for a steering session delegating for the first time). fn mutates
+// the parent record in place and returns the child record to publish (or
+// nil for a parent-only write — e.g. nothing to launch this call). Both
+// writes happen while parentID's lock is held; a non-nil error aborts
+// both.
+//
+// Deadlock analysis (why the child is NEVER separately locked, not even
+// when its shard differs from the parent's): an earlier version of this
+// function acquired childMu (falling back to the already-held parentMu
+// only on a same-shard collision). That is unsafe for a DIFFERENT reason
+// than reentrancy: with many concurrent callers publishing under DIFFERENT
+// parents, goroutine A can hold parent-shard-1 while waiting for
+// child-shard-2, at the exact moment goroutine B holds parent-shard-2 and
+// waits for child-shard-1 — a classic AB-BA circular wait across the
+// 64-shard pool (proved by this file's own concurrency test, which hung
+// past a 75s bound with that version and passes immediately without it).
+// A consistent lock-acquisition ORDER is the usual fix, but is not
+// available here: which id is "child" is decided by fn's return value,
+// AFTER parentMu is already held, so the pair can never be pre-sorted.
+//
+// The actual fix needs no second lock at all: childRec.SessionID is
+// always FRESHLY MINTED (session.NewSessionID's ULID) immediately before
+// this call, by the same launch that is the sole writer of that id for
+// its entire lifetime up to this point — no concurrent goroutine can be
+// racing a write to a session_id that did not exist a moment ago and
+// that only this call knows about. persistLocked's own work (tail-read
+// for the terminal guard, the JSONL append, the parentIndex update — the
+// index has its own independent RWMutex, see lifecycle_index.go) is
+// therefore safe to run against the child's file with no additional
+// mutex: there is nothing to serialize against.
+func (s *LifecycleStore) PublishChildUnderParentLock(
+	parentID string,
+	fn func(parentRec *LifecycleRecord, existed bool) (childRec *LifecycleRecord, err error),
+) error {
+	if err := validateLifecycleSessionID(parentID); err != nil {
+		return err
+	}
+	parentMu := s.Lock(parentID)
+	parentMu.Lock()
+	defer parentMu.Unlock()
+
+	cur, found, err := s.tail(parentID)
+	if err != nil {
+		return err
+	}
+	var parentRec *LifecycleRecord
+	if found {
+		c := *cur
+		parentRec = &c
+	} else {
+		parentRec = &LifecycleRecord{SessionID: parentID}
+	}
+
+	childRec, fnErr := fn(parentRec, found)
+	if fnErr != nil {
+		return fnErr
+	}
+	if childRec != nil {
+		if err := validateLifecycleSessionID(childRec.SessionID); err != nil {
+			return err
+		}
+	}
+
+	parentPath := s.path(parentID)
+	parentSize := int64(0)
+	parentExistedOnDisk := false
+	if info, statErr := os.Stat(parentPath); statErr == nil {
+		parentSize = info.Size()
+		parentExistedOnDisk = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("session: lifecycle: stat parent %q before child publication: %w", parentID, statErr)
+	}
+	if err := s.persistLocked(parentRec); err != nil {
+		return err
+	}
+	if childRec == nil {
+		return nil
+	}
+	// No childMu acquisition — see the doc comment above for why this is
+	// safe rather than a shortcut.
+	if err := s.persistLocked(childRec); err != nil {
+		// The session id is freshly minted and private to this publication, so
+		// removing its file cannot erase another writer. Restore the parent's
+		// byte length while its shard remains locked; this makes the two-record
+		// publication atomic to every reader even though the records live in
+		// separate append-only JSONL files.
+		_ = os.Remove(s.path(childRec.SessionID))
+		s.parentIndex.remove(childRec.SteeringSessionID(), childRec.SessionID)
+
+		var rollbackErr error
+		if parentExistedOnDisk {
+			rollbackErr = os.Truncate(parentPath, parentSize)
+		} else {
+			rollbackErr = os.Remove(parentPath)
+			if errors.Is(rollbackErr, os.ErrNotExist) {
+				rollbackErr = nil
+			}
+		}
+		if !found {
+			s.parentIndex.remove(parentRec.SteeringSessionID(), parentRec.SessionID)
+		}
+		if rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("session: lifecycle: rollback parent %q: %w", parentID, rollbackErr))
+		}
+		return err
+	}
+	return nil
+}
+
 // LifecycleFilter narrows the result of List. All fields are optional
 // (zero value = skip that filter).
 type LifecycleFilter struct {
@@ -569,17 +739,17 @@ type LifecycleFilter struct {
 	// answers "sessions run BY x", filtering by ParentAgentID answers
 	// "sessions x STARTED".
 	ParentAgentID string
-	// ParentDurableKey, when non-empty, restricts results to records whose
-	// OWN ParentDurableKey equals this value — the DIRECT children of the
+	// SteeringSessionID, when non-empty, restricts results to records whose
+	// OWN SteeredBy.SteeringSessionID equals this value — the DIRECT children of the
 	// session/chat this key names (D1's strict-direct-parent edge,
 	// FR-019/FR-020). Backed by an in-memory secondary index maintained
 	// inside Persist (lifecycle_index.go), so setting this field routes
 	// List through an O(descendants) index lookup instead of a full-store
-	// scan. This is a DIFFERENT axis from ParentAgentID: ParentDurableKey
+	// scan. This is a DIFFERENT axis from ParentAgentID: the steering edge
 	// answers "children of X" (session hierarchy, one level deep);
 	// ParentAgentID answers "sessions x STARTED" (agent identity). Empty
 	// means "filter off", like every other field on this struct.
-	ParentDurableKey string
+	SteeringSessionID string
 	// States, when non-empty, restricts results to records whose State is
 	// in this set.
 	States map[LifecycleState]bool
@@ -597,7 +767,7 @@ func (f LifecycleFilter) matches(r *LifecycleRecord) bool {
 		return false
 	}
 	// ParentAgentID is matched against the record's OWN ParentAgentID and
-	// nothing else — never against ParentDurableKey (a same-level SESSION
+	// nothing else — never against SteeredBy.SteeringSessionID (a SESSION
 	// parentage edge post-D1, matched separately below by its own filter
 	// field), OwnerScopeID ("" at top level) or AgentID (the child's id).
 	// Inferring from any of those answers "which session is my direct
@@ -605,12 +775,12 @@ func (f LifecycleFilter) matches(r *LifecycleRecord) bool {
 	if f.ParentAgentID != "" && r.ParentAgentID != f.ParentAgentID {
 		return false
 	}
-	// ParentDurableKey answers a DIFFERENT question — "is r a DIRECT child
+	// SteeredBy.SteeringSessionID answers a DIFFERENT question — "is r a DIRECT child
 	// of session X" (D1/FR-019/FR-020) — matched against the record's OWN
-	// ParentDurableKey, never inferred from ParentAgentID, OwnerScopeID or
+	// edge, never inferred from ParentAgentID, OwnerScopeID or
 	// AgentID. This is the sole clause FR-023's static gate (#106) expects
-	// to find reading ParentDurableKey inside this function.
-	if f.ParentDurableKey != "" && r.ParentDurableKey != f.ParentDurableKey {
+	// to find reading SteeringSessionID inside this function.
+	if f.SteeringSessionID != "" && r.SteeringSessionID() != f.SteeringSessionID {
 		return false
 	}
 	if len(f.States) > 0 && !f.States[r.State] {
@@ -652,14 +822,14 @@ func (s *LifecycleStore) scanSessionIDs() ([]string, error) {
 // to enumerate every non-terminal session with no live runtime turn
 // (FR-118) — pass LifecycleFilter{NonTerminalOnly: true}.
 //
-// FR-019/FR-020 — when filter.ParentDurableKey is set, List is routed
-// through listByParentDurableKey, which resolves the candidate id set from
+// FR-019/FR-020 — when filter.SteeringSessionID() is set, List is routed
+// through listBySteeringSessionID, which resolves the candidate id set from
 // the in-memory parent index (lifecycle_index.go) instead of scanning every
 // persisted session_id: the "children of X" query's file-read count is
 // O(descendants of X), never O(all sessions ever) — see BDD-19.
 func (s *LifecycleStore) List(filter LifecycleFilter) ([]LifecycleRecord, error) {
-	if filter.ParentDurableKey != "" {
-		return s.listByParentDurableKey(filter)
+	if filter.SteeringSessionID != "" {
+		return s.listBySteeringSessionID(filter)
 	}
 	ids, err := s.scanSessionIDs()
 	if err != nil {
@@ -681,20 +851,20 @@ func (s *LifecycleStore) List(filter LifecycleFilter) ([]LifecycleRecord, error)
 	return out, nil
 }
 
-// listByParentDurableKey implements the FR-020 index-backed path for
-// List(LifecycleFilter{ParentDurableKey: X, ...}). It never calls
+// listBySteeringSessionID implements the FR-020 index-backed path for
+// List(LifecycleFilter{SteeringSessionID: X, ...}). It never calls
 // scanSessionIDs: the candidate child ids come entirely from the in-memory
 // parent index (warmed once per store instance from disk, then kept current
 // incrementally by every Persist call — see lifecycle_index.go), so cost
 // scales with len(candidates), not with the total number of persisted
 // session_ids. Every other filter field is still applied via filter.matches
-// exactly as the full-scan path does, so combining ParentDurableKey with
+// exactly as the full-scan path does, so combining SteeringSessionID with
 // e.g. NonTerminalOnly or States behaves identically either way.
-func (s *LifecycleStore) listByParentDurableKey(filter LifecycleFilter) ([]LifecycleRecord, error) {
+func (s *LifecycleStore) listBySteeringSessionID(filter LifecycleFilter) ([]LifecycleRecord, error) {
 	if err := s.parentIndex.ensureWarm(s); err != nil {
 		return nil, err
 	}
-	childIDs := s.parentIndex.children(filter.ParentDurableKey)
+	childIDs := s.parentIndex.children(filter.SteeringSessionID)
 	out := make([]LifecycleRecord, 0, len(childIDs))
 	for _, id := range childIDs {
 		rec, err := s.Load(id)
@@ -703,7 +873,7 @@ func (s *LifecycleStore) listByParentDurableKey(filter LifecycleFilter) ([]Lifec
 				// Stale index entry — e.g. PruneTerminal removed this
 				// child's file between children() snapshotting the set and
 				// this Load. Self-heal rather than fail the whole query.
-				s.parentIndex.remove(filter.ParentDurableKey, id)
+				s.parentIndex.remove(filter.SteeringSessionID, id)
 				continue
 			}
 			return nil, err
@@ -803,6 +973,15 @@ var pruneTerminalRaceHook func(sessionID string) //nolint:gochecknoglobals // te
 // each iteration of PruneTerminal's loop acquires and releases its own id's
 // lock independently.
 func (s *LifecycleStore) pruneTerminalOne(id string, cutoff time.Time) bool {
+	hasLiveDescendant, err := s.hasNonTerminalDescendant(id)
+	if err != nil {
+		slog.Warn("session: lifecycle: prune_terminal: descendant check failed, skipping", "session_id", id, "error", err)
+		return false
+	}
+	if hasLiveDescendant {
+		return false
+	}
+
 	mu := s.Lock(id)
 	mu.Lock()
 	defer mu.Unlock()
@@ -831,10 +1010,39 @@ func (s *LifecycleStore) pruneTerminalOne(id string, cutoff time.Time) bool {
 		return false
 	}
 	// Keep the FR-020 parent index consistent with disk: id's own file is
-	// gone, so it must stop being returned as a child of its ParentDurableKey
-	// (listByParentDurableKey also self-heals on a stale hit, but removing it
+	// gone, so it must stop being returned as a child of its SteeringSessionID
+	// (listBySteeringSessionID also self-heals on a stale hit, but removing it
 	// here means a query issued after this prune never has to pay that
 	// ErrLifecycleNotFound round trip at all).
-	s.parentIndex.remove(rec.ParentDurableKey, id)
+	s.parentIndex.remove(rec.SteeringSessionID(), id)
 	return true
+}
+
+// hasNonTerminalDescendant walks the authoritative SteeredBy edges rather
+// than checking only direct children. Pruning is conservative: an unreadable
+// branch returns an error so its ancestors remain on disk until the hierarchy
+// can be proved quiet.
+func (s *LifecycleStore) hasNonTerminalDescendant(rootSessionID string) (bool, error) {
+	visited := map[string]struct{}{rootSessionID: {}}
+	queue := []string{rootSessionID}
+	for len(queue) > 0 {
+		parentID := queue[0]
+		queue = queue[1:]
+		children, err := s.List(LifecycleFilter{SteeringSessionID: parentID})
+		if err != nil {
+			return false, err
+		}
+		for i := range children {
+			child := &children[i]
+			if _, seen := visited[child.SessionID]; seen {
+				continue
+			}
+			visited[child.SessionID] = struct{}{}
+			if !child.Terminal() {
+				return true, nil
+			}
+			queue = append(queue, child.SessionID)
+		}
+	}
+	return false, nil
 }

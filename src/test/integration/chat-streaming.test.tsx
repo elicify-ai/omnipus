@@ -184,7 +184,6 @@ describe('cancel integration (test #40)', () => {
             cancelStage: null,
             lastUserMessageAt: null,
             lastReceivedEventTime: null,
-            spanByParentCallId: {},
           },
         },
         isStreaming: true,

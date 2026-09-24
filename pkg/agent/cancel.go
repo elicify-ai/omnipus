@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -540,9 +541,13 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 	// list EXACTLY ONCE here and threading it verbatim through PHASE B/C
 	// (al.liveTurnStatesAmong(descendants)) rather than re-deriving the
 	// subtree afresh. That rule is exactly what let a sub-turn that
-	// registers AFTER this point — most commonly a `delegate async=true`
-	// spawn, whose parent turn frequently finishes gracefully within
-	// milliseconds while the backgrounded spawnSubTurn goroutine keeps
+	// registers AFTER this point — most commonly a delegate spawn (pre-
+	// ADR-091, one made with the since-removed `async=true`; ADR-091 D4
+	// deleted the parameter and every delegate call is now what that used
+	// to mean), whose parent turn frequently finishes gracefully within
+	// milliseconds while the backgrounded spawn goroutine (pre-ADR-091,
+	// the deleted spawnSubTurn; today, steer_launcher.go's
+	// runDispatchedSteeredTurn once Dispatch has admitted it) keeps
 	// running and registers its child moments later — escape PHASE B/C
 	// entirely: the frozen snapshot below never named the late child, so
 	// al.liveTurnStatesAmong(descendants) filtered it out of existence no
@@ -814,10 +819,18 @@ func (rc *agentLoopRequestCancel) scheduleEscalation() {
 		pendingSpawn := rc.al.hasPendingDescendantSpawn(rc.sessionID, rc.scope)
 		if len(liveNow) == 0 {
 			if pendingSpawn {
-				// Nothing is alive right now, but a delegate spawn for this
-				// identity is already dispatched and has not registered yet
-				// (MarkPendingDelegateSpawn fired, spawnSubTurn hasn't
-				// reached registerActiveTurn). Arm a chain-reaction latch so
+				// Nothing is alive right now, but hasPendingDescendantSpawn
+				// reports a delegate spawn for this identity as already
+				// dispatched and not yet registered. Pre-ADR-091 this meant
+				// MarkPendingDelegateSpawn had fired and the deleted
+				// spawnSubTurn had not yet reached registerActiveTurn; see
+				// cancel_prearm.go::pendingSpawns' own doc comment (ADR-091
+				// fix lane RX-SUBTURN note) — no current call site marks
+				// this map, so pendingSpawn is always false today except for
+				// whatever gap that leaves in the newer queued-dispatch path
+				// (steer_launcher.go::dispatchSteeredSessionWithReservation's
+				// queued branch, which also registers a turn asynchronously,
+				// later). Arm a chain-reaction latch so
 				// the INSTANT it registers, consumePreArmedCancel (turn.go's
 				// registerActiveTurn) catches it and re-invokes RequestCancel
 				// for it — the same mechanism a cancel arriving before any
@@ -958,10 +971,10 @@ func stringSliceSetDiff(a, b []string) (onlyInA, onlyInB []string) {
 // ADR-057 U15 — descendant-set helpers (W8, FR-024…FR-027)
 // ============================================================================
 
-// CollectDescendantSessionIDs performs a breadth-first walk of the durable
-// ParentDurableKey edge (pkg/session/lifecycle.go, U13's FR-019/FR-020
-// index) starting at rootSessionID and returns every reachable descendant's
-// OWN session id (rootSessionID itself is never included).
+// CollectDescendantSessionIDs performs a breadth-first walk of ADR-091's
+// durable SteeredBy.SteeringSessionID edge starting at rootSessionID and
+// returns every reachable descendant's own session id (rootSessionID itself
+// is never included).
 //
 // [FIX-5, Defect 4, 2026-08-03] Exported and HOISTED: this used to be
 // duplicated byte-for-byte as pkg/gateway/websocket.go's unexported
@@ -997,21 +1010,27 @@ func stringSliceSetDiff(a, b []string) (onlyInA, onlyInB []string) {
 // this is NOT an error case, it is the documented degrade-gracefully path
 // for an install that never wired a lifecycle store at all.
 //
-// [FIX-5, Defect 2, 2026-08-03] Returns a non-nil error when ANY
-// lifecycleStore.List call in the walk fails. Before this fix, a single
-// corrupt/unreadable record made the query for that one node fail, and the
-// walk silently `continue`d past it — treating "the query itself errored"
-// identically to "this node legitimately has zero children". Every
-// descendant beneath the failure point then vanished from the returned
-// slice with NO signal to the caller: resolveBackgroundKillSessionIDs would
-// report a clean-looking background-kill cascade that actually missed half
-// the tree, and the approval-cancel cascade (websocket.go's
-// buildCancelHooks) would leave a dropped grandchild's pending
-// RequestApproval hanging until its own multi-minute timeout while the UI
-// reported the cancel as complete. The returned descendants slice is still
-// the PARTIAL set successfully discovered before the failure — callers MUST
-// treat a non-nil error as "this is a truncated view of the true descendant
-// set", never as "clean success with fewer descendants than expected".
+// [Finding 2, ADR-091 fix lane 2] Walks the durable SteeredBy edge through
+// lifecycleStore.List(LifecycleFilter{SteeringSessionID: id}) — FR-019/
+// FR-020's index-backed "children of X" query (lifecycle.go,
+// listBySteeringSessionID), resolved from the in-memory parent index rather
+// than a directory scan. This is the "every subsequent Stop cascade" the
+// index's own doc comment names as the consumer that must not degrade to
+// O(every session ever persisted): a full os.ReadDir-plus-Load-per-file scan
+// here regressed exactly that, on the Stop path a user hits when something
+// is running away, and made one unreadable UNRELATED record fail the whole
+// walk (turning a complete Stop into a reported `partial: true`). The
+// index-backed walk never has a reason to touch a session outside root's own
+// subtree at all.
+//
+// [FIX-5, Defect 2, 2026-08-03] Returns a non-nil error when ANY List call in
+// the walk fails, alongside the PARTIAL descendant set successfully
+// discovered before the failure — callers MUST treat a non-nil error as "this
+// is a truncated view of the true descendant set", never as "clean success
+// with fewer descendants than expected". Per-branch: one bad branch's List
+// failure is accumulated and the walk continues past it (via errors.Join)
+// rather than aborting the whole BFS, so a corrupt/unreachable node's OWN
+// subtree is what goes missing, not everything queued behind it.
 func CollectDescendantSessionIDs(lifecycleStore *session.LifecycleStore, rootSessionID string) ([]string, error) {
 	if lifecycleStore == nil || rootSessionID == "" {
 		return nil, nil
@@ -1023,27 +1042,27 @@ func CollectDescendantSessionIDs(lifecycleStore *session.LifecycleStore, rootSes
 	for len(queue) > 0 {
 		id := queue[0]
 		queue = queue[1:]
-		children, err := lifecycleStore.List(session.LifecycleFilter{ParentDurableKey: id})
+		children, err := lifecycleStore.List(session.LifecycleFilter{SteeringSessionID: id})
 		if err != nil {
-			// This branch of the tree is now UNREACHABLE for this walk — every
-			// descendant beneath `id`, however many levels deep, is silently
-			// dropped from the returned slice. Recorded (not just logged) so
-			// the caller can distinguish this from "id has no children".
 			walkErrs = append(walkErrs, fmt.Errorf("list children of %q: %w", id, err))
 			continue
 		}
-		for _, rec := range children {
-			if _, seen := visited[rec.SessionID]; seen {
+		childIDs := make([]string, 0, len(children))
+		for i := range children {
+			childIDs = append(childIDs, children[i].SessionID)
+		}
+		sort.Strings(childIDs)
+		for _, childID := range childIDs {
+			if _, seen := visited[childID]; seen {
 				continue
 			}
-			visited[rec.SessionID] = struct{}{}
-			descendants = append(descendants, rec.SessionID)
-			queue = append(queue, rec.SessionID)
+			visited[childID] = struct{}{}
+			descendants = append(descendants, childID)
+			queue = append(queue, childID)
 		}
 	}
 	if len(walkErrs) > 0 {
-		return descendants, fmt.Errorf("descendant walk incomplete for root %q: %d branch(es) failed to list children: %w",
-			rootSessionID, len(walkErrs), errors.Join(walkErrs...))
+		return descendants, fmt.Errorf("descendant walk incomplete for root %q: %w", rootSessionID, errors.Join(walkErrs...))
 	}
 	return descendants, nil
 }
@@ -1081,8 +1100,8 @@ func (al *AgentLoop) resolveBackgroundKillSessionIDs(sessionID string) ([]string
 	return append([]string{sessionID}, descendants...), err
 }
 
-// cancelDurableDescendantLifecycleRecords walks the durable ParentDurableKey
-// edge transitively from rootSessionID (via collectDescendantSessionIDs) and
+// cancelDurableDescendantLifecycleRecords walks the durable steered-by edge
+// transitively from rootSessionID (via collectDescendantSessionIDs) and
 // transitions EVERY reachable descendant's persisted LifecycleRecord to
 // cancelled (FR-026), independent of whether that descendant still has a
 // live turnState in al.activeTurnStates. This is the DURABLE counterpart to
@@ -1091,7 +1110,7 @@ func (al *AgentLoop) resolveBackgroundKillSessionIDs(sessionID string) ([]string
 // finished and been cleared from activeTurnStates is UNREACHABLE via the
 // in-memory parentTurnID chain (steering.go's collectLiveDescendantTurnStates
 // documents this limitation on itself) but remains reachable here, because
-// this walk is keyed on the durable ParentDurableKey edge persisted to disk,
+// this walk is keyed on the durable SteeredBy edge persisted to disk,
 // never on any in-memory turn registration.
 //
 // FR-025: RequestCancel launches this via `go
@@ -1211,10 +1230,13 @@ func (al *AgentLoop) liveTurnStatesAmong(ids []string) []*turnState {
 // hasPendingDescendantSpawn reports whether a delegate sub-turn spawn is
 // currently in flight for the SAME identity this RequestCancel call is
 // scoped to (sessionID, or (scope.Channel, scope.ChatID) when sessionID is
-// empty) — i.e. pkg/tools/delegate.go's executeAsync has already called
-// MarkPendingDelegateSpawn (via the DelegateSpawnMarker seam) but the spawned
-// goroutine has not yet reached registerActiveTurn. See cancel_prearm.go's
-// pendingSpawns field for the full mark/clear/TTL contract.
+// empty) — pre-ADR-091, i.e. pkg/tools/delegate.go's now-deleted executeAsync
+// had already called MarkPendingDelegateSpawn (via the DelegateSpawnMarker
+// seam) but the spawned goroutine had not yet reached registerActiveTurn.
+// See cancel_prearm.go's pendingSpawns field for the full mark/clear/TTL
+// contract — and for the ADR-091 fix lane RX-SUBTURN note that no current
+// call site marks this map, so this function reads it as always empty
+// today; flagged for the team, not fixed here (comment-only lane).
 //
 // This is the second half of the chain-reaction fix (the first half is the
 // fresh re-scan liveTurnStatesAmong's callers now perform): a pending spawn
@@ -1253,7 +1275,7 @@ func (al *AgentLoop) hasPendingDescendantSpawn(sessionID string, scope CancelSco
 // SAME two functions being invoked again by the recursive call.
 //
 // No infinite-recursion or unbounded-depth hazard: unlike
-// CollectDescendantSessionIDs's durable ParentDurableKey BFS (which needs its
+// CollectDescendantSessionIDs's durable steered-by BFS (which needs its
 // own `visited` set because a corrupt/cyclic persisted graph is a real
 // possibility), this recursion is driven entirely by REAL, freshly-created
 // turnState registrations — registerActiveTurn is called at most once per

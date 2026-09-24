@@ -22,51 +22,83 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-// fakeWaker implements MessageParentWaker for tests, recording every call.
-type fakeWaker struct {
-	calls []struct {
+// fakeUpwardDeliverer is a test-only steer.UpwardDeliverer (ADR-091 I-5)
+// standing in for pkg/agent's real SteerUpwardDeliverer, close enough to it
+// for this file's own tests: it resolves the owner key from the child's
+// lifecycle record exactly like ownerKeyFor (edge first, SteeringSessionID
+// fallback) and appends to a REAL *session.MessageInboxStore, so the
+// existing inbox.Drain(...) assertions throughout this file keep proving
+// what they always proved. Every Deliver call is recorded, mirroring the
+// former fakeWaker's calls shape so this file's existing assertions
+// (`waker.calls[0].kind`) needed no restructuring, only a rename.
+type fakeUpwardDeliverer struct {
+	lifecycle *session.LifecycleStore
+	inbox     *session.MessageInboxStore
+	calls     []struct {
 		kind  string
-		event MessageParentWakeEvent
+		event steer.UpwardEvent
 	}
+	// err simulates a WAKE-TRANSPORT failure (never an Append failure) —
+	// matching the real SteerUpwardDeliverer, which always swallows a wake
+	// failure (logs it, returns success) since the message is already
+	// durably stored by the time the wake is attempted. Recorded, never
+	// returned from Deliver.
 	err error
 }
 
-func (f *fakeWaker) WakeParent(ctx context.Context, kind string, event MessageParentWakeEvent) error {
-	f.calls = append(f.calls, struct {
-		kind  string
-		event MessageParentWakeEvent
-	}{kind, event})
-	return f.err
+func (f *fakeUpwardDeliverer) Deliver(_ context.Context, event steer.UpwardEvent) (steer.Delivery, error) {
+	ownerKey := ""
+	if rec, err := f.lifecycle.Load(event.ChildSessionID); err == nil && rec != nil {
+		ownerKey = ownerKeyFor(rec)
+	}
+	res, err := f.inbox.Append(ownerKey, event.Message)
+	if err != nil {
+		return steer.Delivery{}, err
+	}
+	kind, _ := event.Message.Discriminator()
+	if kind == "blocker" || kind == "question" || kind == "handback" {
+		f.calls = append(f.calls, struct {
+			kind  string
+			event steer.UpwardEvent
+		}{kind, event})
+		if f.err != nil {
+			// Best-effort, matching the real Deliver: a wake-transport
+			// failure never fails the call — the entry is already stored.
+			return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryWoke}, nil
+		}
+	}
+	return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryWoke}, nil
 }
 
-func newMessageParentTestSetup(t *testing.T) (*MessageParentTool, *session.LifecycleStore, *session.MessageInboxStore, *fakeWaker) {
+func newMessageParentTestSetup(t *testing.T) (*MessageParentTool, *session.LifecycleStore, *session.MessageInboxStore, *fakeUpwardDeliverer) {
 	t.Helper()
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
-	waker := &fakeWaker{}
+	deliverer := &fakeUpwardDeliverer{lifecycle: lc, inbox: inbox}
 
-	tool := NewMessageParentTool(inbox, lc)
-	tool.SetWaker(waker)
+	tool := NewMessageParentTool(deliverer, lc)
 	// Enable the session-messaging plane by default for tests so the
 	// fail-closed kill switch (fix B.5) does not reject every test call.
 	// Tests that exercise the kill switch itself override this.
 	tool.SetSessionMessagingEnabled(func() bool { return true })
 
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID:        "child-1",
-		State:            session.LifecycleRunning,
-		OwnerScopeKind:   session.OwnerScopeParentSession,
-		OwnerScopeID:     "parent-delegate-id",
-		ParentDurableKey: "parent-1",
-		WorkspaceID:      "ws-1",
-		AgentID:          "worker",
+		SessionID:      "child-1",
+		Generation:     1,
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeParentSession,
+		OwnerScopeID:   "parent-delegate-id",
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
+		WorkspaceID:    "ws-1",
+		AgentID:        "worker",
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
 	}
 
-	return tool, lc, inbox, waker
+	return tool, lc, inbox, deliverer
 }
 
 // withChildContext is a shortcut that stamps the SAME id as both the shared
@@ -217,13 +249,13 @@ func TestMessageParentTool_PerChildCeiling_FailsBackAsToolError(t *testing.T) {
 func TestMessageParentTool_3PChild_Rejected(t *testing.T) {
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
-	tool := NewMessageParentTool(inbox, lc)
+	tool := NewMessageParentTool(&fakeUpwardDeliverer{lifecycle: lc, inbox: inbox}, lc)
 	tool.SetSessionMessagingEnabled(func() bool { return true }) // fix B.5: default fail-closed
 
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-3p", State: session.LifecycleRunning,
+		SessionID: "child-3p", Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: "parent-x",
-		ParentDurableKey: "parent-1", WorkspaceID: "ws-1", AgentID: "worker-3p",
+		SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"}, WorkspaceID: "ws-1", AgentID: "worker-3p",
 		Is3P: true,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -238,7 +270,7 @@ func TestMessageParentTool_3PChild_Rejected(t *testing.T) {
 func TestMessageParentTool_NoSessionContext_Rejected(t *testing.T) {
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
-	tool := NewMessageParentTool(inbox, lc)
+	tool := NewMessageParentTool(&fakeUpwardDeliverer{lifecycle: lc, inbox: inbox}, lc)
 	tool.SetSessionMessagingEnabled(func() bool { return true }) // fix B.5: default fail-closed
 
 	result := tool.Execute(context.Background(), map[string]any{"kind": "progress", "text": "x"})
@@ -255,11 +287,11 @@ func TestMessageParentTool_NoSessionContext_Rejected(t *testing.T) {
 // what to do instead of the generic "no session context available for this
 // call" text, since a task-dispatch session structurally has no delegating
 // parent to message (task_executor.go's mintTaskLifecycleRecord leaves
-// ParentDurableKey empty on purpose).
+// SteeringSessionID empty on purpose).
 func TestMessageParentTool_TaskRun_NoParentSession_RedirectsToGoalClaim(t *testing.T) {
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
-	tool := NewMessageParentTool(inbox, lc)
+	tool := NewMessageParentTool(&fakeUpwardDeliverer{lifecycle: lc, inbox: inbox}, lc)
 	tool.SetSessionMessagingEnabled(func() bool { return true }) // fix B.5: default fail-closed
 
 	ctx := WithRunningTaskID(context.Background(), "task-42")
@@ -471,5 +503,155 @@ func TestMessageParentTool_KillSwitchDisabled_FailsClosed_ArchM2(t *testing.T) {
 	openRes := tool2.Execute(withChildContext("child-1"), map[string]any{"kind": "progress", "text": "y"})
 	if openRes == nil || strings.Contains(openRes.ForLLM, "disabled") {
 		t.Fatalf("unset closure must fail open, got: %+v", openRes)
+	}
+}
+
+// TestToIntArg_RejectsFractionalFloat pins the semantics chosen when
+// delegate_goal.go's `integerArgument` and this file's `toIntArg` — same
+// package, same signature, opposite behaviour on a fractional float — were
+// unified into the single parser in message_parent.go.
+//
+// The strict rule won because all three call sites promise the model an
+// integer in their own rejection message (message_parent `pct`: "must be an
+// integer 0-100"; delegate_status `max`: "must be an integer";
+// delegate_goal `check.expected_exit_code`: "must be an integer from 0 to
+// 255"). Truncating 50.7 to 50 accepted a value the tool had just told the
+// model it would not accept. int64 is carried over from the truncating
+// version because a Go-side caller can produce one.
+//
+// Expected values come from that contract, not from reading the
+// implementation: a whole-valued float converts, a fractional one is an
+// error, and a non-number is an error.
+func TestToIntArg_RejectsFractionalFloat(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		in      any
+		want    int
+		wantErr bool
+	}{
+		{name: "int", in: 42, want: 42},
+		{name: "int64", in: int64(7), want: 7},
+		{name: "whole float (the shape a JSON decoder produces for 50)", in: float64(50), want: 50},
+		{name: "negative whole float", in: float64(-3), want: -3},
+		{name: "zero", in: float64(0), want: 0},
+		{name: "fractional float is rejected, never truncated", in: 50.7, wantErr: true},
+		{name: "fractional float below one is rejected", in: 0.5, wantErr: true},
+		{name: "negative fractional float is rejected", in: -1.5, wantErr: true},
+		{name: "string is not a number", in: "50", wantErr: true},
+		{name: "bool is not a number", in: true, wantErr: true},
+		{name: "nil is not a number", in: nil, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := toIntArg(tc.in)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("toIntArg(%#v) = (%d, nil), want an error", tc.in, got)
+				}
+				if got != 0 {
+					t.Fatalf("toIntArg(%#v) returned %d alongside its error, want the zero value", tc.in, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("toIntArg(%#v) returned error %v, want (%d, nil)", tc.in, err, tc.want)
+			}
+			if got != tc.want {
+				t.Fatalf("toIntArg(%#v) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// --- ADR-091 fix lane RX-OUTCOME, Task 1 ---
+
+// storedNotWokenDeliverer is a steer.UpwardDeliverer that appends to a real
+// inbox and then reports the entry as STORED BUT NOT WOKEN — the outcome
+// message_parent used to discard with "mt.delivery.Outcome is available for
+// callers that want it (none today)".
+type storedNotWokenDeliverer struct {
+	inbox     *session.MessageInboxStore
+	ownerKey  string
+	messageID string
+}
+
+func (d *storedNotWokenDeliverer) Deliver(_ context.Context, event steer.UpwardEvent) (steer.Delivery, error) {
+	res, err := d.inbox.Append(d.ownerKey, event.Message)
+	if err != nil {
+		return steer.Delivery{}, err
+	}
+	d.messageID = res.MessageID
+	return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+}
+
+// newStoredNotWokenSetup builds message_parent over a deliverer that always
+// reports stored_not_woken. It seeds its OWN lifecycle record rather than
+// reusing newMessageParentTestSetup: that helper's seed predates commit
+// 21edbad7e's durable-field validation and no longer persists (see this
+// lane's report), and these two tests must not depend on that being fixed.
+func newStoredNotWokenSetup(t *testing.T) (*MessageParentTool, *storedNotWokenDeliverer) {
+	t.Helper()
+	lc := session.NewLifecycleStore(t.TempDir())
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	deliverer := &storedNotWokenDeliverer{inbox: inbox, ownerKey: "parent-1"}
+	tool := NewMessageParentTool(deliverer, lc)
+	tool.SetSessionMessagingEnabled(func() bool { return true })
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-not-woken", Generation: 3, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: "parent-1",
+		SteeredBy:   &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
+		WorkspaceID: "ws-1", AgentID: "worker",
+	}); err != nil {
+		t.Fatalf("seed lifecycle record failed: %v", err)
+	}
+	return tool, deliverer
+}
+
+// TestMessageParent_StoredNotWoken_LoggedAtError proves message_parent now
+// ACTS on steer.Delivery.Outcome for a wake-eligible kind. A `blocker` the
+// parent was never woken for is an entry nothing will read until boot
+// recovery — previously completely silent.
+func TestMessageParent_StoredNotWoken_LoggedAtError(t *testing.T) {
+	logs := captureSlogInfo(t)
+	tool, deliverer := newStoredNotWokenSetup(t)
+
+	result := tool.Execute(withChildContext("child-not-woken"), map[string]any{
+		"kind": "blocker", "text": "the deploy key is missing", "severity": "high",
+	})
+	if result.IsError {
+		t.Fatalf("message_parent(blocker) failed: %s", result.ForLLM)
+	}
+
+	captured := logs.String()
+	if !strings.Contains(captured, `"level":"ERROR"`) {
+		t.Fatalf("a blocker the parent was never woken for produced no ERROR line — the stall is invisible; captured log:\n%s", captured)
+	}
+	for _, want := range []string{"child-not-woken", "parent-1", deliverer.messageID, string(steer.DeliveryStoredNotWoken)} {
+		if !strings.Contains(captured, want) {
+			t.Errorf("captured ERROR log does not name %q; captured log:\n%s", want, captured)
+		}
+	}
+	if !strings.Contains(captured, `"generation":3`) {
+		t.Errorf("captured ERROR log does not carry the child's generation; captured log:\n%s", captured)
+	}
+}
+
+// TestMessageParent_ProgressStoredNotWokenStaysQuiet is the gate half: for
+// `progress` (never wake-eligible, FR-B-010) stored_not_woken IS the
+// contract, so it must produce no ERROR line. Without this, a report that
+// fired on every stored_not_woken would pass the test above and drown the
+// real signal in production.
+func TestMessageParent_ProgressStoredNotWokenStaysQuiet(t *testing.T) {
+	logs := captureSlogInfo(t)
+	tool, _ := newStoredNotWokenSetup(t)
+
+	result := tool.Execute(withChildContext("child-not-woken"), map[string]any{
+		"kind": "progress", "text": "still checking the checkout page",
+	})
+	if result.IsError {
+		t.Fatalf("message_parent(progress) failed: %s", result.ForLLM)
+	}
+
+	if captured := logs.String(); strings.Contains(captured, `"level":"ERROR"`) {
+		t.Fatalf("a progress entry stored without a wake produced an ERROR line — that outcome is its contract, not a failure; captured log:\n%s", captured)
 	}
 }

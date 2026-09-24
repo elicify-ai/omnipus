@@ -147,7 +147,6 @@ vi.mock('./historical-markdown', () => ({
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
-vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('./markdown-text', () => ({
   MarkdownText: () => React.createElement('div', {}),
@@ -188,7 +187,6 @@ function seedBucket(messages: ChatMessage[]): void {
         lastUserMessageAt: null,
         cancelStage: null,
         lastReceivedEventTime: null,
-        spanByParentCallId: {},
         trimmedCount: 0,
       },
     },

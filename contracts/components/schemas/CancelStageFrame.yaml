@@ -34,3 +34,47 @@ properties:
                  can now treat the session as idle.
       The SPA validates this field via isValidFrame() and drops frames with any
       other value (B3 fix for unknown-stage render crashes).
+  reached:
+    type: array
+    items:
+      type: string
+    description: >
+      ADR-091 I-6. Present on the `detached` stage of a Stop: every session the
+      cascade stamped with a Stop marker (the stopped session and each reachable
+      non-terminal descendant).
+  unreachable:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - reason
+      properties:
+        id:
+          type: string
+          minLength: 1
+        reason:
+          type: string
+    description: ADR-091 I-6. Descendants the cascade could not reach, with why.
+  skipped_newer_generation:
+    type: array
+    items:
+      type: string
+    description: >
+      ADR-091 I-6. Sessions whose live turn belonged to a newer generation than
+      the one stamped (a revival landed first); their cancel was refused.
+  skipped_terminal:
+    type: array
+    items:
+      type: string
+    description: ADR-091 I-6. Terminal descendants, left unwritten.
+  partial:
+    type: boolean
+    description: >
+      ADR-091 I-6. True when `unreachable` is non-empty OR
+      `skipped_newer_generation` is non-empty — a session skipped because a
+      revival landed first is still running, so the cascade did not fully
+      stop the subtree either way (matches the producer,
+      `pkg/gateway/websocket_cancel.go::sendCancelReportFrame`:
+      `len(Unreachable) > 0 || len(SkippedNewerGeneration) > 0`).

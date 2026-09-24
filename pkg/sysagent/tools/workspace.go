@@ -771,7 +771,7 @@ func parseWorkspaceDelegationArg(args map[string]any, teamIDs []string, ceiling 
 }
 
 // edgeModeCategory collapses a coreagent seed's 3-value delegate-tool call
-// vocabulary (config.DelegationMode: task/background/await) down to the
+// vocabulary (config.DelegationMode: task/background) down to the
 // workspace trust-edge's 2-value vocabulary (workspace.DelegationMode:
 // direct/task).
 //
@@ -794,7 +794,7 @@ func edgeModeCategory(mode config.DelegationMode) workspacepkg.DelegationMode {
 	switch mode {
 	case config.DelegationModeTask:
 		return workspacepkg.ModeTask
-	case config.DelegationModeAwait, config.DelegationModeBackground:
+	case config.DelegationModeBackground:
 		return workspacepkg.ModeDirect
 	default:
 		slog.Warn(
@@ -1029,24 +1029,24 @@ func configAgentPresenceSet(d *Deps) map[string]bool {
 	return present
 }
 
-// workspaceDelegationDepthCeilingFallback mirrors the gateway's
-// delegationDepthCeilingFallback (and the agent loop's getSubTurnConfig default):
-// the effective max delegation chain depth when agents.defaults.subturn.max_depth
-// is unset. Kept in lock-step so the tool's defensive edge validation applies the
-// exact same depth ceiling the gateway PUT handler does.
+// workspaceDelegationDepthCeilingFallback mirrors the gateway fallback used
+// when performance.max_delegation_depth is unset. Kept in lock-step so the
+// tool and gateway validate edges against the same ceiling.
 const workspaceDelegationDepthCeilingFallback = 3
 
-// workspaceDelegationDepthCeiling returns the effective delegation depth ceiling
-// from the live config, mirroring gateway.delegationDepthCeiling: the configured
-// agents.defaults.subturn.max_depth when set (> 0), else the fallback of 3. A nil
-// GetCfg (tests without a wired config) yields the fallback.
+// workspaceDelegationDepthCeiling returns the effective delegation depth
+// ceiling from the live config, mirroring gateway.delegationDepthCeiling:
+// performance.max_delegation_depth when set (> 0), otherwise 3. A nil GetCfg
+// (tests without a wired config) yields the fallback.
 func workspaceDelegationDepthCeiling(d *Deps) int {
 	if d == nil || d.GetCfg == nil {
 		return workspaceDelegationDepthCeilingFallback
 	}
 	cfg := d.GetCfg()
-	if cfg != nil && cfg.Agents.Defaults.SubTurn.MaxDepth > 0 {
-		return cfg.Agents.Defaults.SubTurn.MaxDepth
+	if cfg != nil {
+		if depth, err := cfg.Performance.EffectiveMaxDelegationDepth(); err == nil && depth > 0 {
+			return depth
+		}
 	}
 	return workspaceDelegationDepthCeilingFallback
 }

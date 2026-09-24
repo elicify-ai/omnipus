@@ -148,15 +148,15 @@ func TestAskUserQuestion_ValidationErrorDoesNotPark(t *testing.T) {
 }
 
 func TestAskUserQuestion_DelegatedChildRejectedTowardMessageParent(t *testing.T) {
-	reg := &fakeAskRegistry{}
+	reg := &fakeAskRegistry{createErr: askuser.ErrDelegatedChild}
 	tool := newAskTool(reg)
 	ctx := WithDelegationDepth(webCtx(), 1)
 	res := tool.Execute(ctx, validAskArgs())
 	if !res.IsError || res.ParksTurn {
 		t.Fatalf("delegated child must be rejected without park: %+v", res)
 	}
-	if !strings.Contains(res.ForLLM, "message_parent") {
-		t.Fatalf("rejection must name message_parent(question:true): %q", res.ForLLM)
+	if !strings.Contains(res.ForLLM, "relayed") {
+		t.Fatalf("rejection must confirm the automatic parent relay: %q", res.ForLLM)
 	}
 	if len(reg.created) != 0 {
 		t.Fatal("registry must not be touched")

@@ -60,7 +60,6 @@ const BUCKET_DEFAULTS = {
   lastUserMessageAt: null,
   cancelStage: null,
   lastReceivedEventTime: null,
-  spanByParentCallId: {},
 } satisfies Partial<SessionChatState>
 
 function toolCallOf(msg: { tool_calls?: unknown } | undefined, idx = 0): PositionedToolCall | undefined {

@@ -13,7 +13,9 @@ import (
 	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // ====================== FR-068: the live memory gate ======================
@@ -246,272 +248,8 @@ func (a *AdmissionController) SoftCap() int {
 	return a.effectiveCap()
 }
 
-// ====================== ADR-057 W17: root-level delegation admission ======================
-//
-// FR-069/FR-070 (US-15). `turnState.concurrencySem` (pkg/agent/subturn.go)
-// is set only on a CHILD turnState — the sole assignment is subturn.go:1051,
-// guarded at subturn.go:607 — so it gates a delegated child's OWN further
-// fan-out but has nothing to guard a ROOT turn's first delegate call with: a
-// root turnState's concurrencySem is nil, so a wide `delegate` fan-out
-// straight from a chat root sails through completely ungated. This is a
-// SEPARATE, deliberately independent process-global gate — it does not read,
-// write or otherwise interact with concurrencySem, and FR-070 requires that
-// nested (child-level) gating stay byte-identical (see
-// TestNestedDelegationGating_Unchanged, admission_adr057_test.go).
-//
-// This file supplies the gate PRIMITIVE (cap resolution + a non-blocking
-// admit/release counter) and the BDD-77 operator-visible refusal shape.
-// Wiring it into the live `delegate action=run` dispatch path is a call the
-// TARGET AGENT of that dispatch (pkg/tools/delegate.go, owned by U14) or its
-// spawner (pkg/agent/subturn.go, explicitly out of this unit's file
-// ownership) must make — see this unit's final report for the specific,
-// as-yet-unwired call sites this blocks on.
-//
-// CONSOLIDATION UPDATE (2026-08-04, commit 536b7340's follow-up fix):
-// FR-095's original text required this gate to read
-// agents.defaults.subturn.max_concurrent DIRECTLY and forbade sourcing it
-// from Performance.EffectiveMaxParallelAgents(), on the premise that the
-// latter was hard-clamped to 16 by clampParallelExplicit while the former
-// was honored unclamped — two genuinely different numbers. 536b7340 removed
-// that ceiling (clampParallelExplicit now only floors at 1), which
-// invalidated the premise: with a fixed 16 seed, this gate silently
-// disagreed with an operator's own max_parallel_agents setting the instant
-// the two diverged — the exact "control that moves, persists and governs
-// nothing" anti-pattern (ADR-037) this project bans. Performance.
-// EffectiveMaxParallelAgents() is now the single, central authority for
-// agent concurrency; ResolveRootDelegationCap resolves to it whenever
-// subturn.max_concurrent is unset, and only an explicit positive override
-// diverges from it deliberately. See docs/internal/specs/
-// adr-057-session-unification-spec.md's 2026-08-04 amendment note on FR-095.
-
-// ErrRootDelegationCapMisconfigured is returned by ResolveRootDelegationCap
-// when agents.defaults.subturn.max_concurrent resolves to a NEGATIVE value
-// (or cfg itself is nil). This MUST be treated as a boot-time configuration
-// error, never silently reinterpreted as "no gate" (the ADR-037
-// anti-pattern this project bans). A value of exactly 0 (unset — the shipped
-// default) is NOT an error: it means "inherit the central
-// Performance.EffectiveMaxParallelAgents() authority", see
-// ResolveRootDelegationCap.
-var ErrRootDelegationCapMisconfigured = errors.New(
-	"agents.defaults.subturn.max_concurrent must be >= 0 for the root-delegation admission gate")
-
-// ResolveRootDelegationCap reads agents.defaults.subturn.max_concurrent off
-// cfg and resolves the effective root-level delegation admission cap:
-//
-//   - == 0 (unset — the shipped default, see DefaultConfig/defaults.go): the
-//     cap IS cfg.Performance.EffectiveMaxParallelAgents(), the SAME central,
-//     UI-configurable authority getSubTurnConfig(), TaskExecutor's dispatch
-//     semaphore, and AdmissionController's session gate all resolve to. This
-//     is what makes max_parallel_agents the single authority for agent
-//     concurrency (concurrency-gate consolidation, 2026-08-04): an operator
-//     raising it in the UI raises the root-delegation cap too, with no
-//     second knob to also remember to change.
-//   - > 0: an EXPLICIT, deliberate per-delegation override, honored exactly
-//     as configured — it may differ from the central value in either
-//     direction (an operator's own choice, e.g. to constrain delegation
-//     fan-out specifically), and is never silently coerced towards it.
-//   - < 0: ErrRootDelegationCapMisconfigured — a genuine configuration
-//     error, surfaced rather than coerced into any default.
-func ResolveRootDelegationCap(cfg *config.Config) (int, error) {
-	if cfg == nil {
-		return 0, fmt.Errorf("resolve root-delegation cap: %w: nil config", ErrRootDelegationCapMisconfigured)
-	}
-	v := cfg.Agents.Defaults.SubTurn.MaxConcurrent
-	if v < 0 {
-		return 0, fmt.Errorf("resolve root-delegation cap: %w (configured value %d)", ErrRootDelegationCapMisconfigured, v)
-	}
-	if v == 0 {
-		// The second return value (capped) is deliberately discarded here:
-		// this resolver's contract is "a number to gate against", and the
-		// unset case's number IS the physical backstop. Whether that number
-		// came from an operator or from the backstop changes what a UI should
-		// SAY about it, not what this gate should enforce — and the live
-		// memory gate (applyMemoryCap) is what actually bounds admission long
-		// before a backstop-sized cap is approached.
-		n, _ := cfg.Performance.EffectiveMaxParallelAgents()
-		return n, nil
-	}
-	return v, nil
-}
-
-// RootDelegationAdmission is the FR-069 process-global admission gate for
-// ROOT-level delegation fan-out: one shared counter for the whole running
-// gateway process (contrasted with concurrencySem's per-parent-turn scope —
-// FR-095's "two scopes share one number intentionally" note), refusing
-// immediately rather than blocking/queueing (BDD-75's "But it is not queued
-// behind the session-store lock").
-type RootDelegationAdmission struct {
-	// cap is the fixed cap used when resolveCap is nil — the path taken by
-	// direct-int test construction (NewRootDelegationAdmission). Production
-	// wiring never uses this field; see resolveCap.
-	cap int
-	// resolveCap, when non-nil, is consulted FRESH on every TryAdmit/Cap call
-	// instead of cap. Production wiring (NewAgentLoop) sets this to a closure
-	// resolving ResolveRootDelegationCap(al.GetConfig()) live — mirroring
-	// AdmissionController.resolveCap (concurrency-gate consolidation,
-	// 2026-08-04): this gate must never freeze the cap at boot, or an
-	// operator's PUT /api/v1/performance write (or the auto-detected
-	// default's own boot-time-read self-correction, see pkg/config's
-	// availableRAMBytes doc comment) would silently fail to reach
-	// root-level delegation admission until a restart.
-	resolveCap func() int
-	mu         sync.Mutex
-	active     int
-}
-
-// NewRootDelegationAdmission constructs a gate with a FIXED cap: maxCap if
-// positive, otherwise a defensive floor of 1 (never a hardcoded guess — see
-// newRootDelegationAdmissionWithResolver for the production, live-resolved
-// path NewAgentLoop actually uses). This constructor exists for direct unit
-// tests of TryAdmit's admission logic against a known, stable cap.
-func NewRootDelegationAdmission(maxCap int) *RootDelegationAdmission {
-	if maxCap <= 0 {
-		maxCap = 1
-	}
-	return &RootDelegationAdmission{cap: maxCap}
-}
-
-// newRootDelegationAdmissionWithResolver returns a gate whose cap is
-// resolved LIVE via resolveCap on every TryAdmit/Cap call, rather than fixed
-// at construction. This is the production constructor (NewAgentLoop wires
-// resolveCap to re-run ResolveRootDelegationCap against the live config on
-// every call) — see resolveCap's doc comment on the RootDelegationAdmission
-// struct for why live resolution, rather than a value cached once at
-// construction, is required.
-func newRootDelegationAdmissionWithResolver(resolveCap func() int) *RootDelegationAdmission {
-	return &RootDelegationAdmission{
-		resolveCap: resolveCap,
-		cap:        1, // defensive floor, only reachable if resolveCap ever returns <= 0
-	}
-}
-
-// effectiveCap returns the cap to enforce right now: resolveCap()'s current
-// value when set and positive, otherwise the fixed cap. Safe to call without
-// holding r.mu — resolveCap/cap are set once at construction and never
-// mutated afterward (mirrors AdmissionController.effectiveCap).
-func (r *RootDelegationAdmission) effectiveCap() int {
-	if r.resolveCap != nil {
-		if c := r.resolveCap(); c > 0 {
-			return c
-		}
-	}
-	return r.cap
-}
-
-// admissionCapWithReason is the cap actually enforced on an admission
-// decision: the configured cap lowered by the live memory gate, plus whether
-// memory is what is binding (FR-068 — the same accessor, the same threshold
-// and the same reason code the browser pool uses). Cap() keeps reporting the
-// CONFIGURED value, for the reason spelled out on
-// AdmissionController.effectiveCap.
-func (r *RootDelegationAdmission) admissionCapWithReason() (int, bool) {
-	return applyMemoryCap(r.effectiveCap())
-}
-
-// TryAdmit atomically claims a root-delegation slot. Returns (true, release)
-// when admitted; release MUST be called (typically via defer, or on the
-// delegated child's terminal state) when the slot is no longer needed.
-// Returns (false, nil) IMMEDIATELY — never blocking — when the cap is
-// already reached (BDD-75/FR-069: refuse, don't queue).
-func (r *RootDelegationAdmission) TryAdmit() (bool, func()) {
-	ok, _, release := r.TryAdmitWithReason()
-	return ok, release
-}
-
-// TryAdmitWithReason is TryAdmit plus the reason a refusal happened: "" for
-// the operator's own configured cap, config.ReasonMemoryPressure when the
-// live memory gate refused. See AdmissionController.TryAdmitWithReason for
-// why the two must not be reported as one thing.
-func (r *RootDelegationAdmission) TryAdmitWithReason() (bool, string, func()) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	limit, memoryBinding := r.admissionCapWithReason()
-	if r.active >= limit {
-		if memoryBinding {
-			logMemoryAdmissionRefusalOnce(limit)
-			return false, config.ReasonMemoryPressure, nil
-		}
-		return false, "", nil
-	}
-	r.active++
-	released := false
-	release := func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		if released {
-			return // idempotent: a double-release must never under-count active
-		}
-		released = true
-		r.active--
-	}
-	return true, "", release
-}
-
-// Active returns the current number of admitted, not-yet-released root
-// delegations. Used by tests and observability.
-func (r *RootDelegationAdmission) Active() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.active
-}
-
-// Cap returns the cap currently being enforced — the live-resolved value
-// when a resolver is configured (production wiring), otherwise the fixed
-// cap.
-func (r *RootDelegationAdmission) Cap() int {
-	return r.effectiveCap()
-}
-
-// RefuseRootDelegation performs the BDD-77 operator-visible refusal: an
-// slog.Error record naming the maxCap, the delegating agent and the target
-// agent (mirroring pkg/tools/delegate.go:1150-1159's existing shape for the
-// sibling FR-015 refusal), plus the *tools.ToolResult a caller returns to the
-// calling agent. No separate user-facing notification is required
-// (operator decision 6) — the tool error is the whole contract.
-func RefuseRootDelegation(maxCap int, delegatingAgentID, targetAgentID string) *tools.ToolResult {
-	slog.Error("delegate: refusing root-level delegation — concurrent root-delegation cap reached",
-		"cap", maxCap,
-		"delegating_agent_id", delegatingAgentID,
-		"target_agent_id", targetAgentID)
-	return tools.ErrorResult(fmt.Sprintf(
-		"delegate: refusing to start a new root-level delegation — the concurrent root-delegation cap (%d) has been reached; retry once an in-flight root delegation completes",
-		maxCap))
-}
-
-// RefuseRootDelegationForMemory is the FR-068a refusal: the live memory gate,
-// not a configured cap, is what stopped this delegation.
-//
-// It names MEMORY and names a remedy that EXISTS. It deliberately does not
-// mention a cap or advise raising one, because on the host this fires on
-// there may be no cap to raise: an unmeasurable host holds at
-// unmeasurableHostAgentFloor no matter what performance.max_parallel_agents
-// says, and telling an operator to raise a number that will not move the
-// behaviour is worse than saying nothing. It carries
-// config.ReasonMemoryPressure, the same code the browser pool's refusals
-// carry, so one grep finds every memory refusal in the process.
-func RefuseRootDelegationForMemory(delegatingAgentID, targetAgentID string) *tools.ToolResult {
-	slog.Error("delegate: refusing root-level delegation — the host is under memory pressure or its memory cannot be measured",
-		"reason", config.ReasonMemoryPressure,
-		"concurrent_floor", unmeasurableHostAgentFloor,
-		"delegating_agent_id", delegatingAgentID,
-		"target_agent_id", targetAgentID)
-	return tools.ErrorResult(
-		"delegate: refusing to start a new root-level delegation — this host is short of memory, or its available memory cannot be measured at all (no memory reader exists for Windows, and a Linux host with an unreadable /proc/meminfo reports the same). Work already in flight is unaffected; retry once an in-flight delegation completes, or run this on a host with more free memory.")
-}
-
-// lastMemoryAdmissionRefusalLogged makes the memory refusal's operator-facing
-// WARN a LOG-ONCE, matching the browser pool's discipline for the same
-// condition. The condition is static for long stretches — an unmeasurable
-// host stays unmeasurable — and this path is hit on every admission check, so
-// an unthrottled line would bury the log it is meant to make diagnosable. It
-// is the same trade-off, and the same shape, as shouldLogExplicitCeilingWarn
-// in pkg/config.
 var lastMemoryAdmissionRefusalLogged atomic.Bool
 
-// logMemoryAdmissionRefusalOnce emits exactly one WARN per process for the
-// memory-bound admission condition. Exactly one, not one per refusal: a test
-// that fails on zero lines AND on one-per-call is what holds this honest.
 func logMemoryAdmissionRefusalOnce(effectiveCap int) {
 	if lastMemoryAdmissionRefusalLogged.Swap(true) {
 		return
@@ -521,126 +259,230 @@ func logMemoryAdmissionRefusalOnce(effectiveCap int) {
 		"effective_concurrent_cap", effectiveCap)
 }
 
-// resetMemoryAdmissionRefusalLogForTest clears the log-once latch. Tests
-// only: the latch is process-global by design, so a test asserting the
-// once-ness must be able to start from a known state.
 func resetMemoryAdmissionRefusalLogForTest() {
 	lastMemoryAdmissionRefusalLogged.Store(false)
 }
 
-// ====================== ADR-057 W17 wiring: the live dispatch site ======================
+// ====================== ADR-091 I-3/D9: the steered-turn admission loop ======================
 //
-// The gate primitive and refusal shape above were, until this fix, wholly
-// unreferenced from any production dispatch path (zero non-test callers of
-// RootDelegationAdmission/RefuseRootDelegation/ResolveRootDelegationCap
-// outside this file and its own unit test) — a root turn's `delegate` fan-out
-// sailed through completely ungated regardless of
-// agents.defaults.subturn.max_concurrent. rootDelegationAdmittingSpawner
-// closes that gap by wrapping the tools.SubTurnSpawner every per-agent
-// DelegateTool is given (pkg/agent/loop.go's registerSharedTools delegate
-// block, SetSpawner call site).
-//
-// Why wrapping the spawner is the correct dispatch point (not a workaround):
-// EVERY delegate() call, sync or async, for every agent, ultimately calls
-// spawner.SpawnSubTurn (pkg/tools/delegate.go executeSync/executeAsync) —
-// there is no other shared choke point. spawnSubTurn (pkg/agent/subturn.go)
-// runs the child's ENTIRE turn synchronously inside itself regardless of
-// cfg.Async — Async only changes how the result is delivered afterward.
-// Ordinarily the wrapped call blocks for the child's full physical lifetime.
-// A native child whose in-flight operation ignores cancellation is the one
-// exception: spawnSubTurn returns a detached timeout while its runTurn
-// goroutine unwinds. In that case the lease below transfers to the physical
-// child goroutine and releases only when that goroutine actually exits.
-//
-// Root vs nested: parentTS.depth == 0 (turnState's own "0 for root turn"
-// invariant, turn.go) distinguishes a root-level dispatch from a NESTED one
-// (a child, itself mid-delegation, delegating further). Only root-level
-// calls consult this gate — FR-070 requires nested (concurrencySem-gated)
-// behaviour stay byte-identical, and this wrapper never reads, writes, or
-// otherwise touches concurrencySem.
+// A SEPARATE gate from AdmissionController/RootDelegationAdmission above: those
+// two govern the delegate() tool's SPAWN attempt (refuse immediately, no
+// queue). steerAdmission governs steer.SessionLauncher.Dispatch's admission
+// decision (I-2/I-3): the counter tracks TURNS EXECUTING right now — not
+// sessions in a "running" lifecycle state (D9) — and a session that cannot
+// be admitted is QUEUED, never refused, started in launch order (FIFO) as
+// slots free (turn end -> steerAdmission.release -> drainSteerQueue).
 
-// rootDelegationAdmittingSpawner wraps a tools.SubTurnSpawner so a
-// ROOT-level delegate dispatch (parentTS.depth == 0) is admitted through a
-// shared, process-wide RootDelegationAdmission gate before being allowed to
-// spawn; nested (parentTS.depth > 0) calls pass straight through unchanged.
-type rootDelegationAdmittingSpawner struct {
-	inner tools.SubTurnSpawner
-	// gate may be nil (e.g. agents.defaults.subturn.max_concurrent resolved
-	// to <= 0 at AgentLoop construction — see NewAgentLoop's
-	// rootDelegationAdmission resolution, loop.go). A nil gate makes
-	// SpawnSubTurn a pure pass-through, matching the pre-fix (ungated)
-	// behavior rather than panicking on a nil dereference.
-	gate *RootDelegationAdmission
-	// delegatingAgentID is captured once at wiring time (the registering
-	// agent's own id) purely to label the BDD-77 refusal log/result when the
-	// gate is saturated; it does not affect admission decisions.
-	delegatingAgentID string
+// steerQueueEntry is one FIFO-queued dispatch awaiting a free admission
+// slot.
+type steerQueueEntry struct {
+	sessionID  string
+	generation int
 }
 
-type rootDelegationLeaseContextKey struct{}
-
-// rootDelegationLease lets the admitting wrapper transfer ownership to a
-// native child's physical runTurn goroutine. transferred selects exactly one
-// release owner; once makes the release itself idempotent as a second belt.
-type rootDelegationLease struct {
-	release     func()
-	transferred atomic.Bool
-	once        sync.Once
+// steerAdmission is the turn-counting admission gate (I-3 "Admission"). cap
+// is resolved LIVE on every tryAdmit via resolveCap (mirrors
+// AdmissionController.resolveCap's live-resolution rationale — an operator's
+// PUT /api/v1/performance write must reach this gate without a restart).
+type steerAdmission struct {
+	mu         sync.Mutex
+	active     map[string]int // sessionKey -> generation, only while THIS gate admitted the turn
+	queue      []steerQueueEntry
+	resolveCap func() int
 }
 
-func (l *rootDelegationLease) transferToPhysicalChild() bool {
-	return l != nil && l.transferred.CompareAndSwap(false, true)
+func newSteerAdmission(resolveCap func() int) *steerAdmission {
+	return &steerAdmission{active: make(map[string]int), resolveCap: resolveCap}
 }
 
-func (l *rootDelegationLease) releaseSlot() {
-	if l == nil {
+// tryAdmit atomically decides running vs queued for sessionID/gen (I-2
+// "Dispatch — not Launch — decides atomically under the admission lock").
+// Returns (true, 0) when admitted; (false, 1-based position) when queued —
+// never blocks.
+func (g *steerAdmission) tryAdmit(sessionID string, gen int) (admitted bool, queuePosition, concurrencyLimit int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	effectiveCap := 1
+	if g.resolveCap != nil {
+		if c := g.resolveCap(); c > 0 {
+			effectiveCap = c
+		}
+	}
+	if len(g.active) >= effectiveCap {
+		g.queue = append(g.queue, steerQueueEntry{sessionID: sessionID, generation: gen})
+		return false, len(g.queue), effectiveCap
+	}
+	g.active[sessionID] = gen
+	return true, 0, effectiveCap
+}
+
+// release frees sessionID's admission slot (a turn ended — D9: "a session
+// whose turn has ended holds no slot") and pops the oldest queued entry, if
+// any, for the caller to dispatch next (FIFO). A release for a sessionID
+// this gate never admitted (e.g. a non-steered turn's ordinary Finish, or a
+// session that was queued rather than admitted) is a harmless no-op.
+func (g *steerAdmission) release(sessionID string, generation int) (next steerQueueEntry, hasNext bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if activeGeneration, ok := g.active[sessionID]; !ok || activeGeneration != generation {
+		return steerQueueEntry{}, false
+	}
+	delete(g.active, sessionID)
+	if len(g.queue) == 0 {
+		return steerQueueEntry{}, false
+	}
+	next = g.queue[0]
+	g.queue = g.queue[1:]
+	g.active[next.sessionID] = next.generation
+	return next, true
+}
+
+// hasReservation reports whether release promoted this exact generation into
+// the active set. A promoted dispatch consumes that reservation by keeping it
+// for the lifetime of the turn; it must not call tryAdmit and requeue itself.
+func (g *steerAdmission) hasReservation(sessionID string, generation int) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.active[sessionID] == generation
+}
+
+// removeQueued rolls back one exact queue entry after its queued-state write
+// fails. It never changes active reservations and therefore cannot release a
+// different turn's slot.
+func (g *steerAdmission) removeQueued(sessionID string, generation int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for i, entry := range g.queue {
+		if entry.sessionID == sessionID && entry.generation == generation {
+			g.queue = append(g.queue[:i], g.queue[i+1:]...)
+			return
+		}
+	}
+}
+
+// removeQueuedSession drops EVERY queued entry for sessionID, whatever
+// generation each carries, and reports how many it removed. Unlike
+// removeQueued it is not a rollback of one failed write: it is what the Stop
+// cascade uses (steer_delegate_cancel.go::cancelDelegatedSubtree) to take a
+// cancelled session out of the start queue.
+//
+// reserveDispatch would refuse the promotion anyway, so this is not what
+// makes a stopped session safe. It is what makes the queue HONEST: a
+// cancelled worker left sitting in it still counts toward every queue
+// position the tool reports to a model, and still shows in the side panel as
+// a session about to start.
+//
+// Active reservations are never touched, so this can never release a running
+// turn's slot.
+func (g *steerAdmission) removeQueuedSession(sessionID string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	kept := g.queue[:0]
+	removed := 0
+	for _, entry := range g.queue {
+		if entry.sessionID == sessionID {
+			removed++
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	g.queue = kept
+	return removed
+}
+
+// activeCount reports the number of turns this gate currently holds a slot
+// for — test/observability seam.
+func (g *steerAdmission) activeCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.active)
+}
+
+// queueLen reports the number of sessions currently queued — test/
+// observability seam.
+func (g *steerAdmission) queueLen() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.queue)
+}
+
+// steerAdmissionRegistry maps *AgentLoop -> its one steerAdmission gate.
+// A package-level registry, not an AgentLoop struct field, because loop.go
+// is line-count-pinned (scripts/budgets/files.txt) and cannot grow by even
+// one field declaration; every other ADR-091 per-AgentLoop steering state
+// (this gate) is threaded through this side table instead. Entries are
+// never removed — AgentLoop instances are process-lifetime singletons in
+// production, and the handful a test suite constructs and discards is a
+// bounded, acceptable leak (mirrors how Go program-lifetime caches are
+// commonly implemented; there is no AgentLoop.Close hook this could
+// unregister from today).
+var (
+	steerAdmissionRegistry   = map[*AgentLoop]*steerAdmission{}
+	steerAdmissionRegistryMu sync.Mutex
+)
+
+// steerAdmission returns al's steered-turn admission gate, constructing it
+// on first use with a resolver reading the SAME central authority
+// (Performance.EffectiveMaxParallelAgents) AdmissionController and
+// RootDelegationAdmission already read, so all three concurrency gates
+// stay aligned to one operator-configured number.
+func (al *AgentLoop) steerAdmission() *steerAdmission {
+	steerAdmissionRegistryMu.Lock()
+	defer steerAdmissionRegistryMu.Unlock()
+	if g, ok := steerAdmissionRegistry[al]; ok {
+		return g
+	}
+	g := newSteerAdmission(func() int {
+		n, _ := al.GetConfig().Performance.EffectiveMaxParallelAgents()
+		return n
+	})
+	steerAdmissionRegistry[al] = g
+	return g
+}
+
+// drainSteerQueue releases sessionID's slot and, if a session was waiting,
+// dispatches it through the SAME admission path Dispatch itself uses
+// (dispatchSteeredSessionReserved). It is called explicitly by whoever
+// claimed the slot — steer_launcher.go::runDispatchedSteeredTurn's deferred
+// release on the delegate front, loop_inbound.go::processSteeredSystemWake
+// on the wake front — never from turn_exit.go::Finish, which has no
+// back-reference to release through for a steered turn (see Finish's own
+// comment on why the slot is not released there). The dispatch of the next
+// queued session runs in a goroutine so the caller never blocks on it.
+func (al *AgentLoop) drainSteerQueue(sessionID string, generation int) {
+	next, hasNext := al.steerAdmission().release(sessionID, generation)
+	if !hasNext {
 		return
 	}
-	l.once.Do(l.release)
-}
-
-func rootDelegationLeaseFromContext(ctx context.Context) *rootDelegationLease {
-	if ctx == nil {
-		return nil
-	}
-	lease, _ := ctx.Value(rootDelegationLeaseContextKey{}).(*rootDelegationLease)
-	return lease
-}
-
-// newRootDelegationAdmittingSpawner constructs the wrapper described above.
-func newRootDelegationAdmittingSpawner(inner tools.SubTurnSpawner, gate *RootDelegationAdmission, delegatingAgentID string) *rootDelegationAdmittingSpawner {
-	return &rootDelegationAdmittingSpawner{inner: inner, gate: gate, delegatingAgentID: delegatingAgentID}
-}
-
-// SpawnSubTurn implements tools.SubTurnSpawner.
-func (s *rootDelegationAdmittingSpawner) SpawnSubTurn(ctx context.Context, cfg tools.SubTurnConfig) (*tools.ToolResult, error) {
-	if s == nil || s.inner == nil {
-		return nil, errors.New("rootDelegationAdmittingSpawner: nil spawner")
-	}
-	if s.gate == nil {
-		return s.inner.SpawnSubTurn(ctx, cfg)
-	}
-	parentTS := turnStateFromContext(ctx)
-	if parentTS == nil || parentTS.depth != 0 {
-		// Not a root-level dispatch (or no turnState in context at all, e.g.
-		// a bare unit-test call outside a real turn) — RootDelegationAdmission
-		// gates root-level fan-out only; a nested child's own fan-out stays
-		// governed exclusively by its concurrencySem (FR-070).
-		return s.inner.SpawnSubTurn(ctx, cfg)
-	}
-	ok, reason, release := s.gate.TryAdmitWithReason()
-	if !ok {
-		if reason == config.ReasonMemoryPressure {
-			return RefuseRootDelegationForMemory(s.delegatingAgentID, cfg.TargetAgentID), nil
-		}
-		return RefuseRootDelegation(s.gate.Cap(), s.delegatingAgentID, cfg.TargetAgentID), nil
-	}
-	lease := &rootDelegationLease{release: release}
-	ctx = context.WithValue(ctx, rootDelegationLeaseContextKey{}, lease)
-	defer func() {
-		if !lease.transferred.Load() {
-			lease.releaseSlot()
+	go func() {
+		if _, err := al.dispatchSteeredSessionReserved(context.Background(), next.sessionID, next.generation); err != nil {
+			if classifyDrainDispatchError(err) {
+				logger.InfoCF("agent", "steer: drain queue: promoted session was no longer dispatchable (legitimate)",
+					map[string]any{"session_id": next.sessionID, "generation": next.generation, "error": err.Error()})
+				return
+			}
+			// Finding 6 (ADR-091 fix lane 2): the promoted entry is already
+			// out of the queue and its slot went to someone else — on any
+			// OTHER dispatch error (I/O failure, a lost race) the record is
+			// left neither queued, running, terminal nor failed unless we
+			// land it here, so its own parent's hasRunningOrQueuedDescendant
+			// check is not blocked forever on a worker that will never run.
+			logger.WarnCF("agent", "steer: drain queue: dispatch of the next queued session failed — landing it terminal so its parent is not blocked forever",
+				map[string]any{"session_id": next.sessionID, "generation": next.generation, "error": err.Error()})
+			al.reportSteeredSessionTerminalUpward(context.Background(), next.sessionID, next.generation,
+				session.LifecycleFailed, steer.OutcomeFailed, fmt.Sprintf("dispatch_failed: %v", err))
 		}
 	}()
-	return s.inner.SpawnSubTurn(ctx, cfg)
+}
+
+// classifyDrainDispatchError reports whether err is one of the three
+// legitimate "not dispatchable right now" outcomes I-6's reserveDispatch
+// produces (ErrDispatchCancelled/ErrTerminal/ErrStaleGeneration) — expected,
+// logged at Info — versus anything else, which drainSteerQueue must not let
+// silently strand the record (Finding 6).
+func classifyDrainDispatchError(err error) bool {
+	return errors.Is(err, steer.ErrDispatchCancelled) ||
+		errors.Is(err, steer.ErrTerminal) ||
+		errors.Is(err, steer.ErrStaleGeneration)
 }

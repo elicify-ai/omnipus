@@ -472,7 +472,7 @@ func (sg *setGoalToolExecute) validateScopeAndMode() (*ToolResult, bool) {
 	// with a corrected payload" when no payload could ever succeed here. ---
 	if depth := ToolDelegationDepth(sg.ctx); depth > 0 {
 		return ErrorResult("set_goal is owner-session-only: a delegated sub-turn cannot author or amend " +
-			"the parent session's goal record (ADR-088 FR-005) — report your findings back to the parent instead"), true
+			"this session's goal record (ADR-088 FR-005) — report your findings back to the parent instead"), true
 	}
 
 	var goalCondition string

@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 )
@@ -224,10 +225,18 @@ agentLoopRunTurnToolsExecuteLoop1:
 		// appendToolCallTranscript (which persists tcRecord, including
 		// this Error field) is not — it only requires a wired
 		// transcriptStore/transcriptSessionID (turn.go's
-		// appendToolCallTranscript). So on a NoHistory turn (e.g. a
-		// delegated sub-turn's ephemeral history — see subturn.go), this
-		// durable transcript write is the ONLY copy of the failure reason
-		// that survives the turn at all.
+		// appendToolCallTranscript). So on a NoHistory turn (pre-ADR-091,
+		// e.g. a delegated sub-turn's ephemeral history — see the deleted
+		// spawnSubTurn, subturn.go), this durable transcript write is the
+		// ONLY copy of the failure reason that survives the turn at all.
+		// ADR-091 fix lane RX-SUBTURN finding (comment-only; code
+		// unchanged): grep finds NoHistory:true set nowhere in production
+		// code today — every delegated/task child is now a durable
+		// session.SessionTypeDelegate/SessionTypeTask session with its own
+		// real transcript (steer_launcher.go), so "ephemeral history" may no
+		// longer be this architecture's concept for a delegate child; this
+		// paragraph's own NoHistory example is likely stale for that reason,
+		// separate from the symbol-citation fix. Not resolved here.
 
 		switch ex.finishCall(i) {
 		case agentLoopRunTurnToolsExecuteReturn:
@@ -1023,13 +1032,9 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 // prepareDispatch records dispatch metadata and prepares asynchronous result handling.
 func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
 	ts := ex.rx.rr.rq.ri.rf.rt.ts
-	// Temporary origin containment until the compiled per-turn publication
-	// policy replaces these distributed predicates. Automatic tool feedback is
-	// top-level only for root, non-task turns: delegated children inherit the
-	// parent route but must not publish standalone feedback there, while native
-	// task and verifier turns use internal webchat-labelled routes. depth and
-	// IsTaskRun are existing origin proxies, not new flags.
-	allowTopLevelToolFeedback := !ts.opts.SuppressToolFeedback && ts.depth == 0 && !ts.opts.IsTaskRun
+	feedbackReachesUser := ex.rx.rr.rq.ri.rf.rt.al.toolFeedbackReachesUser(
+		ex.rx.ctx, steer.BoundarySyncToolText, ts,
+	)
 
 	argsJSON, marshalErr := json.Marshal(ex.toolArgs)
 	if marshalErr != nil {
@@ -1043,23 +1048,22 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 			"tool":      ex.toolName,
 			"iteration": ex.rx.rr.rq.ri.rf.rt.iteration,
 		})
-	toolExecSID, toolExecProducingSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
+	toolExecSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
 	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 		EventKindToolExecStart,
 		ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.start"),
 		ToolExecStartPayload{
 			ToolCallID: session.ToolCallID(tc.ID),
 			ChatID:     ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-			// ADR-057 FR-011/FR-012/FR-013 (W4/W5d, U9): see
-			// u9ToolExecSessionIDs and
-			// ToolExecStartPayload.SessionID/.ProducingSessionID's doc
-			// comments (events.go, U23) for the full rationale.
-			SessionID:          toolExecSID,
-			Tool:               ex.toolName,
-			Arguments:          cloneEventArguments(ex.toolArgs),
-			ParentSpawnCallID:  session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
-			AgentID:            ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
-			ProducingSessionID: toolExecProducingSID,
+			// ADR-057 FR-011/FR-012 (W4/W5d, U9): see u9ToolExecSessionIDs
+			// and ToolExecStartPayload.SessionID's doc comments (events.go,
+			// U23) for the full rationale. The session ID is always the
+			// tool-producing session's own transcript identity.
+			SessionID:         toolExecSID,
+			Tool:              ex.toolName,
+			Arguments:         cloneEventArguments(ex.toolArgs),
+			ParentSpawnCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
+			AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
 		},
 	)
 
@@ -1069,7 +1073,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	// channels suppress feedback because the UI already renders tool calls
 	// inline or because the channel has no human recipient.
 	if ex.rx.rr.rq.ri.cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
-		allowTopLevelToolFeedback &&
+		feedbackReachesUser && !ts.opts.SuppressToolFeedback &&
 		isMessagingChannel(ts.channel) {
 		feedbackPreview := utils.Truncate(
 			string(argsJSON),
@@ -1094,7 +1098,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	asyncToolCallID := tc.ID
 	gate := &asyncToolCallbackGate{
 		handle: func(result *tools.ToolResult) {
-			ex.handleAsyncResult(result, asyncToolName, asyncToolCallID, toolIteration, allowTopLevelToolFeedback)
+			ex.handleAsyncResult(result, asyncToolName, asyncToolCallID, toolIteration)
 		},
 	}
 	ex.asyncCallbackGate = gate
@@ -1172,17 +1176,15 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 	toolName string,
 	toolCallID string,
 	toolIteration int,
-	allowTopLevelToolFeedback bool,
 ) {
 	ts := ex.rx.rr.rq.ri.rf.rt.ts
-	// Ordinary async feedback follows the captured top-level origin gate.
-	// System-woken roots are the one error-only exception: SendResponse
-	// distinguishes them from internal task/verifier turns, while depth and
-	// IsTaskRun keep delegated children and task work contained.
-	allowSuppressedErrorFeedback := result.IsError &&
-		ts.opts.SuppressToolFeedback && ts.opts.SendResponse &&
-		ts.depth == 0 && !ts.opts.IsTaskRun
-	if allowTopLevelToolFeedback || allowSuppressedErrorFeedback {
+	feedbackReachesUser := ex.rx.rr.rq.ri.rf.rt.al.toolFeedbackReachesUser(
+		ex.rx.ctx, steer.BoundaryAsyncToolFeedback, ts,
+	)
+	allowOrdinaryFeedback := feedbackReachesUser && !ts.opts.SuppressToolFeedback
+	allowSuppressedErrorFeedback := feedbackReachesUser && result.IsError &&
+		ts.opts.SuppressToolFeedback && ts.opts.SendResponse
+	if allowOrdinaryFeedback || allowSuppressedErrorFeedback {
 		// Send ForUser content directly to the user (immediate feedback),
 		// mirroring the synchronous tool execution path. This stays separate
 		// from AsyncNotifier, which owns the reactive continuation turn below.
@@ -1195,24 +1197,23 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 		if userContent != "" && result.IsError && ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback &&
 			ex.rx.rr.rq.ri.rf.rt.ts.channel == "webchat" {
 			persistAsyncToolErrorNotice(ex.rx.rr.rq.ri.rf.rt.ts, toolCallID, userContent)
-			callbackSID, callbackProducingSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
+			callbackSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
 			callbackNoticeID := fmt.Sprintf("%s:async-error:%d", toolCallID, time.Now().UnixNano())
 			ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 				EventKindToolExecEnd,
 				ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.async.error"),
 				ToolExecEndPayload{
-					ToolCallID:         session.ToolCallID(callbackNoticeID),
-					ChatID:             ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-					SessionID:          callbackSID,
-					Tool:               toolName,
-					ForLLMLen:          len(result.ContentForLLM()),
-					ForUserLen:         len(result.ForUser),
-					IsError:            true,
-					Async:              true,
-					Result:             userContent,
-					ParentSpawnCallID:  session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
-					AgentID:            ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(),
-					ProducingSessionID: callbackProducingSID,
+					ToolCallID:        session.ToolCallID(callbackNoticeID),
+					ChatID:            ex.rx.rr.rq.ri.rf.rt.ts.chatID,
+					SessionID:         callbackSID,
+					Tool:              toolName,
+					ForLLMLen:         len(result.ContentForLLM()),
+					ForUserLen:        len(result.ForUser),
+					IsError:           true,
+					Async:             true,
+					Result:            userContent,
+					ParentSpawnCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
+					AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(),
 				},
 			)
 		} else if userContent != "" {
@@ -1513,7 +1514,17 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 			SessionID:   ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID,
 			Parts:       parts,
 		}
-		if ex.rx.turnChannelManager != nil && ex.rx.rr.rq.ri.rf.rt.ts.channel != "" && !constants.IsInternalChannel(ex.rx.rr.rq.ri.rf.rt.ts.channel) {
+		// ADR-091 boundary 4 (FR-B-001): a steered
+		// session's media is persisted to its own transcript (untouched
+		// above) but never sent to a channel or published — this boundary
+		// was UNGATED before ADR-091 (sent whenever media was present).
+		// audienceFor also calls steer.BoundaryObserver.Observe before this
+		// decision is acted on (FR-B-014).
+		mediaAudience := ex.rx.rr.rq.ri.rf.rt.al.audienceFor(ex.rx.ctx, steer.BoundaryMedia, ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID)
+		if mediaAudience != steer.AudienceUser {
+			logger.DebugCF("agent", "Steered session: media contained (not sent to a channel)",
+				map[string]any{"tool": ex.toolName, "session_id": ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID})
+		} else if ex.rx.turnChannelManager != nil && ex.rx.rr.rq.ri.rf.rt.ts.channel != "" && !constants.IsInternalChannel(ex.rx.rr.rq.ri.rf.rt.ts.channel) {
 			if err := ex.rx.turnChannelManager.SendMedia(ex.rx.ctx, outboundMedia); err != nil {
 				logger.WarnCF("agent", "Failed to deliver tool media",
 					map[string]any{
@@ -1537,7 +1548,15 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 		ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback,
 		ex.toolResult,
 	)
-	if userContent != "" && ex.rx.rr.rq.ri.rf.rt.ts.opts.SendResponse {
+	// ADR-091 boundary 1 (FR-B-001): a steered session's
+	// audience is never the user, regardless of SendResponse. audienceFor
+	// also calls steer.BoundaryObserver.Observe before this decision is
+	// acted on (FR-B-014).
+	if userContent != "" &&
+		ex.rx.rr.rq.ri.rf.rt.ts.opts.SendResponse &&
+		ex.rx.rr.rq.ri.rf.rt.al.toolFeedbackReachesUser(
+			ex.rx.ctx, steer.BoundarySyncToolText, ex.rx.rr.rq.ri.rf.rt.ts,
+		) {
 		if pubErr := ex.rx.rr.rq.ri.rf.rt.al.bus.PublishOutbound(ex.rx.ctx, bus.OutboundMessage{
 			Channel: ex.rx.rr.rq.ri.rf.rt.ts.channel,
 			ChatID:  ex.rx.rr.rq.ri.rf.rt.ts.chatID,
@@ -1718,46 +1737,55 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		}
 		ex.rx.rr.rq.ri.rf.rt.inspectionImages[ex.toolCallID] = ex.toolResult.InspectionImages
 	}
-	endSID, endProducingSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
+	endSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
 	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 		EventKindToolExecEnd,
 		ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.end"),
 		ToolExecEndPayload{
 			ToolCallID: session.ToolCallID(ex.toolCallID),
 			ChatID:     ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-			// ADR-057 FR-011/FR-012/FR-013 (W4/W5d, U9): see the
-			// matching ToolExecStartPayload construction above —
-			// identical contract on the result frame.
-			SessionID:          endSID,
-			Tool:               ex.toolName,
-			Duration:           ex.toolDuration,
-			ForLLMLen:          len(ex.contentForLLM),
-			ForUserLen:         len(ex.toolResult.ForUser),
-			IsError:            ex.toolResult.IsError,
-			Async:              ex.toolResult.Async,
-			Result:             ex.contentForLLM,
-			ParentSpawnCallID:  session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
-			AgentID:            ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
-			ProducingSessionID: endProducingSID,
+			// ADR-057 FR-011/FR-012 (W4/W5d, U9): see the matching
+			// ToolExecStartPayload construction above — identical
+			// contract on the result frame.
+			SessionID:         endSID,
+			Tool:              ex.toolName,
+			Duration:          ex.toolDuration,
+			ForLLMLen:         len(ex.contentForLLM),
+			ForUserLen:        len(ex.toolResult.ForUser),
+			IsError:           ex.toolResult.IsError,
+			Async:             ex.toolResult.Async,
+			Result:            ex.contentForLLM,
+			ParentSpawnCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
+			AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
 		},
 	)
 	tcStatus := "success"
 	switch {
 	case ex.toolResult.ParksTurn:
-		// ADR-057 UAT defect C2 fix (2026-08-04): a SYNCHRONOUS
-		// delegate/spawn call whose child sub-turn parked awaiting
-		// the parent's answer (message_parent(kind="question",
-		// wait=true) — see pkg/agent/subturn.go's spawnSubTurn,
-		// the `if turnRes.status == TurnEndStatusParked` branch
-		// that sets ToolResult.ParksTurn, the single source of
-		// truth for this signal). Without this case, a parked
+		// ADR-057 UAT defect C2 fix (2026-08-04): pre-ADR-091, a
+		// SYNCHRONOUS delegate/spawn call (async=false, since deleted
+		// by ADR-091 D4 — every delegate call is now what that used to
+		// mean) whose child sub-turn parked awaiting the parent's
+		// answer (message_parent(kind="question", wait=true) — the
+		// deleted spawnSubTurn's `if turnRes.status ==
+		// TurnEndStatusParked` branch set ToolResult.ParksTurn, the
+		// single source of truth for this signal). ADR-091 fix lane
+		// RX-SUBTURN note: a delegate/spawn call cannot reach this
+		// specific scenario anymore since ADR-091 (delegate never waits
+		// inline for the child), but this `case` remains live and
+		// necessary for other ParksTurn producers today, notably
+		// ask_user_question (pkg/tools/CLAUDE.md: "NEVER returns the
+		// answer as a tool result... returns a ParksTurn stub").
+		// Without this case, a parked
 		// child's toolResult here has Interrupted==false and
 		// IsError==false (it is neither a failure nor a
 		// cancellation), so tcStatus fell through to the
 		// "success" initializer — persisting the OUTER delegate
 		// tool call's own tc.Status as "success" even though the
-		// live subagent_end WS frame (spawnSubTurn's endStatus
-		// switch, now SubTurnStatusParked) already correctly said
+		// live subagent_end WS frame (pre-ADR-091, the deleted
+		// spawnSubTurn's endStatus switch; today,
+		// steer_frames.go::deliverSubagentEnd, now SubTurnStatusParked)
+		// already correctly said
 		// "parked". That divergence meant a SESSION RELOAD
 		// (pkg/gateway/replay.go's resolveStatus(tc.Status), used
 		// to reconstruct the subagent_end frame from this exact
@@ -1773,11 +1801,17 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		// IsError cases.
 		tcStatus = "parked"
 	case ex.toolResult.Interrupted:
-		// Finding F (A-I4 round 5): a synchronous delegate/spawn call
-		// whose child sub-turn was interrupted by a parent-turn
-		// cancellation — see pkg/agent/subturn.go's spawnSubTurn
-		// cleanup defer, the single source of truth for this
-		// classification (ToolResult.Interrupted's doc comment).
+		// Finding F (A-I4 round 5): pre-ADR-091, a synchronous
+		// delegate/spawn call (since deleted, D4) whose child sub-turn
+		// was interrupted by a parent-turn cancellation — the deleted
+		// spawnSubTurn's cleanup defer was the single source of truth
+		// for this classification (ToolResult.Interrupted's doc
+		// comment). ADR-091 fix lane RX-SUBTURN finding (comment-only;
+		// code unchanged): unlike the ParksTurn case above (still fed
+		// by ask_user_question/message_parent), grep finds
+		// ToolResult.Interrupted set to true nowhere in production code
+		// today — this case appears unreachable now. Flagged for the
+		// team, not fixed here.
 		// Persisting "interrupted" here — rather than folding it into
 		// the generic "error" case below — is what lets a session
 		// reload's subagent_end frame (pkg/gateway/replay.go reads
@@ -1837,10 +1871,14 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		}
 		ex.tcRecord.Result = result
 	} else if r := buildSyncDelegateResult(ex.toolName, ex.contentForLLM, ex.toolResult.IsError, ex.toolResult.Async); r != nil {
-		// W4 (sync path): spawnSubTurn's async result-persistence defer
-		// (subturn.go) no-ops for SYNCHRONOUS delegation — it runs before
-		// this record exists and only retries when cfg.Async — so this
+		// W4 (sync path): pre-ADR-091, the deleted spawnSubTurn's async
+		// result-persistence defer (subturn.go) no-op'd for SYNCHRONOUS
+		// delegation (since deleted, D4) — it ran before
+		// this record exists and only retried when cfg.Async — so this
 		// write is the sync delegate tool_call's FINAL persisted state.
+		// See buildSyncDelegateResult's own doc comment (delegate_result.go)
+		// for the ADR-091 fix lane RX-SUBTURN finding that this branch's
+		// "sync-only" framing may no longer match current behavior.
 		// Populate Result with the same {"text":…}(+"error") shape the
 		// async defer produces, so a reloaded sync delegation shows what
 		// the delegate produced (matching the live WS stream and the

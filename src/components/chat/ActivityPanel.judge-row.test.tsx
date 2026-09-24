@@ -8,13 +8,24 @@
 // JudgeVerdictThreadCard.test.tsx and ChatScreen's own tests, is what hides
 // it from the thread by default).
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import { ActivityPanel } from './ActivityPanel'
 import type { JudgeActivityItem } from '@/hooks/useRunningActivity'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
+
+// ADR-091 D7: ActivityRow calls useNavigate unconditionally (for the open
+// control agent rows carry) — a judge row never renders it, but the
+// component still needs a router context to mount at all.
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return {
+    ...actual,
+    useNavigate: () => vi.fn(),
+  }
+})
 
 beforeEach(() => {
   act(() => {

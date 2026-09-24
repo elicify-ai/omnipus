@@ -9,7 +9,7 @@
 // These tests assert OUTCOMES on disk and through the public filter, not the
 // presence of a guard: that the key is always physically present in the
 // JSONL (no `omitempty`), and that the filter matches ParentAgentID and
-// NOTHING else — in particular not the parent↔child-SHARED ParentDurableKey.
+// NOTHING else — in particular not the parent↔child-SHARED SteeringSessionID.
 
 package session
 
@@ -58,9 +58,9 @@ func TestLifecycleRecord_ParentAgentIDRoundTrip(t *testing.T) {
 	t.Run("populated parent survives persist and reload", func(t *testing.T) {
 		s := newTestLifecycleStore(t)
 		if err := s.Persist(&LifecycleRecord{
-			SessionID: "sess-parented", State: LifecycleQueued,
+			SessionID: "sess-parented", Generation: 1, State: LifecycleQueued,
 			OwnerScopeKind: OwnerScopeHuman,
-			ParentAgentID:  "mia", ParentDurableKey: "transcript-1",
+			ParentAgentID:  "mia", SteeredBy: &SteeredBy{SteeringSessionID: "transcript-1", RootSessionID: "transcript-1"},
 			WorkspaceID: "ws-1", AgentID: "ray",
 		}); err != nil {
 			t.Fatalf("persist: %v", err)
@@ -75,8 +75,8 @@ func TestLifecycleRecord_ParentAgentIDRoundTrip(t *testing.T) {
 		}
 		// The parent linkage must be its OWN value, not a copy of any
 		// neighbouring field a future implementer might infer it from.
-		if got.ParentAgentID == got.ParentDurableKey {
-			t.Errorf("ParentAgentID (%q) must not equal ParentDurableKey (%q)", got.ParentAgentID, got.ParentDurableKey)
+		if got.ParentAgentID == got.SteeringSessionID() {
+			t.Errorf("ParentAgentID (%q) must not equal SteeringSessionID (%q)", got.ParentAgentID, got.SteeringSessionID())
 		}
 		if got.ParentAgentID == got.AgentID {
 			t.Errorf("ParentAgentID (%q) must not equal AgentID, which is the CHILD's id", got.ParentAgentID)
@@ -98,9 +98,9 @@ func TestLifecycleRecord_ParentAgentIDRoundTrip(t *testing.T) {
 		// at the delegate mint site (FR-015). What the store MUST do is make
 		// the emptiness visible on disk rather than eliding the key.
 		if err := s.Persist(&LifecycleRecord{
-			SessionID: "sess-orphan", State: LifecycleQueued,
+			SessionID: "sess-orphan", Generation: 1, State: LifecycleQueued,
 			OwnerScopeKind: OwnerScopeHuman,
-			ParentAgentID:  "", ParentDurableKey: "transcript-1",
+			ParentAgentID:  "", SteeredBy: &SteeredBy{SteeringSessionID: "transcript-1", RootSessionID: "transcript-1"},
 			WorkspaceID: "ws-1", AgentID: "ray",
 		}); err != nil {
 			t.Fatalf("persist: %v", err)
@@ -120,7 +120,7 @@ func TestLifecycleRecord_ParentAgentIDRoundTrip(t *testing.T) {
 }
 
 // seedParentTestRecords persists a deliberately adversarial fixture set: the
-// three sessions SHARE a ParentDurableKey (which is what a real parent and
+// three sessions SHARE a SteeringSessionID (which is what a real parent and
 // its children do — pkg/agent/subturn.go reuses the transcript session id),
 // and one of them is run BY the agent under test rather than started by it.
 func seedParentTestRecords(t *testing.T, s *LifecycleStore) {
@@ -129,26 +129,26 @@ func seedParentTestRecords(t *testing.T, s *LifecycleStore) {
 		// Started by mia. The only record a "subagents mia started" query
 		// may return.
 		{
-			SessionID: "mine", State: LifecycleRunning,
+			SessionID: "mine", Generation: 1, State: LifecycleRunning,
 			OwnerScopeKind: OwnerScopeHuman,
-			ParentAgentID:  "mia", ParentDurableKey: "shared-transcript",
+			ParentAgentID:  "mia", SteeredBy: &SteeredBy{SteeringSessionID: "shared-transcript", RootSessionID: "shared-transcript"},
 			WorkspaceID: "ws-1", AgentID: "ray",
 		},
-		// A SIBLING: started by jim, but sharing mia's ParentDurableKey and
+		// A SIBLING: started by jim, but sharing mia's SteeringSessionID and
 		// carrying the same empty OwnerScopeID a top-level delegation has.
 		// Inferring parentage from either field would wrongly return this.
 		{
-			SessionID: "sibling", State: LifecycleRunning,
+			SessionID: "sibling", Generation: 1, State: LifecycleRunning,
 			OwnerScopeKind: OwnerScopeHuman,
-			ParentAgentID:  "jim", ParentDurableKey: "shared-transcript",
+			ParentAgentID:  "jim", SteeredBy: &SteeredBy{SteeringSessionID: "shared-transcript", RootSessionID: "shared-transcript"},
 			WorkspaceID: "ws-1", AgentID: "ava",
 		},
 		// A session mia RUNS (she is the child/target) but did not start.
 		// Inferring parentage from AgentID would wrongly return this.
 		{
-			SessionID: "mia-is-the-child", State: LifecycleRunning,
+			SessionID: "mia-is-the-child", Generation: 1, State: LifecycleRunning,
 			OwnerScopeKind: OwnerScopeHuman,
-			ParentAgentID:  "jim", ParentDurableKey: "shared-transcript",
+			ParentAgentID:  "jim", SteeredBy: &SteeredBy{SteeringSessionID: "shared-transcript", RootSessionID: "shared-transcript"},
 			WorkspaceID: "ws-1", AgentID: "mia",
 		},
 	}
@@ -169,7 +169,7 @@ func listedSessionIDs(recs []LifecycleRecord) []string {
 
 // TestLifecycleFilter_ParentAgentIDMatches proves the filter answers "the
 // subagents I started" exactly — and that a parent is never inferred from a
-// shared field (ParentDurableKey) or a child-owned one (AgentID).
+// shared field (SteeringSessionID) or a child-owned one (AgentID).
 func TestLifecycleFilter_ParentAgentIDMatches(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	seedParentTestRecords(t, s)
@@ -181,7 +181,7 @@ func TestLifecycleFilter_ParentAgentIDMatches(t *testing.T) {
 	ids := listedSessionIDs(got)
 	if len(ids) != 1 || ids[0] != "mine" {
 		t.Fatalf("List(ParentAgentID=mia) = %v, want exactly [mine] — "+
-			"a sibling sharing ParentDurableKey or a session mia merely RUNS leaked in", ids)
+			"a sibling sharing SteeringSessionID or a session mia merely RUNS leaked in", ids)
 	}
 
 	// The reciprocal query must be equally exact.
@@ -222,9 +222,9 @@ func TestLifecycleFilter_UnsetParentAgentIDUnchangedBehaviour(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	seedParentTestRecords(t, s)
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: "no-parent", State: LifecycleRunning,
+		SessionID: "no-parent", Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman,
-		ParentAgentID:  "", ParentDurableKey: "shared-transcript",
+		ParentAgentID:  "", SteeredBy: &SteeredBy{SteeringSessionID: "shared-transcript", RootSessionID: "shared-transcript"},
 		WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("seed no-parent: %v", err)

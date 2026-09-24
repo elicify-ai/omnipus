@@ -85,7 +85,7 @@ func buildWorkspaceDelegationTestAPI(t *testing.T) (*restAPI, string) {
 			},
 		},
 	}
-	cfg.Agents.Defaults.SubTurn.MaxDepth = 3
+	cfg.Performance.MaxDelegationDepth = 3
 
 	// Real entity records (ADR-054) — see the doc comment above for why this
 	// replaces the old dead on-disk config.json splice. Nothing in this
@@ -479,7 +479,7 @@ func TestDelegationEdgeValidate_ModesMatchConfig(t *testing.T) {
 		mode config.DelegationMode
 		want workspace.DelegationMode
 	}{
-		{config.DelegationModeAwait, workspace.ModeDirect},
+		{config.DelegationMode("await"), workspace.ModeDirect},
 		{config.DelegationModeBackground, workspace.ModeDirect},
 		{config.DelegationModeTask, workspace.ModeTask},
 	}
@@ -515,7 +515,7 @@ func TestDelegationEdgeValidate_ModesMatchConfig(t *testing.T) {
 	// Negative control 2: the RETIRED literal 3-value strings, cast directly
 	// (not through agent.EdgeModeCategory), are no longer valid edge modes —
 	// the old 1:1 lock-step this test used to pin is gone.
-	for _, retired := range []config.DelegationMode{config.DelegationModeAwait, config.DelegationModeBackground} {
+	for _, retired := range []config.DelegationMode{config.DelegationMode("await"), config.DelegationModeBackground} {
 		raw := workspace.DelegationEdge{
 			FromAgent: "jim",
 			ToAgent:   "ava",
@@ -861,7 +861,7 @@ func TestDefaultWorkspaceDelegationEdges_SelfEdgesPinDepthAtCeilingOr3(t *testin
 			cfg := &config.Config{}
 			require.True(t, coreagent.SeedConfig(cfg), "SeedConfig on empty config must modify")
 			if tc.configured > 0 {
-				cfg.Agents.Defaults.SubTurn.MaxDepth = tc.configured
+				cfg.Performance.MaxDelegationDepth = tc.configured
 			}
 
 			edges := defaultWorkspaceDelegationEdges(cfg)

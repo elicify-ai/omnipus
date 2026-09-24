@@ -33,6 +33,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/state"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -395,8 +396,13 @@ type AgentLoop struct {
 	// per-SESSION (via CloseSession), not per-connection, so the grant
 	// survives reconnects while still expiring with the session it belongs
 	// to. Shared by the gateway's tool-approval REST path (IsAllowed/Record —
-	// see AgentLoop.CheckGrantOrRequestApproval) and the delegate tool's
-	// async/await paths (Inherit — pkg/agent/subturn.go).
+	// see AgentLoop.CheckGrantOrRequestApproval) and, pre-ADR-091, the
+	// deleted spawnSubTurn's async/await paths (InheritFrom,
+	// pkg/security/approvalgrants.go, U17a). ADR-091 fix lane RX-SUBTURN
+	// finding (comment-only; code unchanged): grep finds no production
+	// caller of ApprovalGrantStore.InheritFrom today — flagged for the team
+	// (a delegated child may no longer inherit the parent's tool-approval
+	// grants), not fixed here.
 	approvalGrants *security.ApprovalGrantStore
 
 	// asyncNotifier is the single process-wide AsyncNotifier instance
@@ -405,6 +411,21 @@ type AgentLoop struct {
 	// way approvalGrants is, per the spec's Clarifications. Always non-nil
 	// after NewAgentLoop.
 	asyncNotifier *asyncNotifierImpl
+
+	// audienceResolver, boundaryObserver, upwardDeliverer are ADR-091 I-5's
+	// injected pkg/steer dependencies (I-5, boundary
+	// inventory §6). Nil until SetSteerAudienceDeps is called (post-boot,
+	// once gateway_boot.go::wireSteerDeps has built the real
+	// implementations) — every boundary reads them through steer_boundary.go's
+	// audienceFor, which treats a nil resolver as AudienceUser (today's
+	// unrestricted behaviour) so a bare test AgentLoop that never wires
+	// steering is unaffected. Guarded by steerDepsMu (late-bound, mirroring
+	// askUserRegistry/askUserRegistryMu).
+	audienceResolver steer.AudienceResolver
+	boundaryObserver steer.BoundaryObserver
+	upwardDeliverer  steer.UpwardDeliverer
+	sessionLauncher  steer.SessionLauncher
+	steerDepsMu      sync.RWMutex
 
 	// sharedSessionStore is the single UnifiedStore at $OMNIPUS_HOME/sessions/
 	// used for all new sessions (joined session model). Legacy per-agent stores
@@ -459,23 +480,6 @@ type AgentLoop struct {
 	closing bool
 	recapWG sync.WaitGroup
 
-	// delegateTools are the per-agent DelegateTool instances this loop built,
-	// retained for ONE reason: Close() has to drain their background (async=true)
-	// delegation goroutines before the stores those goroutines write through are
-	// torn down.
-	//
-	// DelegateTool has always exposed WaitForAsyncTasks for exactly this, and its
-	// doc comment names both callers that need it — "tests rooted at t.TempDir()"
-	// and "a graceful-shutdown path that swaps stores". Neither ever called it:
-	// the tools were constructed as locals in registerAgentTools and dropped, so
-	// Close() had no handle to drain and its own promise that "nothing writes
-	// after Close() returns to race temp-dir cleanup" was false for background
-	// delegation specifically. The symptom is a cleanup-time failure in whichever
-	// test happens to lose the race ("TempDir RemoveAll cleanup: ... directory not
-	// empty"), attributed to that test rather than to the missing drain.
-	delegateToolsMu sync.Mutex
-	delegateTools   []*tools.DelegateTool
-
 	// stopCancel is the CancelFunc created by Run to support Stop(). When
 	// Stop() is called it cancels this func so the Run select wakes
 	// immediately without waiting for the next message or ticker. Stored
@@ -505,18 +509,6 @@ type AgentLoop struct {
 	// Resource-aware admission (CPU load, RSS, goroutine count) is out of
 	// scope for v0.1 and filed as a follow-up.
 	admission *AdmissionController
-
-	// rootDelegationAdmission is the ADR-057 W17 (FR-069/FR-070/FR-095)
-	// process-wide gate for ROOT-level `delegate` fan-out — see admission.go's
-	// "ADR-057 W17" block for the full rationale. Constructed exactly once in
-	// NewAgentLoop from agents.defaults.subturn.max_concurrent (unclamped) and
-	// shared by every per-agent DelegateTool's wrapped spawner
-	// (rootDelegationAdmittingSpawner, registerSharedTools' delegate-tool
-	// block) so the cap is enforced once for the whole running process, not
-	// per agent. Always non-nil after successful construction — NewAgentLoop
-	// fails closed (returns an error) rather than proceeding with a nil gate,
-	// per ErrRootDelegationCapMisconfigured's doc comment.
-	rootDelegationAdmission *RootDelegationAdmission
 
 	// channelSessionIdx maps "channel/chatID" → shared session ID for fast per-peer
 	// session resumption. Built on startup and updated on every new channel session.
@@ -593,6 +585,10 @@ type processOptions struct {
 	SkipInitialSteeringPoll bool                  // If true, skip the steering poll at loop start (used by Continue)
 	TranscriptSessionID     string                // Session ID for transcript tool call recording (empty = disabled)
 	TranscriptStore         *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
+	// OriginKind identifies the durable execution origin when this turn does
+	// not have a lifecycle record to supply it. The zero value is an ordinary
+	// interactive turn. Publication policy resolves the record first.
+	OriginKind session.OriginKind
 
 	// WorkspaceID is the Spec-1 Workspace identifier for this turn.
 	// When set, the memory store uses the shared workspace room
@@ -652,9 +648,19 @@ type processOptions struct {
 	// UserID/gatewayPrincipal already establishes) to decide whether /goal
 	// and /loop action or pass through inert as ordinary text. Every
 	// processOptions literal NOT built from userInitiated(msg) — ProcessScheduled,
-	// processTaskDirect, processTaskDirectExternalCLI, processSystemMessage,
-	// spawnSubTurn — leaves this at its zero value (false), which is the
-	// correct fail-closed answer for every one of those non-user origins.
+	// processTaskDirect, processTaskDirectExternalCLI, processSystemMessage —
+	// leaves this at its zero value (false), which is the correct fail-closed
+	// answer for every one of those non-user origins. Pre-ADR-091, the
+	// deleted spawnSubTurn did too, for a delegated child. ADR-091 fix lane
+	// RX-SUBTURN finding (comment-only; code unchanged): today's replacement
+	// entry point, steer_reconstruct.go::reconstructSteeredTurn, instead sets
+	// `UserInitiated: wake == nil` — TRUE for a steered session's first turn
+	// (delegate child, task child, etc.), by its own doc comment's
+	// deliberate design ("mark it as user-originated for the session-owned
+	// goal loop"). Whether that is an intentional broadening of this field's
+	// fail-closed contract for a launched child, or an unreviewed departure
+	// from the invariant this comment states, needs a team check — flagged,
+	// not resolved here.
 	UserInitiated bool
 }
 
@@ -704,8 +710,9 @@ var ErrReloadNotConfigured = errors.New("reload not configured")
 // is always workspace-scoped: agents are metadata until added to a workspace's
 // team, and a turn for an unassigned agent MUST be refused rather than
 // silently falling through to the agent's own private home directory. This
-// applies uniformly to top-level and delegated (spawnSubTurn) turns alike,
-// since both resolve ts.agent.ID the same way in the re-root block below.
+// applies uniformly to top-level and delegated (steer_launcher.go's
+// SteerLauncher; pre-ADR-091, the deleted spawnSubTurn) turns alike, since
+// both resolve ts.agent.ID the same way in the re-root block below.
 var ErrAgentNotWorkspaceMember = errors.New("agent is not a member of any workspace; turn refused")
 
 // ErrWorkspaceWorkDirUnavailable is returned when the agent belongs to a
@@ -1223,13 +1230,6 @@ func (al *AgentLoop) Close() {
 		al.taskExecutor.Drain(30 * time.Second)
 	}
 
-	// Drain background (async=true) delegations for the same reason and with the
-	// same bounded-drain shape as the two above. A background delegate call is
-	// fire-and-forget for its CALLER by design, so its goroutine outlives the
-	// Execute that started it and keeps writing lifecycle/session state through
-	// the stores torn down below.
-	al.waitDelegateAsyncDrain(30 * time.Second)
-
 	// Cancel all active session workers and wait for them to drain (5 s budget).
 	// stopSessionWorkers is idempotent — safe to call here even if Run() has
 	// already called it on context-cancellation, because workers cancel their
@@ -1425,38 +1425,6 @@ func (al *AgentLoop) waitRecapDrain(budget time.Duration) {
 	}
 }
 
-// waitDelegateAsyncDrain blocks until every agent's in-flight background
-// delegation goroutine has finished, or the budget expires.
-//
-// Bounded for the same reason waitRecapDrain is: a wedged sub-turn (a mock
-// provider that never returns, a real LLM hanging past its own timeout) must
-// never freeze teardown. Exceeding the budget is logged and teardown proceeds —
-// a delegation that did not finish writing is strictly better than a process
-// that will not exit.
-func (al *AgentLoop) waitDelegateAsyncDrain(budget time.Duration) {
-	al.delegateToolsMu.Lock()
-	pending := append([]*tools.DelegateTool(nil), al.delegateTools...)
-	al.delegateToolsMu.Unlock()
-	if len(pending) == 0 {
-		return
-	}
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for _, dt := range pending {
-			dt.WaitForAsyncTasks()
-		}
-	}()
-	select {
-	case <-done:
-		// Every background delegation finished writing.
-	case <-time.After(budget):
-		logger.WarnCF("agent", "Close: background-delegation drain budget exceeded; proceeding with teardown",
-			map[string]any{"budget": budget.String(), "tools": len(pending)})
-	}
-}
-
 // closeAgentMemoryStores walks the registry and closes every agent's MemoryStore
 // so the per-room bleve/scorch background goroutines (introducerLoop, mergerLoop)
 // exit. AgentInstance.Close() only tears down the session store; the MemoryStore
@@ -1525,36 +1493,20 @@ func (al *AgentLoop) writeTurnCancelledRestartForActiveTurns() {
 	})
 }
 
-// u9ToolExecSessionIDs computes the two identity fields ADR-057's W4 stamping
+// u9ToolExecSessionIDs computes the identity field ADR-057's W4 stamping
 // contract requires on the wire for a session-scoped frame, for the two Go
-// event payloads events.go (U23) gave a ProducingSessionID field —
-// ToolExecStartPayload and ToolExecEndPayload, the only two of the 19
-// SESSION_SCOPED_FRAME_TYPES classified as needing it at the Go-payload
-// level today (class (a) per the W5 audit, FR-089/BDD-16: a child turn
-// genuinely emits tool_call_start/tool_call_result, so the wire frame
-// carries both ids). Factored into one function, called from both
-// construction sites below, so this file has exactly one place that answers
-// "what goes on the wire" rather than two independently-maintained copies of
-// the same two-field contract.
+// event payloads ToolExecStartPayload and ToolExecEndPayload.
 //
-//   - sessionID (FR-011/FR-012): the ROUTING identity — the id inherited
-//     verbatim from the root of the delegation subtree — never this turn's
-//     own transcriptSessionID, which for a delegated child differs from the
-//     root's.
-//   - producingSessionID (FR-013): the zero value when ts IS the routing
-//     session (producing == routing — the common non-delegated case, and
-//     every root turn), so the WS forwarder (pkg/gateway/websocket.go, U11)
-//     can implement the "present iff it differs from session_id" rule with a
-//     plain non-empty-and-unequal check before stamping the wire's optional
-//     producing_session_id. Otherwise this turn's own real, store-backed
-//     session id — see ToolExecStartPayload.ProducingSessionID's doc comment
-//     (events.go) for the full rationale.
-func u9ToolExecSessionIDs(ts *turnState) (sessionID string, producingSessionID session.SessionID) {
-	sessionID = string(ts.routingSessionID)
-	if ts.transcriptSessionID == sessionID {
-		return sessionID, ""
+// SessionID is the producer's own transcript identity. routingSessionID is
+// retained only for cascade cancellation and is never a frame destination.
+func u9ToolExecSessionIDs(ts *turnState) (sessionID string) {
+	if ts == nil {
+		return ""
 	}
-	return sessionID, session.SessionID(ts.transcriptSessionID)
+	if ts.transcriptSessionID != "" {
+		return ts.transcriptSessionID
+	}
+	return ts.sessionKey
 }
 
 func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDecision) error {
@@ -2115,7 +2067,15 @@ func (al *AgentLoop) runAgentLoop(
 		}
 	}
 
-	if opts.SendResponse && result.finalContent != "" {
+	// ADR-091 boundary 3 (FR-B-001): a steered session's
+	// final reply is never the user's audience, regardless of
+	// SendResponse — this is the re-entered-delegate leak D11 contained by
+	// hand (`processSystemMessage`'s SendResponse deny) before this ADR;
+	// the permanent form is asking the audience here. audienceFor also
+	// calls steer.BoundaryObserver.Observe before this decision is acted on
+	// (FR-B-014).
+	finalReplyAudience := al.audienceFor(ctx, steer.BoundaryFinalReply, opts.TranscriptSessionID)
+	if opts.SendResponse && result.finalContent != "" && finalReplyAudience == steer.AudienceUser {
 		// ADR-082 D6/FR-011: carry the transcript session id so
 		// webchatChannel.Send (pkg/gateway/webchat_channel.go) can resolve
 		// delivery targets by session id first, chat id second — the fix for
@@ -2359,13 +2319,8 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				// inherited verbatim from the root of the delegation subtree
 				// — not this turn's own store-backed transcriptSessionID,
 				// which for a delegated child differs from the root's. No
-				// ProducingSessionID sibling exists on this payload today
-				// (events.go/U23 added that field only to
-				// ToolExecStart/EndPayload) even though the W5 audit already
-				// classifies "done" as carrying both ids on the wire schema
-				// (contracts/asyncapi.yaml) — closing that gap is events.go's
-				// (U23) and the WS forwarder's (U11) cross-unit follow-up,
-				// not something addable from this file.
+				// The frame is keyed by this producing turn's routing identity;
+				// the payload carries no second session identity.
 				SessionID: string(rz.rc.rx.rr.rq.ri.rf.rt.ts.routingSessionID),
 				IsRoot:    rz.rc.rx.rr.rq.ri.rf.rt.ts.parentTurnID == "",
 			},
@@ -2466,7 +2421,8 @@ const hardInterruptAbortReason = "turn canceled by hard interrupt request"
 //   - one transcript entry with the typed code (replay).
 //
 // A delegated child timeout is the exception: typedTurnExit records the
-// child-local transcript entry but leaves live publication to spawnSubTurn.
+// child-local transcript entry but leaves live publication to the session
+// completion path.
 // The coordinator waits until it has either disarmed the delegation timer or
 // observed its completed callback before choosing either the generic
 // child-timeout frame or the identified delegated-task-limit frame. That
@@ -2534,25 +2490,17 @@ func (al *AgentLoop) emitTurnErrorFrame(
 	ts.appendClassifiedError(EventKindError.String(), transcriptStage, llm)
 }
 
-// emitDelegatedTaskLimitNotice keeps publication ownership coherent by
-// deriving both destinations from sourceTS: live delivery uses the child's
-// inherited routing identity, and replay persistence walks that same child's
-// canonical parent chain to the root conversation transcript.
-func (al *AgentLoop) emitDelegatedTaskLimitNotice(
-	sourceTS *turnState, meta EventMeta, notice delegatedTaskLimitNotice,
-) {
-	llm := notice.llmError()
-	al.emitErrorEvent(sourceTS, meta, string(notice.stage), llm)
-	rootTurnState(sourceTS).appendDelegatedTaskLimitNotice(notice)
-}
-
 func (al *AgentLoop) emitErrorEvent(ts *turnState, meta EventMeta, stage string, llm LLMError) {
+	sessionID := u9ToolExecSessionIDs(ts)
+	if al.audienceFor(context.Background(), steer.BoundaryTypedErrorFrame, sessionID) == steer.AudienceNone {
+		return
+	}
 	al.emitEvent(EventKindError, meta, ErrorPayload{
 		Stage:     stage,
 		ChatID:    ts.opts.ChatID,
 		Code:      string(llm.Code),
 		Message:   llm.Message,
-		SessionID: string(ts.routingSessionID),
+		SessionID: sessionID,
 	})
 }
 

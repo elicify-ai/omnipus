@@ -11,6 +11,20 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 )
 
+func writeSkillWithName(t *testing.T, workspace, slug, displayName string) {
+	t.Helper()
+	dir := filepath.Join(workspace, "skills", slug)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: " + slug +
+		"\ndescription: A test skill with a sufficiently long description to validate.\n" +
+		"metadata:\n  display_name: " + displayName + "\n---\n\n# " + displayName + "\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // --- moved from subturn.go tests 2026-09-15 ---
 
 // TestResolveRequestedSkillForChild_DirectOutcomes (ADR-072 Finding D) is a
@@ -25,8 +39,8 @@ import (
 // (cb.skillsLoader.ListSkills()) and reuses it for both the resolution
 // attempt (via the extracted cb.resolveSkillNameWithList helper) and the
 // fallback membership check — verified here by inspection of the single
-// remaining call site in resolveRequestedSkillForChild's body (subturn.go),
-// since SkillsLoader has no seam to inject a call-counting double without
+// remaining call site in resolveRequestedSkillForChild's body
+// (subturn_identity.go), since SkillsLoader has no seam to inject a call-counting double without
 // changing production code for the sake of a test. This test instead proves
 // the fix did not change behaviour: every outcome the pre-fix double-scan
 // implementation produced is still produced identically.

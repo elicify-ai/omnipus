@@ -273,8 +273,8 @@ func TestSetTodos_StampsProvenanceOnNewCard(t *testing.T) {
 
 	ctx := WithWorkspaceID(WithAgentID(context.Background(), "mia"), "ws-1")
 	res := tool.Execute(ctx, map[string]any{
-		"goal":  "ship the thing",
-		"todos": []any{map[string]any{"text": "step one", "status": "pending"}},
+		"outcome": "ship the thing",
+		"todos":   []any{map[string]any{"text": "step one", "status": "pending"}},
 	})
 	if res.IsError {
 		t.Fatalf("set_todos failed: %s", res.ForLLM)

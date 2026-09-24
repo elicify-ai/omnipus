@@ -9,7 +9,6 @@ import (
 	"log/slog"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -55,13 +54,13 @@ func (dt *delegateToolExecuteRespond) validateAndLoad() (*ToolResult, bool) {
 	// actually RESUME it, not merely unpark the lifecycle record and hope a
 	// live consumer is still around to read the steering queue (it never is
 	// — see the redispatch comment on the native path below). That resume
-	// goes through the same spawner-backed isResume machinery follow_up
-	// uses, so a missing spawner must be rejected up front, before touching
+	// goes through the same SessionLauncher Dispatch machinery follow_up
+	// uses, so a missing launcher must be rejected up front, before touching
 	// anything, exactly like executeFollowUp's own posture (checked before
 	// any argument parsing) — never as a failure discovered mid-flow after
 	// some other state has already changed.
-	if dt.t.spawner == nil {
-		return ErrorResult("delegate: respond: no sub-turn spawner configured to resume the session"), true
+	if dt.t.launcher == nil {
+		return ErrorResult("delegate: respond: no session launcher configured to resume the session"), true
 	}
 	var err error
 	dt.sessionID, err = requiredStringArg(dt.args, "session_id")
@@ -134,7 +133,7 @@ func (dt *delegateToolExecuteRespond) verifyQuestionAuthority() (*ToolResult, bo
 	if dt.t.inbox == nil {
 		return ErrorResult("delegate: respond: no message inbox configured to verify question authority"), true
 	}
-	msgs, _, _, derr := dt.t.inbox.Drain(dt.rec.ParentDurableKey, dt.sessionID, "", 0)
+	msgs, _, _, derr := dt.t.inbox.Drain(dt.rec.SteeringSessionID(), dt.sessionID, "", 0)
 	if derr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: respond: %v", derr)).WithError(derr), true
 	}
@@ -239,28 +238,6 @@ func (dt *delegateToolExecuteRespond) dispatchThirdParty() (*ToolResult, bool) {
 
 // resumeNative delivers the answer and resumes a native parked session.
 func (dt *delegateToolExecuteRespond) resumeNative() *ToolResult {
-	// Native: the parked child's turn has already ENDED (TurnEndStatusParked)
-	// — the steering queue below has no live consumer, and even a freshly
-	// redispatched turn's OWN first iteration does not drain it
-	// (SkipInitialSteeringPoll, set unconditionally for every subturn spawn —
-	// see pkg/agent/subturn.go). EnqueueSteeringMessage is kept for any rare
-	// case where the turn is somehow still alive to read it, but the actual,
-	// guaranteed delivery mechanism is the redispatch below, which reuses the
-	// SAME isResume spawn machinery `delegate follow_up` uses
-	// (spawnCorrectiveFollowUp's native branch): the answer text becomes the
-	// resumed turn's own first message (processOptions.UserMessage), loaded
-	// against the child's existing, on-disk history.
-	//
-	// Enqueue is attempted FIRST, before any lifecycle mutation — an enqueue
-	// failure returns immediately with the record still untouched (still
-	// parked, retryable).
-	if dt.t.steering == nil {
-		return ErrorResult("delegate: respond: no steering sink configured to deliver the answer")
-	}
-	if serr := dt.t.steering.EnqueueSteeringMessage(dt.sessionID, dt.rec.AgentID, providers.Message{Role: "user", Content: dt.text}); serr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: respond: failed to deliver answer: %v", serr)).WithError(serr)
-	}
-
 	// Atomic claim: re-verify state + correlation UNDER the lock
 	// (Correctness-MAJOR-3) so a concurrent respond/cancel on this same
 	// session cannot double-apply. This MUST run BEFORE the redispatch below,
@@ -290,22 +267,37 @@ func (dt *delegateToolExecuteRespond) resumeNative() *ToolResult {
 		return ErrorResult(fmt.Sprintf("delegate: respond: failed to resume session: %v", merr)).WithError(merr)
 	}
 
-	label := ""
-	dt.t.mu.Lock()
-	if taskID, ok := dt.t.sessionIndex[dt.sessionID]; ok {
-		if st, ok := dt.t.tasks[taskID]; ok {
-			label = st.Label
-		}
+	// [ADR-091 fix lane RX-OUTCOME] REFUSE to resume when the answer did not
+	// land. appendFollowUpInstruction's error was discarded here while the
+	// sibling call site (delegate_followup.go::executeFollowUp) already acts
+	// on it — the identical defect, with the identical consequence:
+	// steer_reconstruct.go::reconstructSteeredTurn rebuilds the resumed turn
+	// from the last `user` transcript entry, so a dropped answer means the
+	// child confidently re-runs the instruction it was working on BEFORE it
+	// asked its question, and reports THAT answer upward as if it were the
+	// reply to the parent's response. Silent, and indistinguishable from a
+	// real answer downstream.
+	//
+	// The record is landed `failed` rather than left `running` for the same
+	// reason the sibling does it: the Mutate above has already flipped this
+	// session out of needs_input and cleared NeedsInput, so the correlation
+	// id respond() re-checks is gone and the call can never be retried;
+	// leaving it `running` with no live turn would strand it AND block its
+	// parent's own completion for ever (steer_completion.go::
+	// hasRunningOrQueuedDescendant).
+	instruction := fmt.Sprintf("Answer to your question (correlation_id=%s): %s", dt.correlationID, dt.text)
+	if err := dt.t.appendFollowUpInstruction(dt.sessionID, instruction); err != nil {
+		dt.t.transitionLifecycle(dt.sessionID, session.LifecycleFailed, err.Error())
+		slog.Error("delegate: respond: answer did not land; resume refused",
+			"session_id", dt.sessionID,
+			"correlation_id", dt.correlationID,
+			"generation", dt.rec.Generation,
+			"agent_id", dt.rec.AgentID,
+			"error", err)
+		return ErrorResult(fmt.Sprintf("delegate: respond: %v", err)).WithError(err)
 	}
-	dt.t.mu.Unlock()
-
-	dispatch := dt.t.executeAsync(dt.ctx,
-		fmt.Sprintf("Answer to your question (correlation_id=%s): %s", dt.correlationID, dt.text),
-		// requested_skill is action="run" only (ADR-072 D9) — a resume never
-		// carries one.
-		label, dt.rec.AgentID, nil, dt.sessionID, 0, nil, "", true, dt.cb)
-	if dispatch.IsError {
-		return dispatch
+	if _, err := dt.t.launcher.Dispatch(dt.ctx, dt.sessionID, dt.rec.Generation); err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: respond: dispatch: %v", err)).WithError(err)
 	}
 
 	resp := generated.DelegateRespondResponse{Acknowledged: true}

@@ -360,23 +360,22 @@ func (al *AgentLoop) recordEmptiedOnTranscript(ts *turnState, emptied []emptiedT
 }
 
 // emitProjectionEvents emits one EventKindToolResultProjection per emptied
-// result, with the ADR-057 routing / producing session ids the tool_call
-// frames use (u9ToolExecSessionIDs).
+// result, with the producing session identity used by the tool-call frames
+// (u9ToolExecSessionIDs).
 func (al *AgentLoop) emitProjectionEvents(ts *turnState, emptied []emptiedToolResult) {
-	sid, producingSID := u9ToolExecSessionIDs(ts)
+	sid := u9ToolExecSessionIDs(ts)
 	for _, e := range emptied {
 		al.emitEvent(
 			EventKindToolResultProjection,
 			ts.eventMeta("emptyInPlace", "turn.context.projection"),
 			ToolResultProjectionPayload{
-				ChatID:             ts.chatID,
-				SessionID:          sid,
-				ProducingSessionID: producingSID,
-				ToolCallID:         session.ToolCallID(e.ToolCallID),
-				ArchiveLine:        e.ArchiveLine,
-				ContentState:       string(memory.ProjectionEmptied),
-				Mark:               e.Mark,
-				AgentID:            ts.resolveActiveAgentID(),
+				ChatID:       ts.chatID,
+				SessionID:    sid,
+				ToolCallID:   session.ToolCallID(e.ToolCallID),
+				ArchiveLine:  e.ArchiveLine,
+				ContentState: string(memory.ProjectionEmptied),
+				Mark:         e.Mark,
+				AgentID:      ts.resolveActiveAgentID(),
 			},
 		)
 	}

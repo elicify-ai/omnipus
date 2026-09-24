@@ -735,9 +735,9 @@ func (a *AgentInstance) StoreProviderPool(pool map[string]providers.LLMProvider)
 // FIX 1 (7-reviewer gate, data race): processTaskDirectExternalCLI used to
 // pass the live *AgentInstance straight into runExternalCLISubTurn, which
 // reads agent.Model unlocked (transcript attribution + RunOptions.Model) —
-// a read/write race with SwitchModel. This mirrors spawnSubTurn's existing
-// execSource-snapshot pattern (subturn.go ~603-662, which the native
-// delegation path already relies on for the identical reason): take a SINGLE
+// a read/write race with SwitchModel. This mirrors the same execSource-
+// snapshot pattern the pre-ADR-091 native delegation path (subturn.go,
+// since deleted) relied on for the identical reason: take a SINGLE
 // RLock and copy the whole mutex-protected quad together (never a per-field
 // read spread across separate lock acquisitions, which could observe a torn
 // combination), then build a brand-new AgentInstance value via struct
@@ -748,8 +748,10 @@ func (a *AgentInstance) StoreProviderPool(pool map[string]providers.LLMProvider)
 //
 // providerPool and toolPolicy are copied via their own atomic accessors
 // (Load then Store into the new instance) so the pool snapshot stays paired
-// with the Candidates it was built for, exactly as spawnSubTurn's comment
-// there explains.
+// with the Candidates it was built for — pre-ADR-091, the deleted
+// spawnSubTurn's own comment explained the pairing rationale; today this
+// method's two callers are steer_reconstruct.go's reconstructSteeredTurn
+// and task_executor_run.go.
 func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	a.mu.RLock()
 	model := a.Model

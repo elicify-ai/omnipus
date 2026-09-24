@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,19 +23,9 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/google/uuid"
 )
-
-// MessageParentInboxStore is the subset of *session.MessageInboxStore
-// message_parent needs. Defined as an interface (mirroring
-// DelegateSessionStore/DelegateAgentRegistry in delegate.go) so tests can
-// inject a fake without touching disk.
-type MessageParentInboxStore interface {
-	// Append persists msg into ownerKey's durable inbox. A non-nil error is
-	// always one of pkg/session's sentinel Err* values — never-silent-drop
-	// (FR-125): the caller MUST surface it as a tool error to the child.
-	Append(ownerKey string, msg generated.SessionMessage) (*session.AppendResult, error)
-}
 
 // MessageParentLifecycleStore is the subset of *session.LifecycleStore
 // message_parent needs: reading the CALLING child's own durable record (to
@@ -59,7 +50,7 @@ type MessageParentLifecycleStore interface {
 	// fix6FaultyLifecycleStore) inherits it for free.
 	//
 	// ADR-057 D8/R-13: delegate.go's executeCancel uses this to walk the
-	// durable ParentDurableKey edge from the cancel target down to its own
+	// durable SteeringSessionID edge from the cancel target down to its own
 	// descendants (collectCancelDescendantSessionIDs, delegate.go) so the
 	// background-shell-kill cascade reaches a grandchild's own background
 	// bash/exec work, not just the directly-named session's. Before this,
@@ -71,25 +62,21 @@ type MessageParentLifecycleStore interface {
 }
 
 // MessageParentWakeEvent carries the fields needed to compose a bounded
-// typed wake (ADR-053 S3) without this package depending on pkg/agent's
-// AsyncNotifyEvent (avoids a tools<->agent import cycle — pkg/agent already
-// imports pkg/tools, so the dependency can only run this direction).
+// typed wake (ADR-053 S3). Still used as the wake-transport payload shape by
+// pkg/agent/async_notifier.go's WakeParent/WakeParentAlways — this package no
+// longer builds one directly (steer.UpwardDeliverer.Deliver does, from the
+// steering session's own record); kept here (rather than moved to
+// pkg/agent) so async_notifier.go does not need to depend on pkg/agent's own
+// types for a value pkg/tools already defined, avoiding a tools<->agent
+// import cycle the other way.
 type MessageParentWakeEvent struct {
 	Channel             string
 	ChatID              string
 	AgentID             string
 	TranscriptSessionID string
 	Content             string
-}
-
-// MessageParentWaker abstracts the bounded typed wake
-// (question/blocker/error/handback only, debounced >=15s, rate-capped
-// <=4/h) that pkg/agent's AsyncNotifier implements (async_notifier.go's
-// WakeParent). A wake failure/suppression is never fatal to the tool call —
-// the message is already durably in the inbox by the time WakeParent is
-// consulted.
-type MessageParentWaker interface {
-	WakeParent(ctx context.Context, kind string, event MessageParentWakeEvent) error
+	MessageID           string
+	Generation          int
 }
 
 // ContentEgressFilter redacts/filters untrusted child-authored text before
@@ -100,23 +87,44 @@ type MessageParentWaker interface {
 // the pre-ADR-053 behavior for any caller that does not wire one.
 type ContentEgressFilter func(text string) string
 
-// messageParentWakeableKinds is the closed set of kinds that attempt a
-// bounded typed wake after a successful Append.
+// outcomeForKind maps a message_parent kind (plus, for handback, its
+// ResultSoFar) onto the I-5 Outcome steer.UpwardDeliverer.Deliver needs
+// (ADR-091 I-5, "the event IS an existing SessionMessage ...
+// every Outcome maps onto a kind the inbox already stores"). message_parent
+// deliberately never emits kind=error itself (see this file's package doc
+// comment), so OutcomeFailed/OutcomeTimedOut/OutcomeInterrupted never
+// originate here — those are turn-outcome events, not tool calls.
 //
-// Comments-MAJOR-2: this set is INTENTIONALLY A SUBSET of
-// async_notifier.go's wakeableSessionMessageKinds, NOT a mirror of it. The
-// notifier's set is {question, blocker, error, handback}; this list omits
-// `error` because message_parent deliberately does not EMIT kind=error
-// (error is an engine/parent-only SessionMessage kind — see this file's
-// package doc comment — so a child can never append one and thus can never
-// wake on it). The two were never equal; the prior comment's "mirrors"
-// claim was false. Kept as a local copy so this package does not need to
-// import pkg/agent, and so a caller wiring a DIFFERENT MessageParentWaker
-// still gets the same kind-gating at the call site.
-var messageParentWakeableKinds = map[string]bool{
-	"blocker":  true,
-	"question": true,
-	"handback": true,
+// artifact has no dedicated Outcome constant — it is neither terminal nor
+// wake-eligible, exactly like checkpoint, so it reuses OutcomeCheckpoint.
+// handback mode=pause is likewise not one of I-5's five terminal outcomes
+// (the session keeps running); it reuses OutcomeBlocker, the closest
+// existing "wake-eligible, not terminal" shape.
+func outcomeForKind(kind string, sm generated.SessionMessage) steer.Outcome {
+	switch kind {
+	case "progress":
+		return steer.OutcomeProgress
+	case "checkpoint", "artifact":
+		return steer.OutcomeCheckpoint
+	case "blocker":
+		return steer.OutcomeBlocker
+	case "question":
+		return steer.OutcomeParkedQuestion
+	case "handback":
+		v, err := sm.AsSessionMessageHandback()
+		if err != nil {
+			return steer.OutcomeCheckpoint
+		}
+		if v.Mode != generated.SessionMessageHandbackModeFinal {
+			return steer.OutcomeBlocker
+		}
+		if strings.TrimSpace(v.ResultSoFar) == "" {
+			return steer.OutcomeEmptyAnswer
+		}
+		return steer.OutcomeFinalAnswer
+	default:
+		return steer.OutcomeCheckpoint
+	}
 }
 
 // MessageParentTool implements the `message_parent` child tool (ADR-053
@@ -124,9 +132,8 @@ var messageParentWakeableKinds = map[string]bool{
 type MessageParentTool struct {
 	BaseTool
 
-	inbox     MessageParentInboxStore
 	lifecycle MessageParentLifecycleStore
-	waker     MessageParentWaker
+	deliverer steer.UpwardDeliverer
 	egress    ContentEgressFilter
 
 	// sessionMessagingEnabled, when set via SetSessionMessagingEnabled, is the
@@ -147,23 +154,26 @@ type MessageParentTool struct {
 	now           func() time.Time
 }
 
-// NewMessageParentTool constructs a MessageParentTool. inbox and lifecycle
-// are required for the tool to function (Execute returns a clear error when
-// either is nil, matching DelegateTool's own "no spawner configured"
-// fail-closed convention); waker and egress are optional (a nil waker skips
-// the wake attempt silently — the message is still durably stored; a nil
-// egress filter is a pass-through).
-func NewMessageParentTool(inbox MessageParentInboxStore, lifecycle MessageParentLifecycleStore) *MessageParentTool {
+// NewMessageParentTool constructs a MessageParentTool. deliverer and
+// lifecycle are required for the tool to function (Execute returns a clear
+// error when either is nil, matching DelegateTool's own "no spawner
+// configured" fail-closed convention); egress is optional (a nil egress
+// filter is a pass-through).
+//
+// ADR-091 I-5: deliverer replaces the former separate inbox+waker pair —
+// steer.UpwardDeliverer.Deliver is now the ONLY upward path (Append, the
+// deterministic terminal id, and the wake-eligibility-aware wake all live
+// there; see steer_audience.go::SteerUpwardDeliverer, owned by this same
+// lane). "it replaces that interface" — pkg/steer's own published doc
+// comment for steer.UpwardDeliverer.
+func NewMessageParentTool(deliverer steer.UpwardDeliverer, lifecycle MessageParentLifecycleStore) *MessageParentTool {
 	return &MessageParentTool{
-		inbox:         inbox,
+		deliverer:     deliverer,
 		lifecycle:     lifecycle,
 		needsInputTTL: session.DefaultNeedsInputTTL,
 		now:           time.Now,
 	}
 }
-
-// SetWaker installs the bounded typed-wake implementation.
-func (t *MessageParentTool) SetWaker(w MessageParentWaker) { t.waker = w }
 
 // SetContentEgressFilter installs the content-egress policy filter (N-10).
 func (t *MessageParentTool) SetContentEgressFilter(f ContentEgressFilter) { t.egress = f }
@@ -340,15 +350,17 @@ func (t *MessageParentTool) Parameters() map[string]any {
 }
 
 // ownerKeyFor resolves the DURABLE chat/plan id (D16) this child's parent
-// inbox is keyed to, from the child's own lifecycle record. ParentDurableKey
-// (not OwnerScopeID) is authoritative here — OwnerScopeID follows the wire
-// contract's convention of being empty when OwnerScopeKind==human, which
-// would break inbox routing for a human-owned top-level parent.
+// inbox is keyed to, from the child's own lifecycle record. OwnerScopeID
+// follows the wire contract's convention of being empty when
+// OwnerScopeKind==human, which would break inbox routing for a human-owned
+// top-level parent — neither of the two sources below has that problem.
+//
+// ADR-091 D2: SteeredBy is the sole authoritative parent edge.
 func ownerKeyFor(rec *session.LifecycleRecord) string {
 	if rec == nil {
 		return ""
 	}
-	return strings.TrimSpace(rec.ParentDurableKey)
+	return strings.TrimSpace(rec.SteeringSessionID())
 }
 
 func stringArg(args map[string]any, key string) (string, bool) {
@@ -396,7 +408,7 @@ type messageParentToolExecute struct {
 	sm              generated.SessionMessage
 	correlationID   string
 	waitParks       bool
-	appendResult    *session.AppendResult
+	delivery        steer.Delivery
 }
 
 func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -415,7 +427,14 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 		return r0
 	}
 
-	mt.appendResult, mt.err = mt.t.inbox.Append(mt.ownerKey, mt.sm)
+	// ADR-091 I-5: the ONLY upward path — Append, the deterministic terminal
+	// id and the wake-eligibility-aware wake all live inside Deliver
+	// (steer_audience.go::SteerUpwardDeliverer, owned by this same lane).
+	mt.delivery, mt.err = mt.t.deliverer.Deliver(mt.ctx, steer.UpwardEvent{
+		ChildSessionID: mt.childSessionID,
+		Outcome:        outcomeForKind(mt.kind, mt.sm),
+		Message:        mt.sm,
+	})
 	return mt.finishDelivery()
 }
 
@@ -428,8 +447,8 @@ func (mt *messageParentToolExecute) validateContext() (*ToolResult, bool) {
 	if !mt.t.sessionMessagingPlaneEnabled() {
 		return ErrorResult("message_parent: the session-messaging plane is disabled (session_messaging.enabled = false)"), true
 	}
-	if mt.t.inbox == nil || mt.t.lifecycle == nil {
-		return ErrorResult("message_parent: tool not fully configured (missing inbox/lifecycle store)"), true
+	if mt.t.deliverer == nil || mt.t.lifecycle == nil {
+		return ErrorResult("message_parent: tool not fully configured (missing deliverer/lifecycle store)"), true
 	}
 
 	mt.kind, _ = mt.args["kind"].(string)
@@ -441,7 +460,7 @@ func (mt *messageParentToolExecute) validateContext() (*ToolResult, bool) {
 	// The durable LifecycleRecord is persisted keyed by the child's OWN
 	// ADR-053 durable session_id (ToolDelegateSessionID — see
 	// WithDelegateSessionID / ToolDelegateSessionID in pkg/tools/delegate.go,
-	// the canonical helpers seeded by pkg/agent/subturn.go's spawnSubTurn),
+	// the canonical helpers for the child's own durable identity),
 	// which is distinct from the shared parent/child transcript session id
 	// (ToolTranscriptSessionID, deliberately inherited by the child per
 	// pkg/agent/subturn.go's FR-6a cascade-cancel matching). Looking this up
@@ -452,10 +471,10 @@ func (mt *messageParentToolExecute) validateContext() (*ToolResult, bool) {
 	if mt.childSessionID == "" {
 		// A native task run's root turn carries tools.WithRunningTaskID on ctx
 		// (task_executor.go, set before processTaskDirect) but is never a
-		// delegated child — only pkg/agent/subturn.go's spawnSubTurn calls
-		// WithDelegateSessionID, and it never runs for a task dispatch. This
+		// delegated child — a delegated child's own turn carries the delegate
+		// session id; a task dispatch never runs under one. This
 		// is a structural, not transient, gap: a task-dispatch session's
-		// durable lifecycle record deliberately leaves ParentDurableKey empty
+		// durable lifecycle record deliberately leaves SteeringSessionID empty
 		// (task_executor.go's mintTaskLifecycleRecord doc comment — "a task
 		// dispatch is not a delegate.run call, so there is no delegating
 		// parent to attribute"), so there is no parent inbox this call could
@@ -733,29 +752,36 @@ func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
 		}
 	}
 
-	if mt.t.waker != nil && messageParentWakeableKinds[mt.kind] && !mt.appendResult.Deduped {
-		wakeContent := summarizeForWake(mt.kind, mt.sm)
-		if werr := mt.t.waker.WakeParent(mt.ctx, mt.kind, MessageParentWakeEvent{
-			Channel:             mt.rec.OriginChannel,
-			ChatID:              mt.rec.OriginChatID,
-			AgentID:             mt.rec.AgentID,
-			TranscriptSessionID: mt.childSessionID,
-			Content:             wakeContent,
-		}); werr != nil {
-			// Best-effort: the message is already durably stored; a wake
-			// failure/suppression must never fail the tool call itself.
-			logMessageParentWakeFailure(mt.kind, werr)
-		}
-	}
+	// The wake itself (eligibility, identity, debounce bypass) already
+	// happened inside Deliver, called from Execute above.
+	//
+	// [ADR-091 fix lane RX-OUTCOME, HIGH] mt.delivery.Outcome is no longer
+	// merely "available for callers that want it (none today)" — this is a
+	// caller that wants it. A stored_not_woken outcome on a WAKE-ELIGIBLE
+	// kind (blocker, question, a final handback) means the entry is durable
+	// but the parent was not woken, so nothing will read it until boot
+	// recovery; for a question with wait=true the child has just parked
+	// itself on an answer that will never arrive. Wake-eligibility is read
+	// from the encoded message via the SAME authority Deliver used
+	// (session.ClassifySessionMessage), so progress/checkpoint/non-fatal
+	// error — for which stored_not_woken IS the contract (FR-B-010) — stay
+	// silent instead of flooding the log with non-events.
+	//
+	// It is logged, never turned into a tool error: the entry IS durable, so
+	// telling the child "message_parent failed" would be a false negative
+	// that invites it to send the same message again. Mirrors
+	// pkg/agent/steer_cancel.go::deliverTerminalReport and
+	// pkg/agent/steer_completion.go::reportUndeliveredWake.
+	mt.reportUndeliveredWake()
 
-	resp := generated.MessageParentResponse{Accepted: true, MessageId: &mt.appendResult.MessageID}
+	resp := generated.MessageParentResponse{Accepted: true, MessageId: &mt.delivery.MessageID}
 	if mt.correlationID != "" {
 		resp.CorrelationId = &mt.correlationID
 	}
 	payload, merr := json.Marshal(resp)
 	var result *ToolResult
 	if merr != nil {
-		result = NewToolResult(fmt.Sprintf("message_parent: accepted (message_id=%s)", mt.appendResult.MessageID))
+		result = NewToolResult(fmt.Sprintf("message_parent: accepted (message_id=%s)", mt.delivery.MessageID))
 	} else {
 		result = NewToolResult(string(payload))
 	}
@@ -770,6 +796,35 @@ func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
 		result.ParksTurn = true
 	}
 	return result
+}
+
+// reportUndeliveredWake logs, at ERROR, a delivery whose inbox entry was
+// stored but whose recipient was NOT woken, for a message kind that was
+// supposed to wake it. See finishDelivery's call site for the full rationale
+// (and for why this only ever logs). Silent for every other outcome and for
+// the kinds whose contract IS stored-not-woken.
+func (mt *messageParentToolExecute) reportUndeliveredWake() {
+	if mt.delivery.Outcome != steer.DeliveryStoredNotWoken {
+		return
+	}
+	if class, err := session.ClassifySessionMessage(mt.sm); err == nil && !class.WakeEligible {
+		return
+	}
+	parentSessionID := "(unknown)"
+	if mt.parentSessionID != nil && *mt.parentSessionID != "" {
+		parentSessionID = *mt.parentSessionID
+	}
+	generation := 0
+	if mt.rec != nil {
+		generation = mt.rec.Generation
+	}
+	slog.Error("message_parent: entry stored but the parent was NOT woken — it learns nothing until boot recovery re-nudges it",
+		"session_id", mt.childSessionID,
+		"parent_session_id", parentSessionID,
+		"message_id", mt.delivery.MessageID,
+		"generation", generation,
+		"kind", mt.kind,
+		"delivery_outcome", string(mt.delivery.Outcome))
 }
 
 // parkNeedsInput transitions the calling child's own durable record to
@@ -804,26 +859,24 @@ func (t *MessageParentTool) parkNeedsInput(childSessionID string, correlationID 
 	})
 }
 
-// summarizeForWake renders a short, human-readable summary of sm for the
-// bounded typed wake's AsyncNotifyEvent.Content.
-func summarizeForWake(kind string, sm generated.SessionMessage) string {
-	switch kind {
-	case "question":
-		if v, err := sm.AsSessionMessageQuestion(); err == nil {
-			return fmt.Sprintf("A delegated session is asking: %s", v.Text)
-		}
-	case "blocker":
-		if v, err := sm.AsSessionMessageBlocker(); err == nil {
-			return fmt.Sprintf("A delegated session reported a %s-severity blocker: %s", v.Severity, v.Text)
-		}
-	case "handback":
-		if v, err := sm.AsSessionMessageHandback(); err == nil {
-			return fmt.Sprintf("A delegated session handed back (%s): %s", v.Mode, v.ResultSoFar)
-		}
-	}
-	return "A delegated session sent a message."
-}
-
+// toIntArg is the ONE integer-argument parser for this package's tool
+// front doors: message_parent's `pct`, delegate_status's `max`, and
+// delegate_goal's `check.expected_exit_code`.
+//
+// It REJECTS a fractional float rather than truncating it. Every call site
+// reports the same contract to the model on failure ("must be an integer",
+// "must be an integer 0-100", "must be an integer from 0 to 255"), so
+// silently turning pct=50.7 into 50, or expected_exit_code=1.5 into 1, told
+// the model its value was accepted as written when it was not. A whole-valued
+// float (50.0, the shape a JSON decoder produces for `50`) still converts.
+//
+// int64 is accepted alongside int because a Go-side caller and the stdjson
+// build tag can both produce one where encoding/json would produce float64.
+//
+// This replaces delegate_goal.go's `integerArgument`, which had the strict
+// float rule but no int64 case, and the previous truncating form of this
+// function. Deleted, not deprecated: there is one parser, and it is this one.
+// Guarded by message_parent_test.go::TestToIntArg_RejectsFractionalFloat.
 func toIntArg(v any) (int, error) {
 	switch n := v.(type) {
 	case int:
@@ -831,38 +884,12 @@ func toIntArg(v any) (int, error) {
 	case int64:
 		return int(n), nil
 	case float64:
-		return int(n), nil
+		integer := int(n)
+		if float64(integer) != n {
+			return 0, fmt.Errorf("not an integer")
+		}
+		return integer, nil
 	default:
 		return 0, fmt.Errorf("not a number")
 	}
-}
-
-// logMessageParentWakeFailure is the default logger-injection hook for
-// surfacing wake failures (B.6). It defaults to a no-op so a fresh
-// MessageParentTool without an injected logger still runs; the gateway
-// calls SetMessageParentWakeFailureLogger at boot to install the real slog
-// handler so a missing-wake path is visible on the production runtime.
-//
-// The var indirection remains (renamed, now wrapped by SetMessageParentWakeFailureLogger)
-// so tests can assert a wake failure never propagates to the tool result
-// without needing a real logger — they can override the package-level
-// variable for the duration of the test.
-var logMessageParentWakeFailure = func(kind string, err error) {
-	// Intentionally best-effort by default; see the WakeParent call site's
-	// comment. Production callers should install a real slog handler via
-	// SetMessageParentWakeFailureLogger at boot so a wake failure is
-	// surfaced as a slog.Warn rather than silently swallowed.
-	_ = kind
-	_ = err
-}
-
-// SetMessageParentWakeFailureLogger installs the slog-backed wake-failure
-// logger used on the production runtime path (B.6). It wraps the existing
-// package-level var indirection so test-time overrides via direct assignment
-// still work; install a no-op explicitly to silence the wake log in tests.
-func SetMessageParentWakeFailureLogger(logger func(string, error)) {
-	if logger == nil {
-		return
-	}
-	logMessageParentWakeFailure = logger
 }

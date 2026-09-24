@@ -15,12 +15,9 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
-)
-
-const (
-	maxTaskDepth = 10
 )
 
 // ErrDispatchCapReached is returned by StartTaskNow when the global dispatch
@@ -70,6 +67,7 @@ type taskSlot struct {
 type TaskExecutor struct {
 	agentLoop *AgentLoop
 	store     *task.Store
+	launcher  steer.SessionLauncher
 	mu        sync.Mutex
 	running   map[string]*taskSlot
 	// dispatchSema is the ONLY concurrency gate on task dispatch. It bounds
@@ -86,9 +84,6 @@ type TaskExecutor struct {
 	// changing nothing. Do not reintroduce a per-agent bound without making
 	// it resolve from the same central, operator-configurable authority.
 	dispatchSema *DispatchSemaphore
-
-	// parentFollowUp is a test seam ONLY — production leaves it nil.
-	parentFollowUp func(parentID string)
 
 	// liveTaskActivity (founder decision 2026-09-14) is the REST surface's
 	// read seam for a running task's live last-activity stamp: the AgentLoop
@@ -216,6 +211,14 @@ type TaskExecutor struct {
 	// wg.Wait. Held for two atomic ops and never across I/O or a lock of
 	// te.mu, so it cannot participate in a lock cycle.
 	dispatchGate sync.RWMutex
+}
+
+// SetSessionLauncher installs ADR-091's single session launch/dispatch
+// primitive. StartTaskNow is its task-front consumer.
+func (te *TaskExecutor) SetSessionLauncher(launcher steer.SessionLauncher) {
+	if te != nil {
+		te.launcher = launcher
+	}
 }
 
 // newTaskExecutor creates a TaskExecutor over the unified task store.
@@ -371,9 +374,9 @@ func (te *TaskExecutor) getLifecycleStore() *session.LifecycleStore {
 // mintPlanSession, out of this wave's write-set/scope). A standalone task
 // has no single owning session, so it takes the same OwnerScopeHuman
 // default pkg/tools/delegate.go's own top-level (non-parented) mint uses.
-// ParentAgentID/ParentDurableKey are deliberately left empty: a task
+// ParentAgentID/SteeringSessionID are deliberately left empty: a task
 // dispatch is not a `delegate.run` call, so there is no delegating parent to
-// attribute — and leaving ParentDurableKey empty also means
+// attribute — and leaving SteeringSessionID empty also means
 // verifyCallerOwnsSession (pkg/tools/delegate.go) fails closed if some
 // caller ever names a task's session_id in a delegate.* admin action
 // (cancel/steer/respond/follow_up/peek/inbox), preserving today's behavior
@@ -398,8 +401,15 @@ func (te *TaskExecutor) mintTaskLifecycleRecord(sessionID string, t *task.Task) 
 		ownerID = t.PlanID
 	}
 	rec := &session.LifecycleRecord{
-		SessionID:      sessionID,
-		Generation:     0,
+		SessionID: sessionID,
+		// Generation starts at 1 (LifecycleRecord.Generation's own doc
+		// comment, and what every other minter writes —
+		// steer_launcher.go's launchDirect and launchSteered both use 1).
+		// This was 0, which persistLocked rejects, so EVERY task dispatch
+		// silently failed to write its durable record: the Persist error is
+		// logged and deliberately not propagated, so the task ran on with no
+		// lifecycle record ever being born.
+		Generation:     1,
 		State:          session.LifecycleQueued,
 		OwnerScopeKind: ownerKind,
 		OwnerScopeID:   ownerID,
@@ -1053,6 +1063,9 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	if gateErr := te.requirePlanExecuting(t); gateErr != nil {
 		return "", gateErr
 	}
+	if te.launcher != nil {
+		return te.startTaskNowViaLauncher(ctx, t)
+	}
 
 	// Idempotency guard: if a session already exists, don't create another one.
 	if t.SessionID != "" {
@@ -1194,6 +1207,102 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	te.wg.Add(1)
 	go te.runTaskFromInProgress(taskCtx, t, taskSessionID, cancel, release)
 	return taskSessionID, nil
+}
+
+// startTaskNowViaLauncher is FR-A-010's single task front: Launch+Dispatch
+// for a task without a session and Dispatch alone for an existing session.
+func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Task) (string, error) {
+	if t.SessionID != "" {
+		generation := 1
+		if lifecycle := te.getLifecycleStore(); lifecycle != nil {
+			if rec, err := lifecycle.Load(t.SessionID); err == nil {
+				generation = rec.Generation
+			}
+		}
+		if _, err := te.launcher.Dispatch(ctx, t.SessionID, generation); err != nil {
+			return "", fmt.Errorf("task_executor: StartTaskNow: dispatch existing session: %w", err)
+		}
+		return t.SessionID, nil
+	}
+
+	steeringSessionID := ""
+	if t.OriginSessionID != "" {
+		if sessions := te.agentLoop.GetSessionStore(); sessions != nil {
+			if _, err := sessions.GetMeta(t.OriginSessionID); err == nil {
+				steeringSessionID = t.OriginSessionID
+			}
+		}
+	}
+	req := steer.LaunchRequest{
+		SteeringSessionID: steeringSessionID,
+		TargetAgentID:     t.AgentID,
+		Label:             t.Title,
+		Task:              te.buildPrompt(t),
+		Origin: steer.Origin{
+			Kind:   steer.OriginKindTask,
+			CallID: t.OriginCallID,
+			TaskID: t.ID,
+		},
+		PlanID: t.PlanID,
+	}
+	if steeringSessionID == "" {
+		req.WorkspaceID = t.WorkspaceID
+		req.Owner = t.Owner
+	}
+	launched, err := te.launcher.Launch(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("task_executor: StartTaskNow: launch: %w", err)
+	}
+	updated, err := te.store.Update(t.ID, task.Patch{SessionID: &launched.SessionID})
+	if err != nil {
+		return "", fmt.Errorf("task_executor: StartTaskNow: persist session id: %w", err)
+	}
+	_ = te.activateTaskGoal(updated, launched.SessionID)
+	if _, err := te.launcher.Dispatch(ctx, launched.SessionID, launched.Generation); err != nil {
+		return "", fmt.Errorf("task_executor: StartTaskNow: dispatch: %w", err)
+	}
+	return launched.SessionID, nil
+}
+
+// dispatchLaunchedTask enters the existing task orchestration after the
+// shared steer admission gate has accepted a task-origin session.
+func (te *TaskExecutor) dispatchLaunchedTask(rec *session.LifecycleRecord, release func()) error {
+	if rec == nil || rec.Origin == nil || rec.Origin.TaskID == "" {
+		return fmt.Errorf("task_executor: dispatched task session has no task origin")
+	}
+	t, err := te.store.Get(rec.Origin.TaskID)
+	if err != nil {
+		return fmt.Errorf("task_executor: load launched task %q: %w", rec.Origin.TaskID, err)
+	}
+	if !te.enterDispatch() {
+		return ErrExecutorDraining
+	}
+
+	te.mu.Lock()
+	if _, exists := te.running[t.ID]; exists {
+		te.mu.Unlock()
+		te.wg.Done()
+		return fmt.Errorf("task_executor: task %q already running", t.ID)
+	}
+	taskCtx, cancel := context.WithCancel(context.Background())
+	te.running[t.ID] = &taskSlot{cancel: cancel}
+	te.mu.Unlock()
+
+	if t.SessionID != rec.SessionID {
+		updated, updateErr := te.store.Update(t.ID, task.Patch{SessionID: &rec.SessionID})
+		if updateErr != nil {
+			cancel()
+			te.mu.Lock()
+			delete(te.running, t.ID)
+			te.mu.Unlock()
+			te.wg.Done()
+			return fmt.Errorf("task_executor: bind launched session: %w", updateErr)
+		}
+		t = updated
+	}
+	te.emitStatusChanged(t, task.StatusInProgress)
+	go te.runTaskFromInProgress(taskCtx, t, rec.SessionID, cancel, release)
+	return nil
 }
 
 // SpawnTriggeredRun dispatches a fresh run of a task that a time trigger just
@@ -1763,8 +1872,10 @@ func (al *AgentLoop) processTaskDirect(
 	// Fix C: a task assigned to a subagent_3p (external-CLI) worker must
 	// dispatch through the SAME external-CLI machinery the agent-to-agent
 	// delegation path uses (runner.ResolveDispatch / runExternalCLISubTurn —
-	// see subturn.go's identical gate ahead of spawnSubTurn's native/external
-	// branch) rather than unconditionally falling into runAgentLoop below.
+	// see task_executor_run.go's dispatchesExternalCLI for the identical
+	// gate; pre-ADR-091 this lived in subturn.go's now-deleted spawnSubTurn
+	// native/external branch) rather than unconditionally falling into
+	// runAgentLoop below.
 	// Running a subagent_3p's task on the native engine would silently
 	// mis-execute it with full system-level Omnipus tool access instead of the
 	// configured external CLI — exactly the gap the assignment-time guards in
@@ -1788,6 +1899,7 @@ func (al *AgentLoop) processTaskDirect(
 		SendResponse:           false,
 		TranscriptSessionID:    taskChatID,
 		TranscriptStore:        al.GetAgentStore(agentID),
+		OriginKind:             session.OriginKindTask,
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,
 		RunningTaskID:          tools.ToolRunningTaskID(taskCtx),

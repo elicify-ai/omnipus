@@ -1,12 +1,13 @@
 // types.ts: Chat, attachment, subagent-span, rate-limit, and per-session state contracts
 
 import type { Message, ToolCall, AgentKind } from '@/lib/api'
-import type { WsReceiveFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
+import type { WsReceiveFrame } from '@/lib/ws'
 import type {
   GoalStatusFrame,
   LoopStatusFrame,
   AskUserQuestionCard,
   AskUserAnswerFrame,
+  SubagentStateFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
 
@@ -18,50 +19,78 @@ export interface MediaAttachment {
   caption?: string
 }
 
-// SpanStep is one step in a subagent span.
-// The discriminant `kind` allows renderers to switch between tool calls
-// and interleaved text fragments without a runtime type-check on all fields.
-// Text steps are reserved for future subagent-text streaming; no emit site
-// writes them yet, but the type admits them so a future sprint can add
-// subagent-text streaming without a type change.
-export type SpanStep =
-  | { kind: 'tool'; tool: ToolCall & { call_id: string } }
-  | { kind: 'text'; text: string; ts: number }
-
 // FR-H-008/FR-H-009: a subagent span brackets one sub-turn.
 // Discriminated union: 'running' vs terminal so TypeScript enforces that
 // durationMs / finalResult / reason are only accessible on terminal spans.
+//
+// ADR-091 D7/D10: a child's own tool calls are never nested into this span
+// any more — every frame a child session produces now carries the CHILD's
+// own `session_id` (I-4), so it lands in the child's own bucket, not the
+// parent's. The step-buffering mechanism that used to attach them here
+// (`pendingByParentCallId`, `SpanStep`, `spanByParentCallId`) is deleted;
+// the child's steps are visible only in the child's own session, opened via
+// `childSessionId`.
 interface SubagentSpanBase {
   spanId: string
   parentCallId: string
   taskLabel: string
-  steps: SpanStep[]
   /**
    * Id of the agent running this sub-turn (the delegate), when the frame
-   * carried one — used to resolve name/icon/type for display. Note: for
-   * native (non-external-CLI) delegation to a named target agent, this
-   * currently reflects the PARENT's id due to a backend limitation in
-   * pkg/agent/subturn.go — see the agent-resolution fallback in
-   * useRunningActivity.ts which works around this using the originating
-   * delegate call's own agent_id param.
+   * carried one — used to resolve name/icon/type for display. Note:
+   * pre-ADR-091, for native (non-external-CLI) delegation to a named target
+   * agent, this reflected the PARENT's id due to a backend limitation in
+   * the deleted pkg/agent/subturn.go — see the agent-resolution fallback in
+   * useRunningActivity.ts (and that function's own ADR-091 fix lane
+   * RX-SUBTURN note) which worked around this using the originating
+   * delegate call's own agent_id param. Today's backend
+   * (pkg/agent/steer_frames.go) sets this from the real target agent for
+   * every delegation kind — the fallback's continued necessity is flagged
+   * there, not re-verified here.
    */
   agentId?: string
   /**
-   * ADR-057 FR-013/W5c: the real, store-backed child session this span's
-   * sub-turn ran as (`producing_session_id` off the subagent_start /
-   * subagent_end frame — present iff it differs from the routing
-   * `session_id`, which self-delegation and same-session edge cases can
-   * make equal). Absent on a pre-ADR-057 gateway that hasn't been upgraded
-   * yet (the field is optional on the wire), in which case this span has
-   * only its inline steps and no navigable child session. Populated so a
-   * renderer CAN link out to the drill-down surface
-   * (`/sessions/{childSessionId}`, FR-046) for the child's own full
-   * transcript — deliberately NOT derived from the mid-span child
-   * progress/lifecycle WS frame pair (ADR-053 FE-5), which have zero Go
-   * emitters (ADR-057 Explicit Non-Behaviors — see that section for the
-   * frame type names).
+   * ADR-091 D7/I-4: the real, store-backed child session this span's
+   * sub-turn ran as (`SubagentStartFrame.child_session_id`, carried onto a
+   * terminal span from `SubagentEndFrame.child_session_id` too — present
+   * iff the gateway sent one). Absent on a transcript written before this
+   * delivery (history-only), in which case the row renders without the open
+   * control. Populated so the side panel's open control can navigate to the
+   * child's own full session (`/sessions/{childSessionId}`, FR-046).
    */
   childSessionId?: string
+  /**
+   * ADR-091 D7/FR-E-004: the last `subagent_message.text` reduced onto this
+   * span (progress/checkpoint/blocker/question/error/handback carry text;
+   * `steer`/`respond` have none and are rendered as the literal string
+   * 'steered' instead — see the ambiguity note on `reduceSubagentMessage` in
+   * frames.ts). Truncated to 120 characters with an ellipsis (accepted
+   * default, WP-E spec ambiguity table). Undefined until the child's first
+   * `subagent_message` arrives.
+   */
+  statusLine?: string
+  /**
+   * ADR-091 D7/FR-E-004: the last `subagent_state.state` reduced onto this
+   * span — the eight-value lifecycle domain (`queued`, `running`,
+   * `needs_input`, `paused`, `completed`, `failed`, `cancelled`,
+   * `timed_out`), distinct from this span's own running/terminal `status`
+   * (which is driven by `subagent_start`/`subagent_end`, the PARENT's own
+   * lifecycle events about the child — D7). The side panel row reads this
+   * to show "queued" while the span itself is still `status: 'running'`
+   * (a queued launch emits `subagent_start` immediately, before the child
+   * actually starts executing — I-4).
+   */
+  lifecycleState?: SubagentStateFrame['state']
+  /**
+   * ADR-091 D7 table's own status-line example, "last update N s ago":
+   * the ISO timestamp (`created_at`) of the last `subagent_message` OR
+   * `subagent_state` frame reduced onto this span (also seeded at
+   * `subagent_start`/`subagent_end`). Used by the side panel as the status
+   * line's fallback text — ticking relative time — while no
+   * `subagent_message.text` has arrived yet (accepted default for an
+   * ambiguity the WP-E spec did not fully resolve; see this delivery's
+   * final report).
+   */
+  lastUpdateAt?: string
 }
 
 export interface SubagentSpanRunning extends SubagentSpanBase {
@@ -83,12 +112,6 @@ export interface SubagentSpanTerminal extends SubagentSpanBase {
 }
 
 export type SubagentSpan = SubagentSpanRunning | SubagentSpanTerminal
-
-// A buffered frame waiting for its subagent_start to arrive (FR-H-009)
-export interface BufferedFrame {
-  frame: WsReceiveFrame & { type: 'tool_call_start' | 'tool_call_result' }
-  arrivedAt: number
-}
 
 // #3: ChatMessage is the SPA-internal display type. It intersects Message (the
 // discriminated union) with extra display-only fields so each role variant
@@ -330,20 +353,20 @@ export interface SessionChatState {
    */
   lastReceivedEventTime: string | null
   /**
-   * O(1) index from parent_call_id → { messageId, spanIdx } for the currently-running subagent span.
-   * Written by subagent_start, cleared by subagent_end.
-   */
-  spanByParentCallId: Record<string, { messageId: string; spanIdx: number }>
-  /**
-   * O(1) index from span_id → { messageId, spanIdx }, mirroring
-   * spanByParentCallId above but keyed by the span's OWN id rather than its
-   * parent tool-call id. Added to address chat UI freeze under heavy
+   * O(1) index from span_id → { messageId, spanIdx } for the currently-running
+   * subagent span. Added to address chat UI freeze under heavy
    * subagent/delegation activity: the subagent_end handler used to locate
-   * its target span with a backward linear scan over
-   * `messageOrder × spans`, which re-ran on every subagent_end frame for
-   * the whole duration of a long turn. Written by subagent_start alongside
-   * spanByParentCallId; deleted the moment subagent_end consumes it (once a
-   * span is terminal it is never looked up by span_id again).
+   * its target span with a backward linear scan over `messageOrder × spans`,
+   * which re-ran on every subagent_end frame for the whole duration of a
+   * long turn. Written by subagent_start; consulted by subagent_message and
+   * subagent_state (ADR-091 D7/FR-E-004, reducing the frame onto the span
+   * record) while the span is still running; deleted the moment
+   * subagent_end consumes it (once a span is terminal it is never looked up
+   * by span_id again). ADR-091 D10 deleted its sibling index,
+   * `spanByParentCallId` — the O(1) lookup by the ORIGINATING tool-call id
+   * that fed the now-deleted child-step-nesting mechanism
+   * (`pendingByParentCallId`); this index survives because subagent_end/
+   * _message/_state all key off `span_id`, never `parent_call_id`.
    *
    * Optional for the same fixture-compat reason as `toolCallOwnerMessageId`
    * below: several existing test fixtures construct a SessionChatState-
@@ -353,6 +376,26 @@ export interface SessionChatState {
    * or populates it.
    */
   spanBySpanId?: Record<string, { messageId: string; spanIdx: number }>
+  /**
+   * ADR-091 D7/I-4 (cross-family review finding 19): bounded per-session map
+   * from span_id → the fields a `subagent_message`/`subagent_state` frame
+   * would have reduced onto that span, captured when the frame arrives
+   * BEFORE its span's own `subagent_start` — a genuine replay-gap ordering
+   * (I-4 frames from concurrently running children can interleave on
+   * reconnect), not a bug. Without this, that update used to be logged and
+   * discarded outright, and the child's actual first status/state never
+   * reached the row until (if ever) a later update arrived for the same
+   * span_id.
+   *
+   * Consulted and cleared by the `subagent_start` handler in frames.ts the
+   * moment it creates the span (`PENDING_SPAN_UPDATE_CAP` bounds growth for
+   * a span_id whose `subagent_start` never arrives — an old transcript
+   * missing it, edge case table). Each field is written independently
+   * (never overwriting an already-pending field with `undefined`) so a
+   * message-only update and a later state-only update for the SAME span_id
+   * both survive to be applied together.
+   */
+  pendingSpanUpdatesBySpanId?: Record<string, { statusLine?: string; lifecycleState?: SubagentStateFrame['state']; lastUpdateAt?: string }>
   /**
    * Session-scoped record of every replay_message id that has EVER been
    * merged (via the `replay_message` same-turn/same-agent coalesce branch)
@@ -516,17 +559,24 @@ export interface SessionChatState {
 export type PositionedToolCall = ToolCall & { textOffset?: number }
 
 /**
- * Filter a single span-index map (typed shape `{ messageId: string }`),
- * returning a NEW map with all entries whose `messageId` is in
- * `evictedMessageIds` removed. Used by `evictSpanIndexEntries` below to
- * centralise the lockstep filtering of `spanByParentCallId` and
- * `spanBySpanId`; not exported — call `evictSpanIndexEntries` instead.
+ * Filter the span-index map (typed shape `{ messageId: string }`), returning
+ * a NEW map with all entries whose `messageId` is in `evictedMessageIds`
+ * removed.
  *
  * Returns the SAME reference (no allocation) when `index` is undefined so
  * callers whose `spanBySpanId` was never populated (older test fixtures)
  * stay undefined rather than being implicitly upgraded to `{}`.
+ *
+ * ADR-091 D10 deleted this function's sibling map, `spanByParentCallId` (the
+ * child-step-nesting index) — `spanBySpanId` is now the only span index, so
+ * the lockstep two-map filtering `evictSpanIndexEntries` used to do
+ * collapses to filtering this one map alone; kept as its own named export
+ * (rather than inlined at each call site) since three call sites
+ * (`session.ts::applyMessageArray`, `messages.ts::evictMessageFromBucket`)
+ * shared it before, and the unit test `removes spanBySpanId entries
+ * pointing at the evicted message` locks the invariant.
  */
-function filterSpanIndexByMessageId<T extends { messageId: string }>(
+export function evictSpanIndexEntries<T extends { messageId: string }>(
   index: Record<string, T> | undefined,
   evictedMessageIds: Set<string>,
 ): Record<string, T> | undefined {
@@ -536,35 +586,6 @@ function filterSpanIndexByMessageId<T extends { messageId: string }>(
     if (!evictedMessageIds.has(v.messageId)) next[k] = v
   }
   return next
-}
-
-/**
- * Filter BOTH span-index maps in lockstep, dropping entries whose
- * `messageId` is in `evictedMessageIds`. The two maps
- * (`spanByParentCallId` keyed by parent tool-call id, `spanBySpanId`
- * keyed by the span's own id) must always be filtered by the SAME
- * messageId set on every eviction path: each entry in either map points
- * at a `messageId` in `messagesById`, and a dangling pointer — one map
- * referencing an evicted message while the other has forgotten it — is a
- * silent invariant break (the subagent_end handler's O(1) lookup reads
- * `spanBySpanId` while the rest of the code reads `spanByParentCallId`,
- * so they cannot drift). Centralising the filter here means a new
- * eviction path cannot forget one of the two maps; the unit test
- * `removes spanBySpanId entries pointing at the evicted message` locks
- * the invariant end-to-end.
- */
-export function evictSpanIndexEntries(
-  spanByParentCallId: SessionChatState['spanByParentCallId'],
-  spanBySpanId: SessionChatState['spanBySpanId'] | undefined,
-  evictedMessageIds: Set<string>,
-): {
-  spanByParentCallId: SessionChatState['spanByParentCallId']
-  spanBySpanId: SessionChatState['spanBySpanId'] | undefined
-} {
-  return {
-    spanByParentCallId: filterSpanIndexByMessageId(spanByParentCallId, evictedMessageIds)!,
-    spanBySpanId: filterSpanIndexByMessageId(spanBySpanId, evictedMessageIds),
-  }
 }
 
 export interface ChatStore {
@@ -712,10 +733,6 @@ export interface ChatStore {
   seedSessionTokens: (total: number) => void
   setRateLimitEvent: (event: RateLimitEventData) => void
   clearRateLimitEvent: () => void
-
-  startSpan: (frame: WsSubagentStartFrame) => void
-  endSpan: (frame: WsSubagentEndFrame) => void
-  attachStepToSpan: (parentCallId: string, step: ToolCall & { call_id: string }) => void
 
   // Resets only the foreground session bucket. Does NOT affect other sessions.
   resetSession: () => void
@@ -930,14 +947,5 @@ export interface ChatStore {
 
   handleFrame: (frame: WsReceiveFrame) => void
 }
-
-// FR-H-009: out-of-order frame buffer — tool_call_start/result frames that
-// arrived before their subagent_start. Keyed by `${sessionId}:${parentCallId}`.
-// Dropped to flat rendering after ORPHAN_BUFFER_TTL_MS if no subagent_start arrives.
-export const ORPHAN_BUFFER_TTL_MS = 10_000
-
-export const pendingByParentCallId: Record<string, BufferedFrame[]> = {}
-
-export const orphanTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 
 export const finishedTurnIdsBySession: Record<string, string[]> = {}
