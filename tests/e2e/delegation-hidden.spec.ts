@@ -17,6 +17,29 @@
  * DEFAULT policy itself — this file is that test: no card by default, card
  * appears once verbose chat is turned on.
  *
+ * UPDATE (2026-09-24, lane sq-gwfix): the "then shows one once verbose chat
+ * is turned on" half above is now FALSE and was the confirmed CI failure
+ * (GitHub run 35997069836): `expect(locator('[data-testid="subagent-collapsed"]')
+ * .filter({ hasText: 'delegation-hidden-<ts>' })).toHaveCount(1)` received 0.
+ * Root cause, verified against current `src/`: ADR-091 D7/D10 (commit
+ * 66362240d, "delete the nested child-step rendering — SubagentBlock, its
+ * ChatScreen mounts, and shouldRenderSubagentSpan") deleted `SubagentBlock`
+ * and its gate UNCONDITIONALLY — not just its default-hidden behaviour.
+ * `shouldRenderSubagentSpan` no longer exists in `src/lib/toolVisibility.ts`
+ * at all, so there is nothing left for `verboseChatEnabled` to gate for this
+ * card at ANY setting; a repo-wide grep finds zero producers of
+ * `data-testid="subagent-collapsed"` in `src/`. The everything-BEFORE the
+ * toggle (live delegate call, zero-card-by-default assertion, the Settings
+ * toggle itself) is unaffected and — per the same CI run — passed; only the
+ * final "card reappears" assertion is wrong. Fixed by re-pointing that tail
+ * at the surface ADR-091 D7/AC-7 actually gives a reader instead: the
+ * `delegate` tool-call chip (visible in the thread unconditionally, not
+ * gated by verbose chat either — see `shouldRenderToolCall`'s `delegate`
+ * case) plus the ActivityPanel row and its open control into the child's
+ * own session (ActivityPanel.tsx, ADR-091 D7/FR-E-004). See the test body's
+ * own comments for the replacement assertions. This mirrors the fix already
+ * applied to replay-fidelity.spec.ts test (b) for the identical root cause.
+ *
  * UPDATE (2026-07-17): the two root causes the history block below
  * documents are now BOTH fixed.
  *   (1) `src/routes/_app/sessions.$sessionId.tsx`'s loader no longer
@@ -127,6 +150,26 @@ import { completedDelegation, type DelegationFrame } from './fixtures/delegation
 // Deliberately does NOT call enableVerboseChat — this spec asserts the
 // DEFAULT (verbose-off) policy for its first half.
 
+// Open/close the Activity panel — mirrors replay-fidelity.spec.ts's own
+// helper of the same name (ADR-091 D7/FR-E-004 surface). Idempotent open
+// avoids steered-session-stop.spec.ts's documented trap: a second
+// unconditional click while the panel is already open lands on the Radix
+// Sheet's own overlay/backdrop (a modal), not the bar, and the click is lost.
+async function openActivityPanel(page: Page): Promise<void> {
+  const bar = page.locator('[data-testid="activity-bar"]');
+  await expect(bar).toBeVisible({ timeout: 15_000 });
+  if ((await bar.getAttribute('aria-expanded')) !== 'true') {
+    await bar.click();
+  }
+  await expect(bar).toHaveAttribute('aria-expanded', 'true', { timeout: 15_000 });
+}
+
+async function closeActivityPanel(page: Page): Promise<void> {
+  const bar = page.locator('[data-testid="activity-bar"]');
+  await page.keyboard.press('Escape');
+  await expect(bar).toHaveAttribute('aria-expanded', 'false', { timeout: 15_000 });
+}
+
 const framesByPage = new WeakMap<Page, DelegationFrame[]>();
 
 test.beforeEach(async ({ page }) => {
@@ -168,7 +211,10 @@ async function startFreshChat(page: import('@playwright/test').Page): Promise<vo
 }
 
 test(
-  'default policy: a completed live delegation shows no subagent-collapsed card with verbose chat OFF, then shows one once verbose chat is turned on (no reload)',
+  // RENAMED 2026-09-24 (lane sq-gwfix, CI run 35997069836): the old title
+  // ("...then shows one once verbose chat is turned on") described behaviour
+  // ADR-091 D7/D10 deleted — see the file's 2026-09-24 UPDATE comment above.
+  'default policy: a completed live delegation never shows a subagent-collapsed card (deleted by ADR-091), before or after the verbose-chat toggle; the delegate line and Activity panel row/open control persist across it (no reload)',
   async ({ page }) => {
     requireApiKey();
     // 300s budget: one live delegate round-trip (parent delegate + subagent's
@@ -242,12 +288,38 @@ test(
     await page.goBack();
     await expect(input).toBeVisible({ timeout: 15_000 });
 
-    // Then: the SAME already-completed delegation's card now renders —
-    // proving the card's visibility tracks verboseChatEnabled for identical
-    // underlying span data, not some other confound.
-    const completedCard = collapsedBlocks.filter({ hasText: label });
-    await expect(completedCard).toHaveCount(1, { timeout: 15_000 });
-    await expect(completedCard).toHaveAttribute('aria-label', new RegExp(`^Subagent: ${label}, .*status success$`));
-    await expect(completedCard).toBeVisible();
+    // Then: the deleted subagent-collapsed card does NOT come back under
+    // verbose chat either (CONFIRMED CI FAILURE, GitHub run 35997069836 —
+    // see this file's 2026-09-24 UPDATE above). ADR-091 D7/D10 (66362240d)
+    // deleted SubagentBlock and shouldRenderSubagentSpan unconditionally —
+    // there is no verbose/non-verbose branch left for this element at all,
+    // so re-asserting zero here (not just assuming it from the pre-toggle
+    // check) is the whole point: a card that quietly came back ONLY under
+    // verbose chat would slip past the earlier assertion alone.
+    await expect(collapsedBlocks).toHaveCount(0);
+
+    // And: the delegate tool-call chip — the parent thread's ONLY
+    // delegation surface now (toolVisibility.ts's shouldRenderToolCall,
+    // `delegate` case; ADR-091 D7/AC-7) — is still there. Its own
+    // visibility was never gated by verbose chat to begin with (the
+    // `delegate`/`run` case returns `true` unconditionally, isError
+    // included), so the toggle must not have disturbed it either.
+    await expect(
+      page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]'),
+    ).toHaveCount(1);
+
+    // And: the surface that actually replaced the deleted card — the
+    // Activity panel's row for this delegation, plus its open control into
+    // the child's own session (ActivityPanel.tsx, ADR-091 D7/FR-E-004) — is
+    // reachable and reports success. This is the differentiation this file
+    // exists to prove now: not "verbose reveals a card" (that card is gone
+    // for good) but "the completed delegation's detail lives in the panel,
+    // reachable independently of the verbose-chat toggle".
+    await openActivityPanel(page);
+    const row = page.locator('[data-testid="activity-row"]', { hasText: label });
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    await expect(row).toHaveAttribute('data-status', 'success');
+    await expect(row.locator('[data-testid="activity-row-open"]')).toBeVisible();
+    await closeActivityPanel(page);
   },
 );
