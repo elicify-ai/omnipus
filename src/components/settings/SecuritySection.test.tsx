@@ -360,7 +360,10 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
   // 28 always-ask tools, the workspace path rule, an example and the
   // Windows caveat into ONE long paragraph — "a huge blob of text, not well
   // written". The redesign: one short summary sentence, always visible; the
-  // grouped ask-list collapsed by default behind "Still asks every time";
+  // grouped ask-list collapsed by default behind "Always asks when set to
+  // Ask" (renamed from "Still asks every time" — UAT defect D-02, founder
+  // decision 2026-09-24: the old heading promised something false, since
+  // several of these tools are on Allow by default and never ask at all);
   // a small muted platform caveat. Written against the copy, not the
   // implementation, so it fails if the old paragraph comes back.
   //
@@ -435,7 +438,11 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
 
     // Collapsed: the trigger row is visible, but none of the group labels are.
     const trigger = await screen.findByTestId('auto-approve-ask-list-trigger')
-    expect(trigger).toHaveTextContent(/still asks every time/i)
+    // UAT defect D-02 (founder decision 2026-09-24): "Still asks every time"
+    // promised something false — several of these tools are on Allow by
+    // default and never ask. Renamed to name the real condition.
+    expect(trigger).toHaveTextContent(/always asks when set to ask/i)
+    expect(trigger).not.toHaveTextContent(/still asks every time/i)
     expect(screen.queryByTestId('auto-approve-ask-list-content')).not.toBeInTheDocument()
     expect(screen.queryByText(/sending email/i)).not.toBeInTheDocument()
 
@@ -474,7 +481,13 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     // at the card's own disclosure instead.
     expect(dialog).not.toHaveTextContent(/deleting a task, workspace, or agent/i)
     expect(dialog).not.toHaveTextContent(/mounted folder/i)
-    expect(dialog).toHaveTextContent(/still asks every time/i)
+    // UAT defect D-02 (founder decision 2026-09-24): the dialog used to
+    // point at "Still asks every time", a heading that promised something
+    // false — several of these tools are on Allow by default and never
+    // ask. It now points at the renamed heading, and the old phrase must
+    // not survive anywhere in the dialog.
+    expect(dialog).toHaveTextContent(/always asks when set to ask/i)
+    expect(dialog).not.toHaveTextContent(/still asks every time/i)
     // Founder correction (2026-09-24): the dialog's own summary clause
     // must use the same wording as the card — "stay inside your
     // workspace", with no "and the sandbox" (false once Auto runs with no

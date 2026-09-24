@@ -45,7 +45,7 @@ On the Security screen, the switch carries this description:
 
 > Tools set to “Ask” run without a prompt when it's safe: they stay inside your workspace.
 
-Below the switch, **Still asks every time** is a collapsed list — click it to expand. It groups the fixed list of tools that always ask, even with Auto-approve on:
+Below the switch, **Always asks when set to Ask** is a collapsed list — click it to expand. It groups the fixed list of tools that keep asking whenever they're set to Ask, even with Auto-approve on:
 
 > Sending email · Deleting tasks, agents or workspaces · Installing skills, setting up an environment or publishing a web preview · Changing or testing settings, providers, channels, agents or skills · Running diagnostics · Adding or removing connected (MCP) servers, and MCP tools not marked safe · Browser scripts and uploads · Mounting a folder, or files outside your workspace
 
@@ -104,9 +104,9 @@ Auto-approve only matters for a tool set to **Ask**. Omnipus judges each call on
 
 This is stricter than the shell. Under Auto-approve, the shell command `cat /etc/hosts` runs, because the sandbox lets commands read outside the workspace, while `read_file /etc/hosts` asks. That difference is deliberate.
 
-**Messages and files sent to chat channels go out with no prompt.** `send_message` runs under Auto-approve, and so does `send_file` for a file inside the workspace or a mounted folder. A message, or a file from the workspace, can leave the machine to Telegram, Slack or another connected channel without anyone approving it. If that is not acceptable for an agent, set those two tools to Ask and tick **Never auto-approve** for that agent, or set them to Deny. Email is different: `send_email` and `reply` always ask.
+**Messages and files sent to chat channels go out with no prompt.** `send_message` runs under Auto-approve, and so does `send_file` for a file inside the workspace or a mounted folder. A message, or a file from the workspace, can leave the machine to Telegram, Slack or another connected channel without anyone approving it. If that is not acceptable for an agent, set those two tools to Ask and tick **Never auto-approve** for that agent, or set them to Deny. Email is different: `send_email` and `reply` keep asking whenever they're set to Ask, even with Auto-approve on.
 
-**These 28 tools always ask, even with Auto-approve on:**
+**These 28 tools keep asking whenever they're set to Ask, even with Auto-approve on:**
 
 | Group | Tools |
 |---|---|

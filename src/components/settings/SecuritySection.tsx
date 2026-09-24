@@ -209,19 +209,24 @@ export function AutoApproveControl() {
   // ask-list, the workspace path rule, an example and the Windows caveat
   // into one long paragraph here too — "a huge blob of text". The
   // confirmation stays short (at most 2-3 plain sentences) and points at
-  // the SAME collapsed "Still asks every time" list the card itself shows,
-  // rather than restating all 28 tools inline. `ConfirmDialog`'s
+  // the SAME collapsed "Always asks when set to Ask" list the card itself
+  // shows, rather than restating all 28 tools inline. `ConfirmDialog`'s
   // `description` renders inside an `AlertDialogDescription`, which Radix
   // renders as a `<p>` — a list/disclosure element cannot legally nest
   // inside a `<p>`, which is why this is a pointer to the list, not the
   // list itself.
+  //
+  // Founder decision (2026-09-24, UAT defect D-02): the pointer sentence
+  // used to say these tools "always still ask" — false for a tool on
+  // Allow, which several of these are by default. Reworded to name the
+  // actual condition: they never skip the prompt once set to Ask.
   function requestChange(next: boolean) {
     if (isSaving) return
     void stepUp
       .gate((token) => saveAsync({ next, token }), {
         title: next ? 'Turn Auto-approve on?' : 'Turn Auto-approve off?',
         body: next
-          ? 'Tools set to “ask” will run without a prompt when it’s safe — they stay inside your workspace. See “Still asks every time” on this card for the short list of things that always still ask. Without a kernel sandbox (for example on Windows), shell commands are checked by reading the command text only.'
+          ? 'Tools set to “ask” will run without a prompt when it’s safe — they stay inside your workspace. See “Always asks when set to Ask” on this card for the short list of things that never skip the prompt once set to Ask. Without a kernel sandbox (for example on Windows), shell commands are checked by reading the command text only.'
           : 'Every tool set to “ask” will prompt every time again, with no auto-approval.',
         confirmLabel: next ? 'Turn Auto-approve on' : 'Turn Auto-approve off',
       })

@@ -1,6 +1,14 @@
 /**
- * AutoApproveAskList — the collapsed "Still asks every time" disclosure on
- * the Security → Auto-approve card (SecuritySection.tsx::AutoApproveControl).
+ * AutoApproveAskList — the collapsed "Always asks when set to Ask" disclosure
+ * on the Security → Auto-approve card (SecuritySection.tsx::AutoApproveControl).
+ *
+ * Founder decision (2026-09-24, UAT defect D-02): the earlier heading,
+ * "Still asks every time", promised something false — on a fresh install
+ * several of these tools (`send_email`, `run_doctor`, `install_skill`, …)
+ * are on **Allow** (`pkg/config/defaults.go::defaultToolPoliciesGeneral`),
+ * so they never ask at all. The heading now names the actual condition:
+ * these groups never skip the prompt once their policy IS "Ask", whether or
+ * not Auto-approve is on.
  *
  * Founder feedback (2026-09-24): the old card put the full grouped list of
  * 28 always-ask tools, the workspace path rule, an example, and the Windows
@@ -35,7 +43,7 @@ export function AutoApproveAskList({ defaultOpen = false }: { defaultOpen?: bool
         data-testid="auto-approve-ask-list-trigger"
         className="w-full rounded-none px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]"
       >
-        <span>Still asks every time</span>
+        <span>Always asks when set to Ask</span>
         <span className="flex-1" aria-hidden="true" />
         <span className="text-[var(--color-muted)]">{open ? 'Hide list' : 'Show list'}</span>
       </DisclosureRow>

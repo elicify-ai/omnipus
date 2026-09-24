@@ -1,8 +1,8 @@
 /**
  * AUTO_APPROVE_ASK_GROUPS — the plain-language grouping of every tool ADR-092
- * always asks about under Auto-approve, shown by the Security card's
- * collapsed "Still asks every time" list and the turn-on confirmation
- * dialog (SecuritySection.tsx::AutoApproveControl).
+ * never lets Auto-approve wave through once set to Ask, shown by the
+ * Security card's collapsed "Always asks when set to Ask" list and the
+ * turn-on confirmation dialog (SecuritySection.tsx::AutoApproveControl).
  *
  * The founder's own report (2026-09-24): the previous single paragraph
  * ("28 always-ask tools, the path rule, the example and the Windows caveat")
