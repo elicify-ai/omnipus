@@ -665,22 +665,22 @@ func (t *ExecTool) enforceNetworkPreflight(ctx context.Context, command, session
 	// willRecordGrant now reflects the human's actual choice (review
 	// finding #5): "Allow once" widens THIS command's network posture
 	// (the true return below) without persisting a session-wide grant;
-	// "Allow" persists it via RecordNetworkGrant, which itself emits the
-	// FR-032(c) shell.grant_recorded event.
+	// "Allow" persists it via RecordNetworkGrantWithHosts, which itself
+	// emits exactly ONE FR-032(c) shell.grant_recorded event for this one
+	// approval — not the two rows calling RecordNetworkGrant and
+	// RecordNetworkHosts separately used to emit (D-13 security-review
+	// fix, 2026-09-24).
 	t.emitApprovalDecision(ctx, sessionID, agentID, command, "network_preflight", approved, reason, recordGrant)
 	if !approved {
 		return false, "", ErrorResult(preflightDenialMessage("network", reason))
 	}
 	if recordGrant {
-		t.approvalGrants.RecordNetworkGrant(sessionID, agentID)
-		if len(verdict.Hosts) > 0 {
-			// D-13 fix: "Always Allow adds them for this chat session
-			// only, never written to the global config" (founder decision
-			// B, point 2) — ApprovalGrantStore is in-memory-only, cleared
-			// on session close (ClearSession), same lifetime as every
-			// other ADR-092 session grant.
-			t.approvalGrants.RecordNetworkHosts(sessionID, agentID, verdict.Hosts)
-		}
+		// D-13 fix: "Always Allow adds them for this chat session only,
+		// never written to the global config" (founder decision B, point
+		// 2) — ApprovalGrantStore is in-memory-only, cleared on session
+		// close (ClearSession), same lifetime as every other ADR-092
+		// session grant.
+		t.approvalGrants.RecordNetworkGrantWithHosts(sessionID, agentID, verdict.Hosts)
 	}
 	return true, t.grantEgressHosts(sessionID, agentID, verdict.Hosts, recordGrant), nil
 }
@@ -779,7 +779,20 @@ func (t *ExecTool) enforceShellPermissionMode(ctx context.Context, command strin
 	// network-free read subcommands) makes both pre-flights structurally
 	// inapplicable, so there is nothing left for them to check.
 	//
-	// (b) Otherwise, unless the command is fully covered by an operator D3
+	// (b) A command that defeats D7's tokenizer entirely (ClassifyPathOperations
+	// returns ok=false — an unbalanced quote, a `$()`/backtick substitution)
+	// is asked through THIS gate alone, once, rather than falling through to
+	// D7/D8 below: D7's and D8's own blind-spot postures (fs_preflight_blind,
+	// the network blind-need branch) both independently fail closed on the
+	// exact same underlying parse failure (both classifiers are built on
+	// tokenizeShellWords), so letting them run for real after this check
+	// would ask twice for one unparseable command — violating "ask exactly
+	// once" (founder decision A's invariant, proven by
+	// TestEnforceShellPermissionMode_NoKernelSandbox_BlindCommandEscalates).
+	// With a kernel sandbox enforcing this branch is never reached; D7/D8's
+	// own independent (here, doubled) blind-spot asks are unchanged.
+	//
+	// (c) Otherwise, unless the command is fully covered by an operator D3
 	// allow rule (verdict.FullyAllowed() — an allow rule does NOT bypass
 	// D7/D8, matching TestAllowRule_DoesNotSuppressFSPreflightUnderAuto's
 	// existing precedent) AND commandTriggersExistingPreflight reports that
@@ -791,6 +804,13 @@ func (t *ExecTool) enforceShellPermissionMode(ctx context.Context, command strin
 	// exactly once, never twice.
 	if !sandbox.TurnPolicyBaseInstalled() {
 		if commandIsNoSandboxReadOnly(command) {
+			return result, nil
+		}
+		if _, ok := ClassifyPathOperations(command); !ok {
+			approved, reason := t.requestNoSandboxApproval(ctx, sessionID, agentID, toolCallID, command)
+			if !approved {
+				return nil, ErrorResult(noSandboxDenialMessage(reason))
+			}
 			return result, nil
 		}
 		if !verdict.FullyAllowed() && !t.commandTriggersExistingPreflight(ctx, command, sessionID, agentID) {

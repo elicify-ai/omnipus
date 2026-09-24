@@ -67,7 +67,21 @@ var noSandboxReadOnlyGitSubcommands = map[string]bool{
 // own membership criterion (shell_path_guard.go) already excludes every
 // interpreter by construction ("every interpreter... arbitrary file access
 // by construction").
+//
+// A segment that fails to TOKENIZE at all (an unbalanced quote) is refused
+// outright, before any allowlist match — shellRuleSimpleSegment's metachar
+// scan does not look for quote balance (`"` is not in
+// simpleSegmentMetachars), so `echo "unbalanced` reads as the literal head
+// "echo" with no disqualifying character present and would otherwise pass
+// straight through this allowlist. That is exactly the FR-020 blind spot
+// D7/D8 fail closed on (ClassifyPathOperations/ClassifyNetworkNeed both use
+// this same tokenizer and both refuse to classify it) — this fast path must
+// fail closed the same way, not silently declare an unparseable command
+// read-only because its unparseable head happens to spell "echo".
 func isNoSandboxReadOnlySegment(seg string) bool {
+	if _, ok := tokenizeShellWords(seg); !ok {
+		return false
+	}
 	if !shellRuleSimpleSegment(seg) {
 		return false
 	}

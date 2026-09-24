@@ -309,18 +309,29 @@ func TestEnforceShellPermissionMode_NoKernelSandbox_NetworkDeniedByDefaultThenWi
 // escalates to a prompt with no kernel sandbox — the classifier's fail-closed
 // default must not depend on kernel enforcement being present. An unbalanced
 // quote defeats BOTH ClassifyPathOperations (D7's own blind spot) and
-// ClassifyNetworkNeed's tokenizer (which also fails closed to "flagged" when
-// it cannot tokenize a segment, preflight.go::ClassifyNetworkNeed), so this
-// escalates through both pre-flight layers independently — two prompts, not
-// a silent pass-through of either check.
+// ClassifyNetworkNeed's tokenizer (which also fails closed when it cannot
+// tokenize a segment, preflight.go::ClassifyNetworkNeed) — both built on the
+// same tokenizeShellWords, so they fail on the exact same underlying parse
+// error, not two independent findings.
+//
+// Re-pointed 2026-09-24 (founder decision A, "ask exactly once" invariant):
+// under no kernel sandbox this is now ONE escalation through the
+// no_sandbox_ask gate (shell_no_sandbox_gate.go / enforceShellPermissionMode
+// §(b)) — not the two separate D7 fs_preflight_blind + D8 network-blind
+// prompts the pre-founder-decision-A design would have stacked back to
+// back for the same unparseable command. D7/D8 never run for real once this
+// gate has already asked and been approved. With a kernel sandbox enforcing
+// (not exercised by this no-sandbox-only test), D7/D8 keep their own
+// independent, doubled blind-spot posture — this file has no with-sandbox
+// counterpart to re-point.
 func TestEnforceShellPermissionMode_NoKernelSandbox_BlindCommandEscalates(t *testing.T) {
 	tool, ctx, requester, _ := permTestFixtureNoSandbox(t, ShellModeAuto, true)
 
 	perm, result := tool.enforceShellPermissionMode(ctx, `echo "unbalanced`)
 	require.Nil(t, result, "an approved blind-spot escalation must not refuse the command")
 	require.NotNil(t, perm)
-	assert.Equal(t, 2, requester.callCount(),
-		"a command neither pre-flight classifier can parse must escalate through D7 AND D8, sandbox or no sandbox")
+	assert.Equal(t, 1, requester.callCount(),
+		"a command neither pre-flight classifier can parse must still ask — exactly once, through the no_sandbox_ask gate, not stacked with D7/D8's own redundant blind-spot asks")
 }
 
 // applyAutoNetworkPosture is D8's kernel-rendering half — proves the

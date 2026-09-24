@@ -495,6 +495,61 @@ func (s *ApprovalGrantStore) RecordNetworkGrant(sessionID, agentID string) bool 
 	return true
 }
 
+// RecordNetworkGrantWithHosts atomically records the ADR-092 D8 network-
+// widening grant AND any D-13 "Always Allow" hosts for ONE human approval,
+// emitting exactly ONE shell.grant_recorded row for that approval — never
+// the two separate rows calling RecordNetworkGrant and RecordNetworkHosts
+// back to back for the same decision would each emit on their own (D-13
+// security-review fix, 2026-09-24: one approval must produce one truthful
+// grant row, carrying the hosts when there are any). Idempotent per the
+// same rule as each half individually: a reuse where the grant is already
+// held and every host in hosts is already recorded emits nothing. Returns
+// false (no-op) for a nil store or an empty sessionID/agentID — matching
+// RecordNetworkGrant/RecordNetworkHosts's own fail-safe contract.
+func (s *ApprovalGrantStore) RecordNetworkGrantWithHosts(sessionID, agentID string, hosts []string) bool {
+	if s == nil || sessionID == "" || agentID == "" {
+		return false
+	}
+	s.mu.Lock()
+	if s.networkGrants == nil {
+		s.networkGrants = make(map[grantKey]struct{})
+	}
+	key := grantKey{sessionID: sessionID, agentID: agentID}
+	_, dupGrant := s.networkGrants[key]
+	s.networkGrants[key] = struct{}{}
+
+	hostsAdded := false
+	if len(hosts) > 0 {
+		if s.networkHosts == nil {
+			s.networkHosts = make(map[grantKey]map[string]struct{})
+		}
+		set := s.networkHosts[key]
+		if set == nil {
+			set = make(map[string]struct{}, len(hosts))
+			s.networkHosts[key] = set
+		}
+		for _, h := range hosts {
+			if h == "" {
+				continue
+			}
+			if _, dupHost := set[h]; !dupHost {
+				set[h] = struct{}{}
+				hostsAdded = true
+			}
+		}
+	}
+	s.mu.Unlock()
+
+	if !dupGrant || hostsAdded {
+		var extra map[string]any
+		if len(hosts) > 0 {
+			extra = map[string]any{"hosts": hosts}
+		}
+		s.emitGrantRecorded(audit.ShellGrantScopeNetworkWidening, "", agentID, sessionID, bashToolName, extra)
+	}
+	return true
+}
+
 // HasNetworkGrant reports whether (sessionID, agentID) already holds the
 // ADR-092 D8 network-widening grant this session. Fail-safe: a nil store or
 // an empty sessionID/agentID always returns false.
