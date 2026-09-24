@@ -2023,6 +2023,15 @@ func (al *AgentLoop) dispatchVerifierTurn(
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,
 		WorkspaceID:            tools.ToolWorkspaceID(turnCtx),
+		// D-08/FR-057: the Judge's own adjudication turn runs inside the SAME
+		// task run it is verifying — it must inherit that run's AutoDenyAsk
+		// rather than default to attended, or a headless (Calendar-triggered)
+		// task run's judge pass could open a live approval card for an
+		// ask-policy tool the judge happens to call. turnCtx derives from
+		// va.ctx (context.WithTimeout, values preserved) which derives from
+		// the task run's own taskCtx — see processTaskDirect's identical field
+		// for the origin of the stamp.
+		AutoDenyAsk: tools.ToolAutoDenyAsk(turnCtx),
 	}
 
 	ts := newTurnState(judgeInst, opts, al.newTurnEventScope(judgeInst.ID, sessionKey))

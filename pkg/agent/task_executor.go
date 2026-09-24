@@ -531,6 +531,15 @@ func (te *TaskExecutor) executeTaskPlanVerified(ctx context.Context, taskID stri
 		return ErrExecutorDraining
 	}
 	defer te.wg.Done()
+	// D-08/FR-057: plan-member dispatch is the plan engine's own async
+	// promotion loop (Tick/runEventLoop), never a live "click and watch" —
+	// dispatchReadyMembers's own doc explains why its dispatchCtx is
+	// context.WithoutCancel(ctx), which means this stamp survives that
+	// chokepoint automatically. Stamped here (executeTaskPlanVerified's own
+	// doc calls this "the single chokepoint every plan-member dispatch funnels
+	// through") rather than at dispatchReadyMembers's several callers, so no
+	// future caller can accidentally dispatch a plan member attended.
+	ctx = tools.WithAutoDenyAsk(ctx, true)
 	// Plan-member dispatch is never tied to a recurring occurrence — nil,
 	// task.RunKindScheduled (matching every other non-manual dispatch path).
 	return te.executeTask(ctx, taskID, nil, task.RunKindScheduled, true)
@@ -1182,10 +1191,23 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	// the HTTP request; the explicit cancel stored in te.running[taskID] is the
 	// intended cancellation path (a future "cancel task" API).
 	//
+	// D-08/FR-057: StartTaskNow has two callers with different attended-ness —
+	// the REST "Run now"/"Start Task" handlers (rest_tasks.go, a literal user
+	// click, ctx carries no AutoDenyAsk marker so this defaults false/attended)
+	// and the run_task AGENT TOOL (pkg/tools/run_task.go), whose ctx is the
+	// calling turn's own execCtx and so already carries whatever AutoDenyAsk
+	// that turn was stamped with (true if the calling turn is itself headless,
+	// e.g. a task dispatched via run_task from inside a Calendar-triggered
+	// run). Read it from the caller's ctx BEFORE detaching to Background()
+	// below, or the value is silently lost and the child always defaults
+	// attended regardless of its caller.
+	//
 	// Replace the reserved slot (inserted above, cancel==nil, reserved==true)
 	// with a live slot (cancel set, reserved==false) under the same mutex so
 	// any concurrent reader always observes a consistent, named state.
+	autoDenyAsk := tools.ToolAutoDenyAsk(ctx)
 	taskCtx, cancel := context.WithCancel(context.Background())
+	taskCtx = tools.WithAutoDenyAsk(taskCtx, autoDenyAsk)
 	te.mu.Lock()
 	te.running[taskID] = &taskSlot{cancel: cancel, reserved: false}
 	te.mu.Unlock()
@@ -1289,6 +1311,13 @@ func (te *TaskExecutor) StartOccurrenceRun(_ context.Context, taskID string, occ
 	if _, err := te.store.SpawnReset(taskID); err != nil {
 		return fmt.Errorf("task_executor: StartOccurrenceRun: reset task %q: %w", taskID, err)
 	}
+	// D-08/FR-057: this IS the "run now" a user clicks while watching
+	// (handleTaskRunNow, POST /api/v1/tasks/{id}/runs) — RunKindManual is
+	// exactly that per its own doc. context.Background() here is deliberate,
+	// not an oversight (the caller's ctx is even named `_` above): it carries
+	// no AutoDenyAsk marker, so ToolAutoDenyAsk defaults false and the run
+	// stays attended — cards keep showing, matching FR-057's "a turn a person
+	// actually started must keep showing cards."
 	return te.executeTask(context.Background(), taskID, occurrenceMs, task.RunKindManual, false)
 }
 
@@ -1575,6 +1604,11 @@ func isRoutineAutoDispatchRefusal(err error) bool {
 // plan with N ready members would otherwise cost N redundant
 // plan.Store.Get reads on the same pass.
 func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
+	// D-08/FR-057: the queued-task drain (TaskDrainService) is the
+	// unconditional owner of this dispatch — no operator triggers it, ever —
+	// so every task it dispatches this tick runs headless. Stamped once here,
+	// the sole call site of this method (pkg/heartbeat/task_drain.go).
+	ctx = tools.WithAutoDenyAsk(ctx, true)
 	queued, err := te.store.List(task.Filter{Status: task.StatusNext})
 	if err != nil {
 		logger.WarnCF("task_executor", "Check queued tasks: list failed",
@@ -1719,6 +1753,16 @@ func (al *AgentLoop) NotifyTaskDeleted(taskID string) {
 // processTaskDirect runs the agent loop for a task, dispatching to the given agent.
 // taskChatID identifies the WebSocket chat for event forwarding (defaults to "task:" + sessionKey).
 // Channel is "webchat" for streaming; tool context is "system" so exec/cron tools are permitted.
+//
+// D-08 (founder decision 2026-09-24, FR-057): AutoDenyAsk is read off ctx
+// rather than hardcoded — every genuinely unattended dispatcher (the
+// Calendar/task-trigger fire, the queued-task drain, the auto-advance
+// cascade, plan-member dispatch, the parent follow-up wake) stamps
+// tools.WithAutoDenyAsk(ctx, true) onto the context BEFORE it reaches this
+// function; a literal REST "Run now" click (StartOccurrenceRun/StartTaskNow)
+// leaves it unstamped, so ToolAutoDenyAsk defaults to false and the run stays
+// attended (cards show), matching runAgentLoop's identical
+// ProcessScheduled(ctx) convention (loop.go).
 func (al *AgentLoop) processTaskDirect(
 	ctx context.Context,
 	agentID, prompt, sessionKey, taskChatID string,
@@ -1791,6 +1835,11 @@ func (al *AgentLoop) processTaskDirect(
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,
 		RunningTaskID:          tools.ToolRunningTaskID(taskCtx),
+		// D-08/FR-057: propagate the unattended marker a headless dispatcher
+		// stamped on ctx (see this function's own doc comment) onto the turn's
+		// own opts — this is what loop_run_turn_tools.go's AutoDenyAsk branch
+		// actually reads.
+		AutoDenyAsk: tools.ToolAutoDenyAsk(taskCtx),
 		// WorkspaceID is already on taskCtx via tools.WithWorkspaceID (the task
 		// executor sets it on ctx before calling processTaskDirect — see
 		// runTask/runTaskFromInProgress's tools.WithWorkspaceID(ctx, t.WorkspaceID)

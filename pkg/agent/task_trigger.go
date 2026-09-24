@@ -47,6 +47,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // taskTriggerOwnerSentinel is the AgentID written to cron jobs that belong to
@@ -707,7 +708,18 @@ func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJ
 		return "", nil
 	}
 
-	if err := s.dispatch(ctx, fresh.ID, occurrenceMs); err != nil {
+	// D-08 (founder decision 2026-09-24, FR-057): this is the Calendar/
+	// task-trigger fire — the cron engine calling back into an unattended
+	// dispatch with no operator ever present, whether the trigger is a plain
+	// `once`/`every` fire or an RRULE recurrence. Stamp the headless marker
+	// onto ctx before dispatch so an always-ask tool (e.g. delete_task) is
+	// refused at once (autoDenyHeadlessAsk) instead of opening a live
+	// approval card that only reaches a human "who happens to be online" —
+	// exactly the D-08 defect. executor.SpawnTriggeredRun -> ExecuteTask ->
+	// executeTask preserves ctx values (context.WithCancel, not a detach), so
+	// this single stamp reaches processTaskDirect's processOptions unchanged.
+	dispatchCtx := tools.WithAutoDenyAsk(ctx, true)
+	if err := s.dispatch(dispatchCtx, fresh.ID, occurrenceMs); err != nil {
 		if isRrule {
 			slog.Warn("task_trigger: dispatch failed for rrule task, re-arming next occurrence (no retry backoff)",
 				"task_id", taskID, "job_id", job.ID, "error", err)
