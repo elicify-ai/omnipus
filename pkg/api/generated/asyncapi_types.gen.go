@@ -413,7 +413,7 @@ type CancelFrame struct {
 
 // CancelStageFrame — Server → client cancel progress notification (B3). stage MUST be one of three values — SPA validates via isValidFrame() and drops invalid stages. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
 type CancelStageFrame struct {
-	// ADR-091 I-6. True when `unreachable` is non-empty.
+	// ADR-091 I-6. True when `unreachable` is non-empty — and ONLY then: the cascade could not reach part of the subtree, so this Stop must not be read as complete (WP-D FR-D-001). `skipped_newer_generation` deliberately does NOT set this flag. A session the cascade left alone because a revival had already carried it to a newer generation is a CORRECT outcome, not a failure (ADR-091 D8: "the later instruction wins, which is what the operator asked for"), and WP-D US-1/AS-9 specifies that case with no `partial` and no channel line. Read `skipped_newer_generation` itself to learn which sessions kept running — `partial: false` hides nothing.
 	Partial *bool `json:"partial,omitempty"`
 	// ADR-091 I-6. Present on the `detached` stage of a Stop: every session the cascade stamped with a Stop marker (the stopped session and each reachable non-terminal descendant).
 	Reached   []string `json:"reached,omitempty"`

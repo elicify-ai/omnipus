@@ -72,9 +72,13 @@ properties:
   partial:
     type: boolean
     description: >
-      ADR-091 I-6. True when `unreachable` is non-empty OR
-      `skipped_newer_generation` is non-empty — a session skipped because a
-      revival landed first is still running, so the cascade did not fully
-      stop the subtree either way (matches the producer,
-      `pkg/gateway/websocket_cancel.go::sendCancelReportFrame`:
-      `len(Unreachable) > 0 || len(SkippedNewerGeneration) > 0`).
+      ADR-091 I-6. True when `unreachable` is non-empty — and ONLY then: the
+      cascade could not reach part of the subtree, so this Stop must not be
+      read as complete (WP-D FR-D-001).
+      `skipped_newer_generation` deliberately does NOT set this flag. A session
+      the cascade left alone because a revival had already carried it to a
+      newer generation is a CORRECT outcome, not a failure (ADR-091 D8: "the
+      later instruction wins, which is what the operator asked for"), and WP-D
+      US-1/AS-9 specifies that case with no `partial` and no channel line.
+      Read `skipped_newer_generation` itself to learn which sessions kept
+      running — `partial: false` hides nothing.

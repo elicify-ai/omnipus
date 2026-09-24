@@ -85,7 +85,26 @@ func sendCancelReportFrame(wc *wsConn, sessionID, stage string, report steer.Can
 	if wc == nil {
 		return
 	}
-	partial := len(report.Unreachable) > 0 || len(report.SkippedNewerGeneration) > 0
+	// `partial` means one thing only: the cascade could NOT reach part of the
+	// subtree. WP-D FR-D-001 — "MUST report unreachable ones as partial — in
+	// the report, on the Stop response frame, and as one line on the
+	// originating channel" — and every other `partial` sentence in
+	// adr-091-wp-d-cancel-cascade-spec.md (US-1 AS-4, the "Partial reported"
+	// exact check, the BDD scenario, the integration-boundary table) names
+	// the unreadable/unreachable branch and nothing else.
+	//
+	// SkippedNewerGeneration is deliberately NOT part of this predicate. US-1
+	// AS-9's whole expected outcome is "the registry refuses it, B's
+	// generation-2 turn keeps running, and the report lists B under
+	// SkippedNewerGeneration" — no partial, no channel line. A revival that
+	// landed after the Stop is the LATER instruction, and ADR-091 D8 settles
+	// what that means: "the later instruction wins, which is what the
+	// operator asked for". Cancelling it anyway is listed among the ADR's
+	// prohibitions. Flagging a correct outcome as a partial failure is
+	// over-signalling, and it costs nothing in honesty: the frame carries
+	// `skipped_newer_generation` as its own array, so a client sees exactly
+	// which sessions kept running whatever `partial` says.
+	partial := len(report.Unreachable) > 0
 	frame := generated.CancelStageFrame{
 		Type:                   string(generated.WsFrameTypeCancelStage),
 		SessionId:              sessionID,
@@ -109,21 +128,49 @@ func sendCancelReportFrame(wc *wsConn, sessionID, stage string, report steer.Can
 	sendRawFrameBytes(wc, string(generated.WsFrameTypeCancelStage), data)
 }
 
+// cancelPartialSummary renders the one-line PARTIAL-STOP notice — the line
+// ADR-091 Q21 sends to the channel the Stop came from, and the same wording
+// the SPA sees alongside `partial: true`. Its subject is exactly what the
+// cascade could not reach, so it is empty for a cascade that reached
+// everything it was allowed to touch.
+//
+// WP-D pins both the gate and the wording: FR-D-001 ("MUST report unreachable
+// ones as partial ... as one line on the originating channel"), the
+// "Partial reported" machine-verifiable check ("exactly one line on the
+// originating channel: \"stopped 3 of 5; 2 unreachable\"") and the US-1/AS-4
+// BDD scenario ("Telegram receives one line: \"stopped 2 of 3; 1
+// unreachable\"").
+//
+// SkippedNewerGeneration is not a partial failure and is not named here — see
+// sendCancelReportFrame's comment for why. A caller that needs the broader
+// "is anything under this node still running?" question answered — the REST
+// delete guard, which must not delete session data out from under a live turn
+// — wants cancelIncompleteSubtreeSummary below instead.
 func cancelPartialSummary(report steer.CancelReport) string {
-	// [Finding 3, ADR-091 fix lane 2] SkippedNewerGeneration was previously
-	// discarded here too: a node whose live turn had already advanced past
-	// the generation this Stop stamped is STILL RUNNING, untouched by this
-	// cascade — the same "partial" fact Unreachable already forces into the
-	// summary, not a clean skip.
-	if len(report.Unreachable) == 0 && len(report.SkippedNewerGeneration) == 0 {
+	if len(report.Unreachable) == 0 {
 		return ""
 	}
-	summary := fmt.Sprintf("stopped %d of %d; %d unreachable",
+	return fmt.Sprintf("stopped %d of %d; %d unreachable",
 		len(report.Reached), len(report.Reached)+len(report.Unreachable), len(report.Unreachable))
-	if len(report.SkippedNewerGeneration) > 0 {
-		summary += fmt.Sprintf("; %d already advanced to a newer generation and are still running", len(report.SkippedNewerGeneration))
+}
+
+// cancelIncompleteSubtreeSummary answers a DIFFERENT question from
+// cancelPartialSummary: not "was this Stop partial?" but "could any session
+// under this node still be running?". Only the second question justifies
+// refusing to delete session data, so a node the cascade correctly left alone
+// because a newer generation had taken over counts here even though it does
+// not count as partial. Empty when the cascade left nothing running.
+func cancelIncompleteSubtreeSummary(report steer.CancelReport) string {
+	summary := cancelPartialSummary(report)
+	if len(report.SkippedNewerGeneration) == 0 {
+		return summary
 	}
-	return summary
+	stillRunning := fmt.Sprintf("%d already advanced to a newer generation and are still running",
+		len(report.SkippedNewerGeneration))
+	if summary == "" {
+		return "Stop cascade incomplete: " + stillRunning
+	}
+	return summary + "; " + stillRunning
 }
 
 func sendCancelPartialNotice(wc *wsConn, sessionID string, report steer.CancelReport) {
