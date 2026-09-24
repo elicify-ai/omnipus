@@ -79,6 +79,11 @@ type projItem struct {
 	spanOpen bool
 }
 
+// runningTool reports a tool call whose result has not been published yet.
+func (it *projItem) runningTool() bool {
+	return it.kind == hubKindToolStart && len(it.start) > 0 && len(it.end) == 0
+}
+
 // activeTurnProjection is guarded by sessionHub.mu.
 type activeTurnProjection struct {
 	order []string
@@ -207,16 +212,20 @@ func (p *activeTurnProjection) evictOlder(keep string) int {
 	for p.bytes > hubProjectionMaxBytes {
 		// Oldest first, sparing still-open delegate spans (small, and the
 		// only record that a delegate is running) until nothing else is left.
+		// A tool call still running (start, no result yet) is never evicted
+		// (final-review N6): its result would arrive later with no call to
+		// attach to. Its start frame is small, so this cannot defeat the cap
+		// by much.
 		victim := -1
 		for i, key := range p.order {
-			if it := p.items[key]; key != keep && (it == nil || !it.spanOpen) {
+			if it := p.items[key]; key != keep && (it == nil || (!it.spanOpen && !it.runningTool())) {
 				victim = i
 				break
 			}
 		}
 		if victim < 0 {
 			for i, key := range p.order {
-				if key != keep {
+				if it := p.items[key]; key != keep && (it == nil || !it.runningTool()) {
 					victim = i
 					break
 				}
@@ -305,7 +314,10 @@ func projectionFrames(sessionID string, items []projSnapshotItem, emitted map[st
 			}
 			out = append(out, projectionTokenFrames(sessionID, it)...)
 		case hubKindToolStart:
-			if emitted[it.id] {
+			// A result whose call is no longer in the projection is never
+			// rebuilt on its own: the client would show it as an unmatched
+			// tool result (final-review N6).
+			if emitted[it.id] || len(it.start) == 0 {
 				continue
 			}
 			out = appendNonEmpty(out, it.start, it.end)

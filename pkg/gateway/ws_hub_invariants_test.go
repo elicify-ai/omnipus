@@ -187,3 +187,38 @@ func TestHub_AbandonedTurn_ClearsItsToolCardsToo(t *testing.T) {
 	assert.Empty(t, items, "nothing of an abandoned turn may stay in the projection")
 	assert.False(t, active, "an abandoned turn must not pin the hub against idle eviction")
 }
+
+// TestHub_N6_OverBudget_NeverEvictsARunningToolsStart pins final-review N6:
+// eviction must not drop the start of a tool call that is still running.
+// Its result arrives later and would otherwise sit alone in the projection,
+// and a rebuild would show an "unmatched tool" result with no call.
+func TestHub_N6_OverBudget_NeverEvictsARunningToolsStart(t *testing.T) {
+	var p activeTurnProjection
+	p.update(hubFrameMeta{kind: hubKindToolStart, key: "running"}, []byte(`{"type":"tool_call_start","call_id":"running"}`), "s")
+	big := []byte(`{"type":"tool_call_result","result":"` + strings.Repeat("r", 700<<10) + `"}`)
+	for i := 0; i < 4; i++ { // finished calls push the projection past its budget
+		key := "done-" + string(rune('a'+i))
+		p.update(hubFrameMeta{kind: hubKindToolStart, key: key}, []byte(`{"type":"tool_call_start"}`), "s")
+		p.update(hubFrameMeta{kind: hubKindToolResult, key: key}, big, "s")
+	}
+	p.update(hubFrameMeta{kind: hubKindToolResult, key: "running"}, []byte(`{"type":"tool_call_result","call_id":"running"}`), "s")
+
+	var found bool
+	for _, it := range p.snapshot() {
+		if it.id == "running" {
+			found = true
+			assert.NotEmpty(t, it.start, "the running call's start must survive eviction")
+			assert.NotEmpty(t, it.end)
+		}
+	}
+	assert.True(t, found, "the running tool call must still be in the projection")
+}
+
+// TestHub_N6_RebuildDropsAnOrphanToolResult: a tool item holding only a
+// result (its start is gone) is never sent in a rebuild.
+func TestHub_N6_RebuildDropsAnOrphanToolResult(t *testing.T) {
+	frames := projectionFrames("s", []projSnapshotItem{{
+		kind: hubKindToolStart, id: "orphan", end: []byte(`{"type":"tool_call_result","call_id":"orphan"}`),
+	}}, map[string]bool{})
+	assert.Empty(t, frames, "a result without its call must not be rebuilt")
+}
