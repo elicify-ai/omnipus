@@ -229,7 +229,7 @@ describe('chat store — pendingAutoApproveChoice rides the first message frame 
 
   it('sends the pending choice as auto_approve on the first message frame, then session_started reflects it locally and clears the pending field', () => {
     resetPendingChoiceScenario()
-    const mockSend = vi.fn((_frame: unknown) => true)
+    const mockSend = vi.fn<(frame: unknown) => boolean>(() => true)
     act(() => {
       useConnectionStore.setState({
         connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
@@ -265,7 +265,7 @@ describe('chat store — pendingAutoApproveChoice rides the first message frame 
       'behind the agent loop dispatching the turn',
     () => {
       resetPendingChoiceScenario()
-      const mockSend = vi.fn((_frame: unknown) => true)
+      const mockSend = vi.fn<(frame: unknown) => boolean>(() => true)
       act(() => {
         useConnectionStore.setState({
           connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
@@ -305,7 +305,7 @@ describe('chat store — pendingAutoApproveChoice rides the first message frame 
 
   it('flipping the switch and never sending a message sends nothing to the server at all', () => {
     resetPendingChoiceScenario()
-    const mockSend = vi.fn((_frame: unknown) => true)
+    const mockSend = vi.fn<(frame: unknown) => boolean>(() => true)
     act(() => {
       useConnectionStore.setState({
         connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
@@ -321,7 +321,7 @@ describe('chat store — pendingAutoApproveChoice rides the first message frame 
 
   it('carries a false choice the same way, on the first message frame', () => {
     resetPendingChoiceScenario()
-    const mockSend = vi.fn((_frame: unknown) => true)
+    const mockSend = vi.fn<(frame: unknown) => boolean>(() => true)
     act(() => {
       useConnectionStore.setState({
         connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
@@ -347,7 +347,7 @@ describe('chat store — pendingAutoApproveChoice rides the first message frame 
 
   it('omits auto_approve from the first message frame, and sends nothing extra on session_started, when there is no pending choice', () => {
     resetPendingChoiceScenario()
-    const mockSend = vi.fn((_frame: unknown) => true)
+    const mockSend = vi.fn<(frame: unknown) => boolean>(() => true)
     act(() => {
       useConnectionStore.setState({
         connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
@@ -385,7 +385,7 @@ describe('chat store — pendingAutoApproveChoice rides the first message frame 
 
   it('attachToSession (picking an existing chat) clears an abandoned pending choice', () => {
     resetPendingChoiceScenario()
-    const mockSend = vi.fn((_frame: unknown) => true)
+    const mockSend = vi.fn<(frame: unknown) => boolean>(() => true)
     act(() => {
       useConnectionStore.setState({
         connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,

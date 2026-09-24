@@ -96,6 +96,16 @@ const PLATFORM_APP_STATE = {
   identity: { mode: 'platform', edition: 'hosted', signed_in: true },
 } as never
 
+// Same as PLATFORM_APP_STATE but with dev_mode_bypass:true — the state a
+// dev-mode-bypass install's ['app-state'] fetch actually reports. Used to
+// pin that the ['god-mode'] query is never even attempted once this is
+// known, rather than fired and then explained away by its 503.
+const BYPASS_APP_STATE = {
+  onboarding_complete: true,
+  identity: { mode: 'platform', edition: 'hosted', signed_in: true },
+  dev_mode_bypass: true,
+} as never
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(api.fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
@@ -263,6 +273,24 @@ describe('GodModeControl', () => {
     expect(screen.queryByTestId('god-mode-fetch-error-note')).not.toBeInTheDocument()
   })
 
+  // Regression for the always-503 GET /api/v1/gateway/god-mode console-error
+  // spam: this branch's fix (2026-09-24) is to never fire the doomed request
+  // at all once AppState.dev_mode_bypass is known true, rather than fire it
+  // and explain the 503 away afterward (the test above still covers that
+  // fallback path for the window before AppState resolves). Same note shown,
+  // zero network calls made.
+  it('never calls fetchGodMode when AppState.dev_mode_bypass is true, and still shows the bypass note', async () => {
+    vi.mocked(api.fetchAppState).mockResolvedValue(BYPASS_APP_STATE)
+    renderControl()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('god-mode-bypass-unavailable-note')).toBeInTheDocument()
+    })
+    expect(api.fetchGodMode).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('god-mode-fetch-error-note')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('god-mode-unavailable-note')).not.toBeInTheDocument()
+  })
+
   it('cancelling performs nothing', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_OFF)
     renderControl()
@@ -361,6 +389,28 @@ describe('GodModeActiveBanner', () => {
     await waitFor(() => {
       expect(api.fetchGodMode).toHaveBeenCalled()
     })
+    expect(screen.queryByTestId('god-mode-status-unknown-banner')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('god-mode-active-banner')).not.toBeInTheDocument()
+    expect(container.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  // Regression pinning this branch's actual fix (2026-09-24): before it,
+  // GodModeActiveBanner mounts unconditionally from AppShell on every page
+  // (ADR-092 FR-034) and fired ['god-mode'] regardless, so a dev-mode-bypass
+  // E2E run (gateway.dev_mode_bypass:true — see .github/workflows/pr.yml
+  // "Seed gateway config") produced a real 503 on every single page load,
+  // retried 3 times by the query client's default retry: 4 browser console
+  // errors per load, 4/4 attempts, on tests/e2e/subagent.spec.ts:439 "(d)
+  // real-LLM smoke". Once AppState.dev_mode_bypass is known true, the query
+  // must never fire at all.
+  it('never calls fetchGodMode when AppState.dev_mode_bypass is true, and renders nothing', async () => {
+    vi.mocked(api.fetchAppState).mockResolvedValue(BYPASS_APP_STATE)
+    const { container } = renderBanner()
+
+    await waitFor(() => {
+      expect(api.fetchAppState).toHaveBeenCalled()
+    })
+    expect(api.fetchGodMode).not.toHaveBeenCalled()
     expect(screen.queryByTestId('god-mode-status-unknown-banner')).not.toBeInTheDocument()
     expect(screen.queryByTestId('god-mode-active-banner')).not.toBeInTheDocument()
     expect(container.querySelector('[role="alert"]')).toBeNull()
