@@ -110,6 +110,7 @@ The first time you turn God Mode on through this screen, on an installation that
 | Kernel network-port controls | Off for the shell's own commands: they can bind or connect to any port, not just an allowed list. |
 | Outbound network filtering | The shell's commands are not filtered against the address block list that otherwise stops them reaching your internal network or cloud-metadata services. |
 | Per-command process limits | The extra process-count and memory limits normally placed on a shell command (and the platform equivalents on macOS and Windows) are not applied. |
+| After-run link check | Skipped. Normally, after each shell command, Omnipus looks for links the command left inside the workspace that point outside it, tells the agent, and writes the finding to the audit log. Under God Mode that check does not run. |
 | Auto-approve | Switched off outright, everywhere — there is nothing left for it to add. |
 
 #### What does not change
