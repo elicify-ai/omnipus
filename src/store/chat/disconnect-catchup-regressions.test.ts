@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
+import { emptySessionState } from './session'
 import type { WsReceiveFrame } from '@/lib/ws'
 
 const SID = 'sess-regress'
@@ -767,5 +768,64 @@ describe('BE-DESIGN.md §6.3, Opus review round 7 — a user message mid-turn en
     expect(asst[0].content).toBe(expected)
     expect(asst[0].status).toBe('done')
     expect(asst[0].isStreaming).toBe(false)
+  })
+
+  // Item 3 (orchestrator, Lane A confirmed the gateway is correct —
+  // TestAttach_SeededTranscriptFreshHub_ReportsNoRunningTurn,
+  // squad/be-lane-a-gateway commit fa7ad4c65): opening a fully-completed,
+  // fresh-hub session (no cursor yet, history seeded straight to the
+  // store, no live turn ever) must NOT leave the composer looking like a
+  // turn is running. Exact captured wire, no token frames at all:
+  // session_snapshot(reason:unknown_position) -> session_state(no
+  // active_turn) -> 10x [replay_message user, replay_message assistant,
+  // tool_call_start, tool_call_result] -> done(no turn_id, no seq,
+  // frames_emitted stats) -> catch_up_complete(mode:snapshot).
+  it('opening a fully-completed session (no live turn, ever) never leaves isStreaming stuck true', () => {
+    const SID = 'sess-regress-seeded'
+    useSessionStore.setState({ activeSessionId: SID })
+    // A real attach (attachToSession) sets isReplaying:true BEFORE any
+    // frame arrives — seed that here to isolate whether the isReplaying
+    // guard alone is sufficient, or whether something else is at fault.
+    useChatStore.setState({
+      sessionsById: { [SID]: { ...emptySessionState(), isReplaying: true } },
+    } as never)
+
+    useChatStore.getState().handleFrame({
+      type: 'session_snapshot', session_id: SID, seq: 20, boot_id: 'boot-fresh', reason: 'unknown_position',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-fresh', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
+    } as WsReceiveFrame)
+
+    for (let i = 0; i < 10; i++) {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', session_id: SID, role: 'user', id: `entry-user-${i}`, content: `Message ${i}`, timestamp: new Date(2026, 0, 1, 0, i).toISOString(),
+      } as WsReceiveFrame)
+      useChatStore.getState().handleFrame({
+        type: 'replay_message', session_id: SID, role: 'assistant', id: `entry-asst-${i}`, content: `Response to message ${i}`, agent_id: 'mia', timestamp: new Date(2026, 0, 1, 0, i, 30).toISOString(),
+      } as WsReceiveFrame)
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start', session_id: SID, call_id: `tc-${i}`, tool: 'shell', params: { cmd: `echo ${i}` }, agent_id: 'mia',
+      } as WsReceiveFrame)
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_result', session_id: SID, call_id: `tc-${i}`, status: 'success', result: `${i}\n`,
+      } as WsReceiveFrame)
+    }
+
+    useChatStore.getState().handleFrame({
+      type: 'done', session_id: SID, stats: { frames_emitted: 42, orphan_count: 0 },
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'catch_up_complete', session_id: SID, seq: 20, boot_id: 'boot-fresh', mode: 'snapshot',
+    } as WsReceiveFrame)
+
+    const b = useChatStore.getState().sessionsById[SID]!
+    expect(b.isStreaming).toBe(false)
+    expect(b.activeTurnId).toBeNull()
+    const asstMsgs = b.messageOrder.map((id) => b.messagesById[id]).filter((m) => m.role === 'assistant')
+    expect(asstMsgs).toHaveLength(10)
+    for (const m of asstMsgs) {
+      expect(m.isStreaming).toBeFalsy()
+    }
   })
 })

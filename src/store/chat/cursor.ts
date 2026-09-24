@@ -208,5 +208,19 @@ export function applySnapshotHistoryWipe(bucket: SessionChatState): SessionChatS
     // carried through here only as a safe default if the caller doesn't.
     cursor: bucket.cursor,
     awaitingCatchUp: true,
+    // Item 3 follow-up (orchestrator, Lane A confirmed the gateway side is
+    // correct): the client sets isReplaying:true BEFORE session_snapshot
+    // ever arrives (attachToSession). Without preserving it here, this
+    // full-state reset silently dropped it back to false the instant the
+    // snapshot landed — every replayed tool_call_start/tool_call_result
+    // frame that follows then sees isReplaying:false and incorrectly sets
+    // isStreaming:true (frames.ts's shouldMarkStreaming guard exists
+    // specifically to suppress this during replay, but only works if
+    // isReplaying genuinely stays true through the whole rebuild). Left the
+    // Stop button/composer lock stuck on after opening any fully-completed,
+    // never-live-streamed session (real-browser regression,
+    // replay-fidelity.spec.ts (e)). catch_up_complete is still the only
+    // frame that clears it back to false, at the genuine end of the rebuild.
+    isReplaying: bucket.isReplaying,
   }
 }
