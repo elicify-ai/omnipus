@@ -147,6 +147,45 @@ describe('BUG 2 — the send-time optimistic placeholder must reconcile with the
   })
 })
 
+// Opus review round 2, item 1 ("update moved tools by call_id"): a
+// disconnect no longer cancels a running tool call (BUG 1's fix) — the tool
+// can still legitimately resolve and its result arrive afterward. But
+// clearStreamingState's own bake step (outbound-lifecycle.ts) moves it OUT
+// of the live bucket.toolCalls map and into its owning message's tool_calls
+// array the instant the disconnect fires, so a subsequent tool_call_result
+// for that call_id found no live entry — and was either silently dropped or
+// (via appendUnmatchedToolError) rendered as a scary standalone error
+// notice for a tool call that's actually fine.
+describe('BE-DESIGN.md §6.3 — a tool_call_result for a tool already moved into the message reconciles it in place', () => {
+  it('updates the baked tool_calls entry instead of dropping the result or rendering an unmatched-error notice', () => {
+    useChatStore.getState().handleFrame(token(325, 'checking your tasks... '))
+    useChatStore.getState().handleFrame({
+      type: 'tool_call_start', session_id: SID, call_id: 'call-1', tool: 'list_tasks', params: {}, turn_id: TURN_ID, seq: 326,
+    } as WsReceiveFrame)
+
+    // Disconnect while the tool call is still running — §6.3: not cancelled,
+    // just moved (baked) into the message.
+    useChatStore.getState().clearStreamingState()
+    let bucket = useChatStore.getState().sessionsById[SID]!
+    expect(bucket.toolCalls['call-1']).toBeUndefined() // moved out of the live map
+    let msg = bucket.messagesById[MSG_ID]
+    expect(msg.tool_calls?.[0]).toMatchObject({ id: 'call-1', status: 'running' })
+
+    // The real result arrives afterward (catch-up, or a late live frame).
+    useChatStore.getState().handleFrame({
+      type: 'tool_call_result', session_id: SID, call_id: 'call-1', tool: 'list_tasks', result: { tasks: [] }, status: 'success', seq: 327,
+    } as WsReceiveFrame)
+
+    bucket = useChatStore.getState().sessionsById[SID]!
+    msg = bucket.messagesById[MSG_ID]
+    // Reconciled IN PLACE on the message — not dropped, and no separate
+    // "unmatched tool" error-notice bubble was created.
+    expect(msg.tool_calls?.[0]).toMatchObject({ id: 'call-1', status: 'success', result: { tasks: [] } })
+    const bubbles = assistantBubbles()
+    expect(bubbles).toHaveLength(1)
+  })
+})
+
 // Opus review round 2, item 2 (HIGH, founder decision Q1): the pending tail
 // must render at the END of the thread and survive a snapshot rebuild
 // (queued/sending/FAILED — 'failed' was previously missing entirely), and a

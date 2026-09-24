@@ -60,6 +60,65 @@ interface ReplayAndStatusFrameContext {
   armRateLimitClear: (sid: string, event: RateLimitEventData) => void
 }
 
+// Opus review round 2 item 2: a role:'user' replay_message can name the
+// SAME message this tab already holds as its own send-time optimistic
+// bubble — which is stored under the CLIENT's locally-generated id
+// (sendMessage's own buildQueuedUserMessage), never the server's
+// `messageId`, because nothing re-keys it once sent. Checking `messageId`
+// alone therefore missed this case entirely and created a second, duplicate
+// bubble on every reconnect that replayed a message this tab itself had
+// sent. Detected via `client_message_id` (which the optimistic bubble's
+// `id` equals) and RE-KEYED to the server's real id — safe here
+// specifically because this is a RECONNECT replay, not the live first send:
+// message_status for this client_message_id (the only OTHER reader keyed on
+// it) already ran on an earlier connection cycle. Returns true when it
+// handled (deduped) the frame — the caller must return without any further
+// processing of this replay_message.
+function reconcileOwnOptimisticBubble(
+  draft: SessionChatState,
+  clientMessageId: string | undefined,
+  messageId: string | undefined,
+  role: string,
+  targetSid: string | null,
+): boolean {
+  if (!clientMessageId || !draft.messageOrder.includes(clientMessageId) || clientMessageId === messageId) {
+    return false
+  }
+  const idx = draft.messageOrder.indexOf(clientMessageId)
+  const existing = draft.messagesById[clientMessageId]
+  if (messageId) {
+    delete draft.messagesById[clientMessageId]
+    draft.messagesById[messageId] = { ...existing, id: messageId, deliveryStatus: 'received' }
+    draft.messageOrder[idx] = messageId
+  } else {
+    existing.deliveryStatus = 'received'
+  }
+  console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: 'client-message-id-match' })
+  logDiagnostic('chatReplayDedupSkipped', { messageId, role, reason: 'client-message-id-match', sessionId: targetSid })
+  return true
+}
+
+// Extracted purely to keep handleReplayAndStatusFrame's replay_message case
+// under its line budget (scripts/budgets/functions.txt) — no behavior
+// change from the inline version it replaces. Bakes any tool calls that
+// belong to this turn into `lastMsgId`'s `tool_calls` BEFORE the coalesce
+// branch's early return. Without this, toolCallOrder accumulates across
+// turns and ends up baked onto the wrong (later) assistant message.
+function bakePendingToolCallsInto(draft: SessionChatState, lastMsgId: string): void {
+  if (draft.toolCallOrder.length === 0) return
+  const existing = (draft.messagesById[lastMsgId].tool_calls ?? []) as PositionedToolCall[]
+  const existingById = new Map(existing.map((tc) => [tc.id, tc]))
+  const baked = draft.toolCallOrder
+    .filter((id) => draft.toolCalls[id])
+    .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
+  const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
+  for (const tc of baked) mergedById.set(tc.id, tc)
+  draft.messagesById[lastMsgId].tool_calls = Array.from(mergedById.values())
+  draft.toolCalls = {}
+  draft.toolCallOrder = []
+  draft.textAtToolCallStart = {}
+}
+
 export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid, withBucket, armRateLimitClear }: ReplayAndStatusFrameContext): boolean {
   switch (frame.type) {
         case 'replay_error': {
@@ -263,36 +322,8 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
               // Cursor advancement is handled centrally before the switch (I1);
               // no per-case advance needed here.
               const msgs = getMessages(b)
-              // Opus review round 2 item 2: a role:'user' replay_message can
-              // name the SAME message this tab already holds as its own
-              // send-time optimistic bubble — which is stored under the
-              // CLIENT's locally-generated id (sendMessage's own
-              // buildQueuedUserMessage), never the server's `messageId`,
-              // because nothing re-keys it once sent. Checking `messageId`
-              // alone therefore missed this case entirely and created a
-              // second, duplicate bubble on every reconnect that replayed a
-              // message this tab itself had sent. Detected via
-              // `client_message_id` (which the optimistic bubble's `id`
-              // equals) and RE-KEYED to the server's real id — safe here
-              // specifically because this is a RECONNECT replay, not the
-              // live first send: message_status for this client_message_id
-              // (the only OTHER reader keyed on it) already ran on an
-              // earlier connection cycle.
-              const clientMessageId = replayFrame.client_message_id
-              if (clientMessageId && draft.messageOrder.includes(clientMessageId) && clientMessageId !== messageId) {
-                const idx = draft.messageOrder.indexOf(clientMessageId)
-                const existing = draft.messagesById[clientMessageId]
-                if (messageId) {
-                  delete draft.messagesById[clientMessageId]
-                  draft.messagesById[messageId] = { ...existing, id: messageId, deliveryStatus: 'received' }
-                  draft.messageOrder[idx] = messageId
-                } else {
-                  existing.deliveryStatus = 'received'
-                }
-                console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: 'client-message-id-match' })
-                logDiagnostic('chatReplayDedupSkipped', { messageId, role, reason: 'client-message-id-match', sessionId: targetSid })
-                return
-              }
+              // Opus review round 2 item 2 — see reconcileOwnOptimisticBubble above.
+              if (reconcileOwnOptimisticBubble(draft, replayFrame.client_message_id, messageId, role, targetSid)) return
               // Reconnection dedup: prefer server-assigned id match when present;
               // fall back to (content + role + timestamp) tuple. Content-only dedup
               // was silently dropping legitimate identical user retries.
@@ -358,21 +389,8 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
                   lastMsgId != null && draft.messageOrder[draft.messageOrder.length - 1] === lastMsgId
                 if (lastMsgId && lastMsgIsRawTail && (draft.messagesById[lastMsgId].content ?? '') === '') {
                   // Bake any tool calls that belong to this turn BEFORE taking the early
-                  // return. Without this, toolCallOrder accumulates across turns and ends
-                  // up baked onto the wrong (later) assistant message.
-                  if (draft.toolCallOrder.length > 0) {
-                    const existing = (draft.messagesById[lastMsgId].tool_calls ?? []) as PositionedToolCall[]
-                    const existingById = new Map(existing.map((tc) => [tc.id, tc]))
-                    const baked = draft.toolCallOrder
-                      .filter((id) => draft.toolCalls[id])
-                      .map((id) => stampToolCallOffset(id, draft.toolCalls[id], draft.textAtToolCallStart, existingById.get(id)?.textOffset))
-                    const mergedById = new Map<string, PositionedToolCall>(existing.map((tc) => [tc.id, tc]))
-                    for (const tc of baked) mergedById.set(tc.id, tc)
-                    draft.messagesById[lastMsgId].tool_calls = Array.from(mergedById.values())
-                    draft.toolCalls = {}
-                    draft.toolCallOrder = []
-                    draft.textAtToolCallStart = {}
-                  }
+                  // return — see bakePendingToolCallsInto's own doc comment.
+                  bakePendingToolCallsInto(draft, lastMsgId)
                   const m = draft.messagesById[lastMsgId]
                   m.content = text
                   m.status = 'done'

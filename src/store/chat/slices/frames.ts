@@ -1872,6 +1872,30 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           } else {
             withBucket(targetSid, (b) => {
               if (!b.toolCalls[frame.call_id]) {
+                // Opus review round 2 item 1 ("update moved tools by
+                // call_id"): the live entry can be gone not because this
+                // result is genuinely unmatched, but because §6.3's
+                // disconnect handling (clearStreamingState) already BAKED
+                // it into its owning message's tool_calls array — a
+                // disconnect no longer cancels a running tool call, so the
+                // real result can still legitimately arrive afterward
+                // (catch-up, or a late live frame). Before falling back to
+                // "unmatched" (which renders a scary standalone error
+                // notice for a tool that's actually fine), check every
+                // message's own baked tool_calls for this call_id and
+                // update it in place.
+                for (const id of b.messageOrder) {
+                  const msg = b.messagesById[id]
+                  const idx = msg?.tool_calls?.findIndex((tc) => tc.id === frame.call_id) ?? -1
+                  if (idx === -1) continue
+                  return produce(b, (draft) => {
+                    const tc = draft.messagesById[id].tool_calls![idx]
+                    tc.result = clampedResult
+                    tc.status = frame.status ?? 'success'
+                    tc.duration_ms = frame.duration_ms
+                    tc.error = frame.error
+                  }) as Partial<SessionChatState>
+                }
                 return appendUnmatchedToolError(b, frame, clampedResult)
               }
               return produce(b, (draft) => {
