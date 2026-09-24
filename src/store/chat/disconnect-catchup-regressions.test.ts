@@ -475,3 +475,138 @@ describe('BE-DESIGN.md §6.3, Opus review round 3 N5 — a replayed bubble of th
     expect(bubbles[0].status).toBe('done')
   })
 })
+
+// Round 6, R-W (HIGH, real-browser regression): "This answer couldn't be
+// finished · Generate again" was showing under a FULLY FINISHED answer
+// after almost any catch-up (hard reload, reconnect, chat switch-back,
+// cross-tab, gateway restart) — not just the genuinely-interrupted case.
+// Minimal repro: send a message, wait for the turn to genuinely finish (all
+// tokens + done received live), hard-reload, reopen the chat from the
+// sidebar. A hard reload wipes ALL in-memory state, so nothing about "this
+// turn's done was already seen" survives it — the ONLY signal available
+// after reload is what the snapshot rebuild + catch_up_complete replay.
+describe('BE-DESIGN.md §6.5, Opus review round 6 R-W — a fully finished, replayed answer must NOT be flagged unfinished', () => {
+  it('a normal completed turn, replayed via session_snapshot + catch_up_complete after a hard reload, shows no warning', () => {
+    useSessionStore.setState({ activeSessionId: SID })
+    useChatStore.setState({ sessionsById: {}, messages: [], messagesById: {} } as never)
+
+    // The hard reload: a BRAND NEW store, session_snapshot rebuild. The
+    // turn genuinely completed before the reload (session_state carries NO
+    // active_turn — the server confirms nothing is running), and the
+    // FULL, complete answer replays as ordinary history.
+    useChatStore.getState().handleFrame({
+      type: 'session_snapshot', session_id: SID, seq: 10, boot_id: 'boot-1', reason: 'unknown_position',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-09-24T00:00:00Z',
+      // No active_turn — the turn already finished.
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'replay_message', session_id: SID, id: 'u1', role: 'user', content: 'check my tasks', timestamp: '2026-09-24T00:00:00Z',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'replay_message', session_id: SID, id: MSG_ID, role: 'assistant', content: 'all done, full answer.', turn_id: TURN_ID, agent_id: 'mia', timestamp: '2026-09-24T00:00:01Z',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'catch_up_complete', session_id: SID, seq: 10, boot_id: 'boot-1', mode: 'snapshot',
+    } as WsReceiveFrame)
+
+    const bubbles = assistantBubbles()
+    expect(bubbles).toHaveLength(1)
+    expect(bubbles[0].content).toBe('all done, full answer.')
+    // The whole point: NOT flagged. A replayed, persisted assistant message
+    // is complete by definition — the server never said this turn ended
+    // incomplete, it simply isn't running anymore because it's DONE.
+    expect(bubbles[0].confirmedUnfinished).toBeFalsy()
+  })
+})
+
+// Round 6, R-J (HIGH, real-browser regression): sending a message mid-answer
+// appended the SECOND turn's whole answer into the FIRST turn's bubble.
+// Exact order: turn A tokens, user message (steer), more turn-A tokens,
+// done A, turn B tokens with a NEW turn_id, done B. Expected DOM: [user1],
+// [assistant A], [user2], [assistant B] — four entries, two separate
+// answers. Root cause: the N2 fix (reopen a bubble closed only by
+// closedBySteer) and/or the N5 fix (treat a replayed active-turn bubble as
+// open) matched turn B's tokens onto turn A's already-finalized bubble
+// instead of opening a new one for the genuinely different turn_id.
+describe('BE-DESIGN.md §6.3, Opus review round 6 R-J — a new turn never appends into a finished prior turn\'s bubble', () => {
+  it('turn B opens its OWN bubble after user2, even though turn A was mid-turn-steered', () => {
+    const TURN_B = 'turn-regress-B'
+    // Confirmed root cause: done never cleared draft.activeTurnId, so a
+    // SUBSEQUENT turn's tokens sharing the SAME message_id (message_id
+    // reuse across turns is a real gateway possibility this store cannot
+    // assume never happens) incorrectly matched the N5 "replayed bubble of
+    // the active turn stays open" exception via the STALE activeTurnId
+    // (still turn A's, never reset once turn A's own done fired) even
+    // though the frame's own turn_id is genuinely different.
+    const MSG_B = MSG_ID
+    const sent: unknown[] = []
+    const conn = { send: (f: unknown) => { sent.push(f); return true }, close: () => {}, isConnected: true }
+    useConnectionStore.setState({ connection: conn, isConnected: true } as never)
+    useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'mia' })
+    useChatStore.setState({ sessionsById: {}, messages: [], messagesById: {}, isStreaming: false } as never)
+
+    // Turn A: t001..t006.
+    for (let i = 1; i <= 6; i++) {
+      useChatStore.getState().handleFrame(token(324 + i, `A${String(i).padStart(3, '0')} `))
+    }
+    useChatStore.setState({ isStreaming: true })
+
+    // User steers mid-turn-A.
+    useChatStore.getState().sendMessage('a follow-up question')
+    expect(sent).toHaveLength(1)
+    // Realistic ordering: the server acks the steer message (received)
+    // before it could possibly start turn B's reply — never a race in
+    // practice. Without this, the steer bubble stays 'sending' forever in
+    // this test and is (correctly, per founder Q1) still treated as
+    // pending-tail, which is a self-inflicted test-setup gap, not what R-J
+    // is actually about.
+    const steerFrame = sent[0] as { client_message_id?: string }
+    useChatStore.getState().handleFrame({
+      type: 'message_status', session_id: SID, client_message_id: steerFrame.client_message_id, state: 'received', seq: 331,
+    } as WsReceiveFrame)
+
+    // Turn A keeps streaming its own remaining tokens, then genuinely
+    // finishes with its OWN done. Tokens 1-6 used seq 325-330; 7-10 use
+    // seq 332-335 (331 was the message_status above).
+    for (let i = 7; i <= 10; i++) {
+      useChatStore.getState().handleFrame(token(324 + i + 1, `A${String(i).padStart(3, '0')} `))
+    }
+    useChatStore.getState().handleFrame({
+      type: 'done', session_id: SID, message_id: MSG_ID, turn_id: TURN_ID, seq: 336, stats: { tokens: 10, cost: 0.01 },
+    } as WsReceiveFrame)
+
+    // Turn B: a GENUINELY NEW turn (new turn_id, new message_id) — e.g. the
+    // agent's reply to the steer message itself.
+    for (let i = 1; i <= 6; i++) {
+      useChatStore.getState().handleFrame({
+        type: 'token', session_id: SID, content: `B${String(i).padStart(3, '0')} `, message_id: MSG_B, turn_id: TURN_B, agent_id: 'mia', seq: 336 + i,
+      } as WsReceiveFrame)
+    }
+    useChatStore.getState().handleFrame({
+      type: 'done', session_id: SID, message_id: MSG_B, turn_id: TURN_B, seq: 343, stats: { tokens: 6, cost: 0.01 },
+    } as WsReceiveFrame)
+
+    const b = useChatStore.getState().sessionsById[SID]!
+    const order = b.messageOrder.map((id) => b.messagesById[id])
+    const asst = order.filter((m) => m.role === 'assistant')
+    const users = order.filter((m) => m.role === 'user')
+
+    // TWO separate assistant bubbles — turn B must never merge into A's.
+    expect(asst).toHaveLength(2)
+    expect(asst[0].content).toBe('A001 A002 A003 A004 A005 A006 A007 A008 A009 A010 ')
+    expect(asst[1].content).toBe('B001 B002 B003 B004 B005 B006 ')
+    expect(asst[0].status).toBe('done')
+    expect(asst[1].status).toBe('done')
+
+    // Order: user1 (implicit, none sent here) < assistant A < user2 (the
+    // steer) < assistant B.
+    expect(users).toHaveLength(1)
+    const idxA = b.messageOrder.indexOf(asst[0].id)
+    const idxUser2 = b.messageOrder.indexOf(users[0].id)
+    const idxB = b.messageOrder.indexOf(asst[1].id)
+    expect(idxA).toBeLessThan(idxUser2)
+    expect(idxUser2).toBeLessThan(idxB)
+  })
+})

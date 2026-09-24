@@ -287,7 +287,23 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
   // Step 1: this message_id is already accounted for on some bubble
   // (live-registered as that bubble's own id, or merged onto an earlier
   // bubble of the same turn by step 2 on a previous token).
-  const resolvedId = findBubbleIdForMessageId(draft, messageId)
+  //
+  // Opus review round 6, R-J (HIGH, DO-NOT-SHIP, real-browser regression):
+  // a bare message_id match here is not enough — if the bubble it names
+  // belongs to a DIFFERENT, genuinely finished turn (message_id is not
+  // guaranteed turn-unique; confirmed by direct reproduction: turn B
+  // reusing turn A's message_id merged 120 tokens of two separate answers
+  // into ONE bubble), treating it as "the same answer continuing" is
+  // exactly wrong — a whole second turn's answer got appended into the
+  // first turn's already-finished bubble instead of opening its own. A
+  // message_id match only counts when BOTH frames carry no turn_id, or
+  // their turn_ids agree; otherwise this is a cross-turn id collision and
+  // falls through to steps 2/3 as if the message_id were unregistered.
+  const rawResolvedId = findBubbleIdForMessageId(draft, messageId)
+  const resolvedId =
+    rawResolvedId && turnId && draft.messagesById[rawResolvedId].turnId && draft.messagesById[rawResolvedId].turnId !== turnId
+      ? null
+      : rawResolvedId
   if (resolvedId) {
     const existing = draft.messagesById[resolvedId]
     if (existing.status === 'interrupted' || existing.status === 'error') return
@@ -432,8 +448,18 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       prevMsg.pendingTextBoundary = false
     }
   }
+  // R-J's collision case (see the "cross-turn id collision" comment on
+  // resolvedId above): messageId can already belong to a DIFFERENT,
+  // unrelated bubble (Step 1 deliberately refused to reuse it). Minting the
+  // new bubble under that same id would silently overwrite/destroy the
+  // other turn's bubble in messagesById (same key). Mint a fresh local id
+  // instead in that case, and still register the server's message_id onto
+  // it (mergedReplayMessageIds) so a later token that legitimately repeats
+  // this message_id for THIS turn still resolves consistently.
+  const idCollision = !!draft.messagesById[messageId]
+  const bubbleId = idCollision ? generateId() : messageId
   const bubble: ChatMessage = {
-    id: messageId,
+    id: bubbleId,
     role: 'assistant',
     content: frame.content,
     timestamp: new Date().toISOString(),
@@ -441,6 +467,10 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
     isStreaming: true,
     agentId: frame.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined,
     turnId,
+    ...(idCollision ? { mergedReplayIds: [messageId] } : {}),
+  }
+  if (idCollision) {
+    draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
   }
   draft.messagesById[bubble.id] = bubble
   // Opus review round 3 item N5 (LOW-MEDIUM): a brand new assistant bubble
