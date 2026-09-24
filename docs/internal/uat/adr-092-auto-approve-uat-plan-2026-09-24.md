@@ -38,7 +38,7 @@ the citation, that is a finding, not a reason to change the expectation.
 | Item | Value |
 |---|---|
 | Install | One Fly.io UAT app (`omnipus-uat-swimlane`), fresh data folder, onboarded with `openrouter` + `z-ai/glm-5.3-flash` (founder-set UAT model). |
-| Sandbox | **Enforcing** for phases 1–2; switched to **not enforcing** by the operator for phase 3. |
+| Sandbox | **Fly cannot enforce a kernel sandbox**: its guest kernel returns ENOSYS for Landlock (verified 2026-09-24 — `sandbox-status` reports `backend=fallback`, `kernel_sandbox_active=false`). Phases 1–2 on Fly therefore run in the **no-sandbox** state (badge "Auto — no sandbox"). Phase 3 re-runs the sandbox-dependent rows on a local macOS install where Seatbelt enforces. |
 | Accounts | `admin` / `admin123` (operator and phase-2 lane) plus six tester accounts `t1`–`t6`, added to the install's config by the operator (there is no account screen). One account per tester: a second login on the same account logs the first one out. |
 | Isolation | Each tester works **only in their own workspace and their own agent**. Approval cards are shown per workspace, so another tester's card appears at most as a small "waiting in another workspace" banner — **ignore it, never click it, note if it ever shows a card inside your workspace.** |
 | Global settings | Frozen during phase 1: global Auto-approve **ON**, God Mode **OFF**, no global policy edits. Only the phase-2 lane changes global settings, and only after every phase-1 lane has finished. |
@@ -103,6 +103,7 @@ global default (ON) and the tool named is on "Ask" for your agent.
 | T1-07 | Composer: hover the Auto switch in a new chat, then in a running chat. | New chat: "…applies from your first message". Running chat: "…applies from the next step". | founder rulings 2026-09-24 | |
 | T1-08 | Read an approval card for `delete_task` (ask the agent to delete a task you created). | Plain-English headline; the tool and its arguments visible; buttons Approve Once, Always Allow, Deny; a countdown. | FR-023 | |
 | T1-09 | Look for any emoji, jargon ("TOCTOU", "Landlock", "seccomp", "FR-") or raw config keys in the Security card, badge, tooltips and cards you saw. | None. | brand guidelines; CLAUDE.md language rule | Neg |
+| T1-10 | During onboarding (operator run) or Settings → Providers, type an API key. | The key is masked (dots), with a show/hide control. | security practice; FR-023-era UI rules | Neg |
 
 ### Lane t2 — Marco: the per-chat switch
 
@@ -209,7 +210,9 @@ global default (ON) and the tool named is on "Ask" for your agent.
 | G-09 | Turn God Mode off. Banner gone; badge back to Auto. | As stated. | FR-034 | |
 | G-10 | Global policy: set `create_task` to **Allow** at the global level for a moment — does the marker on agents without an override disappear? Revert. | Marker only on Ask tools. | FR-060 | |
 
-### Phase 3 — Operator: no kernel sandbox (operator restarts the install with the sandbox not enforcing)
+### Phase 3 — Operator: compare with and without a kernel sandbox
+
+N-01…N-07 are read on **Fly** (no sandbox). Then the operator repeats T1-06, T5-01, T5-03, T5-04 and N-03 on a **local macOS install** (Seatbelt enforcing): the badge must read "Auto" (not "Auto — no sandbox"), and the audit entry must show a kernel sandbox was enforcing.
 
 | ID | Steps | Expected result | Source | Neg |
 |---|---|---|---|---|
@@ -222,7 +225,7 @@ global default (ON) and the tool named is on "Ask" for your agent.
 | N-07 | Audit log entry for N-03. | Shows that no kernel sandbox was enforcing. | founder 2026-09-24 | |
 | N-08 | Security health page. | Record what it says about the sandbox (known issue #853 — note only). | issue #853 | |
 
-**Totals:** 92 cases — 52 positive, 40 negative/edge (43%).
+**Totals:** 93 cases — 52 positive, 41 negative/edge (44%).
 
 ---
 
