@@ -113,8 +113,9 @@ func TestHub_H12_SpanFramesOncePerSession_TwoTabs(t *testing.T) {
 
 	hub := h.hubs.lookup(sid)
 	require.NotNil(t, hub)
-	var seqs []float64
-	for _, typ := range []string{"subagent_start", "subagent_message", "subagent_state", "subagent_end"} {
+	lifecycleTypes := []string{"subagent_start", "subagent_message", "subagent_state", "subagent_end"}
+	seqs := make([]float64, 0, len(lifecycleTypes))
+	for _, typ := range lifecycleTypes {
 		got := journalFramesOfType(t, hub, typ)
 		require.Len(t, got, 1, "the session journal must hold exactly one %s for two tabs", typ)
 		seq, ok := got[0]["seq"].(float64)
