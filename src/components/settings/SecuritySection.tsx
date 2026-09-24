@@ -221,7 +221,7 @@ export function AutoApproveControl() {
       .gate((token) => saveAsync({ next, token }), {
         title: next ? 'Turn Auto-approve on?' : 'Turn Auto-approve off?',
         body: next
-          ? 'Tools set to “ask” will run without a prompt when it’s safe — they stay inside your workspace and the sandbox. See “Still asks every time” on this card for the short list of things that always still ask. Without a kernel sandbox (for example on Windows), shell commands are checked by reading the command text only.'
+          ? 'Tools set to “ask” will run without a prompt when it’s safe — they stay inside your workspace. See “Still asks every time” on this card for the short list of things that always still ask. Without a kernel sandbox (for example on Windows), shell commands are checked by reading the command text only.'
           : 'Every tool set to “ask” will prompt every time again, with no auto-approval.',
         confirmLabel: next ? 'Turn Auto-approve on' : 'Turn Auto-approve off',
       })
@@ -265,7 +265,7 @@ export function AutoApproveControl() {
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Auto-approve</p>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             Tools set to &ldquo;Ask&rdquo; run without a prompt when it&rsquo;s safe: they stay inside your
-            workspace and the sandbox.
+            workspace.
           </p>
         </div>
         <Switch
