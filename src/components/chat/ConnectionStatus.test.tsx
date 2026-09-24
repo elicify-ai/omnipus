@@ -456,6 +456,52 @@ describe('finding 14 — AssistantMessageConnectionStatus wiring', () => {
     expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
   })
 
+  it('BE-DESIGN.md §6.5 / Opus review round 2 item 5: renders once reconnected even though disconnectedAssistantMessageId was already cleared, when the bucket itself shows the turn ended with no done()', () => {
+    // Regression: connection.ts::setConnected(true) clears
+    // disconnectedAssistantMessageId the INSTANT the socket reconnects — so
+    // gating this component purely on `disconnectedHere` made the
+    // awaitingCatchUp check downstream in deriveConnectionDisplay
+    // unreachable dead code: by the time catch-up could possibly have
+    // resolved, this component had already returned null. §6.5's real rule
+    // doesn't need the connection store's transient flag at all — it is
+    // fully derivable from the bucket: no done(T) applied (the bubble is
+    // still open/unfinished) and session_state.active_turn is not T.
+    useConnectionStore.setState({
+      isConnected: true,
+      reconnectPhase: null,
+      disconnectedAt: null,
+      reconnectedAt: null,
+      lastDisconnectDurationMs: 20_000,
+      lastDisconnectWasTerminal: true,
+      disconnectedAssistantMessageId: null, // already cleared by setConnected(true)
+    })
+    useSessionStore.setState({ activeSessionId: TEST_SID })
+    useChatStore.setState({
+      sessionsById: {
+        [TEST_SID]: {
+          activeTurnId: null, // session_state confirms no turn running
+          awaitingCatchUp: false, // catch_up_complete has already resolved
+          isReplaying: false,
+          messageOrder: ['assistant-1'],
+          messagesById: {
+            'assistant-1': {
+              id: 'assistant-1',
+              role: 'assistant',
+              content: 'partial answer',
+              timestamp: '2026-09-24T00:00:00Z',
+              status: 'streaming',
+              isStreaming: true,
+              turnId: 'turn-gone-before-restart', // != activeTurnId (null) — the turn ended without a done()
+            },
+          },
+        } as never,
+      },
+    })
+
+    render(<AssistantMessageConnectionStatus messageId="assistant-1" agentName="Mia" />)
+    expect(screen.getByTestId('assistant-connection-status')).toBeInTheDocument()
+  })
+
   it('resends by message id (including any attachments) via resendMessage, not a fresh sendMessage call', () => {
     useConnectionStore.setState({
       isConnected: true,

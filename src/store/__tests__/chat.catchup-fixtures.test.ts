@@ -46,22 +46,42 @@ interface Fixture {
   tabs: FixtureTab[]
 }
 
-/** Every server→client frame across ALL tabs, in file order — this is what
- * ONE simulated browser tab receives across its whole lifetime, including
- * any reconnect segments (fixtures split a reconnect into a second `tabs[]`
- * entry, e.g. "A" then "A (reconnected)" — concatenating them in file order
- * reproduces exactly what a real, persistent Zustand store would see across
- * that reconnect, since reconnecting does not reset the store). */
-function allServerFrames(fixture: Fixture): WsReceiveFrame[] {
-  const frames: WsReceiveFrame[] = []
+/** A step in ONE simulated tab's real-time lifetime: either a frame to feed
+ * into handleFrame, or a disconnect side effect to actually EXECUTE. */
+type DriveStep = { kind: 'frame'; frame: WsReceiveFrame } | { kind: 'disconnect' }
+
+/** Real-browser regression (orchestrator + Opus review round 2, "TEST
+ * QUALITY"): a prior pass of this driver only ever fed server→client frames
+ * straight into handleFrame — it silently dropped every recording's `note`
+ * event, including "connection dropped"/"connection lost". That meant the
+ * real WS disconnect handler (OmnipusRuntimeProvider's onDisconnected ->
+ * clearStreamingState) never actually ran in this suite, so it could not
+ * have caught BUG 1 (clearStreamingState closing the still-streaming
+ * bubble) even though F2/F8 both recorded a real disconnect. Fixed: any
+ * `note` event whose text says the connection dropped/was lost is now a
+ * real step that calls the ACTUAL clearStreamingState(), exactly as
+ * OmnipusRuntimeProvider.tsx's onDisconnected does. */
+function allSteps(fixture: Fixture): DriveStep[] {
+  const steps: DriveStep[] = []
   for (const tab of fixture.tabs) {
     for (const event of tab.events) {
       if (event.dir === 'server→client' && event.frame) {
-        frames.push(event.frame as unknown as WsReceiveFrame)
+        steps.push({ kind: 'frame', frame: event.frame as unknown as WsReceiveFrame })
+      } else if (event.dir === 'note' && /connection (dropped|lost)/i.test(event.note ?? '')) {
+        steps.push({ kind: 'disconnect' })
       }
     }
   }
-  return frames
+  return steps
+}
+
+/** Every server→client frame across ALL tabs, in file order — kept for the
+ * scenarios (F5's per-tab split, F6/F7) that drive frames directly rather
+ * than through `driveSteps`. */
+function allServerFrames(fixture: Fixture): WsReceiveFrame[] {
+  return allSteps(fixture)
+    .filter((s): s is { kind: 'frame'; frame: WsReceiveFrame } => s.kind === 'frame')
+    .map((s) => s.frame)
 }
 
 /** Drives ONE fresh store instance through every server→client frame in
@@ -70,6 +90,22 @@ function driveFrames(frames: WsReceiveFrame[]): void {
   useChatStore.setState({ sessionsById: {} } as never)
   for (const frame of frames) {
     useChatStore.getState().handleFrame(frame)
+  }
+}
+
+/** Drives ONE fresh store instance through a fixture's full step sequence —
+ * frames AND real disconnect side effects, in the order the recording saw
+ * them. Use this instead of `driveFrames(allServerFrames(...))` for any
+ * fixture whose recording notes a real connection drop (F2, F8) — see
+ * `allSteps`'s doc comment. */
+function driveSteps(fixture: Fixture): void {
+  useChatStore.setState({ sessionsById: {} } as never)
+  for (const step of allSteps(fixture)) {
+    if (step.kind === 'disconnect') {
+      useChatStore.getState().clearStreamingState()
+    } else {
+      useChatStore.getState().handleFrame(step.frame)
+    }
   }
 }
 
@@ -127,7 +163,7 @@ describe('F1 — live turn, one tab, no reconnect (baseline shape)', () => {
 describe('F2 — reconnect, incremental catch-up (cursor servable)', () => {
   it('the catch-up tail lands on the SAME bubble as the live continuation — no duplicate, one bubble', () => {
     const fixture = f2 as Fixture
-    driveFrames(allServerFrames(fixture))
+    driveSteps(fixture) // executes the recording's real 'connection dropped' note
     const SID = 'sess-1'
 
     const asst = assistantMessages(SID)
@@ -223,7 +259,7 @@ describe('F7 — gateway restart: the cursor\'s boot id no longer matches', () =
 describe('F8 — message typed while offline', () => {
   it('the offline message appears at the end, then its own answer, with no duplicate', () => {
     const fixture = f8 as Fixture
-    driveFrames(allServerFrames(fixture))
+    driveSteps(fixture) // executes the recording's real 'connection lost' note
     const SID = 'sess-1'
 
     const users = userMessages(SID)
