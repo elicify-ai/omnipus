@@ -53,12 +53,36 @@ export interface FreezeProxyHandle {
  * `routeWebSocket` only affects WebSockets created after it is registered.
  */
 export async function installFreezeProxy(page: Page): Promise<FreezeProxyHandle> {
-  let frozen = false
+  // Real-browser follow-up (orchestrator, scenario b): `page.routeWebSocket`
+  // registers ONE handler that fires again for every NEW WebSocket the page
+  // creates — including the one `page.reload()` opens. A single, closure-
+  // shared `frozen` boolean therefore froze every future connection too,
+  // not just the one that was live when `freeze()` was called. Scenario b's
+  // whole point is a NEW connection (opened by a reload) catching up while
+  // the OLD one stays frozen — but since `unfreeze()` is never called
+  // before that reload, the new connection silently inherited the freeze
+  // and never received a single frame, which is exactly why the rebuilt
+  // page showed zero messages forever (CI: `toHaveCount(1)` received `0`
+  // for the full 60s timeout, every retry).
+  //
+  // Fixed by giving each connection ITS OWN `frozen` flag, private to that
+  // invocation of the routeWebSocket callback. `freeze()`/`unfreeze()`
+  // operate on whichever connection is CURRENTLY live (via
+  // `currentFrozenSetter`, reassigned every time a new WebSocket is
+  // established) — a reload's brand-new connection gets a fresh `frozen =
+  // false` that nothing has touched, exactly matching "the new connection
+  // ... while the frozen one is still nominally bound".
+  let currentFrozenSetter: ((v: boolean) => void) | null = null
+  let currentlyFrozen = false
   let activeRoute: WebSocketRoute | null = null
 
   await page.routeWebSocket(/.*/, (ws) => {
     const server = ws.connectToServer()
     activeRoute = ws
+    let frozen = false
+    currentFrozenSetter = (v: boolean) => {
+      frozen = v
+    }
 
     ws.onMessage((message) => {
       if (frozen) return // drop silently — the whole point of a freeze
@@ -77,14 +101,16 @@ export async function installFreezeProxy(page: Page): Promise<FreezeProxyHandle>
 
   return {
     async freeze() {
-      frozen = true
+      currentlyFrozen = true
+      currentFrozenSetter?.(true)
     },
     async unfreeze() {
-      frozen = false
+      currentlyFrozen = false
+      currentFrozenSetter?.(false)
       void activeRoute // kept for future direct-route inspection needs
     },
     isFrozen() {
-      return frozen
+      return currentlyFrozen
     },
   }
 }
