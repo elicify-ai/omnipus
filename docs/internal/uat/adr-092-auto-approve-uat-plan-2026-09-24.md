@@ -205,7 +205,8 @@ global default (ON) and the tool named is on "Ask" for your agent.
 | G-04 | With global OFF: new chat, flip the chat switch ON, same request. | No card (a chat may loosen for itself). | FR-002 | |
 | G-05 | Turn global Auto back **ON**: a confirmation dialog appears. Read it. | Short, consistent with the card; password required. | FR-045; founder 2026-09-24 | |
 | G-06 | Turn **God Mode** on (Settings → Gateway). | Password step-up; red banner; badge "God Mode". | FR-034 | |
-| G-07 | Under God Mode: `write_file` inside workspace (tool on Ask). | A card (Auto is off under God Mode). | FR-051 | Neg |
+| G-07 | Under God Mode: `write_file` inside workspace (on Ask **on your agent**). | A card — an agent's own Ask survives God Mode, and Auto is off under God Mode. | FR-051; compositor God Mode contract | Neg |
+| G-07b | Under God Mode: ask for `delete_task` (on Ask in the **global** policies by default, not on your agent). | No card — God Mode lifts global Ask to Allow. | `pkg/tools/compositor.go` God Mode contract (global ask → allow; agent ask stays) | Neg |
 | G-08 | Under God Mode: bash `rm -rf notes/x`. | Still refused by the deny rule. | GodModeControl / D3 | Neg |
 | G-09 | Turn God Mode off. Banner gone; badge back to Auto. | As stated. | FR-034 | |
 | G-10 | Global policy: set `create_task` to **Allow** at the global level for a moment — does the marker on agents without an override disappear? Revert. | Marker only on Ask tools. | FR-060 | |
@@ -225,7 +226,7 @@ N-01…N-07 are read on **Fly** (no sandbox). Then the operator repeats T1-06, T
 | N-07 | Audit log entry for N-03. | Shows that no kernel sandbox was enforcing. | founder 2026-09-24 | |
 | N-08 | Security health page. | Record what it says about the sandbox (known issue #853 — note only). | issue #853 | |
 
-**Totals:** 93 cases — 52 positive, 41 negative/edge (44%).
+**Totals:** 94 cases — 52 positive, 42 negative/edge (45%).
 
 ---
 

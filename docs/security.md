@@ -43,7 +43,7 @@ Auto-approve can be set in three places. On a new installation it is **on** glob
 
 On the Security screen, the switch carries this description:
 
-> Tools set to “Ask” run without a prompt when it's safe: they stay inside your workspace and the sandbox.
+> Tools set to “Ask” run without a prompt when it's safe: they stay inside your workspace.
 
 Below the switch, **Still asks every time** is a collapsed list — click it to expand. It groups the fixed list of tools that always ask, even with Auto-approve on:
 
@@ -76,7 +76,7 @@ The badge at the top of a chat shows which state applies to that chat right now.
 
 | Badge | Meaning |
 |---|---|
-| **God Mode** | God Mode is on. No approval prompts, no sandbox. |
+| **God Mode** | God Mode is on. No sandbox, and tools set to Ask in the global policies run without a prompt. A tool that an agent itself sets to Ask still asks, and Auto-approve is off. |
 | **Ask** | Auto-approve is off for this chat. Every tool set to Ask prompts. |
 | **Auto** | Auto-approve is on and a kernel sandbox is active. Safe calls run; the rest ask. |
 | **Auto — no sandbox** | Auto-approve is on, but there is no active kernel sandbox. Safe calls still run; the shell's checks are text-only (see above). The badge's tooltip explains this. |
