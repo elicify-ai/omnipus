@@ -744,13 +744,19 @@ func (pe *PlanEngine) sweepToFailedInterrupted(ls *session.LifecycleStore, rec *
 // a fix.
 //
 // Best-effort and expected to legitimately fail for a delegate/subturn
-// session: pkg/tools/delegate.go's spawnSubTurn path never calls
-// UnifiedStore.NewSession for a child turn at all, so rec.SessionID resolves
-// to no UnifiedMeta record for those. That ONE case — SetMeta's read hitting
-// os.ReadFile's file-not-found error — is the only one logged at Debug,
-// never escalated, and never blocking the sweep. A nil agentLoop (a bare
-// struct-literal test engine) or an unresolvable AgentID is handled the same
-// silent way (there is no meta.json to reconcile either way).
+// session: pre-ADR-091, pkg/tools/delegate.go's spawnSubTurn path never
+// called UnifiedStore.NewSession for a child turn at all, so rec.SessionID
+// resolved to no UnifiedMeta record for those. ADR-091 fix lane RX-SUBTURN
+// note (comment-only; code unchanged): today's launcher
+// (steer_launcher.go::SteerLauncher.Launch) DOES mint a UnifiedMeta record
+// for every delegate child — launchOrdinaryRoot via sessions.NewSession,
+// launchSteered via sessions.CreateSessionWithID — so this specific
+// "legitimately fail" case may no longer occur in practice; the defensive
+// handling below is harmless regardless. That ONE case — SetMeta's read
+// hitting os.ReadFile's file-not-found error — is the only one logged at
+// Debug, never escalated, and never blocking the sweep. A nil agentLoop (a
+// bare struct-literal test engine) or an unresolvable AgentID is handled
+// the same silent way (there is no meta.json to reconcile either way).
 //
 // EVERY OTHER SetMeta failure (a corrupted meta.json, a permission error, a
 // disk-full atomic-write failure) is a REAL, actionable inconsistency on a

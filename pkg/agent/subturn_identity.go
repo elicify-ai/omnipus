@@ -30,10 +30,14 @@ import (
 // system role is then empty for that delegate, and the task is the only
 // user-facing input.
 //
-// Used by spawnSubTurn and runExternalCLISubTurn to compose the
-// (soul, task) prompt pair uniformly across the native and external-cli
-// executors (worker property-model correction: soul is OPTIONAL and the
-// composition is identical for both).
+// Pre-ADR-091 this was used by both the deleted spawnSubTurn and
+// runExternalCLISubTurn to compose the (soul, task) prompt pair uniformly
+// across the native and external-cli executors (worker property-model
+// correction: soul is OPTIONAL and the composition is identical for both).
+// runExternalCLISubTurn (external_dispatch.go) remains live and is this
+// function's only current caller (via composeDelegateInput, called from
+// task_executor_run.go); grep finds no equivalent call on the native
+// dispatch path today.
 func resolveDelegateSoul(al *AgentLoop, agentID string) string {
 	if al == nil || agentID == "" {
 		return ""
@@ -104,6 +108,17 @@ func composeDelegateInput(al *AgentLoop, task, actualSystem, targetAgentID strin
 // parent's ContextBuilder into this decision" — cb here is ALWAYS
 // execSource's builder, never the delegating parent's, so the parent's own
 // grant list has no bearing on the outcome by construction, not convention.
+//
+// ADR-091 fix lane RX-SUBTURN finding (comment-only; code unchanged): pre-
+// ADR-091 the deleted spawnSubTurn called this on the native delegate
+// dispatch path. Grep finds no production caller today (every current call
+// site is in subturn_identity_test.go) — ErrRequestedSkillDenied/
+// ErrRequestedSkillNotFound (pkg/tools/delegate_run.go) are likewise
+// declared but, as far as grep shows, never raised by production code
+// either. Whether requested_skill grant/deny/unresolvable enforcement is
+// still wired into the current native dispatch path some other way, or is
+// a functional gap opened by the ADR-091 migration, needs a team check —
+// flagged, not determined or fixed here.
 //
 // Distinguishes three outcomes (spec FR-053/FR-054, never conflated):
 // granted (with the canonical slug the child may load), denied (the slug

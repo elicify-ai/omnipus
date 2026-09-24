@@ -36,12 +36,16 @@ interface SubagentSpanBase {
   taskLabel: string
   /**
    * Id of the agent running this sub-turn (the delegate), when the frame
-   * carried one — used to resolve name/icon/type for display. Note: for
-   * native (non-external-CLI) delegation to a named target agent, this
-   * currently reflects the PARENT's id due to a backend limitation in
-   * pkg/agent/subturn.go — see the agent-resolution fallback in
-   * useRunningActivity.ts which works around this using the originating
-   * delegate call's own agent_id param.
+   * carried one — used to resolve name/icon/type for display. Note:
+   * pre-ADR-091, for native (non-external-CLI) delegation to a named target
+   * agent, this reflected the PARENT's id due to a backend limitation in
+   * the deleted pkg/agent/subturn.go — see the agent-resolution fallback in
+   * useRunningActivity.ts (and that function's own ADR-091 fix lane
+   * RX-SUBTURN note) which worked around this using the originating
+   * delegate call's own agent_id param. Today's backend
+   * (pkg/agent/steer_frames.go) sets this from the real target agent for
+   * every delegation kind — the fallback's continued necessity is flagged
+   * there, not re-verified here.
    */
   agentId?: string
   /**

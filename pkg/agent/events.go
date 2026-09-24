@@ -473,28 +473,39 @@ const (
 	//nolint:misspell // wire value "cancelled" matches frontend TS union in src/store/chat.ts, src/lib/ws.ts
 	SubTurnStatusCancelled SubTurnStatus = "cancelled"
 	// SubTurnStatusInterrupted indicates the sub-turn was interrupted by its
-	// parent's hard-abort cascade (the common case — see spawnSubTurn's
-	// cleanup defer for the childCtx.Err()==context.Canceled check). The
-	// wire contract's SubagentEndFrame.reason field (surfaced from
-	// SubTurnEndPayload.Reason) is populated only for this status.
+	// parent's hard-abort cascade (the common case — pre-ADR-091 this was
+	// decided by the deleted spawnSubTurn's cleanup defer, via the
+	// childCtx.Err()==context.Canceled check; today, steer_audience.go's
+	// SteerUpwardDeliverer.Deliver maps steer.OutcomeInterrupted onto this
+	// status — see steer_frames.go::deliverSubagentEnd). The wire contract's
+	// SubagentEndFrame.reason field (surfaced from SubTurnEndPayload.Reason)
+	// is DOCUMENTED as populated only for this status; see
+	// SubTurnEndPayload.Reason's own field doc comment below for the ADR-091
+	// fix lane RX-SUBTURN finding that nothing currently sets that field.
 	SubTurnStatusInterrupted SubTurnStatus = "interrupted"
 	// SubTurnStatusTimeout indicates the sub-turn exceeded its configured
 	// timeout. Deliberately routed to SubTurnStatusError in practice, not
-	// this value — spawnSubTurn's cleanup defer distinguishes an external
-	// cancel (context.Canceled) from every other error case, including a
-	// genuine context.DeadlineExceeded from the sub-turn's own Timeout
-	// config expiring, which falls through to SubTurnStatusError (a real
-	// failure, not a cancellation, from the sub-turn's own point of view).
-	// This value remains declared for wire-contract completeness (the
-	// SPA's SUBAGENT_END_STATUSES validation set already includes it) and
-	// as a documented, intentional design choice, not an oversight.
+	// this value — pre-ADR-091, the deleted spawnSubTurn's cleanup defer
+	// distinguished an external cancel (context.Canceled) from every other
+	// error case, including a genuine context.DeadlineExceeded from the
+	// sub-turn's own Timeout config expiring, which fell through to
+	// SubTurnStatusError (a real failure, not a cancellation, from the
+	// sub-turn's own point of view); today, deliverSubagentEnd
+	// (steer_frames.go) maps steer.OutcomeTimedOut onto THIS status
+	// directly — a change from the pre-ADR-091 routing this comment
+	// describes, flagged here rather than silently reconciled. This value
+	// remains declared for wire-contract completeness (the SPA's
+	// SUBAGENT_END_STATUSES validation set already includes it) and as a
+	// documented, intentional design choice, not an oversight.
 	SubTurnStatusTimeout SubTurnStatus = "timeout"
 	// SubTurnStatusParked indicates the sub-turn stopped because a
 	// message_parent(kind="question", wait=true) call parked its own
 	// session in needs_input (ADR-057 UAT defect C2 fix) — mirrors
-	// TurnEndStatusParked (this file, above), which spawnSubTurn's
-	// endStatus switch (pkg/agent/subturn.go) checks lastTurnStatus against
-	// to set this value. Named identically to TurnEndStatusParked's wire
+	// TurnEndStatusParked (this file, above). Pre-ADR-091, the deleted
+	// spawnSubTurn's endStatus switch (pkg/agent/subturn.go) checked
+	// lastTurnStatus against TurnEndStatusParked to set this value; today,
+	// steer_frames.go::deliverSubagentEnd maps steer.OutcomeParkedQuestion
+	// onto this status directly. Named identically to TurnEndStatusParked's wire
 	// value ("parked") end-to-end — turn status, this SubTurnStatus, and
 	// the SubagentEndFrame.status wire enum all use the same literal — so
 	// no per-layer translation is needed. Deliberately NOT named
@@ -565,19 +576,32 @@ type SubTurnEndPayload struct {
 	// (b) (FR-089, BDD-98), so producing_session_id would always equal this
 	// field and is therefore always absent — do not repoint to the child.
 	SessionID string
-	// Reason is populated ONLY when Status == SubTurnStatusInterrupted (FIX 4,
-	// 7-reviewer-gate follow-up on the Wave 3 fix pass), mirroring the wire
-	// contract's SubagentEndFrame.reason field ("why the sub-turn was
+	// Reason was DOCUMENTED to be populated ONLY when Status ==
+	// SubTurnStatusInterrupted (FIX 4, 7-reviewer-gate follow-up on the
+	// Wave 3 fix pass), mirroring the wire contract's SubagentEndFrame.reason
+	// field ("why the sub-turn was
 	//nolint:misspell // documents the literal wire enum value, matches frontend TS union
 	// interrupted by the parent" — parent_timeout | parent_cancelled |
-	// parent_done_early | unknown). spawnSubTurn's cleanup defer sets this
-	// from the cheapest honest signal available at that point
-	// (parentTS.cancelFired) — see its doc comment for the deliberate
-	// coarseness (this does NOT yet distinguish a live user cancel from a
-	// scheduled run's deadline force-abort, both of which reach
-	// parentTS.cancelFired via the same RequestCancel path; a finer split
-	// would require threading the canceller identity through turnState,
-	// out of scope for this fix). Empty for every other Status value.
+	// parent_done_early | unknown). Pre-ADR-091, the deleted spawnSubTurn's
+	// cleanup defer set this from the cheapest honest signal available at
+	// that point (parentTS.cancelFired) — this does NOT yet distinguish a
+	// live user cancel from a scheduled run's deadline force-abort, both of
+	// which reach parentTS.cancelFired via the same RequestCancel path; a
+	// finer split would require threading the canceller identity through
+	// turnState, out of scope for the original fix. Empty for every other
+	// Status value.
+	//
+	// ADR-091 fix lane RX-SUBTURN finding (comment-only; code unchanged):
+	// steer_frames.go::deliverSubagentEnd, the ONLY current constructor of
+	// this payload, never sets this field — grep confirms no assignment to
+	// Reason (or SubTurnEndPayload{...Reason: ...}) anywhere in production
+	// code. pkg/gateway/websocket_forward.go::onSubTurnEnd still forwards it
+	// to the wire (`if p.Reason != "" { ... }`), and its own comment there
+	// says the frontend (SubagentBlock.tsx) already renders it — so today
+	// this field, and the wire's SubagentEndFrame.reason it feeds, appear to
+	// always be empty for an interrupted sub-turn, where they previously
+	// carried a real value. Flagged for the team to confirm and fix in
+	// code; not fixed here (comment-only lane).
 	Reason string
 }
 

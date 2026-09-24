@@ -748,8 +748,10 @@ func (a *AgentInstance) StoreProviderPool(pool map[string]providers.LLMProvider)
 //
 // providerPool and toolPolicy are copied via their own atomic accessors
 // (Load then Store into the new instance) so the pool snapshot stays paired
-// with the Candidates it was built for, exactly as spawnSubTurn's comment
-// there explains.
+// with the Candidates it was built for — pre-ADR-091, the deleted
+// spawnSubTurn's own comment explained the pairing rationale; today this
+// method's two callers are steer_reconstruct.go's reconstructSteeredTurn
+// and task_executor_run.go.
 func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	a.mu.RLock()
 	model := a.Model

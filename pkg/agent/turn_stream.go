@@ -98,17 +98,24 @@ func (ts *turnState) stampStreamerTurnID(streamer bus.Streamer) {
 // token can flow through it. Mirrors stampStreamerTurnID exactly.
 //
 // A delegated child sub-turn streams through the SAME wsStreamer/wsConn
-// machinery as any other turn (it shares its parent's chatID —
-// spawnSubTurn's opts.ChatID: parentTS.chatID), so the assistant-text entry
-// wsStreamer.Finalize persists must carry the same ParentSpawnCallID
-// correlation that appendIntermediateAssistantTranscript/
+// machinery as any other turn (pre-ADR-091 it shared its parent's chatID via
+// the deleted spawnSubTurn's opts.ChatID: parentTS.chatID), so the
+// assistant-text entry wsStreamer.Finalize persists must carry the same
+// ParentSpawnCallID correlation that appendIntermediateAssistantTranscript/
 // appendAssistantTranscript already stamp for the child's non-streaming
 // writes — otherwise a delegate's OWN final streamed response (the common
 // case: multi-step delegations stream their last round) would round-trip
 // through Finalize with no way for pkg/gateway/replay.go to tell it apart
-// from a genuine top-level parent message. See
-// session.TranscriptEntry.ParentSpawnCallID's doc comment for the full
-// root-cause writeup.
+// from a genuine top-level parent message.
+//
+// ADR-091 fix lane RX-SUBTURN finding (comment-only; code unchanged): see
+// turn.go::turnState.parentSpawnCallID's own field doc comment — grep finds
+// nothing assigns that field today, so ts.parentSpawnCallID is always "" and
+// this function always stamps an empty ParentSpawnCallID. If the concern
+// this paragraph describes is still real for a streamed delegate response,
+// this stamping call is not currently preventing it. Flagged for the team,
+// not fixed here. See session.TranscriptEntry.ParentSpawnCallID's doc
+// comment for the full root-cause writeup.
 //
 // Uses a type-assertion to an inline interface so bus.Streamer needs no new
 // method. wsStreamer uses the value for nested webchat/replay projection; the

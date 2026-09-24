@@ -2,9 +2,11 @@
 // CLI runner instead of the native Omnipus agent loop.
 //
 // This is the production wiring site for ExecutorKind="external-cli". The native
-// path (spawnSubTurn → al.runTurn) is unchanged and remains the default; this file
-// is reached ONLY when the resolved sub-agent's SubagentsConfig.Executor resolves
-// to runner.DispatchKindExternalCLI (see runner.ResolveDispatch).
+// path (steer_launcher.go's SteerLauncher.Dispatch -> al.runTurn via
+// runDispatchedSteeredTurn; pre-ADR-091, spawnSubTurn -> al.runTurn) remains
+// the default; this file is reached ONLY when the resolved sub-agent's
+// SubagentsConfig.Executor resolves to runner.DispatchKindExternalCLI (see
+// runner.ResolveDispatch).
 //
 // Flow (FR-5.1 / FR-5.2 / FR-5.4; FR-5.3 as amended by ADR-032):
 //
@@ -150,11 +152,13 @@ type runExternalCLISubTurnState struct {
 // childTS is the sub-turn's turnState (used for transcript writes + agent ID).
 // task is the delegated input prompt. timeout bounds the whole run.
 //
-// childTS.agent is the resolved DELEGATE's own AgentInstance (spawnSubTurn
-// sources Workspace/Model/MaxIterations/Subagents from the TARGET named by
-// TargetAgentID when dispatch resolves to external-cli — see subturn.go), so
-// every field read below already reflects the delegate's own identity, not
-// the delegating parent's.
+// childTS.agent is the resolved DELEGATE's own AgentInstance
+// (steer_reconstruct.go::reconstructSteeredTurn sources it from
+// al.GetRegistry().GetAgent(rec.AgentID), rec.AgentID being the TARGET named
+// by the original LaunchRequest.TargetAgentID; pre-ADR-091, the deleted
+// spawnSubTurn sourced Workspace/Model/MaxIterations/Subagents the same way
+// when dispatch resolved to external-cli), so every field read below already
+// reflects the delegate's own identity, not the delegating parent's.
 func runExternalCLISubTurn(
 	ctx context.Context,
 	al *AgentLoop,
@@ -206,10 +210,19 @@ func runExternalCLISubTurn(
 	//    gate). It additionally breaks a multi-membership tie in favor of
 	//    childTS.opts.WorkspaceID (the current turn's own channel-bound
 	//    workspace) when the agent is actually a member of that specific
-	//    workspace — in practice this is almost always empty here, since
-	//    subagent_3p is delegation-only and spawnSubTurn never threads a
-	//    workspace_id into a child's processOptions, so this falls straight
-	//    through to FindForAgentPreferring's identity-only resolution; kept
+	//    workspace — pre-ADR-091, this was DOCUMENTED as almost always empty
+	//    here, since subagent_3p is delegation-only and the deleted
+	//    spawnSubTurn never threaded a workspace_id into a child's
+	//    processOptions, so this fell straight through to
+	//    FindForAgentPreferring's identity-only resolution. ADR-091 fix lane
+	//    RX-SUBTURN finding (comment-only; code unchanged): today
+	//    steer_reconstruct.go::reconstructSteeredTurn DOES set
+	//    opts.WorkspaceID from rec.WorkspaceID, which steer_launcher.go's
+	//    launchSteered inherits from the steering session's own workspace —
+	//    so childTS.opts.WorkspaceID appears to be commonly NON-empty for a
+	//    delegate child now, unlike the "almost always empty" premise below.
+	//    Whether that changes which branch actually fires in practice needs
+	//    a team check — flagged, not resolved here; kept
 	//    for symmetry with the native path and in case that assumption
 	//    changes.
 	//
@@ -267,11 +280,23 @@ func runExternalCLISubTurn(
 	// collapsed two-function entry points, which fire those two turnState
 	// fields directly, never through context inheritance) is a silent no-op
 	// for an external-CLI sub-turn: childCtx is deliberately detached from
-	// the parent's ctx tree (context.Background() in spawnSubTurn), so
-	// nothing else can ever cancel runCtx. Worst case: a SYNCHRONOUS delegate
-	// (`delegate(async=false)`) deadlocks the parent inside this call for up
-	// to the full run timeout while the UI shows graceful→hard→detached as
-	// if cancel worked.
+	// the parent's ctx tree — pre-ADR-091, spawnSubTurn did this with an
+	// inline context.Background() call. ADR-091 fix lane RX-SUBTURN note
+	// (comment-only; code unchanged): today runCtx is built below via
+	// context.WithCancel(ctx), where ctx is this function's own parameter —
+	// tracing its callers (task_executor_run.go's dispatchCtx, itself
+	// derived from the incoming ctx; and, for a delegate-tool dispatch,
+	// ultimately steer_launcher.go::runDispatchedSteeredTurn's
+	// steeredTurnRunContext(context.Background(), rec)) suggests the same
+	// Background()-rooted detachment still holds indirectly, but this was
+	// not re-verified end-to-end for this lane. Worst case, pre-ADR-091: a
+	// SYNCHRONOUS delegate (`delegate(async=false)`) deadlocked the parent
+	// inside this call for up to the full run timeout while the UI showed
+	// graceful→hard→detached as if cancel worked — ADR-091 D4 deleted the
+	// async=false option outright, so this specific scenario no longer
+	// applies, though the underlying "nothing else can ever cancel runCtx
+	// without this registration" concern is presumably still real for
+	// whatever timeout/cancel path replaced it.
 	//
 	// One cancel func for both slots is the correct behavior here (not a
 	// simplification): runner.ExternalAgentRunner exposes no distinct graceful

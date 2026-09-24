@@ -541,9 +541,13 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 	// list EXACTLY ONCE here and threading it verbatim through PHASE B/C
 	// (al.liveTurnStatesAmong(descendants)) rather than re-deriving the
 	// subtree afresh. That rule is exactly what let a sub-turn that
-	// registers AFTER this point — most commonly a `delegate async=true`
-	// spawn, whose parent turn frequently finishes gracefully within
-	// milliseconds while the backgrounded spawnSubTurn goroutine keeps
+	// registers AFTER this point — most commonly a delegate spawn (pre-
+	// ADR-091, one made with the since-removed `async=true`; ADR-091 D4
+	// deleted the parameter and every delegate call is now what that used
+	// to mean), whose parent turn frequently finishes gracefully within
+	// milliseconds while the backgrounded spawn goroutine (pre-ADR-091,
+	// the deleted spawnSubTurn; today, steer_launcher.go's
+	// runDispatchedSteeredTurn once Dispatch has admitted it) keeps
 	// running and registers its child moments later — escape PHASE B/C
 	// entirely: the frozen snapshot below never named the late child, so
 	// al.liveTurnStatesAmong(descendants) filtered it out of existence no
@@ -815,10 +819,18 @@ func (rc *agentLoopRequestCancel) scheduleEscalation() {
 		pendingSpawn := rc.al.hasPendingDescendantSpawn(rc.sessionID, rc.scope)
 		if len(liveNow) == 0 {
 			if pendingSpawn {
-				// Nothing is alive right now, but a delegate spawn for this
-				// identity is already dispatched and has not registered yet
-				// (MarkPendingDelegateSpawn fired, spawnSubTurn hasn't
-				// reached registerActiveTurn). Arm a chain-reaction latch so
+				// Nothing is alive right now, but hasPendingDescendantSpawn
+				// reports a delegate spawn for this identity as already
+				// dispatched and not yet registered. Pre-ADR-091 this meant
+				// MarkPendingDelegateSpawn had fired and the deleted
+				// spawnSubTurn had not yet reached registerActiveTurn; see
+				// cancel_prearm.go::pendingSpawns' own doc comment (ADR-091
+				// fix lane RX-SUBTURN note) — no current call site marks
+				// this map, so pendingSpawn is always false today except for
+				// whatever gap that leaves in the newer queued-dispatch path
+				// (steer_launcher.go::dispatchSteeredSessionWithReservation's
+				// queued branch, which also registers a turn asynchronously,
+				// later). Arm a chain-reaction latch so
 				// the INSTANT it registers, consumePreArmedCancel (turn.go's
 				// registerActiveTurn) catches it and re-invokes RequestCancel
 				// for it — the same mechanism a cancel arriving before any
@@ -1218,10 +1230,13 @@ func (al *AgentLoop) liveTurnStatesAmong(ids []string) []*turnState {
 // hasPendingDescendantSpawn reports whether a delegate sub-turn spawn is
 // currently in flight for the SAME identity this RequestCancel call is
 // scoped to (sessionID, or (scope.Channel, scope.ChatID) when sessionID is
-// empty) — i.e. pkg/tools/delegate.go's executeAsync has already called
-// MarkPendingDelegateSpawn (via the DelegateSpawnMarker seam) but the spawned
-// goroutine has not yet reached registerActiveTurn. See cancel_prearm.go's
-// pendingSpawns field for the full mark/clear/TTL contract.
+// empty) — pre-ADR-091, i.e. pkg/tools/delegate.go's now-deleted executeAsync
+// had already called MarkPendingDelegateSpawn (via the DelegateSpawnMarker
+// seam) but the spawned goroutine had not yet reached registerActiveTurn.
+// See cancel_prearm.go's pendingSpawns field for the full mark/clear/TTL
+// contract — and for the ADR-091 fix lane RX-SUBTURN note that no current
+// call site marks this map, so this function reads it as always empty
+// today; flagged for the team, not fixed here (comment-only lane).
 //
 // This is the second half of the chain-reaction fix (the first half is the
 // fresh re-scan liveTurnStatesAmong's callers now perform): a pending spawn

@@ -170,13 +170,18 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 		// ever exercised by tests that hand-seed TurnID directly. See
 		// appendAssistantTranscript's identical fix for the full rationale.
 		TurnID: ts.turnID,
-		// ParentSpawnCallID: non-empty only when ts is a CHILD delegation
-		// sub-turn (spawnSubTurn stamps childTS.parentSpawnCallID before any
-		// turn processing runs). Lets pkg/gateway/replay.go withhold this
-		// entry from top-level replay, matching live rendering — see
+		// ParentSpawnCallID: DOCUMENTED to be non-empty only when ts is a
+		// CHILD delegation sub-turn — pre-ADR-091, the deleted spawnSubTurn
+		// stamped childTS.parentSpawnCallID before any turn processing ran.
+		// Lets pkg/gateway/replay.go withhold this entry from top-level
+		// replay, matching live rendering — see
 		// session.TranscriptEntry.ParentSpawnCallID's doc comment for the
 		// full root-cause writeup (live/reload bubble-count divergence on
-		// multi-step delegation).
+		// multi-step delegation). ADR-091 fix lane RX-SUBTURN finding
+		// (comment-only; code unchanged): see turn.go::
+		// turnState.parentSpawnCallID's own field doc comment — grep finds
+		// nothing assigns that field today, so ts.parentSpawnCallID is
+		// always "" here too. Flagged for the team, not fixed here.
 		ParentSpawnCallID: ts.parentSpawnCallID,
 		// Tokens and Cost are intentionally 0 — the turn total is attributed to
 		// the final assistant entry only. See appendAssistantTranscript.

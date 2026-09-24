@@ -340,10 +340,15 @@ func (f *eventForwardState) onSubTurnEnd(evt agent.Event) {
 		endFrameEnd.ParentCallId = &pc
 	}
 	// FIX 4 (7-reviewer-gate follow-up): surface SubTurnEndPayload.Reason
-	// (populated by spawnSubTurn's cleanup defer, pkg/agent/subturn.go,
-	// only when Status == "interrupted") as the wire contract's
-	// SubagentEndFrame.reason. The frontend (SubagentBlock.tsx) already
-	// renders this — it just never received a value before this fix.
+	// (pre-ADR-091, populated by the deleted spawnSubTurn's cleanup defer,
+	// pkg/agent/subturn.go, only when Status == "interrupted") as the wire
+	// contract's SubagentEndFrame.reason. The frontend (SubagentBlock.tsx)
+	// already renders this — it just never received a value before this
+	// fix. ADR-091 fix lane RX-SUBTURN note (comment-only; code unchanged):
+	// see agent.SubTurnEndPayload.Reason's own field doc comment — its only
+	// current constructor (steer_frames.go::deliverSubagentEnd) never sets
+	// it, so `p.Reason != "" ` below appears to always be false today;
+	// flagged for the team, not fixed here.
 	if p.Reason != "" {
 		reason := p.Reason
 		endFrameEnd.Reason = &reason

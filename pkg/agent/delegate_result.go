@@ -8,30 +8,42 @@ import "strings"
 
 // buildSyncDelegateResult produces the persisted session.ToolCall Result map for
 // a SYNCHRONOUS "delegate" tool call, mirroring the {"text":…}(+"error":true)
-// shape that spawnSubTurn's async W4 defer (subturn.go) writes for ASYNC
-// delegation.
+// shape that the deleted spawnSubTurn's async W4 defer (pre-ADR-091,
+// pkg/agent/subturn.go) wrote for ASYNC delegation.
 //
-// Why this exists (W4, sync path): that async defer no-ops for synchronous
-// delegation. It fires before the parent's delegate tool_call record has been
-// written — the delegated run can finish before the delegate tool returns to
-// the turn loop — so the record lookup finds nothing,
-// and its "not found, retry" budget is gated on cfg.Async. For the sync path
+// Why this exists (W4, sync path): that async defer no-op'd for synchronous
+// delegation. It fired before the parent's delegate tool_call record had been
+// written — the delegated run could finish before the delegate tool returned to
+// the turn loop — so the record lookup found nothing,
+// and its "not found, retry" budget was gated on cfg.Async. For the sync path
 // the turn loop's own tool_call write (loop.go) is therefore the FINAL
 // persisted state; without populating Result there, the record kept a terminal
 // status but an EMPTY result, so a reloaded sync delegation showed no trace of
 // what the delegate produced — unlike the live WS stream and the async path
-// (found live by UAT). See spawnSubTurn's W4 defer in pkg/agent/subturn.go for
-// the async counterpart and pkg/agent/wave4_delegate_result_test.go for the
-// async coverage this complements.
+// (found live by UAT). pkg/agent/wave4_delegate_result_test.go has the async
+// coverage this complements.
+//
+// ADR-091 fix lane RX-SUBTURN note (comment-only; code unchanged): ADR-091 D4
+// deleted the caller-selectable async=false/true choice for `delegate` —
+// pkg/tools/delegate.go's Execute no longer implements AsyncExecutor (its own
+// doc comment: "ADR-091 made every action return as soon as launch and
+// dispatch have returned"), so the isAsync flag this function branches on is
+// no longer set the way the "It applies ONLY to synchronous delegation"
+// paragraph below originally meant — grep finds no production code left that
+// sets Async:true for a delegate ToolResult, so this function's `delegate`
+// branch fires on every delegate call today, not a "sync-only" subset.
+// Whether that is still correct, or has quietly become dead/wrong logic that
+// needs updating, is a code question outside a comment-only lane — flagged
+// for the team, not fixed here.
 //
 // It applies ONLY to synchronous delegation. For ASYNC delegation the tool
 // returns an immediate "running in background" ack here (Async:true), and
-// spawnSubTurn's defer owns persisting the real result later; if this wrote the
-// ack as Result, a sub-turn that legitimately finishes with an EMPTY output
-// would keep that stale ack forever — the defer only overwrites Result when it
-// has non-empty text or an error — leaving a terminal-status delegate whose
-// result wrongly claims it is still running. So async is excluded outright and
-// left to the defer (unchanged from before this fix).
+// the deleted spawnSubTurn's defer owned persisting the real result later; if
+// this wrote the ack as Result, a sub-turn that legitimately finished with an
+// EMPTY output would keep that stale ack forever — the defer only overwrote
+// Result when it had non-empty text or an error — leaving a terminal-status
+// delegate whose result wrongly claimed it was still running. So async was
+// excluded outright and left to the defer (unchanged from before that fix).
 //
 // Returns nil for any non-"delegate" tool (the caller then leaves Result unset,
 // exactly as before this fix — no behavior change for other tools), for async
