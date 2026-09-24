@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
-	"log/slog"
 	"os"
 	"sort"
 	"strconv"
@@ -29,7 +28,7 @@ import (
 func newHubBootID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		slog.Error("ws: crypto/rand failed for hub boot id, falling back to a time-derived id", "error", err)
+		logsafeError("ws: crypto/rand failed for hub boot id, falling back to a time-derived id", "error", err)
 		return hex.EncodeToString([]byte(time.Now().Format(time.RFC3339Nano)))
 	}
 	return hex.EncodeToString(b[:])
@@ -188,10 +187,10 @@ func newHubRegistry(bootID string) *hubRegistry {
 	if raw := os.Getenv(hubIdleEvictAfterEnvOverrideVar); raw != "" {
 		if secs, err := strconv.Atoi(raw); err == nil && secs > 0 {
 			idleEvictAfter = time.Duration(secs) * time.Second
-			slog.Warn("ws: hub idle-eviction window overridden — this must NEVER be set in a production install",
+			logsafeWarn("ws: hub idle-eviction window overridden — this must NEVER be set in a production install",
 				"env_var", hubIdleEvictAfterEnvOverrideVar, "seconds", secs)
 		} else {
-			slog.Error("ws: invalid "+hubIdleEvictAfterEnvOverrideVar+", ignoring", "value", raw)
+			logsafeError("ws: invalid "+hubIdleEvictAfterEnvOverrideVar+", ignoring", "value", raw)
 		}
 	}
 	r := &hubRegistry{
@@ -656,7 +655,9 @@ func spliceSeq(frame []byte, seq uint64) []byte {
 		return frame
 	}
 	body := trimmed[:len(trimmed)-1]
-	out := make([]byte, 0, len(body)+24)
+	// Capacity from the body length alone (append grows it once for the
+	// short `,"seq":N}` suffix) — no length arithmetic that could overflow.
+	out := make([]byte, 0, len(body))
 	out = append(out, body...)
 	if len(bytes.TrimSpace(body)) > len(`{`) {
 		out = append(out, ',')

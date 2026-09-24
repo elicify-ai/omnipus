@@ -17,7 +17,6 @@ package gateway
 
 import (
 	"encoding/json"
-	"log/slog"
 	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -193,7 +192,7 @@ func (p *activeTurnProjection) update(meta hubFrameMeta, frame []byte, sessionID
 		evicted := p.evictOlder(touched)
 		if evicted > 0 && !p.truncated {
 			p.truncated = true
-			slog.Warn("ws: active-turn projection exceeded its budget — evicting its oldest items; a snapshot now "+
+			logsafeWarn("ws: active-turn projection exceeded its budget — evicting its oldest items; a snapshot now "+
 				"shows the transcript plus the newest in-progress items",
 				"event", "hub_projection_truncated", "session_id", sessionID, "bytes", p.bytes, "evicted", evicted)
 		}
@@ -384,7 +383,7 @@ func projectionTokenFrames(sessionID string, it projSnapshotItem) [][]byte {
 		}
 		data, err := json.Marshal(frame)
 		if err != nil {
-			slog.Error("ws: marshal projection token failed", "session_id", sessionID, "error", err)
+			logsafeError("ws: marshal projection token failed", "session_id", sessionID, "error", err)
 			return out
 		}
 		out = append(out, data)

@@ -18,7 +18,6 @@ package gateway
 
 import (
 	"encoding/json"
-	"log/slog"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
@@ -118,7 +117,7 @@ func (hcm *wsHandlerHandleChatMessage) answerRetriedMessage() bool {
 	if state == "" {
 		return false
 	}
-	slog.Info("ws: retried client_message_id answered without a second turn",
+	logsafeInfo("ws: retried client_message_id answered without a second turn",
 		"session_id", hcm.sessionID, "client_message_id", hcm.clientMessageID, "state", state)
 	if echo != nil {
 		sendRawFrameBytes(hcm.wc, string(generated.WsFrameTypeUserMessage), echo)

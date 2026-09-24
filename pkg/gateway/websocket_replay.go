@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -142,7 +141,7 @@ func (wh *wsHandlerHandleAttachSession) bindHub() {
 // servable, so it gets exactly the journal frames after it — byte-identical
 // to what every live tab received — and nothing it already has.
 func (wh *wsHandlerHandleAttachSession) sendIncremental() {
-	slog.Info("ws: catch_up",
+	logsafeInfo("ws: catch_up",
 		"event", "catch_up", "mode", "incremental",
 		"session_id", wh.attachID, "chat_id", wh.chatID,
 		"frames", len(wh.res.Tail), "head", wh.res.Head)
@@ -158,7 +157,7 @@ func (wh *wsHandlerHandleAttachSession) sendIncremental() {
 
 // sendSnapshot is A6's snapshot branch.
 func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
-	slog.Info("ws: catch_up",
+	logsafeInfo("ws: catch_up",
 		"event", "catch_up", "mode", "snapshot", "reason", wh.res.Reason,
 		"session_id", wh.attachID, "chat_id", wh.chatID, "head", wh.res.Head)
 	// Read the transcript AFTER the bind (§4.2): everything persisted up to
@@ -169,7 +168,7 @@ func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
 	// failure must be answered while the client's current view is intact.
 	entries, err := attachReadTranscript(wh.store, wh.attachID)
 	if err != nil {
-		slog.Warn("ws: attach_session: could not read transcript", "session_id", wh.attachID, "error", err)
+		logsafeWarn("ws: attach_session: could not read transcript", "session_id", wh.attachID, "error", err)
 		wh.failCatchUp("could not read session transcript")
 		return
 	}
@@ -206,7 +205,7 @@ func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
 // covers. Returns false when the attach was aborted.
 func (wh *wsHandlerHandleAttachSession) replayTranscript(entries []session.TranscriptEntry) (map[string]bool, bool) {
 	rs := computeReplayStats(entries)
-	slog.Info("ws: replay_start",
+	logsafeInfo("ws: replay_start",
 		"event", "replay_start",
 		"session_id", wh.attachID,
 		"entry_count_loaded", len(entries),
@@ -238,7 +237,7 @@ func (wh *wsHandlerHandleAttachSession) replayTranscript(entries []session.Trans
 	framesEmitted, err := streamReplay(wh.ctx, wh.attachID, entries, rs, emit, mediaStore, wh.h.toolStore, isSpanActive, terminalAsk)
 	durationMS := time.Since(started).Milliseconds()
 	if err != nil {
-		slog.Warn("ws: replay_aborted",
+		logsafeWarn("ws: replay_aborted",
 			"event", "replay_aborted",
 			"session_id", wh.attachID,
 			"frames_emitted", framesEmitted,
@@ -248,7 +247,7 @@ func (wh *wsHandlerHandleAttachSession) replayTranscript(entries []session.Trans
 		wh.abortCatchUp(err)
 		return nil, false
 	}
-	slog.Info("ws: replay_end",
+	logsafeInfo("ws: replay_end",
 		"event", "replay_end",
 		"session_id", wh.attachID,
 		"frames_emitted", framesEmitted,
@@ -351,7 +350,7 @@ func (wh *wsHandlerHandleAttachSession) directFrame(frame any) {
 func sendConnGenFrameDirect(wc *wsConn, frame any) {
 	data, err := json.Marshal(frame)
 	if err != nil {
-		slog.Error("ws: marshal catch-up frame failed", "error", err)
+		logsafeError("ws: marshal catch-up frame failed", "error", err)
 		return
 	}
 	wc.direct(data)
@@ -365,10 +364,10 @@ func (wh *wsHandlerHandleAttachSession) resumeLiveSession() {
 	// an EMPTY agent archive is hydrated — an archive with ≥ 1 line is the
 	// live record of the session.
 	if wh.h.agentLoop.AgentArchiveNonEmpty(wh.attachID) {
-		slog.Debug("ws: attach_session: agent archive non-empty; hydration skipped",
+		logsafeDebug("ws: attach_session: agent archive non-empty; hydration skipped",
 			"session_id", wh.attachID)
 	} else if err := wh.h.agentLoop.HydrateAgentHistoryFromTranscript(wh.attachID); err != nil {
-		slog.Warn("ws: attach_session: hydrate agent history failed",
+		logsafeWarn("ws: attach_session: hydrate agent history failed",
 			"session_id", wh.attachID, "error", err)
 		sidCopy := wh.attachID
 		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
@@ -383,5 +382,5 @@ func (wh *wsHandlerHandleAttachSession) resumeLiveSession() {
 	// session; this connection is already bound and receives it like any
 	// other live goal_status. No-op when there is no active goal.
 	wh.h.agentLoop.EmitGoalStatusRehydrate(wh.attachID)
-	slog.Debug("ws: attached to session", "chat_id", wh.chatID, "session_id", wh.attachID)
+	logsafeDebug("ws: attached to session", "chat_id", wh.chatID, "session_id", wh.attachID)
 }

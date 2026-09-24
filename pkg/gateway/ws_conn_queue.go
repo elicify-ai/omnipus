@@ -37,7 +37,6 @@ package gateway
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -294,7 +293,7 @@ func (c *wsConn) queuedFrames() (queued, held int) {
 func (c *wsConn) closeCatchUp() {
 	c.catchUpCloseOnce.Do(func() {
 		c.closeCode.Store(wsCloseCatchUpRequired)
-		slog.Warn("ws: connection too far behind — closing with 4008 so it reconnects and catches up",
+		logsafeWarn("ws: connection too far behind — closing with 4008 so it reconnects and catches up",
 			"event", "ws_close_catch_up_required", "user_id", c.userID)
 		if c.closeReq != nil {
 			select {
@@ -315,12 +314,12 @@ func (c *wsConn) writeCatchUpClose() {
 		return
 	}
 	if err := c.conn.SetWriteDeadline(time.Now().Add(wsWriteWait)); err != nil {
-		slog.Debug("ws: SetWriteDeadline failed for 4008 close", "error", err)
+		logsafeDebug("ws: SetWriteDeadline failed for 4008 close", "error", err)
 		return
 	}
 	if err := c.conn.WriteMessage(websocket.CloseMessage,
 		websocket.FormatCloseMessage(wsCloseCatchUpRequired, wsCloseCatchUpReason)); err != nil {
-		slog.Debug("ws: 4008 close frame write failed", "error", err)
+		logsafeDebug("ws: 4008 close frame write failed", "error", err)
 	}
 	_ = c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 }

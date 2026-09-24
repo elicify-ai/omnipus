@@ -30,7 +30,6 @@ package gateway
 
 import (
 	"encoding/json"
-	"log/slog"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -95,7 +94,7 @@ func (h *WSHandler) hubSubTurnSpawn(evt agent.Event) {
 	if sid == "" {
 		return
 	}
-	slog.Debug("ws: subagent_start",
+	logsafeDebug("ws: subagent_start",
 		"span_id", p.SpanID,
 		"parent_call_id", p.ParentSpawnCallID,
 		"agent_id", p.AgentID,
@@ -114,7 +113,7 @@ func (h *WSHandler) hubSubTurnSpawn(evt agent.Event) {
 	}
 	data, err := json.Marshal(frame)
 	if err != nil {
-		slog.Error("ws: marshal subagent_start for hub failed", "session_id", sid, "error", err)
+		logsafeError("ws: marshal subagent_start for hub failed", "session_id", sid, "error", err)
 		return
 	}
 	hub := h.hubs.getOrCreate(sid)
@@ -163,7 +162,7 @@ func (h *WSHandler) hubSubTurnEnd(evt agent.Event) {
 	if sid == "" {
 		return
 	}
-	slog.Debug("ws: subagent_end",
+	logsafeDebug("ws: subagent_end",
 		"span_id", p.SpanID,
 		"parent_call_id", p.ParentSpawnCallID,
 		"agent_id", p.AgentID,
@@ -195,7 +194,7 @@ func (h *WSHandler) hubSubTurnEnd(evt agent.Event) {
 	}
 	data, err := json.Marshal(frame)
 	if err != nil {
-		slog.Error("ws: marshal subagent_end for hub failed", "session_id", sid, "error", err)
+		logsafeError("ws: marshal subagent_end for hub failed", "session_id", sid, "error", err)
 		return
 	}
 	hub := h.hubs.getOrCreate(sid)
@@ -298,9 +297,9 @@ func (h *WSHandler) startOrphanWatchdog(hub *sessionHub, entry *hubSpan, reason 
 			if stillActive {
 				rechecks++
 				if rechecks <= maxRechecks {
-					logFn := slog.Debug
+					logFn := logsafeDebug
 					if rechecks > 2 {
-						logFn = slog.Warn
+						logFn = logsafeWarn
 					}
 					logFn("ws: subagent span still genuinely active past watchdog timeout — rescheduling",
 						"event", "span_orphan_recheck_still_alive",
@@ -313,7 +312,7 @@ func (h *WSHandler) startOrphanWatchdog(hub *sessionHub, entry *hubSpan, reason 
 					continue
 				}
 				forced = true
-				slog.Error("ws: subagent span still reports active past the watchdog's reschedule "+
+				logsafeError("ws: subagent span still reports active past the watchdog's reschedule "+
 					"ceiling — force-emitting interrupted (fail-closed)",
 					"event", "span_orphan_ceiling_exceeded",
 					"span_id", entry.spanID,
@@ -342,14 +341,14 @@ func (h *WSHandler) synthesizeOrphanEnd(hub *sessionHub, entry *hubSpan, reason 
 	case forced:
 		// Already logged at Error level by the watchdog.
 	case reason == "unknown":
-		slog.Error("ws: subagent span orphaned with unknown reason — synthesizing interrupted end",
+		logsafeError("ws: subagent span orphaned with unknown reason — synthesizing interrupted end",
 			"event", "span_orphan_interrupted",
 			"span_id", entry.spanID,
 			"parent_call_id", entry.parentCallID,
 			"reason", reason,
 		)
 	default:
-		slog.Warn("ws: subagent span orphaned — synthesizing interrupted end",
+		logsafeWarn("ws: subagent span orphaned — synthesizing interrupted end",
 			"event", "span_orphan_interrupted",
 			"span_id", entry.spanID,
 			"parent_call_id", entry.parentCallID,
@@ -374,7 +373,7 @@ func (h *WSHandler) synthesizeOrphanEnd(hub *sessionHub, entry *hubSpan, reason 
 	}
 	data, err := json.Marshal(frame)
 	if err != nil {
-		slog.Error("ws: marshal synthetic subagent_end failed", "session_id", entry.sessionID, "error", err)
+		logsafeError("ws: marshal synthetic subagent_end failed", "session_id", entry.sessionID, "error", err)
 		return
 	}
 	h.hubPublishMetaAlsoTo(entry.sessionID, string(generated.WsFrameTypeSubagentEnd),

@@ -18,7 +18,6 @@ package gateway
 
 import (
 	"encoding/json"
-	"log/slog"
 	"strconv"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -126,7 +125,7 @@ func (h *WSHandler) hubPublishMetaAlsoTo(sessionID, frameType string, meta hubFr
 func (h *WSHandler) hubPublishFrame(sessionID, frameType string, frame any, alsoTo *wsConn) {
 	data, err := json.Marshal(frame)
 	if err != nil {
-		slog.Error("ws: marshal frame for hub failed", "type", frameType, "session_id", sessionID, "error", err)
+		logsafeError("ws: marshal frame for hub failed", "type", frameType, "session_id", sessionID, "error", err)
 		return
 	}
 	h.hubPublishAndDeliverAlsoTo(sessionID, frameType, data, alsoTo)
@@ -137,7 +136,7 @@ func (h *WSHandler) hubPublishFrame(sessionID, frameType string, frame any, also
 func (h *WSHandler) hubPublishFrameMeta(sessionID, frameType string, meta hubFrameMeta, frame any) {
 	data, err := json.Marshal(frame)
 	if err != nil {
-		slog.Error("ws: marshal frame for hub failed", "type", frameType, "session_id", sessionID, "error", err)
+		logsafeError("ws: marshal frame for hub failed", "type", frameType, "session_id", sessionID, "error", err)
 		return
 	}
 	h.hubPublishMetaAlsoTo(sessionID, frameType, meta, data, nil)
@@ -209,7 +208,7 @@ func (h *WSHandler) hubToolExecStart(evt agent.Event) {
 	}
 	data, err := json.Marshal(startF)
 	if err != nil {
-		slog.Error("ws: marshal tool_call_start for hub failed", "session_id", startSID, "error", err)
+		logsafeError("ws: marshal tool_call_start for hub failed", "session_id", startSID, "error", err)
 		return
 	}
 	h.hubPublishMetaAlsoTo(startSID, string(generated.WsFrameTypeToolCallStart),
@@ -282,7 +281,7 @@ func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
 	}
 	data, err := json.Marshal(resultF)
 	if err != nil {
-		slog.Error("ws: marshal tool_call_result for hub failed", "session_id", evtSID, "error", err)
+		logsafeError("ws: marshal tool_call_result for hub failed", "session_id", evtSID, "error", err)
 		return
 	}
 	h.hubPublishMetaAlsoTo(evtSID, string(generated.WsFrameTypeToolCallResult),
@@ -306,11 +305,11 @@ func (h *WSHandler) hubEmitAgentSwitched(evtSID, producingSIDForResult string) {
 	activeAgent, activeOk := h.agentLoop.GetSessionActiveAgent(evtSID)
 	toDefault, sawToDefault := h.agentLoop.GetLastSwitchToDefault(evtSID)
 	if !activeOk {
-		slog.Warn("websocket: switch_agent succeeded but no active agent found for session",
+		logsafeWarn("websocket: switch_agent succeeded but no active agent found for session",
 			"session_id", evtSID)
 	}
 	if !sawToDefault {
-		slog.Warn("websocket: switch_agent succeeded but no toDefault record found for session; falling back to id comparison",
+		logsafeWarn("websocket: switch_agent succeeded but no toDefault record found for session; falling back to id comparison",
 			"session_id", evtSID)
 		toDefault = !activeOk || activeAgent == "" || (defaultAgent != nil && activeAgent == defaultAgent.ID)
 	}
@@ -333,7 +332,7 @@ func (h *WSHandler) hubEmitAgentSwitched(evtSID, producingSIDForResult string) {
 	}
 	data, err := json.Marshal(switchF)
 	if err != nil {
-		slog.Error("ws: marshal agent_switched for hub failed", "session_id", evtSID, "error", err)
+		logsafeError("ws: marshal agent_switched for hub failed", "session_id", evtSID, "error", err)
 		return
 	}
 	h.hubPublishAndDeliver(evtSID, string(generated.WsFrameTypeAgentSwitched), data)
@@ -378,7 +377,7 @@ func (h *WSHandler) hubRateLimit(evt agent.Event) {
 	}
 	data, err := json.Marshal(rateF)
 	if err != nil {
-		slog.Error("ws: marshal rate_limit for hub failed", "session_id", rateSID, "error", err)
+		logsafeError("ws: marshal rate_limit for hub failed", "session_id", rateSID, "error", err)
 		return
 	}
 	h.hubPublishAndDeliver(rateSID, string(generated.WsFrameTypeRateLimit), data)
@@ -422,7 +421,7 @@ func (h *WSHandler) hubError(evt agent.Event) {
 	}
 	data, err := json.Marshal(errF)
 	if err != nil {
-		slog.Error("ws: marshal error frame for hub failed", "session_id", errSID, "error", err)
+		logsafeError("ws: marshal error frame for hub failed", "session_id", errSID, "error", err)
 		return
 	}
 	// A turn-level error stays in the active-turn projection until the
@@ -467,7 +466,7 @@ func (h *WSHandler) hubToolResultProjection(evt agent.Event) {
 	}
 	data, err := json.Marshal(projF)
 	if err != nil {
-		slog.Error("ws: marshal tool_result_projection for hub failed", "session_id", projSID, "error", err)
+		logsafeError("ws: marshal tool_result_projection for hub failed", "session_id", projSID, "error", err)
 		return
 	}
 	h.hubPublishAndDeliver(projSID, string(generated.WsFrameTypeToolResultProjection), data)
@@ -507,7 +506,7 @@ func (h *WSHandler) hubGoalStatusChanged(evt agent.Event) {
 	setGoalStatusDoD(&goalF, p.DoD)
 	data, err := json.Marshal(goalF)
 	if err != nil {
-		slog.Error("ws: marshal goal_status for hub failed", "session_id", p.SessionID, "error", err)
+		logsafeError("ws: marshal goal_status for hub failed", "session_id", p.SessionID, "error", err)
 		return
 	}
 	h.hubBroadcastWithSequencedCopy(p.SessionID, string(generated.WsFrameTypeGoalStatus), data)
@@ -521,7 +520,7 @@ func (h *WSHandler) hubGoalOutcome(evt agent.Event) {
 	frame := goalOutcomeFrame(p.SessionID, p.MessageID, p.Outcome)
 	data, err := json.Marshal(frame)
 	if err != nil {
-		slog.Error("ws: marshal goal_outcome for hub failed", "session_id", p.SessionID, "error", err)
+		logsafeError("ws: marshal goal_outcome for hub failed", "session_id", p.SessionID, "error", err)
 		return
 	}
 	h.hubBroadcastWithSequencedCopy(p.SessionID, string(generated.WsFrameTypeGoalOutcome), data)
@@ -535,7 +534,7 @@ func (h *WSHandler) hubJudgeVerdict(evt agent.Event) {
 	frame := toJudgeVerdictFrame(p.SessionID, p.Verdict)
 	data, err := json.Marshal(frame)
 	if err != nil {
-		slog.Error("ws: marshal judge_verdict for hub failed", "session_id", p.SessionID, "error", err)
+		logsafeError("ws: marshal judge_verdict for hub failed", "session_id", p.SessionID, "error", err)
 		return
 	}
 	// p.SessionID may be "" for a scope=plan verdict (never emitted today) —
@@ -563,7 +562,7 @@ func (h *WSHandler) hubLoopStatusChanged(evt agent.Event) {
 	}
 	data, err := json.Marshal(loopF)
 	if err != nil {
-		slog.Error("ws: marshal loop_status for hub failed", "session_id", p.SessionID, "error", err)
+		logsafeError("ws: marshal loop_status for hub failed", "session_id", p.SessionID, "error", err)
 		return
 	}
 	h.hubBroadcastWithSequencedCopy(p.SessionID, string(generated.WsFrameTypeLoopStatus), data)
