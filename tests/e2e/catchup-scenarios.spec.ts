@@ -122,7 +122,18 @@ async function activeSidebarTitle(page: Page): Promise<string> {
   const row = page.locator('button[aria-current="page"]').first()
   await expect(row).toBeVisible({ timeout: 10_000 })
   const title = (await row.innerText()).trim()
-  await sidebarToggle(page).click() // close the drawer again
+  // Real-browser follow-up (orchestrator): the drawer overlay
+  // (`#sidebar-overlay-panel`, Sidebar.tsx — "absolute left-0 top-0 h-full")
+  // sits visually on top of the header while open, including the hamburger
+  // button itself — a plain second click on it timed out for the full 420s
+  // (CI: "subtree intercepts pointer events", retried 826+ times). Escape
+  // IS the sidebar's own designed close key (Sidebar.tsx's own keydown
+  // handler), but is off-limits here regardless — it also cancels a
+  // running turn, which this scenario cannot risk. `force: true` reaches
+  // the hamburger's own click handler directly without relying on it being
+  // the topmost element at that point — the standard, narrow answer to
+  // "another element visually overlaps the one I actually want to click".
+  await sidebarToggle(page).click({ force: true }) // close the drawer again
   return title
 }
 
@@ -349,11 +360,20 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     // UserMessageDeliveryStatus) — 'queued' while offline ("Not sent yet,
     // will be sent automatically"), transitioning to 'working' once the
     // agent picks it up after the reconnect delivers it.
+    //
+    // Real-browser follow-up (orchestrator): UserMessageDeliveryStatus's
+    // own text is not a visible text node at all — StatusTooltip renders
+    // only an icon as the visible child and puts the whole description on
+    // the inner IconButton's aria-label (ConnectionStatus.tsx's
+    // StatusTooltip). toHaveText() on the container therefore always saw
+    // an empty string (CI: "Received string: \"\""). Read the accessible
+    // name instead, via the role query that actually matches how this
+    // renders.
     const deliveryStatus = page.getByTestId('user-message-delivery-status')
-    await expect(deliveryStatus).toHaveText(/not sent yet/i, { timeout: 15_000 })
+    await expect(deliveryStatus.getByRole('button', { name: /not sent yet/i })).toBeVisible({ timeout: 15_000 })
     await context.setOffline(false)
     await page.evaluate(() => window.dispatchEvent(new Event('online')))
-    await expect(deliveryStatus).toHaveText(/is working on it/i, { timeout: 30_000 })
+    await expect(deliveryStatus.getByRole('button', { name: /is working on it/i })).toBeVisible({ timeout: 30_000 })
     await waitTurnDone(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     // The user's own message is the pending tail (§4.7) — it must render at
