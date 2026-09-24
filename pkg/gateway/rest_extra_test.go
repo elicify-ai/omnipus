@@ -24,10 +24,18 @@ import (
 // It writes a minimal config.json into the temp dir so safeUpdateConfigJSON can read and mutate it.
 func newTestRestAPIWithHome(t *testing.T) *restAPI {
 	t.Helper()
+	return newTestRestAPIWithHomeDevModeBypass(t, false)
+}
+
+// newTestRestAPIWithHomeDevModeBypass is newTestRestAPIWithHome with
+// gateway.dev_mode_bypass set explicitly, for tests pinning behavior that
+// differs under bypass (e.g. TestHandleStateGET_DevModeBypass).
+func newTestRestAPIWithHomeDevModeBypass(t *testing.T, devModeBypass bool) *restAPI {
+	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: devModeBypass},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:         tmpDir,

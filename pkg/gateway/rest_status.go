@@ -317,6 +317,23 @@ func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 			// binary was built as, and whether THIS request is signed in. The
 			// only field the UI reads to branch on edition or sign-in state.
 			"identity": identity,
+			// contracts/components/schemas/AppState.yaml `dev_mode_bypass` —
+			// "True when gateway.dev_mode_bypass is enabled... The SPA uses
+			// this to hide controls that are inoperative when bypass is
+			// active." This field was documented and generated
+			// (gen.AppState.DevModeBypass) but never populated here, so every
+			// SPA gate keyed on it (GodModeControl / GodModeActiveBanner,
+			// commit 671a68ad6) silently never engaged: `appState?.
+			// dev_mode_bypass === true` read false even when bypass was on,
+			// because the field was always absent, not false. Confirmed via
+			// CI run 35990283526's gateway.log: 79
+			// gateway.admin_route_blocked_by_bypass_gate 503s on
+			// /api/v1/gateway/god-mode across the E2E job despite the SPA
+			// gate's own logic being correct. Read directly from config
+			// (mirrors HandleDoctor's `a.agentLoop.GetConfig()` above) —
+			// read-only, no auth-decision here, matches how every other
+			// dev_mode_bypass check in this package reads the same field.
+			"dev_mode_bypass": a.agentLoop.GetConfig().Gateway.DevModeBypass,
 			// ADR-083 CW-3 / EMB-080 — the video-embed allow-list the READER
 			// uses to decide whether to draw a play control at all.
 			//
