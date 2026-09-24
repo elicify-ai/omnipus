@@ -61,9 +61,10 @@ import (
 func fix6NewLifecycleRecord(sessionID, parentDurableKey string) *session.LifecycleRecord {
 	return &session.LifecycleRecord{
 		SessionID:      sessionID,
+		Generation:     1,
 		State:          session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman,
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentDurableKey},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentDurableKey, RootSessionID: parentDurableKey},
 		WorkspaceID:    "ws-1",
 		AgentID:        "worker",
 	}

@@ -59,7 +59,7 @@ func TestAudience_ByClass(t *testing.T) {
 		// steering session's first delegation"); this hand-built fixture
 		// must too.
 		if err := lifecycle.Persist(&session.LifecycleRecord{
-			SessionID: parentID, State: session.LifecycleRunning,
+			SessionID: parentID, Generation: 1, State: session.LifecycleRunning,
 			OwnerScopeKind: session.OwnerScopeHuman, WorkspaceID: "ws-1", AgentID: "worker",
 			Origin: &session.Origin{Kind: session.OriginKindChat},
 		}); err != nil {
@@ -67,7 +67,7 @@ func TestAudience_ByClass(t *testing.T) {
 		}
 		childID := newMetaSession(t, unified, session.SessionTypeDelegate, parentID)
 		if err := lifecycle.Persist(&session.LifecycleRecord{
-			SessionID: childID, State: session.LifecycleRunning,
+			SessionID: childID, Generation: 1, State: session.LifecycleRunning,
 			OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: parentID,
 			WorkspaceID: "ws-1", AgentID: "worker",
 			Origin: &session.Origin{Kind: session.OriginKindDelegate},

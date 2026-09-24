@@ -130,7 +130,7 @@ func TestDelegateTool_FollowUp_NativeBumpsGenerationThenDispatches(t *testing.T)
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-followup-resume-native", Generation: 1, State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman,
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1"},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID:    "ws-1", AgentID: "worker",
 		Is3P: false,
 	}); err != nil {
@@ -182,7 +182,7 @@ func TestDelegateTool_FollowUp_3PDispatchesNewCorrectiveSession(t *testing.T) {
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-followup-resume-3p", Generation: 1, State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman,
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentID},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentID, RootSessionID: parentID},
 		WorkspaceID:    "ws-1", AgentID: "claude-code",
 		Is3P: true,
 	}); err != nil {
@@ -229,7 +229,7 @@ func TestDelegateTool_FollowUp_DispatchFailure_LoggedUnconditionally(t *testing.
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: sessionID, Generation: 1, State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman,
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1"},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID:    "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -286,7 +286,7 @@ func TestDelegateTool_FollowUp_RefusesDispatchWhenTheInstructionCannotLand(t *te
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: sessionID, Generation: 1, State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman,
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1"},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID:    "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -334,7 +334,7 @@ func TestDelegateTool_FollowUp_WritesTheInstructionWhereTheRebuiltTurnReadsIt(t 
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: sessionID, Generation: 1, State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman,
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1"},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID:    "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)

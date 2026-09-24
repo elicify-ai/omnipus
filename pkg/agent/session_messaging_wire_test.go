@@ -83,21 +83,23 @@ func TestSessionMessagingConsumer_ChildToParent_QuestionReachesInboxAndWakes(t *
 	// Seed the PARENT's lifecycle record (owner key = "owner-chat-1") so the
 	// wake's origin routing (channel/chatID) resolves.
 	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
-		SessionID: "owner-chat-1",
-		State:     session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		SessionID:  "owner-chat-1",
+		Generation: 1,
+		State:      session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
 		AgentID:       "parent-agent",
 		OriginChannel: "testchan",
 		OriginChatID:  "chat1",
-		SteeredBy:     &session.SteeredBy{SteeringSessionID: "owner-chat-1"},
+		SteeredBy:     &session.SteeredBy{SteeringSessionID: "owner-chat-1", RootSessionID: "owner-chat-1"},
 	})
 	// Seed the CHILD's lifecycle record so the consumer could resolve it.
 	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
-		SessionID: "child-sess-1",
-		State:     session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		SessionID:  "child-sess-1",
+		Generation: 1,
+		State:      session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
 		AgentID:       "child-agent",
 		OriginChannel: "testchan",
 		OriginChatID:  "chat1",
-		SteeredBy:     &session.SteeredBy{SteeringSessionID: "owner-chat-1"},
+		SteeredBy:     &session.SteeredBy{SteeringSessionID: "owner-chat-1", RootSessionID: "owner-chat-1"},
 	})
 
 	// Wire the stores (the keystone injection) + start the consumer.
@@ -154,14 +156,14 @@ func TestSessionMessagingConsumer_Error_ReachesInboxAndWakes_M2(t *testing.T) {
 	inbox := session.NewMessageInboxStore(t.TempDir())
 	ls := session.NewLifecycleStore(t.TempDir())
 	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
-		SessionID: "owner-err", State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		SessionID: "owner-err", Generation: 1, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
 		AgentID: "parent-agent", OriginChannel: "testchan", OriginChatID: "chat1",
-		SteeredBy: &session.SteeredBy{SteeringSessionID: "owner-err"},
+		SteeredBy: &session.SteeredBy{SteeringSessionID: "owner-err", RootSessionID: "owner-err"},
 	})
 	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
-		SessionID: "child-err", State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		SessionID: "child-err", Generation: 1, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
 		AgentID: "child-agent", OriginChannel: "testchan", OriginChatID: "chat1",
-		SteeredBy: &session.SteeredBy{SteeringSessionID: "owner-err"},
+		SteeredBy: &session.SteeredBy{SteeringSessionID: "owner-err", RootSessionID: "owner-err"},
 	})
 	al.SetSessionMessagingStores(inbox, ls)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -209,11 +211,12 @@ func TestSessionMessagingConsumer_Handback_ReachesInbox(t *testing.T) {
 	inbox := session.NewMessageInboxStore(t.TempDir())
 	ls := session.NewLifecycleStore(t.TempDir())
 	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
-		SessionID: "owner-hb",
-		State:     session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		SessionID:  "owner-hb",
+		Generation: 1,
+		State:      session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
 		AgentID:       "parent-hb",
 		OriginChannel: "tc", OriginChatID: "c1",
-		SteeredBy: &session.SteeredBy{SteeringSessionID: "owner-hb"},
+		SteeredBy: &session.SteeredBy{SteeringSessionID: "owner-hb", RootSessionID: "owner-hb"},
 	})
 	al.SetSessionMessagingStores(inbox, ls)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -253,10 +256,11 @@ func TestSessionMessagingConsumer_Steer_LandsInChildSteeringQueue(t *testing.T) 
 	// child (non-empty parent link) before it will inject a steer.
 	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
 		SessionID:      "child-sess-2",
+		Generation:     1,
 		State:          session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeParentSession,
 		AgentID:        "child-agent-2",
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-of-child-2"},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-of-child-2", RootSessionID: "parent-of-child-2"},
 	})
 	al.SetSessionMessagingStores(inbox, ls)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -344,10 +348,11 @@ func TestSessionMessagingConsumer_MessageParentDirectPath_ReachesInbox(t *testin
 	inbox := session.NewMessageInboxStore(t.TempDir())
 	ls := session.NewLifecycleStore(t.TempDir())
 	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
-		SessionID: "child-direct-1",
-		State:     session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		SessionID:  "child-direct-1",
+		Generation: 1,
+		State:      session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
 		AgentID:   "child-agent-d",
-		SteeredBy: &session.SteeredBy{SteeringSessionID: "owner-direct-1"},
+		SteeredBy: &session.SteeredBy{SteeringSessionID: "owner-direct-1", RootSessionID: "owner-direct-1"},
 	})
 	al.SetSessionMessagingStores(inbox, ls)
 	// ADR-091 I-5: message_parent.go now depends on a single injected
@@ -409,6 +414,7 @@ func TestSessionMessagingConsumer_Steer_RejectsNonChild(t *testing.T) {
 	// not a delegated child, so a steer/respond has no business being injected.
 	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
 		SessionID:      "no-parent-child",
+		Generation:     1,
 		State:          session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeParentSession,
 		AgentID:        "orphan-agent",
@@ -480,9 +486,9 @@ func TestSessionMessagingConsumer_Egress_RedactsSecretAtSink(t *testing.T) {
 	inbox := session.NewMessageInboxStore(t.TempDir())
 	ls := session.NewLifecycleStore(t.TempDir())
 	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
-		SessionID: "owner-egress", State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
+		SessionID: "owner-egress", Generation: 1, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
 		AgentID: "parent-agent", OriginChannel: "tc", OriginChatID: "c1",
-		SteeredBy: &session.SteeredBy{SteeringSessionID: "owner-egress"},
+		SteeredBy: &session.SteeredBy{SteeringSessionID: "owner-egress", RootSessionID: "owner-egress"},
 	})
 	al.SetSessionMessagingStores(inbox, ls)
 	ctx, cancel := context.WithCancel(context.Background())

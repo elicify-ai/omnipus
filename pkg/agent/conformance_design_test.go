@@ -277,9 +277,9 @@ func TestConformance_g6_PerChildCeiling_NoisyChildCannotStarveSibling(t *testing
 	// Two sibling children of the same parent, distinct SessionIDs.
 	for _, sid := range []string{"child-noisy", "child-quiet"} {
 		if err := lc.Persist(&session.LifecycleRecord{
-			SessionID: sid, State: session.LifecycleRunning,
+			SessionID: sid, Generation: 1, State: session.LifecycleRunning,
 			OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: "parent-delegate",
-			SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"}, WorkspaceID: "ws", AgentID: "worker",
+			SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"}, WorkspaceID: "ws", AgentID: "worker",
 		}); err != nil {
 			t.Fatalf("seed %s: %v", sid, err)
 		}
@@ -370,14 +370,14 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 	// a recorded parent — the consumer's sec-MAJOR-3 gate requires it before it
 	// will inject a steer/respond).
 	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
-		SessionID: parentSession, State: session.LifecycleRunning,
+		SessionID: parentSession, Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeParentSession, AgentID: "parent-agent",
-		OriginChannel: "tc", OriginChatID: "c1", SteeredBy: &session.SteeredBy{SteeringSessionID: parentSession},
+		OriginChannel: "tc", OriginChatID: "c1", SteeredBy: &session.SteeredBy{SteeringSessionID: parentSession, RootSessionID: parentSession},
 	})
 	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
 		SessionID: childSession, State: session.LifecycleRunning, Generation: childGen,
 		OwnerScopeKind: session.OwnerScopeParentSession, AgentID: childAgent,
-		OriginChannel: "tc", OriginChatID: "c1", SteeredBy: &session.SteeredBy{SteeringSessionID: parentSession},
+		OriginChannel: "tc", OriginChatID: "c1", SteeredBy: &session.SteeredBy{SteeringSessionID: parentSession, RootSessionID: parentSession},
 	})
 	al.SetSessionMessagingStores(inbox, ls)
 	// ADR-091 I-5: message_parent.go now depends on a single injected

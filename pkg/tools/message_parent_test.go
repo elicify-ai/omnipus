@@ -87,10 +87,11 @@ func newMessageParentTestSetup(t *testing.T) (*MessageParentTool, *session.Lifec
 
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID:      "child-1",
+		Generation:     1,
 		State:          session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeParentSession,
 		OwnerScopeID:   "parent-delegate-id",
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1"},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID:    "ws-1",
 		AgentID:        "worker",
 	}); err != nil {
@@ -252,9 +253,9 @@ func TestMessageParentTool_3PChild_Rejected(t *testing.T) {
 	tool.SetSessionMessagingEnabled(func() bool { return true }) // fix B.5: default fail-closed
 
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-3p", State: session.LifecycleRunning,
+		SessionID: "child-3p", Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: "parent-x",
-		SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"}, WorkspaceID: "ws-1", AgentID: "worker-3p",
+		SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"}, WorkspaceID: "ws-1", AgentID: "worker-3p",
 		Is3P: true,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)

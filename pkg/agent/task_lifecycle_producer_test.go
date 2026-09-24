@@ -299,11 +299,11 @@ func TestLifecycleStore_PruneTerminal_AgeAndStateGated(t *testing.T) {
 	}
 
 	mustPersist(&session.LifecycleRecord{
-		SessionID: "done", State: session.LifecycleCompleted,
+		SessionID: "done", Generation: 1, State: session.LifecycleCompleted,
 		OwnerScopeKind: session.OwnerScopeHuman, AgentID: "a",
 	})
 	mustPersist(&session.LifecycleRecord{
-		SessionID: "still-running", State: session.LifecycleRunning,
+		SessionID: "still-running", Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, AgentID: "a",
 	})
 

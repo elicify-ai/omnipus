@@ -74,9 +74,9 @@ func TestSteerRecordClassifier_Row2_RecordPresentSteeredByNilOriginPresentMetaAg
 	lifecycle, unified := newTestClassifierStores(t)
 	id := newMetaSession(t, unified, session.SessionTypeTask, "")
 	if err := lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: id, State: session.LifecycleRunning,
+		SessionID: id, State: session.LifecycleRunning, Generation: 1,
 		OwnerScopeKind: session.OwnerScopeHuman, WorkspaceID: "ws-1", AgentID: "worker",
-		Origin: &session.Origin{Kind: session.OriginKindTask},
+		Origin: &session.Origin{Kind: session.OriginKindTask, TaskID: "task-row2"},
 	}); err != nil {
 		t.Fatalf("Persist: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestSteerRecordClassifier_Row3_RecordPresentValidSteeredByMetaAgrees_IsStee
 	mustPersistOrdinaryRoot(t, lifecycle, steerer, session.OriginKindChat)
 	child := newMetaSession(t, unified, session.SessionTypeDelegate, steerer)
 	if err := lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: child, State: session.LifecycleRunning,
+		SessionID: child, State: session.LifecycleRunning, Generation: 1,
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: steerer,
 		WorkspaceID: "ws-1", AgentID: "worker",
 		Origin: &session.Origin{Kind: session.OriginKindDelegate, CallID: "call-1"},
@@ -129,7 +129,7 @@ func TestSteerRecordClassifier_Row3b_ThreeLevelChainWalksToTheRealRoot_IsSteered
 	mustPersistOrdinaryRoot(t, lifecycle, root, session.OriginKindChat)
 	mid := newMetaSession(t, unified, session.SessionTypeDelegate, root)
 	if err := lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: mid, State: session.LifecycleRunning,
+		SessionID: mid, State: session.LifecycleRunning, Generation: 1,
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: root,
 		WorkspaceID: "ws-1", AgentID: "mid-agent",
 		Origin:    &session.Origin{Kind: session.OriginKindDelegate, CallID: "call-mid"},
@@ -139,7 +139,7 @@ func TestSteerRecordClassifier_Row3b_ThreeLevelChainWalksToTheRealRoot_IsSteered
 	}
 	leaf := newMetaSession(t, unified, session.SessionTypeDelegate, mid)
 	if err := lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: leaf, State: session.LifecycleRunning,
+		SessionID: leaf, State: session.LifecycleRunning, Generation: 1,
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: mid,
 		WorkspaceID: "ws-1", AgentID: "leaf-agent",
 		Origin:    &session.Origin{Kind: session.OriginKindDelegate, CallID: "call-leaf"},
@@ -179,7 +179,7 @@ func TestSteerRecordClassifier_Row5_RecordPresentSteeredByNilOriginPresentMetaHa
 	steerer := newMetaSession(t, unified, session.SessionTypeChat, "")
 	child := newMetaSession(t, unified, session.SessionTypeDelegate, steerer)
 	if err := lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: child, State: session.LifecycleRunning,
+		SessionID: child, State: session.LifecycleRunning, Generation: 1,
 		OwnerScopeKind: session.OwnerScopeHuman, WorkspaceID: "ws-1", AgentID: "worker",
 		// Origin present (written by ADR-091 code) but SteeredBy was
 		// lost — the edge-lost case, distinct from row 6's legacy case.
@@ -203,7 +203,7 @@ func TestSteerRecordClassifier_Row6_RecordPresentSteeredByNilOriginAbsentDelegat
 	steerer := newMetaSession(t, unified, session.SessionTypeChat, "")
 	child := newMetaSession(t, unified, session.SessionTypeDelegate, steerer)
 	if err := lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: child, State: session.LifecycleRunning,
+		SessionID: child, State: session.LifecycleRunning, Generation: 1,
 		OwnerScopeKind: session.OwnerScopeHuman, WorkspaceID: "ws-1", AgentID: "worker",
 		// No Origin at all — a record written before ADR-091.
 	}); err != nil {
@@ -227,7 +227,7 @@ func TestSteerRecordClassifier_Row7_RecordUnreadable_IsUnreadable(t *testing.T) 
 	lifecycle, unified := newTestClassifierStores(t)
 	id := newMetaSession(t, unified, session.SessionTypeDelegate, "")
 	if err := lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: id, State: session.LifecycleRunning,
+		SessionID: id, State: session.LifecycleRunning, Generation: 1,
 		OwnerScopeKind: session.OwnerScopeHuman, WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("Persist: %v", err)
@@ -259,7 +259,7 @@ func TestSteerRecordClassifier_Row8_SteeredByPresentButMetaDisagrees_IsInvalidEd
 	imposter := newMetaSession(t, unified, session.SessionTypeChat, "")
 	child := newMetaSession(t, unified, session.SessionTypeDelegate, imposter)
 	if err := lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: child, State: session.LifecycleRunning,
+		SessionID: child, State: session.LifecycleRunning, Generation: 1,
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: steerer,
 		WorkspaceID: "ws-1", AgentID: "worker",
 		Origin: &session.Origin{Kind: session.OriginKindDelegate, CallID: "call-1"},
@@ -295,7 +295,7 @@ func TestSteerRecordClassifier_Row8b_CycleInTheAncestorChain_IsInvalidEdge(t *te
 	mustSetParent(t, unified, a, b)
 	mustSetParent(t, unified, b, a)
 	if err := lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: a, State: session.LifecycleRunning,
+		SessionID: a, State: session.LifecycleRunning, Generation: 1,
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: b,
 		WorkspaceID: "ws-1", AgentID: "agent-a",
 		Origin:    &session.Origin{Kind: session.OriginKindDelegate, CallID: "call-a"},
@@ -304,7 +304,7 @@ func TestSteerRecordClassifier_Row8b_CycleInTheAncestorChain_IsInvalidEdge(t *te
 		t.Fatalf("Persist(a): %v", err)
 	}
 	if err := lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: b, State: session.LifecycleRunning,
+		SessionID: b, State: session.LifecycleRunning, Generation: 1,
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: a,
 		WorkspaceID: "ws-1", AgentID: "agent-b",
 		Origin:    &session.Origin{Kind: session.OriginKindDelegate, CallID: "call-b"},
@@ -328,7 +328,7 @@ func TestSteerRecordClassifier_Row8c_UnknownAncestor_IsInvalidEdge(t *testing.T)
 	const ghost = "ghost-session-that-was-never-created"
 	child := newMetaSession(t, unified, session.SessionTypeDelegate, ghost)
 	if err := lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: child, State: session.LifecycleRunning,
+		SessionID: child, State: session.LifecycleRunning, Generation: 1,
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: ghost,
 		WorkspaceID: "ws-1", AgentID: "worker",
 		Origin:    &session.Origin{Kind: session.OriginKindDelegate, CallID: "call-1"},
@@ -353,7 +353,7 @@ func TestSteerRecordClassifier_Row8d_WrongRoot_IsInvalidEdge(t *testing.T) {
 	mustPersistOrdinaryRoot(t, lifecycle, root, session.OriginKindChat)
 	mid := newMetaSession(t, unified, session.SessionTypeDelegate, root)
 	if err := lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: mid, State: session.LifecycleRunning,
+		SessionID: mid, State: session.LifecycleRunning, Generation: 1,
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: root,
 		WorkspaceID: "ws-1", AgentID: "mid-agent",
 		Origin:    &session.Origin{Kind: session.OriginKindDelegate, CallID: "call-mid"},
@@ -363,7 +363,7 @@ func TestSteerRecordClassifier_Row8d_WrongRoot_IsInvalidEdge(t *testing.T) {
 	}
 	leaf := newMetaSession(t, unified, session.SessionTypeDelegate, mid)
 	if err := lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: leaf, State: session.LifecycleRunning,
+		SessionID: leaf, State: session.LifecycleRunning, Generation: 1,
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: mid,
 		WorkspaceID: "ws-1", AgentID: "leaf-agent",
 		Origin: &session.Origin{Kind: session.OriginKindDelegate, CallID: "call-leaf"},
@@ -405,7 +405,7 @@ func TestSteerRecordClassifier_LegacyNonDelegateRecordWithParent_IsOrdinaryRoot(
 	// ADR landed.
 	oldTask := newMetaSession(t, unified, session.SessionTypeTask, oldParent)
 	if err := lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: oldTask, State: session.LifecycleRunning,
+		SessionID: oldTask, State: session.LifecycleRunning, Generation: 1,
 		OwnerScopeKind: session.OwnerScopeHuman, WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("Persist: %v", err)
@@ -427,7 +427,7 @@ func TestSteerRecordClassifier_LegacyNonDelegateRecordWithParent_IsOrdinaryRoot(
 func mustPersistOrdinaryRoot(t *testing.T, lifecycle *session.LifecycleStore, id string, kind session.OriginKind) {
 	t.Helper()
 	if err := lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: id, State: session.LifecycleRunning,
+		SessionID: id, State: session.LifecycleRunning, Generation: 1,
 		OwnerScopeKind: session.OwnerScopeHuman, WorkspaceID: "ws-1", AgentID: "root-agent",
 		Origin: &session.Origin{Kind: kind},
 	}); err != nil {
