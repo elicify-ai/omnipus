@@ -94,7 +94,17 @@ beforeEach(() => {
 })
 
 describe('C8 — clearStreamingState resolves a stuck stream', () => {
-  it('flips isStreaming false and closes the streaming assistant message', () => {
+  it('flips bucket-level isStreaming false but leaves the streaming message OPEN (BE-DESIGN.md §6.3)', () => {
+    // #823 catch-up redesign, Opus review round 2 item 1 (BE-DESIGN.md §6.3:
+    // "On disconnect ... stop closing bubbles and stop marking running tools
+    // cancelled. Mark the session detached."): a turn never depends on a UI
+    // connection — the agent hasn't stopped, only this tab's socket has.
+    // Only the BUCKET-level bookkeeping (isStreaming/cancelStage/
+    // activeTurnId/etc, so the Stop button and composer don't hang on a dead
+    // connection) clears here; the MESSAGE itself stays exactly as it was so
+    // that reconnect's catch-up (session_state -> tokens for the SAME
+    // message_id -> catch_up_complete -> live tokens -> done) resumes the
+    // SAME bubble instead of the §4.2 overlap rule silently discarding it.
     seedStreamingBucket(SID)
     act(() => {
       useChatStore.getState().clearStreamingState()
@@ -103,25 +113,27 @@ describe('C8 — clearStreamingState resolves a stuck stream', () => {
     expect(bucket.isStreaming).toBe(false)
     expect(bucket.cancelStage).toBeNull()
     const msg = bucket.messagesById['a1']
-    expect(msg.isStreaming).toBe(false)
-    expect(msg.status).toBe('done')
-    // Running tool calls are flipped to cancelled and baked into the
-    // finalized message's tool_calls (see the dedicated baking test below);
-    // the live bucket map is cleared so nothing renders as in-flight via the
-    // stale live-bucket path.
+    expect(msg.isStreaming).toBe(true)
+    expect(msg.status).toBe('streaming')
+    // The live bucket map is still cleared (baked into the message instead —
+    // see the dedicated baking test below), because the renderer switches
+    // from the live toolCalls bucket to message.tool_calls the instant
+    // bucket-level isStreaming flips false; a tool call left ONLY in the
+    // live bucket would simply vanish from the UI.
     expect(bucket.toolCalls).toEqual({})
-    expect(msg.tool_calls?.find((tc) => tc.id === 'tc1')?.status).toBe('cancelled')
     // Foreground projection is synced.
     expect(useChatStore.getState().isStreaming).toBe(false)
   })
 
-  it('bakes in-flight tool calls into the finalized message, not just cancels them in place', () => {
-    // Regression test: once isStreaming flips false, the historical renderer
-    // (VirtualAssistantMessageRow) reads message.tool_calls instead of the
-    // live bucket.toolCalls map. Before the fix, the WS-disconnect fallback
-    // only flipped bucket.toolCalls['tc1'].status to 'cancelled' in place and
-    // never baked it into messagesById['a1'].tool_calls — so the in-flight
-    // tool call vanished from the UI the instant the stream was force-closed.
+  it('bakes in-flight tool calls into the still-open message, keeping their real (non-cancelled) status', () => {
+    // Regression test: once bucket-level isStreaming flips false, the
+    // historical renderer (VirtualAssistantMessageRow) reads
+    // message.tool_calls instead of the live bucket.toolCalls map — an
+    // in-flight tool call left only in the live bucket would vanish from the
+    // UI the instant the stream force-closes. §6.3 also says a disconnect
+    // must not mark running tools cancelled: the tool may still resolve
+    // server-side, so the baked copy keeps its real status ('running' here),
+    // not a forced 'cancelled'.
     seedStreamingBucket(SID)
     act(() => {
       useChatStore.getState().clearStreamingState()
@@ -129,7 +141,7 @@ describe('C8 — clearStreamingState resolves a stuck stream', () => {
     const bucket = useChatStore.getState().sessionsById[SID]
     const msg = bucket.messagesById['a1']
     expect(msg.tool_calls).toEqual([
-      { id: 'tc1', tool: 'exec', params: {}, result: undefined, status: 'cancelled', duration_ms: undefined, error: undefined },
+      { id: 'tc1', tool: 'exec', params: {}, result: undefined, status: 'running', duration_ms: undefined, error: undefined },
     ])
     // The live bucket state must be cleared too, so it doesn't leak into the
     // next turn (mirrors the `done` frame handler's baking contract).
@@ -140,7 +152,8 @@ describe('C8 — clearStreamingState resolves a stuck stream', () => {
   it('preserves an already-baked tool_calls entry when baking a second in-flight call on disconnect', () => {
     // If the message already has a baked tool call (e.g. from an earlier
     // partial bake) and a different call is still live when disconnect
-    // fires, both must survive in the merged tool_calls array.
+    // fires, both must survive in the merged tool_calls array, each keeping
+    // its own real status (§6.3 — no forced 'cancelled').
     seedStreamingBucket(SID, {
       messagesById: {
         'a1': {
@@ -159,7 +172,7 @@ describe('C8 — clearStreamingState resolves a stuck stream', () => {
     })
     const msg = useChatStore.getState().sessionsById[SID].messagesById['a1']
     expect(msg.tool_calls?.map((tc) => tc.id)).toEqual(['tc0', 'tc1'])
-    expect(msg.tool_calls?.find((tc) => tc.id === 'tc1')?.status).toBe('cancelled')
+    expect(msg.tool_calls?.find((tc) => tc.id === 'tc1')?.status).toBe('running')
   })
 
   it('bakes an already-resolved (non-running) tool call on disconnect, not just still-running ones', () => {

@@ -181,26 +181,63 @@ function appendUnmatchedToolError(
   }) as Partial<SessionChatState>
 }
 
-// #823 catch-up redesign pass 2 (BE-DESIGN.md §6.3, founder decision Q3 —
-// REPLACE): the #822 mechanism this block used to implement
+// #823 catch-up redesign, Opus review round 2 (BE-DESIGN.md §6.3, "Turn-keyed
+// bubbles — replaces 'append to the last assistant bubble'"): the #822
+// mechanism this block used to implement
 // (isTerminalCatchUpToken/applyTokenStreamingState/needsTerminalCatchUp,
 // keyed on terminalCatchUpPending/activeTurnBubbleOpened) is deleted.
 // catch_up_complete (slices/catchup-frames.ts) is now the sole "catch-up is
 // over" signal — see that file's own doc comment — so a token/done frame
 // never needs to guess whether it is closing a replay window.
 //
-// message_id-keyed bubble resolution REPLACES it for every frame that
-// carries message_id (every live token in production, per Lane B's
-// per-message-id contract) — ground-truthed against Lane A's real recorded
-// fixtures (src/store/__fixtures__/catchup/F1..F8.json): F1's own two-round
-// example produces TWO separate assistant bubbles (one per message_id,
-// split by the tool call between them), the first implicitly finalized the
-// instant the second's first token arrives — there is no explicit `done`
-// for a non-final message_id in one turn.
+// CORRECTION: an earlier pass of this function keyed bubbles by message_id
+// alone, producing a SEPARATE bubble per message_id — which made F1's own
+// two-round example (msg-1 "Let me check." + tool call, then msg-2
+// "All done.") render as two bubbles. That is wrong: §6.3 and §8.3 both
+// require EXACTLY ONE bubble per turn, and F1's fixture "assistant_messages"
+// are the turn's successive text SEGMENTS within that one bubble, not
+// separate bubbles ("one_bubble_per_message" in the fixture means "the whole
+// reply is one bubble," not "one bubble per message_id" — confirmed against
+// the design doc's literal §6.3 rule below). §6.3's real rule:
+//   1. If a bubble already holds this message_id (its own id, OR previously
+//      registered via the turn-merge in step 2 below) — append/replace/
+//      ignore-if-complete, exactly as before.
+//   2. Otherwise, if there is an OPEN (not closed by this turn_id's own
+//      `done`) bubble for the SAME turn_id + agent_id, register this
+//      message_id onto THAT bubble (mirrors the identical mechanism
+//      replay_message already uses for its own same-turn merge — see
+//      `ChatMessage.mergedReplayIds` / `SessionChatState.
+//      mergedReplayMessageIds`'s doc comments) and append/replace there.
+//   3. Otherwise create a new bubble, anchored on turn_id.
+function findBubbleIdForMessageId(draft: SessionChatState, messageId: string): string | null {
+  if (draft.messagesById[messageId]) return messageId
+  for (const id of draft.messageOrder) {
+    const m = draft.messagesById[id]
+    if (m?.role === 'assistant' && m.mergedReplayIds?.includes(messageId)) return id
+  }
+  return null
+}
+
+function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: TokenFrameType): void {
+  const m = draft.messagesById[bubbleId]
+  m.content = frame.replace ? frame.content : (m.content ?? '') + frame.content
+  if (frame.agent_id) m.agentId = frame.agent_id
+  if (frame.turn_id && !m.turnId) m.turnId = frame.turn_id
+  m.isStreaming = true
+  m.status = 'streaming'
+  draft.isStreaming = true
+}
+
 function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFrameType): void {
   const messageId = frame.message_id!
-  const existing = draft.messagesById[messageId]
-  if (existing) {
+  const turnId = frame.turn_id
+
+  // Step 1: this message_id is already accounted for on some bubble
+  // (live-registered as that bubble's own id, or merged onto an earlier
+  // bubble of the same turn by step 2 on a previous token).
+  const resolvedId = findBubbleIdForMessageId(draft, messageId)
+  if (resolvedId) {
+    const existing = draft.messagesById[resolvedId]
     if (existing.status === 'interrupted' || existing.status === 'error') return
     // §4.2/§6.3 overlap rule: a bubble already finalized (status 'done', not
     // streaming) ignores any further token for its message_id outright —
@@ -209,26 +246,94 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
     // text, and live tokens with seq > W for the SAME message_id that
     // arrive afterward must never re-open or duplicate it.
     if (existing.status === 'done' && !existing.isStreaming) return
-    existing.content = frame.replace ? frame.content : (existing.content ?? '') + frame.content
-    if (frame.agent_id) existing.agentId = frame.agent_id
-    if (frame.turn_id && !existing.turnId) existing.turnId = frame.turn_id
-    existing.isStreaming = true
-    existing.status = 'streaming'
-    draft.isStreaming = true
+    applyTokenContentTo(draft, resolvedId, frame)
     return
   }
-  // A NEW message_id: finalize whatever bubble was previously open — bake
-  // any tool calls it still owns first (mirrors the pre-#823 abandoned-
-  // bubble bake, kept for the same reason: a tool call started before this
-  // boundary must not be silently dropped from the closing bubble's
-  // rendered tool_calls).
+
+  // Step 2: no bubble holds this message_id yet. Look for an OPEN bubble
+  // (not finalized by this turn's own `done`) for the SAME turn_id and
+  // agent_id — this is F1's shape (msg-1's tool-call round, then msg-2's
+  // continuation): register the new message_id onto that SAME bubble
+  // instead of starting a second one.
+  if (turnId) {
+    let turnBubbleId: string | null = null
+    for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+      const id = draft.messageOrder[i]
+      const m = draft.messagesById[id]
+      if (m?.role !== 'assistant' || m.turnId !== turnId) continue
+      if (frame.agent_id && m.agentId && m.agentId !== frame.agent_id) continue
+      if (m.status === 'interrupted' || m.status === 'error') continue
+      if (m.status === 'done' && !m.isStreaming) continue // closed by done(turn_id) — do not reopen
+      turnBubbleId = id
+      break
+    }
+    if (turnBubbleId) {
+      const m = draft.messagesById[turnBubbleId]
+      m.mergedReplayIds = [...(m.mergedReplayIds ?? []), messageId]
+      draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
+      applyTokenContentTo(draft, turnBubbleId, frame)
+      return
+    }
+  }
+
+  // Step 3: no bubble for this turn_id either — a genuinely new turn's first
+  // message_id. There may already be an OPEN assistant bubble under a
+  // different, local id, from a DIFFERENT (now-superseded) turn:
+  //
+  //   (a) sendMessage's own send-time optimistic placeholder
+  //       (outbound-lifecycle.ts, a generateId()'d empty bubble minted the
+  //       instant the user hits send, purely so "the agent is about to
+  //       reply" renders with zero latency, before the server has assigned
+  //       — or this client has even learned — the real message_id/turn_id).
+  //       Real-browser regression (orchestrator report, 2026-09-24, BUG 2):
+  //       under the pre-#823 "last assistant message" heuristic the first
+  //       live token transparently reused this placeholder; message_id-keyed
+  //       resolution instead always minted a SECOND, brand-new bubble here,
+  //       leaving the placeholder orphaned — an empty "just the agent name"
+  //       bubble in front of every real answer. Fix: RE-KEY the placeholder
+  //       to the real message_id/turn_id instead of creating a second bubble.
+  //
+  //   (b) a genuinely different, already-content-bearing bubble — e.g. a
+  //       bubble a disconnect left open (BUG 1's fix, clearStreamingState no
+  //       longer closes it) that this new turn is superseding. That one is
+  //       FINALIZED, not reused — bake any tool calls it still owns first
+  //       (mirrors the pre-#823 abandoned-bubble bake: a tool call started
+  //       before this boundary must not be silently dropped from the
+  //       closing bubble's rendered tool_calls).
+  //
+  // Told apart by content: (a) has none yet (and owns no tool calls) — it is
+  // by construction the placeholder, since a real bubble that has already
+  // received a token would already have matched step 1 or 2 above for its
+  // OWN turn. (b) has already streamed something.
   const prevOpenId = findOpenAssistantMessageId(draft.messageOrder, draft.messagesById)
   if (prevOpenId && prevOpenId !== messageId) {
     const prevMsg = draft.messagesById[prevOpenId]
+    const ownedIds = draft.toolCallOrder.filter(
+      (id) => draft.toolCalls[id] && draft.toolCallOwnerMessageId?.[id] === prevOpenId,
+    )
+    const isEmptyPlaceholder =
+      (prevMsg.isStreaming || prevMsg.status === 'streaming') &&
+      !prevMsg.content &&
+      ownedIds.length === 0 &&
+      !prevMsg.media?.length &&
+      !prevMsg.spans?.length
+    if (isEmptyPlaceholder) {
+      delete draft.messagesById[prevOpenId]
+      const idx = draft.messageOrder.indexOf(prevOpenId)
+      const bubble: ChatMessage = {
+        ...prevMsg,
+        id: messageId,
+        content: frame.content,
+        agentId: frame.agent_id ?? prevMsg.agentId,
+        turnId: turnId ?? prevMsg.turnId,
+      }
+      draft.messagesById[messageId] = bubble
+      if (idx !== -1) draft.messageOrder[idx] = messageId
+      else draft.messageOrder.push(messageId)
+      draft.isStreaming = true
+      return
+    }
     if (prevMsg.isStreaming || prevMsg.status === 'streaming') {
-      const ownedIds = draft.toolCallOrder.filter(
-        (id) => draft.toolCalls[id] && draft.toolCallOwnerMessageId?.[id] === prevOpenId,
-      )
       if (ownedIds.length > 0) {
         bakeToolCallsByOwner(draft.messagesById, ownedIds, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, prevOpenId, draft.textAtToolCallStart)
       }
@@ -245,7 +350,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
     status: 'streaming',
     isStreaming: true,
     agentId: frame.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined,
-    turnId: frame.turn_id,
+    turnId,
   }
   draft.messagesById[bubble.id] = bubble
   draft.messageOrder.push(bubble.id)
@@ -888,20 +993,35 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             )
             withBucket(sid, (b) => {
               return produce(b, (draft) => {
-                // #823 catch-up redesign pass 2 (§6.3): prefer the frame's
-                // own message_id when it names an existing bubble — this is
-                // the message_id-keyed counterpart of the 'token' case's own
-                // resolveTokenBubbleByMessageId, needed because `done` can
-                // legitimately finalize a bubble the LAST token already
-                // closed implicitly (a subsequent message_id opened before
-                // done arrived is not possible for a turn's own final
-                // done — message_id is always the LAST bubble of the turn).
-                // Falls back to the pre-#823 heuristic for a message_id-less
-                // frame (the webchatChannel.Send no-stream fallback).
+                // #823 catch-up redesign, Opus review round 2 (§6.3:
+                // "done(turn_id): close every bubble of that turn"): find the
+                // bubble by turn_id FIRST — this is the turn-keyed
+                // counterpart of the 'token' case's own
+                // resolveTokenBubbleByMessageId/findBubbleIdForMessageId. A
+                // turn can register more than one message_id onto the SAME
+                // bubble (F1's msg-1 + tool call + msg-2, merged via
+                // mergedReplayIds), so `frame.message_id` naming that bubble
+                // directly can no longer be assumed — turn_id is the
+                // reliable key now. Falls back to the pre-#823
+                // message_id/lastMsgId heuristic when the frame carries no
+                // turn_id, or names one with no matching bubble (the
+                // webchatChannel.Send no-stream fallback, which has neither).
+                const doneTurnId = frame.turn_id
+                const turnBubbleId = doneTurnId
+                  ? (() => {
+                      for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+                        const id = draft.messageOrder[i]
+                        const m = draft.messagesById[id]
+                        if (m?.role === 'assistant' && m.turnId === doneTurnId) return id
+                      }
+                      return null
+                    })()
+                  : null
                 const lastMsgId =
-                  frame.message_id && draft.messagesById[frame.message_id]
+                  turnBubbleId ??
+                  (frame.message_id && draft.messagesById[frame.message_id]
                     ? frame.message_id
-                    : findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
+                    : findLastAssistantMessageId(draft.messageOrder, draft.messagesById))
                 // Sweep the UNION of {the last assistant message} (unchanged
                 // — always normalized exactly as before, even when it isn't
                 // flagged "streaming" at all, e.g. a replay-reconstructed

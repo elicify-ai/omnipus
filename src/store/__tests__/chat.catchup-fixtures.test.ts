@@ -105,13 +105,19 @@ describe('F1 — live turn, one tab, no reconnect (baseline shape)', () => {
     expect(users[0].content).toBe(fixture.expect.user_message)
 
     const asst = assistantMessages(SID)
-    expect(asst.map((m) => m.content)).toEqual(fixture.expect.assistant_messages)
-    // one_bubble_per_message: each message_id is exactly one bubble — the
-    // core Q3 guarantee this whole pass exists to deliver.
-    expect(asst[0].id).not.toBe(asst[1].id)
-    expect(asst.every((m) => m.status === 'done' && !m.isStreaming)).toBe(true)
+    // BE-DESIGN.md §6.3/§8.3 (corrected — a prior pass of this test wrongly
+    // asserted two separate bubbles, adapting the oracle to that pass's own
+    // bug rather than the design; caught by the orchestrator's Opus review):
+    // "exactly one bubble per turn". F1's two message_ids (msg-1 "Let me
+    // check." + tool call, msg-2 "All done.") merge onto the SAME bubble via
+    // turn_id — the fixture's own `assistant_messages` array is the turn's
+    // successive text SEGMENTS, concatenated into that one bubble's content,
+    // not two separate bubbles' contents.
+    expect(asst).toHaveLength(1)
+    expect(asst[0].content).toBe((fixture.expect.assistant_messages as string[]).join(''))
+    expect(asst[0].status === 'done' && !asst[0].isStreaming).toBe(true)
 
-    const allCalls = asst.flatMap((m) => (m.tool_calls ?? []).map((tc) => tc.tool))
+    const allCalls = (asst[0].tool_calls ?? []).map((tc) => tc.tool)
     expect(allCalls).toEqual(fixture.expect.tool_calls)
 
     expect(bucket(SID)?.isStreaming).toBe(false)
