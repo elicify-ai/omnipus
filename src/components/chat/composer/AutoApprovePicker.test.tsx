@@ -318,3 +318,55 @@ describe('AutoApprovePicker — no-sandbox caution (2026-09-24)', () => {
     expect(tooltip).not.toHaveTextContent('kernel sandbox')
   })
 })
+
+// Code-review finding 3: ChatModeBadge checks `godModeActive` FIRST and
+// renders "God Mode" whatever `resolved` says (it's a STRONGER floor than
+// Auto, not the absence of it — useResolvedAutoApprove's own contract). This
+// picker used to ignore `godModeActive` entirely and just render `resolved`
+// — so with God Mode on and this chat's own Auto explicitly false, the badge
+// said "God Mode" while the switch showed off, and flipping the switch (it
+// sent session_mode_update, which the server accepts but which changes
+// nothing real under the God Mode floor) looked like it did something when
+// it didn't.
+describe('AutoApprovePicker — God Mode is a stronger floor than this chat’s Auto (code-review finding 3)', () => {
+  it('is disabled under God Mode even though there IS an active agent and a real session (the only two conditions that used to control disabled)', async () => {
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(
+      sandboxStatus({ auto_approve_effective: false, kernel_sandbox_active: true, god_mode_active: true }),
+    )
+    renderPicker()
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-auto-approve-toggle')).toBeDisabled()
+    })
+  })
+
+  it('the disabled tooltip mentions God Mode and says this chat’s Auto choice does not apply', async () => {
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(
+      sandboxStatus({ auto_approve_effective: false, kernel_sandbox_active: true, god_mode_active: true }),
+    )
+    renderPicker()
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-auto-approve-toggle')).toBeDisabled()
+    })
+    const trigger = screen.getByTestId('composer-auto-approve-tooltip-trigger')
+    fireEvent.focus(trigger)
+    const tooltip = screen.getByRole('tooltip')
+    expect(tooltip).toHaveTextContent(/god mode/i)
+    expect(tooltip).toHaveTextContent(/does not apply/i)
+  })
+
+  it('flipping does nothing under God Mode — the disabled Switch never fires sendSessionModeUpdate or records a pending choice', async () => {
+    const spy = vi.fn()
+    act(() => {
+      useChatStore.setState({ sendSessionModeUpdate: spy })
+    })
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(
+      sandboxStatus({ auto_approve_effective: false, kernel_sandbox_active: true, god_mode_active: true }),
+    )
+    renderPicker()
+    const toggle = await screen.findByTestId('composer-auto-approve-toggle')
+    await waitFor(() => expect(toggle).toBeDisabled())
+    fireEvent.click(toggle)
+    expect(spy).not.toHaveBeenCalled()
+    expect(useChatStore.getState().pendingAutoApproveChoice).toBeNull()
+  })
+})

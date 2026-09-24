@@ -32,7 +32,14 @@ export interface ResolvedAutoApprove {
 /**
  * useResolvedAutoApprove — the single source of ADR-092's Auto-approve
  * resolution, shared by the composer's per-chat toggle (AutoApprovePicker)
- * and the chat-header mode badge so the two can never disagree.
+ * and the chat-header mode badge (ChatModeBadge) so both read the same
+ * underlying state. Agreement is NOT automatic just from sharing this hook,
+ * though: `godModeActive` is a stronger floor than `resolved` (see its own
+ * field doc below) and every caller must check it FIRST, exactly as
+ * ChatModeBadge does. A caller that reads only `resolved` and ignores
+ * `godModeActive` — AutoApprovePicker used to be exactly this caller — can
+ * still show state that visibly contradicts one that checks both, even
+ * though both are reading the same hook.
  *
  * Resolution order (most specific wins): this session's own
  * `autoApproveEffective` (once a `session_mode_updated` ack has arrived, or

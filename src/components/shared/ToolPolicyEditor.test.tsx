@@ -1277,4 +1277,51 @@ describe('ToolPolicyEditor — ADR-092 J14 "Under Auto" marker', () => {
     const row = screen.getByTestId('tool-row-mcp_myserver_search')
     expect(within(row).getByTestId('auto-approve-marker-mcp_myserver_search')).toHaveTextContent('Auto: runs')
   })
+
+  // Code-review finding 4: the marker used to key off the raw per-agent
+  // value alone (`effective === 'ask'`), ignoring a stricter GLOBAL floor
+  // entirely. A tool with a per-agent value of "ask" but a global "Deny"
+  // floor never actually resolves to "ask" at runtime (the floor wins,
+  // deny > ask > allow — the same merge `lockTitle` already documents) — so
+  // the row showed BOTH "Global: Deny" and "Auto: runs" at once, which is a
+  // direct contradiction: the tool can't be both always-denied and
+  // auto-approved. The marker must use the TRUE effective policy (strictest
+  // of the floor and the per-agent value), not the per-agent value alone.
+  it('shows no Auto marker when a global "Deny" floor overrides a per-agent "Ask" — the row must not contradict its own "Global: Deny" badge', async () => {
+    const user = userEvent.setup()
+    const tool = makeTool({ name: 'send_message', category: 'communication', auto_approve: 'runs' })
+    render(
+      <ToolPolicyEditor
+        tools={[tool]}
+        value={{ policies: { send_message: 'ask' } }}
+        onChange={vi.fn()}
+        globalPolicies={{ policies: { send_message: 'deny' } }}
+      />,
+    )
+    await user.click(within(screen.getByTestId('category-grid')).getByRole('button', { name: /communication/i }))
+    const row = screen.getByTestId('tool-row-send_message')
+    // The floor badge is still shown — this is not about hiding the floor,
+    // only about not ALSO showing a marker that contradicts it.
+    expect(within(row).getByTestId('global-override-send_message')).toHaveTextContent(/global:\s*deny/i)
+    expect(within(row).queryByTestId('auto-approve-marker-send_message')).not.toBeInTheDocument()
+  })
+
+  it('shows no Auto marker when a global "Ask" floor and a per-agent "Ask" agree (still resolves to Ask, so this is the positive control for the fix — marker DOES still show)', async () => {
+    // Positive control: a global "ask" floor with a per-agent "ask" still
+    // truly resolves to "ask" at runtime (floor and agent agree) — the fix
+    // must not over-correct into hiding the marker whenever ANY floor exists.
+    const user = userEvent.setup()
+    const tool = makeTool({ name: 'send_message', category: 'communication', auto_approve: 'runs' })
+    render(
+      <ToolPolicyEditor
+        tools={[tool]}
+        value={{ policies: { send_message: 'ask' } }}
+        onChange={vi.fn()}
+        globalPolicies={{ policies: { send_message: 'ask' } }}
+      />,
+    )
+    await user.click(within(screen.getByTestId('category-grid')).getByRole('button', { name: /communication/i }))
+    const row = screen.getByTestId('tool-row-send_message')
+    expect(within(row).getByTestId('auto-approve-marker-send_message')).toHaveTextContent('Auto: runs')
+  })
 })

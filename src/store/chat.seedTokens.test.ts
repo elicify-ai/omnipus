@@ -13,6 +13,7 @@ vi.mock('@/store/session', () => ({
   useSessionStore: { getState: () => ({ activeSessionId: 'sess-1' }) },
   registerChatSetReplaying: vi.fn(),
   registerChatResetForReplay: vi.fn(),
+  registerChatClearPendingAutoApprove: vi.fn(),
   registerSyncChatForeground: vi.fn(),
 }))
 vi.mock('@/store/connection', () => ({
