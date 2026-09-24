@@ -1230,6 +1230,14 @@ func (al *AgentLoop) Close() {
 		al.taskExecutor.Drain(30 * time.Second)
 	}
 
+	// Drain ADR-091's steered-dispatch front for exactly the reason the two
+	// drains above exist: an admitted steered turn runs on a detached
+	// goroutine that writes lifecycle, inbox and transcript files, and so
+	// does the queue promotion it fires on the way out. Neither was joined
+	// by anything, so both outlived Close() and raced a caller's teardown.
+	// See admission.go::goSteeredTurn for the full note.
+	al.drainSteeredTurns(30 * time.Second)
+
 	// Cancel all active session workers and wait for them to drain (5 s budget).
 	// stopSessionWorkers is idempotent — safe to call here even if Run() has
 	// already called it on context-cancellation, because workers cancel their

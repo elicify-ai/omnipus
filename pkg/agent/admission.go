@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -289,6 +290,17 @@ type steerAdmission struct {
 	active     map[string]int // sessionKey -> generation, only while THIS gate admitted the turn
 	queue      []steerQueueEntry
 	resolveCap func() int
+	// turns counts the DETACHED goroutines this gate's dispatch front has
+	// in flight — the admitted turn itself (steer_launcher.go's
+	// `go al.runDispatchedSteeredTurn`) and the promotion of the next
+	// queued session (drainSteerQueue, below). Both write through the
+	// session, lifecycle, inbox and transcript stores long after the call
+	// that started them has returned, so AgentLoop.Close must be able to
+	// JOIN them — see drainSteeredTurns. Not part of the admission
+	// decision and deliberately outside mu: WaitGroup has its own
+	// synchronisation and taking mu around a goroutine's whole lifetime
+	// would serialise the gate on it.
+	turns sync.WaitGroup
 }
 
 func newSteerAdmission(resolveCap func() int) *steerAdmission {
@@ -455,7 +467,7 @@ func (al *AgentLoop) drainSteerQueue(sessionID string, generation int) {
 	if !hasNext {
 		return
 	}
-	go func() {
+	al.goSteeredTurn(func() {
 		if _, err := al.dispatchSteeredSessionReserved(context.Background(), next.sessionID, next.generation); err != nil {
 			if classifyDrainDispatchError(err) {
 				logger.InfoCF("agent", "steer: drain queue: promoted session was no longer dispatchable (legitimate)",
@@ -473,7 +485,55 @@ func (al *AgentLoop) drainSteerQueue(sessionID string, generation int) {
 			al.reportSteeredSessionTerminalUpward(context.Background(), next.sessionID, next.generation,
 				session.LifecycleFailed, steer.OutcomeFailed, fmt.Sprintf("dispatch_failed: %v", err))
 		}
+	})
+}
+
+// goSteeredTurn starts one detached goroutine on the steered-dispatch front
+// and registers it with the gate's WaitGroup so AgentLoop.Close can join it.
+//
+// [ADR-091 fix lane FX-GOTEST] Close() already drains every OTHER dispatch
+// front it owns before tearing down the stores those fronts write through —
+// recaps (waitRecapDrain), tasks (TaskExecutor.Drain) and session workers
+// (stopSessionWorkers) — and its own comments say why: "nothing writes after
+// Close() returns to race temp-dir cleanup". ADR-091 added a THIRD front and
+// registered it with none of that, so an admitted steered turn (and the
+// promotion it triggers on the way out) kept writing lifecycle, inbox and
+// transcript files after Close() had returned. In production that is a
+// shutdown that reports done while work is still landing on disk; under
+// `go test` it surfaces as "TempDir RemoveAll cleanup: directory not empty",
+// because t.Cleanup runs BEFORE t.TempDir's own removal.
+//
+// Add() happens on the CALLER's goroutine, before the new one starts, so a
+// Close racing a dispatch either sees the turn or happens strictly before
+// it was ever admitted. A turn calling drainSteerQueue from its own defer
+// adds the promotion's count while still holding its own, so the counter
+// cannot dip to zero between the two.
+func (al *AgentLoop) goSteeredTurn(run func()) {
+	gate := al.steerAdmission()
+	gate.turns.Add(1)
+	go func() {
+		defer gate.turns.Done()
+		run()
 	}()
+}
+
+// drainSteeredTurns waits for every in-flight steered turn and queue
+// promotion, bounded by budget. Bounded for the same reason waitRecapDrain
+// and TaskExecutor.Drain are: a provider that never returns must not be able
+// to freeze shutdown for ever. After the budget it logs and proceeds — an
+// unfinished child turn is strictly better than a wedged process.
+func (al *AgentLoop) drainSteeredTurns(budget time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		al.steerAdmission().turns.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(budget):
+		logger.WarnCF("agent", "Close: steered-turn drain budget exceeded; proceeding with teardown",
+			map[string]any{"budget": budget.String()})
+	}
 }
 
 // classifyDrainDispatchError reports whether err is one of the three

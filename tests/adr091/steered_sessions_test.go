@@ -609,18 +609,82 @@ func TestE2E_StopReachesReenteredChild(t *testing.T) {
 	}
 }
 
+// assertStopLandedOn checks rec against the TWO durable shapes a Stop cascade
+// may legally leave on a session it REACHED, and reports which one it found
+// (true = the terminal shape).
+//
+// The founder's decision of 2026-09-24 retired the single shape this test used
+// to assert exclusively. A Stop marker is an INSTRUCTION ("do not run this
+// generation"); landing the terminal state IS that instruction being carried
+// out, so the marker is spent and cleared. Who stopped it and when live in the
+// event log, not on the record. pkg/session/lifecycle.go's write choke point
+// enforces the same rule from the other side — it REJECTS a terminal record
+// that still carries a current-generation marker, because the pair says
+// "finished" and "still waiting to be stopped" at once. So:
+//
+//   - NOT terminal -> the instruction is still outstanding and the
+//     current-generation marker MUST be on the record. Unchanged by the
+//     decision; this is the shape a session with a live turn sits in until the
+//     turn unwinds.
+//   - terminal -> the instruction has been carried out. The marker is gone and
+//     `cancelled` is the fingerprint the Stop left in its place.
+//
+// Every other shape is a LOST Stop and fails: `running`/`queued` with no
+// marker means the cascade's durable write vanished, and any terminal state
+// other than `cancelled` (notably `completed`) means the child finished on its
+// own terms and the Stop never took effect at all. Neither is weakened to a
+// nil-check — both limbs still have to name the exact generation.
+func assertStopLandedOn(t *testing.T, rec *session.LifecycleRecord, when string) bool {
+	t.Helper()
+	live := rec.Stop != nil && rec.Stop.Generation == rec.Generation
+	switch {
+	case rec.Terminal() && live:
+		t.Fatalf("B %s is terminal (%s) AND still carries a current-generation stop marker %+v — "+
+			"a spent instruction must be cleared when it is carried out (and lifecycle.go's write "+
+			"choke point rejects this pair outright)", when, rec.State, rec.Stop)
+	case rec.Terminal() && rec.State != session.LifecycleCancelled:
+		t.Fatalf("B %s is terminal at %q, want %q — a session the cascade REACHED and terminalised "+
+			"was stopped, not finished; any other terminal state means the Stop never took effect "+
+			"(record=%+v)", when, rec.State, session.LifecycleCancelled, rec)
+	case rec.Terminal():
+		// Which of the two legal shapes a run lands in depends on whether B
+		// still had a live turn when the cascade reached it, so record it:
+		// `-v` output is the only thing that distinguishes them afterwards.
+		t.Logf("B %s: terminal shape — state=%q generation=%d, spent stop marker cleared (older marker: %+v)",
+			when, rec.State, rec.Generation, rec.Stop)
+		return true
+	case live:
+		t.Logf("B %s: outstanding shape — state=%q generation=%d, live stop marker %+v",
+			when, rec.State, rec.Generation, rec.Stop)
+		return false
+	default:
+		t.Fatalf("B %s is %q at generation %d with stop marker %+v — a session the cascade REACHED "+
+			"must either still carry its current-generation marker or have landed %q; this record "+
+			"carries neither, so the Stop was LOST",
+			when, rec.State, rec.Generation, rec.Stop, session.LifecycleCancelled)
+	}
+	return false
+}
+
 func TestE2E_StopSurvivesRestart(t *testing.T) {
 	h := newE2EHarness(t)
-	if _, err := h.tree.Stop(h.tree.Root.SessionID); err != nil {
+	report, err := h.tree.Stop(h.tree.Root.SessionID)
+	if err != nil {
 		t.Fatalf("Stop(root): %v", err)
+	}
+	// Everything below is about what a REACHED session's durable record looks
+	// like across a restart, so "the cascade reached B at all" is a premise,
+	// not an assumption: a B that was skipped as already-terminal would make
+	// every assertion after this vacuous.
+	if !slices.Contains(report.Reached, h.tree.B.SessionID) {
+		t.Fatalf("Stop(root) did not reach B (%s): reached=%v skipped_terminal=%v unreachable=%+v",
+			h.tree.B.SessionID, report.Reached, report.SkippedTerminal, report.Unreachable)
 	}
 	stopped, err := h.lifecycle.Load(h.tree.B.SessionID)
 	if err != nil {
 		t.Fatalf("load B after Stop: %v", err)
 	}
-	if stopped.Stop == nil || stopped.Stop.Generation != stopped.Generation {
-		t.Fatalf("B stop marker = %+v at generation %d, want current-generation marker", stopped.Stop, stopped.Generation)
-	}
+	wasTerminal := assertStopLandedOn(t, stopped, "immediately after Stop")
 	oldGeneration := stopped.Generation
 	if crashErr := h.tree.Crash(); crashErr != nil {
 		t.Fatalf("Crash: %v", crashErr)
@@ -632,8 +696,31 @@ func TestE2E_StopSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load B after reboot: %v", err)
 	}
-	if reopened.Stop == nil || reopened.Stop.Generation != oldGeneration {
-		t.Fatalf("B stop marker after reboot = %+v, want generation %d", reopened.Stop, oldGeneration)
+	// THE property this test is named for: the crash/reboot changes nothing.
+	// Whichever of the two shapes the Stop left, the reopened store must show
+	// the SAME one, at the same generation, with the same marker (or the same
+	// absence of one) — a Stop that evaporated on restart is the regression.
+	if reopened.Generation != oldGeneration {
+		t.Fatalf("B generation moved across the restart: %d -> %d", oldGeneration, reopened.Generation)
+	}
+	if got := assertStopLandedOn(t, reopened, "after crash+reboot"); got != wasTerminal {
+		t.Fatalf("B's durable shape changed across the restart: terminal=%v before, terminal=%v after "+
+			"(before=%+v after=%+v)", wasTerminal, got, stopped, reopened)
+	}
+	switch {
+	case stopped.Stop == nil && reopened.Stop != nil:
+		t.Fatalf("B carried no stop marker before the restart but has %+v after", reopened.Stop)
+	case stopped.Stop != nil && reopened.Stop == nil:
+		t.Fatalf("B's stop marker %+v did not survive the restart", stopped.Stop)
+	case stopped.Stop != nil:
+		// time.Time is compared with Equal, never ==: the two values reach
+		// here through different decodes and == would also compare the
+		// monotonic reading and the *Location pointer.
+		if !reopened.Stop.At.Equal(stopped.Stop.At) ||
+			reopened.Stop.Generation != stopped.Stop.Generation ||
+			reopened.Stop.By != stopped.Stop.By {
+			t.Fatalf("B's stop marker changed across the restart: before=%+v after=%+v", stopped.Stop, reopened.Stop)
+		}
 	}
 	newGeneration, err := h.tree.Revive(h.tree.B.SessionID)
 	if err != nil {
@@ -641,6 +728,25 @@ func TestE2E_StopSurvivesRestart(t *testing.T) {
 	}
 	if newGeneration <= oldGeneration {
 		t.Fatalf("Revive(B) generation = %d, want > %d", newGeneration, oldGeneration)
+	}
+	revived, err := h.tree.Deps().LifecycleStore.Load(h.tree.B.SessionID)
+	if err != nil {
+		t.Fatalf("load B after Revive: %v", err)
+	}
+	if revived.Generation != newGeneration {
+		t.Fatalf("B generation after Revive = %d, want the minted %d", revived.Generation, newGeneration)
+	}
+	// A revived session is not stopped: the only marker it may still carry is
+	// an OLDER one, which I-6 deliberately keeps as inert history
+	// (LifecycleRecord.Stopped()'s doc comment names all four shapes).
+	if revived.Stopped() {
+		t.Fatalf("B is still live-stopped after Revive: marker %+v at generation %d", revived.Stop, revived.Generation)
+	}
+	if reopened.Stop != nil {
+		if revived.Stop == nil || revived.Stop.Generation != oldGeneration {
+			t.Fatalf("Revive discarded the older stop marker: before=%+v after=%+v — an earlier "+
+				"generation's marker is inert history a revival retains", reopened.Stop, revived.Stop)
+		}
 	}
 }
 

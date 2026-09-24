@@ -43,6 +43,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -515,9 +516,25 @@ func TestOwnerWake_ReachesATurnAndTheOriginChat(t *testing.T) {
 // The property under test is the one FR-012c actually states: a wake DISPATCHES
 // AN AGENT TURN. Asserting that directly is what makes this test catch the
 // defect; asserting "the notifier was called" is what let it survive.
+// The subtest table is the LIVE membership of pkg/constants::internalChannels,
+// nothing more. It used to carry a third entry, "subagent", which ADR-091 D10
+// deleted from that set in 61c773d7c (WP-F) on the verified premise that no
+// production code has ever set a Channel of "subagent" — the pre-ADR delegation
+// path BORROWED the parent's channel, and no channel implementation is named
+// subagent. With the entry gone the case stopped describing an internal origin
+// at all: the wake fell through to the ordinary delivery path and published
+// outbound, exactly as a NON-internal origin should. The same stale entry was
+// already removed from this file's sibling assertion in f1a2003ae; this is its
+// second occurrence. The guard below makes a third relapse impossible to miss —
+// a dead value can no longer sit here silently testing nothing.
 func TestInternalOriginPlan_OwnerWakeStillRunsATurn(t *testing.T) {
-	for _, internal := range []string{"cli", "system", "subagent"} {
+	for _, internal := range []string{"cli", "system"} {
 		t.Run(internal, func(t *testing.T) {
+			if !constants.IsInternalChannel(internal) {
+				t.Fatalf("%q is NOT in pkg/constants::internalChannels — this subtest asserts the "+
+					"internal-origin contract against a channel the guard does not cover, so it "+
+					"proves nothing; fix the table, not the assertion", internal)
+			}
 			h := newPlanWakeHarness(t)
 			h.parkPlanAtSupervision(t, "p1", runningPlanWithDoD("p1", internal, internal+"-chat-1"))
 
