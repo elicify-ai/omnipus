@@ -110,10 +110,50 @@ export function cursorFromTerminalFrame(
   return { bootId: frame.boot_id ?? priorBootId ?? '', seq: frame.seq }
 }
 
-const PENDING_TAIL_STATUSES: ReadonlySet<ChatMessage['deliveryStatus']> = new Set(['queued', 'sending'])
+// #823 catch-up redesign, Opus review round 2 item 2 (founder decision Q1):
+// 'failed' is included alongside 'queued'/'sending' — a send that failed
+// outright is still an unresolved user message the founder's Q1 rule covers
+// ("pending/failed messages render at the end and move into history when
+// the server echoes them"). Before this fix a failed send silently
+// vanished on the very next snapshot rebuild, since isPendingTailMessage
+// didn't recognize it and applySnapshotHistoryWipe drops everything it
+// doesn't recognize as pending.
+const PENDING_TAIL_STATUSES: ReadonlySet<ChatMessage['deliveryStatus']> = new Set(['queued', 'sending', 'failed'])
 
-function isPendingTailMessage(m: ChatMessage): boolean {
+export function isPendingTailMessage(m: ChatMessage): boolean {
   return m.role === 'user' && !!m.deliveryStatus && PENDING_TAIL_STATUSES.has(m.deliveryStatus)
+}
+
+/**
+ * Opus review round 2 item 2 (founder decision Q1 — "pending/failed messages
+ * render at the END and move into history when the server echoes them"):
+ * insert a freshly-reconstructed HISTORY entry (a `replay_message`, i.e.
+ * something the server has already persisted and is now replaying) into
+ * `draft.messageOrder`, always positioned BEFORE the pending tail rather
+ * than blindly pushed to the true end of the array. A prior pass pushed
+ * every replay_message straight onto messageOrder — since
+ * applySnapshotHistoryWipe puts the surviving pending tail FIRST (kept in
+ * place, nothing else in the bucket yet), every history entry that then
+ * streamed in during the snapshot rebuild landed AFTER it, rendering the
+ * pending/failed message ABOVE the history it was actually sent after.
+ * Returns the index the entry was inserted at (mirrors `Array.prototype.
+ * push`'s return-length convention loosely enough for callers that don't
+ * need it — most just call this and move on).
+ */
+export function insertHistoryMessageId(
+  messageOrder: string[],
+  messagesById: Record<string, ChatMessage>,
+  id: string,
+): void {
+  const firstPendingIdx = messageOrder.findIndex((existingId) => {
+    const m = messagesById[existingId]
+    return !!m && isPendingTailMessage(m)
+  })
+  if (firstPendingIdx === -1) {
+    messageOrder.push(id)
+  } else {
+    messageOrder.splice(firstPendingIdx, 0, id)
+  }
 }
 
 /**

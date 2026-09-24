@@ -146,3 +146,99 @@ describe('BUG 2 — the send-time optimistic placeholder must reconcile with the
     expect(assistantMsgs[0].status).toBe('done')
   })
 })
+
+// Opus review round 2, item 2 (HIGH, founder decision Q1): the pending tail
+// must render at the END of the thread and survive a snapshot rebuild
+// (queued/sending/FAILED — 'failed' was previously missing entirely), and a
+// reconnect that replays the sender's OWN message must not duplicate it.
+describe('BE-DESIGN.md §4.7/founder Q1 — pending tail ordering and replay dedup', () => {
+  const PT_SID = 'sess-pending-tail'
+
+  it('a failed send survives a session_snapshot rebuild and stays positioned AFTER the history that streams in afterward', () => {
+    useSessionStore.setState({ activeSessionId: PT_SID })
+    useChatStore.setState({ sessionsById: {}, messages: [], messagesById: {} } as never)
+
+    // A message the user sent, which failed to deliver — still sitting in
+    // the bucket with deliveryStatus 'failed'.
+    useChatStore.setState((s) => ({
+      sessionsById: {
+        ...s.sessionsById,
+        [PT_SID]: {
+          ...(s.sessionsById[PT_SID] ?? ({} as never)),
+          messageOrder: ['failed-1'],
+          messagesById: {
+            'failed-1': { id: 'failed-1', role: 'user', content: 'did this send?', timestamp: '2026-09-24T00:00:00Z', deliveryStatus: 'failed' },
+          },
+        },
+      },
+    }) as never)
+
+    // A session_snapshot rebuild arrives (e.g. a reload) — the failed send
+    // must survive it, and any HISTORY that then replays must land BEFORE
+    // it, not after.
+    useChatStore.getState().handleFrame({
+      type: 'session_snapshot', session_id: PT_SID, seq: 5, boot_id: 'boot-1', reason: 'unknown_position',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'replay_message', session_id: PT_SID, id: 'hist-1', role: 'user', content: 'an earlier message', timestamp: '2026-09-23T23:59:00Z',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'replay_message', session_id: PT_SID, id: 'hist-2', role: 'assistant', content: 'an earlier reply', timestamp: '2026-09-23T23:59:30Z',
+    } as WsReceiveFrame)
+
+    const bucket = useChatStore.getState().sessionsById[PT_SID]!
+    // The failed send is STILL PRESENT (not silently dropped by the wipe)...
+    expect(bucket.messagesById['failed-1']).toBeDefined()
+    expect(bucket.messagesById['failed-1'].deliveryStatus).toBe('failed')
+    // ...and it is LAST — history that streamed in after the wipe inserts
+    // BEFORE it, never after (founder Q1: pending/failed renders at the end).
+    expect(bucket.messageOrder).toEqual(['hist-1', 'hist-2', 'failed-1'])
+  })
+
+  it('a reconnect that replays the sender\'s own message reconciles the existing optimistic bubble instead of duplicating it', () => {
+    useSessionStore.setState({ activeSessionId: PT_SID })
+    useChatStore.setState({ sessionsById: {}, messages: [], messagesById: {} } as never)
+
+    // The optimistic bubble sendMessage created, still keyed by the LOCAL
+    // client_message_id (never re-keyed at send time).
+    useChatStore.setState((s) => ({
+      sessionsById: {
+        ...s.sessionsById,
+        [PT_SID]: {
+          ...(s.sessionsById[PT_SID] ?? ({} as never)),
+          messageOrder: ['client-abc'],
+          messagesById: {
+            'client-abc': { id: 'client-abc', role: 'user', content: 'check my tasks', timestamp: '2026-09-24T00:00:00Z', deliveryStatus: 'sending' },
+          },
+        },
+      },
+    }) as never)
+
+    // Reconnect: a snapshot replays this SAME message, now with the
+    // server's real id and this client_message_id.
+    useChatStore.getState().handleFrame({
+      type: 'session_snapshot', session_id: PT_SID, seq: 5, boot_id: 'boot-1', reason: 'unknown_position',
+    } as WsReceiveFrame)
+    // The snapshot wipe just cleared history but kept the pending 'sending'
+    // bubble (client-abc) — restore it for this scenario (session_snapshot
+    // itself already preserves it via applySnapshotHistoryWipe; re-seeding
+    // here isolates the replay_message dedup behavior under test without
+    // depending on that separate mechanism).
+    useChatStore.setState((s) => {
+      const b = s.sessionsById[PT_SID]!
+      return { sessionsById: { ...s.sessionsById, [PT_SID]: { ...b, messageOrder: ['client-abc'], messagesById: { 'client-abc': { id: 'client-abc', role: 'user', content: 'check my tasks', timestamp: '2026-09-24T00:00:00Z', deliveryStatus: 'sending' } } } } }
+    })
+    useChatStore.getState().handleFrame({
+      type: 'replay_message', session_id: PT_SID, id: 'server-real-id', client_message_id: 'client-abc', role: 'user', content: 'check my tasks', timestamp: '2026-09-24T00:00:00Z',
+    } as WsReceiveFrame)
+
+    const bucket = useChatStore.getState().sessionsById[PT_SID]!
+    const userMsgs = bucket.messageOrder.map((id) => bucket.messagesById[id]).filter((m) => m.role === 'user')
+    // Exactly ONE user bubble — not two.
+    expect(userMsgs).toHaveLength(1)
+    // Re-keyed to the server's real id, resolved out of pending status.
+    expect(bucket.messagesById['server-real-id']).toBeDefined()
+    expect(bucket.messagesById['server-real-id'].deliveryStatus).toBe('received')
+    expect(bucket.messagesById['client-abc']).toBeUndefined()
+  })
+})

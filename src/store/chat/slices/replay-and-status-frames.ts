@@ -45,6 +45,7 @@ import { MAX_MESSAGES_PER_SESSION, evictMessageFromBucket, findAssistantMessageI
 import { isTurnFinished, schedulePlanStatusInvalidate } from '../routing'
 import { sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
+import { insertHistoryMessageId } from '../cursor'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, RateLimitEventData, SessionChatState } from '../types'
 
 
@@ -262,6 +263,36 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
               // Cursor advancement is handled centrally before the switch (I1);
               // no per-case advance needed here.
               const msgs = getMessages(b)
+              // Opus review round 2 item 2: a role:'user' replay_message can
+              // name the SAME message this tab already holds as its own
+              // send-time optimistic bubble — which is stored under the
+              // CLIENT's locally-generated id (sendMessage's own
+              // buildQueuedUserMessage), never the server's `messageId`,
+              // because nothing re-keys it once sent. Checking `messageId`
+              // alone therefore missed this case entirely and created a
+              // second, duplicate bubble on every reconnect that replayed a
+              // message this tab itself had sent. Detected via
+              // `client_message_id` (which the optimistic bubble's `id`
+              // equals) and RE-KEYED to the server's real id — safe here
+              // specifically because this is a RECONNECT replay, not the
+              // live first send: message_status for this client_message_id
+              // (the only OTHER reader keyed on it) already ran on an
+              // earlier connection cycle.
+              const clientMessageId = replayFrame.client_message_id
+              if (clientMessageId && draft.messageOrder.includes(clientMessageId) && clientMessageId !== messageId) {
+                const idx = draft.messageOrder.indexOf(clientMessageId)
+                const existing = draft.messagesById[clientMessageId]
+                if (messageId) {
+                  delete draft.messagesById[clientMessageId]
+                  draft.messagesById[messageId] = { ...existing, id: messageId, deliveryStatus: 'received' }
+                  draft.messageOrder[idx] = messageId
+                } else {
+                  existing.deliveryStatus = 'received'
+                }
+                console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: 'client-message-id-match' })
+                logDiagnostic('chatReplayDedupSkipped', { messageId, role, reason: 'client-message-id-match', sessionId: targetSid })
+                return
+              }
               // Reconnection dedup: prefer server-assigned id match when present;
               // fall back to (content + role + timestamp) tuple. Content-only dedup
               // was silently dropping legitimate identical user retries.
@@ -584,7 +615,13 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid
                   : {}),
               }
               draft.messagesById[newMsg.id] = newMsg
-              draft.messageOrder.push(newMsg.id)
+              // Opus review round 2 item 2 (founder decision Q1): a
+              // replay_message is HISTORY the server already persisted —
+              // insert it before the pending tail (unresolved
+              // queued/sending/failed sends), not blindly at the true end
+              // of messageOrder, so a pending message a session_snapshot
+              // preserved never renders ABOVE history it was sent after.
+              insertHistoryMessageId(draft.messageOrder, draft.messagesById, newMsg.id)
               // Ring buffer enforcement during replay — evict oldest entry plus all dependent maps.
               if (draft.messageOrder.length > MAX_MESSAGES_PER_SESSION) {
                 const evictId = draft.messageOrder[0]
