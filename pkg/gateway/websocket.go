@@ -942,16 +942,13 @@ func writeCloseAuthFailedWithReason(conn *websocket.Conn, reason string) {
 // outcome, so it changes who can authenticate not at all; it changes only how
 // fast and how audibly a handshake that never could authenticate dies.
 //
-// The frame path loops every account in Gateway.Users first (bcrypt; the
-// single-user model normally holds exactly one, but a pre-single-user-model
-// install may still carry leftover extra accounts — config.warnAboutExtraUsers
-// flags that at load time as an advisory; every configured account still
-// authenticates here, same as checkBearerAuth), then the CLI's dedicated
-// Gateway.CLIToken, then falls back to OMNIPUS_BEARER_TOKEN env var for
-// backward compatibility. Sets wc.userID to the resolved identity on success,
-// and wc.isCLIToken when that identity came from the CLIToken branch (the
-// cookie path never sets isCLIToken — a cookie always identifies a real human
-// Gateway.Users account, never the synthetic CLI identity).
+// The frame path resolves the bearer through resolveBearerIdentity (every
+// configured account can still match, same as checkBearerAuth), then falls
+// back to the OMNIPUS_BEARER_TOKEN env var for backward compatibility.
+// Sets wc.userID to the resolved identity on success, and wc.isCLIToken
+// when that identity came from the CLIToken branch (the cookie path never
+// sets isCLIToken — a cookie always identifies a real human Gateway.Users
+// account, never the synthetic CLI identity).
 func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Request) bool {
 	cfg := h.agentLoop.GetConfig()
 
@@ -997,12 +994,10 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 
 	rawToken := authFrame.Token
 
-	// 1 & 2. Configured identities — human Gateway.Users accounts, then the
-	// CLI's dedicated token. See resolveBearerIdentity's doc (auth.go) for
-	// the full rationale (looping every user, ViaCLIToken/isCLIToken
-	// semantics, etc.) — shared with checkBearerAuth (auth.go) and
-	// withOptionalAuth (rest_auth.go), which previously reimplemented this
-	// same lookup independently.
+	// 1 & 2. Configured identities. Order depends on token shape; see
+	// resolveBearerIdentity's doc (auth.go) for which slot is tried first
+	// and for ViaCLIToken/isCLIToken. Shared with checkBearerAuth (auth.go)
+	// and withOptionalAuth (rest_auth.go).
 	if user, viaCLIToken, matched := resolveBearerIdentity(cfg, rawToken); matched {
 		wc.userID = user.Username // FR-073: needed for session_state user scoping
 		wc.isCLIToken = viaCLIToken

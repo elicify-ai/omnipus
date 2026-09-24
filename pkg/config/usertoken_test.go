@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"golang.org/x/crypto/bcrypt"
@@ -105,19 +106,85 @@ func TestVerifyToken_NoTokens(t *testing.T) {
 	}
 }
 
-// TestVerifyToken_IDMissFallsBackToScan: an id-tagged token whose ID is not in
-// the set is still found by the scan fallback when its body matches an entry.
-func TestVerifyToken_IDMissFallsBackToScan(t *testing.T) {
-	// Same body bytes but the stored entry has a different ID than presented.
-	body := "omnipus_AAAA_sharedbody"
-	u := &UserConfig{
-		Tokens: []TokenEntry{
-			{ID: "BBBB", Hash: hashBody(t, body)}, // ID differs from presented
-		},
+// withCompareCount installs a bcrypt-compare counter for the rest of the test.
+// Hash generation does not go through the compare, so calling this before
+// hashBody/hashFull does not inflate the count.
+func withCompareCount(t *testing.T) *int {
+	t.Helper()
+	n := 0
+	restore := SetCompareHashAndPasswordForTest(func(hashed, pw []byte) error {
+		n++
+		return bcrypt.CompareHashAndPassword(hashed, pw)
+	})
+	t.Cleanup(restore)
+	return &n
+}
+
+// TestVerifyTokenAgainst_IDMissDoesNotBcryptScan: an id that is not in the set
+// is a mismatch, even when another entry was hashed from the same secret body
+// and even when the legacy single hash would match the full presented string.
+// The old fallthrough accepted both; that is the CPU-exhaustion path.
+func TestVerifyTokenAgainst_IDMissDoesNotBcryptScan(t *testing.T) {
+	stored := "omnipus_bbbbbbbb_samebody"
+	presented := "omnipus_aaaaaaaa_samebody"
+	tokens := []TokenEntry{{ID: "bbbbbbbb", Hash: hashBody(t, stored)}}
+	legacy := hashFull(t, presented) // old fallthrough would accept this
+	n := withCompareCount(t)
+
+	err := VerifyTokenAgainst(tokens, legacy, presented)
+	if err == nil {
+		t.Fatal("id miss must not match another entry's body or the legacy hash")
 	}
-	// Presented token: body is "sharedbody" (same), ID "AAAA" not present.
-	if err := u.VerifyToken(body); err != nil {
-		t.Fatalf("scan fallback should match on body, got %v", err)
+	if !errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+		t.Fatalf("err = %v, want bcrypt mismatch", err)
+	}
+	if *n != 0 {
+		t.Fatalf("bcrypt compares = %d, want 0 (id miss must not scan)", *n)
+	}
+}
+
+// TestVerifyTokenAgainst_IDHitIsOneCompare: a matching id verifies that one
+// hash and does not walk the rest of the set.
+func TestVerifyTokenAgainst_IDHitIsOneCompare(t *testing.T) {
+	tok := "omnipus_11112222_aaaabbbbcccc"
+	tokens := []TokenEntry{
+		{ID: "99998888", Hash: hashBody(t, "omnipus_99998888_other")},
+		{ID: "11112222", Hash: hashBody(t, tok)},
+		{ID: "77776666", Hash: hashBody(t, "omnipus_77776666_later")},
+	}
+	n := withCompareCount(t)
+	if err := VerifyTokenAgainst(tokens, "", tok); err != nil {
+		t.Fatalf("expected match, got %v", err)
+	}
+	if *n != 1 {
+		t.Fatalf("bcrypt compares = %d, want 1", *n)
+	}
+}
+
+// TestVerifyTokenAgainst_LegacyNoIDScansAndAccepts: a token with no embedded id
+// still walks the set (and stops at the first match). A wrong one is rejected
+// only after every entry has been tried.
+func TestVerifyTokenAgainst_LegacyNoIDScansAndAccepts(t *testing.T) {
+	first := "omnipus_" + strings.Repeat("1", 64)
+	second := "omnipus_" + strings.Repeat("2", 64)
+	wrong := "omnipus_" + strings.Repeat("3", 64)
+	tokens := []TokenEntry{
+		{Hash: hashFull(t, first)},
+		{Hash: hashFull(t, second)},
+	}
+	n := withCompareCount(t)
+	if err := VerifyTokenAgainst(tokens, "", second); err != nil {
+		t.Fatalf("legacy token must verify, got %v", err)
+	}
+	if *n != 2 {
+		t.Fatalf("matching legacy compares = %d, want 2", *n)
+	}
+	*n = 0
+	if err := VerifyTokenAgainst(tokens, "", wrong); err == nil {
+		t.Fatal("wrong legacy token must not verify")
+	}
+	if *n != 2 {
+		t.Fatalf("rejected legacy compares = %d, want 2", *n)
 	}
 }
 

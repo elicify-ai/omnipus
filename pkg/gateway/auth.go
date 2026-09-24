@@ -57,8 +57,9 @@ type AuthResult struct {
 
 // resolveBearerIdentity resolves a raw bearer token (already stripped of the
 // "Bearer " prefix / WS auth-frame envelope) against the configured
-// identities: every account in cfg.Gateway.Users first, then the CLI's
-// dedicated cfg.Gateway.CLIToken. This is the exact lookup that
+// identities in cfg.Gateway.Users and the dedicated cfg.Gateway.CLIToken.
+// Which is tried first depends on the token shape, documented below. This
+// is the exact lookup that
 // checkBearerAuth, authenticateWS (websocket.go), and withOptionalAuth
 // (rest_auth.go) each need — it was previously reimplemented independently in
 // all three. This helper performs no policy decisions (dev-mode bypass,
@@ -72,35 +73,59 @@ type AuthResult struct {
 // match aliases the live entry inside cfg.Gateway.Users (same as the
 // pre-refactor inline code did) — safe because cfg is itself a point-in-time
 // snapshot the caller already holds.
+//
+// Order depends on token shape, so a CLI call does not pay one bcrypt per
+// stored user token:
+//
+//   - ID-tagged ("omnipus_<id>_<body>"): human accounts first, then the CLI
+//     slot. An id miss does not scan (see VerifyTokenAgainst), so a human
+//     token is one bcrypt and an unknown id is none. Humans stay ahead of
+//     the CLI slot: an id-tagged user token cannot be claimed as the CLI
+//     identity.
+//   - No id (legacy "omnipus_<hex>", which is every CLI token minted today):
+//     the CLI slot first, then human accounts. A valid CLI bearer is one
+//     bcrypt. A legacy string that is both the CLI token and a user token
+//     resolves as the CLI identity. Those strings are independently random
+//     256-bit values; fresh user tokens are id-tagged and are not on this
+//     branch. A legacy user token pays one failed CLI compare, then the
+//     same scan as before.
 func resolveBearerIdentity(
 	cfg *config.Config,
 	rawToken string,
 ) (user *config.UserConfig, viaCLIToken bool, matched bool) {
-	// The human account(s) in Gateway.Users. Single-user model: normally
-	// holds exactly one entry, but a pre-single-user-model install could
-	// still carry a leftover second (or third...) account from before the
-	// Users CRUD API was deleted (config.warnAboutExtraUsers logs a WARN for
-	// this at load time — deliberately not self-healed/truncated here, since
-	// that would race a legitimate account's own in-flight login). Looping
-	// keeps every configured account able to authenticate rather than
-	// silently and permanently locking out everyone but index 0 (SEC-1 / UAT
-	// #399: the presented token's embedded ID indexes directly to the right
-	// hash inside VerifyToken, with a scan fallback for legacy tokens).
-	for i := range cfg.Gateway.Users {
-		if cfg.Gateway.Users[i].VerifyToken(rawToken) == nil {
-			return &cfg.Gateway.Users[i], false, true
+	if config.TokenIDFromRaw(rawToken) != "" {
+		if user, ok := matchUserBearer(cfg, rawToken); ok {
+			return user, false, true
 		}
+		if cfg.Gateway.VerifyCLIToken(rawToken) == nil {
+			return &config.UserConfig{Username: "cli"}, true, true
+		}
+		return nil, false, false
 	}
-
-	// The CLI's dedicated token — decoupled from the human account (see
-	// GatewayConfig.CLIToken doc). Verified via the nil-safe helper that
-	// wraps the same shared VerifyTokenAgainst logic UserConfig.VerifyToken
-	// uses internally, with no legacy hash to check.
+	// Legacy no-id bearer. CLI first: the common case is the machine token,
+	// and scanning every user hash before it is the cost this avoids.
 	if cfg.Gateway.VerifyCLIToken(rawToken) == nil {
 		return &config.UserConfig{Username: "cli"}, true, true
 	}
-
+	if user, ok := matchUserBearer(cfg, rawToken); ok {
+		return user, false, true
+	}
 	return nil, false, false
+}
+
+// matchUserBearer reports the first Gateway.Users entry whose token set
+// accepts rawToken. Every configured account is tried: a pre-single-user
+// install can still carry a leftover extra account (config.warnAboutExtraUsers
+// logs that at load time; it is not truncated here, because dropping it would
+// race a legitimate account's own in-flight login). An id-tagged token indexes
+// straight to one hash inside VerifyToken; a legacy token scans that account.
+func matchUserBearer(cfg *config.Config, rawToken string) (*config.UserConfig, bool) {
+	for i := range cfg.Gateway.Users {
+		if cfg.Gateway.Users[i].VerifyToken(rawToken) == nil {
+			return &cfg.Gateway.Users[i], true
+		}
+	}
+	return nil, false
 }
 
 // bearerAccountsConfigured reports whether any account-based auth (human
@@ -115,12 +140,10 @@ func bearerAccountsConfigured(cfg *config.Config) bool {
 }
 
 // checkBearerAuth validates the Authorization header.
-// It loops every account in Gateway.Users (the single-user model normally
-// holds exactly one, but a pre-single-user-model install may still carry
-// leftover extra accounts from before the Users CRUD API was deleted —
-// config.warnAboutExtraUsers flags that at load time as an advisory; every
-// configured account still authenticates here regardless), then the CLI's
-// dedicated Gateway.CLIToken, then falls back to the legacy
+// It resolves the bearer through resolveBearerIdentity (every configured
+// Gateway.Users account can still match — a pre-single-user install may
+// carry leftover extra accounts; config.warnAboutExtraUsers flags that at
+// load time and they are not dropped here), then falls back to the legacy
 // OMNIPUS_BEARER_TOKEN env var for backward compatibility.
 // Returns AuthResult so callers can distinguish authenticated from anonymous.
 func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request, cfg *config.Config) AuthResult {
@@ -170,11 +193,10 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 	}
 	rawToken := strings.TrimPrefix(auth, prefix)
 
-	// 1 & 2. Configured identities — human Gateway.Users accounts, then the
-	// CLI's dedicated token. See resolveBearerIdentity's doc for the full
-	// rationale (looping every user, ViaCLIToken semantics, etc.) — shared
-	// with authenticateWS (websocket.go) and withOptionalAuth (rest_auth.go),
-	// which previously reimplemented this same lookup independently.
+	// 1 & 2. Configured identities. Which of the human accounts and the CLI
+	// slot is tried first depends on token shape; see resolveBearerIdentity.
+	// Shared with authenticateWS (websocket.go) and withOptionalAuth
+	// (rest_auth.go), which previously reimplemented this lookup independently.
 	if user, viaCLIToken, matched := resolveBearerIdentity(cfg, rawToken); matched {
 		return AuthResult{Authenticated: true, User: user, ViaCLIToken: viaCLIToken}
 	}
