@@ -1,4 +1,7 @@
-import { resolvedTokens, tokens } from './tokens'
+// Import the status slices, not `tokens` / `resolvedTokens`. A dynamic index
+// keeps every property of the imported object, and the full catalog is what
+// pushed the production bundle over its raw-size budget.
+import { statusResolvedTokens as resolvedTokens, statusTokens as tokens } from './tokens'
 
 const TOKEN_ROLES = ['foreground', 'background', 'border', 'icon', 'label', 'hover', 'focus', 'filledForeground'] as const
 type TokenRole = (typeof TOKEN_ROLES)[number]

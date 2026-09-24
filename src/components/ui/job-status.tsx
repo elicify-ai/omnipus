@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { cn } from '@/lib/utils'
-import { resolvedTokens } from '@/design-system/tokens'
+import { motionResolvedTokens } from '@/design-system/tokens'
 
 import { Button } from './button'
 import { Progress } from './progress'
@@ -22,7 +22,7 @@ export interface JobStatusProps {
   className?: string
 }
 
-const escalationMs = Number.parseFloat(resolvedTokens['motion.loading.escalation'])
+const escalationMs = Number.parseFloat(motionResolvedTokens['motion.loading.escalation'])
 
 const labels: Record<JobState, string> = {
   queued: 'Queued', running: 'Running', progress: 'In progress', paused: 'Paused',

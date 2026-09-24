@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { resolvedTokens } from './tokens'
+import { motionResolvedTokens } from './tokens'
 
-const delayMs = Number.parseFloat(resolvedTokens['motion.loading.delay'])
-const minimumVisibleMs = Number.parseFloat(resolvedTokens['motion.loading.minimumVisible'])
+const delayMs = Number.parseFloat(motionResolvedTokens['motion.loading.delay'])
+const minimumVisibleMs = Number.parseFloat(motionResolvedTokens['motion.loading.minimumVisible'])
 
 /** Controls indicator visibility only; callers retain their content and operation state. */
 export function useLoadingVisibility(pending: boolean): boolean {
