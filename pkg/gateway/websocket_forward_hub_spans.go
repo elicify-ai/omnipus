@@ -82,7 +82,7 @@ func (h *WSHandler) hubSubTurnSpawn(evt agent.Event) {
 		return
 	}
 	h.hubPublishMetaAlsoTo(sid, string(generated.WsFrameTypeSubagentStart),
-		hubFrameMeta{kind: hubKindSpanStart, key: p.SpanID}, data, nil)
+		hubFrameMeta{}, data, nil) // not a projection item — see activeTurnProjection.active
 }
 
 // hubSubTurnEnd publishes the real subagent_end once through the session hub.
@@ -132,7 +132,7 @@ func (h *WSHandler) hubSubTurnEnd(evt agent.Event) {
 		return
 	}
 	h.hubPublishMetaAlsoTo(sid, string(generated.WsFrameTypeSubagentEnd),
-		hubFrameMeta{kind: hubKindSpanEnd, key: p.SpanID}, data, nil)
+		hubFrameMeta{}, data, nil)
 }
 
 // hubSubagentMessage publishes ADR-091 D7/I-4's side-panel status line

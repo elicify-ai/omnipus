@@ -90,3 +90,40 @@ func TestHub_TurnEndWithLiveWebStreamer_LeavesTheTurnToDone(t *testing.T) {
 	})
 	assert.True(t, hubProjActive(hub), "a streamed web turn keeps its items until its own done")
 }
+
+// TestHub_OpenSpanNeverPinsTheHub pins merge-review F2/F3: ADR-091 persists
+// every subagent_start/subagent_end into the parent's transcript BEFORE
+// publishing it (steer_frames.go), and a snapshot's transcript replay
+// re-emits the span from that entry, so a span kept in the projection is
+// dead weight — and, with the orphan watchdog retired, a child that never
+// ends would have pinned its parent's hub forever. An open span must not
+// count as unfinished work, and a reconnect after the hub was evicted and
+// recreated must get a snapshot (retention_exceeded), never a silent
+// incremental catch-up that skips the span.
+func TestHub_OpenSpanNeverPinsTheHub(t *testing.T) {
+	h := makeMinimalHandler()
+	const sid = "parent-sess"
+	hub := h.hubs.getOrCreate(sid)
+	hub.publish(tokenFrame(t, 0))
+	cursor := int64(hub.snapshotHead()) // the client saw everything up to here
+	h.hubSyncTap(agent.Event{Kind: agent.EventKindSubTurnSpawn, Payload: agent.SubTurnSpawnPayload{
+		SpanID: "span_c9", ParentSpawnCallID: session.ToolCallID("c9"), SessionID: sid, Label: "child-sess",
+	}})
+	hub.mu.Lock()
+	hub.proj.update(hubFrameMeta{kind: hubKindDone}, nil, sid) // the parent's turn finished
+	hub.mu.Unlock()
+
+	assert.False(t, hubProjActive(hub), "an open child span must not keep the parent's hub alive")
+	ageHub(hub)
+	require.Equal(t, []string{sid}, h.hubs.evictIdle(time.Now()))
+
+	// The client missed the span start; the recreated hub cannot serve it
+	// incrementally, so it must be told to rebuild from the transcript.
+	fresh := h.hubs.getOrCreate(sid)
+	require.NotSame(t, hub, fresh)
+	conn := newFakeHubConn("reconnect")
+	res := fresh.bind(conn, &cursor, hubStrp(h.hubs.bootID), h.hubs.bootID)
+	fresh.unbind(conn)
+	assert.False(t, res.Servable)
+	assert.Equal(t, reasonRetentionExceeded, res.Reason)
+}

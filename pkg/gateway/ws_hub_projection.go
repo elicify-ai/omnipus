@@ -7,7 +7,7 @@
 // A snapshot catch-up rebuilds a session from its persisted transcript, read
 // AFTER the connection was bound to the hub. What the transcript cannot hold
 // yet is everything published but not persisted: the answer text streaming
-// right now, a tool call still running, a delegate span still open. The
+// right now or a tool call still running. The
 // projection keeps exactly that, updated inside the hub's publish critical
 // section, so "what the snapshot shows" plus "what arrives live after the
 // bind" is always the whole session with no gap. Items the transcript read
@@ -32,8 +32,6 @@ const (
 	hubKindDone
 	hubKindToolStart
 	hubKindToolResult
-	hubKindSpanStart
-	hubKindSpanEnd
 	hubKindItem // media, turn-level error: shown until the turn's done
 )
 
@@ -41,8 +39,7 @@ const (
 // projection current, without re-parsing the frame's JSON.
 type hubFrameMeta struct {
 	kind hubFrameKind
-	// key: tool call id (tool kinds), span id (span kinds), or a unique
-	// item key (hubKindItem).
+	// key: tool call id (tool kinds) or a unique item key (hubKindItem).
 	key string
 	// token only.
 	turnID    string
@@ -61,9 +58,9 @@ const (
 
 // projItem is one still-unfinished thing a snapshot must reproduce.
 type projItem struct {
-	kind hubFrameKind // hubKindToken, hubKindToolStart (a tool call), hubKindSpanStart (a span), hubKindItem
+	kind hubFrameKind // hubKindToken, hubKindToolStart (a tool call), hubKindItem
 	key  string
-	id   string // tool call id / span id (what the replay's emitted set holds)
+	id   string // tool call id (what the replay's emitted set holds)
 
 	// Token items: the message text so far.
 	turnID    string
@@ -71,11 +68,9 @@ type projItem struct {
 	agentID   string
 	text      []byte
 
-	// Tool / span / item frames, unsequenced, in the order they must be sent.
+	// Tool / item frames, unsequenced, in the order they must be sent.
 	start []byte
 	end   []byte
-
-	spanOpen bool
 }
 
 // runningTool reports a tool call whose result has not been published yet.
@@ -107,8 +102,18 @@ type projSnapshotItem struct {
 	end       []byte
 }
 
-// active reports whether any turn or span is still unfinished — the gate
-// that keeps an idle-eviction sweep from dropping a hub mid-turn (§3.2).
+// active reports whether any turn is still unfinished — the gate that keeps
+// an idle-eviction sweep from dropping a hub mid-turn (§3.2).
+//
+// Sub-agent spans are deliberately NOT projection items (merge-review
+// F2/F3): ADR-091 persists every subagent_start/subagent_end into the
+// parent's transcript BEFORE publishing it (pkg/agent/steer_frames.go), and a
+// snapshot's transcript replay re-emits the span from that entry
+// (replay.go::dispatchPersistedSubagentStart), so a projected span was dead
+// weight — and, with the orphan watchdog retired, a child that never ends
+// would have kept its parent's hub alive forever. An evicted and recreated
+// hub answers a stale cursor with a snapshot (retention_exceeded), which
+// rebuilds open spans from the transcript.
 func (p *activeTurnProjection) active() bool {
 	return len(p.items) > 0
 }
@@ -157,18 +162,6 @@ func (p *activeTurnProjection) update(meta hubFrameMeta, frame []byte, sessionID
 		p.bytes += len(frame) - len(it.end)
 		it.end = frame
 		touched = "tool:" + meta.key
-	case hubKindSpanStart:
-		it := p.item("span:"+meta.key, meta.key, hubKindSpanStart)
-		p.bytes += len(frame) - len(it.start)
-		it.start = frame
-		it.spanOpen = true
-		touched = "span:" + meta.key
-	case hubKindSpanEnd:
-		it := p.item("span:"+meta.key, meta.key, hubKindSpanStart)
-		p.bytes += len(frame) - len(it.end)
-		it.end = frame
-		it.spanOpen = false
-		touched = "span:" + meta.key
 	case hubKindItem:
 		it := p.item("item:"+meta.key, meta.key, hubKindItem)
 		p.bytes += len(frame) - len(it.start)
@@ -180,10 +173,9 @@ func (p *activeTurnProjection) update(meta hubFrameMeta, frame []byte, sessionID
 	case hubKindDone:
 		// done(T) is published only after T's final answer was persisted
 		// (persist-before-done, §4.3), and every earlier round and tool call
-		// was persisted before it too — so everything but a still-open span
-		// (an async delegate outlives its parent's turn) is covered by any
+		// was persisted before it too — so everything is covered by any
 		// transcript read taken from here on.
-		p.clearExceptOpenSpans()
+		p.clear()
 		return
 	default:
 		return
@@ -209,25 +201,15 @@ func (p *activeTurnProjection) update(meta hubFrameMeta, frame []byte, sessionID
 func (p *activeTurnProjection) evictOlder(keep string) int {
 	evicted := 0
 	for p.bytes > hubProjectionMaxBytes {
-		// Oldest first, sparing still-open delegate spans (small, and the
-		// only record that a delegate is running) until nothing else is left.
-		// A tool call still running (start, no result yet) is never evicted
-		// (final-review N6): its result would arrive later with no call to
-		// attach to. Its start frame is small, so this cannot defeat the cap
-		// by much.
+		// Oldest first. A tool call still running (start, no result yet) is
+		// never evicted (final-review N6): its result would arrive later with
+		// no call to attach to. Its start frame is small, so this cannot
+		// defeat the cap by much.
 		victim := -1
 		for i, key := range p.order {
-			if it := p.items[key]; key != keep && (it == nil || (!it.spanOpen && !it.runningTool())) {
+			if it := p.items[key]; key != keep && (it == nil || !it.runningTool()) {
 				victim = i
 				break
-			}
-		}
-		if victim < 0 {
-			for i, key := range p.order {
-				if it := p.items[key]; key != keep && (it == nil || !it.runningTool()) {
-					victim = i
-					break
-				}
 			}
 		}
 		if victim < 0 {
@@ -245,9 +227,11 @@ func (p *activeTurnProjection) evictOlder(keep string) int {
 }
 
 // forgetTurn drops everything turnID left in the projection — its streamed
-// text, its tool calls, its media and errors (open delegate spans are the
-// delegate's own and stay). Used only for a turn abandoned without a done
-// (ADR-082 review CR4/F2, #823 review item 9): nothing of it was persisted
+// text, its tool calls, its media and errors. Used for a turn abandoned
+// without a done (ADR-082 review CR4/F2, #823 review item 9), and at
+// TurnEnd for a turn with no web streamer, which never publishes a done
+// (merge-review F1, websocket_forward_hub.go's hubTurnEnd). For the
+// abandoned turn nothing of it was persisted
 // and no done will ever close it, so keeping it would show every later
 // snapshot a message and tool cards that never finish, and would pin the
 // hub against idle eviction forever.
@@ -258,7 +242,7 @@ func (p *activeTurnProjection) forgetTurn(turnID string) {
 	keepOrder := p.order[:0]
 	for _, key := range p.order {
 		it := p.items[key]
-		if it != nil && it.turnID == turnID && it.kind != hubKindSpanStart {
+		if it != nil && it.turnID == turnID {
 			p.bytes -= len(it.text) + len(it.start) + len(it.end)
 			delete(p.items, key)
 			continue
@@ -268,19 +252,8 @@ func (p *activeTurnProjection) forgetTurn(turnID string) {
 	p.order = keepOrder
 }
 
-func (p *activeTurnProjection) clearExceptOpenSpans() {
-	var keepOrder []string
-	keep := make(map[string]*projItem)
-	bytes := 0
-	for _, key := range p.order {
-		it := p.items[key]
-		if it != nil && it.kind == hubKindSpanStart && it.spanOpen {
-			keepOrder = append(keepOrder, key)
-			keep[key] = it
-			bytes += len(it.start) + len(it.end)
-		}
-	}
-	p.order, p.items, p.bytes, p.truncated = keepOrder, keep, bytes, false
+func (p *activeTurnProjection) clear() {
+	p.order, p.items, p.bytes, p.truncated = nil, nil, 0, false
 }
 
 // snapshot copies the projection out for use after the hub lock is released.
@@ -302,7 +275,8 @@ func (p *activeTurnProjection) snapshot() []projSnapshotItem {
 // projectionFrames turns snapshot items the transcript replay did NOT
 // already emit into the unsequenced frames a snapshot catch-up sends after
 // the replay (BE-DESIGN.md §4.1 A6). emitted holds every message id, tool
-// call id and span id the replay sent.
+// call id and span id the replay sent (spans are never projected, see
+// activeTurnProjection.active).
 func projectionFrames(sessionID string, items []projSnapshotItem, emitted map[string]bool) [][]byte {
 	var out [][]byte
 	for _, it := range items {
@@ -317,11 +291,6 @@ func projectionFrames(sessionID string, items []projSnapshotItem, emitted map[st
 			// rebuilt on its own: the client would show it as an unmatched
 			// tool result (final-review N6).
 			if emitted[it.id] || len(it.start) == 0 {
-				continue
-			}
-			out = appendNonEmpty(out, it.start, it.end)
-		case hubKindSpanStart:
-			if emitted[it.id] {
 				continue
 			}
 			out = appendNonEmpty(out, it.start, it.end)
