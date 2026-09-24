@@ -410,24 +410,10 @@ of silently proceeding" while doing exactly the opposite.*
 **Note.** If the UI gives no way to request a skill, record "not reachable from the
 UI" — that is a legitimate finding about the feature's reachability.
 
-### G2 — Workers survive a server restart, or are reported
+### G2 — moved
 
-**Setup.** Agents `uat-g2-boss`, `uat-g2-worker`. **Requires someone who can restart
-the Omnipus server** — coordinate first; do not restart a shared server unannounced.
-
-**Steps.**
-1. Start a long-running delegation.
-2. With the worker `running`, have the server restarted.
-3. Reload the page and return to the chat.
-4. Watch for 3 minutes.
-
-**Expected.** Each worker either resumes, or is clearly marked as failed/cancelled.
-Nothing is left `running` forever with nothing behind it.
-
-**Screenshots.** (a) before restart; (b) 3 minutes after reload.
-
-**PASS** if every worker reaches a sensible state or resumes.
-**FAIL** if a row is stuck `running` indefinitely, or vanishes with no explanation.
+Server-restart recovery now lives in **Lane I** alongside the other interruption
+cases, so one agent owns every "something went away mid-flight" scenario.
 
 ---
 
@@ -468,6 +454,129 @@ stop the lane — a cross-account leak outranks every other result in this plan.
 
 ---
 
+## Lane I — Recovery from interruptions (~35 min)
+
+The question every scenario here asks: **when something goes away mid-flight, does
+the work come back, or does it die quietly?** A worker left `running` forever with
+nothing behind it is the worst outcome — worse than an honest failure, because
+nobody knows to retry it.
+
+Run this lane **last**, or on a dedicated instance: I1 and I4 disturb the whole
+server.
+
+### I1 — The server restarts while workers are running
+
+**Setup.** Agents `uat-i-boss`, `uat-i-worker`. **Requires someone who can restart
+the Omnipus server** — coordinate first, never restart a shared server unannounced.
+
+**Steps.**
+1. Start a long delegation: `Ask uat-i-worker to write a detailed 10-paragraph report on the history of printing.`
+2. Wait until the worker row shows `running`.
+3. Have the server restarted.
+4. Reload the page, reopen the chat, watch for 3 minutes.
+
+**Expected.** Each worker either **resumes and finishes**, or is clearly marked
+`failed` / `cancelled` with a visible reason. Nothing sits at `running` forever.
+
+**Screenshots.** (a) running before restart; (b) 30 seconds after reload; (c) 3
+minutes after reload.
+
+**PASS** if every worker resumes or is honestly reported.
+**FAIL** if a row is stuck `running` with nothing behind it, or a worker vanishes
+with no trace. A vanished worker is the more serious of the two.
+
+### I2 — The tester's internet connection drops
+
+Tests the **browser's** connection, not the server's. The work runs on the server,
+so losing the browser should not lose the work.
+
+**Setup.** Agents `uat-i2-boss`, `uat-i2-worker`.
+
+**Steps.**
+1. Start a delegation that takes a minute or two.
+2. With the worker `running`, **disconnect the browser's network** (turn off Wi-Fi,
+   or use the browser's offline mode). Keep the tab open.
+3. Wait 60 seconds.
+4. Reconnect. Do **not** reload yet — watch for 30 seconds first.
+5. If nothing recovers on its own, reload and look again.
+
+**Expected.**
+- While offline, the UI may show a disconnected or reconnecting indicator. That is
+  correct.
+- After reconnecting, the activity strip shows the worker again with an up-to-date
+  state — whether or not you reloaded.
+- The work **continued on the server** while you were offline: a worker that would
+  have finished during that minute shows `completed`, not `running`.
+
+**Screenshots.** (a) running before disconnect; (b) the UI while offline; (c) 30s
+after reconnect, before any reload; (d) after reload.
+
+**PASS** if the worker's true state is visible after reconnecting and the work was
+not interrupted by the browser going away.
+**FAIL** if the work stopped because the browser disconnected, if the strip is empty
+after reconnecting, or if the UI still shows `running` for something that actually
+finished.
+
+### I3 — The AI provider fails or rate-limits mid-task
+
+**Setup.** Agents `uat-i3-boss`, `uat-i3-worker`. You need a provider failure. In
+order of preference: (a) ask an operator to point the worker's model at an invalid
+API key or unreachable endpoint; (b) use a model with a very low rate limit and
+start several workers at once to trip it; (c) if neither is available, record
+**BLOCKED** — do not fake it.
+
+**Steps.**
+1. Start a delegation that will make several model calls.
+2. Cause the provider failure while the worker is `running`.
+3. Watch the worker row and the boss's chat for 5 minutes.
+
+**Expected.**
+- The worker either **recovers and continues** (a transient rate limit should be
+  retried), or **fails with a clear message naming the provider problem**.
+- The boss is told either way.
+- The boss's chat does **not** spin indefinitely with no explanation.
+
+**Screenshots.** (a) the moment of failure; (b) the row 1 minute later; (c) the
+boss's chat at 5 minutes.
+
+**PASS** if the worker recovers, or fails with a message that reaches the boss.
+**FAIL** if the worker stalls silently, or the boss waits forever with no error.
+
+> ⚠️ **Report this one carefully whatever happens.** There is reason to believe a
+> delegated worker does **not** currently retry a provider rate limit, even though a
+> retry mechanism exists in the code — its enabling condition appears never to be met
+> for delegated work. If you see no retry, that is a genuine finding, not tester
+> error. Record exactly what you observed: how long it waited, whether any retry was
+> visible, and what the boss was finally told.
+
+### I4 — A nested worker survives an interruption
+
+The hardest case: an interruption two levels down, where the recovery has to travel
+back up a chain.
+
+**Setup.** Agents `uat-i4-l1`, `uat-i4-l2`, `uat-i4-l3`; l1→l2→l3.
+
+**Steps.**
+1. From a chat with `uat-i4-l1`, start a job that reaches all three levels and takes
+   a few minutes.
+2. Once the deepest worker is `running`, interrupt — restart the server (I1) or drop
+   the provider (I3), whichever you can arrange.
+3. Reload and watch all three levels for 5 minutes.
+
+**Expected.** Every level reaches a sensible state. Either the chain resumes and the
+answer arrives at the top, or each level reports a clear failure — including the
+**top-level chat**, which must not be left waiting on a child that will never reply.
+
+**Screenshots.** (a) all three running; (b) 1 minute after; (c) 5 minutes after,
+including the top-level chat.
+
+**PASS** if the top-level chat ends up with an answer or an explanation.
+**FAIL** if the top-level chat waits forever while a lower level is already dead.
+*This is the exact shape of the bug this ADR set out to fix — a chain where one
+level dies and its ancestors wait for ever.*
+
+---
+
 ## Lane assignment summary
 
 | Lane | Covers | Needs | Time |
@@ -479,12 +588,13 @@ stop the lane — a cross-account leak outranks every other result in this plan.
 | D | Revive with a new instruction, step limit | 1 account, 4 agents | 25 min |
 | E | Concurrency queue and ordering | 1 account, 5 agents, settings change | 20 min |
 | F | Panel visibility, reload, long label | 1 account, 5 agents | 20 min |
-| G | Skill refusal, restart recovery | 1 account, restart access | 25 min |
+| G | Skill refusal | 1 account, 2 agents | 10 min |
 | H | Cross-account isolation | **2 accounts, 2 browsers** | 20 min |
+| I | Recovery: restart, network drop, provider failure, nested | restart and/or provider access | 35 min |
 
-Lanes A–H are independent. Lane P should complete first because B and E need the
-numbers it records. Lane G's restart step affects the whole server — **schedule it
-after the others finish**, or run it against a dedicated instance.
+Lanes A–I are independent. Lane P should complete first because B and E need the
+numbers it records. **Lane I restarts the server and/or breaks the provider — run it
+last, or against a dedicated instance**, or it will corrupt every other lane's result.
 
 ---
 
@@ -503,7 +613,9 @@ after the others finish**, or run it against a dedicated instance.
 6. **The 30-minute lifetime cap covers the whole life of a delegated session.** A
    follow-up that wakes it does **not** restart the clock — a worker woken repeatedly
    over 30 minutes may still time out. That is intended.
-7. **Timings in this plan are guidance**, except the explicit 3-minute no-progress
+7. **A provider failure you cannot arrange is BLOCKED, not FAIL** (I3). Record it as
+   blocked and say why — never simulate the failure and report a guess.
+8. **Timings in this plan are guidance**, except the explicit 3-minute no-progress
    rule, which is a real FAIL condition.
 
 ---
