@@ -41,10 +41,11 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Warning, ShieldCheck, SpinnerGap } from '@phosphor-icons/react'
-import { fetchGodMode, fetchAppState, setGodMode, getErrorMessage } from '@/lib/api'
+import { fetchGodMode, setGodMode, getErrorMessage } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
 import { Button } from '@/components/ui/button'
+import { useDevModeBypassKnown } from '@/hooks/useDevModeBypassKnown'
 import { useStepUp } from './useStepUp'
 import { isReAuthCancelled } from './useReAuthGate'
 import { GatewayRestartModal } from './GatewayRestartModal'
@@ -69,20 +70,15 @@ export function GodModeControl() {
 
   // See GodModeActiveBanner's matching comment below: GET /api/v1/gateway/
   // god-mode always 503s under dev_mode_bypass, so skip the doomed request
-  // once AppState.dev_mode_bypass (shared ['app-state'] cache entry, same
-  // key AppShell already fetches) says it's on, rather than firing it and
-  // explaining the error away afterward.
-  const { data: appState } = useQuery({
-    queryKey: ['app-state'],
-    queryFn: fetchAppState,
-    staleTime: 60_000,
-  })
-  const devModeBypassKnown = appState?.dev_mode_bypass === true
+  // once dev_mode_bypass (shared ['app-state'] cache entry, same key
+  // AppShell already fetches — see useDevModeBypassKnown) says it's on,
+  // rather than firing it and explaining the error away afterward.
+  const { known: devModeBypassKnown, resolved: appStateResolved } = useDevModeBypassKnown()
 
   const { data: godMode, isLoading: godModeIsLoading, isError, error } = useQuery({
     queryKey: ['god-mode'],
     queryFn: fetchGodMode,
-    enabled: appState !== undefined && !devModeBypassKnown,
+    enabled: appStateResolved && !devModeBypassKnown,
   })
   const bypassUnavailable = devModeBypassKnown || isBypassUnavailable(error)
   // Still resolving whether god-mode is even reachable: either appState
@@ -91,7 +87,7 @@ export function GodModeControl() {
   // this reads false immediately — nothing is "loading", it's just
   // unavailable, exactly like a completed fetch that hit the real 503 did
   // before this fix.
-  const isLoading = appState === undefined || (!devModeBypassKnown && godModeIsLoading)
+  const isLoading = !appStateResolved || (!devModeBypassKnown && godModeIsLoading)
 
   // Opened when setGodMode reports restart_required=true (enabling from a
   // boot that was not yet authorized). Never opens for a disable.
@@ -398,25 +394,20 @@ export function GodModeActiveBanner() {
   const queryClient = useQueryClient()
 
   // Shares AppShell's own ['app-state'] cache entry (same queryKey,
-  // staleTime 60s) — this is not a second network round trip on a page that
-  // already renders AppShell. `dev_mode_bypass` is what the god-mode query
-  // is doomed against (see isBypassUnavailable's doc comment above): reading
-  // it here lets the doomed request be skipped entirely, rather than fired
-  // and then explained away. Before this fix, GodModeActiveBanner mounts on
-  // EVERY page (ADR-092 FR-034 moved it app-wide) and fired ['god-mode']
-  // unconditionally, so a dev_mode_bypass install produced a real 503 —
-  // retried 3 times by the query client's default retry — on every single
-  // page load, 4 browser console errors per load. E2E CI runs with
-  // dev_mode_bypass:true (see .github/workflows/pr.yml "Seed gateway
-  // config"), so this fired on every spec that loaded a page at all; only
-  // specs opting into the `consoleErrors` fixture (tests/e2e/subagent.spec.ts
-  // (d)) asserted on it and went red.
-  const { data: appState } = useQuery({
-    queryKey: ['app-state'],
-    queryFn: fetchAppState,
-    staleTime: 60_000,
-  })
-  const devModeBypassKnown = appState?.dev_mode_bypass === true
+  // staleTime 60s, via useDevModeBypassKnown) — this is not a second network
+  // round trip on a page that already renders AppShell. `dev_mode_bypass` is
+  // what the god-mode query is doomed against (see isBypassUnavailable's doc
+  // comment above): reading it here lets the doomed request be skipped
+  // entirely, rather than fired and then explained away. Before this fix,
+  // GodModeActiveBanner mounts on EVERY page (ADR-092 FR-034 moved it
+  // app-wide) and fired ['god-mode'] unconditionally, so a dev_mode_bypass
+  // install produced a real 503 — retried 3 times by the query client's
+  // default retry — on every single page load, 4 browser console errors per
+  // load. E2E CI runs with dev_mode_bypass:true (see .github/workflows/pr.yml
+  // "Seed gateway config"), so this fired on every spec that loaded a page at
+  // all; only specs opting into the `consoleErrors` fixture
+  // (tests/e2e/subagent.spec.ts (d)) asserted on it and went red.
+  const { known: devModeBypassKnown, resolved: appStateResolved } = useDevModeBypassKnown()
 
   const { data: godMode, isError, error } = useQuery({
     queryKey: ['god-mode'],
@@ -427,7 +418,7 @@ export function GodModeActiveBanner() {
     // which is correct: there is nothing yet to report either way. The
     // moment appState resolves with dev_mode_bypass:false, this flips
     // enabled:true and the query fires exactly as before.
-    enabled: appState !== undefined && !devModeBypassKnown,
+    enabled: appStateResolved && !devModeBypassKnown,
   })
   // Known from appState (the common case — no doomed request was even
   // made) OR a genuine 503 the query itself hit (defense in depth, e.g. a
