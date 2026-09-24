@@ -39,8 +39,8 @@ func writeSkillWithName(t *testing.T, workspace, slug, displayName string) {
 // (cb.skillsLoader.ListSkills()) and reuses it for both the resolution
 // attempt (via the extracted cb.resolveSkillNameWithList helper) and the
 // fallback membership check — verified here by inspection of the single
-// remaining call site in resolveRequestedSkillForChild's body (subturn.go),
-// since SkillsLoader has no seam to inject a call-counting double without
+// remaining call site in resolveRequestedSkillForChild's body
+// (subturn_identity.go), since SkillsLoader has no seam to inject a call-counting double without
 // changing production code for the sake of a test. This test instead proves
 // the fix did not change behaviour: every outcome the pre-fix double-scan
 // implementation produced is still produced identically.

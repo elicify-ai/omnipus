@@ -27,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -147,8 +148,33 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 		}
 		req.Limits.TimeoutSeconds = int(timeout.Seconds())
 	}
-	if _, ok := l.al.GetRegistry().GetAgent(req.TargetAgentID); !ok {
+	targetAgent, ok := l.al.GetRegistry().GetAgent(req.TargetAgentID)
+	if !ok {
 		return steer.LaunchResult{}, steer.ErrAgentUnknown
+	}
+	// ADR-072 D9/FR-050/FR-053/FR-054: requested_skill is "a hard request,
+	// not a hint" (pkg/tools/delegate.go::Parameters). Resolved here, on the
+	// real launch path, BEFORE any write below (launchOrdinaryRoot/
+	// launchSteered both mint and persist the child) — a denial or an
+	// unresolvable slug refuses the launch outright, so no child session is
+	// ever created for it. Gated against targetAgent's OWN ContextBuilder,
+	// never the steering session's — the receiver's own grant is the only
+	// thing consulted (resolveRequestedSkillForChild's doc comment,
+	// subturn_identity.go). pkg/tools' sentinels are reused (not re-minted)
+	// so pkg/tools/delegate_run.go's errors.Is discrimination — and its
+	// existing, spec-worded result helpers — need no package-local
+	// duplicate on this side of the boundary.
+	if requestedSkill := strings.TrimSpace(req.RequestedSkill); requestedSkill != "" {
+		_, outcome := resolveRequestedSkillForChild(targetAgent.ContextBuilder, requestedSkill)
+		if outcome != requestedSkillGranted {
+			sentinel := tools.ErrRequestedSkillNotFound
+			if outcome == requestedSkillDenied {
+				sentinel = tools.ErrRequestedSkillDenied
+			}
+			return steer.LaunchResult{}, fmt.Errorf(
+				"steer: launch: %w: skill %q requested for agent %q",
+				sentinel, requestedSkill, req.TargetAgentID)
+		}
 	}
 	lifecycle := l.al.GetSessionLifecycleStore()
 	sessions := l.al.GetSessionStore()
@@ -167,21 +193,57 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 	}
 	result, err := l.launchSteered(sessions, lifecycle, req, title, sessionType)
 	if err == nil {
-		l.publishSteeredLaunch(req, result, title)
+		l.publishSteeredLaunch(req, result)
 	}
 	return result, err
 }
 
+// subagentSpanTaskLabel resolves the live subagent_start frame's task_label
+// exactly the way pkg/gateway/replay.go::resolveTaskLabel reconstructs it
+// from the persisted transcript on replay: an explicit label is used as-is;
+// the task-text fallback is truncated to 60 RUNES (never bytes — slicing
+// mid-rune on a multi-byte character would corrupt the frame).
+//
+// Fix for the "no row appears until reload" defect (reviewer finding,
+// 2026-09-24): the deleted subturn.go used to truncate this fallback; the
+// ADR-091 rewrite of the launch path dropped the truncation while replay.go
+// kept it, so live and replay silently disagreed. contracts/components/
+// schemas/SubagentStartFrame.yaml caps task_label at maxLength 100 and
+// src/lib/ws.ts drops (does not just warn on) any frame that fails
+// safeParse — so an untruncated task fallback past 100 chars, the common
+// case for a real task description, silently discarded the LIVE
+// subagent_start frame client-side: the parent's side panel showed no row
+// at all for the whole run, self-healing only on reload because
+// resolveTaskLabel's own 60-rune truncation applies there. This is the
+// single source-of-truth fix: only the frame's label is truncated here —
+// the session's own Title/meta (launchOrdinaryRoot/launchSteered's `title`
+// above) is untouched and keeps the full text.
+func subagentSpanTaskLabel(label, task string) string {
+	if label != "" {
+		return label
+	}
+	runes := []rune(task)
+	if len(runes) > 60 {
+		return string(runes[:60])
+	}
+	return task
+}
+
 // publishSteeredLaunch preserves the subagent span event while the old
 // in-chat child executor is removed. The event is parent-scoped: its routing
-// session is the steering session, while Label identifies the child.
-func (l *SteerLauncher) publishSteeredLaunch(req steer.LaunchRequest, result steer.LaunchResult, title string) {
+// session is the steering session, while task_label identifies the child —
+// resolved by subagentSpanTaskLabel directly from req.Label/req.Task (not
+// from Launch's own `title` local, which is untruncated and feeds the
+// session's own Title/meta instead) so the frame the SPA validates matches
+// SubagentStartFrame.yaml's 100-char cap the same way replay reconstructs
+// it.
+func (l *SteerLauncher) publishSteeredLaunch(req steer.LaunchRequest, result steer.LaunchResult) {
 	if l == nil || l.al == nil || req.SteeringSessionID == "" || req.Origin.CallID == "" || result.SessionID == "" {
 		return
 	}
 	if lifecycle := l.al.GetSessionLifecycleStore(); lifecycle != nil {
 		if rec, err := lifecycle.Load(result.SessionID); err == nil {
-			l.al.deliverSubagentStart(req.SteeringSessionID, rec, title)
+			l.al.deliverSubagentStart(req.SteeringSessionID, rec, subagentSpanTaskLabel(req.Label, req.Task))
 			l.al.deliverSubagentState(req.SteeringSessionID, rec, string(session.LifecycleQueued))
 		}
 	}

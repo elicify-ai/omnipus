@@ -223,8 +223,18 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 			TimeoutSeconds: int(dt.timeout / time.Second),
 		},
 		ToolExclusions: []string{string(ExcludedSwitchAgent)},
+		RequestedSkill: strings.TrimSpace(dt.requestedSkill),
 	})
 	if err != nil {
+		// ADR-072 D9/FR-053/FR-054: a requested_skill dispatch failure is a
+		// distinct, structured outcome (denied vs. not-found), never the
+		// generic launch-error text — Launch (pkg/agent/steer_launcher.go)
+		// wraps exactly ErrRequestedSkillDenied/ErrRequestedSkillNotFound
+		// (declared in this file) for this one reason: so the discrimination
+		// below is a plain errors.Is with no import cycle.
+		if errors.Is(err, ErrRequestedSkillDenied) || errors.Is(err, ErrRequestedSkillNotFound) {
+			return requestedSkillDispatchFailureResult(targetAgentID, strings.TrimSpace(dt.requestedSkill), err)
+		}
 		return ErrorResult(fmt.Sprintf("delegate: launch: %v", err)).WithError(err)
 	}
 	dispatch, err := dt.t.launcher.Dispatch(dt.ctx, launch.SessionID, launch.Generation)
@@ -440,10 +450,15 @@ func resolveDelegateTimeoutSeconds(args map[string]any) (time.Duration, error) {
 //
 // NOTE ON LOCKING (Correctness-MAJOR-3, honesty template): this delegates
 // to session.TransitionSession (the single dual-store mediator, Defect #28)
-// with a nil UnifiedStore — a delegate/subturn session has no chat-transcript
-// meta.json at all (UnifiedStore.NewSession is never called for a child turn
-// — see pkg/agent/subturn.go), so there is nothing to mirror onto. The
-// mediator's atomic LifecycleStore.Mutate (the RMW primitive that holds the
+// with a nil UnifiedStore — not because a delegated child has no
+// chat-transcript meta.json (it does: pkg/agent/steer_launcher.go's Launch
+// mints one via sessions.NewSession/CreateSessionWithID for every child,
+// ordinary-root or steered, and writeChildMetaAndHistory sets its Title),
+// but because t.lifecycle here is typed MessageParentLifecycleStore (see
+// message_parent.go), a narrow interface with no *session.UnifiedStore
+// handle to pass — this call site simply has no store reference available,
+// so the mediator's UnifiedMeta-status mirror step is skipped rather than
+// wired to one. The mediator's atomic LifecycleStore.Mutate (the RMW primitive that holds the
 // per-session striped lock across tail→fn→write) replaces the hand-rolled
 // Mutate call this helper used to make directly. The prior Load+Persist pair
 // was a non-atomic RMW: two concurrent transitions on the same session_id
@@ -460,10 +475,10 @@ func (t *DelegateTool) transitionLifecycle(sessionID string, state session.Lifec
 	if t.lifecycle == nil || sessionID == "" {
 		return
 	}
-	// nil UnifiedStore: delegate/subturn sessions have no chat-transcript meta
-	// (see the doc comment above) — the mediator skips the mirror. t.lifecycle
-	// (MessageParentLifecycleStore) satisfies session.LifecycleMutator, so no
-	// type assertion is needed.
+	// nil UnifiedStore: t.lifecycle has no *session.UnifiedStore handle to
+	// pass (see the doc comment above) — the mediator skips the mirror.
+	// t.lifecycle (MessageParentLifecycleStore) satisfies
+	// session.LifecycleMutator, so no type assertion is needed.
 	if err := session.TransitionSession(t.lifecycle, nil, sessionID, state, failedReason); err != nil {
 		slog.Warn("delegate: transitionLifecycle: dual-store transition failed", "session_id", sessionID, "state", state, "error", err)
 	}
