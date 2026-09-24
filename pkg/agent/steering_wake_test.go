@@ -35,7 +35,7 @@ func TestSteeringDrain_WritesConsumedMarkerForWake(t *testing.T) {
 		t.Fatalf("EnqueueSteeringWake: %v", enqErr)
 	}
 
-	msgs := al.dequeueSteeringMessagesForScopeWithFallback("agent:agent-1:session:" + meta.ID)
+	msgs, _ := al.dequeueSteeringMessagesForScopeWithFallback("agent:agent-1:session:" + meta.ID)
 	if len(msgs) != 1 || msgs[0].Content != "child completed" {
 		t.Fatalf("drained messages = %+v", msgs)
 	}
@@ -53,7 +53,7 @@ func TestSteeringDrain_WritesConsumedMarkerForWake(t *testing.T) {
 		t.Fatalf("consumed markers = %d, want exactly 1; transcript = %+v", markers, entries)
 	}
 
-	if again := al.dequeueSteeringMessagesForScopeWithFallback("agent:agent-1:session:" + meta.ID); again != nil {
+	if again, _ := al.dequeueSteeringMessagesForScopeWithFallback("agent:agent-1:session:" + meta.ID); again != nil {
 		t.Fatalf("second drain = %+v, want nil", again)
 	}
 	entries, err = store.ReadTranscript(meta.ID)

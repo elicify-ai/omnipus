@@ -226,11 +226,21 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
 	}
 
-	if serr := t.steering.EnqueueSteeringMessage(sessionID, rec.AgentID, providers.Message{Role: "user", Content: text}); serr != nil {
+	// correlation_id is optional for action="steer" (the schema's own
+	// description: "Required for action=\"respond\" (optional for
+	// \"steer\")") — a caller who wants to match a later steering_receipt
+	// (issue #870) to this exact instruction supplies one; when absent,
+	// EnqueueSteeringMessage mints a server-assigned reference and hands it
+	// back below regardless, so the receipt is always correlatable.
+	requestedCorrelationID, _ := stringArg(args, "correlation_id")
+	resolvedCorrelationID, serr := t.steering.EnqueueSteeringMessage(sessionID, rec.AgentID,
+		providers.Message{Role: "user", Content: text}, requestedCorrelationID)
+	if serr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", serr)).WithError(serr)
 	}
 	return NewToolResult(fmt.Sprintf(
-		"Steering message queued for session %s; it will apply at the child's next tool boundary.", sessionID,
+		"Steering message queued for session %s (correlation_id=%s); it will apply at the child's next tool boundary.",
+		sessionID, resolvedCorrelationID,
 	))
 }
 

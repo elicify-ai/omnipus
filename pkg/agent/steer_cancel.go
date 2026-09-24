@@ -99,7 +99,7 @@ func (al *AgentLoop) WriteSteerRevivalState(_ context.Context, sessionID string,
 		return steer.ErrStaleGeneration
 	}
 	if rec.SteeredBy != nil {
-		al.deliverSubagentState(rec.SteeredBy.SteeringSessionID, rec, string(session.LifecycleRunning))
+		al.deliverSubagentState(rec.SteeredBy.SteeringSessionID, rec, string(session.LifecycleRunning), nil)
 	}
 	return nil
 }

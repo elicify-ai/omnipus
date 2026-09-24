@@ -582,18 +582,24 @@ type processOptions struct {
 	// sessions are attributable. Empty for channel-originated turns (the platform
 	// sender in Sender.Username is not a gateway principal and is never read here)
 	// and unauthenticated env-token / dev-bypass paths — never guessed.
-	UserID                  string                // Authenticated gateway principal (FR-017)
-	UserMessage             string                // User message content (may include prefix)
-	ForcedSkills            []string              // Skills explicitly requested for this message
-	Media                   []string              // media:// refs from inbound message
-	InitialSteeringMessages []providers.Message   // Steering messages from refactor/agent
-	DefaultResponse         string                // Response when LLM returns empty
-	SendResponse            bool                  // Whether to send response via bus
-	SuppressToolFeedback    bool                  // Whether to suppress inline tool call and result feedback
-	NoHistory               bool                  // If true, don't load session history (for heartbeat)
-	SkipInitialSteeringPoll bool                  // If true, skip the steering poll at loop start (used by Continue)
-	TranscriptSessionID     string                // Session ID for transcript tool call recording (empty = disabled)
-	TranscriptStore         *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
+	UserID                  string              // Authenticated gateway principal (FR-017)
+	UserMessage             string              // User message content (may include prefix)
+	ForcedSkills            []string            // Skills explicitly requested for this message
+	Media                   []string            // media:// refs from inbound message
+	InitialSteeringMessages []providers.Message // Steering messages from refactor/agent
+	// InitialSteeringCorrelationIDs (issue #870) is the parallel correlation-id
+	// slice for InitialSteeringMessages — index i's id belongs to message i,
+	// "" where none. Carried separately rather than folded into
+	// providers.Message: that struct is the literal LLM provider request
+	// wire shape, never a receipt-bookkeeping carrier.
+	InitialSteeringCorrelationIDs []string
+	DefaultResponse               string                // Response when LLM returns empty
+	SendResponse                  bool                  // Whether to send response via bus
+	SuppressToolFeedback          bool                  // Whether to suppress inline tool call and result feedback
+	NoHistory                     bool                  // If true, don't load session history (for heartbeat)
+	SkipInitialSteeringPoll       bool                  // If true, skip the steering poll at loop start (used by Continue)
+	TranscriptSessionID           string                // Session ID for transcript tool call recording (empty = disabled)
+	TranscriptStore               *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
 	// OriginKind identifies the durable execution origin when this turn does
 	// not have a lifecycle record to supply it. The zero value is an ordinary
 	// interactive turn. Publication policy resolves the record first.

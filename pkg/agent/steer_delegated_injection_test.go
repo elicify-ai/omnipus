@@ -81,8 +81,9 @@ func TestSteerDelegatedChild_EnqueuedAgainstChildSessionInjectsIntoChildsNextRou
 			toolCalls:    []providers.ToolCall{truncationEchoCall("call-1", "go")},
 			finishReason: "stop",
 			onCall: func() {
-				require.NoError(t, al.EnqueueSteeringMessage(targetScope, testDefaultAgentID,
-					providers.Message{Role: "user", Content: steerDelegatedChildText}))
+				_, enqErr := al.EnqueueSteeringMessage(targetScope, testDefaultAgentID,
+					providers.Message{Role: "user", Content: steerDelegatedChildText}, "")
+				require.NoError(t, enqErr)
 			},
 		},
 		// Round 2: the child's next round — where the steering message must

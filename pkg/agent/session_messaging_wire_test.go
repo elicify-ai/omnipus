@@ -290,7 +290,7 @@ func TestSessionMessagingConsumer_Steer_LandsInChildSteeringQueue(t *testing.T) 
 	waitFor(t, 2*time.Second, func() bool {
 		return al.pendingSteeringCountForScope(scope) == 1
 	})
-	drained := al.dequeueSteeringMessagesForScope(scope)
+	drained, _ := al.dequeueSteeringMessagesForScope(scope)
 	if len(drained) != 1 || drained[0].Content != "also add a test for the edge case" {
 		t.Fatalf("expected the steer text queued, got: %+v", drained)
 	}

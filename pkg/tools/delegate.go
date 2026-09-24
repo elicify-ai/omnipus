@@ -479,8 +479,15 @@ func (t *DelegateTool) SetSteerCaps(ratePerMinute, bodyBytes int) {
 // *agent.AgentLoop (via its EnqueueSteeringMessage wrapper — see
 // pkg/agent/steering.go); defined as an interface here to avoid a
 // tools<->agent import cycle.
+//
+// EnqueueSteeringMessage returns the resolved correlation id — correlationID
+// echoed back when the caller supplied one, otherwise a server-assigned
+// reference (SubagentStateFrame.yaml's own steering_receipt.correlation_id
+// wording) — so executeSteer (delegate_followup.go) can hand it back to the
+// steerer: a steering_receipt (issue #870) the parent cannot correlate to
+// the instruction it sent is decoration, not a receipt.
 type DelegateSteeringSink interface {
-	EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error
+	EnqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error)
 }
 
 // defaultCancelGrace is the cooperative-stop grace window before the hard

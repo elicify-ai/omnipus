@@ -715,6 +715,7 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 	}
 	rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.mu.RUnlock()
 	rp.rc.rx.rr.rq.ri.pendingMessages = append([]providers.Message(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.InitialSteeringMessages...)
+	rp.rc.rx.rr.rq.ri.pendingSteeringReceipts = append([]string(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.InitialSteeringCorrelationIDs...)
 	return agentLoopRunTurnConductorNext
 }
 
@@ -1169,12 +1170,14 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 	}
 
 	if ri.rf.rt.iteration > 1 {
-		if steerMsgs := ri.rf.rt.al.dequeueSteeringMessagesForScope(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+		if steerMsgs, steerCorrelationIDs := ri.rf.rt.al.dequeueSteeringMessagesForScope(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
 			ri.pendingMessages = append(ri.pendingMessages, steerMsgs...)
+			ri.pendingSteeringReceipts = append(ri.pendingSteeringReceipts, steerCorrelationIDs...)
 		}
 	} else if !ri.rf.rt.ts.opts.SkipInitialSteeringPoll {
-		if steerMsgs := ri.rf.rt.al.dequeueSteeringMessagesForScopeWithFallback(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+		if steerMsgs, steerCorrelationIDs := ri.rf.rt.al.dequeueSteeringMessagesForScopeWithFallback(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
 			ri.pendingMessages = append(ri.pendingMessages, steerMsgs...)
+			ri.pendingSteeringReceipts = append(ri.pendingSteeringReceipts, steerCorrelationIDs...)
 		}
 	}
 
@@ -1203,6 +1206,7 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 				content := ri.cfg.FilterSensitiveData(result.ForLLM)
 				msg := providers.Message{Role: "user", Content: fmt.Sprintf("[SubTurn Result] %s", content)}
 				ri.pendingMessages = append(ri.pendingMessages, msg)
+				ri.pendingSteeringReceipts = append(ri.pendingSteeringReceipts, "") // not a steer; no receipt
 			}
 		default:
 			// No results available
@@ -1242,7 +1246,17 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 				TotalContentLen: totalContentLen,
 			},
 		)
+		// [Issue #870] THIS is the "applied" moment — the field means the
+		// steer was injected into a real round, never merely enqueued. A
+		// receipt is stamped and emitted here, once EventKindSteeringInjected
+		// itself has already fired, for every message in this batch that
+		// carries a correlation id (steer_frames.go::
+		// deliverSteeringReceiptsForInjection is a no-op for a plain,
+		// unsteered session — the child lifecycle lookup it performs finds
+		// no steering parent, so nothing is emitted).
+		ri.rf.rt.al.deliverSteeringReceiptsForInjection(ri.rf.rt.ts.sessionKey, ri.pendingSteeringReceipts)
 		ri.pendingMessages = nil
+		ri.pendingSteeringReceipts = nil
 	}
 
 	logger.DebugCF("agent", "LLM iteration",

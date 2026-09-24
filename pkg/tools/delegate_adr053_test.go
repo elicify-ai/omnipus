@@ -16,6 +16,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -34,12 +35,15 @@ type fakeSteeringSink struct {
 	scopes    []string
 }
 
-func (f *fakeSteeringSink) EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error {
+func (f *fakeSteeringSink) EnqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.delivered = append(f.delivered, msg)
 	f.scopes = append(f.scopes, scope)
-	return nil
+	if correlationID == "" {
+		correlationID = "corr_test_" + strconv.Itoa(len(f.delivered))
+	}
+	return correlationID, nil
 }
 
 func (f *fakeSteeringSink) last() (providers.Message, string) {

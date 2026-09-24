@@ -298,7 +298,7 @@ func (l *SteerLauncher) publishSteeredLaunch(req steer.LaunchRequest, result ste
 	if lifecycle := l.al.GetSessionLifecycleStore(); lifecycle != nil {
 		if rec, err := lifecycle.Load(result.SessionID); err == nil {
 			l.al.deliverSubagentStart(req.SteeringSessionID, rec, subagentSpanTaskLabel(req.Label, req.Task))
-			l.al.deliverSubagentState(req.SteeringSessionID, rec, string(session.LifecycleQueued))
+			l.al.deliverSubagentState(req.SteeringSessionID, rec, string(session.LifecycleQueued), nil)
 		}
 	}
 }
@@ -948,7 +948,7 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 			return steer.DispatchResult{}, commitErr
 		}
 		if running.SteeredBy != nil {
-			al.deliverSubagentState(running.SteeringSessionID(), running, string(session.LifecycleRunning))
+			al.deliverSubagentState(running.SteeringSessionID(), running, string(session.LifecycleRunning), nil)
 		}
 		return steer.DispatchResult{State: steer.DispatchRunning, Generation: gen}, nil
 	}
@@ -984,7 +984,7 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 		return steer.DispatchResult{}, err
 	}
 	if rec.SteeredBy != nil {
-		al.deliverSubagentState(rec.SteeringSessionID(), rec, string(session.LifecycleRunning))
+		al.deliverSubagentState(rec.SteeringSessionID(), rec, string(session.LifecycleRunning), nil)
 	}
 
 	// Fire-and-forget (I-2 "Return timing", founder decision round 9): the

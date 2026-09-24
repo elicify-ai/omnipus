@@ -214,11 +214,26 @@ func (al *AgentLoop) deliverSubagentMessage(parentSessionID string, childRec *se
 	)
 }
 
+// steeringReceipt carries the two facts SubagentStateFrame.yaml's
+// steering_receipt requires (correlation_id, applied_at) from the injection
+// site (loop_run_turn.go) to deliverSubagentState below — issue #870.
+// appliedAt is stamped by the caller at the moment of injection, never at
+// enqueue: the field means the steer was APPLIED, and a receipt stamped
+// earlier would misreport a steer that is still queued, or one dropped
+// because the session stopped before its next round, as already applied.
+type steeringReceipt struct {
+	correlationID string
+	appliedAt     time.Time
+}
+
 // deliverSubagentState persists then emits ONE subagent_state frame
 // (ADR-091 D7/I-4) reporting childSessionID's lifecycle transition to its
-// steering session's side panel.
+// steering session's side panel. receipt is nil on every ordinary lifecycle
+// ping; non-nil only for the ADR-091/issue-#870 steering_receipt case (see
+// deliverSteeringReceiptsForInjection below, the function's own SIXTH call
+// site and the only one that ever passes a non-nil receipt).
 //
-// Mid-flight transitions ARE emitted. The four production callers:
+// Mid-flight transitions ARE emitted. The four ordinary-lifecycle callers:
 //
 //   - steer_launcher.go::SteerLauncher.publishSteeredLaunch (from Launch) —
 //     `queued` at creation.
@@ -238,13 +253,24 @@ func (al *AgentLoop) deliverSubagentMessage(parentSessionID string, childRec *se
 // An earlier version of this comment described the mid-flight gap as open
 // and said no launcher or canceller existed to hook. Both now exist and both
 // call this function; do not re-implement a second emitter for transitions
-// this one already reports.
-func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *session.LifecycleRecord, state string) {
+// this one already reports — the SAME rule is why the steering_receipt
+// (issue #870) rides this existing builder via an added parameter rather
+// than a second SubagentStateFrame builder of its own.
+func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *session.LifecycleRecord, state string, receipt *steeringReceipt) {
 	if al == nil || parentSessionID == "" || childRec == nil || childRec.Origin == nil || childRec.Origin.CallID == "" {
 		return
 	}
 	originCallID := childRec.Origin.CallID
 	id := fmt.Sprintf("%s:%d:state:%s", originCallID, childRec.Generation, state)
+	if receipt != nil {
+		// A single injected round can carry more than one applied steer
+		// (three queued messages -> three receipts, per issue #870's design
+		// note): distinguish each frame's persisted transcript id by the
+		// correlation id it reports, or the second and third would collide
+		// on the SAME id (originCallID+generation+state alone repeats
+		// per-message) and silently overwrite one another on replay.
+		id = fmt.Sprintf("%s:receipt:%s", id, receipt.correlationID)
+	}
 	childID := childRec.SessionID
 	frame := generated.SubagentStateFrame{
 		Type: string(generated.WsFrameTypeSubagentState),
@@ -259,6 +285,22 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 		State:          state,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}
+	if receipt != nil && receipt.correlationID != "" {
+		// Absent, never null (SubagentStateFrame.yaml's own comment): this
+		// is an omitempty POINTER, left nil on every frame that carries no
+		// receipt, so the field is present or absent on the wire — never an
+		// explicit JSON null. Marking it nullable in the schema instead
+		// broke `tsc -b --noEmit` (ADR-091 UAT defect 1); do not "fix" this
+		// by making the pointer field non-optional or by touching the
+		// schema.
+		frame.SteeringReceipt = &struct {
+			AppliedAt     string `json:"applied_at"`
+			CorrelationId string `json:"correlation_id"`
+		}{
+			AppliedAt:     receipt.appliedAt.UTC().Format(time.RFC3339),
+			CorrelationId: receipt.correlationID,
+		}
+	}
 	if err := al.persistSubagentEntry(parentSessionID, id, session.SystemSubtypeSubagentState, func(e *session.TranscriptEntry) {
 		e.SubagentState = &frame
 	}); err != nil {
@@ -271,6 +313,65 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 		EventMeta{TracePath: "subagent.state", SessionKey: parentSessionID},
 		SubagentStatePayload{SessionID: parentSessionID, MessageID: id, Frame: frame},
 	)
+}
+
+// deliverSteeringReceiptsForInjection is loop_run_turn.go's sole hook into
+// issue #870's steering_receipt: called immediately after
+// EventKindSteeringInjected fires for a round that actually injected
+// messages, so it runs once per round, never on enqueue. childSessionKey is
+// the CHILD's own session id (steer_reconstruct.go's SessionKey:
+// rec.SessionID convention — the same key runTurn registers the turn
+// under); correlationIDs is loop_run_turn_types.go's own
+// agentLoopRunTurnIteration.pendingSteeringReceipts, parallel to the
+// messages that were just injected, "" for any entry with no correlation id
+// (SubTurn results, plain chat turns).
+//
+// A no-op — deliberately, not defensively — for every session that is not
+// a steered child: steerParentSessionID(rec) returns "" for a session with
+// no SteeredBy edge, and deliverSubagentState's own guard (parentSessionID
+// == "") refuses to emit anything for it. This is how a plain chat turn
+// that happens to reuse the shared steering queue (DeliverSessionMessage's
+// SessionMessage kind=steer/respond path) never manufactures a receipt with
+// nowhere to be delivered.
+func (al *AgentLoop) deliverSteeringReceiptsForInjection(childSessionKey string, correlationIDs []string) {
+	if al == nil || childSessionKey == "" {
+		return
+	}
+	haveAny := false
+	for _, id := range correlationIDs {
+		if id != "" {
+			haveAny = true
+			break
+		}
+	}
+	if !haveAny {
+		return
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return
+	}
+	rec, err := lifecycle.Load(childSessionKey)
+	if err != nil || rec == nil {
+		return
+	}
+	parentSessionID := steerParentSessionID(rec)
+	if parentSessionID == "" {
+		return
+	}
+	// One shared instant for the whole batch: every message in this slice
+	// was injected together, into the SAME round, by the SAME call to
+	// ri.messages = append(...) just above in loop_run_turn.go — they are
+	// all genuinely applied at this one moment, not at N slightly different
+	// times.
+	appliedAt := time.Now().UTC()
+	for _, id := range correlationIDs {
+		if id == "" {
+			continue
+		}
+		al.deliverSubagentState(parentSessionID, rec, string(session.LifecycleRunning),
+			&steeringReceipt{correlationID: id, appliedAt: appliedAt})
+	}
 }
 
 // deliverGoalVerdictUpward covers ADR-091 FR-B-017 (I-5, AS-12): when the
