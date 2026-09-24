@@ -70,7 +70,28 @@ export function ActivityBar() {
   const failedRecent = recentlyFinished.filter((item) => isFailedStatus(item.status))
   const hasFailedRecent = failedRecent.length > 0
 
-  const shouldMount = isRunning || panelOpen || hasFailedRecent
+  // Defect 1 fix (ADR-091 fix lane RX-FRONTEND): commit 8b8d6ef9d narrowed
+  // `runningChildren` to count ONLY `lifecycleState === 'running'`
+  // (useRunningActivity.ts::isRunningAgentChild) but left this mount gate
+  // reading that same narrowed count via `isRunning` above. A queued launch
+  // emits `subagent_start` then `subagent_state(queued)` back-to-back
+  // (verified: pkg/agent/steer_launcher.go::publishSteeredLaunch) —
+  // `running` (lifecycleState arrives later, at Dispatch) — so under a
+  // saturated admission gate a child can sit at `queued` indefinitely:
+  // `runningChildren` stays 0 and nothing has finished, so `isRunning` alone
+  // can never make the bar appear — the delegation becomes entirely
+  // invisible even though ActivityPanel's queued dot (efc29991a) is fully
+  // able to render it once mounted. `running` (unlike `runningChildren`)
+  // already carries every direct agent child whose SPAN is still open —
+  // queued, running, needs_input, paused, or lifecycle-terminal-but-not-yet
+  // -subagent_end'd (see RunningActivity.runningChildren's doc comment) —
+  // exactly the same set ActivityPanel's "Running now" section renders, so
+  // reusing it here keeps the pill and the panel's contents in sync by
+  // construction. Bash sessions are excluded (kind !== 'agent'), preserving
+  // FR-E-005's "shell jobs never drive the pill" rule.
+  const hasOpenAgentChildren = running.some((item) => item.kind === 'agent')
+
+  const shouldMount = hasOpenAgentChildren || panelOpen || hasFailedRecent
   if (!shouldMount) return null
 
   const stackItems = runningChildItems.slice(0, MAX_STACK_AVATARS)

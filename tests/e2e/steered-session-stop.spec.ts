@@ -32,17 +32,72 @@
  *      (openSessionByDeepLink) reconstructs the ActivityPanel row from
  *      those persisted frames.
  *
- * IMPORTANT — unverified by execution: per this lane's explicit instruction
- * ("Do not run the browser suite — it needs a built binary. Just add the
- * spec and confirm `bash scripts/e2e-shards.sh check` passes"), this spec
- * has NOT been run against a live gateway. The on-disk shapes above are
- * grounded in direct reads of pkg/session/lifecycle.go, pkg/session/
- * daypartition.go and pkg/agent/steer_frames.go (cited inline), not in an
- * observed pass. If the ActivityPanel's replay reconstruction turns out to
- * need additional persisted state (e.g. a `subagent_message` frame, or a
- * live WS push rather than pure replay), that is a finding for whoever
- * first runs this spec against a built binary, not a defect in the seeding
- * approach itself.
+ * ADR-091 fix lane RX-FRONTEND, Defect 2 — two bugs fixed here, both found
+ * by re-deriving what the system actually emits/renders instead of trusting
+ * this file's own prior assertions:
+ *
+ * 1. WRONG STATUS VALUE. `ActivityPanel.tsx::ActivityRow` stamps
+ *    `data-status` from `item.status` — the SPAN axis (span.status, cleared
+ *    only by `subagent_end`) — never from `lifecycleState` (the
+ *    `subagent_state` axis). On a Stop, the Go side emits DIFFERENT values on
+ *    each axis (verified against source, not assumed):
+ *      - `pkg/agent/steer_frames.go::deliverSubagentEnd` maps
+ *        `steer.OutcomeInterrupted` -> `SubTurnStatusInterrupted`, i.e.
+ *        `subagent_end.status = "interrupted"` — this is `item.status`, i.e.
+ *        `data-status`.
+ *      - `pkg/agent/steer_audience.go` (~line 182-183) separately maps that
+ *        SAME `steer.OutcomeInterrupted` -> `session.LifecycleCancelled`
+ *        ("cancelled") for the `subagent_state` frame — this is
+ *        `lifecycleState`, rendered as the row's visible status TEXT via
+ *        `getLifecycleStatusDot` (`src/lib/subagentStatus.tsx`), never as
+ *        `data-status`.
+ *    The old assertion (`data-status: 'cancelled'`) read the second value off
+ *    the first attribute — a value the system never emits there. Fixed below
+ *    to assert `data-status: 'interrupted'` and the visible label "cancelled".
+ *
+ * 2. UNREACHABLE STOP BUTTON. `ChatScreen.tsx`'s `stop-btn` only renders
+ *    while `isStreaming` is true for the currently attached session, and
+ *    `cancelStream()` (src/store/chat/slices/outbound-lifecycle.ts) ADDITIONALLY
+ *    gates its own network send on that same flag — both are populated only
+ *    by a real client-initiated turn or by a `session_state.active_turn`
+ *    snapshot the gateway derives from a REAL in-memory turn object. This
+ *    spec's child is seeded purely on disk (a `LifecycleRecord` row plus
+ *    `subagent_start`/`subagent_state` transcript entries, both written
+ *    directly by Node, never through a real Launch/Dispatch) — no in-memory
+ *    turn is ever created for it, so `isStreaming` can never become true and
+ *    `stop-btn` can never render. Waiting on it was a permanent hang, not a
+ *    slow pass.
+ *
+ *    Fix: `sendCancelFrame` below sends the byte-identical wire frame a real
+ *    Stop click sends — `{type:"cancel",session_id}`, exactly
+ *    `contracts/components/schemas/CancelFrame.yaml` /
+ *    `outbound-lifecycle.ts`'s own `connection.send({ type: 'cancel',
+ *    session_id: targetSid })` — over a SECOND, same-origin WebSocket opened
+ *    from inside the page. No separate auth is needed: `pkg/gateway/
+ *    websocket.go`'s upgrade handler authenticates purely off the session
+ *    cookie the browser already carries (verified: "the SPA always attaches
+ *    the same-origin session cookie" / no client `{"type":"auth",...}` frame
+ *    needed on that path), and `chat_id` is server-assigned per connection
+ *    (`pkg/gateway/websocket.go:592`), not client-supplied — so a fresh
+ *    connection needs no setup before sending. This exercises the REAL
+ *    `pkg/gateway/websocket_cancel.go::handleCancel` ->
+ *    `cancelSteeredSubtree` -> `pkg/agent/steer_cancel.go` cascade
+ *    end-to-end; only the UI click itself is synthesized, because this
+ *    fixture's seeding strategy makes that click structurally unreachable no
+ *    matter what the test does downstream of it.
+ *
+ * IMPORTANT — still not verified by an observed pass. This lane (RX-FRONTEND,
+ * frontend-only: src/** and tests/e2e/** ownership, no Go edits, no live
+ * gateway) confirmed `tests/e2e/global-setup.ts::preflightCheck` hard-fails
+ * the ENTIRE Playwright suite — including this deterministic, no-LLM spec —
+ * unless `OPENROUTER_API_KEY_CI` is set, and no built Omnipus binary /
+ * bootstrapped `$OMNIPUS_HOME` was available in this environment either. Both
+ * fixes above are grounded in direct reads of the cited Go source and
+ * contract files, not in an observed pass — `bash scripts/e2e-shards.sh check`
+ * (shard registration, needs no live gateway) was run and passes; the spec
+ * itself was not executed. Whoever next runs this against a built binary
+ * should treat any further mismatch as a fresh finding, not a defect in this
+ * fix.
  */
 
 import * as fs from 'fs'
@@ -180,6 +235,50 @@ function seedSubagentFramesInParentTranscript(rootId: string, childId: string, c
   fs.appendFileSync(transcriptPath, lines, { encoding: 'utf-8' })
 }
 
+/**
+ * Sends `{type:"cancel", session_id: sessionId}` — the exact `CancelFrame`
+ * (contracts/components/schemas/CancelFrame.yaml) a real Stop click sends
+ * (outbound-lifecycle.ts:757's `connection.send({ type: 'cancel',
+ * session_id: targetSid })`) — over a FRESH, same-origin WebSocket opened
+ * from inside the page.
+ *
+ * Why not press the real `stop-btn`: it (and `cancelStream()`'s own network
+ * send) is gated on `isStreaming`, which only ever becomes true for a
+ * REAL in-memory turn — never for this spec's purely-disk-seeded child (see
+ * this file's header comment, Defect 2 fix #2). This sends the same wire
+ * frame without needing that gate. No extra auth setup is required: the
+ * gateway's WS upgrade authenticates off the session cookie the browser
+ * already carries, and `chat_id` is server-assigned per connection
+ * (pkg/gateway/websocket.go:592), so a brand-new connection can send this
+ * frame immediately after opening.
+ */
+async function sendCancelFrame(page: Page, sessionId: string): Promise<void> {
+  await page.evaluate((sid) => {
+    return new Promise<void>((resolve, reject) => {
+      const wsBase = window.location.origin.replace(/^http/, 'ws')
+      const socket = new WebSocket(`${wsBase}/api/v1/chat/ws`)
+      const timer = setTimeout(() => {
+        socket.close()
+        reject(new Error('sendCancelFrame: socket did not open within 10s'))
+      }, 10_000)
+      socket.onopen = () => {
+        socket.send(JSON.stringify({ type: 'cancel', session_id: sid }))
+        // WebSocket.send() returns synchronously but the frame is flushed
+        // asynchronously — give it a beat before tearing the socket down.
+        setTimeout(() => {
+          clearTimeout(timer)
+          socket.close()
+          resolve()
+        }, 500)
+      }
+      socket.onerror = () => {
+        clearTimeout(timer)
+        reject(new Error('sendCancelFrame: socket errored before opening'))
+      }
+    })
+  }, sessionId)
+}
+
 test(
   'stopping a steered session row from the activity panel reaches a stopped state and survives reload',
   async ({ page }) => {
@@ -209,28 +308,38 @@ test(
     await expect(row).toBeVisible({ timeout: 15_000 })
     await expect(row).toHaveAttribute('data-status', 'running')
 
-    // Open the row (drives into the worker's own session) and press the
-    // real Stop control there — Stop on a session stops everything below
-    // it (pkg/agent/CLAUDE.md), including this worker's own turn.
+    // Open the row (drives into the worker's own session) — this still
+    // exercises the real "Open" navigation control. The real Stop click
+    // that would normally follow is unreachable here (`stop-btn` only
+    // renders while `isStreaming`, which this disk-seeded child never sets
+    // — see this file's header comment, Defect 2 fix #2) — send the
+    // equivalent `cancel` wire frame directly instead. Stop on a session
+    // stops everything below it (pkg/agent/CLAUDE.md); this targets the
+    // worker's OWN session id, matching what a real Stop click sends while
+    // attached to it (`cancelStream()` with no explicit sessionId defaults
+    // to the active session).
     await row.locator('[data-testid="activity-row-open"]').click()
-    const stopBtn = page.locator('[data-testid="stop-btn"]')
-    await expect(stopBtn).toBeVisible({ timeout: 15_000 })
-    await stopBtn.click()
+    await sendCancelFrame(page, childId)
 
     // Back to the root and re-open the panel to read the row's settled status.
     await openSessionByDeepLink(page, rootId)
     await activityBar.click()
     const rowAfterStop = page.locator('[data-testid="activity-row"]', { hasText: taskLabel })
 
-    // The product's own status vocabulary is "cancelled" — never "stopped"
-    // (contracts/components/schemas/SessionLifecycleRecord.yaml,
-    // pkg/session/lifecycle.go's LifecycleCancelled = "cancelled") — a Stop
-    // is recorded as a cancellation, not a bespoke "stopped" state. Assert
-    // the real wire value, and explicitly rule out the two states an
-    // interrupted-but-mishandled Stop most often gets confused with.
-    await expect(rowAfterStop).toHaveAttribute('data-status', 'cancelled', { timeout: 15_000 })
+    // `data-status` is `ActivityRow`'s SPAN axis (`item.status`, from
+    // `subagent_end.status`) — a Stop maps to `steer.OutcomeInterrupted`,
+    // which `deliverSubagentEnd` (pkg/agent/steer_frames.go) stamps as
+    // "interrupted", never "cancelled". "cancelled" is the SEPARATE
+    // `lifecycleState` axis (`subagent_state.state`, pkg/agent/
+    // steer_audience.go ~182-183) that never reaches `data-status` — it
+    // only drives the row's visible label (getLifecycleStatusDot,
+    // src/lib/subagentStatus.tsx). Assert both, on their correct axes, and
+    // explicitly rule out the states an interrupted-but-mishandled Stop
+    // most often gets confused with.
+    await expect(rowAfterStop).toHaveAttribute('data-status', 'interrupted', { timeout: 15_000 })
     await expect(rowAfterStop).not.toHaveAttribute('data-status', 'failed')
     await expect(rowAfterStop).not.toHaveAttribute('data-status', 'running')
+    await expect(rowAfterStop.getByText('cancelled', { exact: true })).toBeVisible()
 
     // Reload and confirm the stopped state was durably persisted, not just
     // held in the client's in-memory store.
@@ -239,6 +348,7 @@ test(
     await waitForConnected(page, { timeout: 15_000 })
     await activityBar.click()
     const rowAfterReload = page.locator('[data-testid="activity-row"]', { hasText: taskLabel })
-    await expect(rowAfterReload).toHaveAttribute('data-status', 'cancelled', { timeout: 15_000 })
+    await expect(rowAfterReload).toHaveAttribute('data-status', 'interrupted', { timeout: 15_000 })
+    await expect(rowAfterReload.getByText('cancelled', { exact: true })).toBeVisible()
   },
 )
