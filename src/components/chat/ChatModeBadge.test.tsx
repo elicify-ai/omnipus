@@ -1,11 +1,15 @@
 /**
  * ChatModeBadge tests (ADR-092).
  *
- * Three renderings per the founder's ruling ("safe" = what never leaves the
- * kernel sandbox, judged per call): Auto off -> "Ask"; Auto on + kernel
- * sandbox active -> "Auto"; Auto on + no kernel sandbox -> "Auto -> Ask"
- * with an explanatory tooltip (the Tooltip primitive's actual production
- * use case).
+ * Founder decision (2026-09-24): Auto-approve no longer requires an
+ * enforcing kernel sandbox — Auto works for every tool, shell included, on
+ * every platform, whether or not the sandbox is enforcing.
+ * `kernel_sandbox_active` is WARNING-ONLY now. Three renderings: Auto off ->
+ * "Ask"; Auto on + kernel sandbox active -> "Auto"; Auto on + no kernel
+ * sandbox -> "Auto — no sandbox" (still Auto, a caution) with an explanatory
+ * tooltip (the Tooltip primitive's actual production use case). The old
+ * "Auto → Ask" text (Auto silently falling back to Ask with no sandbox) is
+ * gone.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
@@ -83,27 +87,27 @@ describe('ChatModeBadge — three states', () => {
     renderBadge()
     await waitFor(() => {
       expect(screen.getByTestId('chat-mode-badge')).toHaveTextContent('Auto')
-      expect(screen.getByTestId('chat-mode-badge')).not.toHaveTextContent('Auto →')
+      expect(screen.getByTestId('chat-mode-badge')).not.toHaveTextContent('no sandbox')
     })
   })
 
-  it('reads "Auto → Ask" with an explanatory tooltip when Auto-approve is on but no kernel sandbox is active', async () => {
+  it('reads "Auto — no sandbox" (still Auto, a caution) with an explanatory tooltip when Auto-approve is on but no kernel sandbox is enforcing', async () => {
     vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({ auto_approve_effective: true, kernel_sandbox_active: false }))
     renderBadge()
     const trigger = await screen.findByTestId('chat-mode-badge-trigger')
-    expect(trigger).toHaveTextContent('Auto → Ask')
+    expect(trigger).toHaveTextContent('Auto — no sandbox')
+    // The old "Auto → Ask" wording (Auto silently degrading to Ask with no
+    // sandbox) must be gone — Auto is still active, this is a caution.
+    expect(trigger).not.toHaveTextContent('Auto → Ask')
+    expect(trigger).not.toHaveTextContent('→')
 
     // The tooltip primitive's actual production use case — reveal on focus.
     fireEvent.focus(trigger)
     await waitFor(() => {
       const tooltip = screen.getByRole('tooltip')
-      expect(tooltip).toHaveTextContent(/no active kernel sandbox/i)
-      // ADR-092 addendum §7/T17: Auto covers every tool resolved to "ask",
-      // not just shell commands — the tooltip must say so in general terms,
-      // never name shell/bash specifically as the scope of what's affected.
-      expect(tooltip).toHaveTextContent(/every tool set to .ask./i)
-      expect(tooltip).not.toHaveTextContent(/shell/i)
-      expect(tooltip).not.toHaveTextContent(/\bbash\b/i)
+      expect(tooltip).toHaveTextContent(
+        'No kernel sandbox is enforcing. Safe tool calls still run without asking, but shell commands are checked by reading the command text only.',
+      )
     })
   })
 

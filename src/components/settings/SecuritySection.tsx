@@ -21,6 +21,7 @@
  */
 
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { cn } from '@/lib/utils'
 import { AuditLogViewer } from './AuditLogViewer'
 import { PromptGuardSection } from './PromptGuardSection'
 import { ExecProxyStatusCard } from './ExecProxyStatusCard'
@@ -53,6 +54,7 @@ import {
   updateGlobalToolPolicies,
   fetchSandboxConfig,
   updateSandboxConfig,
+  fetchSandboxStatus,
   getErrorMessage,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -158,10 +160,15 @@ function GlobalToolPoliciesSection() {
 // only has meaning for a tool currently resolved to "ask". It covers every
 // such tool, not just shell commands (ADR-092 addendum §2/§3) — "runs" is
 // what the classifier proves never leaves the workspace/sandbox for that
-// specific call; a short, fixed list always asks regardless (§7). With no
-// active kernel sandbox nothing can be positively cleared, so an "ask" tool
-// always prompts regardless of this setting (see the chat-header badge,
-// which reads "Auto → Ask" for exactly that case).
+// specific call; a short, fixed list always asks regardless (§7).
+//
+// Founder decision (2026-09-24): Auto-approve no longer requires an
+// enforcing kernel sandbox — it works for every tool, shell included, on
+// every platform (Windows too), whether or not the sandbox is enforcing.
+// `kernel_sandbox_active` (read from the same ['sandbox-status'] query the
+// chat-header badge uses) is WARNING-ONLY here: with no enforcing sandbox,
+// shell commands are checked by reading the command text only, and the
+// card's platform caveat line is shown as a caution instead of muted.
 //
 // Lives on the same SandboxConfig the Process Sandbox (Advanced) section
 // already manages, and goes through the same re-auth-gated
@@ -175,6 +182,12 @@ function AutoApproveControl() {
     queryKey: ['sandbox-config'],
     queryFn: fetchSandboxConfig,
   })
+  const { data: sandboxStatus } = useQuery({
+    queryKey: ['sandbox-status'],
+    queryFn: fetchSandboxStatus,
+  })
+  const kernelSandboxEnforcing = sandboxStatus?.kernel_sandbox_active === true
+  const noSandboxCaution = sandboxStatus !== undefined && !kernelSandboxEnforcing
 
   const { mutateAsync: saveAsync, isPending: isSaving } = useMutation({
     mutationFn: (vars: { next: boolean; token?: string }) =>
@@ -204,7 +217,7 @@ function AutoApproveControl() {
       .gate((token) => saveAsync({ next, token }), {
         title: next ? 'Turn Auto-approve on?' : 'Turn Auto-approve off?',
         body: next
-          ? 'Tools set to “ask” will run without a prompt when it’s safe — they stay inside your workspace and the sandbox. See “Still asks every time” on this card for the short list of things that always still ask. Needs the sandbox — not available on Windows.'
+          ? 'Tools set to “ask” will run without a prompt when it’s safe — they stay inside your workspace and the sandbox. See “Still asks every time” on this card for the short list of things that always still ask. Without a kernel sandbox (for example on Windows), shell commands are checked by reading the command text only.'
           : 'Every tool set to “ask” will prompt every time again, with no auto-approval.',
         confirmLabel: next ? 'Turn Auto-approve on' : 'Turn Auto-approve off',
       })
@@ -262,8 +275,14 @@ function AutoApproveControl() {
 
       <AutoApproveAskList />
 
-      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-        Needs the sandbox &mdash; not available on Windows.
+      <p
+        className={cn(
+          'text-[length:var(--type-caption-size)]',
+          noSandboxCaution ? 'text-[var(--color-warning)]' : 'text-[var(--color-muted)]',
+        )}
+      >
+        Without a kernel sandbox (for example on Windows), shell commands are checked by reading the command text
+        only.
       </p>
 
       {/* This control's OWN useStepUp() instance — its dialogs must be

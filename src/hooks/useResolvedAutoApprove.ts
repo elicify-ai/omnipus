@@ -6,14 +6,23 @@ import { fetchAgents, fetchSandboxStatus } from '@/lib/api'
 export interface ResolvedAutoApprove {
   /** The effective Auto-approve state for the active chat, folding all three scopes. */
   resolved: boolean
-  /** SandboxStatus.kernel_sandbox_active — the platform predicate. */
+  /**
+   * SandboxStatus.kernel_sandbox_active — whether a kernel sandbox is
+   * currently enforcing on this platform. Founder decision (2026-09-24):
+   * this is WARNING-ONLY. Auto works for every tool, shell included, on
+   * every platform (Windows too), whether or not the sandbox is enforcing —
+   * this flag no longer gates `resolved` or switches Auto off. A caller
+   * (e.g. ChatModeBadge) uses it only to decide whether to show a caution
+   * that shell commands, with no sandbox to check them against, are cleared
+   * by reading the command text only.
+   */
   kernelSandboxActive: boolean
   /**
    * SandboxStatus.god_mode_active — the global God Mode override. When
    * true, every agent's tool policy is floored at "allow" regardless of
-   * Auto-approve/kernel-sandbox state; a caller (e.g. ChatModeBadge) must
-   * check this FIRST and render "God Mode", never fall through to "Ask" —
-   * God Mode is not the absence of Auto, it is a stronger floor than Auto.
+   * Auto-approve state; a caller (e.g. ChatModeBadge) must check this FIRST
+   * and render "God Mode", never fall through to "Ask" — God Mode is not
+   * the absence of Auto, it is a stronger floor than Auto.
    */
   godModeActive: boolean
   /** Whether the active session is a real, server-known session (not '__pending' or none). */
@@ -36,11 +45,15 @@ export interface ResolvedAutoApprove {
  * global default), floored off if the active agent sets
  * `auto_approve_disabled`. `SandboxStatus` carries no session/agent context
  * (per its own schema description), so folding those narrower scopes in is
- * explicitly the SPA's job, done here once. `resolved` and
- * `kernelSandboxActive` together answer "does Auto actually clear anything
- * right now" (SandboxStatus's own contract: Auto only takes effect with a
- * kernel sandbox present AND god_mode_active false) — `godModeActive` is a
- * separate, stronger floor a caller must check ahead of both.
+ * explicitly the SPA's job, done here once.
+ *
+ * Founder decision (2026-09-24): Auto-approve no longer requires an
+ * enforcing kernel sandbox — it is effective for every tool on every
+ * platform regardless of `kernel_sandbox_active`. `kernelSandboxActive` is
+ * exposed purely so a caller can WARN ("no kernel sandbox — shell commands
+ * are checked by reading the command text only"); it must never be folded
+ * into `resolved`. `godModeActive` remains a separate, stronger floor a
+ * caller must check ahead of `resolved`.
  */
 export function useResolvedAutoApprove(): ResolvedAutoApprove {
   const activeAgentId = useSessionStore((s) => s.activeAgentId)

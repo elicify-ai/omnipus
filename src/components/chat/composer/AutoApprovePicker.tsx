@@ -78,7 +78,7 @@ export function AutoApprovePicker({
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const sendSessionModeUpdate = useChatStore((s) => s.sendSessionModeUpdate)
   const setPendingAutoApproveChoice = useChatStore((s) => s.setPendingAutoApproveChoice)
-  const { resolved, hasRealSession } = useResolvedAutoApprove()
+  const { resolved, hasRealSession, kernelSandboxActive } = useResolvedAutoApprove()
 
   const isDisabled = disabled || !activeAgentId
 
@@ -102,9 +102,17 @@ export function AutoApprovePicker({
   // message (there is no "next step" yet to speak of); a running chat's
   // flip applies from the very next tool call, not the next typed message —
   // "next step" says that without implying the user has to type anything.
-  const tooltipContent = hasRealSession
+  const baseTooltipContent = hasRealSession
     ? 'Auto-approve for this chat — applies from the next step'
     : 'Auto-approve for this chat — applies from your first message'
+
+  // Founder decision (2026-09-24): Auto works without an enforcing kernel
+  // sandbox, but it's still worth a calm caution — appended to the same
+  // tooltip rather than a second visual element, matching ChatModeBadge's
+  // "Auto — no sandbox" wording so the two never disagree.
+  const tooltipContent = resolved && !kernelSandboxActive
+    ? `${baseTooltipContent}. No kernel sandbox is enforcing — shell commands are checked by reading the command text only.`
+    : baseTooltipContent
 
   return (
     <Tooltip

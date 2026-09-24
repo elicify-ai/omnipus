@@ -272,3 +272,49 @@ describe('AutoApprovePicker — explains itself via the catalogued Tooltip, not 
     expect(tooltip).not.toHaveTextContent('next message')
   })
 })
+
+// Founder decision (2026-09-24): Auto works without an enforcing kernel
+// sandbox — it must never flip back to disabled/off, but the tooltip adds a
+// calm caution matching ChatModeBadge's "Auto — no sandbox" wording.
+describe('AutoApprovePicker — no-sandbox caution (2026-09-24)', () => {
+  it('is still checked (Auto stays on) when resolved true and no kernel sandbox is enforcing', async () => {
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(
+      sandboxStatus({ auto_approve_effective: true, kernel_sandbox_active: false }),
+    )
+    renderPicker()
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-checked', 'true')
+    })
+  })
+
+  it('appends the no-sandbox caution to the tooltip when Auto is on and no kernel sandbox is enforcing', async () => {
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(
+      sandboxStatus({ auto_approve_effective: true, kernel_sandbox_active: false }),
+    )
+    renderPicker()
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-checked', 'true')
+    })
+    const trigger = screen.getByTestId('composer-auto-approve-tooltip-trigger')
+    fireEvent.focus(trigger)
+    const tooltip = screen.getByRole('tooltip')
+    expect(tooltip).toHaveTextContent('applies from the next step')
+    expect(tooltip).toHaveTextContent(
+      'No kernel sandbox is enforcing — shell commands are checked by reading the command text only.',
+    )
+  })
+
+  it('does NOT show the caution when Auto is off, even with no kernel sandbox enforcing', async () => {
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(
+      sandboxStatus({ auto_approve_effective: false, kernel_sandbox_active: false }),
+    )
+    renderPicker()
+    await waitFor(() => {
+      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-checked', 'false')
+    })
+    const trigger = screen.getByTestId('composer-auto-approve-tooltip-trigger')
+    fireEvent.focus(trigger)
+    const tooltip = screen.getByRole('tooltip')
+    expect(tooltip).not.toHaveTextContent('kernel sandbox')
+  })
+})
