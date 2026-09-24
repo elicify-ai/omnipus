@@ -629,6 +629,21 @@ func (rc *runContextWithOptions) loadConfigAndProvider() (error, bool) {
 			"source", godModeSource)
 	}
 
+	// godmode-policy-freeze fix (2026-09-25): publish god-mode AVAILABILITY
+	// to agent's package-level atomic HERE, before initializeAgentLoop calls
+	// agent.NewAgentLoop below. NewAgentLoop builds every agent instance
+	// eagerly, and each instance's tool-policy snapshot
+	// (agentToolsCfgToPolicy) and bash tool (wireExecToolDepsOn) read
+	// agent.GodModeActive(cfg) AT CONSTRUCTION TIME — the OLD call site
+	// (AgentLoop.SetAllowGodMode, invoked from gateway_boot.go deep inside
+	// setupAndStartServices) ran AFTER those instances already existed, so a
+	// persisted sandbox.god_mode=true survived a restart with every
+	// already-built consumer frozen at GodMode=false until the next
+	// TriggerReload. Mirrors the same "must run before NewAgentLoop"
+	// requirement this function's own agent.SetWindowCatalog call documents
+	// a few lines below for the provider-catalog boot sequence.
+	agent.SetGodModeAvailable(rc.allowGodMode)
+
 	// Build the real LLM provider. The test_harness override hook + scripted-
 	// scenario fallback was removed 2026-05-10; tests now run against real
 	// OpenRouter via the configured provider entry.
