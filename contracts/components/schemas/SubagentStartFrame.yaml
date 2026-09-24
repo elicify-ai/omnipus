@@ -14,7 +14,8 @@ additionalProperties: false
 properties:
   type:
     type: string
-    const: subagent_start
+    enum:
+      - subagent_start
   session_id:
     type: string
     minLength: 1
@@ -28,7 +29,11 @@ properties:
   parent_call_id:
     type: string
     minLength: 1
-    description: The spawn ToolCall.ID that triggered this sub-turn.
+    description: >
+      The originating delegate or create_task tool-call id. For delegate-origin
+      children, this is the delegate tool-call id. For create_task-origin children
+      (task sessions), this is the create_task tool-call id (the span key for I-4).
+      This is the span identifier used for both fronts.
   task_label:
     type: string
     minLength: 1
@@ -40,3 +45,11 @@ properties:
   agent_id:
     type: string
     description: Agent running the sub-turn.
+  child_session_id:
+    type: string
+    minLength: 1
+    description: >
+      Optional session id of the opened child session. Present for steered
+      sessions; absent for legacy subturn spans. Enables the open control on
+      the side panel row (ADR-091 I-4).
+    example: "550e8400-e29b-41d4-a716-446655440000"

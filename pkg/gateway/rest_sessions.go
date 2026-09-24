@@ -16,6 +16,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -610,7 +611,7 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 
 // deleteSession handles DELETE /api/v1/sessions/{id}.
 // Removes all session data and returns {"success": true}.
-func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id string) {
+func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id string) {
 	store := a.resolveSessionStore(id)
 	if store == nil {
 		jsonErr(w, http.StatusNotFound, "session not found")
@@ -656,12 +657,43 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id strin
 		}
 	}
 
+	// Deleting a session is also a REST-originated Stop boundary: stamp and
+	// cancel its durable steering subtree before any session data disappears.
+	// A partial cascade aborts deletion instead of reporting success while an
+	// unreadable descendant may still be running. The current OpenAPI delete
+	// response has no cancel-report fields; until a future response
+	// schema publishes one, the error body carries the same one-line partial summary used by
+	// the WebSocket channel and no undocumented wire fields are emitted.
+	report, cascaded := cancelSteeredSubtree(r.Context(), a.agentLoop, id, steer.Principal{
+		Kind: steer.PrincipalKindHuman,
+		ID:   actorUsername(r),
+	})
+	// [Finding 3, ADR-091 fix lane 2] SkippedNewerGeneration also refuses
+	// deletion: a descendant whose live turn had already advanced past the
+	// generation this Stop stamped is STILL RUNNING, exactly the "may still
+	// be running" case this guard exists to catch. That is deliberately a
+	// WIDER condition than the `partial` flag on the cancel_stage frame,
+	// which per WP-D FR-D-001 means "unreachable" alone: a newer generation
+	// taking over is a CORRECT Stop outcome, but it is still a live turn, and
+	// deleting its session data is what this guard refuses. Hence
+	// cancelIncompleteSubtreeSummary, not cancelPartialSummary — the latter
+	// is empty in the skipped-only case and would leave this 500 with no
+	// reason in its body.
+	if cascaded && (len(report.Unreachable) > 0 || len(report.SkippedNewerGeneration) > 0) {
+		summary := cancelIncompleteSubtreeSummary(report)
+		slog.Warn("rest: delete session: Stop cascade incomplete; deletion refused",
+			"session_id", id, "summary", summary,
+			"unreachable", report.Unreachable, "skipped_newer_generation", report.SkippedNewerGeneration)
+		jsonErr(w, http.StatusInternalServerError, summary)
+		return
+	}
+
 	// ADR-057 W18b (FR-071/BDD-78): resolve id's full descendant set BEFORE
 	// deleting anything, over the DURABLE lifecycle store — every delegation,
 	// live or not, has a LifecycleRecord (User Story 4), so this walk is
 	// authoritative independent of turn liveness and survives a restart.
 	// Reuses U11's already-tested u11CollectDescendantSessionIDs (same
-	// package, pkg/gateway/websocket.go), which walks U13's ParentDurableKey
+	// package, pkg/gateway/websocket.go), which walks U13's SteeringSessionID
 	// index (pkg/session/lifecycle.go) exactly as the cancel/approval-cascade
 	// paths do — this handler does not reimplement the walk. A nil lifecycle
 	// store (no delegation store wired — most webchat-only installs never

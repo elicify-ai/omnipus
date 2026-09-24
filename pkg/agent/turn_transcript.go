@@ -170,13 +170,18 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 		// ever exercised by tests that hand-seed TurnID directly. See
 		// appendAssistantTranscript's identical fix for the full rationale.
 		TurnID: ts.turnID,
-		// ParentSpawnCallID: non-empty only when ts is a CHILD delegation
-		// sub-turn (spawnSubTurn stamps childTS.parentSpawnCallID before any
-		// turn processing runs). Lets pkg/gateway/replay.go withhold this
-		// entry from top-level replay, matching live rendering — see
+		// ParentSpawnCallID: DOCUMENTED to be non-empty only when ts is a
+		// CHILD delegation sub-turn — pre-ADR-091, the deleted spawnSubTurn
+		// stamped childTS.parentSpawnCallID before any turn processing ran.
+		// Lets pkg/gateway/replay.go withhold this entry from top-level
+		// replay, matching live rendering — see
 		// session.TranscriptEntry.ParentSpawnCallID's doc comment for the
 		// full root-cause writeup (live/reload bubble-count divergence on
-		// multi-step delegation).
+		// multi-step delegation). ADR-091 fix lane RX-SUBTURN finding
+		// (comment-only; code unchanged): see turn.go::
+		// turnState.parentSpawnCallID's own field doc comment — grep finds
+		// nothing assigns that field today, so ts.parentSpawnCallID is
+		// always "" here too. Flagged for the team, not fixed here.
 		ParentSpawnCallID: ts.parentSpawnCallID,
 		// Tokens and Cost are intentionally 0 — the turn total is attributed to
 		// the final assistant entry only. See appendAssistantTranscript.
@@ -417,28 +422,6 @@ func (ts *turnState) appendErrorTranscript(kind, stage, message string, pe ...*P
 // fix then vanishes on reload. Pass the live LLMError instead.
 func (ts *turnState) appendClassifiedError(kind, stage string, llm LLMError) {
 	ts.writeErrorTranscript(kind, stage, llm.Message, llm.Code)
-}
-
-// appendDetachedTerminalError is the controller-owned timeout write allowed after
-// MarkAbandoned. The abandoned flag suppresses writes from the detached child
-// goroutine; it must not suppress the coordinator's single terminal timeout,
-// or a session reload would lose the reason the child stopped.
-func (ts *turnState) appendDetachedTerminalError(kind, stage string, llm LLMError) {
-	ts.writeErrorTranscriptWithAbandonment(kind, stage, llm.Message, llm.Code, true)
-}
-
-// appendDelegatedTaskLimitNotice is the sole persistence entry point for the
-// identifier-rich delegated-task notice. Its current producers restrict
-// variable content to bounded correlation fields, so this method can preserve
-// that copy without opening the generic classified-error path to arbitrary
-// child output.
-func (ts *turnState) appendDelegatedTaskLimitNotice(notice delegatedTaskLimitNotice) {
-	kind := EventKindError.String()
-	stage := string(notice.stage)
-	if !ts.canWriteErrorTranscript(kind, stage, notice.message, false) {
-		return
-	}
-	ts.persistErrorTranscript(kind, stage, notice.llmError(), notice.message)
 }
 
 func (ts *turnState) writeErrorTranscript(kind, stage, message string, code LLMErrorCode, pe ...*ProviderError) {

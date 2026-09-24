@@ -2835,10 +2835,58 @@ paths:
                 type: object
                 required:
                 - success
+                additionalProperties: false
                 properties:
                   success:
                     type: boolean
                     example: true
+                  reached:
+                    type: array
+                    items:
+                      type: string
+                    description: >
+                      ADR-091 I-6. Every session the cascade stamped with a Stop marker
+                      (the stopped session and each reachable non-terminal descendant).
+                  unreachable:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required:
+                        - id
+                        - reason
+                      properties:
+                        id:
+                          type: string
+                          minLength: 1
+                        reason:
+                          type: string
+                    description: ADR-091 I-6. Descendants the cascade could not reach, with why.
+                  skipped_newer_generation:
+                    type: array
+                    items:
+                      type: string
+                    description: >
+                      ADR-091 I-6. Sessions whose live turn belonged to a newer generation than
+                      the one stamped (a revival landed first); their cancel was refused.
+                  skipped_terminal:
+                    type: array
+                    items:
+                      type: string
+                    description: ADR-091 I-6. Terminal descendants, left unwritten.
+                  partial:
+                    type: boolean
+                    description: >
+                      ADR-091 I-6. True when `unreachable` is non-empty — and ONLY then: the
+                      cascade could not reach part of the subtree, so this Stop must not be
+                      read as complete (WP-D FR-D-001).
+                      `skipped_newer_generation` deliberately does NOT set this flag. A session
+                      the cascade left alone because a revival had already carried it to a
+                      newer generation is a CORRECT outcome, not a failure (ADR-091 D8: "the
+                      later instruction wins, which is what the operator asked for"), and WP-D
+                      US-1/AS-9 specifies that case with no `partial` and no channel line.
+                      Read `skipped_newer_generation` itself to learn which sessions kept
+                      running — `partial: false` hides nothing.
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':

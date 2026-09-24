@@ -194,11 +194,15 @@ describe('WsConnection — heartbeat liveness self-heal (ping timeout force-clos
     expect(() => vi.advanceTimersByTime(60_000)).not.toThrow()
 
     // The synthetic path must have run the full close handling: disconnected
-    // callback, an error surfaced with the synthetic reason, and the handler
-    // detached from the dead socket so a late real close can't double-fire.
+    // callback, and the handler detached from the dead socket so a late real
+    // close can't double-fire. #823: this forced close is a transport drop
+    // like any other — it must NOT reach the error channel / AppShell banner
+    // (was: `expect(cbs.onError).toHaveBeenCalledWith(expect.stringContaining('ping timeout (close() threw)'))`).
+    // Connection state is communicated only through the phase-1 quiet UI, via
+    // onDisconnected + onReconnectStateChange below.
     expect(cbs.onDisconnected).toHaveBeenCalledTimes(1)
     expect(throwingWs.onclose).toBeNull()
-    expect(cbs.onError).toHaveBeenCalledWith(expect.stringContaining('ping timeout (close() threw)'))
+    expect(cbs.onError).not.toHaveBeenCalled()
 
     // And a reconnect must be scheduled — the frozen-connection symptom is gone.
     vi.advanceTimersByTime(5_000)

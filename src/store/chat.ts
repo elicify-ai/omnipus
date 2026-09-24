@@ -25,7 +25,7 @@ registerChatClearPendingAutoApprove(() => useChatStore.getState().setPendingAuto
 export * from './chat/frames'
 export * from './chat/messages'
 export * from './chat/store'
-export type { ChatMessage, ClientTruncatedResult, MediaAttachment, OutboundQueueItem, PositionedToolCall, QueuedOutboundMessage, RateLimitEventData, SessionChatState, SpanStep, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from './chat/types'
+export type { ChatMessage, ClientTruncatedResult, MediaAttachment, OutboundQueueItem, PositionedToolCall, QueuedOutboundMessage, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from './chat/types'
 
 // F-S8: removed flat→bucket bidirectional sync subscriber.
 // Tests now seed sessionsById directly (see resetStores() in test files).

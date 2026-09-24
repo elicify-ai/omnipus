@@ -165,6 +165,18 @@ func omnipusGracefulShutdown(
 		cp.Close()
 	}
 
+	// Step 5b: overwrite the master key the credential store has held since
+	// boot. It sits here because this is the last point that can still resolve
+	// a credential ref — the in-flight turns drained in step 2 and the provider
+	// teardown just above both read through the store. The remaining steps
+	// (preview registries, nag banner, PID file) do not. Best-effort by
+	// construction: store.Close's doc comment states what it can and cannot
+	// erase.
+	if runningServices.credStore != nil {
+		runningServices.credStore.Close()
+		slog.Debug("shutdown: credential store key material wiped")
+	}
+
 	// Step 6: Stop Tier 1/3 preview-tool registries so their janitor goroutines exit.
 	// servedSubdirs.Stop() is idempotent and safe to call even when Stop was never
 	// explicitly called (the janitor goroutine exits when the stop channel closes).

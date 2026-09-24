@@ -122,7 +122,6 @@ function setAgentWorking(sessionId: string, isStreaming: boolean) {
             lastUserMessageAt: null,
             cancelStage: null,
             lastReceivedEventTime: null,
-            spanByParentCallId: {},
           }
       return { sessionsById: { ...state.sessionsById, [sessionId]: bucket } }
     })

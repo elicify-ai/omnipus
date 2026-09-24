@@ -39,7 +39,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat'
-import type { SpanStep, SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
+import type { SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { fetchAgents } from '@/lib/api'
 import type { Agent, ToolCall } from '@/lib/api'
@@ -57,7 +57,6 @@ export interface AgentActivityItem {
   taskLabel: string
   status: ActivityStatus
   durationMs?: number
-  steps: SpanStep[] // populated for native only — empty for 3p (issue #492: no live step detail yet)
   /**
    * The span's final result text (terminal spans only) — Fix 2 (2026-07-16):
    * SubagentBlock's thread card (now hidden from the thread by default) was
@@ -74,6 +73,35 @@ export interface AgentActivityItem {
    * via formatInterruptReason (@/lib/subagentStatus), not this raw value.
    */
   interruptReason?: SubagentSpanTerminal['reason']
+  /**
+   * ADR-091 D7/FR-E-004: the last `subagent_message.text` reduced onto this
+   * span, or 'steered' for a bare steer/respond — see
+   * `SubagentSpanBase.statusLine`'s doc comment. Undefined until the
+   * child's first `subagent_message` arrives.
+   */
+  statusLine?: string
+  /**
+   * ADR-091 D7/FR-E-004: the last `subagent_state.state` reduced onto this
+   * span — see `SubagentSpanBase.lifecycleState`'s doc comment. The side
+   * panel row reads `'queued'` here to show "queued" even while this
+   * item's own `status` is still `'running'` (a queued launch emits
+   * `subagent_start` before the child actually starts — I-4).
+   */
+  lifecycleState?: SubagentSpan['lifecycleState']
+  /**
+   * ADR-091 D7: the child's own routable session id
+   * (`SubagentStartFrame.child_session_id`) — the side panel's open control
+   * target. Absent on a transcript written before this delivery (history
+   * only), in which case the row renders without the open control.
+   */
+  childSessionId?: string
+  /**
+   * ADR-091 D7 table's "last update N s ago" — the ISO timestamp of the
+   * last `subagent_message`/`subagent_state` frame reduced onto this span
+   * (also seeded at `subagent_start`/`subagent_end`). See
+   * `SubagentSpanBase.lastUpdateAt`'s doc comment.
+   */
+  lastUpdateAt?: string
 }
 
 export interface BashActivityItem {
@@ -140,8 +168,44 @@ export type ActivityItem = AgentActivityItem | BashActivityItem | JudgeActivityI
 
 export interface RunningActivity {
   runningCount: number
+  /**
+   * ADR-091 D7/FR-E-005 (founder decision, round 8; cross-family review
+   * finding 20): the open session's direct AGENT children whose
+   * `lifecycleState` (the ADR-053 eight-state domain reduced from
+   * `subagent_state`) is exactly `'running'` — excludes background shell
+   * jobs (`runningCount` still includes those), a QUEUED child (`span.status`
+   * is already `'running'` from the moment `subagent_start` fires, before
+   * the child has actually started — D7 table), and a child whose
+   * lifecycleState already reached a terminal value (`completed`, `failed`,
+   * …) via an earlier `subagent_state` even though its `subagent_end` (which
+   * flips `span.status`) hasn't arrived yet. Also excludes a span with no
+   * lifecycleState at all yet (subagent_start received, no subagent_state
+   * received) — "how many sub-agents are running" answers `'running'`
+   * exactly, not "started and not yet known to have stopped". This is what
+   * the Activity Bar's pill AND avatar stack read (`runningChildItems`
+   * below): "The SPA must not count shell jobs in the pill, because the
+   * pill answers 'how many sub-agents are running'" (WP-E spec, explicit
+   * prohibitions). A grandchild counts in its own parent's set only when
+   * that parent's own session is the one open — this hook is already
+   * scoped to the active session (file header), so that scoping falls out
+   * for free.
+   */
+  runningChildren: number
+  /**
+   * The actual `AgentActivityItem`s backing `runningChildren` above — same
+   * `lifecycleState === 'running'` filter, exposed as a list (not just a
+   * count) so the Activity Bar's avatar stack shows the SAME agents the
+   * pill's number describes, rather than the broader `running` list (which
+   * mixes in queued/lifecycle-terminal spans and shell jobs).
+   */
+  runningChildItems: AgentActivityItem[]
   running: ActivityItem[]
   recentlyFinished: ActivityItem[]
+}
+
+/** True when `item` is a direct agent child whose lifecycleState is exactly 'running' — see `RunningActivity.runningChildren`'s doc comment. */
+function isRunningAgentChild(item: ActivityItem): item is AgentActivityItem {
+  return item.kind === 'agent' && item.lifecycleState === 'running'
 }
 
 /** Cap on how many finished items are retained for display (most-recent-first). */
@@ -251,13 +315,24 @@ function resolveAgent(agentId: string | undefined, agents: Agent[]): ResolvedAge
  * truth and they disagree in one real case.
  *
  * For NATIVE (non-external-CLI) delegation to a specific named target
- * agent, the backend deliberately leaves the WS frame's `agent_id` as the
- * PARENT's id, not the target's (`pkg/agent/subturn.go` ~610-641 — only
- * `DispatchKindExternalCLI` gets `agent.ID` reassigned; the comment there
- * calls native reassignment a larger refactor out of that fix's scope).
- * That makes `span.agentId` correct for untargeted delegation and for
- * external-CLI dispatch, but wrong for "delegate to agent X" when X is
- * native — it would show the parent's avatar/name instead of X's.
+ * agent, the backend used to deliberately leave the WS frame's `agent_id`
+ * as the PARENT's id, not the target's (pre-ADR-091, `pkg/agent/subturn.go`
+ * — since deleted — only `DispatchKindExternalCLI` got `agent.ID`
+ * reassigned; the comment there called native reassignment a larger
+ * refactor out of that fix's scope). That made `span.agentId` correct for
+ * untargeted delegation and for external-CLI dispatch, but wrong for
+ * "delegate to agent X" when X is native — it would show the parent's
+ * avatar/name instead of X's.
+ *
+ * ADR-091 fix lane RX-SUBTURN finding (comment-only; code unchanged):
+ * today's backend emitter, `pkg/agent/steer_frames.go`'s
+ * `deliverSubagentStart`/`deliverSubagentEnd`, sets
+ * `SubagentStartFrame.AgentId`/`SubagentEndFrame.AgentId` from
+ * `childRec.AgentID` (the real target agent) for EVERY delegation kind,
+ * not just external-CLI — so the gap this workaround exists for may no
+ * longer be present on the wire. This function's fallback logic is left
+ * unchanged (out of scope for a comment-only lane); flagged for the
+ * frontend team to verify whether the workaround below is still needed.
  *
  * Workaround: the originating `delegate` tool call (found via
  * `span.parentCallId`) carries the actual `agent_id` argument the calling
@@ -546,9 +621,12 @@ export function useRunningActivity(): RunningActivity {
       taskLabel: span.taskLabel,
       status: span.status,
       durationMs,
-      steps: resolved.agentType === '3p' ? [] : span.steps,
       finalResult: terminal?.finalResult,
       interruptReason: terminal?.reason,
+      statusLine: span.statusLine,
+      lifecycleState: span.lifecycleState,
+      childSessionId: span.childSessionId,
+      lastUpdateAt: span.lastUpdateAt,
     }
     if (isSpanRunning) {
       clearFinishedAt(span.spanId)
@@ -613,8 +691,12 @@ export function useRunningActivity(): RunningActivity {
     finishedCandidates.push({ item, time: Date.parse(verdict.judged_at), seq: finishedSeq++ })
   }
 
+  const runningChildItems = running.filter(isRunningAgentChild)
+
   return {
     runningCount: running.length,
+    runningChildren: runningChildItems.length,
+    runningChildItems,
     running,
     recentlyFinished: mergeAndCapFinished(finishedCandidates),
   }

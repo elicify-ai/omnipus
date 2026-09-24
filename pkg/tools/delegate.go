@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,210 +13,37 @@ import (
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // ADR-036 / docs/internal/specs/agent-delegation-spec.md — `delegate` is the
-// single, unified delegation tool. It replaces the formerly-separate `spawn`
-// (async/background), `run_subagent` (sync/await), and `check_spawn_status`
-// tools with one tool, one schema, and one piece of task-status state.
+// single, unified delegation tool. It replaces the formerly-separate `spawn`,
+// `run_subagent`, and `check_spawn_status` tools with one tool and one schema.
 //
-// FR-D2 (the bug this merge exists to fix): before this merge, `spawn` called
-// SubTurnSpawner.SpawnSubTurn directly in a goroutine, entirely bypassing the
-// legacy SubagentManager.tasks map that `check_spawn_status` read from —
+// FR-D2 (the bug this merge exists to fix): before this merge, `spawn` ran the
+// child turn directly in a goroutine, entirely bypassing the legacy
+// SubagentManager.tasks map that `check_spawn_status` read from —
 // checking on a spawn-created task always reported "no subagents have been
-// spawned yet." DelegateTool's own `tasks` map is now the SINGLE state store
-// both the async path writes to and `action: "status"` reads from — no
-// second, disconnected data structure exists.
+// spawned yet." DelegateTool grew its own `tasks`/`sessionIndex` maps as the
+// FR-D2 fix's SINGLE state store, keyed by a task_id the tool itself minted.
+//
+// ADR-091 superseded that store: the launcher migration (delegate_run.go's
+// executeRun/launchAndDispatch) moved dispatch onto steer.SessionLauncher —
+// the one session-launch primitive every session type now shares — which
+// writes only the durable session.LifecycleRecord, never the legacy tasks
+// map. `action:"status"` (and every other parent-side action) now reads
+// that same durable record by session_id; the tasks/sessionIndex maps and
+// their task_id addressing were deleted with the last caller that wrote
+// them, closing the FR-D2 problem this comment used to describe a
+// different way (a second, disconnected store) permanently rather than
+// reopening it.
 
-// SubTurnSpawner is an interface for spawning sub-turns.
-// This avoids circular dependency between tools and agent packages.
-type SubTurnSpawner interface {
-	SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*ToolResult, error)
-}
-
-// SubTurnConfig holds configuration for spawning a sub-turn. This is the
-// shared underlying primitive DelegateTool's async and sync paths both call
-// (Async is the only differentiator) — unchanged in shape from the
-// pre-merge spawn/run_subagent split, since pkg/agent/subturn.go converts
-// this field-by-field into its own agent.SubTurnConfig.
-type SubTurnConfig struct {
-	Model              string
-	Tools              []Tool
-	SystemPrompt       string
-	MaxTokens          int
-	Temperature        float64
-	Async              bool          // true for background delegation, false for await (blocking) delegation
-	Critical           bool          // continue running after parent finishes gracefully
-	Timeout            time.Duration // 0 = use default (5 minutes)
-	MaxContextRunes    int           // 0 = auto, -1 = no limit, >0 = explicit limit
-	ActualSystemPrompt string
-	// TargetAgentID, when non-empty, is the configured agent the sub-turn is
-	// delegating TO (e.g., a worker). When set, subturn.go resolves the
-	// delegate's soul (AgentConfig.Soul or, for seeded base agents, the
-	// compiled coreagent.GetPrompt) and uses it as the ActualSystemPrompt so
-	// the child turn runs with system=soul + user=task, uniformly across the
-	// native and external-cli executors. Empty means "delegate the parent's
-	// own agent" — the parent's own soul applies.
-	TargetAgentID   string
-	InitialMessages []providers.Message
-	// TaskLabel is the optional human-readable label for the sub-turn task (FR-H-004).
-	// Populated from delegate's "label" argument. Used in the subagent_start WS frame.
-	TaskLabel string
-	// TaskID is DelegateTool's operator-visible handle for this run (for
-	// example, "delegate-12"). It is internal correlation metadata, not child
-	// prompt content, and lets terminal notices name the exact task that ended.
-	TaskID string
-	// ResolvedMaxDepth, when non-nil, is the effective onward-delegation depth
-	// cap the delegation-policy gate already authorized this specific call
-	// against (the tighter of a matched delegation-graph edge's own Depth and
-	// the global SubTurn.MaxDepth ceiling). When set, the spawn-time depth
-	// check uses this value instead of independently re-deriving a possibly
-	// different default, so an explicit per-edge Depth is never silently
-	// overridden (#477). nil means "no override — use the spawner's own
-	// default depth resolution."
-	ResolvedMaxDepth *int
-
-	// ContextSnapshot carries the DISCRETIONARY portion of the ADR-053 D1
-	// curated context snapshot (R§8.5) — see ContextSnapshot's own doc
-	// comment. nil means no discretionary snapshot. Mirrors (and is
-	// converted 1:1 into) agent.SubTurnConfig.ContextSnapshot by
-	// AgentLoopSpawner.SpawnSubTurn — the same tools<->agent type-doubling
-	// this whole struct already exists to work around (see this type's own
-	// doc comment above).
-	ContextSnapshot *ContextSnapshot
-
-	// RequestedSkill is the ADR-072 D9 "request" mechanism (spec FR-050..056):
-	// action="run" only, an optional skill slug the parent names on the same
-	// discretionary, parent-authored channel ContextSnapshot already rides —
-	// a NAME only, never content (Alternative F in the ADR was rejected for
-	// exactly the shape of sending a skill's body across this boundary).
-	// spawnSubTurn (pkg/agent/subturn.go) resolves this against the CHILD's
-	// (execSource's) own ContextBuilder/grant — never the caller's, D9's
-	// "the gate is the receiver's, structurally, not by convention" — and:
-	//   - if granted, appends the canonical slug to the child's
-	//     processOptions.ForcedSkills so the child's first turn begins with
-	//     it loaded (the same one-shot field the human "/<skill>" command
-	//     already drives);
-	//   - if the receiver is not granted it, the delegation fails at
-	//     dispatch (before the child's first model call) with a structured
-	//     error reusing DelegationDeniedCode (FR-053) — see
-	//     ErrRequestedSkillDenied;
-	//   - if the slug resolves to nothing on any shelf visible to the
-	//     receiver, the delegation fails at dispatch with the SkillNotFoundCode
-	//     discriminator (FR-054) — see ErrRequestedSkillNotFound, distinct
-	//     from the denial above, never conflated.
-	// Empty means "no requested skill" — mechanism 1 (naming the skill in
-	// plain language inside `task`) is unaffected either way and guarantees
-	// nothing on its own (FR-055).
-	RequestedSkill string
-
-	// DelegateSessionID, when non-empty, is the ADR-053 durable session_id
-	// (S2) DelegateTool minted and persisted a `queued` LifecycleRecord
-	// under BEFORE calling Spawn — see agent.SubTurnConfig.DelegateSessionID
-	// (the sibling field this converts into) for why reusing this exact
-	// value as the child's turn/steering-queue identity matters.
-	DelegateSessionID string
-
-	// IsResume marks this dispatch as a WARM RESUME of an existing session
-	// (native `delegate follow_up` on a terminal session) rather than a
-	// brand-new mint — see agent.SubTurnConfig.IsResume (the sibling field
-	// this converts into) for the full rationale. false for every other
-	// caller (delegate.run, team, evaluator-optimizer, ...), unchanged.
-	IsResume bool
-}
-
-// ContextSnapshot is the tools-side mirror of agent.ContextSnapshot (ADR-053
-// D1/R§8.5's curated context snapshot, discretionary portion only — parent-
-// named artifact references, not contents, plus optional notes). Kept as a
-// separate type from agent.ContextSnapshot for the identical reason
-// SubTurnConfig itself is duplicated across the two packages: avoiding a
-// tools<->agent import cycle (agent already imports tools).
+// ContextSnapshot is the discretionary portion of the ADR-053 curated
+// context snapshot: parent-named artifact references, not contents, plus
+// optional notes.
 type ContextSnapshot struct {
 	References []string
 	Notes      string
-}
-
-// DelegateTaskState is the single source of truth for a background
-// (async=true) delegated task's status — written by DelegateTool's own async
-// path and read by action:"status" (FR-D2). It replaces the legacy,
-// disconnected SubagentTask/SubagentManager.tasks pair.
-type DelegateTaskState struct {
-	ID            string
-	Task          string
-	Label         string
-	AgentID       string
-	OriginChannel string
-	OriginChatID  string
-	Status        string // running | completed | failed | canceled
-	Result        string
-	Created       int64
-
-	// SessionID (ADR-057 W21b — RE-POINTED, deliberately, not left as a
-	// silent byproduct of FR-007 landing elsewhere in this change set) is
-	// the DELEGATING PARENT's own transcript session id at task-creation
-	// time — captured from ToolTranscriptSessionID(ctx) inside the caller's
-	// own tool-execution context, i.e. the caller's OWN durable session id
-	// (pkg/agent/subturn.go's TranscriptSessionID: childID, post-FR-007),
-	// NOT the spawned child's. Retained for display/back-compat only
-	// (delegateFormatTask does not currently render it, and no other
-	// consumer in this package reads it). Pre-ADR-057, this field doubled
-	// as "the session a running native task's activity snapshot is read
-	// from", because a delegated child used to write its OWN narration into
-	// its PARENT's shared transcript — that assumption broke silently the
-	// moment FR-007 gave every child its own real session, and
-	// recentActivityLines has been re-pointed at DelegateSessionID instead
-	// (FR-043; see that field's own doc comment). Empty when no transcript
-	// session context was available at creation time (e.g. a direct
-	// programmatic Execute call, as in most of this file's tests).
-	SessionID string
-	// SpawnCallID is this delegate tool call's own ID — the value a spawned
-	// child sub-turn's transcript entries carry back as
-	// session.TranscriptEntry.ParentSpawnCallID (see that field's doc
-	// comment and pkg/agent/subturn.go's parentSpawnCallID). Captured at
-	// task-creation time from ToolCallID(ctx). Used to filter SessionID's
-	// transcript down to just this task's own activity.
-	SpawnCallID string
-	// Is3P is true when this task's target agent dispatches via an external
-	// CLI runner (subagent_3p: claude-code/codex/opencode — see
-	// runner.DispatchKindExternalCLI) rather than natively inside the
-	// Omnipus agent loop. Resolved ONCE at task-creation time via
-	// DelegateAgentRegistry.IsExternalCLI, so a registry/config change
-	// mid-flight cannot flip a task's own snapshot eligibility
-	// inconsistently. By design (operator-confirmed scope for W2),
-	// external-CLI dispatch is treated as batch/report-on-completion for
-	// action:"status" purposes even though runExternalCLISubTurn's own
-	// narration DOES land in the same ParentSpawnCallID-tagged transcript
-	// entries a native task's does (see recordExternalToolCall /
-	// pkg/agent/external_dispatch.go's appendIntermediateAssistantTranscript
-	// calls) — a running Is3P task's action:"status" never attempts a live
-	// transcript snapshot regardless, and instead renders a fixed
-	// no-live-progress note.
-	Is3P bool
-
-	// DelegateSessionID is the ADR-053 durable session_id (S2) this task's
-	// child was spawned under — distinct from SessionID above. status/
-	// inbox/steer/respond/cancel/follow_up/peek all address a child by THIS
-	// id, and (ADR-057 FR-043) so does recentActivityLines: post-FR-007 a
-	// delegated child writes its OWN transcript into its OWN session
-	// (DelegateSessionID), never into SessionID (the delegating PARENT's
-	// own transcript id at dispatch time — see SessionID's own doc comment
-	// above), so reading SessionID back for a running task's activity
-	// snapshot silently found nothing the moment FR-007 landed elsewhere in
-	// this change set. Fixed here; DelegateSessionID is the only correct
-	// key for that read.
-	DelegateSessionID string
-
-	// LastStatusRead is the UnixMilli timestamp of this task's most recent
-	// action:"status" read (ADR-057 FR-045/FR-087, BDD-52) — stamped by
-	// getTaskCopy/listTaskCopies on every read, and initialized to the
-	// task's own Created time at registration so a never-polled task still
-	// ages from a real timestamp rather than from the zero value (which
-	// would read as 1970 and make it immediately eligible for eviction).
-	// evictStaleTasksLocked uses this, not Created, to decide whether a
-	// terminal task has gone stale long enough to reclaim — a task still
-	// being actively polled must never be evicted out from under a caller
-	// mid-conversation.
-	LastStatusRead int64
 }
 
 // delegateSessionIDCtxKey is the context key carrying a child turn's own
@@ -229,11 +55,10 @@ type DelegateTaskState struct {
 type delegateSessionIDCtxKey struct{}
 
 // WithDelegateSessionID returns a child context carrying the durable
-// ADR-053 session_id for the turn currently executing. Set by
-// pkg/agent/subturn.go's spawnSubTurn on the child's own turn context, so a
-// child's OWN tool calls (message_parent, and any future session-aware
-// tool) can resolve their own durable identity without conflating it with
-// the shared transcript session id.
+// ADR-053 session_id for the turn currently executing. Carried on the child's
+// own turn context, so a child's OWN tool calls (message_parent, and any
+// future session-aware tool) can resolve their own durable identity without
+// conflating it with the shared transcript session id.
 func WithDelegateSessionID(ctx context.Context, id string) context.Context {
 	if id == "" {
 		return ctx
@@ -253,7 +78,10 @@ func ToolDelegateSessionID(ctx context.Context) string {
 // via an external CLI runner (subagent_3p: claude-code/codex/opencode).
 // DelegateTool consults this at task-creation time (W2) to decide whether a
 // background task is eligible for a live in-flight transcript snapshot
-// under action:"status" — see DelegateTaskState.Is3P's doc comment.
+// under action:"status". The verdict is persisted as
+// session.LifecycleRecord.Is3P (pkg/session/lifecycle.go) and read back from
+// the durable record on every later action — ADR-091 deleted the in-process
+// DelegateTaskState this classification used to be stamped on.
 //
 // Satisfied by *agent.AgentRegistry; defined as an interface here (mirroring
 // AgentRegistryReader in handoff.go) to avoid an import cycle
@@ -322,15 +150,16 @@ type ToolCallProgressSnapshot struct {
 // Implemented by *agent.AgentLoop (ToolCallProgressForSession, turn.go) and
 // wired via SetProgressReader at DelegateTool construction time (loop.go),
 // mirroring every other tools<->agent seam this tool already has
-// (SubTurnSpawner, DelegateAgentRegistry, DelegateSessionStore) to avoid a
+// (the steer.SessionLauncher seam, DelegateAgentRegistry, DelegateSessionStore) to avoid a
 // tools<->agent import cycle: pkg/agent already imports pkg/tools, so the
 // dependency can only run tools->agent as an interface, never the reverse as
 // a concrete type.
 type DelegateProgressReader interface {
 	// ProgressForSession returns the live progress snapshot for the turn
-	// registered under sessionKey — expected to be a
-	// DelegateTaskState.DelegateSessionID — and false when no turn is
-	// registered under that key, or one is but has not yet recorded any
+	// registered under sessionKey — expected to be the delegate session id
+	// (session.LifecycleRecord.SessionID, the id `action:"run"` returns and
+	// every later action addresses) — and false when no turn is registered
+	// under that key, or one is but has not yet recorded any
 	// tool-call-argument progress.
 	ProgressForSession(sessionKey string) (ToolCallProgressSnapshot, bool)
 }
@@ -342,27 +171,7 @@ type DelegateProgressReader interface {
 type DelegateTool struct {
 	BaseTool
 
-	spawner      SubTurnSpawner
-	defaultModel string
-	maxTokens    int
-	temperature  float64
-
-	// spawnMarker, when non-nil, is the DelegateSpawnMarker seam executeAsync
-	// calls (synchronously, before dispatching the async spawn goroutine) to
-	// record that a delegate spawn is genuinely imminent for the delegating
-	// parent's own identity. Wired automatically by SetSpawner via a type
-	// assertion against the concrete spawner passed in — see SetSpawner's
-	// doc comment. nil is a silent no-op (no marker recorded), matching
-	// every other optional capability on this tool.
-	spawnMarker DelegateSpawnMarker
-
-	// asyncWG tracks the detached goroutines executeAsync launches. Background
-	// delegation is deliberately fire-and-forget for the CALLER (the parent
-	// turn moves on immediately — see executeAsync's Critical:true comment),
-	// but the goroutine keeps writing to the lifecycle store after the caller
-	// returns. Anything that tears down the stores those writes target must be
-	// able to wait for them first; WaitForAsyncTasks is that seam.
-	asyncWG sync.WaitGroup
+	launcher steer.SessionLauncher
 
 	// getAgentRegistry, when set, resolves the live agent registry used to
 	// classify a delegation target as native or external-CLI at
@@ -413,40 +222,12 @@ type DelegateTool struct {
 	// SetOwnershipWalkMaxDepth and defaultOwnershipWalkMaxDepth.
 	ownershipWalkMaxDepth int
 
-	mu     sync.Mutex
-	tasks  map[string]*DelegateTaskState
-	nextID int
-	// sessionIndex maps a DelegateSessionID (ADR-053 durable id) back to its
-	// legacy taskID (t.tasks' key), so status/inbox/etc. can resolve either
-	// the legacy task_id or the new session_id to the same DelegateTaskState.
-	sessionIndex map[string]string
-	// taskRetentionCap/taskRetentionTTL bound t.tasks/t.sessionIndex
-	// (FR-045/FR-087, BDD-52) — see SetTaskRetentionPolicy,
-	// defaultDelegateTaskRetentionCap and defaultDelegateTaskTTL.
-	taskRetentionCap int
-	taskRetentionTTL time.Duration
-
 	// delegationDenyBackground applies the full delegation-policy gate
 	// (FR-6.2: trust set + mode("background") + depth) for async=true calls.
 	// This is the ONLY gate for the background mode (ADR-037 retired the
 	// legacy trust-only allowlistCheck fallback — it was only ever consulted
 	// when this was nil, which never happens in production wiring).
 	delegationDenyBackground func(ctx context.Context, targetAgentID string) *DelegationDenial
-	// delegationDenyAwait applies the full delegation-policy gate (FR-6.2:
-	// trust set + mode("await") + depth) for async=false calls. This is the
-	// ONLY gate for the await mode (ADR-037 retired the legacy trust-only
-	// delegateChecker fallback — same reasoning as delegationDenyBackground).
-	delegationDenyAwait func(ctx context.Context, targetAgentID string) *DelegationDenial
-
-	// delegationDepthResolver, when non-nil, resolves the effective onward-
-	// delegation depth cap for a specific target — the SAME cap the deny
-	// checker above already authorized this call against. Returns nil for "no
-	// override" (fall back to the spawner's own default depth resolution) or
-	// a pointer to the resolved cap. Threaded into SubTurnConfig.ResolvedMaxDepth
-	// so the spawn-time depth check never independently re-derives a different
-	// number than the one this gate already authorized (#477). Field name and
-	// setter name are pinned — do not rename (relied on by pkg/agent/loop.go).
-	delegationDepthResolver func(ctx context.Context, targetAgentID string) *int
 
 	// --- ADR-053 §5.1 corrected delegate action set (run|status|inbox|
 	// inbox_ack|steer|respond|cancel|follow_up|peek) ---
@@ -460,26 +241,22 @@ type DelegateTool struct {
 	// steering-queue scope (generalizes pkg/agent/steering.go's existing
 	// mechanism — see DelegateSteeringSink's doc comment).
 	steering DelegateSteeringSink
-	// cancelSoft/cancelHard hold two-argument closures over AgentLoop's
-	// collapsed ADR-057 W13 entry points, Interrupt/InterruptSessionHard
-	// (pkg/agent/steering.go — each now takes a mandatory, explicit
-	// InterruptScope), wired in pkg/agent/session_messaging_wire.go as
-	// `func(sessionKey, hint string) ([]string, error) { return
-	// al.Interrupt(sessionKey, ScopeSelfOnly, hint) }` (soft) and the
-	// InterruptSessionHard analogue (hard) — both pinned to ScopeSelfOnly,
-	// never ScopeSubtree, matching this field's own load-bearing point
-	// below: a direct activeTurnStates.Load(sessionKey) targeting exactly
-	// ONE delegation, not a subtree sweep. (Pre-W13 these wrapped the now-
-	// retired two-argument InterruptBySessionKey/InterruptBySessionKeyHard
-	// directly — the field TYPE here never changed, only what it's wired
-	// to.) Injected to avoid a tools<->agent import cycle, matching
-	// every other AgentLoop capability this tool already consumes via a
-	// setter (SetSpawner, etc.). Returns the canceled turn's ID as a
-	// single-element descendants slice on a hit, nil descendants on a miss
-	// (target already terminated) — executeCancel uses that miss signal to
-	// detect a TOCTOU window.
-	cancelSoft func(sessionKey, hint string) ([]string, error)
-	cancelHard func(sessionKey, hint string) ([]string, error)
+	// cancelSoft/cancelHard hold closures over ADR-091's durable Stop
+	// cascade, AgentLoop.cancelDelegatedSubtree (pkg/agent/
+	// steer_delegate_cancel.go), wired in
+	// pkg/agent/session_messaging_wire.go. Injected to avoid a
+	// tools<->agent import cycle, matching every other AgentLoop capability
+	// this tool consumes via a setter (SetSpawner, etc.).
+	//
+	// They return every session id the stop REACHED — the named session plus
+	// every descendant found through the durable parent-child edge — and an
+	// empty slice when it reached nothing, which is the miss signal
+	// executeCancel uses to detect its TOCTOU window. They previously
+	// wrapped the live-turn interrupt pair (Interrupt/InterruptSessionHard),
+	// which reached nothing at all for a session whose turn had not started
+	// and missed a running child's own grandchildren; see SetCancelHooks.
+	cancelSoft func(sessionKey string, by steer.Principal, hint string) ([]string, error)
+	cancelHard func(sessionKey string, by steer.Principal, hint string) ([]string, error)
 	// cancelGrace is the cooperative-stop grace window before the hard
 	// RequestCancel backstop fires (session_messaging.cancel_grace,
 	// FR-195). Defaults to defaultCancelGrace.
@@ -500,38 +277,20 @@ type DelegateTool struct {
 	sessionMessagingEnabled func() bool
 	sessionMessagingWired   atomic.Bool
 
-	// requireParentAgentID, when set via SetRequireParentAgentID, is the
-	// live-read reader for tools.delegate.require_parent_agent_id
-	// (R2-MAJ-015) — the operator kill switch for the FR-015 fail-closed
-	// parent-agent-id guard in Execute's lifecycle-mint block.
+	// requireParentAgentID is WRITE-ONLY on this type: SetRequireParentAgentID
+	// assigns it and nothing reads it. It used to back the FR-015 fail-closed
+	// parent-agent-id guard in this tool's own lifecycle-mint block; ADR-091
+	// moved that mint onto the launcher, and the guard now lives — and reads
+	// the same key directly — at
+	// pkg/agent/steer_launcher.go::SteerLauncher.Launch, which calls
+	// config.DelegateToolConfig.EffectiveRequireParentAgentID() itself. The
+	// resolver that was this field's only consumer has been deleted.
 	//
-	// It is a func() bool, NOT a captured bool, for two independent reasons:
-	//
-	//  1. Live reads. An operator flipping the key must take effect without a
-	//     restart, exactly like sessionMessagingEnabled above. That matters
-	//     more here than almost anywhere else: the guard's failure mode is
-	//     "every delegate call in the install errors", and needing a restart
-	//     to escape it defeats the point of shipping an escape hatch.
-	//  2. Late binding. Gateway boot assigns several of this tool's
-	//     dependencies AFTER the wiring pass that constructs it runs, so a
-	//     dependency read eagerly at wiring time can be nil (or stale)
-	//     forever while registration still looks perfectly correct. Resolving
-	//     through the closure on every call sidesteps the ordering question
-	//     entirely rather than depending on getting it right.
-	//
-	// UNWIRED (nil) resolves to TRUE — the fail-closed posture, matching
-	// config.DelegateToolConfig.EffectiveRequireParentAgentID's own default
-	// for an unset key. Deliberately NOT the sessionMessagingWired treatment:
-	// there, unwired and "wired to false" must be distinguishable because
-	// fail-closed is the SAFE end of that switch and an unwired tool must not
-	// be granted the plane. Here the safe end and the unwired default are the
-	// SAME value (true = keep refusing), so an extra wired flag would carry
-	// no information — any path that reaches this resolver without a wired
-	// closure gets the strict guard, which is the correct answer.
+	// The field and SetRequireParentAgentID survive ONLY because
+	// pkg/agent/loop_wire.go still calls the setter; all three must be
+	// deleted in one change by whoever owns loop_wire.go. Do not build
+	// anything new on this field — read the config key directly instead.
 	requireParentAgentID func() bool
-
-	snapshotMaxBytes int
-	snapshotMaxRefs  int
 
 	// steerRateMu/steerRateWindows back the steer/respond rate cap (ADR-053
 	// §Contract Surface "Caps": 6/min, 16 KiB — session_messaging.steer_rate/
@@ -548,23 +307,28 @@ type DelegateTool struct {
 	now func() time.Time
 }
 
-// Compile-time check: DelegateTool implements AsyncExecutor.
-var _ AsyncExecutor = (*DelegateTool)(nil)
+// SetSessionLauncher installs ADR-091's one session-launch primitive. The
+// delegate run front refuses to launch while this dependency is absent.
+func (t *DelegateTool) SetSessionLauncher(launcher steer.SessionLauncher) {
+	t.launcher = launcher
+}
 
 // Compile-time check: DelegateTool implements JobSessionResolver (#583).
 var _ JobSessionResolver = (*DelegateTool)(nil)
 
-// NewDelegateTool constructs a DelegateTool. defaultModel/maxTokens/temperature
-// mirror the values the retired SubagentManager used to carry for its callers
-// (agent.Model / agent.MaxTokens / agent.Temperature at the call site).
-func NewDelegateTool(defaultModel string, maxTokens int, temperature float64) *DelegateTool {
+// NewDelegateTool constructs a DelegateTool.
+//
+// The three parameters are vestigial: they mirrored the values the retired
+// SubagentManager carried for its callers (agent.Model / agent.MaxTokens /
+// agent.Temperature at the call site), and the fields they were stored in
+// were never read again once ADR-091 moved dispatch onto
+// steer.SessionLauncher, which resolves the child's model and sampling
+// parameters from the TARGET agent's own configuration. The fields are
+// deleted; the parameters survive only until pkg/agent/loop_wire.go and
+// pkg/tools/general_builtin_catalog.go — the two production call sites, both
+// outside this lane's ownership — drop them.
+func NewDelegateTool(_ string, _ int, _ float64) *DelegateTool {
 	return &DelegateTool{
-		defaultModel:     defaultModel,
-		maxTokens:        maxTokens,
-		temperature:      temperature,
-		tasks:            make(map[string]*DelegateTaskState),
-		sessionIndex:     make(map[string]string),
-		nextID:           1,
 		cancelGrace:      defaultCancelGrace,
 		now:              time.Now,
 		steerRateWindows: make(map[string][]time.Time),
@@ -627,32 +391,14 @@ func (t *DelegateTool) sessionMessagingPlaneEnabled() bool {
 	return t.sessionMessagingEnabled()
 }
 
-// SetRequireParentAgentID installs the live reader for
-// tools.delegate.require_parent_agent_id (R2-MAJ-015) — the operator kill
-// switch for the FR-015 fail-closed parent-agent-id guard. See the
-// requireParentAgentID field doc for why this is a closure and not a bool.
-//
-// The caller is expected to pass a closure that resolves the key through
-// config.DelegateToolConfig.EffectiveRequireParentAgentID, e.g.
-//
-//	tool.SetRequireParentAgentID(func() bool {
-//	    return al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID()
-//	})
-//
-// Passing nil restores the unwired default (true / strict), so this is safe
-// to call unconditionally from a re-runnable wiring pass.
+// SetRequireParentAgentID stores a reader for
+// tools.delegate.require_parent_agent_id (R2-MAJ-015) that this tool no
+// longer consults — see the requireParentAgentID field doc. The FR-015
+// guard it used to feed now reads the key itself at
+// pkg/agent/steer_launcher.go::SteerLauncher.Launch. Retained only so
+// pkg/agent/loop_wire.go keeps compiling; delete both together.
 func (t *DelegateTool) SetRequireParentAgentID(fn func() bool) {
 	t.requireParentAgentID = fn
-}
-
-// parentAgentIDRequired resolves the FR-015 guard's strictness for this call.
-// An unwired tool resolves TRUE (strict) — see the requireParentAgentID field
-// doc for why this one does not need the sessionMessagingWired treatment.
-func (t *DelegateTool) parentAgentIDRequired() bool {
-	if t.requireParentAgentID == nil {
-		return true
-	}
-	return t.requireParentAgentID()
 }
 
 // isSessionMessagingAction reports whether a delegate action touches the
@@ -667,42 +413,39 @@ func isSessionMessagingAction(action string) bool {
 	return false
 }
 
-// SetCancelHooks installs the soft (cooperative) and hard (RequestCancel
-// backstop) cancel functions. ADR-057 W13 collapsed the four legacy
-// interrupt entry points (InterruptSession, InterruptSessionHard,
-// InterruptBySessionKey, InterruptBySessionKeyHard) into two —
-// AgentLoop.Interrupt and AgentLoop.InterruptSessionHard
-// (pkg/agent/steering.go) — each now taking a mandatory, explicit
-// InterruptScope. The canonical wiring, in
-// pkg/agent/session_messaging_wire.go, is a pair of two-argument closures
-// pinned to ScopeSelfOnly: `func(sessionKey, hint string) ([]string, error)
-// { return al.Interrupt(sessionKey, ScopeSelfOnly, hint) }` (soft) and the
-// InterruptSessionHard analogue (hard) — NEVER ScopeSubtree, and never a
-// closure over the OLD, now-retired InterruptBySessionKey(Hard) pair
-// (still named here only for historical contrast). ScopeSubtree would
-// widen a single targeted cancel into a whole-subtree sweep, exactly the
-// dual-namespace-style bug this hook's own WARNING below exists to keep
-// closed (see pkg/agent/session_messaging_wire_adr057_test.go's
-// TestSetCancelHooks_ScopeSelfOnlyNotSubtree) — a future "fixing
-// consistency" edit swapping in ScopeSubtree here would silently
-// reintroduce it, unless a scope-aware regression test catches it, since
-// the compiler cannot: soft/hard keep the same
-// func(string, string) ([]string, error) signature regardless of which
-// scope the wiring closure captures.
+// SetCancelHooks installs the soft (cooperative) and hard (immediate) stop
+// functions. Each returns the session ids the stop actually REACHED, which is
+// how executeCancel tells "I stopped something" from "there was nothing to
+// stop".
+//
+// The canonical wiring (pkg/agent/session_messaging_wire.go) is a pair of
+// closures over `AgentLoop.cancelDelegatedSubtree`, ADR-091's durable Stop
+// cascade — the same one a human's Stop uses. Read that function's doc
+// comment before changing this: the live-turn interrupt pair
+// (Interrupt/InterruptSessionHard with ScopeSubtree) that used to be wired
+// here could not stop a QUEUED worker at all and, after the sub-turn path was
+// deleted, no longer reached a running worker's own grandchildren either.
+// Neither failure was visible to the compiler or to this signature, so do not
+// "simplify" the wiring back to a turn-registry interrupt.
+//
+// `by` is the principal the stop is recorded against — it lands on the
+// durable Stop marker (session.Stop.By, I-1) and is what the UI and the audit
+// trail show as who stopped the session. executeCancel derives it from
+// verifyCallerPrincipal, never manufactures it.
 //
 // WARNING — the hook MUST be invoked with the delegate's sessionKey
 // (== delegateSessionID, the caller-facing id this tool returns from run and
 // accepts on every subsequent cancel/steer/respond/peek), NEVER the parent
 // chat's transcriptSessionID/routingSessionID. The two id spaces are
-// deliberately distinct for a delegated sub-turn (see
+// deliberately distinct for a delegated child (see
 // turnState.routingSessionID's own doc comment, pkg/agent/turn.go — the
 // ROUTING id, not the transcript id, is what a chat-wide Stop cascades via)
 // — sessionKey is the unique per-delegation address, unrelated to either.
 // executeCancel passes its session_id argument here verbatim — that
 // argument IS the delegateSessionID by contract.
 func (t *DelegateTool) SetCancelHooks(
-	soft func(sessionKey, hint string) ([]string, error),
-	hard func(sessionKey, hint string) ([]string, error),
+	soft func(sessionKey string, by steer.Principal, hint string) ([]string, error),
+	hard func(sessionKey string, by steer.Principal, hint string) ([]string, error),
 ) {
 	t.cancelSoft = soft
 	t.cancelHard = hard
@@ -714,15 +457,6 @@ func (t *DelegateTool) SetCancelGrace(d time.Duration) {
 	if d > 0 {
 		t.cancelGrace = d
 	}
-}
-
-// SetSnapshotCaps overrides the curated context snapshot's discretionary-
-// portion caps (session_messaging config — snapshot_max_bytes/
-// snapshot_max_refs, R§8.5). Zero/negative values fall back to the ADR
-// §Contract Surface defaults.
-func (t *DelegateTool) SetSnapshotCaps(maxBytes, maxRefs int) {
-	t.snapshotMaxBytes = maxBytes
-	t.snapshotMaxRefs = maxRefs
 }
 
 // SetClock overrides the tool's time source for deterministic tests.
@@ -743,45 +477,10 @@ func (t *DelegateTool) SetSteerCaps(ratePerMinute, bodyBytes int) {
 // DelegateSteeringSink lands a parent->child steer/respond message in the
 // child's steering-queue scope at its next tool boundary. Satisfied by
 // *agent.AgentLoop (via its EnqueueSteeringMessage wrapper — see
-// pkg/agent/steering.go); defined as an interface here (mirroring
-// SubTurnSpawner above) to avoid a tools<->agent import cycle.
+// pkg/agent/steering.go); defined as an interface here to avoid a
+// tools<->agent import cycle.
 type DelegateSteeringSink interface {
 	EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error
-}
-
-// DelegateSpawnMarker lets DelegateTool record — synchronously, on the
-// dispatching goroutine, BEFORE the goroutine that will actually spawn the
-// child sub-turn is even launched — that a delegate spawn is genuinely about
-// to happen for a given identity (sessionID, or the (channel, chatID) Tier B
-// fallback form). This exists to close a real gap: a Stop click's
-// RequestCancel decides whether to arm a pre-registration cancel latch via
-// turnImminentForIdentity (pkg/agent/cancel_prearm.go), whose ONLY
-// production evidence source is al.sessionWorkers — populated exclusively
-// by the top-level inbound-message dispatch loop. A delegate sub-turn NEVER
-// goes through that loop (executeAsync below dispatches straight to
-// SpawnSubTurn on a bare goroutine), so without this marker, a Stop landing
-// between "the delegating parent's own turn finished" and "the child has
-// registered" finds no active turn AND no dispatcher evidence, and the
-// cancel is silently lost — precisely the bug this closes.
-//
-// Satisfied by *agent.AgentLoopSpawner (pkg/agent/subturn.go), the SAME
-// concrete type already passed to SetSpawner as a SubTurnSpawner — see
-// SetSpawner's own doc comment for how the two interfaces are wired
-// together from that one call. Defined as a SEPARATE interface (not folded
-// into SubTurnSpawner itself) so a test-only SubTurnSpawner mock (this
-// package's own tests construct several) is never forced to implement a
-// marker method it has no use for; DelegateTool treats an unwired marker
-// (nil) as a silent no-op, matching every other optional capability this
-// tool already accepts via a setter (cancelSoft/cancelHard,
-// sessionMessagingEnabled, etc.).
-//
-// Deliberately has NO Clear method: clearing the marker is entirely
-// pkg/agent's own responsibility (spawnSubTurn clears it the instant the
-// child registers, or on any early return that never reaches registration —
-// see subturn.go's pendingSpawnKeysForThisCall/registeredForCancel), which
-// never needs to cross the tools<->agent boundary at all.
-type DelegateSpawnMarker interface {
-	MarkPendingDelegateSpawn(sessionID, channel, chatID string)
 }
 
 // defaultCancelGrace is the cooperative-stop grace window before the hard
@@ -789,49 +488,9 @@ type DelegateSpawnMarker interface {
 // (session_messaging.cancel_grace default, FR-195).
 const defaultCancelGrace = 5 * time.Second
 
-// WaitForAsyncTasks blocks until every in-flight background (async=true)
-// delegation goroutine has finished writing its terminal lifecycle state.
-//
-// Background delegation is fire-and-forget for the CALLER by design, so the
-// goroutine outlives the Execute call that started it and keeps writing to the
-// lifecycle store afterwards. Any caller that is about to tear down the
-// storage those writes target MUST wait here first, or the writes race the
-// teardown. Tests rooted at t.TempDir() are the primary case (the temp dir is
-// removed the moment the test body returns); a graceful-shutdown path that
-// swaps stores would be another.
-//
-// This does NOT cancel anything — it only waits. Cancellation is the caller's
-// ctx, which the goroutine already honors.
-func (t *DelegateTool) WaitForAsyncTasks() {
-	t.asyncWG.Wait()
-}
-
-// SetSpawner sets the SubTurnSpawner used for both async and sync delegation.
-//
-// If spawner ALSO implements DelegateSpawnMarker (as *agent.AgentLoopSpawner
-// does, in the real production wiring — pkg/agent/subturn.go), it is
-// automatically installed as this tool's pending-spawn marker too, via a
-// plain interface type assertion. This is a deliberate "one setter wires
-// both capabilities" choice, not an oversight: production has exactly one
-// real SubTurnSpawner implementation and it always supports marking, so a
-// second SetSpawnMarker call at every wiring site would be pure
-// boilerplate; a test-only SubTurnSpawner mock that does NOT implement
-// DelegateSpawnMarker simply leaves t.spawnMarker nil (the type assertion's
-// ok is false), which is the correct, harmless "no marker configured"
-// behavior for a test that never exercises this path. Calling SetSpawner
-// again with a spawner that does NOT implement the marker interface clears
-// any previously-wired marker rather than leaving a stale one from an
-// earlier call — this setter is the single source of truth for both
-// fields, never a partial update.
-func (t *DelegateTool) SetSpawner(spawner SubTurnSpawner) {
-	t.spawner = spawner
-	marker, _ := spawner.(DelegateSpawnMarker)
-	t.spawnMarker = marker
-}
-
 // SetAgentRegistry installs the live agent-registry lookup (W2) DelegateTool
 // uses at task-creation time to classify a delegation target as native or
-// external-CLI (DelegateTaskState.Is3P). getRegistry is called at
+// external-CLI (persisted as session.LifecycleRecord.Is3P). getRegistry is called at
 // task-creation time, not construction time, so hot reloads are reflected
 // automatically — see the getAgentRegistry field doc.
 func (t *DelegateTool) SetAgentRegistry(getRegistry func() DelegateAgentRegistry) {
@@ -866,39 +525,17 @@ func (t *DelegateTool) SetSessionManager(sm *SessionManager) {
 // defaultOwnershipWalkMaxDepth bounds the ancestor-chain walk
 // verifyCallerOwnsSession performs (FR-039/BDD-43) when
 // SetOwnershipWalkMaxDepth is never called. pkg/tools cannot reference
-// pkg/agent's own safety-backstop delegation-depth default
-// (defaultMaxSubTurnDepth, currently 3) directly — that package boundary
-// already exists for every other AgentLoop capability this tool consumes
-// via a setter (see delegationDepthResolver) — so this is a same-valued,
-// independently-declared constant, not a shared symbol.
+// pkg/agent's own safety-backstop delegation-depth default directly, so this
+// is a same-valued, independently-declared constant.
 const defaultOwnershipWalkMaxDepth = 3
 
 // SetOwnershipWalkMaxDepth overrides the ancestor-chain walk's depth bound
 // (FR-039). Zero/negative values fall back to defaultOwnershipWalkMaxDepth.
 //
-// PRODUCTION WIRING GAP (flagged, not fixed, by this comment): unlike
-// delegationDepthResolver (SetDelegationDepthResolver, wired in
-// pkg/agent/loop.go alongside the deny-checker setters for this same
-// delegateTool), nothing in the production call graph calls this setter —
-// its only callers repo-wide are this package's own tests. Onward-
-// delegation depth is fully operator-configurable
-// (cfg.Agents.Defaults.SubTurn.MaxDepth — pkg/agent/delegation_depth.go's
-// buildDelegationDepthResolver reads this exact same field as its
-// globalDepthCap), but this walk's bound stays hardcoded at
-// defaultOwnershipWalkMaxDepth (3) regardless of that config. An operator
-// who raises max_depth beyond 3 gets cancel/steer/peek/respond/follow_up
-// ownership errors on a legitimate deeper descendant that are
-// indistinguishable from a real cross-tenant attempt. The fix is a
-// one-line call in pkg/agent/loop.go, right after the existing
-// SetDelegationDepthResolver wiring for this same delegateTool
-// (currently ~line 1787, inside registerSharedTools):
-//
-//	delegateTool.SetOwnershipWalkMaxDepth(cfg.Agents.Defaults.SubTurn.MaxDepth)
-//
-// (n<=0 already no-ops back to today's default via this setter, so that
-// call is safe unconditionally — an unset config leaves current behavior
-// unchanged.) Not made here: pkg/agent/loop.go is outside this file's
-// ownership for this change.
+// Production wiring resolves performance.max_delegation_depth through the
+// shared effective-depth function before calling this setter. The ownership
+// walk and delegation authorization therefore use the same bound; n<=0 keeps
+// the local safety default for isolated callers.
 func (t *DelegateTool) SetOwnershipWalkMaxDepth(n int) {
 	if n > 0 {
 		t.ownershipWalkMaxDepth = n
@@ -912,124 +549,6 @@ func (t *DelegateTool) ownershipMaxDepth() int {
 	return defaultOwnershipWalkMaxDepth
 }
 
-// defaultDelegateTaskRetentionCap/defaultDelegateTaskTTL bound
-// t.tasks/t.sessionIndex (FR-045/FR-087, BDD-52) when
-// SetTaskRetentionPolicy is never called: an install that runs many
-// delegations over a long uptime must not grow these maps without bound.
-const (
-	defaultDelegateTaskRetentionCap = 1000
-	defaultDelegateTaskTTL          = time.Hour
-)
-
-// SetTaskRetentionPolicy overrides the retention bound (C, FR-087) and TTL
-// (T, FR-045) governing t.tasks/t.sessionIndex eviction. Zero/negative
-// values fall back to the defaults above.
-//
-// Parameter named retentionCap, not cap: the predeclared built-in `cap()`
-// must stay callable unshadowed inside this function's own body (and any
-// future edit to it) — golangci-lint's predeclared check flags a parameter
-// sharing that name.
-func (t *DelegateTool) SetTaskRetentionPolicy(retentionCap int, ttl time.Duration) {
-	if retentionCap > 0 {
-		t.taskRetentionCap = retentionCap
-	}
-	if ttl > 0 {
-		t.taskRetentionTTL = ttl
-	}
-}
-
-// taskCap returns the configured retention bound (C, FR-087) —
-// evictStaleTasksLocked's second pass enforces it.
-func (t *DelegateTool) taskCap() int {
-	if t.taskRetentionCap > 0 {
-		return t.taskRetentionCap
-	}
-	return defaultDelegateTaskRetentionCap
-}
-
-func (t *DelegateTool) taskTTL() time.Duration {
-	if t.taskRetentionTTL > 0 {
-		return t.taskRetentionTTL
-	}
-	return defaultDelegateTaskTTL
-}
-
-// isTerminalDelegateStatus reports whether status is one of the three
-// terminal DelegateTaskState.Status values eviction is scoped to
-// (FR-045/FR-087) — a "running" task is never evicted regardless of age.
-func isTerminalDelegateStatus(status string) bool {
-	switch status {
-	case "completed", "failed", "canceled":
-		return true
-	}
-	return false
-}
-
-// evictStaleTasksLocked removes terminal DelegateTaskState entries whose
-// last action:"status" read (getTaskCopy stamps LastStatusRead on a
-// targeted single-task read; a never-polled task ages from its own Created
-// time) is older than the configured TTL (FR-045), keeping
-// t.tasks/t.sessionIndex bounded (FR-087, BDD-52) without evicting a task
-// still within its TTL window (BDD-52's "But" clause, test #93) — which
-// would otherwise break a caller's next action:"status" poll for it.
-// Callers MUST already hold t.mu. Runs as part of the tool's own
-// bookkeeping (every new task registration in executeAsync/executeSync) —
-// FR-045 requires no external caller/ticker, and this satisfies it without
-// adding a goroutine to manage.
-//
-// Second pass — FR-087's cap (C), previously dead code: a fleet of terminal
-// tasks that are all still individually within their own TTL window (e.g. a
-// caller polling every one of them faster than TTL elapses) would otherwise
-// grow t.tasks/t.sessionIndex without bound regardless of the configured
-// retention cap, since the TTL sweep above is the ONLY mechanism that ran
-// before this fix (taskCap had no other reference in the repo). When the
-// map is still over taskCap() after the TTL sweep, evict the
-// LEAST-RECENTLY-READ terminal tasks first until at/under cap — the same
-// "actively polled survives" ordering as the TTL sweep (a task with a
-// fresh LastStatusRead is evicted last, so an in-progress poll loop is
-// never starved out from under the caller). Running tasks are NEVER
-// evicted by either mechanism (isTerminalDelegateStatus), so the cap is a
-// best-effort bound when running tasks alone already exceed it.
-func (t *DelegateTool) evictStaleTasksLocked() {
-	cutoff := t.now().Add(-t.taskTTL())
-	for id, st := range t.tasks {
-		if !isTerminalDelegateStatus(st.Status) {
-			continue
-		}
-		if time.UnixMilli(st.LastStatusRead).After(cutoff) {
-			continue
-		}
-		delete(t.tasks, id)
-		if st.DelegateSessionID != "" {
-			delete(t.sessionIndex, st.DelegateSessionID)
-		}
-	}
-
-	limit := t.taskCap()
-	if len(t.tasks) <= limit {
-		return
-	}
-	type terminalAge struct {
-		id   string
-		read int64
-	}
-	terminal := make([]terminalAge, 0, len(t.tasks))
-	for id, st := range t.tasks {
-		if isTerminalDelegateStatus(st.Status) {
-			terminal = append(terminal, terminalAge{id: id, read: st.LastStatusRead})
-		}
-	}
-	sort.Slice(terminal, func(i, j int) bool { return terminal[i].read < terminal[j].read })
-	excess := len(t.tasks) - limit
-	for i := 0; i < excess && i < len(terminal); i++ {
-		id := terminal[i].id
-		if st, ok := t.tasks[id]; ok && st.DelegateSessionID != "" {
-			delete(t.sessionIndex, st.DelegateSessionID)
-		}
-		delete(t.tasks, id)
-	}
-}
-
 // SetDelegationDenyCheckerBackground installs the full delegation-policy gate
 // (FR-6.2: trust set + mode("background") + depth) applied when async=true.
 // Mirrors the pre-merge SpawnTool.SetDelegationDenyChecker exactly.
@@ -1039,21 +558,23 @@ func (t *DelegateTool) SetDelegationDenyCheckerBackground(
 	t.delegationDenyBackground = check
 }
 
-// SetDelegationDenyCheckerAwait installs the full delegation-policy gate
-// (FR-6.2: trust set + mode("await") + depth) applied when async=false.
-// Mirrors the pre-merge SubagentTool.SetDelegationDenyChecker exactly.
-func (t *DelegateTool) SetDelegationDenyCheckerAwait(
-	check func(ctx context.Context, targetAgentID string) *DelegationDenial,
-) {
-	t.delegationDenyAwait = check
-}
-
-// SetDelegationDepthResolver installs the effective-depth-cap resolver (#477).
-// See the delegationDepthResolver field doc. Name pinned — relied on by
-// pkg/agent/loop.go's registration wiring.
-func (t *DelegateTool) SetDelegationDepthResolver(resolve func(ctx context.Context, targetAgentID string) *int) {
-	t.delegationDepthResolver = resolve
-}
+// DelegateVsTaskVsPlanGuidance is the shared "which of the three do I reach
+// for?" paragraph every front door to the same delegation primitive shows the
+// model: `delegate` (this file), `create_plan` (plan.go) and `create_task`
+// (task.go). It was pasted verbatim into all three Description() methods, so
+// a wording fix landed in one and silently disagreed with the other two —
+// three descriptions of one decision is exactly the drift this const exists
+// to prevent. Package-level and exported-shaped on purpose: plan.go and
+// task.go are in this same package and must concatenate THIS value rather
+// than their own copy.
+const DelegateVsTaskVsPlanGuidance = "Choosing between these: delegate hands work to another agent now and returns immediately — " +
+	"use it when you need the result inside this conversation. create_task files work as a card " +
+	"on the board that runs on its own and is judged against its goal — use it for work that " +
+	"outlives this conversation or that someone should see. A plan is for long-running, complex " +
+	"implementations and higher-level planning: several tasks with an order and dependencies " +
+	"between them, and an agent working on one of those tasks can itself delegate further. If the " +
+	"work is a single lookup or one action you can do yourself, just do it — starting a child " +
+	"costs time and one of a limited number of concurrent slots. "
 
 func (t *DelegateTool) Name() string {
 	return "delegate"
@@ -1061,19 +582,20 @@ func (t *DelegateTool) Name() string {
 
 func (t *DelegateTool) Description() string {
 	return "Delegate a task to a subagent, and control/monitor it afterward. " +
+		DelegateVsTaskVsPlanGuidance +
 		"For a goal with two or more independent parts meant to run in parallel (for example several " +
 		"files or deliverables written by different agents), prefer a plan over several parallel run " +
 		"calls: load create_plan and execute_plan with ToolSearch (if your policy allows them). A plan's " +
 		"members declare write_sets that plan-lint checks for overlap before anything runs, and the whole " +
 		"plan is judged against one Definition of Done and can be stopped as a unit; parallel delegate " +
 		"calls get no overlap check. Delegate directly for a single self-contained piece of work. " +
-		"action=\"run\" (default) delegates a new task — by default in the background " +
-		"(async=true), returning immediately with a task_id/session_id; set async=false to " +
-		"block and receive the result inline. A delegation is force-cancelled after " +
-		"timeout_seconds (default 300s / 5 min) if it has not finished by then. " +
-		"action=\"status\" checks on a previously-delegated task/session; with no " +
-		"task_id/session_id given, it lists all tasks currently visible to you instead — " +
-		"this is the tool's discovery affordance for what you have outstanding. " +
+		"action=\"run\" (default) launches a session. It returns at once with the child's session_id " +
+		"and whether it is running or queued (with its place in line). You get a message when the " +
+		"child finishes, asks a question, or hits a problem. Check on it with delegate status, " +
+		"redirect it with delegate steer, stop it with delegate cancel. A delegation is " +
+		"force-cancelled after timeout_seconds (default 1800s / 30 min) if it has not finished by then. " +
+		"action=\"status\" checks on a previously-delegated session by its session_id — the only way " +
+		"to address a child; use list_jobs to see everything you have outstanding. " +
 		"action=\"inbox\" drains messages the child has pushed back to you (progress/" +
 		"checkpoint/artifact/blocker/question/handback); action=\"inbox_ack\" acknowledges " +
 		"them. action=\"steer\" injects an instruction at the child's next tool boundary " +
@@ -1092,6 +614,48 @@ func (t *DelegateTool) Description() string {
 func (t *DelegateTool) Scope() ToolScope { return ScopeCore }
 
 func (t *DelegateTool) Category() ToolCategory { return CategoryDelegation }
+
+// delegateCriterionItemSchema is the per-item schema shared by the
+// top-level "criteria"/"dod" parameters below — the exact object shape
+// parseDelegateCriterion (delegate_goal.go) accepts. It is a NARROWER subset
+// of create_task/create_plan's own criteria/dod item schema (task.go/plan.go):
+// delegate's goal only accepts kind "prose" or "check" — there is no
+// "behavior" kind here, unlike the task/plan tools' criteria/dod, so it is
+// not mirrored byte-for-byte, only shape-for-shape on the fields delegate's
+// own parser actually reads.
+func delegateCriterionItemSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"text": map[string]any{
+				"type":        "string",
+				"description": "The criterion statement (required).",
+			},
+			"kind": map[string]any{
+				"type": "string",
+				"enum": []string{"prose", "check"},
+				"description": "prose: a free-text statement judged when the child's work is checked. " +
+					"check: a shell command run to verify it. Optional — inferred from the payload (a " +
+					"check payload => check, otherwise prose); an explicit kind mismatching its payload " +
+					"is rejected.",
+			},
+			"check": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"command":            map[string]any{"type": "string", "description": "Shell command to run"},
+					"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
+				},
+				"description": "Required when kind is \"check\"; must be omitted for \"prose\".",
+			},
+			"judgment": map[string]any{
+				"type":        "string",
+				"enum":        []string{"boolean", "quantitative", "artifact"},
+				"description": "How this criterion is scored. Optional, defaults to boolean.",
+			},
+		},
+		"required": []string{"text"},
+	}
+}
 
 func (t *DelegateTool) Parameters() map[string]any {
 	return map[string]any{
@@ -1112,12 +676,6 @@ func (t *DelegateTool) Parameters() map[string]any {
 				"description": "Optional: the id of a specific agent to delegate to (must be in your " +
 					"delegation allowlist). Omit to run a generic subagent under your own agent.",
 			},
-			"async": map[string]any{
-				"type": "boolean",
-				"description": "Whether to run in the background (true, the default) and return immediately " +
-					"with a task_id, or block until the delegated turn completes (false) and return its " +
-					"result inline.",
-			},
 			"action": map[string]any{
 				"type": "string",
 				"enum": []string{"run", "status", "inbox", "inbox_ack", "steer", "respond", "cancel", "follow_up", "peek"},
@@ -1126,16 +684,26 @@ func (t *DelegateTool) Parameters() map[string]any {
 					"instruction. \"respond\" answers an open question. \"cancel\" stops a child. " +
 					"\"follow_up\" warm-resumes a finished child. \"peek\" reads latest checkpoint/progress.",
 			},
-			"task_id": map[string]any{
-				"type": "string",
-				"description": "The task_id to check (e.g. \"delegate-1\"), used with action=\"status\". " +
-					"When omitted under action=\"status\", all visible tasks are listed instead. DEPRECATED " +
-					"alias for session_id — session_id wins when both are present.",
-			},
 			"session_id": map[string]any{
 				"type": "string",
-				"description": "The durable child session to target. Required for status/inbox/inbox_ack/" +
-					"steer/respond/cancel/follow_up/peek.",
+				"description": "The durable child session to target — the only way to address a " +
+					"child. Required for status/inbox/inbox_ack/steer/respond/cancel/follow_up/peek.",
+			},
+			"criteria": map[string]any{
+				"type":  "array",
+				"items": delegateCriterionItemSchema(),
+				"description": "Optional (action=\"run\" only), together with dod: acceptance criteria for " +
+					"this delegation — the outcome-specific checks. Supplying criteria without dod (or dod " +
+					"without criteria) is refused: a goal always has both. Set one for multi-step work or " +
+					"work you must verify before relying on it; leave it off for a quick lookup or a single " +
+					"action.",
+			},
+			"dod": map[string]any{
+				"type":  "array",
+				"items": delegateCriterionItemSchema(),
+				"description": "Optional (action=\"run\" only), together with criteria: Definition of Done " +
+					"for this delegation — generic standing quality gates, distinct from criteria and never " +
+					"mixed into it (same shape as criteria).",
 			},
 			"snapshot": map[string]any{
 				"type": "object",
@@ -1166,16 +734,11 @@ func (t *DelegateTool) Parameters() map[string]any {
 			},
 			"timeout_seconds": map[string]any{
 				"type":        "integer",
-				"description": "Optional (action=\"run\" only): max seconds before this delegation is force-cancelled. 0 = default (5 min).",
+				"description": "Optional (action=\"run\" only): max seconds before this delegation is force-cancelled. 0 = default (30 min).",
 			},
 			"critical": map[string]any{
 				"type":        "boolean",
 				"description": "Optional (action=\"run\" only): continue running after the parent finishes gracefully.",
-			},
-			"allow_blocking_question": map[string]any{
-				"type": "boolean",
-				"description": "Optional (action=\"run\" with wait/async=false only): permit a bounded human-" +
-					"routed wait on a child question instead of the default rejection.",
 			},
 			"message_ids": map[string]any{
 				"type":        "array",
@@ -1212,21 +775,22 @@ func (t *DelegateTool) Parameters() map[string]any {
 	}
 }
 
+// Execute is delegate's ONLY entry point. This tool deliberately does not
+// implement AsyncExecutor: ADR-091 made every action return as soon as launch
+// and dispatch have returned, so there is no later completion for a callback
+// to report. The AsyncCallback that used to be threaded in here reached four
+// levels down (executeRun -> launchAndDispatch, executeRespond /
+// executeFollowUp -> spawnCorrectiveFollowUp) and was discarded, unread, at
+// every one of those leaves — a callback the registry could hand over but
+// that could never fire. The remaining `nil` arguments below are the last
+// trace of it; the `AsyncCallback` parameters on delegate_run.go,
+// delegate_park.go and delegate_followup.go go with them, and those three
+// files are outside this lane's ownership.
 func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	return t.execute(ctx, args, nil)
+	return t.execute(ctx, args)
 }
 
-// ExecuteAsync implements AsyncExecutor. The callback is passed through as a
-// call parameter — never stored on the DelegateTool instance.
-func (t *DelegateTool) ExecuteAsync(
-	ctx context.Context,
-	args map[string]any,
-	cb AsyncCallback,
-) *ToolResult {
-	return t.execute(ctx, args, cb)
-}
-
-func (t *DelegateTool) execute(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
+func (t *DelegateTool) execute(ctx context.Context, args map[string]any) *ToolResult {
 	action, _ := args["action"].(string)
 	if rawAction, present := args["action"]; present && rawAction != nil {
 		if _, ok := rawAction.(string); !ok {
@@ -1247,7 +811,7 @@ func (t *DelegateTool) execute(ctx context.Context, args map[string]any, cb Asyn
 
 	switch action {
 	case "run":
-		return t.executeRun(ctx, args, cb)
+		return t.executeRun(ctx, args, nil)
 	case "status":
 		return t.executeStatus(ctx, args)
 	case "inbox":
@@ -1257,11 +821,11 @@ func (t *DelegateTool) execute(ctx context.Context, args map[string]any, cb Asyn
 	case "steer":
 		return t.executeSteer(ctx, args)
 	case "respond":
-		return t.executeRespond(ctx, args, cb)
+		return t.executeRespond(ctx, args, nil)
 	case "cancel":
 		return t.executeCancel(ctx, args)
 	case "follow_up":
-		return t.executeFollowUp(ctx, args, cb)
+		return t.executeFollowUp(ctx, args, nil)
 	case "peek":
 		return t.executePeek(ctx, args)
 	default:
@@ -1316,7 +880,7 @@ func requiredStringArg(args map[string]any, key string) (string, error) {
 
 // callerOwnerKey resolves the CALLING agent's own durable inbox key — the
 // same ToolTranscriptSessionID(ctx) value that was captured as the child's
-// ParentDurableKey at `run` time (D16). Every parent-side action
+// SteeringSessionID at `run` time (D16). Every parent-side action
 // (inbox/inbox_ack/steer/respond/cancel/follow_up/peek) uses this exact
 // resolution so a caller can only ever address inboxes/sessions it itself
 // spawned.
@@ -1324,48 +888,80 @@ func callerOwnerKey(ctx context.Context) string {
 	return strings.TrimSpace(ToolTranscriptSessionID(ctx))
 }
 
+type delegatePrincipalContextKey struct{}
+
+// WithDelegatePrincipal carries an already-authenticated human principal from
+// the gateway into a delegate steering action. Tools never manufacture human
+// identity: callers that do not supply this value are evaluated as agents.
+func WithDelegatePrincipal(ctx context.Context, principal steer.Principal) context.Context {
+	return context.WithValue(ctx, delegatePrincipalContextKey{}, principal)
+}
+
+func delegateHumanPrincipal(ctx context.Context) (steer.Principal, bool) {
+	principal, ok := ctx.Value(delegatePrincipalContextKey{}).(steer.Principal)
+	if !ok || principal.Kind != steer.PrincipalKindHuman || strings.TrimSpace(principal.ID) == "" {
+		return steer.Principal{}, false
+	}
+	return principal, true
+}
+
 // verifyCallerOwnsSession (ADR-057 W12/FR-039/FR-040) rejects a gated
 // delegate action whose caller is not an ANCESTOR of rec — a direct parent,
 // grandparent, and so on up to the configured max delegation depth
-// (SetOwnershipWalkMaxDepth) — in the ParentDurableKey chain (defense in
+// (SetOwnershipWalkMaxDepth) — in the SteeringSessionID chain (defense in
 // depth: a session_id alone is guessable/loggable; ownership must also
 // match at the handler).
 //
-// Pre-ADR-057, a plain `caller == rec.ParentDurableKey` equality check was
-// correct because ParentDurableKey was shared across an entire subtree (a
+// Pre-ADR-057, a plain `caller == rec.SteeringSessionID()` equality check was
+// correct because SteeringSessionID was shared across an entire subtree (a
 // parent's key was literally re-inherited down every generation) — which
 // ALSO meant it accidentally permitted sibling/cousin reach (FR-040's
 // "MUST be removed": any two sessions sharing the SAME parent — or the same
-// distant ancestor — carried the identical ParentDurableKey value and thus
+// distant ancestor — carried the identical SteeringSessionID value and thus
 // passed the equality check against EACH OTHER's records, not just their
-// real parent's). U13's ParentDurableKey redefinition (pkg/session/lifecycle.go's
+// real parent's). U13's SteeringSessionID redefinition (pkg/session/lifecycle.go's
 // own doc comment: "names its DIRECT parent only — it is NOT re-inherited
 // down the chain") already closed that leak by construction — a sibling's
 // target now carries the immediate parent's key, never the caller's own —
 // but it also silently broke the LEGITIMATE root-over-subtree case
 // (BDD-42): a chat A that spawned child B, which spawned grandchild D, can
-// no longer reach D via one-hop equality, because D's ParentDurableKey
+// no longer reach D via one-hop equality, because D's SteeringSessionID
 // names B, not A. This walk restores that reach without reopening the
 // sibling/cousin one: it climbs ONE hop per iteration (rec's own
-// ParentDurableKey is depth 1, its parent's ParentDurableKey is depth 2,
+// SteeringSessionID is depth 1, its parent's SteeringSessionID is depth 2,
 // …), matching each hop against the caller, and stops — rejecting — the
 // moment it either exhausts the depth bound (BDD-43) or reaches a link with
 // no further LifecycleRecord to load (the root chat has none of its own,
 // which is exactly the terminal, no-match case; a Load failure is never
 // treated as an ownership match).
 func (t *DelegateTool) verifyCallerOwnsSession(ctx context.Context, rec *session.LifecycleRecord) error {
+	_, err := t.verifyCallerPrincipal(ctx, rec)
+	return err
+}
+
+// verifyCallerPrincipal proves steering authority and returns the identity
+// that must accompany the resulting action. An authenticated human is global
+// steering authority. An agent must be the target's direct or transitive
+// steering ancestor, walked exclusively through the durable SteeredBy edge.
+func (t *DelegateTool) verifyCallerPrincipal(ctx context.Context, rec *session.LifecycleRecord) (steer.Principal, error) {
+	if principal, ok := delegateHumanPrincipal(ctx); ok {
+		return principal, nil
+	}
 	caller := callerOwnerKey(ctx)
 	if caller == "" {
-		return fmt.Errorf("session %s is not owned by the calling session", rec.SessionID)
+		return steer.Principal{}, fmt.Errorf("session %s is not steered by the calling principal", rec.SessionID)
 	}
-	ancestor := strings.TrimSpace(rec.ParentDurableKey)
+	ancestor := ""
+	if rec.SteeredBy != nil {
+		ancestor = strings.TrimSpace(rec.SteeredBy.SteeringSessionID)
+	}
 	maxDepth := t.ownershipMaxDepth()
 	for depth := 0; depth < maxDepth; depth++ {
 		if ancestor == "" {
 			break
 		}
 		if ancestor == caller {
-			return nil
+			return steer.Principal{Kind: steer.PrincipalKindAgent, ID: caller}, nil
 		}
 		if t.lifecycle == nil {
 			break
@@ -1395,7 +991,10 @@ func (t *DelegateTool) verifyCallerOwnsSession(ctx context.Context, rec *session
 			// failure of ANY kind is never treated as an ownership match.
 			break
 		}
-		ancestor = strings.TrimSpace(parentRec.ParentDurableKey)
+		if parentRec.SteeredBy == nil {
+			break
+		}
+		ancestor = strings.TrimSpace(parentRec.SteeredBy.SteeringSessionID)
 	}
-	return fmt.Errorf("session %s is not owned by the calling session", rec.SessionID)
+	return steer.Principal{}, fmt.Errorf("session %s is not steered by the calling principal", rec.SessionID)
 }

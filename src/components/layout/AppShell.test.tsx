@@ -447,6 +447,65 @@ describe('AppShell — banner announcements', () => {
   })
 })
 
+// ── #823: no global banner while a transport drop is in progress ─────────────
+//
+// The old defect (issue #823 follow-up comment): a WS drop set
+// connectionError immediately, so AppShell rendered "Disconnected from
+// gateway — code 1006 connection lost. Reconnecting…" the instant the
+// network cut, before the 15s quiet window even started. After the fix,
+// src/lib/ws.ts never calls callbacks.onError for an abnormal close / retry /
+// give-up — so connectionError stays null through the entire drop, and
+// AppShell renders no connection banner at all. The only surface for a drop
+// is the phase-1 quiet UI (ConnectionStatus.tsx), owned elsewhere, not
+// AppShell.
+describe('AppShell — no connection banner while a transport drop is in progress (#823)', () => {
+  afterEach(() => {
+    useConnectionStore.setState({
+      connectionError: null,
+      isConnected: true,
+      reconnectPhase: null,
+      reconnectAttempt: 0,
+    })
+  })
+
+  it('renders no role="alert" connection banner while disconnected and reconnecting', async () => {
+    vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+    // Post-fix ws.ts state during a live drop: isConnected false, actively
+    // retrying, but connectionError was never set.
+    useConnectionStore.setState({
+      connectionError: null,
+      isConnected: false,
+      reconnectPhase: 'reconnecting',
+      reconnectAttempt: 1,
+    })
+
+    renderShell()
+
+    await waitFor(() => expect(api.fetchAppState).toHaveBeenCalled())
+    expect(screen.queryByText(/disconnected from gateway/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/code 1006/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/reconnecting/i)).not.toBeInTheDocument()
+  })
+
+  it('renders no role="alert" connection banner after the reconnect give-up phase', async () => {
+    vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+    useConnectionStore.setState({
+      connectionError: null,
+      isConnected: false,
+      reconnectPhase: 'gave_up',
+      reconnectAttempt: 20,
+    })
+
+    renderShell()
+
+    await waitFor(() => expect(api.fetchAppState).toHaveBeenCalled())
+    expect(screen.queryByText(/connection lost after/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/click "reconnect now"/i)).not.toBeInTheDocument()
+  })
+})
+
 // ── <sm docked-browser takeover inerts the collapsed chat region (FW-3, item 6) ──
 //
 // When BrowserLivePanel is docked open on a phone viewport (<640px), the flex

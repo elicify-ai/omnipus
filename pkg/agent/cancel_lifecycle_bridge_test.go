@@ -60,7 +60,7 @@ func TestRequestCancel_TransitionsLifecycleRecordToCancelled(t *testing.T) {
 	// task/delegate dispatch would have on disk at cancel time.
 	require.NoError(t, ls.Persist(&session.LifecycleRecord{
 		SessionID:      sessionID,
-		Generation:     0,
+		Generation:     1,
 		State:          session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman,
 		AgentID:        "main",

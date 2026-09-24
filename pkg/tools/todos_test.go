@@ -20,7 +20,7 @@ func TestSetTodos_NewGoalCreatesTask(t *testing.T) {
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	result := tool.Execute(ctx, map[string]any{
-		"goal": "implement feature X",
+		"outcome": "implement feature X",
 		"todos": []any{
 			map[string]any{"text": "write tests", "status": "pending"},
 			map[string]any{"text": "write code", "status": "in_progress"},
@@ -68,7 +68,7 @@ func TestSetTodos_SameGoalReplacesChecklist(t *testing.T) {
 
 	// First call: 3 todos.
 	r1 := tool.Execute(ctx, map[string]any{
-		"goal": "refactor",
+		"outcome": "refactor",
 		"todos": []any{
 			map[string]any{"text": "step A", "status": "pending"},
 			map[string]any{"text": "step B", "status": "pending"},
@@ -81,7 +81,7 @@ func TestSetTodos_SameGoalReplacesChecklist(t *testing.T) {
 
 	// Second call: 2 todos (replace).
 	r2 := tool.Execute(ctx, map[string]any{
-		"goal": "refactor",
+		"outcome": "refactor",
 		"todos": []any{
 			map[string]any{"text": "step A", "status": "completed"},
 			map[string]any{"text": "step B", "status": "in_progress"},
@@ -116,16 +116,16 @@ func TestSetTodos_DifferentGoalCreatesSeparateTask(t *testing.T) {
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	r1 := tool.Execute(ctx, map[string]any{
-		"goal":  "goal alpha",
-		"todos": []any{map[string]any{"text": "do alpha", "status": "pending"}},
+		"outcome": "goal alpha",
+		"todos":   []any{map[string]any{"text": "do alpha", "status": "pending"}},
 	})
 	if r1.IsError {
 		t.Fatalf("first set_todos: %s", r1.ForLLM)
 	}
 
 	r2 := tool.Execute(ctx, map[string]any{
-		"goal":  "goal beta",
-		"todos": []any{map[string]any{"text": "do beta", "status": "pending"}},
+		"outcome": "goal beta",
+		"todos":   []any{map[string]any{"text": "do beta", "status": "pending"}},
 	})
 	if r2.IsError {
 		t.Fatalf("second set_todos: %s", r2.ForLLM)
@@ -158,7 +158,7 @@ func TestSetTodos_InvalidStatusReturnsError(t *testing.T) {
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	result := tool.Execute(ctx, map[string]any{
-		"goal": "bad status goal",
+		"outcome": "bad status goal",
 		"todos": []any{
 			map[string]any{"text": "something", "status": "invalid-value"},
 		},
@@ -187,7 +187,7 @@ func TestSetTodos_EmptyTextReturnsError(t *testing.T) {
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	result := tool.Execute(ctx, map[string]any{
-		"goal": "empty text goal",
+		"outcome": "empty text goal",
 		"todos": []any{
 			map[string]any{"text": "", "status": "pending"},
 		},
@@ -211,7 +211,7 @@ func TestSetTodos_ReadOnWrite(t *testing.T) {
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	result := tool.Execute(ctx, map[string]any{
-		"goal": "build the thing",
+		"outcome": "build the thing",
 		"todos": []any{
 			map[string]any{"text": "scaffold", "status": "completed"},
 			map[string]any{"text": "wire API", "status": "in_progress"},
@@ -254,8 +254,8 @@ func TestSetTodos_EmptyTodosClearsChecklist(t *testing.T) {
 
 	// Seed a goal with one todo.
 	r1 := tool.Execute(ctx, map[string]any{
-		"goal":  "transient goal",
-		"todos": []any{map[string]any{"text": "do something", "status": "pending"}},
+		"outcome": "transient goal",
+		"todos":   []any{map[string]any{"text": "do something", "status": "pending"}},
 	})
 	if r1.IsError {
 		t.Fatalf("seed: %s", r1.ForLLM)
@@ -263,8 +263,8 @@ func TestSetTodos_EmptyTodosClearsChecklist(t *testing.T) {
 
 	// Clear the checklist.
 	r2 := tool.Execute(ctx, map[string]any{
-		"goal":  "transient goal",
-		"todos": []any{},
+		"outcome": "transient goal",
+		"todos":   []any{},
 	})
 	if r2.IsError {
 		t.Fatalf("clear: %s", r2.ForLLM)
@@ -282,6 +282,29 @@ func TestSetTodos_EmptyTodosClearsChecklist(t *testing.T) {
 	}
 }
 
+// TestSetTodos_OldGoalArgNoLongerAccepted proves the goal -> outcome rename is
+// breaking: a caller still sending the old `goal` argument (with no `outcome`)
+// gets a clear error naming the new field, never a silent fallback.
+func TestSetTodos_OldGoalArgNoLongerAccepted(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewSetTodosTool(store)
+
+	ctx := WithAgentID(context.Background(), "mia")
+	ctx = WithWorkspaceID(ctx, "ws-1")
+
+	result := tool.Execute(ctx, map[string]any{
+		"goal":  "implement feature X",
+		"todos": []any{map[string]any{"text": "step", "status": "pending"}},
+	})
+	if !result.IsError {
+		t.Fatal("expected error when the old `goal` argument is sent instead of `outcome`")
+	}
+	if !strings.Contains(result.ForLLM, "outcome") {
+		t.Errorf("error must name the new `outcome` field, got: %s", result.ForLLM)
+	}
+}
+
 // TestSetTodos_NoAgentID proves that a missing acting agent ID returns an error.
 func TestSetTodos_NoAgentID(t *testing.T) {
 	t.Parallel()
@@ -289,8 +312,8 @@ func TestSetTodos_NoAgentID(t *testing.T) {
 	tool := NewSetTodosTool(store)
 
 	result := tool.Execute(context.Background(), map[string]any{
-		"goal":  "orphan goal",
-		"todos": []any{map[string]any{"text": "something", "status": "pending"}},
+		"outcome": "orphan goal",
+		"todos":   []any{map[string]any{"text": "something", "status": "pending"}},
 	})
 	if !result.IsError {
 		t.Fatal("expected error when no agent ID in context")
@@ -311,7 +334,7 @@ func TestSetTodos_DefaultStatusPending(t *testing.T) {
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	result := tool.Execute(ctx, map[string]any{
-		"goal": "implicit pending goal",
+		"outcome": "implicit pending goal",
 		"todos": []any{
 			map[string]any{"text": "no status field"},
 		},
@@ -357,7 +380,7 @@ func TestSetTodos_DoesNotHijackRealTask(t *testing.T) {
 
 	// Now call set_todos with the same goal title.
 	result := tool.Execute(ctx, map[string]any{
-		"goal": "implement feature X",
+		"outcome": "implement feature X",
 		"todos": []any{
 			map[string]any{"text": "scratchpad step", "status": "pending"},
 		},
@@ -413,8 +436,8 @@ func TestSetTodos_NewGoalArchivesPriorScratchpad(t *testing.T) {
 
 	// Create first scratchpad card.
 	r1 := tool.Execute(ctx, map[string]any{
-		"goal":  "goal alpha",
-		"todos": []any{map[string]any{"text": "step A", "status": "pending"}},
+		"outcome": "goal alpha",
+		"todos":   []any{map[string]any{"text": "step A", "status": "pending"}},
 	})
 	if r1.IsError {
 		t.Fatalf("first set_todos: %s", r1.ForLLM)
@@ -429,8 +452,8 @@ func TestSetTodos_NewGoalArchivesPriorScratchpad(t *testing.T) {
 
 	// Switch to a new goal — this must archive the first scratchpad card.
 	r2 := tool.Execute(ctx, map[string]any{
-		"goal":  "goal beta",
-		"todos": []any{map[string]any{"text": "step B", "status": "pending"}},
+		"outcome": "goal beta",
+		"todos":   []any{map[string]any{"text": "step B", "status": "pending"}},
 	})
 	if r2.IsError {
 		t.Fatalf("second set_todos: %s", r2.ForLLM)
@@ -470,7 +493,7 @@ func TestSetTodos_AtomicCreate(t *testing.T) {
 	ctx = WithWorkspaceID(ctx, "ws-1")
 
 	result := tool.Execute(ctx, map[string]any{
-		"goal": "atomic create goal",
+		"outcome": "atomic create goal",
 		"todos": []any{
 			map[string]any{"text": "step one", "status": "pending"},
 			map[string]any{"text": "step two", "status": "in_progress"},
@@ -532,8 +555,8 @@ func TestSetTodos_ArchiveDoesNotTouchRealTasks(t *testing.T) {
 
 	// Create first scratchpad goal.
 	r1 := tool.Execute(ctx, map[string]any{
-		"goal":  "scratchpad goal 1",
-		"todos": []any{map[string]any{"text": "x", "status": "pending"}},
+		"outcome": "scratchpad goal 1",
+		"todos":   []any{map[string]any{"text": "x", "status": "pending"}},
 	})
 	if r1.IsError {
 		t.Fatalf("first scratchpad: %s", r1.ForLLM)
@@ -541,8 +564,8 @@ func TestSetTodos_ArchiveDoesNotTouchRealTasks(t *testing.T) {
 
 	// Switch to a new scratchpad goal — archive-previous must fire.
 	r2 := tool.Execute(ctx, map[string]any{
-		"goal":  "scratchpad goal 2",
-		"todos": []any{map[string]any{"text": "y", "status": "pending"}},
+		"outcome": "scratchpad goal 2",
+		"todos":   []any{map[string]any{"text": "y", "status": "pending"}},
 	})
 	if r2.IsError {
 		t.Fatalf("second scratchpad: %s", r2.ForLLM)
@@ -580,8 +603,8 @@ func TestSetTodos_AnyAgentCanUseItsOwnScratchpad(t *testing.T) {
 			ctx = WithWorkspaceID(ctx, "ws-1")
 
 			result := tool.Execute(ctx, map[string]any{
-				"goal":  "scratchpad goal for " + agentID,
-				"todos": []any{map[string]any{"text": "x", "status": "pending"}},
+				"outcome": "scratchpad goal for " + agentID,
+				"todos":   []any{map[string]any{"text": "x", "status": "pending"}},
 			})
 			if result.IsError {
 				t.Fatalf("expected set_todos to succeed for agent %q, got error: %s", agentID, result.ForLLM)
@@ -618,16 +641,16 @@ func TestSetTodos_SessionScoped_SecondSessionGetsOwnCardForSameGoal(t *testing.T
 	ctxB = WithTranscriptSessionID(ctxB, "session-b")
 
 	if r := tool.Execute(ctxA, map[string]any{
-		"goal":  "shared goal title",
-		"todos": []any{map[string]any{"text": "A step", "status": "pending"}},
+		"outcome": "shared goal title",
+		"todos":   []any{map[string]any{"text": "A step", "status": "pending"}},
 	}); r.IsError {
 		t.Fatalf("session A set_todos: %s", r.ForLLM)
 	}
 	// Same goal title from session B: must NOT find (and overwrite) A's card —
 	// it creates its own.
 	if r := tool.Execute(ctxB, map[string]any{
-		"goal":  "shared goal title",
-		"todos": []any{map[string]any{"text": "B step", "status": "pending"}},
+		"outcome": "shared goal title",
+		"todos":   []any{map[string]any{"text": "B step", "status": "pending"}},
 	}); r.IsError {
 		t.Fatalf("session B set_todos: %s", r.ForLLM)
 	}
@@ -656,8 +679,8 @@ func TestSetTodos_SessionScoped_SecondSessionGetsOwnCardForSameGoal(t *testing.T
 	// A same-goal update from session A still replaces A's own card (exactly
 	// two cards remain, A's list replaced).
 	if r := tool.Execute(ctxA, map[string]any{
-		"goal":  "shared goal title",
-		"todos": []any{map[string]any{"text": "A step 2", "status": "in_progress"}},
+		"outcome": "shared goal title",
+		"todos":   []any{map[string]any{"text": "A step 2", "status": "in_progress"}},
 	}); r.IsError {
 		t.Fatalf("session A update: %s", r.ForLLM)
 	}
@@ -685,22 +708,22 @@ func TestSetTodos_SessionScoped_GoalSwitchDoesNotArchiveOtherSessionsCards(t *te
 
 	// Session A opens a checklist, then switches to a new goal.
 	if r := tool.Execute(mkCtx("session-a"), map[string]any{
-		"goal":  "A goal one",
-		"todos": []any{map[string]any{"text": "a1", "status": "pending"}},
+		"outcome": "A goal one",
+		"todos":   []any{map[string]any{"text": "a1", "status": "pending"}},
 	}); r.IsError {
 		t.Fatalf("A first: %s", r.ForLLM)
 	}
 	// Session B opens its own (unrelated) checklist while A is still on goal one.
 	if r := tool.Execute(mkCtx("session-b"), map[string]any{
-		"goal":  "B goal",
-		"todos": []any{map[string]any{"text": "b1", "status": "pending"}},
+		"outcome": "B goal",
+		"todos":   []any{map[string]any{"text": "b1", "status": "pending"}},
 	}); r.IsError {
 		t.Fatalf("B first: %s", r.ForLLM)
 	}
 	// A switches goals — the archive pass must close only A's old card.
 	if r := tool.Execute(mkCtx("session-a"), map[string]any{
-		"goal":  "A goal two",
-		"todos": []any{map[string]any{"text": "a2", "status": "pending"}},
+		"outcome": "A goal two",
+		"todos":   []any{map[string]any{"text": "a2", "status": "pending"}},
 	}); r.IsError {
 		t.Fatalf("A switch: %s", r.ForLLM)
 	}

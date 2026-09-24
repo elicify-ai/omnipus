@@ -310,6 +310,7 @@ func (n *asyncNotifierImpl) Notify(ctx context.Context, event AsyncNotifyEvent) 
 			// comments on these two fields for the full rationale.
 			AsyncOriginAgentID:       event.AgentID,
 			AsyncTranscriptSessionID: event.TranscriptSessionID,
+			Metadata:                 asyncNotifyMetadata(event),
 		})
 	} else {
 		publishErr = fmt.Errorf("async notifier: no message bus available (source %q)", event.SourceKind)
@@ -348,6 +349,23 @@ func (n *asyncNotifierImpl) Notify(ctx context.Context, event AsyncNotifyEvent) 
 	return nil
 }
 
+func asyncNotifyMetadata(event AsyncNotifyEvent) map[string]string {
+	metadata := make(map[string]string, len(event.Metadata)+2)
+	for key, value := range event.Metadata {
+		metadata[key] = fmt.Sprint(value)
+	}
+	if id, ok := event.Metadata["steer_message_id"]; ok {
+		metadata["steer_message_id"] = fmt.Sprint(id)
+	}
+	if generation, ok := event.Metadata["steer_generation"]; ok {
+		metadata["steer_generation"] = fmt.Sprint(generation)
+	}
+	if len(metadata) == 0 {
+		return nil
+	}
+	return metadata
+}
+
 // ====================== ADR-053 S3: Bounded Typed Wake ======================
 //
 // GENERALIZATION of this file's existing terminal-only wake (BOM
@@ -372,12 +390,20 @@ const (
 )
 
 // wakeableSessionMessageKinds is the closed set of SessionMessage `kind`
-// values that may trigger a bounded typed wake.
+// values that may trigger a bounded typed wake — the legacy WakeParent path
+// (pkg/agent/session_messaging_wire.go::fireWakeForBusMessage, the bus
+// consumer's child->parent route; nothing publishes on that bus channel in
+// production today). ADR-091 I-5 extends this set with goal_status and
+// narrows "error" to fatal errors only — that finer-grained decision is
+// steer.UpwardDeliverer.Deliver's (WakeParentAlways below), which computes
+// eligibility from the turn Outcome directly rather than from this
+// kind-string map, since MessageParentWakeEvent carries no Fatal field.
 var wakeableSessionMessageKinds = map[string]bool{ //nolint:gochecknoglobals
-	"question": true,
-	"blocker":  true,
-	"error":    true,
-	"handback": true,
+	"question":    true,
+	"blocker":     true,
+	"error":       true,
+	"handback":    true,
+	"goal_status": true,
 }
 
 // SetWakeClock overrides WakeParent's time source for deterministic
@@ -474,21 +500,29 @@ func (n *asyncNotifierImpl) allowWake(debounceKey string) bool {
 	return true
 }
 
-// WakeParent implements tools.MessageParentWaker — the interface
-// pkg/tools/message_parent.go depends on (defined on the tools side to
-// avoid a tools<->agent import cycle; asyncNotifierImpl satisfies it
-// structurally). kind is the originating SessionMessage's discriminator
-// (question/blocker/error/handback — anything else is rejected, since only
-// those four kinds may wake a new turn per the ADR). event carries the
-// already-resolved routing (Channel/ChatID/AgentID/TranscriptSessionID) the
-// caller assembled from the ORIGINAL delegation's own OriginChannel/
-// OriginChatID (DelegateTaskState / the durable SessionLifecycleRecord's
-// owner scope) — this file does not itself resolve "where does the parent
-// live", only whether/when to wake it.
+// WakeParent is the legacy bus-consumer wake path
+// (session_messaging_wire.go::fireWakeForBusMessage). It is NOT an
+// implementation of tools.MessageParentWaker: ADR-091 deleted that interface
+// and replaced it with steer.UpwardDeliverer, whose Deliver method
+// (steer_audience.go) is the only upward path from a child to its parent. It
+// still takes a tools.MessageParentWakeEvent, which survives as a plain
+// value type on the tools side.
+//
+// kind is the originating SessionMessage's discriminator and must be a
+// member of wakeableSessionMessageKinds above — FIVE kinds since ADR-091 I-5
+// added goal_status, not the original four. Keep the rejection message below
+// in step with that map; they drifted once already.
+//
+// event carries the already-resolved routing
+// (Channel/ChatID/AgentID/TranscriptSessionID) the caller assembled from the
+// ORIGINAL delegation's own OriginChannel/OriginChatID on the durable
+// session.LifecycleRecord — this file does not itself resolve "where does
+// the parent live", only whether/when to wake it.
 func (n *asyncNotifierImpl) WakeParent(ctx context.Context, kind string, event tools.MessageParentWakeEvent) error {
 	if !wakeableSessionMessageKinds[kind] {
 		return fmt.Errorf(
-			"async notifier: wake parent: kind %q is not wakeable (question/blocker/error/handback only)", kind,
+			"async notifier: wake parent: kind %q is not wakeable "+
+				"(question/blocker/error/handback/goal_status only)", kind,
 		)
 	}
 	if event.Channel == "" || event.ChatID == "" {
@@ -510,5 +544,36 @@ func (n *asyncNotifierImpl) WakeParent(ctx context.Context, kind string, event t
 		TranscriptSessionID: event.TranscriptSessionID,
 		SourceKind:          "message_parent:" + kind,
 		Content:             event.Content,
+		Metadata: map[string]any{
+			"steer_message_id": event.MessageID,
+			"steer_generation": event.Generation,
+		},
+	})
+}
+
+// WakeParentAlways delivers the bounded typed wake for a WAKE-ELIGIBLE
+// outcome (ADR-091 I-5's table: handback, question, blocker,
+// a fatal error, goal_status) WITHOUT allowWake's debounce/hourly cap —
+// FR-B-010's "wake-eligible kinds ... bypass allowWake, so a terminal
+// outcome can never be suppressed". The caller (steer.UpwardDeliverer's
+// Deliver, steer_audience.go) has already decided eligibility from the
+// turn's Outcome before calling this; kind is descriptive only (SourceKind
+// composition), never re-validated against wakeableSessionMessageKinds.
+func (n *asyncNotifierImpl) WakeParentAlways(ctx context.Context, kind string, event tools.MessageParentWakeEvent) error {
+	if event.Channel == "" || event.ChatID == "" {
+		return fmt.Errorf("async notifier: wake parent: refusing to wake with empty destination (channel=%q chatID=%q)",
+			event.Channel, event.ChatID)
+	}
+	return n.Notify(ctx, AsyncNotifyEvent{
+		Channel:             event.Channel,
+		ChatID:              event.ChatID,
+		AgentID:             event.AgentID,
+		TranscriptSessionID: event.TranscriptSessionID,
+		SourceKind:          "message_parent:" + kind,
+		Content:             event.Content,
+		Metadata: map[string]any{
+			"steer_message_id": event.MessageID,
+			"steer_generation": event.Generation,
+		},
 	})
 }

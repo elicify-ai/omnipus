@@ -2189,6 +2189,768 @@ func (e DelegateRunActionAction) Valid() bool {
 	}
 }
 
+// Defines values for DelegateRunActionGoalCriteriaAuthorKind.
+const (
+	DelegateRunActionGoalCriteriaAuthorKindAgent DelegateRunActionGoalCriteriaAuthorKind = "agent"
+	DelegateRunActionGoalCriteriaAuthorKindUser  DelegateRunActionGoalCriteriaAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalCriteriaAuthorKind enum.
+func (e DelegateRunActionGoalCriteriaAuthorKind) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalCriteriaAuthorKindAgent:
+		return true
+	case DelegateRunActionGoalCriteriaAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalCriteriaBehaviorScope.
+const (
+	DelegateRunActionGoalCriteriaBehaviorScopeAttempt     DelegateRunActionGoalCriteriaBehaviorScope = "attempt"
+	DelegateRunActionGoalCriteriaBehaviorScopeTaskSession DelegateRunActionGoalCriteriaBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalCriteriaBehaviorScope enum.
+func (e DelegateRunActionGoalCriteriaBehaviorScope) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalCriteriaBehaviorScopeAttempt:
+		return true
+	case DelegateRunActionGoalCriteriaBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalCriteriaJudgment.
+const (
+	DelegateRunActionGoalCriteriaJudgmentArtifact     DelegateRunActionGoalCriteriaJudgment = "artifact"
+	DelegateRunActionGoalCriteriaJudgmentBoolean      DelegateRunActionGoalCriteriaJudgment = "boolean"
+	DelegateRunActionGoalCriteriaJudgmentQuantitative DelegateRunActionGoalCriteriaJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalCriteriaJudgment enum.
+func (e DelegateRunActionGoalCriteriaJudgment) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalCriteriaJudgmentArtifact:
+		return true
+	case DelegateRunActionGoalCriteriaJudgmentBoolean:
+		return true
+	case DelegateRunActionGoalCriteriaJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalCriteriaKind.
+const (
+	DelegateRunActionGoalCriteriaKindBehavior DelegateRunActionGoalCriteriaKind = "behavior"
+	DelegateRunActionGoalCriteriaKindCheck    DelegateRunActionGoalCriteriaKind = "check"
+	DelegateRunActionGoalCriteriaKindProse    DelegateRunActionGoalCriteriaKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalCriteriaKind enum.
+func (e DelegateRunActionGoalCriteriaKind) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalCriteriaKindBehavior:
+		return true
+	case DelegateRunActionGoalCriteriaKindCheck:
+		return true
+	case DelegateRunActionGoalCriteriaKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalCriteriaProvenance.
+const (
+	DelegateRunActionGoalCriteriaProvenanceFloor     DelegateRunActionGoalCriteriaProvenance = "floor"
+	DelegateRunActionGoalCriteriaProvenanceInferred  DelegateRunActionGoalCriteriaProvenance = "inferred"
+	DelegateRunActionGoalCriteriaProvenanceStated    DelegateRunActionGoalCriteriaProvenance = "stated"
+	DelegateRunActionGoalCriteriaProvenanceWorkspace DelegateRunActionGoalCriteriaProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalCriteriaProvenance enum.
+func (e DelegateRunActionGoalCriteriaProvenance) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalCriteriaProvenanceFloor:
+		return true
+	case DelegateRunActionGoalCriteriaProvenanceInferred:
+		return true
+	case DelegateRunActionGoalCriteriaProvenanceStated:
+		return true
+	case DelegateRunActionGoalCriteriaProvenanceWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalCriteriaStatus.
+const (
+	DelegateRunActionGoalCriteriaStatusMet     DelegateRunActionGoalCriteriaStatus = "met"
+	DelegateRunActionGoalCriteriaStatusPending DelegateRunActionGoalCriteriaStatus = "pending"
+	DelegateRunActionGoalCriteriaStatusUnmet   DelegateRunActionGoalCriteriaStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalCriteriaStatus enum.
+func (e DelegateRunActionGoalCriteriaStatus) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalCriteriaStatusMet:
+		return true
+	case DelegateRunActionGoalCriteriaStatusPending:
+		return true
+	case DelegateRunActionGoalCriteriaStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalDodAuthorKind.
+const (
+	DelegateRunActionGoalDodAuthorKindAgent DelegateRunActionGoalDodAuthorKind = "agent"
+	DelegateRunActionGoalDodAuthorKindUser  DelegateRunActionGoalDodAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalDodAuthorKind enum.
+func (e DelegateRunActionGoalDodAuthorKind) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalDodAuthorKindAgent:
+		return true
+	case DelegateRunActionGoalDodAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalDodBehaviorScope.
+const (
+	DelegateRunActionGoalDodBehaviorScopeAttempt     DelegateRunActionGoalDodBehaviorScope = "attempt"
+	DelegateRunActionGoalDodBehaviorScopeTaskSession DelegateRunActionGoalDodBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalDodBehaviorScope enum.
+func (e DelegateRunActionGoalDodBehaviorScope) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalDodBehaviorScopeAttempt:
+		return true
+	case DelegateRunActionGoalDodBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalDodJudgment.
+const (
+	DelegateRunActionGoalDodJudgmentArtifact     DelegateRunActionGoalDodJudgment = "artifact"
+	DelegateRunActionGoalDodJudgmentBoolean      DelegateRunActionGoalDodJudgment = "boolean"
+	DelegateRunActionGoalDodJudgmentQuantitative DelegateRunActionGoalDodJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalDodJudgment enum.
+func (e DelegateRunActionGoalDodJudgment) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalDodJudgmentArtifact:
+		return true
+	case DelegateRunActionGoalDodJudgmentBoolean:
+		return true
+	case DelegateRunActionGoalDodJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalDodKind.
+const (
+	DelegateRunActionGoalDodKindBehavior DelegateRunActionGoalDodKind = "behavior"
+	DelegateRunActionGoalDodKindCheck    DelegateRunActionGoalDodKind = "check"
+	DelegateRunActionGoalDodKindProse    DelegateRunActionGoalDodKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalDodKind enum.
+func (e DelegateRunActionGoalDodKind) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalDodKindBehavior:
+		return true
+	case DelegateRunActionGoalDodKindCheck:
+		return true
+	case DelegateRunActionGoalDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalDodProvenance.
+const (
+	DelegateRunActionGoalDodProvenanceFloor     DelegateRunActionGoalDodProvenance = "floor"
+	DelegateRunActionGoalDodProvenanceInferred  DelegateRunActionGoalDodProvenance = "inferred"
+	DelegateRunActionGoalDodProvenanceStated    DelegateRunActionGoalDodProvenance = "stated"
+	DelegateRunActionGoalDodProvenanceWorkspace DelegateRunActionGoalDodProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalDodProvenance enum.
+func (e DelegateRunActionGoalDodProvenance) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalDodProvenanceFloor:
+		return true
+	case DelegateRunActionGoalDodProvenanceInferred:
+		return true
+	case DelegateRunActionGoalDodProvenanceStated:
+		return true
+	case DelegateRunActionGoalDodProvenanceWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalDodStatus.
+const (
+	DelegateRunActionGoalDodStatusMet     DelegateRunActionGoalDodStatus = "met"
+	DelegateRunActionGoalDodStatusPending DelegateRunActionGoalDodStatus = "pending"
+	DelegateRunActionGoalDodStatusUnmet   DelegateRunActionGoalDodStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalDodStatus enum.
+func (e DelegateRunActionGoalDodStatus) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalDodStatusMet:
+		return true
+	case DelegateRunActionGoalDodStatusPending:
+		return true
+	case DelegateRunActionGoalDodStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalLatestClaimStatus.
+const (
+	DelegateRunActionGoalLatestClaimStatusBlocked       DelegateRunActionGoalLatestClaimStatus = "blocked"
+	DelegateRunActionGoalLatestClaimStatusMet           DelegateRunActionGoalLatestClaimStatus = "met"
+	DelegateRunActionGoalLatestClaimStatusWaitingOnUser DelegateRunActionGoalLatestClaimStatus = "waiting_on_user"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalLatestClaimStatus enum.
+func (e DelegateRunActionGoalLatestClaimStatus) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalLatestClaimStatusBlocked:
+		return true
+	case DelegateRunActionGoalLatestClaimStatusMet:
+		return true
+	case DelegateRunActionGoalLatestClaimStatusWaitingOnUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSource.
+const (
+	DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSourceDiff         DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSource = "diff"
+	DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSourceFileRead     DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSource = "file_read"
+	DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSourceMachineCheck DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSource = "machine_check"
+	DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSourceSessionRead  DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSource = "session_read"
+	DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSourceTranscript   DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSource = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSource enum.
+func (e DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSource) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSourceDiff:
+		return true
+	case DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSourceFileRead:
+		return true
+	case DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSourceMachineCheck:
+		return true
+	case DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSourceSessionRead:
+		return true
+	case DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSourceTranscript:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalLatestVerdictPerCriterionProvenance.
+const (
+	DelegateRunActionGoalLatestVerdictPerCriterionProvenanceDeterministicCheck DelegateRunActionGoalLatestVerdictPerCriterionProvenance = "deterministic_check"
+	DelegateRunActionGoalLatestVerdictPerCriterionProvenanceDiff               DelegateRunActionGoalLatestVerdictPerCriterionProvenance = "diff"
+	DelegateRunActionGoalLatestVerdictPerCriterionProvenanceJudgeRead          DelegateRunActionGoalLatestVerdictPerCriterionProvenance = "judge_read"
+	DelegateRunActionGoalLatestVerdictPerCriterionProvenanceNone               DelegateRunActionGoalLatestVerdictPerCriterionProvenance = "none"
+	DelegateRunActionGoalLatestVerdictPerCriterionProvenanceSessionRead        DelegateRunActionGoalLatestVerdictPerCriterionProvenance = "session_read"
+	DelegateRunActionGoalLatestVerdictPerCriterionProvenanceTranscript         DelegateRunActionGoalLatestVerdictPerCriterionProvenance = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalLatestVerdictPerCriterionProvenance enum.
+func (e DelegateRunActionGoalLatestVerdictPerCriterionProvenance) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalLatestVerdictPerCriterionProvenanceDeterministicCheck:
+		return true
+	case DelegateRunActionGoalLatestVerdictPerCriterionProvenanceDiff:
+		return true
+	case DelegateRunActionGoalLatestVerdictPerCriterionProvenanceJudgeRead:
+		return true
+	case DelegateRunActionGoalLatestVerdictPerCriterionProvenanceNone:
+		return true
+	case DelegateRunActionGoalLatestVerdictPerCriterionProvenanceSessionRead:
+		return true
+	case DelegateRunActionGoalLatestVerdictPerCriterionProvenanceTranscript:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalLatestVerdictScope.
+const (
+	DelegateRunActionGoalLatestVerdictScopeGoal DelegateRunActionGoalLatestVerdictScope = "goal"
+	DelegateRunActionGoalLatestVerdictScopePlan DelegateRunActionGoalLatestVerdictScope = "plan"
+	DelegateRunActionGoalLatestVerdictScopeTask DelegateRunActionGoalLatestVerdictScope = "task"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalLatestVerdictScope enum.
+func (e DelegateRunActionGoalLatestVerdictScope) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalLatestVerdictScopeGoal:
+		return true
+	case DelegateRunActionGoalLatestVerdictScopePlan:
+		return true
+	case DelegateRunActionGoalLatestVerdictScopeTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalOwnerKind.
+const (
+	DelegateRunActionGoalOwnerKindSession DelegateRunActionGoalOwnerKind = "session"
+	DelegateRunActionGoalOwnerKindTask    DelegateRunActionGoalOwnerKind = "task"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalOwnerKind enum.
+func (e DelegateRunActionGoalOwnerKind) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalOwnerKindSession:
+		return true
+	case DelegateRunActionGoalOwnerKindTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalSource.
+const (
+	DelegateRunActionGoalSourceChatCompiled DelegateRunActionGoalSource = "chat_compiled"
+	DelegateRunActionGoalSourcePlanDod      DelegateRunActionGoalSource = "plan_dod"
+	DelegateRunActionGoalSourceTaskExplicit DelegateRunActionGoalSource = "task_explicit"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalSource enum.
+func (e DelegateRunActionGoalSource) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalSourceChatCompiled:
+		return true
+	case DelegateRunActionGoalSourcePlanDod:
+		return true
+	case DelegateRunActionGoalSourceTaskExplicit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalState.
+const (
+	DelegateRunActionGoalStateActive    DelegateRunActionGoalState = "active"
+	DelegateRunActionGoalStateCleared   DelegateRunActionGoalState = "cleared"
+	DelegateRunActionGoalStateDefining  DelegateRunActionGoalState = "defining"
+	DelegateRunActionGoalStateExhausted DelegateRunActionGoalState = "exhausted"
+	DelegateRunActionGoalStateExpired   DelegateRunActionGoalState = "expired"
+	DelegateRunActionGoalStateMet       DelegateRunActionGoalState = "met"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalState enum.
+func (e DelegateRunActionGoalState) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalStateActive:
+		return true
+	case DelegateRunActionGoalStateCleared:
+		return true
+	case DelegateRunActionGoalStateDefining:
+		return true
+	case DelegateRunActionGoalStateExhausted:
+		return true
+	case DelegateRunActionGoalStateExpired:
+		return true
+	case DelegateRunActionGoalStateMet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalSupersededCriteriaCriteriaAuthorKind.
+const (
+	DelegateRunActionGoalSupersededCriteriaCriteriaAuthorKindAgent DelegateRunActionGoalSupersededCriteriaCriteriaAuthorKind = "agent"
+	DelegateRunActionGoalSupersededCriteriaCriteriaAuthorKindUser  DelegateRunActionGoalSupersededCriteriaCriteriaAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalSupersededCriteriaCriteriaAuthorKind enum.
+func (e DelegateRunActionGoalSupersededCriteriaCriteriaAuthorKind) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalSupersededCriteriaCriteriaAuthorKindAgent:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaCriteriaAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalSupersededCriteriaCriteriaBehaviorScope.
+const (
+	DelegateRunActionGoalSupersededCriteriaCriteriaBehaviorScopeAttempt     DelegateRunActionGoalSupersededCriteriaCriteriaBehaviorScope = "attempt"
+	DelegateRunActionGoalSupersededCriteriaCriteriaBehaviorScopeTaskSession DelegateRunActionGoalSupersededCriteriaCriteriaBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalSupersededCriteriaCriteriaBehaviorScope enum.
+func (e DelegateRunActionGoalSupersededCriteriaCriteriaBehaviorScope) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalSupersededCriteriaCriteriaBehaviorScopeAttempt:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaCriteriaBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalSupersededCriteriaCriteriaJudgment.
+const (
+	DelegateRunActionGoalSupersededCriteriaCriteriaJudgmentArtifact     DelegateRunActionGoalSupersededCriteriaCriteriaJudgment = "artifact"
+	DelegateRunActionGoalSupersededCriteriaCriteriaJudgmentBoolean      DelegateRunActionGoalSupersededCriteriaCriteriaJudgment = "boolean"
+	DelegateRunActionGoalSupersededCriteriaCriteriaJudgmentQuantitative DelegateRunActionGoalSupersededCriteriaCriteriaJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalSupersededCriteriaCriteriaJudgment enum.
+func (e DelegateRunActionGoalSupersededCriteriaCriteriaJudgment) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalSupersededCriteriaCriteriaJudgmentArtifact:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaCriteriaJudgmentBoolean:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaCriteriaJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalSupersededCriteriaCriteriaKind.
+const (
+	DelegateRunActionGoalSupersededCriteriaCriteriaKindBehavior DelegateRunActionGoalSupersededCriteriaCriteriaKind = "behavior"
+	DelegateRunActionGoalSupersededCriteriaCriteriaKindCheck    DelegateRunActionGoalSupersededCriteriaCriteriaKind = "check"
+	DelegateRunActionGoalSupersededCriteriaCriteriaKindProse    DelegateRunActionGoalSupersededCriteriaCriteriaKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalSupersededCriteriaCriteriaKind enum.
+func (e DelegateRunActionGoalSupersededCriteriaCriteriaKind) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalSupersededCriteriaCriteriaKindBehavior:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaCriteriaKindCheck:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaCriteriaKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalSupersededCriteriaCriteriaProvenance.
+const (
+	DelegateRunActionGoalSupersededCriteriaCriteriaProvenanceFloor     DelegateRunActionGoalSupersededCriteriaCriteriaProvenance = "floor"
+	DelegateRunActionGoalSupersededCriteriaCriteriaProvenanceInferred  DelegateRunActionGoalSupersededCriteriaCriteriaProvenance = "inferred"
+	DelegateRunActionGoalSupersededCriteriaCriteriaProvenanceStated    DelegateRunActionGoalSupersededCriteriaCriteriaProvenance = "stated"
+	DelegateRunActionGoalSupersededCriteriaCriteriaProvenanceWorkspace DelegateRunActionGoalSupersededCriteriaCriteriaProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalSupersededCriteriaCriteriaProvenance enum.
+func (e DelegateRunActionGoalSupersededCriteriaCriteriaProvenance) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalSupersededCriteriaCriteriaProvenanceFloor:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaCriteriaProvenanceInferred:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaCriteriaProvenanceStated:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaCriteriaProvenanceWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalSupersededCriteriaCriteriaStatus.
+const (
+	DelegateRunActionGoalSupersededCriteriaCriteriaStatusMet     DelegateRunActionGoalSupersededCriteriaCriteriaStatus = "met"
+	DelegateRunActionGoalSupersededCriteriaCriteriaStatusPending DelegateRunActionGoalSupersededCriteriaCriteriaStatus = "pending"
+	DelegateRunActionGoalSupersededCriteriaCriteriaStatusUnmet   DelegateRunActionGoalSupersededCriteriaCriteriaStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalSupersededCriteriaCriteriaStatus enum.
+func (e DelegateRunActionGoalSupersededCriteriaCriteriaStatus) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalSupersededCriteriaCriteriaStatusMet:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaCriteriaStatusPending:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaCriteriaStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalSupersededCriteriaDodAuthorKind.
+const (
+	DelegateRunActionGoalSupersededCriteriaDodAuthorKindAgent DelegateRunActionGoalSupersededCriteriaDodAuthorKind = "agent"
+	DelegateRunActionGoalSupersededCriteriaDodAuthorKindUser  DelegateRunActionGoalSupersededCriteriaDodAuthorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalSupersededCriteriaDodAuthorKind enum.
+func (e DelegateRunActionGoalSupersededCriteriaDodAuthorKind) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalSupersededCriteriaDodAuthorKindAgent:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaDodAuthorKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalSupersededCriteriaDodBehaviorScope.
+const (
+	DelegateRunActionGoalSupersededCriteriaDodBehaviorScopeAttempt     DelegateRunActionGoalSupersededCriteriaDodBehaviorScope = "attempt"
+	DelegateRunActionGoalSupersededCriteriaDodBehaviorScopeTaskSession DelegateRunActionGoalSupersededCriteriaDodBehaviorScope = "task_session"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalSupersededCriteriaDodBehaviorScope enum.
+func (e DelegateRunActionGoalSupersededCriteriaDodBehaviorScope) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalSupersededCriteriaDodBehaviorScopeAttempt:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaDodBehaviorScopeTaskSession:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalSupersededCriteriaDodJudgment.
+const (
+	DelegateRunActionGoalSupersededCriteriaDodJudgmentArtifact     DelegateRunActionGoalSupersededCriteriaDodJudgment = "artifact"
+	DelegateRunActionGoalSupersededCriteriaDodJudgmentBoolean      DelegateRunActionGoalSupersededCriteriaDodJudgment = "boolean"
+	DelegateRunActionGoalSupersededCriteriaDodJudgmentQuantitative DelegateRunActionGoalSupersededCriteriaDodJudgment = "quantitative"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalSupersededCriteriaDodJudgment enum.
+func (e DelegateRunActionGoalSupersededCriteriaDodJudgment) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalSupersededCriteriaDodJudgmentArtifact:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaDodJudgmentBoolean:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaDodJudgmentQuantitative:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalSupersededCriteriaDodKind.
+const (
+	DelegateRunActionGoalSupersededCriteriaDodKindBehavior DelegateRunActionGoalSupersededCriteriaDodKind = "behavior"
+	DelegateRunActionGoalSupersededCriteriaDodKindCheck    DelegateRunActionGoalSupersededCriteriaDodKind = "check"
+	DelegateRunActionGoalSupersededCriteriaDodKindProse    DelegateRunActionGoalSupersededCriteriaDodKind = "prose"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalSupersededCriteriaDodKind enum.
+func (e DelegateRunActionGoalSupersededCriteriaDodKind) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalSupersededCriteriaDodKindBehavior:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaDodKindCheck:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaDodKindProse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalSupersededCriteriaDodProvenance.
+const (
+	DelegateRunActionGoalSupersededCriteriaDodProvenanceFloor     DelegateRunActionGoalSupersededCriteriaDodProvenance = "floor"
+	DelegateRunActionGoalSupersededCriteriaDodProvenanceInferred  DelegateRunActionGoalSupersededCriteriaDodProvenance = "inferred"
+	DelegateRunActionGoalSupersededCriteriaDodProvenanceStated    DelegateRunActionGoalSupersededCriteriaDodProvenance = "stated"
+	DelegateRunActionGoalSupersededCriteriaDodProvenanceWorkspace DelegateRunActionGoalSupersededCriteriaDodProvenance = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalSupersededCriteriaDodProvenance enum.
+func (e DelegateRunActionGoalSupersededCriteriaDodProvenance) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalSupersededCriteriaDodProvenanceFloor:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaDodProvenanceInferred:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaDodProvenanceStated:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaDodProvenanceWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalSupersededCriteriaDodStatus.
+const (
+	DelegateRunActionGoalSupersededCriteriaDodStatusMet     DelegateRunActionGoalSupersededCriteriaDodStatus = "met"
+	DelegateRunActionGoalSupersededCriteriaDodStatusPending DelegateRunActionGoalSupersededCriteriaDodStatus = "pending"
+	DelegateRunActionGoalSupersededCriteriaDodStatusUnmet   DelegateRunActionGoalSupersededCriteriaDodStatus = "unmet"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalSupersededCriteriaDodStatus enum.
+func (e DelegateRunActionGoalSupersededCriteriaDodStatus) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalSupersededCriteriaDodStatusMet:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaDodStatusPending:
+		return true
+	case DelegateRunActionGoalSupersededCriteriaDodStatusUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalTerminalHistoryState.
+const (
+	DelegateRunActionGoalTerminalHistoryStateCleared   DelegateRunActionGoalTerminalHistoryState = "cleared"
+	DelegateRunActionGoalTerminalHistoryStateExhausted DelegateRunActionGoalTerminalHistoryState = "exhausted"
+	DelegateRunActionGoalTerminalHistoryStateExpired   DelegateRunActionGoalTerminalHistoryState = "expired"
+	DelegateRunActionGoalTerminalHistoryStateMet       DelegateRunActionGoalTerminalHistoryState = "met"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalTerminalHistoryState enum.
+func (e DelegateRunActionGoalTerminalHistoryState) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalTerminalHistoryStateCleared:
+		return true
+	case DelegateRunActionGoalTerminalHistoryStateExhausted:
+		return true
+	case DelegateRunActionGoalTerminalHistoryStateExpired:
+		return true
+	case DelegateRunActionGoalTerminalHistoryStateMet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSource.
+const (
+	DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSourceDiff         DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSource = "diff"
+	DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSourceFileRead     DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSource = "file_read"
+	DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSourceMachineCheck DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSource = "machine_check"
+	DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSourceSessionRead  DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSource = "session_read"
+	DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSourceTranscript   DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSource = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSource enum.
+func (e DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSource) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSourceDiff:
+		return true
+	case DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSourceFileRead:
+		return true
+	case DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSourceMachineCheck:
+		return true
+	case DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSourceSessionRead:
+		return true
+	case DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSourceTranscript:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenance.
+const (
+	DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenanceDeterministicCheck DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenance = "deterministic_check"
+	DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenanceDiff               DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenance = "diff"
+	DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenanceJudgeRead          DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenance = "judge_read"
+	DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenanceNone               DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenance = "none"
+	DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenanceSessionRead        DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenance = "session_read"
+	DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenanceTranscript         DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenance = "transcript"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenance enum.
+func (e DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenance) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenanceDeterministicCheck:
+		return true
+	case DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenanceDiff:
+		return true
+	case DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenanceJudgeRead:
+		return true
+	case DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenanceNone:
+		return true
+	case DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenanceSessionRead:
+		return true
+	case DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenanceTranscript:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRunActionGoalTerminalHistoryVerdictScope.
+const (
+	DelegateRunActionGoalTerminalHistoryVerdictScopeGoal DelegateRunActionGoalTerminalHistoryVerdictScope = "goal"
+	DelegateRunActionGoalTerminalHistoryVerdictScopePlan DelegateRunActionGoalTerminalHistoryVerdictScope = "plan"
+	DelegateRunActionGoalTerminalHistoryVerdictScopeTask DelegateRunActionGoalTerminalHistoryVerdictScope = "task"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRunActionGoalTerminalHistoryVerdictScope enum.
+func (e DelegateRunActionGoalTerminalHistoryVerdictScope) Valid() bool {
+	switch e {
+	case DelegateRunActionGoalTerminalHistoryVerdictScopeGoal:
+		return true
+	case DelegateRunActionGoalTerminalHistoryVerdictScopePlan:
+		return true
+	case DelegateRunActionGoalTerminalHistoryVerdictScopeTask:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DelegateSessionResponseState.
 const (
 	DelegateSessionResponseStateCancelled  DelegateSessionResponseState = "cancelled"
@@ -2234,6 +2996,45 @@ const (
 func (e DelegateStatusActionAction) Valid() bool {
 	switch e {
 	case DelegateStatusActionActionStatus:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateStatusResponseSessionOriginKind.
+const (
+	DelegateStatusResponseSessionOriginKindChannel   DelegateStatusResponseSessionOriginKind = "channel"
+	DelegateStatusResponseSessionOriginKindChat      DelegateStatusResponseSessionOriginKind = "chat"
+	DelegateStatusResponseSessionOriginKindDelegate  DelegateStatusResponseSessionOriginKind = "delegate"
+	DelegateStatusResponseSessionOriginKindHeartbeat DelegateStatusResponseSessionOriginKind = "heartbeat"
+	DelegateStatusResponseSessionOriginKindHuman     DelegateStatusResponseSessionOriginKind = "human"
+	DelegateStatusResponseSessionOriginKindPlan      DelegateStatusResponseSessionOriginKind = "plan"
+	DelegateStatusResponseSessionOriginKindScheduled DelegateStatusResponseSessionOriginKind = "scheduled"
+	DelegateStatusResponseSessionOriginKindTask      DelegateStatusResponseSessionOriginKind = "task"
+	DelegateStatusResponseSessionOriginKindVerifier  DelegateStatusResponseSessionOriginKind = "verifier"
+)
+
+// Valid indicates whether the value is a known member of the DelegateStatusResponseSessionOriginKind enum.
+func (e DelegateStatusResponseSessionOriginKind) Valid() bool {
+	switch e {
+	case DelegateStatusResponseSessionOriginKindChannel:
+		return true
+	case DelegateStatusResponseSessionOriginKindChat:
+		return true
+	case DelegateStatusResponseSessionOriginKindDelegate:
+		return true
+	case DelegateStatusResponseSessionOriginKindHeartbeat:
+		return true
+	case DelegateStatusResponseSessionOriginKindHuman:
+		return true
+	case DelegateStatusResponseSessionOriginKindPlan:
+		return true
+	case DelegateStatusResponseSessionOriginKindScheduled:
+		return true
+	case DelegateStatusResponseSessionOriginKindTask:
+		return true
+	case DelegateStatusResponseSessionOriginKindVerifier:
 		return true
 	default:
 		return false
@@ -2291,6 +3092,42 @@ func (e DelegateStatusResponseSessionState) Valid() bool {
 	case DelegateStatusResponseSessionStateRunning:
 		return true
 	case DelegateStatusResponseSessionStateTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateStatusResponseSessionSteeredByAuthorizationMode.
+const (
+	DelegateStatusResponseSessionSteeredByAuthorizationModeDirect DelegateStatusResponseSessionSteeredByAuthorizationMode = "direct"
+	DelegateStatusResponseSessionSteeredByAuthorizationModeTask   DelegateStatusResponseSessionSteeredByAuthorizationMode = "task"
+)
+
+// Valid indicates whether the value is a known member of the DelegateStatusResponseSessionSteeredByAuthorizationMode enum.
+func (e DelegateStatusResponseSessionSteeredByAuthorizationMode) Valid() bool {
+	switch e {
+	case DelegateStatusResponseSessionSteeredByAuthorizationModeDirect:
+		return true
+	case DelegateStatusResponseSessionSteeredByAuthorizationModeTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateStatusResponseSessionStopByKind.
+const (
+	DelegateStatusResponseSessionStopByKindAgent DelegateStatusResponseSessionStopByKind = "agent"
+	DelegateStatusResponseSessionStopByKindHuman DelegateStatusResponseSessionStopByKind = "human"
+)
+
+// Valid indicates whether the value is a known member of the DelegateStatusResponseSessionStopByKind enum.
+func (e DelegateStatusResponseSessionStopByKind) Valid() bool {
+	switch e {
+	case DelegateStatusResponseSessionStopByKindAgent:
+		return true
+	case DelegateStatusResponseSessionStopByKindHuman:
 		return true
 	default:
 		return false
@@ -4142,10 +4979,209 @@ func (e MessageStatus) Valid() bool {
 	}
 }
 
+// Defines values for MessageSubagentEndReason.
+const (
+	MessageSubagentEndReasonParentCancelled MessageSubagentEndReason = "parent_cancelled"
+	MessageSubagentEndReasonParentDoneEarly MessageSubagentEndReason = "parent_done_early"
+	MessageSubagentEndReasonParentTimeout   MessageSubagentEndReason = "parent_timeout"
+	MessageSubagentEndReasonUnknown         MessageSubagentEndReason = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentEndReason enum.
+func (e MessageSubagentEndReason) Valid() bool {
+	switch e {
+	case MessageSubagentEndReasonParentCancelled:
+		return true
+	case MessageSubagentEndReasonParentDoneEarly:
+		return true
+	case MessageSubagentEndReasonParentTimeout:
+		return true
+	case MessageSubagentEndReasonUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentEndStatus.
+const (
+	MessageSubagentEndStatusCancelled   MessageSubagentEndStatus = "cancelled"
+	MessageSubagentEndStatusError       MessageSubagentEndStatus = "error"
+	MessageSubagentEndStatusInterrupted MessageSubagentEndStatus = "interrupted"
+	MessageSubagentEndStatusParked      MessageSubagentEndStatus = "parked"
+	MessageSubagentEndStatusSuccess     MessageSubagentEndStatus = "success"
+	MessageSubagentEndStatusTimeout     MessageSubagentEndStatus = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentEndStatus enum.
+func (e MessageSubagentEndStatus) Valid() bool {
+	switch e {
+	case MessageSubagentEndStatusCancelled:
+		return true
+	case MessageSubagentEndStatusError:
+		return true
+	case MessageSubagentEndStatusInterrupted:
+		return true
+	case MessageSubagentEndStatusParked:
+		return true
+	case MessageSubagentEndStatusSuccess:
+		return true
+	case MessageSubagentEndStatusTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentEndType.
+const (
+	MessageSubagentEndTypeSubagentEnd MessageSubagentEndType = "subagent_end"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentEndType enum.
+func (e MessageSubagentEndType) Valid() bool {
+	switch e {
+	case MessageSubagentEndTypeSubagentEnd:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentMessageKind.
+const (
+	MessageSubagentMessageKindArtifact        MessageSubagentMessageKind = "artifact"
+	MessageSubagentMessageKindBlocker         MessageSubagentMessageKind = "blocker"
+	MessageSubagentMessageKindCheckpoint      MessageSubagentMessageKind = "checkpoint"
+	MessageSubagentMessageKindDecisionRequest MessageSubagentMessageKind = "decision_request"
+	MessageSubagentMessageKindError           MessageSubagentMessageKind = "error"
+	MessageSubagentMessageKindGoalStatus      MessageSubagentMessageKind = "goal_status"
+	MessageSubagentMessageKindHandback        MessageSubagentMessageKind = "handback"
+	MessageSubagentMessageKindProgress        MessageSubagentMessageKind = "progress"
+	MessageSubagentMessageKindQuestion        MessageSubagentMessageKind = "question"
+	MessageSubagentMessageKindRespond         MessageSubagentMessageKind = "respond"
+	MessageSubagentMessageKindSteer           MessageSubagentMessageKind = "steer"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentMessageKind enum.
+func (e MessageSubagentMessageKind) Valid() bool {
+	switch e {
+	case MessageSubagentMessageKindArtifact:
+		return true
+	case MessageSubagentMessageKindBlocker:
+		return true
+	case MessageSubagentMessageKindCheckpoint:
+		return true
+	case MessageSubagentMessageKindDecisionRequest:
+		return true
+	case MessageSubagentMessageKindError:
+		return true
+	case MessageSubagentMessageKindGoalStatus:
+		return true
+	case MessageSubagentMessageKindHandback:
+		return true
+	case MessageSubagentMessageKindProgress:
+		return true
+	case MessageSubagentMessageKindQuestion:
+		return true
+	case MessageSubagentMessageKindRespond:
+		return true
+	case MessageSubagentMessageKindSteer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentMessageType.
+const (
+	MessageSubagentMessageTypeSubagentMessage MessageSubagentMessageType = "subagent_message"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentMessageType enum.
+func (e MessageSubagentMessageType) Valid() bool {
+	switch e {
+	case MessageSubagentMessageTypeSubagentMessage:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentStartType.
+const (
+	MessageSubagentStartTypeSubagentStart MessageSubagentStartType = "subagent_start"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentStartType enum.
+func (e MessageSubagentStartType) Valid() bool {
+	switch e {
+	case MessageSubagentStartTypeSubagentStart:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentStateState.
+const (
+	MessageSubagentStateStateCancelled  MessageSubagentStateState = "cancelled"
+	MessageSubagentStateStateCompleted  MessageSubagentStateState = "completed"
+	MessageSubagentStateStateFailed     MessageSubagentStateState = "failed"
+	MessageSubagentStateStateNeedsInput MessageSubagentStateState = "needs_input"
+	MessageSubagentStateStatePaused     MessageSubagentStateState = "paused"
+	MessageSubagentStateStateQueued     MessageSubagentStateState = "queued"
+	MessageSubagentStateStateRunning    MessageSubagentStateState = "running"
+	MessageSubagentStateStateTimedOut   MessageSubagentStateState = "timed_out"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentStateState enum.
+func (e MessageSubagentStateState) Valid() bool {
+	switch e {
+	case MessageSubagentStateStateCancelled:
+		return true
+	case MessageSubagentStateStateCompleted:
+		return true
+	case MessageSubagentStateStateFailed:
+		return true
+	case MessageSubagentStateStateNeedsInput:
+		return true
+	case MessageSubagentStateStatePaused:
+		return true
+	case MessageSubagentStateStateQueued:
+		return true
+	case MessageSubagentStateStateRunning:
+		return true
+	case MessageSubagentStateStateTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentStateType.
+const (
+	MessageSubagentStateTypeSubagentState MessageSubagentStateType = "subagent_state"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentStateType enum.
+func (e MessageSubagentStateType) Valid() bool {
+	switch e {
+	case MessageSubagentStateTypeSubagentState:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageSystemSubtype.
 const (
 	MessageSystemSubtypeBrowserHandoverNotice MessageSystemSubtype = "browser_handover_notice"
 	MessageSystemSubtypeGoalOutcome           MessageSystemSubtype = "goal_outcome"
+	MessageSystemSubtypeSubagentEnd           MessageSystemSubtype = "subagent_end"
+	MessageSystemSubtypeSubagentMessage       MessageSystemSubtype = "subagent_message"
+	MessageSystemSubtypeSubagentStart         MessageSystemSubtype = "subagent_start"
+	MessageSystemSubtypeSubagentState         MessageSystemSubtype = "subagent_state"
 )
 
 // Valid indicates whether the value is a known member of the MessageSystemSubtype enum.
@@ -4154,6 +5190,14 @@ func (e MessageSystemSubtype) Valid() bool {
 	case MessageSystemSubtypeBrowserHandoverNotice:
 		return true
 	case MessageSystemSubtypeGoalOutcome:
+		return true
+	case MessageSystemSubtypeSubagentEnd:
+		return true
+	case MessageSystemSubtypeSubagentMessage:
+		return true
+	case MessageSystemSubtypeSubagentStart:
+		return true
+	case MessageSystemSubtypeSubagentState:
 		return true
 	default:
 		return false
@@ -7382,10 +8426,209 @@ func (e SessionDetailMessagesStatus) Valid() bool {
 	}
 }
 
+// Defines values for SessionDetailMessagesSubagentEndReason.
+const (
+	SessionDetailMessagesSubagentEndReasonParentCancelled SessionDetailMessagesSubagentEndReason = "parent_cancelled"
+	SessionDetailMessagesSubagentEndReasonParentDoneEarly SessionDetailMessagesSubagentEndReason = "parent_done_early"
+	SessionDetailMessagesSubagentEndReasonParentTimeout   SessionDetailMessagesSubagentEndReason = "parent_timeout"
+	SessionDetailMessagesSubagentEndReasonUnknown         SessionDetailMessagesSubagentEndReason = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentEndReason enum.
+func (e SessionDetailMessagesSubagentEndReason) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentEndReasonParentCancelled:
+		return true
+	case SessionDetailMessagesSubagentEndReasonParentDoneEarly:
+		return true
+	case SessionDetailMessagesSubagentEndReasonParentTimeout:
+		return true
+	case SessionDetailMessagesSubagentEndReasonUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentEndStatus.
+const (
+	SessionDetailMessagesSubagentEndStatusCancelled   SessionDetailMessagesSubagentEndStatus = "cancelled"
+	SessionDetailMessagesSubagentEndStatusError       SessionDetailMessagesSubagentEndStatus = "error"
+	SessionDetailMessagesSubagentEndStatusInterrupted SessionDetailMessagesSubagentEndStatus = "interrupted"
+	SessionDetailMessagesSubagentEndStatusParked      SessionDetailMessagesSubagentEndStatus = "parked"
+	SessionDetailMessagesSubagentEndStatusSuccess     SessionDetailMessagesSubagentEndStatus = "success"
+	SessionDetailMessagesSubagentEndStatusTimeout     SessionDetailMessagesSubagentEndStatus = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentEndStatus enum.
+func (e SessionDetailMessagesSubagentEndStatus) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentEndStatusCancelled:
+		return true
+	case SessionDetailMessagesSubagentEndStatusError:
+		return true
+	case SessionDetailMessagesSubagentEndStatusInterrupted:
+		return true
+	case SessionDetailMessagesSubagentEndStatusParked:
+		return true
+	case SessionDetailMessagesSubagentEndStatusSuccess:
+		return true
+	case SessionDetailMessagesSubagentEndStatusTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentEndType.
+const (
+	SessionDetailMessagesSubagentEndTypeSubagentEnd SessionDetailMessagesSubagentEndType = "subagent_end"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentEndType enum.
+func (e SessionDetailMessagesSubagentEndType) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentEndTypeSubagentEnd:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentMessageKind.
+const (
+	SessionDetailMessagesSubagentMessageKindArtifact        SessionDetailMessagesSubagentMessageKind = "artifact"
+	SessionDetailMessagesSubagentMessageKindBlocker         SessionDetailMessagesSubagentMessageKind = "blocker"
+	SessionDetailMessagesSubagentMessageKindCheckpoint      SessionDetailMessagesSubagentMessageKind = "checkpoint"
+	SessionDetailMessagesSubagentMessageKindDecisionRequest SessionDetailMessagesSubagentMessageKind = "decision_request"
+	SessionDetailMessagesSubagentMessageKindError           SessionDetailMessagesSubagentMessageKind = "error"
+	SessionDetailMessagesSubagentMessageKindGoalStatus      SessionDetailMessagesSubagentMessageKind = "goal_status"
+	SessionDetailMessagesSubagentMessageKindHandback        SessionDetailMessagesSubagentMessageKind = "handback"
+	SessionDetailMessagesSubagentMessageKindProgress        SessionDetailMessagesSubagentMessageKind = "progress"
+	SessionDetailMessagesSubagentMessageKindQuestion        SessionDetailMessagesSubagentMessageKind = "question"
+	SessionDetailMessagesSubagentMessageKindRespond         SessionDetailMessagesSubagentMessageKind = "respond"
+	SessionDetailMessagesSubagentMessageKindSteer           SessionDetailMessagesSubagentMessageKind = "steer"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentMessageKind enum.
+func (e SessionDetailMessagesSubagentMessageKind) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentMessageKindArtifact:
+		return true
+	case SessionDetailMessagesSubagentMessageKindBlocker:
+		return true
+	case SessionDetailMessagesSubagentMessageKindCheckpoint:
+		return true
+	case SessionDetailMessagesSubagentMessageKindDecisionRequest:
+		return true
+	case SessionDetailMessagesSubagentMessageKindError:
+		return true
+	case SessionDetailMessagesSubagentMessageKindGoalStatus:
+		return true
+	case SessionDetailMessagesSubagentMessageKindHandback:
+		return true
+	case SessionDetailMessagesSubagentMessageKindProgress:
+		return true
+	case SessionDetailMessagesSubagentMessageKindQuestion:
+		return true
+	case SessionDetailMessagesSubagentMessageKindRespond:
+		return true
+	case SessionDetailMessagesSubagentMessageKindSteer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentMessageType.
+const (
+	SessionDetailMessagesSubagentMessageTypeSubagentMessage SessionDetailMessagesSubagentMessageType = "subagent_message"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentMessageType enum.
+func (e SessionDetailMessagesSubagentMessageType) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentMessageTypeSubagentMessage:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentStartType.
+const (
+	SessionDetailMessagesSubagentStartTypeSubagentStart SessionDetailMessagesSubagentStartType = "subagent_start"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStartType enum.
+func (e SessionDetailMessagesSubagentStartType) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentStartTypeSubagentStart:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentStateState.
+const (
+	SessionDetailMessagesSubagentStateStateCancelled  SessionDetailMessagesSubagentStateState = "cancelled"
+	SessionDetailMessagesSubagentStateStateCompleted  SessionDetailMessagesSubagentStateState = "completed"
+	SessionDetailMessagesSubagentStateStateFailed     SessionDetailMessagesSubagentStateState = "failed"
+	SessionDetailMessagesSubagentStateStateNeedsInput SessionDetailMessagesSubagentStateState = "needs_input"
+	SessionDetailMessagesSubagentStateStatePaused     SessionDetailMessagesSubagentStateState = "paused"
+	SessionDetailMessagesSubagentStateStateQueued     SessionDetailMessagesSubagentStateState = "queued"
+	SessionDetailMessagesSubagentStateStateRunning    SessionDetailMessagesSubagentStateState = "running"
+	SessionDetailMessagesSubagentStateStateTimedOut   SessionDetailMessagesSubagentStateState = "timed_out"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateState enum.
+func (e SessionDetailMessagesSubagentStateState) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentStateStateCancelled:
+		return true
+	case SessionDetailMessagesSubagentStateStateCompleted:
+		return true
+	case SessionDetailMessagesSubagentStateStateFailed:
+		return true
+	case SessionDetailMessagesSubagentStateStateNeedsInput:
+		return true
+	case SessionDetailMessagesSubagentStateStatePaused:
+		return true
+	case SessionDetailMessagesSubagentStateStateQueued:
+		return true
+	case SessionDetailMessagesSubagentStateStateRunning:
+		return true
+	case SessionDetailMessagesSubagentStateStateTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentStateType.
+const (
+	SessionDetailMessagesSubagentStateTypeSubagentState SessionDetailMessagesSubagentStateType = "subagent_state"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateType enum.
+func (e SessionDetailMessagesSubagentStateType) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentStateTypeSubagentState:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionDetailMessagesSystemSubtype.
 const (
 	SessionDetailMessagesSystemSubtypeBrowserHandoverNotice SessionDetailMessagesSystemSubtype = "browser_handover_notice"
 	SessionDetailMessagesSystemSubtypeGoalOutcome           SessionDetailMessagesSystemSubtype = "goal_outcome"
+	SessionDetailMessagesSystemSubtypeSubagentEnd           SessionDetailMessagesSystemSubtype = "subagent_end"
+	SessionDetailMessagesSystemSubtypeSubagentMessage       SessionDetailMessagesSystemSubtype = "subagent_message"
+	SessionDetailMessagesSystemSubtypeSubagentStart         SessionDetailMessagesSystemSubtype = "subagent_start"
+	SessionDetailMessagesSystemSubtypeSubagentState         SessionDetailMessagesSystemSubtype = "subagent_state"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesSystemSubtype enum.
@@ -7394,6 +8637,14 @@ func (e SessionDetailMessagesSystemSubtype) Valid() bool {
 	case SessionDetailMessagesSystemSubtypeBrowserHandoverNotice:
 		return true
 	case SessionDetailMessagesSystemSubtypeGoalOutcome:
+		return true
+	case SessionDetailMessagesSystemSubtypeSubagentEnd:
+		return true
+	case SessionDetailMessagesSystemSubtypeSubagentMessage:
+		return true
+	case SessionDetailMessagesSystemSubtypeSubagentStart:
+		return true
+	case SessionDetailMessagesSystemSubtypeSubagentState:
 		return true
 	default:
 		return false
@@ -7637,6 +8888,45 @@ func (e SessionDetailSessionType) Valid() bool {
 	}
 }
 
+// Defines values for SessionLifecycleRecordOriginKind.
+const (
+	SessionLifecycleRecordOriginKindChannel   SessionLifecycleRecordOriginKind = "channel"
+	SessionLifecycleRecordOriginKindChat      SessionLifecycleRecordOriginKind = "chat"
+	SessionLifecycleRecordOriginKindDelegate  SessionLifecycleRecordOriginKind = "delegate"
+	SessionLifecycleRecordOriginKindHeartbeat SessionLifecycleRecordOriginKind = "heartbeat"
+	SessionLifecycleRecordOriginKindHuman     SessionLifecycleRecordOriginKind = "human"
+	SessionLifecycleRecordOriginKindPlan      SessionLifecycleRecordOriginKind = "plan"
+	SessionLifecycleRecordOriginKindScheduled SessionLifecycleRecordOriginKind = "scheduled"
+	SessionLifecycleRecordOriginKindTask      SessionLifecycleRecordOriginKind = "task"
+	SessionLifecycleRecordOriginKindVerifier  SessionLifecycleRecordOriginKind = "verifier"
+)
+
+// Valid indicates whether the value is a known member of the SessionLifecycleRecordOriginKind enum.
+func (e SessionLifecycleRecordOriginKind) Valid() bool {
+	switch e {
+	case SessionLifecycleRecordOriginKindChannel:
+		return true
+	case SessionLifecycleRecordOriginKindChat:
+		return true
+	case SessionLifecycleRecordOriginKindDelegate:
+		return true
+	case SessionLifecycleRecordOriginKindHeartbeat:
+		return true
+	case SessionLifecycleRecordOriginKindHuman:
+		return true
+	case SessionLifecycleRecordOriginKindPlan:
+		return true
+	case SessionLifecycleRecordOriginKindScheduled:
+		return true
+	case SessionLifecycleRecordOriginKindTask:
+		return true
+	case SessionLifecycleRecordOriginKindVerifier:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionLifecycleRecordOwnerScopeKind.
 const (
 	SessionLifecycleRecordOwnerScopeKindHuman         SessionLifecycleRecordOwnerScopeKind = "human"
@@ -7688,6 +8978,42 @@ func (e SessionLifecycleRecordState) Valid() bool {
 	case SessionLifecycleRecordStateRunning:
 		return true
 	case SessionLifecycleRecordStateTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionLifecycleRecordSteeredByAuthorizationMode.
+const (
+	SessionLifecycleRecordSteeredByAuthorizationModeDirect SessionLifecycleRecordSteeredByAuthorizationMode = "direct"
+	SessionLifecycleRecordSteeredByAuthorizationModeTask   SessionLifecycleRecordSteeredByAuthorizationMode = "task"
+)
+
+// Valid indicates whether the value is a known member of the SessionLifecycleRecordSteeredByAuthorizationMode enum.
+func (e SessionLifecycleRecordSteeredByAuthorizationMode) Valid() bool {
+	switch e {
+	case SessionLifecycleRecordSteeredByAuthorizationModeDirect:
+		return true
+	case SessionLifecycleRecordSteeredByAuthorizationModeTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionLifecycleRecordStopByKind.
+const (
+	SessionLifecycleRecordStopByKindAgent SessionLifecycleRecordStopByKind = "agent"
+	SessionLifecycleRecordStopByKindHuman SessionLifecycleRecordStopByKind = "human"
+)
+
+// Valid indicates whether the value is a known member of the SessionLifecycleRecordStopByKind enum.
+func (e SessionLifecycleRecordStopByKind) Valid() bool {
+	switch e {
+	case SessionLifecycleRecordStopByKindAgent:
+		return true
+	case SessionLifecycleRecordStopByKindHuman:
 		return true
 	default:
 		return false
@@ -7886,6 +9212,7 @@ func (e SessionMessageErrorKind) Valid() bool {
 // Defines values for SessionMessageGoalStatusCondition.
 const (
 	SessionMessageGoalStatusConditionMet           SessionMessageGoalStatusCondition = "met"
+	SessionMessageGoalStatusConditionNotMet        SessionMessageGoalStatusCondition = "not_met"
 	SessionMessageGoalStatusConditionWaitingOnUser SessionMessageGoalStatusCondition = "waiting_on_user"
 )
 
@@ -7893,6 +9220,8 @@ const (
 func (e SessionMessageGoalStatusCondition) Valid() bool {
 	switch e {
 	case SessionMessageGoalStatusConditionMet:
+		return true
+	case SessionMessageGoalStatusConditionNotMet:
 		return true
 	case SessionMessageGoalStatusConditionWaitingOnUser:
 		return true
@@ -7903,12 +9232,15 @@ func (e SessionMessageGoalStatusCondition) Valid() bool {
 
 // Defines values for SessionMessageGoalStatusDirection.
 const (
-	SessionMessageGoalStatusDirectionSessionToUi SessionMessageGoalStatusDirection = "session_to_ui"
+	SessionMessageGoalStatusDirectionSessionToParent SessionMessageGoalStatusDirection = "session_to_parent"
+	SessionMessageGoalStatusDirectionSessionToUi     SessionMessageGoalStatusDirection = "session_to_ui"
 )
 
 // Valid indicates whether the value is a known member of the SessionMessageGoalStatusDirection enum.
 func (e SessionMessageGoalStatusDirection) Valid() bool {
 	switch e {
+	case SessionMessageGoalStatusDirectionSessionToParent:
+		return true
 	case SessionMessageGoalStatusDirectionSessionToUi:
 		return true
 	default:
@@ -13137,6 +14469,9 @@ type DelegateRespondResponse struct {
 		// Is3p True when this session dispatches via an external CLI runner.
 		Is3p bool `json:"is_3p"`
 
+		// QueuePosition 1-based position in the admission queue when `state == queued`, else 0. Lets the caller know its place in line for execution (ADR-091 I-2).
+		QueuePosition *int `json:"queue_position,omitempty"`
+
 		// ResumedFrom The prior session id this generation resumed from, when applicable.
 		ResumedFrom *string `json:"resumed_from,omitempty"`
 
@@ -13155,11 +14490,463 @@ type DelegateRespondResponseCorrectiveSessionState string
 type DelegateRunAction struct {
 	Action DelegateRunActionAction `json:"action"`
 
-	// AllowBlockingQuestion Explicit opt-in (only meaningful with `wait: true`) permitting a bounded human-routed wait on a child `question` instead of the default rejection (P2M-14/MIN-3).
-	AllowBlockingQuestion *bool `json:"allow_blocking_question,omitempty"`
-
 	// Critical Continue running after the parent finishes gracefully.
 	Critical *bool `json:"critical,omitempty"`
+
+	// Goal The unified goal / criteria record (ADR-086 D1 — a goal is its own stored entity, addressed by its own id, and is NOT represented as fields on a session or a task; ADR-053 §Contract Surface, S1 — "one criteria model, two authors"). A chat `/goal` and a standalone Task's criteria are judged against the SAME `AcceptanceCriterion` model (REUSED, never duplicated — a second goal store is a DoD-11 blocking finding). Authored two ways: `chat_compiled` (agent-compiled from user intent via the SMART goal compiler, US-3) or `task_explicit` (explicit at task creation). TYPE-ONLY on the wire (D-E, 2026-09-11, OQ-2 ANSWERED): registered in `components.schemas` and referenced by NO path — there is no `GET`/`PATCH /api/v1/goals/{id}` and no `GoalUpdateRequest.yaml`, in this delivery or as a follow-up. The SPA reaches goal state through `GoalStatusFrame` (WS) and through the task shapes' `dod`/`criteria`. RESHAPED from the pre-existing four-field stub (`binding_kind [session|task|plan]`/`binding_id`/`attempts_max`/`judge_rounds_max`/ `state [active|done|failed|cleared]`) by this delivery — see the joint ADR-084/ADR-085/ADR-086 delivery plan's C-05, R-14, R-31, OQ-1.
+	Goal *struct {
+		// ActiveSessionId GOAL-FR-006 — the id of the session this goal is currently active in, once `state != defining`. Absent while `state == defining`. Cleared (never re-pointed) once the goal reaches a terminal state — the terminal record still names the session that carried it via the LAST value this field held before the transition, per the `terminal_history`/replay-anchored transcript, not via a live pointer that could dangle (EC-10).
+		ActiveSessionId *string `json:"active_session_id,omitempty"`
+
+		// AttemptsUsed GOAL-FR-006 — attempts consumed so far against this goal's owner's attempt ceiling (a distinct counter from `round` — `TestAttemptsVsRounds_DistinctBrakes` asserts the two counters are distinct, not that their numbers differ, R-03). Reset to 0 when a terminal task-owned goal re-enters `active` on task re-run (R-04).
+		AttemptsUsed *int `json:"attempts_used,omitempty"`
+
+		// CreatedAt RFC3339 timestamp this goal was set/created.
+		CreatedAt time.Time `json:"created_at"`
+
+		// Criteria REUSED unchanged (S1) — `kind: check` is the machine-checkable ladder rung ("machine" = `check`), `behavior` the deterministic tool-call-log rung, `prose` the subjective Judge rung.
+		Criteria []struct {
+			// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+			Author struct {
+				// Id Agent ID or username of the author.
+				Id string `json:"id"`
+
+				// Kind Whether this criterion was authored by an agent or a human user.
+				Kind DelegateRunActionGoalCriteriaAuthorKind `json:"kind"`
+			} `json:"author"`
+
+			// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+			Behavior *struct {
+				// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+				MaxCount *int `json:"max_count,omitempty"`
+
+				// MinCount Minimum number of successful calls of `tool` required within `scope`.
+				MinCount *int `json:"min_count,omitempty"`
+
+				// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+				Scope *DelegateRunActionGoalCriteriaBehaviorScope `json:"scope,omitempty"`
+
+				// Tool Name of the tool whose successful-call count is checked.
+				Tool string `json:"tool"`
+			} `json:"behavior,omitempty"`
+
+			// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+			Check *struct {
+				// Command Shell command run through the assignee's `bash` tool.
+				Command string `json:"command"`
+
+				// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+				ExpectedExitCode int `json:"expected_exit_code"`
+			} `json:"check,omitempty"`
+
+			// ClauseCount JUDGE-FR-006b — the number of distinct clauses in this criterion's `text`, computed once by `pkg/task/criterion.go::normalizeCriteria` when the criterion is created or updated (never recomputed at adjudication time — see FR-006b's rationale: a count derived at judging time would let the judged party shrink a failing multi-clause criterion into fewer clauses to reduce its own evidence bar). OPTIONAL here only in the sense that a criterion loaded before this field existed carries none until its own next load-time backfill; the server always persists an explicit value going forward, the same precedent as `status`'s own `CritPending` backfill. Consumed exclusively as a grounding-evidence REPORTING signal (how many distinctly-grounded evidence entries the Judge's investigation found) — per operator decision D-B, grounding is never a proof gate, and this field NEVER changes a verdict from `met` to anything else.
+			ClauseCount *int `json:"clause_count,omitempty"`
+
+			// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+			Id *string `json:"id,omitempty"`
+
+			// Judgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+			Judgment DelegateRunActionGoalCriteriaJudgment `json:"judgment"`
+
+			// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+			Kind DelegateRunActionGoalCriteriaKind `json:"kind"`
+
+			// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+			Provenance *DelegateRunActionGoalCriteriaProvenance `json:"provenance,omitempty"`
+
+			// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
+			Status DelegateRunActionGoalCriteriaStatus `json:"status"`
+
+			// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+			Text string `json:"text"`
+		} `json:"criteria"`
+
+		// Definition The compiled SMART restatement of `prompt` (US-3 echo-confirm) — distinct from the raw prompt. Absent for `task_explicit` sources, which have no separate compile step.
+		Definition *string `json:"definition,omitempty"`
+
+		// Dod ADR-080 D-DOD — the goal's Definition of Done, DISTINCT from `criteria`: generic standing quality gates (e.g. no secrets in the output) vs. outcome-specific checks. `AcceptanceCriterion`-shaped (judged identically) but modelled as its own array, mirroring the existing `Plan.dod` precedent — never mixed into `criteria`. REQUIRED with `minItems: 1` — the compiler's built-in floor layer guarantees at least one item on every newly-compiled goal. A pre-ADR-080 persisted goal with no `dod` is backfilled with the built-in floor DoD at load time (before this schema validates), so a legacy goal always satisfies `minItems: 1` too. The Judge evaluates `criteria` UNION `dod` together.
+		Dod []struct {
+			// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+			Author struct {
+				// Id Agent ID or username of the author.
+				Id string `json:"id"`
+
+				// Kind Whether this criterion was authored by an agent or a human user.
+				Kind DelegateRunActionGoalDodAuthorKind `json:"kind"`
+			} `json:"author"`
+
+			// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+			Behavior *struct {
+				// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+				MaxCount *int `json:"max_count,omitempty"`
+
+				// MinCount Minimum number of successful calls of `tool` required within `scope`.
+				MinCount *int `json:"min_count,omitempty"`
+
+				// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+				Scope *DelegateRunActionGoalDodBehaviorScope `json:"scope,omitempty"`
+
+				// Tool Name of the tool whose successful-call count is checked.
+				Tool string `json:"tool"`
+			} `json:"behavior,omitempty"`
+
+			// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+			Check *struct {
+				// Command Shell command run through the assignee's `bash` tool.
+				Command string `json:"command"`
+
+				// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+				ExpectedExitCode int `json:"expected_exit_code"`
+			} `json:"check,omitempty"`
+
+			// ClauseCount JUDGE-FR-006b — the number of distinct clauses in this criterion's `text`, computed once by `pkg/task/criterion.go::normalizeCriteria` when the criterion is created or updated (never recomputed at adjudication time — see FR-006b's rationale: a count derived at judging time would let the judged party shrink a failing multi-clause criterion into fewer clauses to reduce its own evidence bar). OPTIONAL here only in the sense that a criterion loaded before this field existed carries none until its own next load-time backfill; the server always persists an explicit value going forward, the same precedent as `status`'s own `CritPending` backfill. Consumed exclusively as a grounding-evidence REPORTING signal (how many distinctly-grounded evidence entries the Judge's investigation found) — per operator decision D-B, grounding is never a proof gate, and this field NEVER changes a verdict from `met` to anything else.
+			ClauseCount *int `json:"clause_count,omitempty"`
+
+			// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+			Id *string `json:"id,omitempty"`
+
+			// Judgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+			Judgment DelegateRunActionGoalDodJudgment `json:"judgment"`
+
+			// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+			Kind DelegateRunActionGoalDodKind `json:"kind"`
+
+			// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+			Provenance *DelegateRunActionGoalDodProvenance `json:"provenance,omitempty"`
+
+			// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
+			Status DelegateRunActionGoalDodStatus `json:"status"`
+
+			// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+			Text string `json:"text"`
+		} `json:"dod"`
+
+		// GoalId Unique goal identifier.
+		GoalId string `json:"goal_id"`
+
+		// LastActivityAt GOAL-FR-006 — RFC3339 timestamp of the most recent activity on this goal (a claim, an adjudication, a criteria update). Drives the 7-day idle-expiry sweep (D-A) for BOTH owner kinds identically, and is the clock the goal's own retention (A-8: "the goal's own `last_activity_at` against the session retention window") measures against for a task-owned goal, which has no session lifecycle of its own to borrow a clock from. Initialised to `created_at`.
+		LastActivityAt time.Time `json:"last_activity_at"`
+
+		// LatestClaim GOAL-FR-006 — a snapshot of the most recent `goal_claim` tool call against this goal (JUDGE §D12's reliable claim channel). Absent until the first claim. Does not itself carry a verdict — see `latest_verdict` below, set only once the claim's adjudication completes.
+		LatestClaim *struct {
+			ClaimedAt time.Time `json:"claimed_at"`
+
+			// Evidence The claim's own evidence text. Required and non-empty (whitespace-trimmed) at the call when `status == met` (JUDGE machine-verifiable constraint); ignored otherwise. This is a snapshot of what was submitted, not a grounding excerpt — distinct from `CriterionVerdict.evidence`.
+			Evidence *string `json:"evidence,omitempty"`
+
+			// Status JUDGE machine-verifiable constraint — `goal_claim.status` enum is exactly these three values.
+			Status DelegateRunActionGoalLatestClaimStatus `json:"status"`
+		} `json:"latest_claim,omitempty"`
+
+		// LatestReason GOAL-FR-006 — most recent judge reason fed forward as steering (evaluator-optimizer pattern), mirroring `GoalStatusFrame.latest_reason`. Empty/absent before the first round completes.
+		LatestReason *string `json:"latest_reason,omitempty"`
+
+		// LatestVerdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
+		LatestVerdict *struct {
+			// Id Server-set verdict identifier (UUID).
+			Id string `json:"id"`
+
+			// JudgeAgentId ID of the Judge System Agent that produced this verdict (NFR-5 correlation — usage metering is attributed to this `agent_id` alongside the plan/task/goal correlation IDs).
+			JudgeAgentId string `json:"judge_agent_id"`
+
+			// JudgedAt RFC 3339 UTC timestamp when the verdict was produced.
+			JudgedAt time.Time `json:"judged_at"`
+
+			// Met Overall PASS/FAIL verdict across all criteria. Fail-closed default `false` — absence of a verdict never defaults to `true` (NFR-2).
+			Met bool `json:"met"`
+
+			// Model Judge model used to produce this verdict (transparency / NFR-5 metering).
+			Model string `json:"model"`
+
+			// PerCriterion Per-criterion outcomes making up the overall verdict.
+			PerCriterion []struct {
+				// CriterionId ID of the AcceptanceCriterion this verdict judges.
+				CriterionId string `json:"criterion_id"`
+
+				// Evidence JUDGE-FR-006 — one entry per clause of the criterion this verdict judges, each answering that clause with its own grounding excerpt. NEW, OPTIONAL, sibling field alongside `evidence_quote` (FR-006's own wording) — `evidence_quote` keeps its existing type/length/optionality unchanged for every reader that does not know about this field (C2); when `evidence` is present the engine populates `evidence_quote` from `evidence[0].quote` so no existing persisted-verdict reader, replay frame or SPA render is affected. A criterion with no machine-checkable form and no located evidence for one or more of its clauses is still the NORMAL case and may still be `met` on the Judge's reasoned conviction (GOAL-FR-038/FR-039, D-B) — this array is a REPORTING obligation the Judge uses to show its work and flag any clause it could not ground, never a gate that can turn a `met` into an `unmet`.
+				Evidence *[]struct {
+					// Part The clause text (a substring of the criterion's own `text`) this entry answers.
+					Part string `json:"part"`
+
+					// Quote The verbatim, rune-truncated (500 code points) grounding excerpt for this clause. UNTRUSTED CONTENT — same framing obligation as `evidence_quote` above. MAY be empty when the Judge could not locate grounding for this clause and is reporting that gap rather than fabricating a quote (D-B: an empty/failed entry here is reported, not fabricated, and never by itself flips the overall verdict).
+					Quote string `json:"quote"`
+
+					// Source Where this clause's grounding excerpt came from. Plain string here (not a closed enum, unlike the verdict-level `evidence_source` above) — a codegen constraint (oapi-codegen cannot auto-name two same-shaped nested enum types across this document without a shared top-level schema, which is out of this wave's write-set) and, independently, a defensible one: this per-entry value is a REPORTING detail (D-B), never compared against by code the way the top-level `evidence_source` is (FR-066's derivation).
+					Source *string `json:"source,omitempty"`
+
+					// Target The specific artifact this clause's excerpt was read from.
+					Target *string `json:"target,omitempty"`
+				} `json:"evidence,omitempty"`
+
+				// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text. FR-071: when `evidence` (below) is present, `evidence_quote` MUST equal `evidence[0].quote`.
+				EvidenceQuote *string `json:"evidence_quote,omitempty"`
+
+				// EvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+				EvidenceSource *DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSource `json:"evidence_source,omitempty"`
+
+				// EvidenceTarget JUDGE-FR-065 — the specific artifact the grounding evidence was read from (a file path, a diff hunk's changed file, a transcript tool-call id, …), paired with `evidence_source`. OPTIONAL REPORTING field only (D-B) — never a proof gate.
+				EvidenceTarget *string `json:"evidence_target,omitempty"`
+
+				// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
+				Met bool `json:"met"`
+
+				// Provenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+				Provenance *DelegateRunActionGoalLatestVerdictPerCriterionProvenance `json:"provenance,omitempty"`
+
+				// Reason The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
+				Reason string `json:"reason"`
+			} `json:"per_criterion"`
+
+			// PlanId Plan being judged. Present when `scope == plan`.
+			PlanId *string `json:"plan_id,omitempty"`
+
+			// Round Attempt/round index (ADR D7 — a "round" is one worker turn plus its judge evaluation).
+			Round int `json:"round"`
+
+			// Scope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
+			Scope DelegateRunActionGoalLatestVerdictScope `json:"scope"`
+
+			// TaskId Task being judged. Present when `scope == task`.
+			TaskId *string `json:"task_id,omitempty"`
+		} `json:"latest_verdict,omitempty"`
+
+		// MaxRounds GOAL-FR-024/MV-1, D-D/D-E (2026-09-11, operator-ratified) — the SINGLE budget ceiling for this goal's adjudication rounds, collapsed from the pre-existing separate `attempts_max`/`judge_rounds_max` pair (R14/C-05). Defaults to 20 (no schema `default:` here — this field is `required`, and combining `default:` with `required` makes openapi-zod-client emit an optional `.default()` input type that conflicts with the plain required TS type; see AcceptanceCriterionInput.yaml's header comment for the sibling codegen trap on an OPTIONAL field). There is NO per-goal override anywhere on the wire (D-E retires GOAL-FR-046/US-8 in full): this value is always the ONE global "goal tries" setting under Settings → Performance (`PerformanceSettings.yaml`'s `goal_max_rounds`), governing a task-owned and a session-owned goal IDENTICALLY — there is no writable per-goal budget field on this schema, `Task.yaml`, `TaskUpdateRequest.yaml` or anywhere else. The distinct `attempts` counter (task retry attempts, separate from adjudication rounds) is NOT modelled here — it stays on the task/session's own attempt machinery; the `2 × effective budget` hard ceiling there is an independent divergence brake, not a second goal budget (R-03).
+		MaxRounds int `json:"max_rounds"`
+
+		// OwnerId The session/task id this goal is bound to, per `owner_kind`. RENAMED from the pre-existing `binding_id` (R-14).
+		OwnerId string `json:"owner_id"`
+
+		// OwnerKind GOAL-FR-002 — a goal MUST reference exactly one owner, as an owner kind plus an owner id; owner kind MUST be part of the persisted record, not inferred. RENAMED from the pre-existing `binding_kind` (R-14: a rename, not a widening) and NARROWED from three values to two (R-31): `plan` is dropped. A Plan's own DoD is judged with NO goal record involved at all — criterion statuses are projected directly onto the plan member's own DoD list, using the same explicit, logged no-op discipline already required for the ephemeral soft-tier criterion (goal spec FR-040). `Goal.OwnerID` is unique per owner for the `task` kind — one goal per task for the task's whole life; a terminal task-owned goal re-enters `active` on task re-run rather than a new goal being minted (R-04, see `state` and `terminal_history` below). A `session`-owned goal has no such re-entry edge — a terminal chat goal stays terminal.
+		OwnerKind DelegateRunActionGoalOwnerKind `json:"owner_kind"`
+
+		// Prompt The raw user intent this goal was set/compiled from.
+		Prompt string `json:"prompt"`
+
+		// QuestionRoundsUsed GOAL-FR-004 — the keeper's own durable clarification-question door counter (today the session-level `goal_question_rounds_used`), relocated onto the goal record so it applies identically to both owner kinds (GOAL-FR-015/FR-020).
+		QuestionRoundsUsed int `json:"question_rounds_used"`
+
+		// Round Adjudications consumed so far (R§8.9 — one round = one adjudication, claim-triggered or idle-settled). The stored integer is preserved unchanged across the upgrade from the legacy "one turn + judge" round definition — only the increment site moved. Reset to 0 when a terminal task-owned goal re-enters `active` on task re-run (R-04).
+		Round *int `json:"round,omitempty"`
+
+		// RouteChannel GOAL-FR-034 — the channel a keeper follow-up for this goal is delivered through (e.g. "telegram", "discord"), surviving from the pre-existing session-level `goal_route_channel`. `dispatchGoalAsyncFollowUp` aborts without either `route_channel` or `route_chat_id`. Absent for a goal whose owner has never needed an async follow-up (e.g. webchat delivery, which stays session-addressed per ADR-082 and does not use this field, GOAL-FR-035).
+		RouteChannel *string `json:"route_channel,omitempty"`
+
+		// RouteChatId GOAL-FR-034 — the chat/peer id within `route_channel` a keeper follow-up for this goal is delivered to, surviving from the pre-existing session-level `goal_route_chat_id`.
+		RouteChatId *string `json:"route_chat_id,omitempty"`
+
+		// Source How this goal's criteria were authored. `plan_dod` is retained on the wire for forward-compatibility even though no `owner_kind: plan` goal record exists any more (see `owner_kind` above) — a Plan's DoD never reaches this enum today.
+		Source DelegateRunActionGoalSource `json:"source"`
+
+		// StartedAt GOAL-FR-006 — RFC3339 timestamp this goal was last ACTIVATED (GOAL-FR-010). Absent while `state == defining`. Reset to a fresh timestamp on a task-owned goal's terminal → active re-entry (R-04).
+		StartedAt *time.Time `json:"started_at,omitempty"`
+
+		// State GOAL-FR-006/FR-027/FR-028, R-14 (a RENAME of the pre-existing 4-value set, not a widening: `done` → `met`, `failed` → `exhausted`, plus two new values). `defining` — the goal exists, is readable and editable, and MUST NOT run (ADR-086 D2/D3, GOAL-FR-009): a task holds its goal in this phase from task creation until the task starts. `active` — activated and iterating (GOAL-FR-010: activation binds the goal to exactly one session and starts the loop). `met` — terminal, a verdict satisfied every criterion. `exhausted` — terminal, the round/attempt/budget ceiling was reached with no `met` verdict. `expired` — terminal, the 7-day idle-expiry sweep ended a goal that never claimed (D-A) — EC-10: a goal record whose active session was swept by retention is also terminal-expired at the next sweep rather than left pointing at a missing session. `cleared` — terminal, a deliberate user-initiated `/goal clear` (not a failure, mirrors `GoalStatusFrame.state`'s existing `cleared`/`failed` split). Ending a goal is a STATUS TRANSITION on a retained record, never field-zeroing erasure (GOAL-FR-027/FR-028): the record survives every terminal transition with its criteria, their final statuses, the verdict, the reason and any handover intact. This 4-value set is deliberately narrower than and distinct from the richer `GoalStatusFrame.state` display enum (R§8.10), which derives additional ephemeral engine-phase and lifecycle-overlay states from this state PLUS the owning session's own lifecycle. Do not conflate the two. A `task`-owned goal's ONLY re-entry edge is terminal → `active` on task re-run (R-04); a `session`-owned goal has no such edge and stays terminal once ended.
+		State DelegateRunActionGoalState `json:"state"`
+
+		// SupersededCriteria GOAL-FR-006 — the superseded-criteria history: prior `criteria`/`dod` sets this goal carried before a `set_goal(mode: update)` steering revision replaced them (ADR-088). Empty/absent for a goal never revised. Distinct from `terminal_history` below, which records prior COMPLETED RUNS of a re-run task-owned goal, not prior criteria revisions of the current run.
+		SupersededCriteria *[]struct {
+			Criteria []struct {
+				// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+				Author struct {
+					// Id Agent ID or username of the author.
+					Id string `json:"id"`
+
+					// Kind Whether this criterion was authored by an agent or a human user.
+					Kind DelegateRunActionGoalSupersededCriteriaCriteriaAuthorKind `json:"kind"`
+				} `json:"author"`
+
+				// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+				Behavior *struct {
+					// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+					MaxCount *int `json:"max_count,omitempty"`
+
+					// MinCount Minimum number of successful calls of `tool` required within `scope`.
+					MinCount *int `json:"min_count,omitempty"`
+
+					// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+					Scope *DelegateRunActionGoalSupersededCriteriaCriteriaBehaviorScope `json:"scope,omitempty"`
+
+					// Tool Name of the tool whose successful-call count is checked.
+					Tool string `json:"tool"`
+				} `json:"behavior,omitempty"`
+
+				// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+				Check *struct {
+					// Command Shell command run through the assignee's `bash` tool.
+					Command string `json:"command"`
+
+					// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+					ExpectedExitCode int `json:"expected_exit_code"`
+				} `json:"check,omitempty"`
+
+				// ClauseCount JUDGE-FR-006b — the number of distinct clauses in this criterion's `text`, computed once by `pkg/task/criterion.go::normalizeCriteria` when the criterion is created or updated (never recomputed at adjudication time — see FR-006b's rationale: a count derived at judging time would let the judged party shrink a failing multi-clause criterion into fewer clauses to reduce its own evidence bar). OPTIONAL here only in the sense that a criterion loaded before this field existed carries none until its own next load-time backfill; the server always persists an explicit value going forward, the same precedent as `status`'s own `CritPending` backfill. Consumed exclusively as a grounding-evidence REPORTING signal (how many distinctly-grounded evidence entries the Judge's investigation found) — per operator decision D-B, grounding is never a proof gate, and this field NEVER changes a verdict from `met` to anything else.
+				ClauseCount *int `json:"clause_count,omitempty"`
+
+				// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+				Id *string `json:"id,omitempty"`
+
+				// Judgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+				Judgment DelegateRunActionGoalSupersededCriteriaCriteriaJudgment `json:"judgment"`
+
+				// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+				Kind DelegateRunActionGoalSupersededCriteriaCriteriaKind `json:"kind"`
+
+				// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+				Provenance *DelegateRunActionGoalSupersededCriteriaCriteriaProvenance `json:"provenance,omitempty"`
+
+				// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
+				Status DelegateRunActionGoalSupersededCriteriaCriteriaStatus `json:"status"`
+
+				// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+				Text string `json:"text"`
+			} `json:"criteria"`
+			Dod []struct {
+				// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
+				Author struct {
+					// Id Agent ID or username of the author.
+					Id string `json:"id"`
+
+					// Kind Whether this criterion was authored by an agent or a human user.
+					Kind DelegateRunActionGoalSupersededCriteriaDodAuthorKind `json:"kind"`
+				} `json:"author"`
+
+				// Behavior Present iff `kind == behavior` (400 if present with a different `kind` — no mixed shape); required iff `kind == behavior` (400 if absent). ADR-052 FR-034 — resolved deterministically from the session's per-entry tool-call log (no LLM verifier dispatch). Unknown fields are rejected 400 (`additionalProperties: false`). `min_count >= 0`, and `min_count == 0` with `max_count == 0` expresses "never call this tool"; when both are present, `max_count >= min_count` (400 if violated).
+				Behavior *struct {
+					// MaxCount Maximum number of successful calls of `tool` allowed within `scope`. Absent = no upper bound. Must be >= `min_count` when present.
+					MaxCount *int `json:"max_count,omitempty"`
+
+					// MinCount Minimum number of successful calls of `tool` required within `scope`.
+					MinCount *int `json:"min_count,omitempty"`
+
+					// Scope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+					Scope *DelegateRunActionGoalSupersededCriteriaDodBehaviorScope `json:"scope,omitempty"`
+
+					// Tool Name of the tool whose successful-call count is checked.
+					Tool string `json:"tool"`
+				} `json:"behavior,omitempty"`
+
+				// Check Present iff `kind == check` (400 if present with `kind == prose` — no mixed shape); required iff `kind == check` (400 if absent). Dispatched through the assignee agent's existing `bash` tool machinery (ADR D2 rule 1) — same tool registry, policy resolution, sandbox enforcement, and audit trail as any other `bash` call. Policy `allow` runs; `ask` resolves to deny (no interactive approver mid-loop); `deny` fails the criterion closed.
+				Check *struct {
+					// Command Shell command run through the assignee's `bash` tool.
+					Command string `json:"command"`
+
+					// ExpectedExitCode Exit code that counts as PASS (`met`) for this check.
+					ExpectedExitCode int `json:"expected_exit_code"`
+				} `json:"check,omitempty"`
+
+				// ClauseCount JUDGE-FR-006b — the number of distinct clauses in this criterion's `text`, computed once by `pkg/task/criterion.go::normalizeCriteria` when the criterion is created or updated (never recomputed at adjudication time — see FR-006b's rationale: a count derived at judging time would let the judged party shrink a failing multi-clause criterion into fewer clauses to reduce its own evidence bar). OPTIONAL here only in the sense that a criterion loaded before this field existed carries none until its own next load-time backfill; the server always persists an explicit value going forward, the same precedent as `status`'s own `CritPending` backfill. Consumed exclusively as a grounding-evidence REPORTING signal (how many distinctly-grounded evidence entries the Judge's investigation found) — per operator decision D-B, grounding is never a proof gate, and this field NEVER changes a verdict from `met` to anything else.
+				ClauseCount *int `json:"clause_count,omitempty"`
+
+				// Id Server-set criterion identifier (UUID). Absent on a create-time payload; always present once persisted.
+				Id *string `json:"id,omitempty"`
+
+				// Judgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+				Judgment DelegateRunActionGoalSupersededCriteriaDodJudgment `json:"judgment"`
+
+				// Kind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+				Kind DelegateRunActionGoalSupersededCriteriaDodKind `json:"kind"`
+
+				// Provenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+				Provenance *DelegateRunActionGoalSupersededCriteriaDodProvenance `json:"provenance,omitempty"`
+
+				// Status Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
+				Status DelegateRunActionGoalSupersededCriteriaDodStatus `json:"status"`
+
+				// Text The criterion statement (`kind: prose`) or a human-readable description of what the check verifies (`kind: check`).
+				Text string `json:"text"`
+			} `json:"dod"`
+			SupersededAt time.Time `json:"superseded_at"`
+		} `json:"superseded_criteria,omitempty"`
+
+		// TerminalHistory R-04 (goal spec A-2/EC-1) — for a `task`-owned goal that is reused across a re-run after its prior run ended (the SAME goal, its `attempts_used`/`round` reset to 0, per `owner_kind`'s description): the prior run's terminal outcome is APPENDED here rather than overwritten, so a task's full adjudication history survives every re-run. A `session`-owned goal never re-enters `active` from terminal, so this array stays empty for it. Ordered oldest-first.
+		TerminalHistory *[]struct {
+			// AttemptsUsed Attempts consumed in that prior run.
+			AttemptsUsed *int      `json:"attempts_used,omitempty"`
+			EndedAt      time.Time `json:"ended_at"`
+
+			// Round Rounds consumed in that prior run.
+			Round *int `json:"round,omitempty"`
+
+			// State The terminal state this prior run ended in.
+			State          DelegateRunActionGoalTerminalHistoryState `json:"state"`
+			TerminalReason *string                                   `json:"terminal_reason,omitempty"`
+
+			// Verdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
+			Verdict *struct {
+				// Id Server-set verdict identifier (UUID).
+				Id string `json:"id"`
+
+				// JudgeAgentId ID of the Judge System Agent that produced this verdict (NFR-5 correlation — usage metering is attributed to this `agent_id` alongside the plan/task/goal correlation IDs).
+				JudgeAgentId string `json:"judge_agent_id"`
+
+				// JudgedAt RFC 3339 UTC timestamp when the verdict was produced.
+				JudgedAt time.Time `json:"judged_at"`
+
+				// Met Overall PASS/FAIL verdict across all criteria. Fail-closed default `false` — absence of a verdict never defaults to `true` (NFR-2).
+				Met bool `json:"met"`
+
+				// Model Judge model used to produce this verdict (transparency / NFR-5 metering).
+				Model string `json:"model"`
+
+				// PerCriterion Per-criterion outcomes making up the overall verdict.
+				PerCriterion []struct {
+					// CriterionId ID of the AcceptanceCriterion this verdict judges.
+					CriterionId string `json:"criterion_id"`
+
+					// Evidence JUDGE-FR-006 — one entry per clause of the criterion this verdict judges, each answering that clause with its own grounding excerpt. NEW, OPTIONAL, sibling field alongside `evidence_quote` (FR-006's own wording) — `evidence_quote` keeps its existing type/length/optionality unchanged for every reader that does not know about this field (C2); when `evidence` is present the engine populates `evidence_quote` from `evidence[0].quote` so no existing persisted-verdict reader, replay frame or SPA render is affected. A criterion with no machine-checkable form and no located evidence for one or more of its clauses is still the NORMAL case and may still be `met` on the Judge's reasoned conviction (GOAL-FR-038/FR-039, D-B) — this array is a REPORTING obligation the Judge uses to show its work and flag any clause it could not ground, never a gate that can turn a `met` into an `unmet`.
+					Evidence *[]struct {
+						// Part The clause text (a substring of the criterion's own `text`) this entry answers.
+						Part string `json:"part"`
+
+						// Quote The verbatim, rune-truncated (500 code points) grounding excerpt for this clause. UNTRUSTED CONTENT — same framing obligation as `evidence_quote` above. MAY be empty when the Judge could not locate grounding for this clause and is reporting that gap rather than fabricating a quote (D-B: an empty/failed entry here is reported, not fabricated, and never by itself flips the overall verdict).
+						Quote string `json:"quote"`
+
+						// Source Where this clause's grounding excerpt came from. Plain string here (not a closed enum, unlike the verdict-level `evidence_source` above) — a codegen constraint (oapi-codegen cannot auto-name two same-shaped nested enum types across this document without a shared top-level schema, which is out of this wave's write-set) and, independently, a defensible one: this per-entry value is a REPORTING detail (D-B), never compared against by code the way the top-level `evidence_source` is (FR-066's derivation).
+						Source *string `json:"source,omitempty"`
+
+						// Target The specific artifact this clause's excerpt was read from.
+						Target *string `json:"target,omitempty"`
+					} `json:"evidence,omitempty"`
+
+					// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text. FR-071: when `evidence` (below) is present, `evidence_quote` MUST equal `evidence[0].quote`.
+					EvidenceQuote *string `json:"evidence_quote,omitempty"`
+
+					// EvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+					EvidenceSource *DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSource `json:"evidence_source,omitempty"`
+
+					// EvidenceTarget JUDGE-FR-065 — the specific artifact the grounding evidence was read from (a file path, a diff hunk's changed file, a transcript tool-call id, …), paired with `evidence_source`. OPTIONAL REPORTING field only (D-B) — never a proof gate.
+					EvidenceTarget *string `json:"evidence_target,omitempty"`
+
+					// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
+					Met bool `json:"met"`
+
+					// Provenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+					Provenance *DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenance `json:"provenance,omitempty"`
+
+					// Reason The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
+					Reason string `json:"reason"`
+				} `json:"per_criterion"`
+
+				// PlanId Plan being judged. Present when `scope == plan`.
+				PlanId *string `json:"plan_id,omitempty"`
+
+				// Round Attempt/round index (ADR D7 — a "round" is one worker turn plus its judge evaluation).
+				Round int `json:"round"`
+
+				// Scope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
+				Scope DelegateRunActionGoalTerminalHistoryVerdictScope `json:"scope"`
+
+				// TaskId Task being judged. Present when `scope == task`.
+				TaskId *string `json:"task_id,omitempty"`
+			} `json:"verdict,omitempty"`
+		} `json:"terminal_history,omitempty"`
+
+		// TerminalReason GOAL-FR-028 — the reason this goal reached its current terminal `state`, distinct from `latest_reason` (which tracks the latest ROUND's judge reason, not why the goal itself ended): e.g. "idle expiry after 7 days of inactivity with no claim", "round budget (20) exhausted", "cleared by operator". Absent while the goal is not terminal. Exactly one terminal frame is emitted per ending (GOAL-FR-028) and this field is set in the same transition.
+		TerminalReason *string `json:"terminal_reason,omitempty"`
+
+		// ZeroOutputPushes GOAL-FR-004 — the keeper's own durable recordless-nudge / zero-output-push streak counter (today the session-level `goal_zero_output_pushes`, bound `goalZeroOutputPushMax = 2`), relocated onto the goal record so it applies identically to a task-owned and a session-owned goal (GOAL-FR-015/FR-017).
+		ZeroOutputPushes int `json:"zero_output_pushes"`
+	} `json:"goal,omitempty"`
 
 	// Label Human-readable label for the spawned span (subagent_start.task_label).
 	Label *string `json:"label,omitempty"`
@@ -13179,15 +14966,117 @@ type DelegateRunAction struct {
 	// Task The task prompt handed to the child as its first user message.
 	Task string `json:"task"`
 
-	// TimeoutSeconds Maximum seconds before this delegation is force-cancelled. 0 = default (5 min).
+	// TimeoutSeconds Maximum seconds before this delegation is force-cancelled. 0 = default (30 min).
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
-
-	// Wait True for a synchronous (blocking) delegation. A synchronous delegation whose child raises a `question` is rejected by default with a clear tool error (never a silent deadlock, MIN-3) unless the caller also sets `allow_blocking_question`.
-	Wait *bool `json:"wait,omitempty"`
 }
 
 // DelegateRunActionAction defines model for DelegateRunAction.Action.
 type DelegateRunActionAction string
+
+// DelegateRunActionGoalCriteriaAuthorKind Whether this criterion was authored by an agent or a human user.
+type DelegateRunActionGoalCriteriaAuthorKind string
+
+// DelegateRunActionGoalCriteriaBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type DelegateRunActionGoalCriteriaBehaviorScope string
+
+// DelegateRunActionGoalCriteriaJudgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+type DelegateRunActionGoalCriteriaJudgment string
+
+// DelegateRunActionGoalCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+type DelegateRunActionGoalCriteriaKind string
+
+// DelegateRunActionGoalCriteriaProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+type DelegateRunActionGoalCriteriaProvenance string
+
+// DelegateRunActionGoalCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
+type DelegateRunActionGoalCriteriaStatus string
+
+// DelegateRunActionGoalDodAuthorKind Whether this criterion was authored by an agent or a human user.
+type DelegateRunActionGoalDodAuthorKind string
+
+// DelegateRunActionGoalDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type DelegateRunActionGoalDodBehaviorScope string
+
+// DelegateRunActionGoalDodJudgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+type DelegateRunActionGoalDodJudgment string
+
+// DelegateRunActionGoalDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+type DelegateRunActionGoalDodKind string
+
+// DelegateRunActionGoalDodProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+type DelegateRunActionGoalDodProvenance string
+
+// DelegateRunActionGoalDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
+type DelegateRunActionGoalDodStatus string
+
+// DelegateRunActionGoalLatestClaimStatus JUDGE machine-verifiable constraint — `goal_claim.status` enum is exactly these three values.
+type DelegateRunActionGoalLatestClaimStatus string
+
+// DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+type DelegateRunActionGoalLatestVerdictPerCriterionEvidenceSource string
+
+// DelegateRunActionGoalLatestVerdictPerCriterionProvenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+type DelegateRunActionGoalLatestVerdictPerCriterionProvenance string
+
+// DelegateRunActionGoalLatestVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
+type DelegateRunActionGoalLatestVerdictScope string
+
+// DelegateRunActionGoalOwnerKind GOAL-FR-002 — a goal MUST reference exactly one owner, as an owner kind plus an owner id; owner kind MUST be part of the persisted record, not inferred. RENAMED from the pre-existing `binding_kind` (R-14: a rename, not a widening) and NARROWED from three values to two (R-31): `plan` is dropped. A Plan's own DoD is judged with NO goal record involved at all — criterion statuses are projected directly onto the plan member's own DoD list, using the same explicit, logged no-op discipline already required for the ephemeral soft-tier criterion (goal spec FR-040). `Goal.OwnerID` is unique per owner for the `task` kind — one goal per task for the task's whole life; a terminal task-owned goal re-enters `active` on task re-run rather than a new goal being minted (R-04, see `state` and `terminal_history` below). A `session`-owned goal has no such re-entry edge — a terminal chat goal stays terminal.
+type DelegateRunActionGoalOwnerKind string
+
+// DelegateRunActionGoalSource How this goal's criteria were authored. `plan_dod` is retained on the wire for forward-compatibility even though no `owner_kind: plan` goal record exists any more (see `owner_kind` above) — a Plan's DoD never reaches this enum today.
+type DelegateRunActionGoalSource string
+
+// DelegateRunActionGoalState GOAL-FR-006/FR-027/FR-028, R-14 (a RENAME of the pre-existing 4-value set, not a widening: `done` → `met`, `failed` → `exhausted`, plus two new values). `defining` — the goal exists, is readable and editable, and MUST NOT run (ADR-086 D2/D3, GOAL-FR-009): a task holds its goal in this phase from task creation until the task starts. `active` — activated and iterating (GOAL-FR-010: activation binds the goal to exactly one session and starts the loop). `met` — terminal, a verdict satisfied every criterion. `exhausted` — terminal, the round/attempt/budget ceiling was reached with no `met` verdict. `expired` — terminal, the 7-day idle-expiry sweep ended a goal that never claimed (D-A) — EC-10: a goal record whose active session was swept by retention is also terminal-expired at the next sweep rather than left pointing at a missing session. `cleared` — terminal, a deliberate user-initiated `/goal clear` (not a failure, mirrors `GoalStatusFrame.state`'s existing `cleared`/`failed` split). Ending a goal is a STATUS TRANSITION on a retained record, never field-zeroing erasure (GOAL-FR-027/FR-028): the record survives every terminal transition with its criteria, their final statuses, the verdict, the reason and any handover intact. This 4-value set is deliberately narrower than and distinct from the richer `GoalStatusFrame.state` display enum (R§8.10), which derives additional ephemeral engine-phase and lifecycle-overlay states from this state PLUS the owning session's own lifecycle. Do not conflate the two. A `task`-owned goal's ONLY re-entry edge is terminal → `active` on task re-run (R-04); a `session`-owned goal has no such edge and stays terminal once ended.
+type DelegateRunActionGoalState string
+
+// DelegateRunActionGoalSupersededCriteriaCriteriaAuthorKind Whether this criterion was authored by an agent or a human user.
+type DelegateRunActionGoalSupersededCriteriaCriteriaAuthorKind string
+
+// DelegateRunActionGoalSupersededCriteriaCriteriaBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type DelegateRunActionGoalSupersededCriteriaCriteriaBehaviorScope string
+
+// DelegateRunActionGoalSupersededCriteriaCriteriaJudgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+type DelegateRunActionGoalSupersededCriteriaCriteriaJudgment string
+
+// DelegateRunActionGoalSupersededCriteriaCriteriaKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+type DelegateRunActionGoalSupersededCriteriaCriteriaKind string
+
+// DelegateRunActionGoalSupersededCriteriaCriteriaProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+type DelegateRunActionGoalSupersededCriteriaCriteriaProvenance string
+
+// DelegateRunActionGoalSupersededCriteriaCriteriaStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
+type DelegateRunActionGoalSupersededCriteriaCriteriaStatus string
+
+// DelegateRunActionGoalSupersededCriteriaDodAuthorKind Whether this criterion was authored by an agent or a human user.
+type DelegateRunActionGoalSupersededCriteriaDodAuthorKind string
+
+// DelegateRunActionGoalSupersededCriteriaDodBehaviorScope Window the tool-call count is evaluated over. `attempt` = the current retry attempt only. `task_session` (default) = the whole session backing the task/plan-member run.
+type DelegateRunActionGoalSupersededCriteriaDodBehaviorScope string
+
+// DelegateRunActionGoalSupersededCriteriaDodJudgment ADR-080 D-TYPES — THE contract crux. Orthogonal to `kind`: `kind` answers "by what MECHANISM is this verified" (`check`/`prose`/ `behavior`), `judgment` answers "what SHAPE of claim is this" — `boolean` (a yes/no fact the Judge can rule true or false), `quantitative` (a value against a threshold/comparator), or `artifact` (a named produced/changed/sent thing whose existence is checkable). Fully server-inferable for the technical kinds (`check` -> `boolean`, `behavior` -> `quantitative`) and defaults to `boolean` for `prose` when the author omits it — see `task.InferJudgment`. REQUIRED here because the server always persists an explicit value (`normalizeCriteria` backfills via `InferJudgment`, including a load-time backfill of pre-ADR-080 persisted criteria).
+type DelegateRunActionGoalSupersededCriteriaDodJudgment string
+
+// DelegateRunActionGoalSupersededCriteriaDodKind `check` = machine-checkable command with an expected exit code, run via the assignee's `bash` tool. `prose` = free-text statement judged by the Judge System Agent. `behavior` (ADR-052 FR-034) = a deterministic machine check over the session's own tool-call log — the comparator is the count of successful calls of a named tool within a scope, resolved WITHOUT the LLM verifier or `inspect_session`. Ladder order: machine-check (`check`) -> `behavior` -> subjective (`prose`, verifier).
+type DelegateRunActionGoalSupersededCriteriaDodKind string
+
+// DelegateRunActionGoalSupersededCriteriaDodProvenance ADR-080 D-DOD — the authority layer this criterion (typically a DoD item) was derived from, highest first: `stated` (the setter named it explicitly), `workspace` (derived from workspace/project instructions), `floor` (one of the built-in universal quality gates, guaranteeing a DoD always exists), `inferred` (bounded, type-appropriate inference — SHOWN for the setter's approval, never silently invented). ADDITIVE-OPTIONAL: meaningful only on `Goal.dod` items; absent/ignored on regular acceptance criteria and on task/plan criteria. Never required.
+type DelegateRunActionGoalSupersededCriteriaDodProvenance string
+
+// DelegateRunActionGoalSupersededCriteriaDodStatus Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
+type DelegateRunActionGoalSupersededCriteriaDodStatus string
+
+// DelegateRunActionGoalTerminalHistoryState The terminal state this prior run ended in.
+type DelegateRunActionGoalTerminalHistoryState string
+
+// DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+type DelegateRunActionGoalTerminalHistoryVerdictPerCriterionEvidenceSource string
+
+// DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+type DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenance string
+
+// DelegateRunActionGoalTerminalHistoryVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
+type DelegateRunActionGoalTerminalHistoryVerdictScope string
 
 // DelegateSessionResponse Response shape shared by `delegate` actions that spawn or resume a child session — `run`, `follow_up` (native warm resume or 3P cold respawn), and a 3P `respond` (which spawns a new corrective session, D5). Reused rather than duplicated across those three actions (DoD-11).
 type DelegateSessionResponse struct {
@@ -13196,6 +15085,9 @@ type DelegateSessionResponse struct {
 
 	// Is3p True when this session dispatches via an external CLI runner.
 	Is3p bool `json:"is_3p"`
+
+	// QueuePosition 1-based position in the admission queue when `state == queued`, else 0. Lets the caller know its place in line for execution (ADR-091 I-2).
+	QueuePosition *int `json:"queue_position,omitempty"`
 
 	// ResumedFrom The prior session id this generation resumed from, when applicable.
 	ResumedFrom *string `json:"resumed_from,omitempty"`
@@ -13252,7 +15144,7 @@ type DelegateStatusResponse struct {
 		// FailedReason Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively (e.g. `interrupted`, `judge_rounds_exhausted`), unlike `Plan.failed_reason`'s closed enum, so this field is left open rather than guessing at a complete set (flagged for review).
 		FailedReason *string `json:"failed_reason,omitempty"`
 
-		// Generation This session's generation number. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
+		// Generation This session's generation number. Starts at 1. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
 		Generation int `json:"generation"`
 
 		// GoalRef The goal-id this session is servicing, when it is goal-bearing.
@@ -13276,6 +15168,18 @@ type DelegateStatusResponse struct {
 			TtlDeadline time.Time `json:"ttl_deadline"`
 		} `json:"needs_input,omitempty"`
 
+		// Origin Every record carries its origin: how and where this session was launched (ADR-091 I-1). Kind discriminates the launch path.
+		Origin *struct {
+			// CallId For delegate/task-origin sessions, the tool-call id (span key) of the originating delegate or create_task call. Absent for other kinds.
+			CallId *string `json:"call_id,omitempty"`
+
+			// Kind The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+			Kind DelegateStatusResponseSessionOriginKind `json:"kind"`
+
+			// TaskId For task-origin sessions, the persistent task id from the task record (persisted on the task disk-only, by tools/task.go). Absent for delegate-origin and other kinds.
+			TaskId *string `json:"task_id,omitempty"`
+		} `json:"origin,omitempty"`
+
 		// OwnerScopeId The `parent_session_id` or `plan_id` this session's ownership resolves to, per `owner_scope_kind`. Absent/empty when `owner_scope_kind == human`.
 		OwnerScopeId *string `json:"owner_scope_id,omitempty"`
 
@@ -13285,7 +15189,7 @@ type DelegateStatusResponse struct {
 		// OwnsPlanId Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `paused` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
 		OwnsPlanId *string `json:"owns_plan_id,omitempty"`
 
-		// ResumedFrom The prior generation's `session_id` this record resumed from. Null for generation 0 (the original spawn).
+		// ResumedFrom The prior generation's `session_id` this record resumed from. Null for generation 1 (the original spawn).
 		ResumedFrom *string `json:"resumed_from,omitempty"`
 
 		// SessionId Unique durable session identifier.
@@ -13293,6 +15197,58 @@ type DelegateStatusResponse struct {
 
 		// State The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 		State DelegateStatusResponseSessionState `json:"state"`
+
+		// SteeredBy Present for steered sessions (a session launched by another session's delegate or create_task). Absent for ordinary-root sessions that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
+		SteeredBy *struct {
+			// Authorization The gate verdict at launch.
+			Authorization struct {
+				// Mode How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
+				Mode DelegateStatusResponseSessionSteeredByAuthorizationMode `json:"mode"`
+
+				// RemainingDepth Remaining delegation depth budget for this child's own onward delegations. Decremented from the edge or global default.
+				RemainingDepth int `json:"remaining_depth"`
+			} `json:"authorization"`
+
+			// Limits Creator-set session limits.
+			Limits *struct {
+				// TimeoutSeconds Maximum seconds before this delegation is force-cancelled. 0 = the configured default. Scope is the session's lifetime across re-entries (ADR-091 I-1).
+				TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+			} `json:"limits,omitempty"`
+
+			// ReportingTarget The steering session's own address; where completion wakes it.
+			ReportingTarget *struct {
+				Channel   *string `json:"channel,omitempty"`
+				ChatId    *string `json:"chat_id,omitempty"`
+				SessionId *string `json:"session_id,omitempty"`
+			} `json:"reporting_target,omitempty"`
+
+			// RootSessionId The cascade root, verified by walking the chain at launch. Equal to steering_session_id at depth 1.
+			RootSessionId string `json:"root_session_id"`
+
+			// SteeringSessionId The direct parent session; the inbox owner key.
+			SteeringSessionId string `json:"steering_session_id"`
+
+			// ToolExclusions Tool names excluded for this steered session (e.g., switch_agent). Applied at launch.
+			ToolExclusions *[]string `json:"tool_exclusions,omitempty"`
+		} `json:"steered_by,omitempty"`
+
+		// Stop Present when this session's own record carries a Stop marker, written by the cancel cascade on the stopped node and every reachable non-terminal descendant (ADR-091 I-6). Absent for sessions that were not stopped. No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
+		Stop *struct {
+			// At RFC3339 timestamp when the Stop marker was written.
+			At time.Time `json:"at"`
+
+			// By Who or what initiated the stop.
+			By struct {
+				// Id The agent id (if kind=agent) or user id (if kind=human).
+				Id *string `json:"id,omitempty"`
+
+				// Kind Principal kind (agent or human).
+				Kind *DelegateStatusResponseSessionStopByKind `json:"kind,omitempty"`
+			} `json:"by"`
+
+			// Generation The generation this Stop marker names. A revived generation is a newer generation number.
+			Generation int `json:"generation"`
+		} `json:"stop,omitempty"`
 
 		// Terminal Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
 		Terminal *bool `json:"terminal,omitempty"`
@@ -13311,11 +15267,20 @@ type DelegateStatusResponse struct {
 	UnackedCount int `json:"unacked_count"`
 }
 
+// DelegateStatusResponseSessionOriginKind The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+type DelegateStatusResponseSessionOriginKind string
+
 // DelegateStatusResponseSessionOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type DelegateStatusResponseSessionOwnerScopeKind string
 
 // DelegateStatusResponseSessionState The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 type DelegateStatusResponseSessionState string
+
+// DelegateStatusResponseSessionSteeredByAuthorizationMode How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
+type DelegateStatusResponseSessionSteeredByAuthorizationMode string
+
+// DelegateStatusResponseSessionStopByKind Principal kind (agent or human).
+type DelegateStatusResponseSessionStopByKind string
 
 // DelegateSteerAction `delegate` tool call, `action: steer` (ADR-053 §5.1). Mid-run injection at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering). Rate-capped 6/min, 16 KiB body.
 type DelegateSteerAction struct {
@@ -15864,10 +17829,128 @@ type Message struct {
 	// Status Completion status of this message turn.
 	Status *MessageStatus `json:"status,omitempty"`
 
+	// SubagentEnd Server → client (FR-H-004). Closing bracket of a subagent span. Emitted when the sub-turn finishes. The SPA transitions the span from "running" to a terminal status and records duration and optional result. NOTE: status MUST be validated — the SPA's generated Zod schema (src/lib/api/generated/schemas.ts, built from this enum) rejects any status string not in this set; such frames are dropped.
+	SubagentEnd *struct {
+		// AgentId Agent that ran the sub-turn.
+		AgentId *string `json:"agent_id,omitempty"`
+
+		// DurationMs Wall-clock duration of the sub-turn in milliseconds.
+		DurationMs *int `json:"duration_ms,omitempty"`
+
+		// FinalResult Optional textual summary of the sub-turn's output.
+		FinalResult *string `json:"final_result,omitempty"`
+
+		// Message Internal reason string emitted by the orphan-watchdog synthetic end frame. Not rendered directly in the UI.
+		Message *string `json:"message,omitempty"`
+
+		// ParentCallId The spawn ToolCall.ID that triggered this sub-turn.
+		ParentCallId *string `json:"parent_call_id,omitempty"`
+
+		// Reason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+		Reason *MessageSubagentEndReason `json:"reason,omitempty"`
+
+		// SessionId Session in which this sub-turn ran.
+		SessionId string `json:"session_id"`
+
+		// SpanId Matches the span_id from the preceding subagent_start frame.
+		SpanId string `json:"span_id"`
+
+		// Status Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
+		Status MessageSubagentEndStatus `json:"status"`
+		Type   MessageSubagentEndType   `json:"type"`
+	} `json:"subagent_end,omitempty"`
+
+	// SubagentMessage Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span event riding between the existing `subagent_start`/`subagent_end` brackets, feeding pill/panel/board live as a child pushes typed messages / the parent steers it. Rides the existing since-cursor WS replay (same pattern as `ReplayMessageFrame`).
+	// SHAPE DECISION (flagged for review): this is a FLAT, UI-facing PROJECTION of the underlying `SessionMessage` — it does not embed the full 12-variant `SessionMessage` discriminated union. Reasons: (1) the full union is hosted INLINE in `openapi.yaml` per ADR-034 specifically because oapi-codegen needs internal component refs inside a `oneOf` — embedding it inside an asyncapi frame would require a second, hand-duplicated copy of all 12 variants inside `asyncapi.yaml` (which does not resolve cross-file `$ref` for its own codegen, per the existing `GoalStatusFrame.yaml` note), multiplying maintenance burden for a live UI ping that only ever needs a handful of display fields; (2) this mirrors the established precedent of `GoalStatusFrame` itself being a flat projection of goal state rather than embedding a full Goal record. Full-fidelity SessionMessage data (every typed field, for every kind) is available via `delegate.inbox`/`delegate.peek` (`DelegateInboxResponse`/`DelegatePeekResponse`) — this frame is a live nudge, not the source of truth.
+	SubagentMessage *struct {
+		// ChildSessionId Optional session id of the delegated child session this mid-span update is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
+		ChildSessionId *string `json:"child_session_id,omitempty"`
+
+		// CorrelationId Present for `question`/`decision_request`/`steer`/`respond` — lets the SPA thread a live reply.
+		CorrelationId *string `json:"correlation_id,omitempty"`
+
+		// CreatedAt RFC3339 timestamp the underlying message was created.
+		CreatedAt time.Time `json:"created_at"`
+
+		// Kind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+		Kind MessageSubagentMessageKind `json:"kind"`
+
+		// MessageId The underlying SessionMessage's `message_id` — correlates this live ping with the full record fetchable via `delegate.inbox`/`peek`.
+		MessageId string `json:"message_id"`
+
+		// Pct Present for `kind: progress` when a percentage estimate was given.
+		Pct *int `json:"pct,omitempty"`
+
+		// SenderIdentity Agent ID (or "human") that authored the underlying message.
+		SenderIdentity string `json:"sender_identity"`
+
+		// SessionId Session in which the parent's span is running.
+		SessionId string `json:"session_id"`
+
+		// SpanId Matches the `span_id` from the bracketing `subagent_start` frame.
+		SpanId string `json:"span_id"`
+
+		// Text Flattened display text (progress.text / checkpoint.summary / blocker.text / question.text / error.text / steer.text / respond.text), when the kind carries one.
+		Text *string                    `json:"text,omitempty"`
+		Type MessageSubagentMessageType `json:"type"`
+
+		// UntrustedOrigin True when the underlying message's free-text content originated from a child agent and must render in untrusted-content framing (FE-7/MAJ-12).
+		UntrustedOrigin bool `json:"untrusted_origin"`
+	} `json:"subagent_message,omitempty"`
+
+	// SubagentStart Server → client (FR-H-004). Opening bracket of a subagent span. Emitted when the agent loop spawns a sub-turn. The SPA uses span_id to group subsequent nested tool_call_start / tool_call_result frames under a collapsible span UI.
+	SubagentStart *struct {
+		// AgentId Agent running the sub-turn.
+		AgentId *string `json:"agent_id,omitempty"`
+
+		// ChildSessionId Optional session id of the opened child session. Present for steered sessions; absent for legacy subturn spans. Enables the open control on the side panel row (ADR-091 I-4).
+		ChildSessionId *string `json:"child_session_id,omitempty"`
+
+		// ParentCallId The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
+		ParentCallId string `json:"parent_call_id"`
+
+		// SessionId Session in which this sub-turn is running.
+		SessionId string `json:"session_id"`
+
+		// SpanId Unique identifier for this span. Constructed by the server as "span_" + parent spawn ToolCall.ID.
+		SpanId string `json:"span_id"`
+
+		// TaskLabel Human-readable label for the subagent task, extracted from the spawn call's "label" or "task" parameter (truncated to 60 chars by the server; schema allows up to 100 to accommodate edge cases).
+		TaskLabel string                   `json:"task_label"`
+		Type      MessageSubagentStartType `json:"type"`
+	} `json:"subagent_start,omitempty"`
+
+	// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+	SubagentState *struct {
+		// ChildSessionId Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
+		ChildSessionId *string `json:"child_session_id,omitempty"`
+
+		// CreatedAt RFC3339 timestamp this state ping was emitted.
+		CreatedAt time.Time `json:"created_at"`
+
+		// SessionId Session in which the parent's span is running.
+		SessionId string `json:"session_id"`
+
+		// SpanId Matches the `span_id` from the bracketing `subagent_start` frame.
+		SpanId string `json:"span_id"`
+
+		// State The child's current durable lifecycle state (SessionLifecycleRecord.state).
+		State MessageSubagentStateState `json:"state"`
+
+		// SteeringReceipt Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3).
+		SteeringReceipt *struct {
+			AppliedAt time.Time `json:"applied_at"`
+
+			// CorrelationId The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
+			CorrelationId string `json:"correlation_id"`
+		} `json:"steering_receipt,omitempty"`
+		Type MessageSubagentStateType `json:"type"`
+	} `json:"subagent_state,omitempty"`
+
 	// Summary Compaction summary text (present only on type=compaction entries).
 	Summary *string `json:"summary,omitempty"`
 
-	// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
+	// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
 	SystemSubtype *MessageSystemSubtype `json:"system_subtype,omitempty"`
 
 	// Timestamp RFC3339 timestamp when this entry was recorded.
@@ -15900,7 +17983,7 @@ type Message struct {
 		// Result Return value from the tool. Shape is tool-specific.
 		Result *map[string]interface{} `json:"result,omitempty"`
 
-		// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+		// Status Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 		Status MessageToolCallsStatus `json:"status"`
 
 		// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -16004,13 +18087,37 @@ type MessageRole string
 // MessageStatus Completion status of this message turn.
 type MessageStatus string
 
-// MessageSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
+// MessageSubagentEndReason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+type MessageSubagentEndReason string
+
+// MessageSubagentEndStatus Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
+type MessageSubagentEndStatus string
+
+// MessageSubagentEndType defines model for Message.SubagentEnd.Type.
+type MessageSubagentEndType string
+
+// MessageSubagentMessageKind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+type MessageSubagentMessageKind string
+
+// MessageSubagentMessageType defines model for Message.SubagentMessage.Type.
+type MessageSubagentMessageType string
+
+// MessageSubagentStartType defines model for Message.SubagentStart.Type.
+type MessageSubagentStartType string
+
+// MessageSubagentStateState The child's current durable lifecycle state (SessionLifecycleRecord.state).
+type MessageSubagentStateState string
+
+// MessageSubagentStateType defines model for Message.SubagentState.Type.
+type MessageSubagentStateType string
+
+// MessageSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
 type MessageSystemSubtype string
 
 // MessageToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
 type MessageToolCallsContentState string
 
-// MessageToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+// MessageToolCallsStatus Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type MessageToolCallsStatus string
 
 // MessageTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
@@ -16471,7 +18578,7 @@ type Plan struct {
 	// Description Optional free-form description.
 	Description *string `json:"description,omitempty"`
 
-	// Dod Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `goal`, ADR D5).
+	// Dod Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `objective`, ADR D5).
 	Dod *[]struct {
 		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
 		Author struct {
@@ -16531,9 +18638,6 @@ type Plan struct {
 	// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 	FailedReason *PlanFailedReason `json:"failed_reason,omitempty"`
 
-	// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
-	Goal *string `json:"goal,omitempty"`
-
 	// Id Unique plan identifier (ULID).
 	Id string `json:"id"`
 
@@ -16545,6 +18649,9 @@ type Plan struct {
 
 	// LastUnmetTerminalSignature ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_supervision`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_supervision`.
 	LastUnmetTerminalSignature *string `json:"last_unmet_terminal_signature,omitempty"`
+
+	// Objective Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
+	Objective *string `json:"objective,omitempty"`
 
 	// Owner Username of the user who created this plan. Set server-side at creation; read-only.
 	Owner *string `json:"owner,omitempty"`
@@ -16669,7 +18776,7 @@ type PlanCreateRequest struct {
 	// Description Optional free-form description.
 	Description *string `json:"description,omitempty"`
 
-	// Dod Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `goal`). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload.
+	// Dod Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `objective`). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload.
 	Dod *[]struct {
 		// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
 		Author struct {
@@ -16726,8 +18833,8 @@ type PlanCreateRequest struct {
 		Text string `json:"text"`
 	} `json:"dod,omitempty"`
 
-	// Goal Plain-prose objective (used by the plan judge when `dod` is empty).
-	Goal *string `json:"goal,omitempty"`
+	// Objective Plain-prose objective (used by the plan judge when `dod` is empty).
+	Objective *string `json:"objective,omitempty"`
 
 	// OwnerAgentId Agent responsible for this plan.
 	OwnerAgentId string `json:"owner_agent_id"`
@@ -16797,7 +18904,7 @@ type PlanListResponse struct {
 		// Description Optional free-form description.
 		Description *string `json:"description,omitempty"`
 
-		// Dod Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `goal`, ADR D5).
+		// Dod Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `objective`, ADR D5).
 		Dod *[]struct {
 			// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
 			Author struct {
@@ -16857,9 +18964,6 @@ type PlanListResponse struct {
 		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 		FailedReason *PlanListResponsePlansFailedReason `json:"failed_reason,omitempty"`
 
-		// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
-		Goal *string `json:"goal,omitempty"`
-
 		// Id Unique plan identifier (ULID).
 		Id string `json:"id"`
 
@@ -16871,6 +18975,9 @@ type PlanListResponse struct {
 
 		// LastUnmetTerminalSignature ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_supervision`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_supervision`.
 		LastUnmetTerminalSignature *string `json:"last_unmet_terminal_signature,omitempty"`
+
+		// Objective Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
+		Objective *string `json:"objective,omitempty"`
 
 		// Owner Username of the user who created this plan. Set server-side at creation; read-only.
 		Owner *string `json:"owner,omitempty"`
@@ -17009,7 +19116,7 @@ type PlanRestartResponse struct {
 		// Description Optional free-form description.
 		Description *string `json:"description,omitempty"`
 
-		// Dod Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `goal`, ADR D5).
+		// Dod Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `objective`, ADR D5).
 		Dod *[]struct {
 			// Author Recorded identity of whoever authored this criterion (ADR D2 rule 3; mandatory — 400 if absent). A cross-agent-authored machine check (author identity != assignee agent id) requires assignee-owner confirmation unless waived by a workspace setting.
 			Author struct {
@@ -17069,9 +19176,6 @@ type PlanRestartResponse struct {
 		// FailedReason Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
 		FailedReason *PlanRestartResponsePlanFailedReason `json:"failed_reason,omitempty"`
 
-		// Goal Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
-		Goal *string `json:"goal,omitempty"`
-
 		// Id Unique plan identifier (ULID).
 		Id string `json:"id"`
 
@@ -17083,6 +19187,9 @@ type PlanRestartResponse struct {
 
 		// LastUnmetTerminalSignature ADR-053 C1/INV-7/F2 — a signature of the plan's all-terminal member outcomes at the moment the plan last entered `plan_phase: awaiting_supervision`. Persisted (not in-memory only, closing the standalone-F2 restart gap) so the engine can tell an unchanged all-terminal-but-unmet state from a genuinely new one after a restart, and skip re-judging it (no JudgeRound burned). Empty/absent when the plan has never entered `awaiting_supervision`.
 		LastUnmetTerminalSignature *string `json:"last_unmet_terminal_signature,omitempty"`
+
+		// Objective Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
+		Objective *string `json:"objective,omitempty"`
 
 		// Owner Username of the user who created this plan. Set server-side at creation; read-only.
 		Owner *string `json:"owner,omitempty"`
@@ -17254,8 +19361,8 @@ type PlanUpdateRequest struct {
 		Text string `json:"text"`
 	} `json:"dod,omitempty"`
 
-	// Goal New plain-prose objective.
-	Goal *string `json:"goal,omitempty"`
+	// Objective New plain-prose objective.
+	Objective *string `json:"objective,omitempty"`
 
 	// OwnerAgentId Reassign plan ownership to this agent.
 	OwnerAgentId *string `json:"owner_agent_id,omitempty"`
@@ -19117,10 +21224,128 @@ type SessionDetail struct {
 		// Status Completion status of this message turn.
 		Status *SessionDetailMessagesStatus `json:"status,omitempty"`
 
+		// SubagentEnd Server → client (FR-H-004). Closing bracket of a subagent span. Emitted when the sub-turn finishes. The SPA transitions the span from "running" to a terminal status and records duration and optional result. NOTE: status MUST be validated — the SPA's generated Zod schema (src/lib/api/generated/schemas.ts, built from this enum) rejects any status string not in this set; such frames are dropped.
+		SubagentEnd *struct {
+			// AgentId Agent that ran the sub-turn.
+			AgentId *string `json:"agent_id,omitempty"`
+
+			// DurationMs Wall-clock duration of the sub-turn in milliseconds.
+			DurationMs *int `json:"duration_ms,omitempty"`
+
+			// FinalResult Optional textual summary of the sub-turn's output.
+			FinalResult *string `json:"final_result,omitempty"`
+
+			// Message Internal reason string emitted by the orphan-watchdog synthetic end frame. Not rendered directly in the UI.
+			Message *string `json:"message,omitempty"`
+
+			// ParentCallId The spawn ToolCall.ID that triggered this sub-turn.
+			ParentCallId *string `json:"parent_call_id,omitempty"`
+
+			// Reason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+			Reason *SessionDetailMessagesSubagentEndReason `json:"reason,omitempty"`
+
+			// SessionId Session in which this sub-turn ran.
+			SessionId string `json:"session_id"`
+
+			// SpanId Matches the span_id from the preceding subagent_start frame.
+			SpanId string `json:"span_id"`
+
+			// Status Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
+			Status SessionDetailMessagesSubagentEndStatus `json:"status"`
+			Type   SessionDetailMessagesSubagentEndType   `json:"type"`
+		} `json:"subagent_end,omitempty"`
+
+		// SubagentMessage Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span event riding between the existing `subagent_start`/`subagent_end` brackets, feeding pill/panel/board live as a child pushes typed messages / the parent steers it. Rides the existing since-cursor WS replay (same pattern as `ReplayMessageFrame`).
+		// SHAPE DECISION (flagged for review): this is a FLAT, UI-facing PROJECTION of the underlying `SessionMessage` — it does not embed the full 12-variant `SessionMessage` discriminated union. Reasons: (1) the full union is hosted INLINE in `openapi.yaml` per ADR-034 specifically because oapi-codegen needs internal component refs inside a `oneOf` — embedding it inside an asyncapi frame would require a second, hand-duplicated copy of all 12 variants inside `asyncapi.yaml` (which does not resolve cross-file `$ref` for its own codegen, per the existing `GoalStatusFrame.yaml` note), multiplying maintenance burden for a live UI ping that only ever needs a handful of display fields; (2) this mirrors the established precedent of `GoalStatusFrame` itself being a flat projection of goal state rather than embedding a full Goal record. Full-fidelity SessionMessage data (every typed field, for every kind) is available via `delegate.inbox`/`delegate.peek` (`DelegateInboxResponse`/`DelegatePeekResponse`) — this frame is a live nudge, not the source of truth.
+		SubagentMessage *struct {
+			// ChildSessionId Optional session id of the delegated child session this mid-span update is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
+			ChildSessionId *string `json:"child_session_id,omitempty"`
+
+			// CorrelationId Present for `question`/`decision_request`/`steer`/`respond` — lets the SPA thread a live reply.
+			CorrelationId *string `json:"correlation_id,omitempty"`
+
+			// CreatedAt RFC3339 timestamp the underlying message was created.
+			CreatedAt time.Time `json:"created_at"`
+
+			// Kind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+			Kind SessionDetailMessagesSubagentMessageKind `json:"kind"`
+
+			// MessageId The underlying SessionMessage's `message_id` — correlates this live ping with the full record fetchable via `delegate.inbox`/`peek`.
+			MessageId string `json:"message_id"`
+
+			// Pct Present for `kind: progress` when a percentage estimate was given.
+			Pct *int `json:"pct,omitempty"`
+
+			// SenderIdentity Agent ID (or "human") that authored the underlying message.
+			SenderIdentity string `json:"sender_identity"`
+
+			// SessionId Session in which the parent's span is running.
+			SessionId string `json:"session_id"`
+
+			// SpanId Matches the `span_id` from the bracketing `subagent_start` frame.
+			SpanId string `json:"span_id"`
+
+			// Text Flattened display text (progress.text / checkpoint.summary / blocker.text / question.text / error.text / steer.text / respond.text), when the kind carries one.
+			Text *string                                  `json:"text,omitempty"`
+			Type SessionDetailMessagesSubagentMessageType `json:"type"`
+
+			// UntrustedOrigin True when the underlying message's free-text content originated from a child agent and must render in untrusted-content framing (FE-7/MAJ-12).
+			UntrustedOrigin bool `json:"untrusted_origin"`
+		} `json:"subagent_message,omitempty"`
+
+		// SubagentStart Server → client (FR-H-004). Opening bracket of a subagent span. Emitted when the agent loop spawns a sub-turn. The SPA uses span_id to group subsequent nested tool_call_start / tool_call_result frames under a collapsible span UI.
+		SubagentStart *struct {
+			// AgentId Agent running the sub-turn.
+			AgentId *string `json:"agent_id,omitempty"`
+
+			// ChildSessionId Optional session id of the opened child session. Present for steered sessions; absent for legacy subturn spans. Enables the open control on the side panel row (ADR-091 I-4).
+			ChildSessionId *string `json:"child_session_id,omitempty"`
+
+			// ParentCallId The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
+			ParentCallId string `json:"parent_call_id"`
+
+			// SessionId Session in which this sub-turn is running.
+			SessionId string `json:"session_id"`
+
+			// SpanId Unique identifier for this span. Constructed by the server as "span_" + parent spawn ToolCall.ID.
+			SpanId string `json:"span_id"`
+
+			// TaskLabel Human-readable label for the subagent task, extracted from the spawn call's "label" or "task" parameter (truncated to 60 chars by the server; schema allows up to 100 to accommodate edge cases).
+			TaskLabel string                                 `json:"task_label"`
+			Type      SessionDetailMessagesSubagentStartType `json:"type"`
+		} `json:"subagent_start,omitempty"`
+
+		// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+		SubagentState *struct {
+			// ChildSessionId Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
+			ChildSessionId *string `json:"child_session_id,omitempty"`
+
+			// CreatedAt RFC3339 timestamp this state ping was emitted.
+			CreatedAt time.Time `json:"created_at"`
+
+			// SessionId Session in which the parent's span is running.
+			SessionId string `json:"session_id"`
+
+			// SpanId Matches the `span_id` from the bracketing `subagent_start` frame.
+			SpanId string `json:"span_id"`
+
+			// State The child's current durable lifecycle state (SessionLifecycleRecord.state).
+			State SessionDetailMessagesSubagentStateState `json:"state"`
+
+			// SteeringReceipt Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3).
+			SteeringReceipt *struct {
+				AppliedAt time.Time `json:"applied_at"`
+
+				// CorrelationId The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
+				CorrelationId string `json:"correlation_id"`
+			} `json:"steering_receipt,omitempty"`
+			Type SessionDetailMessagesSubagentStateType `json:"type"`
+		} `json:"subagent_state,omitempty"`
+
 		// Summary Compaction summary text (present only on type=compaction entries).
 		Summary *string `json:"summary,omitempty"`
 
-		// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
+		// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
 		SystemSubtype *SessionDetailMessagesSystemSubtype `json:"system_subtype,omitempty"`
 
 		// Timestamp RFC3339 timestamp when this entry was recorded.
@@ -19153,7 +21378,7 @@ type SessionDetail struct {
 			// Result Return value from the tool. Shape is tool-specific.
 			Result *map[string]interface{} `json:"result,omitempty"`
 
-			// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+			// Status Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 			Status SessionDetailMessagesToolCallsStatus `json:"status"`
 
 			// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -19366,13 +21591,37 @@ type SessionDetailMessagesRole string
 // SessionDetailMessagesStatus Completion status of this message turn.
 type SessionDetailMessagesStatus string
 
-// SessionDetailMessagesSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
+// SessionDetailMessagesSubagentEndReason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+type SessionDetailMessagesSubagentEndReason string
+
+// SessionDetailMessagesSubagentEndStatus Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
+type SessionDetailMessagesSubagentEndStatus string
+
+// SessionDetailMessagesSubagentEndType defines model for SessionDetail.Messages.SubagentEnd.Type.
+type SessionDetailMessagesSubagentEndType string
+
+// SessionDetailMessagesSubagentMessageKind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+type SessionDetailMessagesSubagentMessageKind string
+
+// SessionDetailMessagesSubagentMessageType defines model for SessionDetail.Messages.SubagentMessage.Type.
+type SessionDetailMessagesSubagentMessageType string
+
+// SessionDetailMessagesSubagentStartType defines model for SessionDetail.Messages.SubagentStart.Type.
+type SessionDetailMessagesSubagentStartType string
+
+// SessionDetailMessagesSubagentStateState The child's current durable lifecycle state (SessionLifecycleRecord.state).
+type SessionDetailMessagesSubagentStateState string
+
+// SessionDetailMessagesSubagentStateType defines model for SessionDetail.Messages.SubagentState.Type.
+type SessionDetailMessagesSubagentStateType string
+
+// SessionDetailMessagesSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
 type SessionDetailMessagesSystemSubtype string
 
 // SessionDetailMessagesToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
 type SessionDetailMessagesToolCallsContentState string
 
-// SessionDetailMessagesToolCallsStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+// SessionDetailMessagesToolCallsStatus Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type SessionDetailMessagesToolCallsStatus string
 
 // SessionDetailMessagesTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
@@ -19407,7 +21656,7 @@ type SessionLifecycleRecord struct {
 	// FailedReason Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively (e.g. `interrupted`, `judge_rounds_exhausted`), unlike `Plan.failed_reason`'s closed enum, so this field is left open rather than guessing at a complete set (flagged for review).
 	FailedReason *string `json:"failed_reason,omitempty"`
 
-	// Generation This session's generation number. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
+	// Generation This session's generation number. Starts at 1. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
 	Generation int `json:"generation"`
 
 	// GoalRef The goal-id this session is servicing, when it is goal-bearing.
@@ -19431,6 +21680,18 @@ type SessionLifecycleRecord struct {
 		TtlDeadline time.Time `json:"ttl_deadline"`
 	} `json:"needs_input,omitempty"`
 
+	// Origin Every record carries its origin: how and where this session was launched (ADR-091 I-1). Kind discriminates the launch path.
+	Origin *struct {
+		// CallId For delegate/task-origin sessions, the tool-call id (span key) of the originating delegate or create_task call. Absent for other kinds.
+		CallId *string `json:"call_id,omitempty"`
+
+		// Kind The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+		Kind SessionLifecycleRecordOriginKind `json:"kind"`
+
+		// TaskId For task-origin sessions, the persistent task id from the task record (persisted on the task disk-only, by tools/task.go). Absent for delegate-origin and other kinds.
+		TaskId *string `json:"task_id,omitempty"`
+	} `json:"origin,omitempty"`
+
 	// OwnerScopeId The `parent_session_id` or `plan_id` this session's ownership resolves to, per `owner_scope_kind`. Absent/empty when `owner_scope_kind == human`.
 	OwnerScopeId *string `json:"owner_scope_id,omitempty"`
 
@@ -19440,7 +21701,7 @@ type SessionLifecycleRecord struct {
 	// OwnsPlanId Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `paused` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
 	OwnsPlanId *string `json:"owns_plan_id,omitempty"`
 
-	// ResumedFrom The prior generation's `session_id` this record resumed from. Null for generation 0 (the original spawn).
+	// ResumedFrom The prior generation's `session_id` this record resumed from. Null for generation 1 (the original spawn).
 	ResumedFrom *string `json:"resumed_from,omitempty"`
 
 	// SessionId Unique durable session identifier.
@@ -19448,6 +21709,58 @@ type SessionLifecycleRecord struct {
 
 	// State The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 	State SessionLifecycleRecordState `json:"state"`
+
+	// SteeredBy Present for steered sessions (a session launched by another session's delegate or create_task). Absent for ordinary-root sessions that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
+	SteeredBy *struct {
+		// Authorization The gate verdict at launch.
+		Authorization struct {
+			// Mode How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
+			Mode SessionLifecycleRecordSteeredByAuthorizationMode `json:"mode"`
+
+			// RemainingDepth Remaining delegation depth budget for this child's own onward delegations. Decremented from the edge or global default.
+			RemainingDepth int `json:"remaining_depth"`
+		} `json:"authorization"`
+
+		// Limits Creator-set session limits.
+		Limits *struct {
+			// TimeoutSeconds Maximum seconds before this delegation is force-cancelled. 0 = the configured default. Scope is the session's lifetime across re-entries (ADR-091 I-1).
+			TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+		} `json:"limits,omitempty"`
+
+		// ReportingTarget The steering session's own address; where completion wakes it.
+		ReportingTarget *struct {
+			Channel   *string `json:"channel,omitempty"`
+			ChatId    *string `json:"chat_id,omitempty"`
+			SessionId *string `json:"session_id,omitempty"`
+		} `json:"reporting_target,omitempty"`
+
+		// RootSessionId The cascade root, verified by walking the chain at launch. Equal to steering_session_id at depth 1.
+		RootSessionId string `json:"root_session_id"`
+
+		// SteeringSessionId The direct parent session; the inbox owner key.
+		SteeringSessionId string `json:"steering_session_id"`
+
+		// ToolExclusions Tool names excluded for this steered session (e.g., switch_agent). Applied at launch.
+		ToolExclusions *[]string `json:"tool_exclusions,omitempty"`
+	} `json:"steered_by,omitempty"`
+
+	// Stop Present when this session's own record carries a Stop marker, written by the cancel cascade on the stopped node and every reachable non-terminal descendant (ADR-091 I-6). Absent for sessions that were not stopped. No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
+	Stop *struct {
+		// At RFC3339 timestamp when the Stop marker was written.
+		At time.Time `json:"at"`
+
+		// By Who or what initiated the stop.
+		By struct {
+			// Id The agent id (if kind=agent) or user id (if kind=human).
+			Id *string `json:"id,omitempty"`
+
+			// Kind Principal kind (agent or human).
+			Kind *SessionLifecycleRecordStopByKind `json:"kind,omitempty"`
+		} `json:"by"`
+
+		// Generation The generation this Stop marker names. A revived generation is a newer generation number.
+		Generation int `json:"generation"`
+	} `json:"stop,omitempty"`
 
 	// Terminal Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
 	Terminal *bool `json:"terminal,omitempty"`
@@ -19462,11 +21775,20 @@ type SessionLifecycleRecord struct {
 	WorkspaceId string `json:"workspace_id"`
 }
 
+// SessionLifecycleRecordOriginKind The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+type SessionLifecycleRecordOriginKind string
+
 // SessionLifecycleRecordOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type SessionLifecycleRecordOwnerScopeKind string
 
 // SessionLifecycleRecordState The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 type SessionLifecycleRecordState string
+
+// SessionLifecycleRecordSteeredByAuthorizationMode How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
+type SessionLifecycleRecordSteeredByAuthorizationMode string
+
+// SessionLifecycleRecordStopByKind Principal kind (agent or human).
+type SessionLifecycleRecordStopByKind string
 
 // SessionMessage The typed, schema-validated envelope carried over the existing pkg/bus MessageBus (no new transport) that derives every control/visibility surface of the session-control plane (ADR-053 S6/US-6). Discriminated by `kind` — 12 variants covering child->parent reporting (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), engine-emitted control (revision_entry), session->UI propagation (goal_status), and parent->child control (steer/respond). `direction` is one of `child_to_parent | parent_to_child | session_to_ui | engine` — the historical `human` value is dropped (M8); every kind variant maps to exactly one of the four. Every field/kind/direction pairing is the ratified shape from the spec's Contract Surface table — see the individual variant files for full per-kind documentation and caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16 KiB for steer; per-child unacked ceiling 20 open question+blocker, D15).
 type SessionMessage struct {
@@ -19620,12 +21942,26 @@ type SessionMessageErrorKind string
 
 // SessionMessageGoalStatus SessionMessage `oneOf` variant, `kind: goal_status` (ADR-053 §Contract Surface). Direction `session_to_ui`. This is the typed, engine-internal propagation of the parsed `GOAL_STATUS:` marker (US-2) — DISTINCT from the existing `GoalStatusFrame` WS frame (`contracts/asyncapi.yaml`), which carries the 8-state DISPLAY pill (queued/active/waiting_on_user/ judge_unavailable/re-planning/judging/done/failed, R§8.10) plus round/max_rounds/cap accounting. `SessionMessageGoalStatus.condition` is the raw two-value marker outcome (`met`/`waiting_on_user`) the claim-or- idle trigger consumes to decide whether to adjudicate or pause — it feeds the pill, it is not the pill itself. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
 type SessionMessageGoalStatus struct {
-	// Condition The typed `GOAL_STATUS:` marker outcome (US-2). No marker on a turn means "not waiting" — a deterministic fallback, never inferred by a prose classifier, and never represented as a third enum value here (absence of this message IS the not-waiting state).
-	Condition  SessionMessageGoalStatusCondition `json:"condition"`
-	CreatedAt  time.Time                         `json:"created_at"`
-	Depth      int                               `json:"depth"`
-	Direction  SessionMessageGoalStatusDirection `json:"direction"`
-	Generation *int                              `json:"generation,omitempty"`
+	// Condition The typed condition outcome. `met` — goal conditions met. `not_met` — goal conditions failed (founder decision, round 10). `waiting_on_user` — waiting on operator input. No marker on a turn means "not waiting" — a deterministic fallback, never inferred by a prose classifier, and never represented as a fourth enum value here (absence of this message IS the not-waiting state).
+	Condition SessionMessageGoalStatusCondition `json:"condition"`
+	CreatedAt time.Time                         `json:"created_at"`
+	Depth     int                               `json:"depth"`
+
+	// Direction Direction this verdict travels. `session_to_ui` for verdicts meant for the operator; `session_to_parent` for verdicts from a steered child to its steering parent (ADR-091 I-5).
+	Direction SessionMessageGoalStatusDirection `json:"direction"`
+
+	// Evidence Optional evidence list supporting the verdict. Each entry explains one criterion and whether it was met (ADR-091 I-5, founder decision round 10).
+	Evidence *[]struct {
+		// Criterion The criterion being evaluated.
+		Criterion *string `json:"criterion,omitempty"`
+
+		// Met Whether this criterion was met.
+		Met *bool `json:"met,omitempty"`
+
+		// Note Optional contextual note about this criterion.
+		Note *string `json:"note,omitempty"`
+	} `json:"evidence,omitempty"`
+	Generation *int `json:"generation,omitempty"`
 
 	// GoalId The goal this condition applies to (R§8.11 — a session may carry multiple independent goals, each keyed by goal-id).
 	GoalId          string                       `json:"goal_id"`
@@ -19637,10 +21973,10 @@ type SessionMessageGoalStatus struct {
 	UntrustedOrigin bool                         `json:"untrusted_origin"`
 }
 
-// SessionMessageGoalStatusCondition The typed `GOAL_STATUS:` marker outcome (US-2). No marker on a turn means "not waiting" — a deterministic fallback, never inferred by a prose classifier, and never represented as a third enum value here (absence of this message IS the not-waiting state).
+// SessionMessageGoalStatusCondition The typed condition outcome. `met` — goal conditions met. `not_met` — goal conditions failed (founder decision, round 10). `waiting_on_user` — waiting on operator input. No marker on a turn means "not waiting" — a deterministic fallback, never inferred by a prose classifier, and never represented as a fourth enum value here (absence of this message IS the not-waiting state).
 type SessionMessageGoalStatusCondition string
 
-// SessionMessageGoalStatusDirection defines model for SessionMessageGoalStatus.Direction.
+// SessionMessageGoalStatusDirection Direction this verdict travels. `session_to_ui` for verdicts meant for the operator; `session_to_parent` for verdicts from a steered child to its steering parent (ADR-091 I-5).
 type SessionMessageGoalStatusDirection string
 
 // SessionMessageGoalStatusKind defines model for SessionMessageGoalStatus.Kind.
@@ -19685,7 +22021,7 @@ type SessionMessageProgress struct {
 	// CreatedAt RFC3339 timestamp this message was created.
 	CreatedAt time.Time `json:"created_at"`
 
-	// Depth Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/subturn.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
+	// Depth Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
 	Depth int `json:"depth"`
 
 	// Direction M8 — the unused `human` value is dropped. `progress` is always child -> parent.
@@ -21513,7 +23849,7 @@ type ToolCall struct {
 	// Result Return value from the tool. Shape is tool-specific.
 	Result *map[string]interface{} `json:"result,omitempty"`
 
-	// Status Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+	// Status Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 	Status ToolCallStatus `json:"status"`
 
 	// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -21523,7 +23859,7 @@ type ToolCall struct {
 // ToolCallContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
 type ToolCallContentState string
 
-// ToolCallStatus Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+// ToolCallStatus Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type ToolCallStatus string
 
 // ToolPolicy A policy value governing whether a tool call is allowed, requires approval, or is denied.
@@ -22935,7 +25271,7 @@ type WorkspaceDelegationEdgesModes string
 // WorkspaceDelegationPersistenceStatus Whether all, some, or none of the requested resource components were saved.
 type WorkspaceDelegationPersistenceStatus string
 
-// WorkspaceDelegationEdge A single directed delegation edge in a workspace's delegation graph. The graph is the per-workspace source of truth for who-delegates-to-whom (M5): each edge authorizes from_agent to delegate work to to_agent, in the listed modes, bounded by depth. Membership in the workspace team is the union of all agents referenced by any edge plus the workspace's core_team roster.
+// WorkspaceDelegationEdge A single directed delegation edge in a workspace's delegation graph. The graph is the per-workspace source of truth for who-delegates-to-whom (M5): each edge authorizes from_agent to delegate work to to_agent, in the listed modes, bounded by depth. Membership in the workspace team is the union of all agents referenced by any edge plus the workspace's core_team roster. Delegation never awaits — a delegating agent hands work to the target and continues; the child runs in parallel and reports back through upward delivery (ADR-091 D4).
 type WorkspaceDelegationEdge struct {
 	// Depth Maximum delegation chain depth for this edge (number of hops). 0 = no onward delegation past this hop. Bounded by the global subturn depth ceiling. Absent means the workspace/global default applies.
 	Depth *int `json:"depth,omitempty"`

@@ -103,6 +103,30 @@ The encrypted credential store needs a master key. The gateway looks for one in 
 
 A fresh install warns you to back up `master.key`. Heed it: losing that file makes every stored credential permanently unreadable, with no recovery. See [Security for users](security.md).
 
+## Credentials stop working after an upgrade
+
+Every stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open. A vault from an earlier release is upgraded to this format automatically, once, the first time the new gateway or any `omnipus` command opens it. You do not need to re-enter anything. The upgrade writes the whole file in one step: if it is interrupted, the old file is left as it was and the next start tries again.
+
+The gateway refuses to start, and changes nothing, in three cases:
+
+| Message says | What it means | What to do |
+|---|---|---|
+| "every entry failed" | The master key is not the one the vault was written with | Supply the original master key (`master.key`, `OMNIPUS_MASTER_KEY` or `OMNIPUS_KEY_FILE`) |
+| "N of M entries failed authentication" and names them | Those entries were edited or copied on disk | Remove the named entries from `credentials.json`, restart, then enter them again |
+| "already migrated it once" | An old-format vault appeared after this installation had already been upgraded | If you restored a pre-upgrade backup on purpose, delete `credentials.json.migrated` next to the vault and restart. If you did not, treat the vault as tampered with |
+
+To remove an entry by hand: stop the gateway, back up `credentials.json`, open it in a text editor, and delete the named entry (its name and its `nonce` and `ciphertext` lines) from the `credentials` section. Restart the gateway, then enter the value again in **Settings**, **Security**, **Credential Vault**, or with `omnipus credentials set <name> <value>`.
+
+### Going back to an older release, and coming back
+
+A release from before this change cannot read an upgraded vault. If you go back to one anyway, and re-enter credentials there so it writes an old-format vault, the next start of the newer release refuses with "already migrated it once". To recover, delete `credentials.json.migrated` next to the vault and start again. The vault is then upgraded a second time. Only do this when you know the old-format file came from you.
+
+### Windows: two processes upgrading at once
+
+On Windows, Omnipus has no lock between separate processes. If two Omnipus processes (for example the gateway and an `omnipus credentials` command) open the same old-format vault at the same moment, both may run the upgrade. Each writes a complete, valid vault, and the last one written wins. No value is mixed up or swapped. In passphrase mode, the process whose write was replaced holds a key for the overwritten file and fails to read credentials until it is restarted. Start the gateway alone for the first run after upgrading.
+
+After the upgrade there is deliberately no fallback that reads an old entry: it would let a value be moved between names again. If one entry fails while the others still work, that entry was edited on disk or copied from another entry. The gateway names the entry at fault in its log. Re-enter it the same way.
+
 ## The web app looks outdated after a source build
 
 The Go binary embeds the web app from `pkg/gateway/spa/` — a copy of the frontend build output, not the output itself, so building without refreshing that copy serves an old interface. `make build` refreshes it and builds in one step. Confirm a change reached the binary by searching the bundled assets for a string only it contains:

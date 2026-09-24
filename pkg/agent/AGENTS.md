@@ -6,12 +6,12 @@ The turn engine every workspace tab sits on. No screen owns it.
 
 This is the largest Go package in the repo. Never run it whole; scope to one
 symbol (`CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run
-'^TestSpawnSubTurn_TargetIdentity' ./pkg/agent/`). CI is the authority for
-full-suite results.
+'^TestLaunch_DefaultTimeoutIsThirtyMinutes' ./pkg/agent/`). CI is the
+authority for full-suite results.
 
 Cite `file::symbol` in notes and reviews, never `file:line` — `loop.go`,
-`turn.go` and `subturn.go` churn daily; every line number in older notes here
-was stale within weeks.
+`turn.go` and `steer_launcher.go` churn daily; every line number in older
+notes here was stale within weeks.
 
 ## Size ceiling
 
@@ -20,23 +20,68 @@ was stale within weeks.
 New code belongs in a sibling file, not appended; a split re-keys the row
 by hand (see that file's header).
 
-## Delegation identity — never inherit agent-level settings from the parent
+## Delegation — a worker is a session steered by another session (ADR-091)
 
-`subturn.go::spawnSubTurn` sources every agent-level setting (ID, Name,
-Workspace, ContextBuilder, Tools, tool policy, AgentType, and the
-Model/Provider/Candidates/ProviderPool quad) from `execSource` — the resolved
-delegate, or the parent for self-delegation — with no per-field exception. The
-mutex-protected quad is read from the SAME source under one `RLock`; mixing
-parent and target fields was itself an identity-inheritance bug once. Do not
-reintroduce a "keep some fields parent-sourced" exception. Regression:
-`subturn_target_identity_test.go`.
+A worker is **not a special case.** It is a normal session that another
+session (the steering session) launched through the `pkg/steer.SessionLauncher`
+interface and recorded with one `LifecycleRecord` edge — the canonical parent
+relationship. `pkg/steer` holds every published interface; `pkg/agent` supplies
+the production implementations; the tools, channels, and gateway packages
+inject them and cannot import `pkg/agent`.
 
-The one REQUIRED parent-to-child assignment is
-`childTS.routingSessionID = parentTS.routingSessionID` (ADR-057 D2) — the
-cancel/interrupt reachability key. It pattern-matches the prohibited shape and
-is not covered by it: delete it and chat-wide Stop silently stops reaching
-delegated sub-turns, no error, no obvious test failure. Full contract: the
-`routingSessionID` field's doc comment in `turn.go`.
+The nine implementation files:
+
+- `pkg/agent/steer_launcher.go` — `SteerLauncher.Launch` writes the record and
+  the mandatory fields (identity, ownership stamp, workspace, title and edge)
+  atomically before any turn runs; `SteerLauncher.Dispatch` decides admission
+  under one lock and returns the authoritative `running` / `queued` result.
+- `pkg/agent/steer_audience.go` — `SteerAudienceResolver.Audience` answers
+  "who is this session's audience?" at every publication boundary, so a
+  steered session can never reach a user-facing address by accident. The
+  companion `SteerUpwardDeliverer.Deliver` is the only upward path from a
+  child to its parent.
+- `pkg/agent/steer_cancel.go` — `SteerCanceller.CancelSubtree` walks the
+  durable edge, stamps a Stop marker on every reachable non-terminal
+  descendant under the node's cascade lock, and cancels each live turn with
+  the stamped generation; `SteerCanceller.Revive` increments a stopped
+  session's generation under the same record lock so a newer instruction can
+  bring it back.
+- `pkg/agent/steer_reconstruct.go` — `reconstructSteeredTurn` rebuilds a
+  steered session's `turnState` from its record on every entry path that
+  RESUMES a turn: first run and revival (`SteerLauncher.Dispatch`) and the
+  wake (`loop_inbound.go::processSteeredSystemWake`). Identity is never
+  per-path. **Boot is not one of those paths** — `boot_sweep.go::
+  SteerBootRecovery` never calls it; a steered session still mid-flight at
+  boot is marked `OutcomeInterrupted` and delivered to its parent rather
+  than resumed. (That file's own header says so; this list used to claim
+  boot as a fourth entry point.)
+- `pkg/agent/steer_classify.go` — `SteerRecordClassifier` implements I-8:
+  which of the six classes a session belongs to, reading the lifecycle
+  record AND the session's own metadata and requiring them to agree.
+  Consumed by `SteerAudienceResolver` and boot recovery.
+- `pkg/agent/steer_boundary.go` — the shared per-boundary helper for every
+  publication boundary this package hosts: resolve audience, then call
+  `steer.BoundaryObserver.Observe` BEFORE acting on the decision. Also holds
+  `SetSteerAudienceDeps`, which injects the I-5 trio onto the loop.
+- `pkg/agent/steer_completion.go` — `completeSteeredTurn` applies the
+  goal-less completion disposition after a real turn exits (deliver first,
+  then mark terminal, so boot recovery can repair the gap rather than lose
+  the child's only result).
+- `pkg/agent/steer_delegate_cancel.go` — `cancelDelegatedSubtree`, the stop
+  an AGENT performs on a worker it started (`delegate(action="cancel")`),
+  routed through the same durable cascade a human's Stop uses.
+- `pkg/agent/steer_frames.go` — the four sub-agent lifecycle frames
+  (`subagent_start`/`state`/`message`/`end`) persisted into the PARENT's
+  transcript. Read its header before chasing a missing frame: start and end
+  do not share a caller.
+
+The `subturn.go` ring, borrowed `Channel`/`ChatID`, wait-inline
+(`async:false`), the `ParentDurableKey` field, and every per-site
+"is this a delegate?" boolean are gone in the same delivery. Self-target is
+allowed for both delegation and tasks; recursion is bounded by the concurrency
+and depth caps that already exist. There is no second memory, no second
+identity, and no second path to the parent — the test suite asserts this on a
+three-level delegation.
 
 ## Retired surfaces — resolve merges by keeping the deletion
 
@@ -51,9 +96,12 @@ delegated sub-turns, no error, no obvious test failure. Full contract: the
 - **Orphaned-foreground-turn watchdog** (ADR-082): a turn never depends on a UI
   connection; only explicit Stop/cancel (`RequestCancel`,
   `InterruptSessionHard`) ends a turn early. Guard:
-  `scripts/check-no-orphan-turn-watchdog.sh`. Two unrelated mechanisms that
-  also say "orphan" are KEPT: the subagent-span forwarder watchdog
-  (`websocket.go::startOrphanWatchdog`) and `SubTurnOrphan`.
+  `scripts/check-no-orphan-turn-watchdog.sh`. One unrelated mechanism that
+  also says "orphan" is KEPT: `SubTurnOrphan`. The subagent-span forwarder
+  watchdog (formerly `websocket.go::startOrphanWatchdog`) is a DIFFERENT
+  mechanism and this delivery (ADR-091) retired it too — see
+  `pkg/gateway/websocket_forward.go`'s header for why it was not re-aimed at
+  a new trigger instead.
 
 ## Context compaction
 

@@ -125,19 +125,18 @@ describe('GenericToolCall — marshal-error result sentinel', () => {
 // ── BLOCKER 2: delegation-denied sentinel rendering ──────────────────────────
 
 describe('GenericToolCall — delegation-denied result sentinel', () => {
-  // Fix 2 (2026-07-16, revised): a `delegate` call with the default/absent
-  // args shape these fixtures use (action defaults to "run") is now hidden
-  // in the thread by default REGARDLESS of outcome — isError/marshalErr no
-  // longer override delegate visibility (toolVisibility.ts's
-  // shouldRenderToolCall doc comment: the failure is explained by the
-  // delegating agent's own response text, not a thread chip; the raw
-  // denial stays inspectable in the ActivityPanel). This describe block
-  // tests the delegation-denied CHIP'S OWN render logic (does it draw the
-  // amber branch correctly), a separate concern from default visibility —
-  // so verbose chat is forced on to get past the now-independent
-  // visibility gate, exactly as an opted-in user would see it. The
-  // default-hidden case itself is covered by the REGRESSION-turned-positive
-  // test at the end of this block.
+  // ADR-091 D7/AC-7: a `delegate` call with the default/absent args shape
+  // these fixtures use (action defaults to "run") is visible in the thread
+  // by DEFAULT now, REGARDLESS of outcome — delegate never consults
+  // isError/marshalErr at all (toolVisibility.ts's shouldRenderToolCall doc
+  // comment: this tool-call chip is the parent's ONLY delegation surface,
+  // now that the span-level surface it used to defer to is deleted). This
+  // describe block tests the delegation-denied CHIP'S OWN render logic (does
+  // it draw the amber branch correctly), a separate concern from default
+  // visibility — verbose chat is still forced on here (harmless: verbose
+  // short-circuits to visible regardless) so this block keeps working
+  // unchanged however default visibility evolves. The default-visible case
+  // itself is pinned by the test at the end of this block.
   beforeEach(() => {
     act(() => {
       useChatPreferencesStore.setState({ verboseChatEnabled: true })
@@ -249,16 +248,12 @@ describe('GenericToolCall — delegation-denied result sentinel', () => {
     expect(badge).not.toHaveTextContent(/\bFailed\b/)
   })
 
-  // Was "REGRESSION: ... is NOT hidden" pre-Fix-2: shouldRenderToolCall used
-  // to decide visibility from tool+params alone, with no idea the call had
-  // been denied, so an isError/delegationFailure override forced it visible.
-  // Fix 2 (revised 2026-07-16) removed that override for delegate entirely —
-  // a `delegate` call with fully default/absent args (action defaults to
-  // "run") now stays hidden in the thread EVEN when denied; verbose chat is
-  // the only way back. This test now pins BOTH halves: hidden by default,
-  // and — once verbose is on (this describe's own beforeEach) — the exact
-  // same chip content the original regression test asserted.
-  it('a policy-denied delegation with fully default/absent args is hidden by default, and shows the full denial chip once verbose chat is enabled', () => {
+  // ADR-091 D7/AC-7: a `delegate` call with fully default/absent args
+  // (action defaults to "run") is visible in the thread by DEFAULT, denied
+  // or not — it is the parent's ONLY delegation surface now, so it cannot
+  // wait for verbose chat. This test pins BOTH halves: visible with verbose
+  // OFF, and the exact same denial-chip content either way.
+  it('a policy-denied delegation with fully default/absent args is visible by default, showing the full denial chip', () => {
     const delegationDenied = {
       error: 'delegation_denied' as const,
       reason: 'Scout is not in your trust set for delegation.',
@@ -267,29 +262,12 @@ describe('GenericToolCall — delegation-denied result sentinel', () => {
       target_agent_id: 'scout-01',
     }
 
-    // First: with verbose forced back OFF, the row must be hidden — the
-    // failure is left for the delegating agent's own response text and the
-    // ActivityPanel to surface, not a thread chip.
+    // With verbose forced back OFF, the row must still be visible — a
+    // denied 'run' delegation has no other thread-side surface to defer to.
     // Issue #617: producible pairing (result + status:complete + error) —
     // see the first test in this describe block for the full rationale.
     act(() => {
       useChatPreferencesStore.setState({ verboseChatEnabled: false })
-    })
-    const { unmount } = render(
-      <GenericToolCall
-        toolName="delegate"
-        result={delegationDenied}
-        status={COMPLETE_STATUS}
-        error={delegationDenied.reason}
-      />
-    )
-    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
-    unmount()
-
-    // Then: verbose chat back on (this describe's default) reveals the full
-    // chip, with the same content the pre-Fix-2 test pinned.
-    act(() => {
-      useChatPreferencesStore.setState({ verboseChatEnabled: true })
     })
     render(
       <GenericToolCall
@@ -414,12 +392,12 @@ describe('GenericToolCall — flat text-line status dot', () => {
     expect(indicator?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
   })
 
-  // (item 8e, 2026-07-16 fix wave): these two tests need verboseChatEnabled
-  // true to get past the visibility gate at all (toolName="delegate") —
-  // scoped to their own nested describe with a beforeEach/afterEach pair,
-  // matching the pattern the "delegation-denied result sentinel" describe
-  // above (lines 141-151) already uses, instead of each test managing its
-  // own inline act()/setState set-and-reset.
+  // (item 8e, 2026-07-16 fix wave): these two tests force verboseChatEnabled
+  // true (harmless — a default `run` delegate call is visible either way,
+  // ADR-091 D7/AC-7) — scoped to their own nested describe with a
+  // beforeEach/afterEach pair, matching the pattern the "delegation-denied
+  // result sentinel" describe above already uses, instead of each test
+  // managing its own inline act()/setState set-and-reset.
   describe('delegation-denied variant (verbose forced on)', () => {
     beforeEach(() => {
       act(() => {
@@ -632,21 +610,12 @@ describe('GenericToolCall — verbose chat gate', () => {
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 
-  it('a background delegate call (default action=run, async=true) renders nothing when verboseChatEnabled is false', () => {
-    render(
-      <GenericToolCall
-        toolName="delegate"
-        args={{}}
-        status={COMPLETE_STATUS}
-      />
-    )
-    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
-  })
-
-  it('a background delegate call renders normally when verboseChatEnabled is true', () => {
-    act(() => {
-      useChatPreferencesStore.setState({ verboseChatEnabled: true })
-    })
+  // ADR-091 D7/AC-7: the parent's chat must show exactly the one line a
+  // delegation produces — the span/step surface this call used to defer to
+  // (SubagentBlock, deleted along with `shouldRenderSubagentSpan`) is gone,
+  // so this tool-call chip is now the thread's ONLY delegation surface and
+  // is visible by default, not gated behind verbose chat.
+  it('a background delegate call (default action=run, async=true) renders by default (verboseChatEnabled false)', () => {
     render(
       <GenericToolCall
         toolName="delegate"
@@ -657,14 +626,7 @@ describe('GenericToolCall — verbose chat gate', () => {
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 
-  // INVERTED 2026-07-16 (was: "... still renders regardless of verbose
-  // setting"): Fix 2 hides a 'run' delegation for BOTH sync and async.
-  // Revised same day: the thread has NO default delegation surface at all
-  // anymore — SubagentBlock's span card is ALSO verbose-only now
-  // (shouldRenderSubagentSpan, toolVisibility.ts), so this isn't "redundant
-  // with the card", it's simply hidden, same as the card, until verbose
-  // chat is on.
-  it('an explicit blocking delegate call (async: false) is ALSO hidden by default — no sync exception', () => {
+  it('an explicit blocking delegate call (async: false) is ALSO visible by default — no sync exception', () => {
     render(
       <GenericToolCall
         toolName="delegate"
@@ -672,17 +634,30 @@ describe('GenericToolCall — verbose chat gate', () => {
         status={COMPLETE_STATUS}
       />
     )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  // Only `status` (polling a previously-delegated task) stays hidden by
+  // default — pure noise, no standalone meaning to a reader.
+  it('a delegate status poll renders nothing when verboseChatEnabled is false', () => {
+    render(
+      <GenericToolCall
+        toolName="delegate"
+        args={{ action: 'status' }}
+        status={COMPLETE_STATUS}
+      />
+    )
     expect(screen.queryByTestId('tool-call-badge')).toBeNull()
   })
 
-  it('...but renders once verbose chat is enabled', () => {
+  it('a delegate status poll renders once verbose chat is enabled', () => {
     act(() => {
       useChatPreferencesStore.setState({ verboseChatEnabled: true })
     })
     render(
       <GenericToolCall
         toolName="delegate"
-        args={{ async: false }}
+        args={{ action: 'status' }}
         status={COMPLETE_STATUS}
       />
     )
@@ -700,20 +675,30 @@ describe('GenericToolCall — verbose chat gate', () => {
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 
-  // INVERTED 2026-07-16 (was: "REGRESSION ... is NOT hidden", from when the
-  // isError/marshalErr override was a blanket short-circuit ahead of the
-  // switch). shouldRenderToolCall's outcome override is now per-tool-class
-  // (see its doc comment) — delegate and the background-dispatch/poll/read
-  // sub-cases of `bash` deliberately do NOT honor isError/marshalErr
-  // anymore: the calling agent's own turn explains the failure, and the raw
-  // result stays inspectable in the ActivityPanel (surface="panel"). Only
-  // ToolSearch keeps the override (covered above). Only verboseChatEnabled
-  // brings these two rows back now.
-  it('a background delegate call with a _marshal_error result and non-error status stays HIDDEN — no outcome exception for delegate', () => {
+  // ADR-091 D7/AC-7: delegate never consults isError/marshalErr at all — a
+  // `run` call is already visible unconditionally (see above), so an
+  // outcome signal changes nothing for it. `status` stays hidden regardless
+  // of outcome too (see the paired test below). Background `bash`
+  // (poll/read/dispatch), by contrast, keeps its own no-outcome-exception
+  // rule: the calling agent's own turn explains the failure, and only
+  // verboseChatEnabled brings that row back.
+  it('a background delegate call with a _marshal_error result and non-error status stays VISIBLE — no outcome exception needed, already visible', () => {
     render(
       <GenericToolCall
         toolName="delegate"
         args={{}}
+        result={{ _marshal_error: 'json: unsupported type: chan int' }}
+        status={COMPLETE_STATUS}
+      />
+    )
+    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+  })
+
+  it('a delegate status poll with a _marshal_error result and non-error status stays HIDDEN — no outcome exception for delegate', () => {
+    render(
+      <GenericToolCall
+        toolName="delegate"
+        args={{ action: 'status' }}
         result={{ _marshal_error: 'json: unsupported type: chan int' }}
         status={COMPLETE_STATUS}
       />
@@ -733,14 +718,14 @@ describe('GenericToolCall — verbose chat gate', () => {
     expect(screen.queryByTestId('tool-call-badge')).toBeNull()
   })
 
-  it('both the delegate and background-bash _marshal_error cases above become visible once verbose chat is enabled', () => {
+  it('both the hidden delegate-status-poll and background-bash _marshal_error cases above become visible once verbose chat is enabled', () => {
     act(() => {
       useChatPreferencesStore.setState({ verboseChatEnabled: true })
     })
     const { unmount } = render(
       <GenericToolCall
         toolName="delegate"
-        args={{}}
+        args={{ action: 'status' }}
         result={{ _marshal_error: 'json: unsupported type: chan int' }}
         status={COMPLETE_STATUS}
       />

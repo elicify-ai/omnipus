@@ -54,12 +54,14 @@ import (
 func u11PersistLifecycleChild(t *testing.T, ls *session.LifecycleStore, childID, parentID string) {
 	t.Helper()
 	rec := &session.LifecycleRecord{
-		SessionID:        childID,
-		State:            session.LifecycleRunning,
-		OwnerScopeKind:   session.OwnerScopeParentSession,
-		OwnerScopeID:     parentID,
-		ParentDurableKey: parentID,
-		ParentAgentID:    "ava",
+		SessionID:      childID,
+		Generation:     1,
+		State:          session.LifecycleRunning,
+		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentID, RootSessionID: parentID},
+		OwnerScopeKind: session.OwnerScopeParentSession,
+		OwnerScopeID:   parentID,
+		ParentAgentID:  "ava",
 	}
 	if err := ls.Persist(rec); err != nil {
 		t.Fatalf("fixture: persist lifecycle record %q (parent %q): %v", childID, parentID, err)

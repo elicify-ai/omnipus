@@ -19,7 +19,7 @@
 //     already covers for a plan-owner session — this test's contribution is
 //     proving the identical mechanism reconciles a record SHAPED like a
 //     real delegate.go `run` mint (OwnerScopeParentSession, a
-//     ParentDurableKey, no OwnsPlanID/GoalRef — see delegate.go:1166-1180),
+//     SteeringSessionID, no OwnsPlanID/GoalRef — see delegate.go:1166-1180),
 //     which no existing boot_sweep_test.go case constructs.
 //  2. A transcript write attempted against the un-minted child id — i.e. a
 //     crash so early that delegate.go's lifecycle Persist (run's FIRST
@@ -48,10 +48,10 @@ import (
 // did, because the process crashed in between.
 const u19UnmintedChildID = "u19-child-crashed-before-mint"
 
-// u19ParentDurableKey is the delegating chat's own durable id — distinct
+// u19SteeringSessionID is the delegating chat's own durable id — distinct
 // from the child id per the spec's own "distinct ids everywhere" corollary
 // (FR-074).
-const u19ParentDurableKey = "u19-parent-chat-durable-key"
+const u19SteeringSessionID = "u19-parent-chat-durable-key"
 
 // TestBootSweep_ReconcilesChildAcrossRestart is test #65
 // (TestBootSweep_ReconcilesChildAcrossRestart, BDD-87, FR-078).
@@ -60,21 +60,29 @@ func TestBootSweep_ReconcilesChildAcrossRestart(t *testing.T) {
 
 	// (1) Persist a lifecycle record shaped exactly like delegate.go's
 	// executeRun mint (pkg/tools/delegate.go:1166-1180) for a ROOT-level
-	// delegation: OwnerScopeParentSession/ParentDurableKey set, State=queued
+	// delegation: OwnerScopeParentSession/SteeringSessionID set, State=queued
 	// (the state a mint-then-crash leaves behind — the spawn goroutine that
 	// would advance it to `running` never got to run), no OwnsPlanID/GoalRef
 	// (a plain delegate child is not a plan-owner or goal-bearing session,
 	// so neither boot-sweep exemption applies).
+	// Generation: 1 — the "crashed before mint" this test models is the
+	// CHILD's own TRANSCRIPT session (session.CreateSessionWithID, minted
+	// later during the actual spawn) never being created, NOT the lifecycle
+	// record's Generation: SteerLauncher.Launch writes the durable record —
+	// with Generation already stamped 1 — as its FIRST, atomic write, before
+	// any turn (and therefore before the transcript mint) ever runs. A
+	// lifecycle record with Generation 0 is not a state delegate.go's real
+	// mint can produce at any point, crash or not.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
-		SessionID:        u19UnmintedChildID,
-		Generation:       0,
-		State:            session.LifecycleQueued,
-		OwnerScopeKind:   session.OwnerScopeParentSession,
-		OwnerScopeID:     u19ParentDurableKey,
-		ParentAgentID:    "parent-agent",
-		ParentDurableKey: u19ParentDurableKey,
-		AgentID:          "child-agent",
-		CreatedAt:        time.Now().Add(-1 * time.Minute),
+		SessionID:      u19UnmintedChildID,
+		Generation:     1,
+		State:          session.LifecycleQueued,
+		OwnerScopeKind: session.OwnerScopeParentSession,
+		OwnerScopeID:   u19SteeringSessionID,
+		ParentAgentID:  "parent-agent",
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: u19SteeringSessionID, RootSessionID: u19SteeringSessionID},
+		AgentID:        "child-agent",
+		CreatedAt:      time.Now().Add(-1 * time.Minute),
 	})
 
 	// (2) Simulate the restart: run the boot sweep exactly as Start would at

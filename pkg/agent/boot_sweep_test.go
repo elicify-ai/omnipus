@@ -144,22 +144,23 @@ func TestBootSweep_NeedsInputReconstructable_Preserved(t *testing.T) {
 	}
 }
 
-// TestBootSweep_NeedsInputNotReconstructable_Swept verifies that a
-// needs_input session failing any reconstructability clause is swept. Here
-// clause (1) fails (no checkpoint at park).
-func TestBootSweep_NeedsInputNotReconstructable_Swept(t *testing.T) {
+// TestBoot_ParkedRecoverableWithoutCheckpoint verifies ADR-091 FR-D-006:
+// NeedsInput itself is the durable recovery record; a checkpoint is optional.
+func TestBoot_ParkedRecoverableWithoutCheckpoint(t *testing.T) {
 	h := newBootSweepHarness(t)
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "sess-ni-nockpt", Generation: 1, State: session.LifecycleNeedsInput,
 		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman,
-		// no LastCheckpointRef -> clause (1) fails
-		NeedsInput: &session.NeedsInput{CorrelationID: "corr-1", TTLDeadline: time.Now().Add(24 * time.Hour)},
+		NeedsInput:     &session.NeedsInput{CorrelationID: "corr-1", TTLDeadline: time.Now().Add(24 * time.Hour)},
 	})
 
 	res := h.pe.runBootSweep(context.Background())
-	if len(res.SweptToFailed) != 1 {
-		t.Fatalf("SweptToFailed = %v, want the non-reconstructable needs_input swept", res.SweptToFailed)
+	if len(res.PreservedNeedsInput) != 1 || res.PreservedNeedsInput[0] != "sess-ni-nockpt" {
+		t.Fatalf("PreservedNeedsInput = %v, want [sess-ni-nockpt]", res.PreservedNeedsInput)
+	}
+	if len(res.SweptToFailed) != 0 {
+		t.Fatalf("SweptToFailed = %v, want none", res.SweptToFailed)
 	}
 }
 
@@ -178,7 +179,7 @@ func TestIsNeedsInputReconstructable_Predicate(t *testing.T) {
 		want bool
 	}{
 		{"all four clauses satisfied", func(*session.LifecycleRecord) {}, true},
-		{"clause1 no checkpoint", func(r *session.LifecycleRecord) { r.LastCheckpointRef = "" }, false},
+		{"no checkpoint remains reconstructable", func(r *session.LifecycleRecord) { r.LastCheckpointRef = "" }, true},
 		{"clause2 agent deleted", func(r *session.LifecycleRecord) { r.AgentID = "ghost" }, false},
 		{"clause3 no correlation", func(r *session.LifecycleRecord) { r.NeedsInput.CorrelationID = "" }, false},
 		{"clause3 no owner scope", func(r *session.LifecycleRecord) { r.OwnerScopeKind = "" }, false},

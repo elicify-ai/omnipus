@@ -52,20 +52,52 @@ function isFailedStatus(status: ActivityItem['status']): boolean {
 }
 
 export function ActivityBar() {
-  const { runningCount, running, recentlyFinished } = useRunningActivity()
+  // ADR-091 D7/FR-E-005 (founder decision, round 8): this is "the pill" the
+  // spec refers to — its running count and spin state now answer "how many
+  // sub-agents are running" (`runningChildren`), excluding background shell
+  // jobs. `runningCount` (agent spans + bash jobs together) still exists on
+  // the hook for any other consumer, but is no longer what THIS indicator's
+  // label/spin state is driven by. `running` (the broader list, still
+  // including queued/lifecycle-terminal spans and shell jobs) is passed
+  // through to ActivityPanel unchanged below — only the avatar stack here
+  // uses `runningChildItems`, the SAME set `runningChildren` counts (cross-
+  // family review finding 20), so the stack's avatars and the pill's number
+  // always describe the same agents.
+  const { runningChildren, runningChildItems, running, recentlyFinished } = useRunningActivity()
   const [panelOpen, setPanelOpen] = useState(false)
 
-  const isRunning = runningCount > 0
+  const isRunning = runningChildren > 0
   const failedRecent = recentlyFinished.filter((item) => isFailedStatus(item.status))
   const hasFailedRecent = failedRecent.length > 0
 
-  const shouldMount = isRunning || panelOpen || hasFailedRecent
+  // Defect 1 fix (ADR-091 fix lane RX-FRONTEND): commit 8b8d6ef9d narrowed
+  // `runningChildren` to count ONLY `lifecycleState === 'running'`
+  // (useRunningActivity.ts::isRunningAgentChild) but left this mount gate
+  // reading that same narrowed count via `isRunning` above. A queued launch
+  // emits `subagent_start` then `subagent_state(queued)` back-to-back
+  // (verified: pkg/agent/steer_launcher.go::publishSteeredLaunch) —
+  // `running` (lifecycleState arrives later, at Dispatch) — so under a
+  // saturated admission gate a child can sit at `queued` indefinitely:
+  // `runningChildren` stays 0 and nothing has finished, so `isRunning` alone
+  // can never make the bar appear — the delegation becomes entirely
+  // invisible even though ActivityPanel's queued dot (efc29991a) is fully
+  // able to render it once mounted. `running` (unlike `runningChildren`)
+  // already carries every direct agent child whose SPAN is still open —
+  // queued, running, needs_input, paused, or lifecycle-terminal-but-not-yet
+  // -subagent_end'd (see RunningActivity.runningChildren's doc comment) —
+  // exactly the same set ActivityPanel's "Running now" section renders, so
+  // reusing it here keeps the pill and the panel's contents in sync by
+  // construction. Bash sessions are excluded (kind !== 'agent'), preserving
+  // FR-E-005's "shell jobs never drive the pill" rule.
+  const hasOpenAgentChildren = running.some((item) => item.kind === 'agent')
+
+  const shouldMount = hasOpenAgentChildren || panelOpen || hasFailedRecent
   if (!shouldMount) return null
 
-  const stackItems = running.slice(0, MAX_STACK_AVATARS)
+  const stackItems = runningChildItems.slice(0, MAX_STACK_AVATARS)
 
   const label = isRunning
-    ? `${runningCount} running`
+    ? `${runningChildren} running`
     : hasFailedRecent
       ? `${failedRecent.length} failed`
       : 'Activity'

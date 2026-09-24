@@ -11,7 +11,6 @@ import (
 	"unicode"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 const artifactPathsLLMNote = "Use `send_file` with one of these paths to send it to the user, or use file/exec tools to save it inside the workspace if requested."
@@ -55,11 +54,6 @@ type ToolResult struct {
 	// durable history retains only ForLLM's re-read marker.
 	InspectionImages []InspectionImage `json:"-"`
 
-	// Messages holds the ephemeral session history after execution.
-	// Only populated by SubTurn executions; used by evaluator_optimizer
-	// to carry stateful worker context across evaluation iterations.
-	Messages []providers.Message `json:"-"`
-
 	// ArtifactTags exposes local artifact paths back to the LLM in a structured
 	// form, e.g. "[file:/tmp/example.png]". This is used when a tool produced a
 	// reusable local artifact but did not deliver it to the user yet.
@@ -67,11 +61,7 @@ type ToolResult struct {
 
 	// Interrupted indicates the tool's underlying work was cut short by a
 	// parent-turn cancellation (or a direct cancel targeting it) rather than
-	// a genuine execution failure. Currently set only by the synchronous
-	// delegate/spawn path (pkg/agent/subturn.go's spawnSubTurn cleanup defer,
-	// which is the single source of truth for the classification — mirrors
-	// the exact SubTurnStatusInterrupted/SubTurnStatusCancelled check used
-	// for the live subagent_end frame) so pkg/agent/loop.go's tool-call-
+	// a genuine execution failure, so pkg/agent/loop.go's tool-call-
 	// transcript persistence can record status "interrupted" instead of
 	// folding it into the generic IsError=true/"error" bucket every other
 	// tool failure uses (Finding F / A-I4 round 5: without this, a session
@@ -157,7 +147,7 @@ type ToolResult struct {
 	//
 	// Meaningful ONLY on a SYNCHRONOUS result: it rides the tool's own
 	// *ToolResult pointer back through ToolRegistry.Execute and
-	// normalizeToolResult exactly like Err/Messages above, but a result
+	// normalizeToolResult exactly like Err above, but a result
 	// reconstituted from a stored payload (a background dispatch, an async
 	// notifier round-trip) has crossed a serialisation boundary that
 	// json:"-" deliberately strips.

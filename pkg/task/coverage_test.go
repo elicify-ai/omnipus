@@ -18,7 +18,6 @@
 //   - SpawnReset: in-progress guard (ErrAlreadyRunning), clears run fields,
 //     sets status=next
 //   - ClaimForRun concurrent N-goroutine race: exactly one wins
-//   - ClaimParentFollowUp N-goroutine race: exactly one wins
 //   - AppendTodo: atomic append, validates text limits, persists
 //   - AddDependency: idempotent, same-graph cycle guard, cross-workspace allowed
 //   - DAG depth-50 chain triggers ErrBlockedByDepthExceeded
@@ -368,7 +367,6 @@ func TestSpawnReset_ClearsRunFields(t *testing.T) {
 	tk2.Artifacts = []string{"a.txt"}
 	tk2.StartedAt = at
 	tk2.CompletedAt = at
-	tk2.FollowedUp = true
 	require.NoError(t, s.write(tk2))
 
 	// SpawnReset should succeed on non-in_progress task.
@@ -380,7 +378,6 @@ func TestSpawnReset_ClearsRunFields(t *testing.T) {
 	assert.Nil(t, reset.Artifacts, "Artifacts cleared")
 	assert.Empty(t, reset.StartedAt, "StartedAt cleared")
 	assert.Empty(t, reset.CompletedAt, "CompletedAt cleared")
-	assert.False(t, reset.FollowedUp, "FollowedUp cleared")
 
 	// Verify persistence.
 	got, _ := s.Get(tk.ID)
@@ -1508,37 +1505,6 @@ func TestClaimForRun_ConcurrentRace(t *testing.T) {
 	assert.NotEmpty(t, got.StartedAt)
 }
 
-// ---- ClaimParentFollowUp concurrent N-goroutine race -----------------------
-
-func TestClaimParentFollowUp_ConcurrentRace(t *testing.T) {
-	// Traces to: claim.go line 61 — ClaimParentFollowUp CAS: exactly one winner
-	s := newStore(t)
-	p := mkTask("parent", "ws")
-	mustCreate(t, s, p)
-
-	const goroutines = 20
-	var wins int32
-	var wg sync.WaitGroup
-	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
-		go func() {
-			defer wg.Done()
-			won, err := s.ClaimParentFollowUp(p.ID)
-			if err == nil && won {
-				atomic.AddInt32(&wins, 1)
-			}
-		}()
-	}
-	wg.Wait()
-
-	assert.Equal(t, int32(1), wins, "exactly one goroutine must win the follow-up claim")
-
-	// FollowedUp must be persisted as true.
-	got, err := s.Get(p.ID)
-	require.NoError(t, err)
-	assert.True(t, got.FollowedUp)
-}
-
 // ---- Get with invalid ID ---------------------------------------------------
 
 func TestGetInvalidID(t *testing.T) {
@@ -1927,7 +1893,6 @@ func TestRestartReset_HappyPath(t *testing.T) {
 	loaded.SessionID = "sess-abc"
 	loaded.StartedAt = at
 	loaded.CompletedAt = at
-	loaded.FollowedUp = true
 	require.NoError(t, s.write(loaded))
 
 	reset, err := s.RestartReset(tk.ID)
@@ -1940,7 +1905,6 @@ func TestRestartReset_HappyPath(t *testing.T) {
 	assert.Empty(t, reset.SessionID)
 	assert.Empty(t, reset.StartedAt)
 	assert.Empty(t, reset.CompletedAt)
-	assert.False(t, reset.FollowedUp)
 
 	// Persistence check.
 	got, err := s.Get(tk.ID)

@@ -46,6 +46,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -133,6 +134,15 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 	egress := al.buildContentEgressFilter()
 	needInputTTL := al.sessionMessagingNeedsInputTTL()
 
+	// Boundary 8 lives in pkg/tools. Re-apply both dependencies here on every
+	// boot/hot-reload wire pass because registerSharedTools replaces the
+	// MessageTool instance on reload.
+	if tool, ok := agent.Tools.Get("send_message"); ok {
+		if mt, mtOK := tool.(*tools.MessageTool); mtOK && mt != nil {
+			mt.SetSteerAudienceResolver(al.getSteerAudienceResolver(), al.getBoundaryObserver())
+		}
+	}
+
 	// --- delegate tool: inject the S2/S3 stores + the steering sink + cancel
 	// hooks. SetSteeringSink/SetCancelHooks/SetMessageInbox/SetLifecycleStore
 	// are idempotent in-place setters (delegate was registered by
@@ -140,6 +150,7 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 	// re-wires the real stores in place once they exist). ---
 	if tool, ok := agent.Tools.Get("delegate"); ok {
 		if dt, dtOk := tool.(*tools.DelegateTool); dtOk && dt != nil {
+			dt.SetSessionLauncher(al.getSteerSessionLauncher())
 			// ADR-057 FR-021/W7b (fail-closed wiring): propagate BOTH the wire
 			// and the un-wire, not just the wire. The pre-ADR-057 code only
 			// called SetLifecycleStore/SetMessageInbox when the value was
@@ -180,58 +191,34 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			// a chat steer uses, so a parent->child steer lands at the child's
 			// next tool boundary exactly like a chat interrupt (INV-3).
 			dt.SetSteeringSink(al)
-			// Cancel hooks: soft = graceful stop, hard = escalate after the
-			// cancel_grace window. These MUST be keyed by the caller-facing
-			// delegateSessionID (== sessionKey in activeTurnStates), not
-			// routingSessionID — Interrupt/InterruptSessionHard's whole-chat
-			// Range fallback matches on routingSessionID, which for a
-			// delegated sub-turn is deliberately the PARENT's shared chat id
-			// (subturn.go's FR-011 inheritance), never equal to
-			// delegateSessionID. Wiring those here unscoped meant every
-			// delegate.cancel silently no-op'd (zero Range matches, which
-			// Interrupt treats as a non-error no-op) while still reporting
-			// success. Calling Interrupt/InterruptSessionHard with a scope routes
-			// through resolveInterruptAnchors' point-lookup half (a direct
-			// activeTurnStates.Load(sessionKey)) as its anchor — targeting the
-			// named delegate, never a sibling or the parent — byte-identical
-			// anchor resolution to the retired InterruptBySessionKey/
-			// InterruptBySessionKeyHard (ADR-057 FR-041 collapse).
+			// Cancel hooks. Both closures go through ADR-091's DURABLE Stop
+			// cascade (steer_delegate_cancel.go::cancelDelegatedSubtree), the
+			// same one a human's Stop uses over the socket and REST
+			// (pkg/gateway/websocket_cancel.go::cancelSteeredSubtree) — soft
+			// stamps and asks each reached turn to stop cooperatively, hard
+			// stamps and fires each turn's generation-aware abort.
 			//
-			// [FIX-5, 2026-08-03] The scope is ScopeSubtree, NOT ScopeSelfOnly.
-			// This was flipped from an earlier revision that wired ScopeSelfOnly
-			// on PRE-D1 reasoning ("cancel must reach exactly the named child and
-			// never a sibling or the parent, and ScopeSubtree would additionally
-			// walk descendants — the wrong widening"). That reasoning held only
-			// while a delegated child shared its parent's transcript/session id
-			// (pre-D1): a subtree walk rooted at "the child" then had no way to
-			// stop at the child's own boundary and would have bled into the
-			// parent/sibling's shared namespace. ADR-057 D1 gives every
-			// delegated child its OWN distinct session id (subturn.go), so
-			// ScopeSubtree rooted at a CHILD's sessionKey now reaches exactly
-			// that child's own descendants and structurally CANNOT reach the
-			// parent or a sibling (ADR-057 architecture doc line ~336, FR-042,
-			// AC-8) — the "wrong widening" the old comment warned against no
-			// longer applies to this call site.
+			// They used to be closures over the live-turn interrupt pair
+			// (al.Interrupt / al.InterruptSessionHard with ScopeSubtree). That
+			// wiring was correct for ADR-057's sub-turns and became wrong twice
+			// over when ADR-091 made a worker a SESSION:
 			//
-			// This is also a deliberate, ADR-mandated BEHAVIOR CHANGE (R-13/AC-8;
-			// spec "Operator decisions (settled — not re-litigated)" item 5;
-			// spec:3246 "R-13's behaviour change is INTENDED and confirmed"):
-			// delegate action="cancel" used to cancel one turn and leave that
-			// child's OWN grandchildren (and its own background shells) running
-			// — a live leak. Under D8/R-13 a per-delegation cancel becomes
-			// ScopeSubtree rooted at the child, exactly like a chat-root Stop
-			// already does in cancel.go's RequestCancel. See
-			// TestSetCancelHooks_ChildCancelReachesSubtree (this package's
-			// _adr057_test.go, inverted from the prior
-			// TestSetCancelHooks_ScopeSelfOnlyNotSubtree, which asserted the now-
-			// superseded ScopeSelfOnly contract) for the red/green proof of the
-			// NEW contract.
+			//   - a queued worker has no live turn, so the interrupt reached
+			//     nothing and the tool reported a success-shaped no-op while the
+			//     worker went on to start;
+			//   - ScopeSubtree walks parentTurnID links between live turns, and
+			//     no steered turn has one, so a cancel on a running child left
+			//     its own grandchildren running — reopening exactly the D8/R-13
+			//     leak that scope was chosen to close.
+			//
+			// The durable parent-child edge closes both. See
+			// cancelDelegatedSubtree's own doc comment before changing this.
 			dt.SetCancelHooks(
-				func(sessionKey, hint string) ([]string, error) {
-					return al.Interrupt(sessionKey, ScopeSubtree, hint)
+				func(sessionKey string, by steer.Principal, hint string) ([]string, error) {
+					return al.cancelDelegatedSubtree(sessionKey, by, false, hint)
 				},
-				func(sessionKey, hint string) ([]string, error) {
-					return al.InterruptSessionHard(sessionKey, ScopeSubtree, hint)
+				func(sessionKey string, by steer.Principal, hint string) ([]string, error) {
+					return al.cancelDelegatedSubtree(sessionKey, by, true, hint)
 				},
 			)
 			// FR-196 kill switch on the SYNC session-messaging-plane actions
@@ -243,23 +230,29 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 
 	// --- message_parent tool: register per-agent with the REAL stores. Unlike
 	// delegate (which has SetMessageInbox/SetLifecycleStore setters for in-place
-	// re-wire), MessageParentTool takes inbox/lifecycle as CONSTRUCTOR args
+	// re-wire), MessageParentTool takes deliverer/lifecycle as CONSTRUCTOR args
 	// with no later setter — so the live-stores injection is a RECONSTRUCTION,
 	// not an in-place setter call. On the first registerSharedTools pass (nil
-	// stores) this registers a fail-closed instance; SetSessionMessagingStores'
-	// later re-wire reconstructs it with the real stores via RegisterReplacing
-	// (the method whose doc explicitly exists for this SetPlanStore-style
-	// late-binding re-wire). MessageParentTool holds no mutable task state
-	// (unlike delegate's tasks map), so reconstruction is always safe. ---
-	mp := tools.NewMessageParentTool(inbox, lifecycle)
+	// deliverer/lifecycle) this registers a fail-closed instance;
+	// SetSessionMessagingStores' and SetSteerAudienceDeps' later re-wires (both
+	// call this function — see their own doc comments) reconstruct it with the
+	// real dependencies via RegisterReplacing (the method whose doc explicitly
+	// exists for this SetPlanStore-style late-binding re-wire). MessageParentTool
+	// holds no mutable task state (unlike delegate's tasks map), so
+	// reconstruction is always safe.
+	//
+	// ADR-091 I-5: deliverer replaces the former inbox+waker pair — Deliver
+	// (steer_audience.go::SteerUpwardDeliverer) is now the ONLY upward path;
+	// "it replaces that interface" (pkg/steer's own doc comment for
+	// steer.UpwardDeliverer). getUpwardDeliverer is nil until
+	// SetSteerAudienceDeps is called, matching the existing nil-until-wired
+	// fail-closed posture this comment already documents for inbox/lifecycle. ---
+	mp := tools.NewMessageParentTool(al.getUpwardDeliverer(), lifecycle)
 	mp.SetContentEgressFilter(egress)
 	mp.SetNeedsInputTTL(needInputTTL)
 	// FR-196 kill switch on the SYNC tool path (arch-M2): the live closure
 	// re-reads config per call, mirroring the async consumer's per-event read.
 	mp.SetSessionMessagingEnabled(al.sessionMessagingEnabledLive())
-	if al.asyncNotifier != nil {
-		mp.SetWaker(al.asyncNotifier)
-	}
 	// RegisterReplacing: a same-name collision is EXPECTED here (the fail-closed
 	// first-pass instance is replaced by the live one) — logged at DEBUG, not
 	// WARN (see registry.go's RegisterReplacing doc).
@@ -500,24 +493,30 @@ func (al *AgentLoop) dispatchSessionMessageEvent(ctx context.Context, evt bus.Se
 // sec-MAJOR-3 (defense-in-depth): the consumer RE-DERIVES the parent↔child
 // relationship from the durable lifecycle record instead of trusting the
 // envelope's TargetSessionID. The target MUST resolve to a record that IS a
-// delegated child (non-empty ParentDurableKey) before any injection happens.
-// This is the sink-side mirror of the delegate tool's producer-side
+// delegated child (a populated edge — ownerKeyFor-equivalent, see
+// deliverOwnerKey in steer_audience.go) before any injection happens. This
+// is the sink-side mirror of the delegate tool's producer-side
 // verifyCallerOwnsSession gate (pkg/tools/delegate.go) — the delegate tool
-// already verifies caller == rec.ParentDurableKey before it calls the steering
-// sink DIRECTLY (it does not ride this bus path today), but a future second
+// already verifies caller ownership before it calls the steering sink
+// DIRECTLY (it does not ride this bus path today), but a future second
 // producer of a steer/respond bus event that forgets that gate is still
-// stopped here: the consumer refuses to inject a steer/respond into a session
-// that has no recorded parent. (The SessionMessageEvent envelope carries no
-// publisher identity today, so a full publisher==parent equality check is not
-// possible at the sink; asserting the target is a genuine delegated child is
-// the load-bearing re-derivation available — it converts a forged/guessed
-// TargetSessionID from an injection into a rejected dispatch.)
+// stopped here: the consumer refuses to inject a steer/respond into a
+// session that has no recorded parent.
 //
-// When the record is missing (child already swept/reaped) OR has no recorded
-// parent, the steer is rejected (returned as a dispatch error, logged at WARN
-// by the per-event handler) — never a silent injection. The parent's
-// delegate.steer call already returned success to the parent; the bus path is
-// the decoupled delivery, so a WARN here is not user-visible breakage.
+// ADR-091 I-5 "Bus route authority" (R17, FR-B-015): additionally
+// RE-VERIFIES evt.Principal against the target's edge — an ancestor of the
+// target (any depth, D5) or the authenticated human is admitted; a sibling
+// naming another valid child, or an event with no principal at all, is
+// refused. This closes the gap the pre-ADR-091 comment above named: "the
+// envelope carries no publisher identity" is no longer true once the
+// publisher sets Principal after its own verifyCallerOwnsSession check.
+//
+// When the record is missing (child already swept/reaped), has no recorded
+// parent, or the principal fails re-verification, the steer is rejected
+// (returned as a dispatch error, logged at WARN by the per-event handler) —
+// never a silent injection. The parent's delegate.steer call already
+// returned success to the parent; the bus path is the decoupled delivery,
+// so a WARN here is not user-visible breakage.
 func (al *AgentLoop) deliverParentToChild(ctx context.Context, evt bus.SessionMessageEvent) error {
 	childSessionID := strings.TrimSpace(evt.TargetSessionID)
 	if childSessionID == "" {
@@ -535,10 +534,13 @@ func (al *AgentLoop) deliverParentToChild(ctx context.Context, evt bus.SessionMe
 		// (benign) OR a forged/guessed TargetSessionID (attack). Fail-closed.
 		return fmt.Errorf("session message consumer: parent->child event rejected: target %q is not a known delegated child: %w", childSessionID, lerr)
 	}
-	if strings.TrimSpace(rec.ParentDurableKey) == "" {
+	if deliverOwnerKey(rec) == "" {
 		// The target has no recorded parent — it is not a delegated child, so
 		// a steer/respond has no business being injected into it.
 		return fmt.Errorf("session message consumer: parent->child event rejected: target %q has no recorded parent (not a delegated child)", childSessionID)
+	}
+	if !al.principalAuthorizedForTarget(rec, evt.Principal) {
+		return fmt.Errorf("session message consumer: parent->child event rejected: principal %+v is not an ancestor of target %q", evt.Principal, childSessionID)
 	}
 	childAgentID := rec.AgentID
 	// The steering scope key runTurn registers the active turn under is
@@ -548,6 +550,44 @@ func (al *AgentLoop) deliverParentToChild(ctx context.Context, evt bus.SessionMe
 		scope = "agent:" + childAgentID + ":" + childSessionID
 	}
 	return al.DeliverSessionMessage(ctx, scope, childAgentID, evt.Message)
+}
+
+// principalAncestorWalkMaxDepth bounds principalAuthorizedForTarget's
+// ancestor walk — a generous depth ceiling defending against a corrupt/
+// cyclic edge chain rather than a realistic delegation depth (that cap is
+// enforced separately at launch, D9).
+const principalAncestorWalkMaxDepth = 64
+
+// principalAuthorizedForTarget implements ADR-091 I-5's "Bus route
+// authority" (R17, FR-B-015): a human principal (the gateway's own
+// authenticated identity) is always admitted; an agent principal is
+// admitted only when its ID names an ANCESTOR of rec — any depth (D5's
+// "any ancestor may act"), walked via the edge (deliverOwnerKey,
+// steer_audience.go) — never a sibling, never an unrelated session, and
+// never a zero-value Principal (Kind unset).
+func (al *AgentLoop) principalAuthorizedForTarget(rec *session.LifecycleRecord, by session.Principal) bool {
+	if by.Kind == session.PrincipalKindHuman && strings.TrimSpace(by.ID) != "" {
+		return true
+	}
+	if by.Kind != session.PrincipalKindAgent || strings.TrimSpace(by.ID) == "" {
+		return false
+	}
+	ls := al.GetSessionLifecycleStore()
+	if ls == nil {
+		return false
+	}
+	ancestor := deliverOwnerKey(rec)
+	for depth := 0; depth < principalAncestorWalkMaxDepth && ancestor != ""; depth++ {
+		if ancestor == by.ID {
+			return true
+		}
+		ar, err := ls.Load(ancestor)
+		if err != nil || ar == nil {
+			return false
+		}
+		ancestor = deliverOwnerKey(ar)
+	}
+	return false
 }
 
 // deliverChildToParent routes a child->parent reporting event to the durable

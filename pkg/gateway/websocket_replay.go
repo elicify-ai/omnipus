@@ -391,22 +391,28 @@ func (wh *wsHandlerHandleAttachSession) runReplay() {
 	// Pass pre-computed rs into streamReplay so it doesn't rebuild
 	// spawnIDsWithChildren for a second time.
 	var mediaStore media.MediaStore
-	var isSpanActive func(string) bool
 	if wh.h.agentLoop != nil {
 		mediaStore = wh.h.agentLoop.GetMediaStore()
-		// Wire real sub-turn liveness into replay so a spawn/delegate call
-		// whose placeholder ack (async delegation: Status="success",
-		// DurationMS≈0) has not yet been corrected by the real
-		// EventKindSubTurnEnd is never shown as a fabricated "done" — see
-		// agent.AgentLoop.IsSubTurnActiveForSpawnCall's doc comment.
-		isSpanActive = wh.h.agentLoop.IsSubTurnActiveForSpawnCall
 	}
+	// Finding 1 fix: real sub-turn liveness for a spawn/delegate call whose
+	// placeholder ack (async delegation: Status="success", DurationMS≈0) has
+	// not yet been corrected no longer needs wiring in from here at all —
+	// streamReplay derives it itself from the transcript's own persisted
+	// subagent_start/subagent_end entries (see
+	// buildPersistedSubagentSpanIndexes / classifyToolCall's stillActive
+	// doc comment in replay.go). The previous wiring point,
+	// agent.AgentLoop.IsSubTurnActiveForSpawnCall, answered from two data
+	// sources ADR-091 deleted the writer of (steering.go's
+	// markSubTurnSpanOpen had zero real callers; turnState.
+	// parentSpawnCallID was never assigned) — it was deleted rather than
+	// left in place always answering false.
+	//
 	// askuserquestion-tool-spec v3 §0.6: hand replay the session's terminal
 	// (answered/cancelled) AskUserQuestion record, if any, so the collapsed
 	// card is reconstructed on cold history load and the §0.2 resume message
 	// never renders as a raw JSON bubble — see streamReplay's terminalAsk doc.
 	terminalAsk := loadTerminalAskRecord(wh.store, wh.attachID)
-	wh.framesEmitted, wh.replayErr = streamReplay(wh.ctx, wh.attachID, wh.entries, wh.rs, emitFn, mediaStore, wh.h.toolStore, isSpanActive, terminalAsk)
+	wh.framesEmitted, wh.replayErr = streamReplay(wh.ctx, wh.attachID, wh.entries, wh.rs, emitFn, mediaStore, wh.h.toolStore, terminalAsk)
 
 	wh.durationMS = time.Since(wh.replayStart).Milliseconds()
 }

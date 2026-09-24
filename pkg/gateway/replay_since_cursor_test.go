@@ -45,7 +45,7 @@ func TestStreamReplay_SinceCursor_Integration(t *testing.T) {
 
 	sink := &sliceSink{}
 	rs := computeReplayStats(filtered)
-	_, err := streamReplay(context.Background(), "sid", filtered, rs, sink.emit, nil, nil, nil, nil)
+	_, err := streamReplay(context.Background(), "sid", filtered, rs, sink.emit, nil, nil, nil)
 	require.NoError(t, err)
 
 	frames := sink.all()

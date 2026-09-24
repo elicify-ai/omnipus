@@ -2020,6 +2020,7 @@ func (al *AgentLoop) dispatchVerifierTurn(
 		SendResponse:           false,
 		TranscriptSessionID:    chatID,
 		TranscriptStore:        al.GetAgentStore(judgeInst.ID),
+		OriginKind:             session.OriginKindVerifier,
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,
 		WorkspaceID:            tools.ToolWorkspaceID(turnCtx),

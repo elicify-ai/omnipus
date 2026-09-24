@@ -1,6 +1,16 @@
 import { create } from 'zustand'
 import type { WsConnection } from '@/lib/ws'
 
+// Review finding 13: reconnectedAt used to be cleared by NOTHING — once set,
+// it stayed non-null forever, so every consumer's `active = !isConnected ||
+// reconnectedAt !== null` computation stayed true permanently, keeping a
+// 1-second polling timer running on every assistant-message row for the
+// rest of the session. Mirrors ConnectionStatus.tsx's own RECOVERY_NOTICE_MS
+// (the "Up to date" note's visible duration) — after that window the note is
+// gone from the UI anyway, so there is nothing left that needs `now` to keep
+// ticking.
+const RECONNECTED_AT_CLEAR_MS = 2_000
+
 interface ConnectionStore {
   connection: WsConnection | null
   isConnected: boolean
@@ -53,21 +63,36 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   setConnected: (connected) => {
     const current = get()
     const now = Date.now()
+    const justReconnected = connected && current.disconnectedAt !== null
     set({
       isConnected: connected,
       connectionError: connected ? null : current.connectionError,
       reconnectPhase: connected ? null : current.reconnectPhase,
       reconnectAttempt: connected ? 0 : current.reconnectAttempt,
       disconnectedAt: connected ? null : (current.disconnectedAt ?? now),
-      reconnectedAt: connected && current.disconnectedAt !== null ? now : current.reconnectedAt,
-      lastDisconnectDurationMs: connected && current.disconnectedAt !== null
-        ? now - current.disconnectedAt
+      reconnectedAt: justReconnected ? now : current.reconnectedAt,
+      lastDisconnectDurationMs: justReconnected
+        ? now - current.disconnectedAt!
         : current.lastDisconnectDurationMs,
-      lastDisconnectWasTerminal: connected && current.disconnectedAt !== null
+      lastDisconnectWasTerminal: justReconnected
         ? current.reconnectPhase === 'gave_up'
         : current.lastDisconnectWasTerminal,
       disconnectedAssistantMessageId: connected ? null : current.disconnectedAssistantMessageId,
     })
+    if (justReconnected) {
+      // Review finding 13: without this, reconnectedAt (and therefore the
+      // `active` flag every "Up to date"/status consumer derives from it)
+      // never returns to a resting state, so the 1-second polling timer in
+      // useConnectionNow runs forever. Guard on `reconnectedAt === now`
+      // rather than clearing unconditionally, so a LATER disconnect/
+      // reconnect cycle's own fresh timestamp is never stomped by this
+      // stale timer firing after the fact.
+      window.setTimeout(() => {
+        if (get().reconnectedAt === now) {
+          set({ reconnectedAt: null })
+        }
+      }, RECONNECTED_AT_CLEAR_MS)
+    }
   },
   recordDisconnect: (assistantMessageId) => {
     const current = get()

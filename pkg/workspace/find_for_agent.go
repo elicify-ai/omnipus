@@ -51,8 +51,7 @@ type teamRecord struct {
 // this agent belong to" (agent identity → workspace), used to re-root a
 // turn's filesystem at the workspace's shared directory regardless of
 // whether the turn itself carries a channel-bound workspace_id. See
-// pkg/agent/loop.go's runTurn and pkg/agent/external_dispatch.go's
-// runExternalCLISubTurn.
+// pkg/agent/loop.go's runTurn and the external command-line dispatch runner.
 //
 // No uniqueness constraint prevents an agent ID from appearing in more than
 // one workspace's CoreTeam simultaneously — nothing enforces or even detects

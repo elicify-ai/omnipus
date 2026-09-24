@@ -715,21 +715,6 @@ func (rw *registerSharedToolsWire3) registerHandoffAndSkills(agentID string, age
 func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agent *AgentInstance, sharedStore *session.UnifiedStore) {
 	{
 		delegateTool := tools.NewDelegateTool(agent.Model, agent.MaxTokens, agent.Temperature)
-		// ADR-057 W17 (FR-069/FR-070/FR-095): wrap the real spawner with
-		// the root-delegation admission gate (admission.go) so a
-		// ROOT-level `delegate` fan-out from this agent is actually
-		// capped by al.rootDelegationAdmission — the SAME shared,
-		// process-wide instance every other agent's DelegateTool is
-		// wrapped with, so the cap applies once across the whole running
-		// gateway, not per agent. See rootDelegationAdmittingSpawner's
-		// doc comment (admission.go) for why wrapping SpawnSubTurn here
-		// is the correct choke point for both sync and async delegation.
-		delegateTool.SetSpawner(newRootDelegationAdmittingSpawner(NewSubTurnSpawner(rw.rs.al), rw.rs.al.rootDelegationAdmission, agentID))
-		// Retain it so Close() can drain its background delegations before
-		// the stores they write through are torn down. See delegateTools.
-		rw.rs.al.delegateToolsMu.Lock()
-		rw.rs.al.delegateTools = append(rw.rs.al.delegateTools, delegateTool)
-		rw.rs.al.delegateToolsMu.Unlock()
 		// FR-196 kill switch — wire it HERE, at construction, not only in
 		// SetSessionMessagingStores' later re-wire. This is a PER-AGENT
 		// DelegateTool: the session_messaging_wire.go re-wire walks the
@@ -818,35 +803,11 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 			// real sub-turn and MUST be graph-gated (and thus denied), never exempted.
 			buildDelegationDenyCheckerForDelegate(
 				currentAgentID,
-				rw.cfg.Agents.Defaults,
+				rw.cfg.Performance,
 				config.DelegationModeBackground,
 				agentExistsChecker(rw.rs.registry),
 			),
 		)
-		// FR-6.2: full-policy gate for the await (async=false) mode. Uses
-		// the same buildDelegationDenyChecker as the background gate
-		// above but with DelegationModeAwait, so a targeted
-		// delegate(agent_id="X", async=false) is checked against the
-		// caller→X edge for the "await" mode, and an untargeted call
-		// falls back to evalUntargetedDelegation.
-		delegateTool.SetDelegationDenyCheckerAwait(
-			// ForDelegate bakes in exempt=false: same reasoning as the background
-			// gate — a self-targeted await delegate() is real delegation, graph-gated.
-			buildDelegationDenyCheckerForDelegate(
-				currentAgentID, rw.cfg.Agents.Defaults, config.DelegationModeAwait, agentExistsChecker(rw.rs.registry),
-			),
-		)
-		// #477 / FR-D9-FR-D10: thread the SAME effective depth cap the
-		// gates above just authorized against into spawnSubTurn's own
-		// depth check — the resolver is mode-agnostic (sourced only from
-		// the matched edge's own Depth, shared by both the background and
-		// await gates) — so the spawn-time backstop does not
-		// independently re-derive (and silently override) an explicit
-		// per-edge Depth.
-		delegateTool.SetDelegationDepthResolver(buildDelegationDepthResolver(
-			currentAgentID, rw.cfg.Agents.Defaults,
-		))
-
 		// ADR-057: derive the ownership-walk bound from the SAME operator
 		// setting that bounds delegation depth. Left unwired, the walk used
 		// a hardcoded 3 while delegation depth stayed configurable — so
@@ -854,7 +815,11 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 		// child fail with an ownership error indistinguishable from a real
 		// cross-tenant attempt. Zero/unset is ignored by the setter, which
 		// keeps its own default.
-		delegateTool.SetOwnershipWalkMaxDepth(rw.cfg.Agents.Defaults.SubTurn.MaxDepth)
+		configuredDepthCap, depthErr := rw.cfg.Performance.EffectiveMaxDelegationDepth()
+		if depthErr != nil {
+			configuredDepthCap = 0
+		}
+		delegateTool.SetOwnershipWalkMaxDepth(resolveEffectiveDelegationDepth(nil, configuredDepthCap))
 
 		agent.Tools.RegisterReplacing(delegateTool)
 	}
@@ -907,17 +872,24 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 			// oneself is not delegation (no new instance spawned), not graph-gated.
 			buildDelegationDenyCheckerForTaskReassignment(
 				currentAgentID,
-				rw.cfg.Agents.Defaults,
+				rw.cfg.Performance,
 				config.DelegationModeTask,
 				agentExistsChecker(rw.rs.registry),
 			),
 		)
-		// Task-mode recursion bound: reject a task_create issued from within a
-		// task run whose delegation generation already sits at the ceiling. The
-		// per-agent depth gate cannot bound task mode on its own because every
-		// task run starts a fresh turn at depth 0 (see processTaskDirect depth
-		// seeding); this hard ceiling closes that gap.
-		taskCreate.SetMaxDelegationDepth(maxTaskDepth)
+		// Task-mode recursion bound (ADR-091 D9): reject a task_create issued
+		// from within a task run whose delegation generation already sits at the
+		// ceiling. The per-agent depth gate cannot bound task mode on its own
+		// because every task run starts a fresh turn at depth 0 (see
+		// processTaskDirect depth seeding). Route the ceiling through the SAME
+		// single limit surface as every other reader — resolveEffectiveDelegationDepth
+		// over performance.max_delegation_depth, with the safety-backstop default
+		// when the key is unset — never a separate hardcoded constant.
+		configuredDepthCap, depthErr := rw.cfg.Performance.EffectiveMaxDelegationDepth()
+		if depthErr != nil {
+			configuredDepthCap = 0
+		}
+		taskCreate.SetMaxDelegationDepth(resolveEffectiveDelegationDepth(nil, configuredDepthCap))
 		// Founder decision 2026-09-15: refuse assigning a task to an agent
 		// that cannot finish it (task_assignee_readiness.go).
 		taskCreate.SetAssigneeReadinessChecker(rw.rs.al.TaskAssigneeCannotFinish)
@@ -978,14 +950,14 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 			// existing owner is a no-op reassignment, not delegation — not graph-gated.
 			buildDelegationDenyCheckerForTaskReassignment(
 				currentAgentID,
-				rw.cfg.Agents.Defaults,
+				rw.cfg.Performance,
 				config.DelegationModeTask,
 				agentExistsChecker(rw.rs.registry),
 			),
 		)
 		// Same rationale as taskCreate above: the subagent_3p reassignment
 		// guard is retired now that processTaskDirect dispatches an
-		// external-CLI worker's task run through runExternalCLISubTurn.
+		// external-CLI worker's task run through the shared command-line runner.
 		agent.Tools.RegisterReplacing(taskUpdate)
 
 		setTodos := tools.NewSetTodosTool(rw.rs.al.taskStore)

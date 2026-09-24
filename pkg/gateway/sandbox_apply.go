@@ -874,7 +874,13 @@ func (as *applySandboxState) degradeAfterLandlockFailure(applyErr error) (*Sandb
 			"requested_abi", originalABI,
 			"requested_mode", string(as.mode),
 			"original_apply_error", applyErr)
-		return as.result, fmt.Errorf("sandbox: Landlock rejected ruleset (%w) and FallbackBackend.Apply failed: %v", applyErr, fbErr)
+		// Both causes are wrapped (%w twice, Go 1.20+ multi-error wrapping):
+		// this failure is a boot abort, and a caller matching on either the
+		// Landlock rejection sentinel or the canonicalization error under the
+		// FallbackBackend failure must be able to find it with errors.Is.
+		// Formatting the second one with %v discarded the fallback cause's
+		// identity and left only its text.
+		return as.result, fmt.Errorf("sandbox: Landlock rejected ruleset (%w) and FallbackBackend.Apply failed: %w", applyErr, fbErr)
 	}
 
 	as.backend = fallback

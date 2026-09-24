@@ -4,6 +4,8 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -522,4 +524,41 @@ func TestHandleConfigGET_StripsSeededSkillGrants(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &onDisk))
 	assert.Equal(t, []any{coreagent.SkillsMigrationDefineDone}, onDisk["seeded_skill_grants"],
 		"config.json on disk must keep the marker")
+}
+
+// TestDescribeCredentialResolutionError_EntryAuthNamesTheEntry pins the third
+// branch of the classifier: a stored entry that does not authenticate under its
+// own name (edited on disk, moved from another entry, or written before the AAD
+// name binding existed) must name that entry and ask for it to be re-entered —
+// never fall through to the "unlock and retry" advice, which is wrong when the
+// store is open and only the bytes are at fault.
+//
+// *credentials.EntryAuthError unwraps to credentials.ErrWrongKey, so this also
+// pins the match ORDER: the type must be tested, not the sentinel.
+func TestDescribeCredentialResolutionError_EntryAuthNamesTheEntry(t *testing.T) {
+	authErr := &credentials.EntryAuthError{Name: "ANTHROPIC_API_KEY"}
+
+	// The wrapped shape the REST path actually sees (resolveCredentialRef wraps
+	// the store error with %w).
+	wrapped := fmt.Errorf("credential store: %w", authErr)
+
+	msg := describeCredentialResolutionError(wrapped)
+
+	assert.Contains(t, msg, "ANTHROPIC_API_KEY",
+		"the operator-facing message must name the entry at fault")
+	assert.Contains(t, msg, "re-enter",
+		"the correct remediation for an unusable entry is to enter it again")
+	assert.NotContains(t, msg, "unlock and retry",
+		"unlock-and-retry is the wrong advice when the store is already readable")
+
+	// The two pre-existing branches are unchanged.
+	notFoundMsg := describeCredentialResolutionError(
+		fmt.Errorf("credential store: %w", &credentials.NotFoundError{Name: "MISSING_REF"}))
+	assert.Equal(t,
+		"the configured credential reference no longer exists — re-enter the API key.",
+		notFoundMsg)
+
+	otherMsg := describeCredentialResolutionError(errors.New("store is locked"))
+	assert.Contains(t, otherMsg, "unlock and retry",
+		"an unclassified failure keeps the unlock-and-retry advice")
 }

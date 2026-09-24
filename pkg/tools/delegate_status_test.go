@@ -3,9 +3,12 @@
 package tools
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // --- moved from delegate.go tests 2026-09-15 ---
@@ -85,5 +88,66 @@ func TestFormatToolCallProgressLine_FreshVsStale(t *testing.T) {
 	if fresh == stale {
 		t.Fatal("fresh and stale snapshots must render distinguishably — a caller has no way to tell " +
 			"'still working' from 'may have stalled' otherwise")
+	}
+}
+
+func TestDelegateStatus_FromRecordNotStreaming(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.September, 22, 12, 0, 0, 0, time.UTC)
+	tool, lifecycle, inbox, _ := newADR053TestTool(t)
+	tool.SetClock(func() time.Time { return now })
+	ctx := WithTranscriptSessionID(context.Background(), "parent-status")
+
+	persist := func(id string, createdAt time.Time) {
+		t.Helper()
+		if err := lifecycle.Persist(&session.LifecycleRecord{
+			SessionID: id, Generation: 1, State: session.LifecycleRunning,
+			OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: "parent-status",
+			SteeredBy:   &session.SteeredBy{SteeringSessionID: "parent-status", RootSessionID: "parent-status"},
+			WorkspaceID: "ws-status", AgentID: "worker", ParentAgentID: "orchestrator",
+			CreatedAt: createdAt,
+		}); err != nil {
+			t.Fatalf("persist lifecycle record %s: %v", id, err)
+		}
+	}
+
+	persist("child-with-message", now.Add(-2*time.Minute))
+	msg := progressMsgForDelegateTest(t, "child-with-message", "status-message")
+	progress, err := msg.AsSessionMessageProgress()
+	if err != nil {
+		t.Fatalf("decode progress message: %v", err)
+	}
+	progress.CreatedAt = now.Add(-40 * time.Second)
+	progress.Text = "last status line"
+	if err := msg.FromSessionMessageProgress(progress); err != nil {
+		t.Fatalf("encode progress message: %v", err)
+	}
+	if _, err := inbox.Append("parent-status", msg); err != nil {
+		t.Fatalf("append progress message: %v", err)
+	}
+
+	got := tool.Execute(ctx, map[string]any{"action": "status", "session_id": "child-with-message"})
+	if got.IsError {
+		t.Fatalf("status from durable record failed: %s", got.ForLLM)
+	}
+	if !strings.Contains(got.ForLLM, "running, last status line, 40 s ago") {
+		t.Fatalf("status = %q, want lifecycle state, last inbox line, and inbox age", got.ForLLM)
+	}
+	if err := inbox.Ack("parent-status", []string{"status-message"}); err != nil {
+		t.Fatalf("ack progress message: %v", err)
+	}
+	got = tool.Execute(ctx, map[string]any{"action": "status", "session_id": "child-with-message"})
+	if got.IsError || !strings.Contains(got.ForLLM, "running, last status line, 40 s ago") {
+		t.Fatalf("status must retain the latest durable line after acknowledgement, got: %+v", got)
+	}
+
+	persist("child-without-message", now.Add(-25*time.Second))
+	got = tool.Execute(ctx, map[string]any{"action": "status", "session_id": "child-without-message"})
+	if got.IsError {
+		t.Fatalf("status without inbox entry failed: %s", got.ForLLM)
+	}
+	if !strings.Contains(got.ForLLM, "running, no message yet, started 25 s ago") {
+		t.Fatalf("status = %q, want lifecycle state and record age without a fabricated message time", got.ForLLM)
 	}
 }

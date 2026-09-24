@@ -107,8 +107,16 @@ describe('chat store — delegator/delegate token attribution (regression)', () 
     expect(afterSpanStart[0].agentId).toBe('jim')
 
     // The delegate's OWN reasoning-text token stream arrives on the SAME
-    // chat/session (delegate turns share chatID with the parent — see
-    // pkg/agent/subturn.go), correctly carrying the delegate's agent_id on the
+    // chat/session (pre-ADR-091: delegate turns shared chatID with the
+    // parent, per the deleted pkg/agent/subturn.go. ADR-091 fix lane
+    // RX-SUBTURN finding (comment-only; code unchanged): today
+    // pkg/agent/steer_reconstruct.go::reconstructSteeredTurn sets
+    // opts.ChatID from the CHILD's own meta.PeerID, not copied from the
+    // parent — and a steered child's own meta is minted with no PeerID at
+    // all (see reportingTargetFor's "Finding A" doc comment in
+    // steer_launcher.go), so this "share chatID with the parent" premise
+    // may no longer hold; flagged for the team, not re-verified against the
+    // live WS wire here), correctly carrying the delegate's agent_id on the
     // wire per Fix 5a. Jim's turn is still open (isStreaming) while it waits on
     // the delegate — this is the exact race window the bug lived in.
     act(() => {
@@ -237,8 +245,13 @@ describe('chat store — delegator/delegate token attribution (regression)', () 
 // placeholder sendMessage() creates (no agentId at creation) is STILL
 // unattributed when tool_call_start fires — and stays that way, since the
 // old code never stamped it there either. The delegate's own reply tokens
-// then arrive (its sub-turn shares the parent's transcriptSessionID/
-// transcriptStore per pkg/agent/subturn.go regardless of Async), and because
+// then arrive (pre-ADR-091, its sub-turn shared the parent's
+// transcriptSessionID/transcriptStore per the deleted pkg/agent/subturn.go
+// regardless of Async — ADR-091 D4 later deleted the Async choice itself;
+// today each steered child has its OWN transcriptSessionID/transcriptStore,
+// a real durable session per steer_launcher.go, so this specific sharing
+// premise is stale — flagged, not re-verified for this test's own
+// assertions), and because
 // the `token` case's agent_id-boundary rule (Fix 5a) only opens a NEW bubble
 // when BOTH sides are known and mismatched, an unset bubble agentId is
 // permissive — the delegate's tokens silently claim the WHOLE bubble,

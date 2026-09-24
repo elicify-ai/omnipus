@@ -321,8 +321,8 @@ type TranscriptEntry struct {
 	//
 	// Populated only by pkg/agent/turn.go's appendIntermediateAssistantTranscript
 	// / appendAssistantTranscript and pkg/gateway/websocket.go's
-	// wsStreamer.Finalize, from turnState.parentSpawnCallID — non-empty ONLY
-	// for a child turnState created by pkg/agent/subturn.go's spawnSubTurn.
+	// wsStreamer.Finalize, from turnState.parentSpawnCallID — non-empty only
+	// for a child turn correlated to a parent tool call.
 	// Empty (and omitted from JSON) for every entry produced by a root
 	// (non-delegated) turn, so existing/legacy transcripts round-trip
 	// unchanged.
@@ -340,8 +340,8 @@ type TranscriptEntry struct {
 	//       store-backed session and its OWN transcript.jsonl. The parent's
 	//       transcript is deliberately EMPTY of the child's writes. (What a
 	//       child DOES inherit verbatim from its parent is the separate
-	//       routingSessionID field — the cancel/interrupt reachability key,
-	//       subturn.go:1130 — which is a different concept from this one and
+	//       routingSessionID field — the cancel/interrupt reachability key
+	//       (the pre-ADR-091 subturn.go, since deleted) — which is a different concept from this one and
 	//       must not be conflated with it.)
 	//
 	//   (2) "replay.go uses it to withhold the entry from replay entirely" —
@@ -411,11 +411,38 @@ type TranscriptEntry struct {
 	// re-sent on replay as the goal_outcome WS frame with this entry's ID as
 	// its message id. nil, and omitted from JSON, on every other entry.
 	GoalOutcome *generated.GoalOutcome `json:"goal_outcome,omitempty"`
+
+	// SubagentStart/SubagentState/SubagentMessage/SubagentEnd carry the four
+	// ADR-091 D7/I-4 sub-agent lifecycle frames, persisted as events in the
+	// PARENT's own transcript at the moment they happen — "no new store":
+	// this file's existing SystemSubtype+dedicated-typed-field convention
+	// (see GoalOutcome above), applied to the ADR-053 frame shapes
+	// (contracts/asyncapi.yaml) generates. Keyed by
+	// steer.Origin.CallID (the originating delegate/create_task tool-call
+	// id — the span key), via each frame's own ParentCallId/SpanId field —
+	// not a new TranscriptEntry field, so the existing since-cursor replay
+	// (pkg/gateway/websocket_replay.go::loadReplay reads the transcript and
+	// nothing else) returns them with no schema change beyond these four.
+	// Exactly one of the four is non-nil per entry, discriminated by
+	// SystemSubtype (SystemSubtypeSubagentStart etc.) — never Content.
+	SubagentStart   *generated.SubagentStartFrame   `json:"subagent_start,omitempty"`
+	SubagentState   *generated.SubagentStateFrame   `json:"subagent_state,omitempty"`
+	SubagentMessage *generated.SubagentMessageFrame `json:"subagent_message,omitempty"`
+	SubagentEnd     *generated.SubagentEndFrame     `json:"subagent_end,omitempty"`
 }
 
 // SystemSubtypeGoalOutcome is the TranscriptEntry.SystemSubtype value of a goal
 // outcome entry — the discriminator replay reads, never Content.
 const SystemSubtypeGoalOutcome = "goal_outcome"
+
+// ADR-091 D7/I-4 SystemSubtype values for the four persisted sub-agent
+// lifecycle frames — see SubagentStart's own doc comment above.
+const (
+	SystemSubtypeSubagentStart   = "subagent_start"
+	SystemSubtypeSubagentState   = "subagent_state"
+	SystemSubtypeSubagentMessage = "subagent_message"
+	SystemSubtypeSubagentEnd     = "subagent_end"
+)
 
 // Attachment represents a file attached to a message.
 type Attachment struct {

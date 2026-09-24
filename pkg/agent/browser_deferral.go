@@ -107,7 +107,7 @@ func browserControlGateExhaustedMessage(toolName string) string {
 // turn (newTurnState's zero value is exactly "no deferrals yet"), no
 // cross-turn or cross-session state. A delegated child turn gets its own
 // turnState and therefore its own ledger (FR-017) — there is no shared
-// counter to thread through spawnSubTurn.
+// counter to thread through the session launcher.
 type turnBrowserDeferralLedger struct {
 	used int
 }

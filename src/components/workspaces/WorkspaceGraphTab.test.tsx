@@ -104,13 +104,13 @@ describe('WorkspaceGraphTab — embedded toolbar (hidePlanSelector)', () => {
     expect(screen.queryByLabelText(/filter the graph by plan/i)).toBeNull()
   })
 
-  it('still shows the active-plan header (goal/progress) when embedded WITH a resolvable active plan', async () => {
+  it('still shows the active-plan header (objective/progress) when embedded WITH a resolvable active plan', async () => {
     useWorkspacesStore.setState({ activePlanId: 'plan-1' })
-    vi.mocked(fetchPlans).mockResolvedValue([makePlan({ id: 'plan-1', title: 'Launch', goal: 'Ship it' })])
+    vi.mocked(fetchPlans).mockResolvedValue([makePlan({ id: 'plan-1', title: 'Launch', objective: 'Ship it' })])
     renderTab('ws-1', { hidePlanSelector: true })
     await screen.findByTestId('graph-view-stub')
     // The plan selector stays hidden, but the toolbar renders because a plan is
-    // active — its goal/progress must still show.
+    // active — its objective/progress must still show.
     expect(screen.queryByText('By plan')).toBeNull()
     await waitFor(() => expect(screen.getByText('Ship it')).toBeInTheDocument())
   })
@@ -143,9 +143,9 @@ describe('WorkspaceGraphTab — plan switcher', () => {
 // ── Active-plan header ───────────────────────────────────────────────────────
 
 describe('WorkspaceGraphTab — active-plan header', () => {
-  it('renders the state chip, goal, and progress when activePlanId resolves to a loaded plan', async () => {
+  it('renders the state chip, objective, and progress when activePlanId resolves to a loaded plan', async () => {
     vi.mocked(fetchPlans).mockResolvedValue([
-      makePlan({ id: 'plan-9', title: 'Launch', state: 'running', goal: 'Ship v1', progress: 0.5 }),
+      makePlan({ id: 'plan-9', title: 'Launch', state: 'running', objective: 'Ship v1', progress: 0.5 }),
     ])
     useWorkspacesStore.setState({ activePlanId: 'plan-9' })
     renderTab()

@@ -382,21 +382,21 @@ func taskAssignedTo(t *task.Task, principal string) bool {
 // collectSubagentRows returns the sessions this caller delegated.
 //
 // Parentage is LifecycleRecord.ParentAgentID and nothing else. It must never
-// be inferred from ParentDurableKey, from ScopeID (empty for a top-level
+// be inferred from SteeringSessionID, from ScopeID (empty for a top-level
 // delegation), or from AgentID (the CHILD's id, not the parent's).
 //
 // [ADR-057 FR-022 doc correction] This comment used to justify excluding
-// ParentDurableKey by claiming it is "shared with its children and every
+// SteeringSessionID by claiming it is "shared with its children and every
 // cousin in the subtree — inferring from it leaks grandchildren." That
 // described the PRE-ADR-057 semantics only. Post-ADR-057 (D1), U13's
-// redefinition (pkg/session/lifecycle.go's own ParentDurableKey doc
+// redefinition (pkg/session/lifecycle.go's own SteeringSessionID doc
 // comment) makes it name only the DIRECT parent — one hop, never
 // re-inherited down the chain — so it is no longer shared across cousins
 // at all, and the old justification is false as a description of the
 // current field. The conclusion (do not use it here) still holds, for the
 // simpler reason ParentAgentID already gives directly: it names an AGENT
 // identity, which is what "did I delegate this" means, whereas
-// ParentDurableKey names a SESSION id one hop up — the wrong kind of value
+// SteeringSessionID names a SESSION id one hop up — the wrong kind of value
 // for this predicate regardless of how many hops it spans.
 func collectSubagentRows(
 	store JobLifecycleLister,
@@ -405,7 +405,6 @@ func collectSubagentRows(
 	ceiling int,
 	namer JobAgentNamer,
 	resolver JobSessionResolver,
-	labelResolver JobLabelResolver,
 	activityReader JobSessionActivityReader,
 ) collectResult {
 	filter := session.LifecycleFilter{WorkspaceID: workspaceID, ParentAgentID: principal}
@@ -422,7 +421,17 @@ func collectSubagentRows(
 	// cannot leak, and a budget spent before that re-check would re-open the
 	// undercount half of the same hole. It also makes `present` mean the same
 	// thing for all three kinds: the caller's own records, post-supersession.
-	newest := newestGenerations(records, principal)
+	// Task-origin sessions are represented by collectTaskRows. Exclude them
+	// before lineage collapse and the scan ceiling so one durable session can
+	// never consume both a task row and a subagent row (ADR-091 FR-C-010).
+	nonTask := records[:0]
+	for i := range records {
+		if records[i].Origin != nil && records[i].Origin.Kind == session.OriginKindTask {
+			continue
+		}
+		nonTask = append(nonTask, records[i])
+	}
+	newest := newestGenerations(nonTask, principal)
 	kept, scanned, present, truncated := applyScanCeiling(newest, ceiling)
 	res := collectResult{
 		unreadable:    skipped,
@@ -498,35 +507,13 @@ func collectSubagentRows(
 		}
 	}
 
-	// Exactly ONE resolver call for the whole batch, never one per row —
-	// same FR-028 contention rule as the session resolver immediately below,
-	// and the same underlying index (see JobLabelResolver's doc comment).
-	var customLabels map[string]string
-	if labelResolver != nil {
-		customLabels = labelResolver.ResolvableLabels(ids)
-	}
-	// Exactly ONE resolver call for the whole batch, never one per row.
-	var resolvable map[string]bool
-	if resolver != nil {
-		resolvable = resolver.ResolvableSessionIDs(ids)
-	}
+	_ = resolver
+	_ = ids
 	for i := range rows {
-		// Terminal rows are never actionable, for every kind. A subagent row
-		// is additionally not actionable when its session no longer resolves
-		// in this process — a durable record survives a restart, the in-memory
-		// index does not. With no delegate tool wired, nothing resolves, which
-		// is the honest answer rather than an error.
-		rows[i].Actionable = !terminalStatus(rows[i].Status) && resolvable[rows[i].ID]
-
-		// [UAT M3 fix] label_contains must match the label the CALLER set,
-		// when one is still resolvable, not unconditionally the agent name.
-		// Redacted the same way Label is (FR-019a: the filter must never see
-		// unredacted free text) — never truncated, because filterLabel is
-		// never serialized (truncation exists only to bound the JSON payload
-		// Label/NativeStatus contribute).
-		if custom := strings.TrimSpace(customLabels[rows[i].ID]); custom != "" {
-			rows[i].filterLabel = red.redact(custom)
-		}
+		// The lifecycle record is the durable authority after restart. Whether
+		// an old in-memory delegate index happens to contain the id cannot make
+		// a running or parked session unactionable.
+		rows[i].Actionable = !terminalStatus(rows[i].Status)
 	}
 	res.rows = rows
 	return res
@@ -599,9 +586,12 @@ func newestGenerations(records []session.LifecycleRecord, principal string) []*s
 	return out
 }
 
-// subagentLabel resolves the delegated agent's display name, falling back to
-// the raw agent id when the agent no longer resolves.
+// subagentLabel reads the durable launch title. Old records written before
+// lifecycle titles were added fall back to the delegated agent's name/id.
 func subagentLabel(rec *session.LifecycleRecord, namer JobAgentNamer) string {
+	if title := strings.TrimSpace(rec.Title); title != "" {
+		return title
+	}
 	if namer != nil {
 		if name, ok := namer.AgentDisplayName(rec.AgentID); ok && strings.TrimSpace(name) != "" {
 			return name

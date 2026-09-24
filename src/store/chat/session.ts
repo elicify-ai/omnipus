@@ -27,8 +27,8 @@ export function emptySessionState(): SessionChatState {
     cancelStage: null,
     autoApproveEffective: null,
     lastReceivedEventTime: null,
-    spanByParentCallId: {},
     spanBySpanId: {},
+    pendingSpanUpdatesBySpanId: {},
     mergedReplayMessageIds: {},
     goalStatus: null,
     goalPills: {},
@@ -132,7 +132,7 @@ export function stampToolCallOffset(
  * Replaces each touched entry in `messagesById` with a NEW object (never
  * mutates an existing message object in place) — safe both as an Immer
  * producer helper (draft-slot reassignment is the standard Immer pattern
- * used elsewhere in this file, e.g. startSpan) and against a caller's own
+ * used elsewhere in this file) and against a caller's own
  * shallow-copied plain object (clearStreamingState's manual `next.messagesById
  * = {...bucket.messagesById}` copy shares message object REFERENCES with the
  * original bucket — mutating a shared message in place would corrupt the
@@ -239,7 +239,6 @@ export function applyMessageArray(
   let toolCallOrderPatch: string[] = [...bucket.toolCallOrder]
   let textAtToolCallStartPatch: typeof bucket.textAtToolCallStart = { ...bucket.textAtToolCallStart }
   let toolCallOwnerMessageIdPatch: Record<string, string> = { ...bucket.toolCallOwnerMessageId }
-  let spanByParentCallIdPatch: typeof bucket.spanByParentCallId = { ...bucket.spanByParentCallId }
   let spanBySpanIdPatch: typeof bucket.spanBySpanId = { ...(bucket.spanBySpanId ?? {}) }
 
   if (msgs.length > MAX_MESSAGES_PER_SESSION) {
@@ -279,13 +278,10 @@ export function applyMessageArray(
       toolCallOwnerMessageIdPatch = newOwner
     }
 
-    // Evict BOTH span-index maps in lockstep via the shared helper — the
-    // two maps must always be filtered together (see evictSpanIndexEntries'
-    // doc comment for the invariant).
+    // Evict the span index via the shared helper (see evictSpanIndexEntries'
+    // doc comment).
     const evictedMessageIds = new Set(evicted.map((m) => m.id))
-    const filtered = evictSpanIndexEntries(spanByParentCallIdPatch, spanBySpanIdPatch, evictedMessageIds)
-    spanByParentCallIdPatch = filtered.spanByParentCallId
-    spanBySpanIdPatch = filtered.spanBySpanId
+    spanBySpanIdPatch = evictSpanIndexEntries(spanBySpanIdPatch, evictedMessageIds)
   }
 
   const messagesById: Record<string, ChatMessage> = {}
@@ -303,7 +299,6 @@ export function applyMessageArray(
     toolCallOrder: toolCallOrderPatch,
     textAtToolCallStart: textAtToolCallStartPatch,
     toolCallOwnerMessageId: toolCallOwnerMessageIdPatch,
-    spanByParentCallId: spanByParentCallIdPatch,
     spanBySpanId: spanBySpanIdPatch,
   }
 }

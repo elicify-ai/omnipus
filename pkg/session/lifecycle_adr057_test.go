@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// ADR-057 W6, U13 — coverage for LifecycleFilter.ParentDurableKey (FR-019),
+// ADR-057 W6, U13 — coverage for LifecycleFilter.SteeringSessionID (FR-019),
 // the doc-comment corrections (FR-022, U13's two-of-three sites), and the
 // U13-scoped slice of FR-023's static gate. Per binding Rule 1, every
 // behavioural assertion runs against a REAL *LifecycleStore rooted at a
@@ -16,12 +16,12 @@ import (
 	"testing"
 )
 
-// TestLifecycleFilter_ParentDurableKey_DirectChildrenOnly is test #10 / BDD-18
+// TestLifecycleFilter_SteeringSessionID_DirectChildrenOnly is test #10 / BDD-18
 // ("Children-of-X returns direct children only"): given persisted lifecycle
 // records for chat A, its child B, its OTHER child C, and B's own child
-// (grandchild) D, List(LifecycleFilter{ParentDurableKey: A}) must return
+// (grandchild) D, List(LifecycleFilter{SteeringSessionID: A}) must return
 // exactly B and C — never D, and never A itself.
-func TestLifecycleFilter_ParentDurableKey_DirectChildrenOnly(t *testing.T) {
+func TestLifecycleFilter_SteeringSessionID_DirectChildrenOnly(t *testing.T) {
 	s := newTestLifecycleStore(t)
 
 	// FR-074 — every id here is deliberately distinct; asserted below rather
@@ -43,7 +43,7 @@ func TestLifecycleFilter_ParentDurableKey_DirectChildrenOnly(t *testing.T) {
 
 	// A itself: a top-level chat, no parent.
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: chatA, State: LifecycleRunning,
+		SessionID: chatA, Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeHuman,
 		WorkspaceID:    "ws-1", AgentID: "mia",
 	}); err != nil {
@@ -52,103 +52,103 @@ func TestLifecycleFilter_ParentDurableKey_DirectChildrenOnly(t *testing.T) {
 	// B and C: direct children of A.
 	for _, id := range []string{childB, childC} {
 		if err := s.Persist(&LifecycleRecord{
-			SessionID: id, State: LifecycleRunning,
+			SessionID: id, Generation: 1, State: LifecycleRunning,
 			OwnerScopeKind: OwnerScopeParentSession, OwnerScopeID: chatA,
-			ParentAgentID: "mia", ParentDurableKey: chatA,
+			ParentAgentID: "mia", SteeredBy: &SteeredBy{SteeringSessionID: chatA, RootSessionID: chatA},
 			WorkspaceID: "ws-1", AgentID: "ray",
 		}); err != nil {
 			t.Fatalf("persist %q: %v", id, err)
 		}
 	}
-	// D: a GRANDCHILD — B's own child, ParentDurableKey = B (its DIRECT
+	// D: a GRANDCHILD — B's own child, SteeringSessionID = B (its DIRECT
 	// parent), never A.
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: grandD, State: LifecycleRunning,
+		SessionID: grandD, Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeParentSession, OwnerScopeID: childB,
-		ParentAgentID: "ray", ParentDurableKey: childB,
+		ParentAgentID: "ray", SteeredBy: &SteeredBy{SteeringSessionID: childB, RootSessionID: chatA},
 		WorkspaceID: "ws-1", AgentID: "ava",
 	}); err != nil {
 		t.Fatalf("persist grandD: %v", err)
 	}
 
-	got, err := s.List(LifecycleFilter{ParentDurableKey: chatA})
+	got, err := s.List(LifecycleFilter{SteeringSessionID: chatA})
 	if err != nil {
-		t.Fatalf("List(ParentDurableKey=%q): %v", chatA, err)
+		t.Fatalf("List(SteeringSessionID=%q): %v", chatA, err)
 	}
 	gotIDs := map[string]bool{}
 	for _, r := range got {
 		gotIDs[r.SessionID] = true
 	}
 	if len(gotIDs) != 2 || !gotIDs[childB] || !gotIDs[childC] {
-		t.Fatalf("List(ParentDurableKey=%q) = %v, want exactly [%q %q]", chatA, listedSessionIDs(got), childB, childC)
+		t.Fatalf("List(SteeringSessionID=%q) = %v, want exactly [%q %q]", chatA, listedSessionIDs(got), childB, childC)
 	}
 	if gotIDs[grandD] {
-		t.Fatalf("List(ParentDurableKey=%q) leaked the GRANDCHILD %q — must be depth-1 only", chatA, grandD)
+		t.Fatalf("List(SteeringSessionID=%q) leaked the GRANDCHILD %q — must be depth-1 only", chatA, grandD)
 	}
 	if gotIDs[chatA] {
-		t.Fatalf("List(ParentDurableKey=%q) leaked %q itself", chatA, chatA)
+		t.Fatalf("List(SteeringSessionID=%q) leaked %q itself", chatA, chatA)
 	}
 
 	// The reciprocal query: children of B is exactly D.
-	got, err = s.List(LifecycleFilter{ParentDurableKey: childB})
+	got, err = s.List(LifecycleFilter{SteeringSessionID: childB})
 	if err != nil {
-		t.Fatalf("List(ParentDurableKey=%q): %v", childB, err)
+		t.Fatalf("List(SteeringSessionID=%q): %v", childB, err)
 	}
 	if len(got) != 1 || got[0].SessionID != grandD {
-		t.Fatalf("List(ParentDurableKey=%q) = %v, want exactly [%q]", childB, listedSessionIDs(got), grandD)
+		t.Fatalf("List(SteeringSessionID=%q) = %v, want exactly [%q]", childB, listedSessionIDs(got), grandD)
 	}
 
 	// A parent with no children at all returns an empty, non-nil-error slice.
-	got, err = s.List(LifecycleFilter{ParentDurableKey: "nobody-persisted-this-10"})
+	got, err = s.List(LifecycleFilter{SteeringSessionID: "nobody-persisted-this-10"})
 	if err != nil {
-		t.Fatalf("List(ParentDurableKey=<absent>): %v", err)
+		t.Fatalf("List(SteeringSessionID=<absent>): %v", err)
 	}
 	if len(got) != 0 {
-		t.Fatalf("List(ParentDurableKey=<absent>) = %v, want empty", listedSessionIDs(got))
+		t.Fatalf("List(SteeringSessionID=<absent>) = %v, want empty", listedSessionIDs(got))
 	}
 }
 
-// TestLifecycleFilter_ParentDurableKey_ComposesWithOtherFilterFields proves
-// the index-backed path (listByParentDurableKey) still applies every OTHER
+// TestLifecycleFilter_SteeringSessionID_ComposesWithOtherFilterFields proves
+// the index-backed path (listBySteeringSessionID) still applies every OTHER
 // LifecycleFilter field exactly like the full-scan path does — the index
 // only narrows the CANDIDATE set, it never bypasses filter.matches.
-func TestLifecycleFilter_ParentDurableKey_ComposesWithOtherFilterFields(t *testing.T) {
+func TestLifecycleFilter_SteeringSessionID_ComposesWithOtherFilterFields(t *testing.T) {
 	s := newTestLifecycleStore(t)
 	const parent = "chat-compose-10b"
 	const runningChild = "child-compose-10b-running"
 	const doneChild = "child-compose-10b-done"
 
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: runningChild, State: LifecycleRunning,
+		SessionID: runningChild, Generation: 1, State: LifecycleRunning,
 		OwnerScopeKind: OwnerScopeParentSession, OwnerScopeID: parent,
-		ParentDurableKey: parent, WorkspaceID: "ws-1", AgentID: "ray",
+		SteeredBy: &SteeredBy{SteeringSessionID: parent, RootSessionID: parent}, WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("persist runningChild: %v", err)
 	}
 	if err := s.Persist(&LifecycleRecord{
-		SessionID: doneChild, State: LifecycleCompleted,
+		SessionID: doneChild, Generation: 1, State: LifecycleCompleted,
 		OwnerScopeKind: OwnerScopeParentSession, OwnerScopeID: parent,
-		ParentDurableKey: parent, WorkspaceID: "ws-1", AgentID: "ava",
+		SteeredBy: &SteeredBy{SteeringSessionID: parent, RootSessionID: parent}, WorkspaceID: "ws-1", AgentID: "ava",
 	}); err != nil {
 		t.Fatalf("persist doneChild: %v", err)
 	}
 
-	got, err := s.List(LifecycleFilter{ParentDurableKey: parent, NonTerminalOnly: true})
+	got, err := s.List(LifecycleFilter{SteeringSessionID: parent, NonTerminalOnly: true})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if len(got) != 1 || got[0].SessionID != runningChild {
-		t.Fatalf("List(ParentDurableKey=%q, NonTerminalOnly=true) = %v, want exactly [%q] — "+
+		t.Fatalf("List(SteeringSessionID=%q, NonTerminalOnly=true) = %v, want exactly [%q] — "+
 			"the index path must still apply NonTerminalOnly, not just resolve the candidate set",
 			parent, listedSessionIDs(got), runningChild)
 	}
 
-	got, err = s.List(LifecycleFilter{ParentDurableKey: parent, AgentID: "ava"})
+	got, err = s.List(LifecycleFilter{SteeringSessionID: parent, AgentID: "ava"})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if len(got) != 1 || got[0].SessionID != doneChild {
-		t.Fatalf("List(ParentDurableKey=%q, AgentID=ava) = %v, want exactly [%q]", parent, listedSessionIDs(got), doneChild)
+		t.Fatalf("List(SteeringSessionID=%q, AgentID=ava) = %v, want exactly [%q]", parent, listedSessionIDs(got), doneChild)
 	}
 }
 
@@ -163,7 +163,7 @@ func TestLifecycleFilter_ParentDurableKey_ComposesWithOtherFilterFields(t *testi
 // docCommentGateAnchors locates the two U13-owned doc-comment blocks FR-022
 // requires rewriting, each identified by a stable substring from the
 // CURRENT (post-rewrite) text — not a hardcoded line number, since editing
-// this file (adding the ParentDurableKey field/clause/index wiring) shifts
+// this file (adding the SteeringSessionID field/clause/index wiring) shifts
 // every line below it. Returns the located blocks' surrounding text windows
 // for content assertions.
 func docCommentGateAnchors(t *testing.T, src string) (parentAgentIDFieldBlock, matchesClauseBlock string) {
@@ -171,7 +171,7 @@ func docCommentGateAnchors(t *testing.T, src string) (parentAgentIDFieldBlock, m
 
 	// Block 1 — the ParentAgentID struct field's "MUST NOT be inferred"
 	// bullet list (pre-rewrite: lifecycle.go:225-228 named the retracted
-	// claim inside this block's ParentDurableKey bullet).
+	// claim inside this block's SteeringSessionID bullet).
 	anchor1 := "MUST NOT be inferred from any other field, ever:"
 	idx1 := strings.Index(src, anchor1)
 	if idx1 < 0 {
@@ -204,7 +204,7 @@ func docCommentGateAnchors(t *testing.T, src string) (parentAgentIDFieldBlock, m
 // source from disk and asserts, in order:
 //  1. (positive lower bound, binding Rule 4) both U13-owned blocks are
 //     LOCATED by anchor text;
-//  2. (negative) neither block describes ParentDurableKey as shared
+//  2. (negative) neither block describes SteeringSessionID as shared
 //     parent<->child in the retracted, pre-ADR-057 sense ("SHARES with its
 //     child", "cousins", "grandchildren" as a LEAK, "(shared parent<->child)").
 func TestLifecycleDocComments_NoSharedParentChildClaim_U13Scope(t *testing.T) {
@@ -229,24 +229,24 @@ func TestLifecycleDocComments_NoSharedParentChildClaim_U13Scope(t *testing.T) {
 	for _, phrase := range retractedPhrases {
 		if strings.Contains(block1, phrase) {
 			t.Errorf("ParentAgentID field doc comment still contains the retracted claim %q — "+
-				"FR-022 requires it no longer describe ParentDurableKey as shared parent<->child", phrase)
+				"FR-022 requires it no longer describe SteeringSessionID as shared parent<->child", phrase)
 		}
 		if strings.Contains(block2, phrase) {
 			t.Errorf("matches() ParentAgentID-clause comment still contains the retracted claim %q — "+
-				"FR-022 requires it no longer describe ParentDurableKey as shared parent<->child", phrase)
+				"FR-022 requires it no longer describe SteeringSessionID as shared parent<->child", phrase)
 		}
 	}
 
 	// Positive corroboration: both blocks now correctly attribute
-	// ParentDurableKey's D1 semantics rather than merely NOT containing the
+	// SteeringSessionID's D1 semantics rather than merely NOT containing the
 	// old phrasing (silence about a field is not the same as correcting the
 	// claim about it).
-	if !strings.Contains(block1, "ParentDurableKey") {
-		t.Error("ParentAgentID field doc comment no longer mentions ParentDurableKey at all — " +
+	if !strings.Contains(block1, "SteeringSessionID") {
+		t.Error("ParentAgentID field doc comment no longer mentions SteeringSessionID at all — " +
 			"the corrected block must still explain why ParentAgentID cannot be inferred from it")
 	}
-	if !strings.Contains(block2, "ParentDurableKey") {
-		t.Error("matches() ParentAgentID-clause comment no longer mentions ParentDurableKey at all")
+	if !strings.Contains(block2, "SteeringSessionID") {
+		t.Error("matches() ParentAgentID-clause comment no longer mentions SteeringSessionID at all")
 	}
 }
 
@@ -272,7 +272,7 @@ func extractFunctionBody(t *testing.T, src, funcAnchor string) string {
 	return rest[:end+len("\n}")]
 }
 
-// TestLifecycleFilterMatches_ParentDurableKeyIsTheParentageReadU13Scope is
+// TestLifecycleFilterMatches_SteeringSessionIDIsTheParentageReadU13Scope is
 // U13's slice of FR-023 / test #106 ("the system MUST NOT use OwnerScopeID
 // or ParentAgentID as the parentage edge"). The FULL cross-package gate
 // (verifyCallerOwnsSession + callerOwnerKey + their transitive callees in
@@ -282,10 +282,10 @@ func extractFunctionBody(t *testing.T, src, funcAnchor string) string {
 // it. This test covers exactly the piece U13 is accountable for: matches()
 // ITSELF, read from the real, current source.
 //
-// Per binding Rule 4, the positive lower bound (>= 1 real ParentDurableKey
+// Per binding Rule 4, the positive lower bound (>= 1 real SteeringSessionID
 // read) is asserted FIRST, proving the extraction actually reached the
 // function body before the zero-count clause is trusted.
-func TestLifecycleFilterMatches_ParentDurableKeyIsTheParentageReadU13Scope(t *testing.T) {
+func TestLifecycleFilterMatches_SteeringSessionIDIsTheParentageReadU13Scope(t *testing.T) {
 	src, err := os.ReadFile("lifecycle.go")
 	if err != nil {
 		t.Fatalf("read lifecycle.go: %v", err)
@@ -293,9 +293,9 @@ func TestLifecycleFilterMatches_ParentDurableKeyIsTheParentageReadU13Scope(t *te
 	body := extractFunctionBody(t, string(src), "func (f LifecycleFilter) matches(r *LifecycleRecord) bool {")
 
 	// Positive lower bound (Rule 4): matches() must actually read
-	// r.ParentDurableKey at least once — the FR-019 clause this unit added.
-	if got := strings.Count(body, "r.ParentDurableKey"); got < 1 {
-		t.Fatalf("positive lower bound failed: matches() contains %d reads of r.ParentDurableKey, want >= 1 — "+
+	// r.SteeringSessionID() at least once — the FR-019 clause this unit added.
+	if got := strings.Count(body, "r.SteeringSessionID()"); got < 1 {
+		t.Fatalf("positive lower bound failed: matches() contains %d reads of r.SteeringSessionID(), want >= 1 — "+
 			"either the FR-019 clause is missing or this gate's extraction is broken", got)
 	}
 

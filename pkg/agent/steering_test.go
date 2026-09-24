@@ -17,6 +17,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -2066,5 +2068,204 @@ func TestInterruptSessionHard_CascadesAcrossSession(t *testing.T) {
 		if !ha {
 			t.Errorf("turn %d (%s): hardAbort not set after InterruptSessionHard", i, key)
 		}
+	}
+}
+
+// runDelegateSteer calls the REAL, production-wired delegate tool's "steer"
+// action exactly as the parent agent would.
+func runDelegateSteer(t *testing.T, al *AgentLoop, callerSessionID, targetSessionID, text string) *tools.ToolResult {
+	t.Helper()
+	ctx := tools.WithTranscriptSessionID(context.Background(), callerSessionID)
+	return delegateToolFor(t, al).Execute(ctx, map[string]any{
+		"action": "steer", "session_id": targetSessionID, "text": text,
+	})
+}
+
+// TestDelegateSteer_RevivesStoppedQueuedChild is Finding 1's proof of done
+// (ADR-091 fix lane 2, Q17/D8): "a Stop survives a restart; only a newer
+// instruction revives the session, as a new generation." A queued child the
+// Stop cascade stamped never had a live turn, so nothing transitioned it —
+// SteerCanceller.Revive existed with zero production callers, and
+// executeSteer (pkg/tools/delegate_followup.go) enqueued into a steering
+// queue no live turn would ever drain, silently orphaning the message while
+// telling the model it would "apply at the child's next tool boundary" (a
+// false success). A steering message on a stopped-while-queued child must
+// instead revive it as a NEW generation and redispatch it for real.
+func TestDelegateSteer_RevivesStoppedQueuedChild(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	al.GetConfig().Performance.MaxParallelAgents = 1
+	provider, releaseAll := installParkedProvider(t, al)
+	defer releaseAll()
+
+	launcher := NewSteerLauncher(al)
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	busyID, busyGen := launchSteeredChild(t, al, parentID, "call-steer-busy", "occupies the only slot")
+	queuedID, queuedGen := launchSteeredChild(t, al, parentID, "call-steer-queued", "gets stopped while queued")
+
+	if _, err := launcher.Dispatch(context.Background(), busyID, busyGen); err != nil {
+		t.Fatalf("Dispatch(busy): %v", err)
+	}
+	select {
+	case <-provider.entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the busy child never reached its provider")
+	}
+	queued, err := launcher.Dispatch(context.Background(), queuedID, queuedGen)
+	if err != nil {
+		t.Fatalf("Dispatch(queued): %v", err)
+	}
+	if queued.State != steer.DispatchQueued {
+		t.Fatalf("Dispatch(queued) = %+v, want State=queued", queued)
+	}
+
+	// Stop the queued child directly, mirroring a human Stop click on it.
+	canceller := al.steerCanceller()
+	if _, cancelErr := canceller.CancelSubtree(context.Background(), queuedID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"}); cancelErr != nil {
+		t.Fatalf("CancelSubtree(queued): %v", cancelErr)
+	}
+	stopped, err := al.GetSessionLifecycleStore().Load(queuedID)
+	if err != nil {
+		t.Fatalf("Load(queued after stop): %v", err)
+	}
+	if stopped.Stop == nil || stopped.Stop.Generation != stopped.Generation {
+		t.Fatalf("queued child has no current-generation Stop marker after CancelSubtree: %+v", stopped.Stop)
+	}
+
+	// The founder's decision: only a NEWER instruction revives it — steer it.
+	res := runDelegateSteer(t, al, parentID, queuedID, "please continue")
+	if res.IsError {
+		t.Fatalf("delegate(steer) on a stopped-while-queued child = error %q", res.ForLLM)
+	}
+
+	revived, err := al.GetSessionLifecycleStore().Load(queuedID)
+	if err != nil {
+		t.Fatalf("Load(queued after steer): %v", err)
+	}
+	if revived.Generation != stopped.Generation+1 {
+		t.Fatalf("generation after steer = %d, want %d (a NEW generation)", revived.Generation, stopped.Generation+1)
+	}
+	if revived.Terminal() {
+		t.Fatalf("revived child is terminal (state=%q) — the steer did not bring it back", revived.State)
+	}
+
+	// Prove it is not merely marked revived on disk — it actually redispatched
+	// and will run once the busy sibling's slot frees.
+	releaseAll()
+	if ts := al.getActiveTurnState(busyID); ts != nil {
+		select {
+		case <-ts.Finished():
+		case <-time.After(30 * time.Second):
+			t.Fatal("the busy child did not finish after its provider was released")
+		}
+	}
+	select {
+	case <-provider.entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the revived child never reached its provider once a slot freed — it never actually ran again")
+	}
+}
+
+// --- ADR-091 fix lane RX-DELIVERY, DEFECT 4: a revived session must never
+// re-run its PREVIOUS instruction ---
+//
+// appendSteeredInstruction was fire-and-forget in two independent ways, and
+// either one on its own makes a revived session confidently answer the OLD
+// question and report that answer upward as a real result:
+//
+//  1. It wrote ONLY UnifiedStore.AddMessage (context.jsonl). The turn a
+//     revival reconstructs takes its UserMessage from the TRANSCRIPT —
+//     steer_reconstruct.go::reconstructSteeredTurn scans transcript.jsonl
+//     backwards for the last non-blank `user` entry — which only
+//     SteerLauncher.Launch ever wrote (AddMessage AND
+//     AppendTranscriptStrict, steer_launcher.go). So the new instruction
+//     never reached the place the revived turn reads.
+//  2. AddMessage has no return value at all, and a nil store was a silent
+//     no-op, so ReviveStoppedSession dispatched regardless.
+
+// TestAppendSteeredInstruction_RevivedTurnRunsTheNewInstructionNotTheOldOne
+// is DEFECT 4's behavioural proof: after the new instruction is appended, the
+// turn a revival reconstructs must run the NEW instruction.
+func TestAppendSteeredInstruction_RevivedTurnRunsTheNewInstructionNotTheOldOne(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	const original = "ORIGINAL: audit the whole checkout flow"
+	const replacement = "stop, do this instead: summarise the release notes"
+	childID, _ := launchSteeredChild(t, al, parentID, "call-revive-instruction", original)
+
+	if err := al.appendSteeredInstruction(childID, testDefaultAgentID, replacement); err != nil {
+		t.Fatalf("appendSteeredInstruction: %v", err)
+	}
+
+	rec, err := al.GetSessionLifecycleStore().Load(childID)
+	if err != nil {
+		t.Fatalf("Load(child): %v", err)
+	}
+	ts, err := al.reconstructSteeredTurn(rec, nil)
+	if err != nil {
+		t.Fatalf("reconstructSteeredTurn: %v", err)
+	}
+	if ts.userMessage == original {
+		t.Fatalf("the revived turn would re-run the ORIGINAL pre-Stop instruction %q — "+
+			"the session answers the old question and reports it upward as a real result", ts.userMessage)
+	}
+	if ts.userMessage != replacement {
+		t.Fatalf("reconstructed UserMessage = %q, want the new instruction %q", ts.userMessage, replacement)
+	}
+}
+
+// TestAppendSteeredInstruction_ReportsAnInstructionThatCannotLand is DEFECT
+// 4's silent-no-op half: the helper must TELL its caller when the new
+// instruction did not land, instead of returning nothing at all.
+func TestAppendSteeredInstruction_ReportsAnInstructionThatCannotLand(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+
+	// No session of this id exists in any store, so there is nowhere for the
+	// instruction to land.
+	err := al.appendSteeredInstruction("01JAAAAAAAAAAAAAAAAAAAAAAA", testDefaultAgentID, "do this instead")
+
+	if err == nil {
+		t.Fatal("appending an instruction that cannot land reported success — the caller will dispatch and re-run the old instruction")
+	}
+}
+
+// TestReviveStoppedSession_RefusesWhenTheNewInstructionCannotLand is DEFECT
+// 4's refusal: failing the revive is strictly better than reviving a session
+// that will run the wrong instruction. The failure must be attributed to the
+// instruction, and must happen before the record is revived at all.
+func TestReviveStoppedSession_RefusesWhenTheNewInstructionCannotLand(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	lifecycle := al.GetSessionLifecycleStore()
+	parentID := newTestSteeringSession(t, al, "ws-1")
+
+	// A durably stopped record whose UnifiedStore session does not exist:
+	// the new instruction has nowhere to land.
+	const ghostID = "01JBBBBBBBBBBBBBBBBBBBBBBB"
+	ghost := testSteerLifecycleRecord(ghostID, parentID, session.LifecycleRunning, 1)
+	ghost.AgentID = testDefaultAgentID
+	ghost.Stop = &session.Stop{
+		At: time.Now().UTC(), Generation: 1,
+		By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"},
+	}
+	persistSteerLifecycle(t, lifecycle, ghost)
+
+	revived, err := al.ReviveStoppedSession(context.Background(), ghostID,
+		steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"}, "do this instead")
+
+	if err == nil || revived {
+		t.Fatalf("ReviveStoppedSession = (%v, %v), want a refusal — the session would re-run its previous instruction", revived, err)
+	}
+	if !strings.Contains(err.Error(), "instruction") {
+		t.Fatalf("ReviveStoppedSession error = %v, want a failure attributed to the new instruction not landing", err)
+	}
+	after, loadErr := lifecycle.Load(ghostID)
+	if loadErr != nil {
+		t.Fatalf("Load(ghost): %v", loadErr)
+	}
+	if after.Generation != 1 {
+		t.Fatalf("Generation = %d, want 1 — the record was revived before the new instruction was known to be durable", after.Generation)
 	}
 }

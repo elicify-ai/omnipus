@@ -79,12 +79,12 @@ func TestAES256GCMEncryptDecrypt(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			// Traces to: wave1-core-foundation-spec.md Dataset: Credential Encryption Inputs rows 8,9,10
-			entry, err := encrypt(key, []byte(tc.plaintext))
+			entry, err := encrypt(key, "TEST_ENTRY", []byte(tc.plaintext))
 			require.NoError(t, err, "encrypt must not fail")
 			assert.NotEmpty(t, entry.Nonce, "nonce must be populated")
 			assert.NotEmpty(t, entry.Ciphertext, "ciphertext must be populated")
 
-			plaintext, err := decrypt(key, entry)
+			plaintext, err := decrypt(key, "TEST_ENTRY", entry)
 			require.NoError(t, err, "decrypt must not fail")
 			assert.Equal(t, tc.plaintext, plaintext, "decrypted value must match original")
 		})
@@ -103,10 +103,10 @@ func TestAES256GCMDecryptWrongKey(t *testing.T) {
 		wrongKey[i] = 0xBB
 	}
 
-	entry, err := encrypt(rightKey, []byte("secret-value"))
+	entry, err := encrypt(rightKey, "TEST_ENTRY", []byte("secret-value"))
 	require.NoError(t, err)
 
-	_, err = decrypt(wrongKey, entry)
+	_, err = decrypt(wrongKey, "TEST_ENTRY", entry)
 	assert.ErrorIs(t, err, ErrWrongKey, "decryption with wrong key must return ErrWrongKey")
 }
 
@@ -136,10 +136,12 @@ func TestCredentialStoreFileFormat(t *testing.T) {
 	assert.Contains(t, raw, "salt", "must have 'salt' key")
 	assert.Contains(t, raw, "credentials", "must have 'credentials' key")
 
-	// Check version is 1.
+	// Check version is 2 — the name-bound format. (Was 1 until the one-time
+	// migration landed: version 1 now means "pre-name-binding, nil AAD", and a
+	// store is only ever written at the current version. See store_migrate.go.)
 	var version int
 	require.NoError(t, json.Unmarshal(raw["version"], &version))
-	assert.Equal(t, 1, version, "version must be 1")
+	assert.Equal(t, 2, version, "version must be 2 (name-bound format)")
 
 	// Check credentials has the correct nested structure.
 	var creds map[string]map[string]string

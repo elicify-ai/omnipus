@@ -5,11 +5,13 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/google/uuid"
 )
 
@@ -101,13 +103,13 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// ADR-057 W12: ownership is verified via a plain Load BEFORE the Mutate
 	// below, deliberately OUTSIDE the atomic closure — unlike the terminal
 	// check (see the TOCTOU comment below), ownership cannot race: a
-	// session's ParentDurableKey is stamped once at mint time and carried
+	// session's SteeringSessionID is stamped once at mint time and carried
 	// forward unchanged even across follow_up generations (see
 	// spawnCorrectiveFollowUp's whole-struct-copy comment), so a Load taken
 	// a moment before Mutate observes the exact same value Mutate itself
 	// would. Verifying it here, rather than inside the closure below, is
 	// not just style: the ownership walk (verifyCallerOwnsSession, FR-039)
-	// climbs the ParentDurableKey chain via t.lifecycle.Load(ancestor) for
+	// climbs the SteeringSessionID chain via t.lifecycle.Load(ancestor) for
 	// every hop beyond the direct parent, and pkg/session/lifecycle_lock.go's
 	// striped lock is only 64-wide — an ancestor whose id happens to hash to
 	// the SAME shard as sessionID would deadlock against Mutate's
@@ -117,7 +119,8 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	if lerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", lerr))
 	}
-	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
+	by, verr := t.verifyCallerPrincipal(ctx, rec)
+	if verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", verr))
 	}
 	// Not available to external-CLI (3P) sessions: every steering-queue drain
@@ -132,10 +135,51 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// at all. Mirrors message_parent's identical Is3P posture (D5).
 	if rec.Is3P {
 		return ErrorResult(fmt.Sprintf(
-			"delegate: steer: not available to external-CLI (3P) sessions — session %s runs on an external CLI "+
+			"delegate: steer: not_steerable: external command-line session %s runs on an external CLI "+
 				"(claude-code/codex/opencode) with no steering-queue drain in its dispatch path; use "+
 				"action=\"respond\" (which redispatches a corrective session) or action=\"follow_up\" instead",
 			sessionID,
+		))
+	}
+
+	// [Finding 1, ADR-091 fix lane 2 — Q17/D8] A session carrying a Stop
+	// marker for its OWN current generation is checked FIRST, off the plain
+	// Load above — terminal or not: the founder's decision is that only a
+	// newer instruction revives a stopped session, as a new generation,
+	// never the steering queue (which a stopped session has no live
+	// consumer left to drain). Deliberately NOT folded into the
+	// Mutate-based terminal-rejection closure below: a Stop marker, once
+	// stamped for a generation, is retained forever as inert history (see
+	// SteerCanceller.Revive's own doc comment) — the same "checked off a
+	// naked Load is safe because the fact cannot become stale" reasoning
+	// executeRespond's own resumeNative uses for its terminal predicate.
+	// Reviver.ReviveStoppedSession re-validates atomically under Revive's
+	// own record lock regardless, so no window is opened here. This ALSO
+	// avoids a real bug the Mutate-closure version of this check had: once
+	// a stamped-but-never-ran session is terminalised by its own Stop
+	// (Finding 5, pkg/agent/steer_cancel.go::terminaliseNeverRanStop),
+	// persisting an UNCHANGED copy of that now-terminal record through
+	// Mutate (the "harmless no-op" pattern the terminal-rejection closure
+	// below relies on) trips the store's own immutable-terminal invariant
+	// (ErrLifecycleTerminalImmutable) — Mutate's no-op persist is only
+	// harmless when the record is NOT terminal.
+	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+		if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
+			return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
+		}
+		reviver, ok := t.steering.(steerReviver)
+		if !ok {
+			return ErrorResult(fmt.Sprintf("delegate: steer: session %s is stopped and cannot be revived: no reviver configured", sessionID))
+		}
+		revived, rerr := reviver.ReviveStoppedSession(ctx, sessionID, by, text)
+		if rerr != nil {
+			return ErrorResult(fmt.Sprintf("delegate: steer: revive stopped session %s: %v", sessionID, rerr)).WithError(rerr)
+		}
+		if !revived {
+			return ErrorResult(fmt.Sprintf("delegate: steer: session %s could not be revived", sessionID))
+		}
+		return NewToolResult(fmt.Sprintf(
+			"Session %s was stopped; the steering message revived it as a new generation and it has been redispatched.", sessionID,
 		))
 	}
 
@@ -160,8 +204,11 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// delivery is a separate side channel, not a lifecycle field) — Mutate
 	// persisting an unchanged copy of the tail record is a harmless,
 	// deliberate byproduct of reusing the RMW primitive purely for its
-	// locking guarantee. Ownership is deliberately NOT re-checked here — see
-	// the comment above for why a stale ownership read cannot happen.
+	// locking guarantee, PROVIDED the record is not terminal — which is
+	// exactly why the Stop-marker (possibly-terminal) case above is handled
+	// before ever reaching here, never inside this closure. Ownership is
+	// deliberately NOT re-checked here — see the comment above for why a
+	// stale ownership read cannot happen.
 	if merr := t.lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return session.ErrLifecycleNotFound
@@ -187,9 +234,20 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	))
 }
 
+// steerReviver is satisfied by *agent.AgentLoop (t.steering's concrete
+// production type, wired via SetSteeringSink) beyond DelegateSteeringSink's
+// own EnqueueSteeringMessage method. Declared here, not added to
+// DelegateSteeringSink itself, so a narrower test fake standing in for the
+// steering sink is not forced to also implement revival — mirrors
+// appendFollowUpInstruction's own optional-capability type assertion on
+// t.sessionStore below.
+type steerReviver interface {
+	ReviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error)
+}
+
 func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
-	if t.spawner == nil {
-		return ErrorResult("delegate: no sub-turn spawner configured")
+	if t.launcher == nil {
+		return ErrorResult("delegate: no session launcher configured")
 	}
 	if t.lifecycle == nil {
 		return ErrorResult("delegate: no lifecycle store configured")
@@ -225,7 +283,7 @@ func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any,
 	// NOTE: this is a naked Load+Terminal check, NOT the LifecycleStore.Mutate
 	// RMW that executeSteer/executeRespond use to close their check-then-act
 	// TOCTOU window. The polarity is inverted here: follow_up RESUMES a
-	// terminal session (executeAsync re-queues it as a new generation), so
+	// terminal session (spawnCorrectiveFollowUp re-queues it as a new generation), so
 	// the gate is `!rec.Terminal() -> reject`, and the immutable-terminal
 	// invariant (L-3) means a session that is terminal at this Load STAYS
 	// terminal — there is no concurrent transition that can flip it back to
@@ -277,32 +335,22 @@ func followUpInstructionArg(args map[string]any) (string, error) {
 // and 3P) and a 3P `respond` (D5 — a 3P child never warm-resumes; every
 // continuation is a NEW corrective session carrying the prior context).
 // Native follow_up reuses sessionID verbatim (warm resume, same session, new
-// generation — see agent.spawnSubTurn's childID-reuse mechanism); 3P mints a
-// NEW session_id (cold respawn), linked back via ResumedFrom.
+// generation — the terminal follow-up bumps the record's Generation); 3P mints
+// a NEW session_id (cold respawn), linked back via ResumedFrom.
 func (t *DelegateTool) spawnCorrectiveFollowUp(
 	ctx context.Context,
 	sessionID string,
 	rec *session.LifecycleRecord,
 	instructions string,
-	cb AsyncCallback,
+	_ AsyncCallback,
 ) *ToolResult {
 	newSessionID := sessionID
 	if rec.Is3P {
 		newSessionID = uuid.NewString()
 	}
 
-	label := ""
-	t.mu.Lock()
-	if taskID, ok := t.sessionIndex[sessionID]; ok {
-		if st, ok := t.tasks[taskID]; ok {
-			label = st.Label
-			instructions = fmt.Sprintf("Original task: %s\n\n%s", st.Task, instructions)
-		}
-	}
-	t.mu.Unlock()
-
 	// The whole-struct copy is load-bearing for FR-034: ParentAgentID (and
-	// ParentDurableKey/OriginChannel/OriginChatID with it) MUST be carried
+	// SteeringSessionID/OriginChannel/OriginChatID with it) MUST be carried
 	// forward onto every generation mint. It is deliberately CARRIED FORWARD
 	// from the prior generation rather than re-sourced from ToolAgentID(ctx)
 	// — the follow_up caller is not necessarily the agent that originally
@@ -315,25 +363,176 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	newRec.State = session.LifecycleQueued
 	newRec.FailedReason = ""
 	newRec.NeedsInput = nil
+	if rec.Is3P {
+		if err := t.cloneCorrectiveSessionIdentity(sessionID, newSessionID, rec); err != nil {
+			return ErrorResult(fmt.Sprintf("delegate: follow_up: failed to create corrective session: %v", err)).WithError(err)
+		}
+	}
 	if err := t.lifecycle.Persist(&newRec); err != nil {
 		return ErrorResult(fmt.Sprintf("delegate: follow_up: failed to persist new generation: %v", err)).WithError(err)
 	}
+	// [Defect 4, ADR-091 fix lane RX-DELIVERY] REFUSE to dispatch when the
+	// new instruction did not land. reconstructSteeredTurn would otherwise
+	// rebuild the turn from the last `user` transcript entry — the PREVIOUS
+	// instruction — and the session would confidently answer the old
+	// question and report it upward as a real result. The record is landed
+	// failed for the same reason the dispatch-failure path just below does
+	// it: a new generation was already persisted, so leaving it `queued`
+	// would strand it and block its parent for ever.
+	if err := t.appendFollowUpInstruction(newSessionID, instructions); err != nil {
+		t.transitionLifecycle(newSessionID, session.LifecycleFailed, err.Error())
+		slog.Error("delegate: follow-up instruction did not land; dispatch refused",
+			"session_id", newSessionID,
+			"generation", newRec.Generation,
+			"agent_id", rec.AgentID,
+			"error", err)
+		return ErrorResult(fmt.Sprintf("delegate: follow_up: %v", err)).WithError(err)
+	}
 
-	// timeout: 0 (use the spawner's default) — a follow_up resume does not
-	// carry forward any original timeout_seconds override from the prior
-	// generation; the timeout_seconds thread-through is scoped to the
-	// initial `run` dispatch only.
-	//
-	// isResume: !rec.Is3P — mirrors newSessionID's own native/3P branch
-	// above. Native follow_up reuses sessionID VERBATIM (newSessionID ==
-	// sessionID), so the spawner must treat this as a WARM RESUME of that
-	// already-existing session rather than attempt to create it — routing it
-	// through the ordinary create path would always collide with FR-096's
-	// collision guard (BDD-107), since the directory it would be "creating"
-	// is the very one being resumed. A 3P respawn mints a genuinely NEW
-	// session_id (newSessionID != sessionID), so it is a real create like any
-	// other dispatch and must NOT set IsResume.
-	// requested_skill is action="run" only (ADR-072 D9) — a follow_up resume
-	// never carries one.
-	return t.executeAsync(ctx, instructions, label, rec.AgentID, nil, newSessionID, 0, nil, "", !rec.Is3P, cb)
+	dispatch, err := t.launcher.Dispatch(ctx, newSessionID, newRec.Generation)
+	if err != nil {
+		t.transitionLifecycle(newSessionID, session.LifecycleFailed, err.Error())
+		slog.Error("delegate: follow-up dispatch failed",
+			"session_id", newSessionID,
+			"generation", newRec.Generation,
+			"agent_id", rec.AgentID,
+			"error", err)
+		return ErrorResult(fmt.Sprintf("delegate: follow_up: dispatch failed: %v", err)).WithError(err)
+	}
+
+	message := fmt.Sprintf("Follow-up dispatched for session %s at generation %d (state: %s)",
+		newSessionID, dispatch.Generation, dispatch.State)
+	if dispatch.State == steer.DispatchQueued {
+		message += fmt.Sprintf(", queue position %d", dispatch.QueuePosition)
+	}
+	// rec.Title is the durable launch-time label (session.LifecycleRecord's
+	// own doc comment) — the session_id-addressed replacement for the
+	// pre-ADR-091 in-memory task-state label lookup this used to read
+	// (t.tasks/t.sessionIndex, deleted with the last writer that populated
+	// them; see delegate.go's package doc comment).
+	if rec.Title != "" {
+		message = fmt.Sprintf("Follow-up for %q dispatched for session %s at generation %d (state: %s)",
+			rec.Title, newSessionID, dispatch.Generation, dispatch.State)
+	}
+	return NewToolResult(message)
+}
+
+// followUpInstructionWriter is the write capability
+// appendFollowUpInstruction needs from the session store. AddMessage extends
+// the model's history (context.jsonl); AppendTranscriptStrict writes the
+// transcript entry the rebuilt turn actually READS BACK, and is the only one
+// of the two that can report a failure. The concrete production
+// *session.UnifiedStore satisfies both; a read-only status fake does not, and
+// is refused rather than silently skipped.
+type followUpInstructionWriter interface {
+	AddMessage(sessionKey, role, content string)
+	AppendTranscriptStrict(sessionID string, entry session.TranscriptEntry) error
+}
+
+// appendFollowUpInstruction adds the new user instruction to the session's
+// durable history AND to its transcript, before Dispatch reconstructs the
+// turn, and reports whether it actually landed.
+//
+// [Defect 4, ADR-091 fix lane RX-DELIVERY, HIGH] It used to be
+// fire-and-forget in two independent ways, either of which alone makes a
+// followed-up session re-run its PREVIOUS instruction and report that answer
+// upward as a real result:
+//
+//   - It wrote only AddMessage, which has NO return value (UnifiedStore logs
+//     internally and tells the caller nothing), and a nil store or a failed
+//     type assertion was a silent no-op. Callers dispatched regardless.
+//   - AddMessage writes context.jsonl only. The turn Dispatch reconstructs
+//     takes its UserMessage from the TRANSCRIPT —
+//     agent/steer_reconstruct.go::reconstructSteeredTurn scans
+//     transcript.jsonl backwards for the last non-blank `user` entry when
+//     wake == nil — which only agent/steer_launcher.go's launch path ever
+//     wrote. So the new instruction never reached the place that turn reads.
+//
+// Both halves are fixed here by mirroring the launch path's own write pair
+// (AddMessage AND AppendTranscriptStrict) and returning the strict append's
+// error. The entry id is fresh per call: a follow-up is a new instruction,
+// never a duplicate of the last one.
+//
+// The signature deliberately keeps its original two parameters: the OTHER
+// call site (delegate_park.go::resumeNative) belongs to a different fix lane,
+// and adding a parameter would break its compilation rather than let it adopt
+// the new error return on its own schedule. The transcript entry's agent id
+// is therefore looked up here, best-effort — it is display metadata, never a
+// reason to refuse an instruction that is otherwise durable.
+func (t *DelegateTool) appendFollowUpInstruction(sessionID, instruction string) error {
+	instruction = strings.TrimSpace(instruction)
+	if instruction == "" {
+		return nil
+	}
+	if t.sessionStore == nil {
+		// Degraded boot: loop_wire.go skips SetSessionStore entirely when
+		// al.GetSessionStore() is nil, the same state
+		// cloneCorrectiveSessionIdentity above already treats as "nothing to
+		// write". Refusing here would add nothing: with no session store,
+		// agent/steer_reconstruct.go::reconstructSteeredTurn fails outright
+		// ("session store is not wired") long before it could re-run a stale
+		// instruction, so the dispatch cannot succeed with the wrong
+		// instruction either way. Loud, not silent.
+		slog.Warn("delegate: follow-up instruction not recorded: no session store is wired (degraded boot)",
+			"session_id", sessionID)
+		return nil
+	}
+	writer, ok := t.sessionStore.(followUpInstructionWriter)
+	if !ok {
+		return fmt.Errorf("session store cannot record the new instruction for %q "+
+			"(no write capability); the session would re-run its previous instruction", sessionID)
+	}
+	writer.AddMessage(sessionID, "user", instruction)
+	agentID := ""
+	if t.lifecycle != nil {
+		if rec, lerr := t.lifecycle.Load(sessionID); lerr == nil && rec != nil {
+			agentID = rec.AgentID
+		}
+	}
+	if err := writer.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
+		ID:      sessionID + "-instruction-" + uuid.NewString(),
+		Role:    "user",
+		AgentID: agentID,
+		Content: instruction,
+	}); err != nil {
+		return fmt.Errorf("record the new instruction for %q in the transcript the rebuilt turn reads: %w", sessionID, err)
+	}
+	return nil
+}
+
+// correctiveSessionStore is the write-capable production UnifiedStore shape
+// needed when an external worker gets a fresh corrective session identity.
+// DelegateSessionStore remains read-only for status-only fakes.
+type correctiveSessionStore interface {
+	DelegateSessionStore
+	AddMessage(sessionKey, role, content string)
+	GetMeta(sessionID string) (*session.UnifiedMeta, error)
+	CreateSessionWithID(childID, parentID string, sessionType session.UnifiedSessionType, channel, creatingAgentID string) (*session.UnifiedMeta, error)
+	SetMeta(sessionID string, patch session.MetaPatch) error
+}
+
+func (t *DelegateTool) cloneCorrectiveSessionIdentity(sourceID, newID string, rec *session.LifecycleRecord) error {
+	if t.sessionStore == nil {
+		return nil
+	}
+	store, ok := t.sessionStore.(correctiveSessionStore)
+	if !ok {
+		return fmt.Errorf("session store cannot create corrective identities")
+	}
+	source, err := store.GetMeta(sourceID)
+	if err != nil {
+		return err
+	}
+	parentID := source.ParentSessionID
+	if rec != nil && rec.SteeredBy != nil && rec.SteeredBy.SteeringSessionID != "" {
+		parentID = rec.SteeredBy.SteeringSessionID
+	}
+	if _, err := store.CreateSessionWithID(newID, parentID, source.Type, source.Channel, source.ActiveAgentID); err != nil {
+		return err
+	}
+	title, owner, workspace, instanceID, taskID := source.Title, source.Owner, source.WorkspaceID, source.InstanceID, source.TaskID
+	return store.SetMeta(newID, session.MetaPatch{
+		Title: &title, Owner: &owner, WorkspaceID: &workspace, InstanceID: &instanceID, TaskID: &taskID,
+		ParentSessionID: &parentID,
+	})
 }

@@ -1131,6 +1131,7 @@ func (al *AgentLoop) writeGoalVerdictTranscript(store *session.UnifiedStore, ses
 	// just the GLOBAL ActivityPanel.
 	al.emitEvent(EventKindJudgeVerdict, EventMeta{Source: "goal_loop"},
 		JudgeVerdictPayload{SessionID: sessionID, Verdict: *verdict})
+	al.deliverGoalVerdictUpward(context.Background(), sessionID, verdict)
 }
 
 // --- Idle-expiry sweep (FR-064/D7, review r1) -----------------------------

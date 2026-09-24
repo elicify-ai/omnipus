@@ -37,14 +37,33 @@ func (h BcryptHash) String() string {
 	return string(h)
 }
 
+// compareHashAndPassword is the compare BcryptHash.Verify runs. Tests swap it
+// (SetCompareHashAndPasswordForTest) to count comparisons. Production keeps
+// bcrypt.CompareHashAndPassword, which compares in constant time.
+var compareHashAndPassword = bcrypt.CompareHashAndPassword
+
+// SetCompareHashAndPasswordForTest replaces the compare used by
+// BcryptHash.Verify and returns a restore function. The swap is not safe
+// concurrently with other tests; do not call t.Parallel while it is installed.
+func SetCompareHashAndPasswordForTest(fn func(hashedPassword, password []byte) error) func() {
+	prev := compareHashAndPassword
+	if fn == nil {
+		compareHashAndPassword = bcrypt.CompareHashAndPassword
+	} else {
+		compareHashAndPassword = fn
+	}
+	return func() { compareHashAndPassword = prev }
+}
+
 // Verify reports whether plaintext bcrypt-hashes to this value.
 // Returns ErrNoHashSet on empty receiver, or the bcrypt mismatch error
 // from bcrypt.CompareHashAndPassword on hash mismatch.
 //
-// Constant-time comparison is bcrypt-internal.
+// Constant-time comparison is bcrypt-internal. An empty hash returns before
+// any compare, so it does not count as a bcrypt verification.
 func (h BcryptHash) Verify(plaintext string) error {
 	if h == "" {
 		return ErrNoHashSet
 	}
-	return bcrypt.CompareHashAndPassword([]byte(h), []byte(plaintext))
+	return compareHashAndPassword([]byte(h), []byte(plaintext))
 }

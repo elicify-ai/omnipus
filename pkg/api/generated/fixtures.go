@@ -2207,7 +2207,7 @@ func FixturePlan_Populated() Plan {
 		Id:           "01J3ZQK8N2H8VXNRP5T7C9M4WE",
 		WorkspaceId:  "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 		Title:        "v1.0 Launch",
-		Goal:         strPtr("Ship the v1.0 release with all P0 issues closed and CI green."),
+		Objective:    strPtr("Ship the v1.0 release with all P0 issues closed and CI green."),
 		Description:  strPtr("Coordinates the v1.0 release train across backend and SPA."),
 		State:        PlanState("running"),
 		PlanPhase:    (*PlanPlanPhase)(strPtr("dispatching")),
@@ -2236,7 +2236,7 @@ func FixturePlanCreateRequest_Populated() PlanCreateRequest {
 	return PlanCreateRequest{
 		WorkspaceId:  "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 		Title:        "v1.0 Launch",
-		Goal:         strPtr("Ship the v1.0 release with all P0 issues closed and CI green."),
+		Objective:    strPtr("Ship the v1.0 release with all P0 issues closed and CI green."),
 		OwnerAgentId: "jim",
 	}
 }
@@ -2305,11 +2305,11 @@ func FixturePlanListResponse_Populated() PlanListResponse {
 				Text        string                              `json:"text"`
 			} `json:"dod,omitempty"`
 			FailedReason               *PlanListResponsePlansFailedReason `json:"failed_reason,omitempty"`
-			Goal                       *string                            `json:"goal,omitempty"`
 			Id                         string                             `json:"id"`
 			JudgeRounds                *int                               `json:"judge_rounds,omitempty"`
 			LastActivityAt             *time.Time                         `json:"last_activity_at,omitempty"`
 			LastUnmetTerminalSignature *string                            `json:"last_unmet_terminal_signature,omitempty"`
+			Objective                  *string                            `json:"objective,omitempty"`
 			Owner                      *string                            `json:"owner,omitempty"`
 			OwnerAgentId               string                             `json:"owner_agent_id"`
 			OwnerSessionId             *string                            `json:"owner_session_id,omitempty"`

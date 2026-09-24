@@ -189,7 +189,6 @@ vi.mock('./historical-markdown', () => ({
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
-vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 // Mocked down to the stable contract — the real component's exact markup
 // isn't what this file asserts against, only "did the ORDINARY path render
 // instead of the goal-setup failure line".
@@ -288,7 +287,6 @@ function seedFailedToolCallAssistant(goalFrame: GoalStatusFrame | null): void {
         lastUserMessageAt: null,
         cancelStage: null,
         lastReceivedEventTime: null,
-        spanByParentCallId: {},
         trimmedCount: 0,
         goalStatus: goalFrame,
       },

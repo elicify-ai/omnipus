@@ -4,6 +4,7 @@ import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ChatThread } from '@/components/chat/ChatThread'
 import { useChatStore } from '@/store/chat'
+import { useSessionStore } from '@/store/session'
 import type { Message } from '@/lib/api'
 
 // test_message_history_load (test #25)
@@ -37,6 +38,14 @@ function wrapper({ children }: { children: React.ReactNode }) {
 beforeEach(() => {
   act(() => {
     useChatStore.setState({ messages: [], toolCalls: {} })
+    // ADR-091 D7/FR-E-002 removed the test-mode FALLBACK_SID that used to let
+    // setMessages()/appendMessage() route to a default bucket with no active
+    // session set. getActiveSid() now returns null (and every routed action
+    // silently no-ops) unless a session is explicitly active — so ChatThread,
+    // which only writes fetched history into the ACTIVE session's bucket, needs
+    // the session it's asked to display to also be the active one. Reset here;
+    // each test below sets the session it renders as active before rendering.
+    useSessionStore.setState({ activeSessionId: null, activeAgentId: null })
   })
   vi.mocked(fetchSessionMessages).mockResolvedValue(mockMessages)
 })
@@ -44,6 +53,7 @@ beforeEach(() => {
 describe('message history integration (test #25)', () => {
   it('loads and renders all messages in chronological order', async () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Previous messages load on session navigation (AC1)
+    useSessionStore.setState({ activeSessionId: 'sess_aws' })
     render(<ChatThread sessionId="sess_aws" />, { wrapper })
 
     await waitFor(() => {
@@ -54,6 +64,7 @@ describe('message history integration (test #25)', () => {
 
   it('merges messages from multiple day partitions in chronological order', async () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Multi-day session merges partitions (AC2)
+    useSessionStore.setState({ activeSessionId: 'sess_aws' })
     render(<ChatThread sessionId="sess_aws" />, { wrapper })
 
     await waitFor(() => {
@@ -64,6 +75,7 @@ describe('message history integration (test #25)', () => {
 
   it('renders compaction entry as system message', async () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Compaction entries render as system messages (AC5)
+    useSessionStore.setState({ activeSessionId: 'sess_aws' })
     render(<ChatThread sessionId="sess_aws" />, { wrapper })
 
     await waitFor(() => {
@@ -74,6 +86,7 @@ describe('message history integration (test #25)', () => {
   it('renders empty chat when session has no messages', async () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Empty session shows no messages
     vi.mocked(fetchSessionMessages).mockResolvedValue([])
+    useSessionStore.setState({ activeSessionId: 'sess_empty' })
     const { container } = render(<ChatThread sessionId="sess_empty" />, { wrapper })
 
     await waitFor(() => {

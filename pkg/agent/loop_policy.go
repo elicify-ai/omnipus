@@ -331,7 +331,7 @@ func (al *AgentLoop) loadToolApprover() PolicyApprover {
 // identity (turnState.routingSessionID, W4). This is a narrower requirement
 // than the pre-ADR-057 invariant it replaces: before D1, a delegated child's
 // transcriptSessionID was always threaded through unchanged from its parent
-// (subturn.go's spawnSubTurn), so "the one identity shared across a
+// (subturn.go's spawnSubTurn, since deleted by ADR-091), so "the one identity shared across a
 // delegation chain" and "the child's own identity" were the same value and
 // this distinction did not exist. Under ADR-057 the child gets its OWN
 // distinct, store-backed transcriptSessionID (FR-005/FR-007/FR-009), and

@@ -25,10 +25,9 @@ import {
   sanitizeLegacyErrorMessage,
 } from '@/lib/llm-error'
 import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
-import { bufferForSpan, hasOpenSpanFast, markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
+import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
 import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, pendingCancelAckSids, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
-import { ORPHAN_BUFFER_TTL_MS, orphanTimers, pendingByParentCallId } from '../types'
 import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
 import { handleReplayAndStatusFrame } from './replay-and-status-frames'
 
@@ -134,6 +133,41 @@ function appendUnmatchedToolError(
   }) as Partial<SessionChatState>
 }
 
+// ADR-091 D7/I-4 (cross-family review finding 19): bounds
+// SessionChatState.pendingSpanUpdatesBySpanId growth for a span_id whose
+// subagent_start never arrives (e.g. an old transcript missing it — edge
+// case table). Small, matching GOAL_PILLS_CAP's role for the same shape of
+// "bounded pending map" problem (goals.ts::evictGoalPillsOverCap) — there is
+// no realistic scenario with dozens of concurrently in-flight replay gaps.
+const PENDING_SPAN_UPDATE_CAP = 50
+
+type PendingSpanUpdate = NonNullable<SessionChatState['pendingSpanUpdatesBySpanId']>[string]
+
+/**
+ * Merge a subagent_message/subagent_state update into span_id's pending
+ * slot (created on first miss) when the span itself can't be found — the
+ * frame arrived before its span's own subagent_start. Each field in `patch`
+ * is applied independently: `patch` must omit a key entirely rather than
+ * set it to `undefined`, or a later-arriving update of the OTHER frame type
+ * would clobber an earlier one's field (e.g. a pending statusLine from
+ * subagent_message wiped by a subsequent subagent_state's patch that never
+ * meant to touch it). Evicts the oldest entry (insertion order) once over
+ * PENDING_SPAN_UPDATE_CAP.
+ */
+function recordPendingSpanUpdate(
+  existing: SessionChatState['pendingSpanUpdatesBySpanId'],
+  spanId: string,
+  patch: PendingSpanUpdate,
+): NonNullable<SessionChatState['pendingSpanUpdatesBySpanId']> {
+  const next = { ...(existing ?? {}) }
+  next[spanId] = { ...next[spanId], ...patch }
+  const keys = Object.keys(next)
+  if (keys.length > PENDING_SPAN_UPDATE_CAP) {
+    delete next[keys[0]]
+  }
+  return next
+}
+
 // Issue #822: a real done can arrive at the reconnect bind boundary before
 // its catch-up token. That next token is the completed snapshot, not a new
 // live stream. New turns are already streaming before their first token.
@@ -157,7 +191,7 @@ interface FrameContext {
   set: StoreApi<ChatStore>['setState']
   get: StoreApi<ChatStore>['getState']
   getActiveSid: () => string | null
-  bucketToForeground: (bucket: SessionChatState) => Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanByParentCallId' | 'spanBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null }
+  bucketToForeground: (bucket: SessionChatState) => Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanBySpanId' | 'pendingSpanUpdatesBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null }
   withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void
   deleteBucket: (sid: string) => void
   resolveKickoffAttempt: (workspaceId: string, outcome: 'done' | 'failed') => void
@@ -179,15 +213,42 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       const frameSessionId =
         (frame as { session_id?: string }).session_id ??
         (frame as { card?: { session_id?: string } }).card?.session_id
+
+      // ADR-091 D7/FR-E-002 (cross-family review finding 18): the required-
+      // session check runs FIRST, before anything else — timestamp advance,
+      // handleReplayAndStatusFrame, the cancel-ack disambiguation below, and
+      // every switch-case reducer — and returns from `handleFrame` itself.
+      // A session-scoped frame identifies its own session; when it doesn't,
+      // that is a routing error, never a "guess the session" situation, so
+      // it is dropped outright — never filed under whatever happens to be
+      // foreground, and never reassigned to some OTHER session either (see
+      // the CANCEL_ACK_FRAME_TYPES note below, which is why that mechanism
+      // is scoped to non-session-scoped frame types only). Doing this here,
+      // before the switch, is what makes every session-scoped case arm
+      // downstream able to assume `targetSid` is non-null once reached —
+      // upstream fallbacks (`rate_limit`'s `targetSid ?? getActiveSid()`,
+      // `tool_approval_required`'s unconditional `enqueue(frame)`) were the
+      // two production paths that used to file such a frame anyway.
+      if (SESSION_SCOPED_FRAME_TYPES.has(frame.type) && !frameSessionId) {
+        console.error('[chat] server frame missing session_id — dropping', { type: frame.type })
+        logDiagnostic('chatFrameMissingSessionId', { frameType: frame.type })
+        useConnectionStore.getState().setConnectionError(
+          'internal: server frame missing session_id — please reload'
+        )
+        return
+      }
+
       const activeSid = getActiveSid()
 
-      // F-S1: Route to the correct bucket.
-      // Session-scoped frames missing session_id are treated differently per environment.
+      // F-S1: Route to the correct bucket. By this point a session-scoped
+      // frame is guaranteed to carry frameSessionId (the branch above
+      // returned otherwise), so only a GLOBAL frame (error, ping, pong,
+      // device_pairing_*, session_state) can still be missing one.
       const targetSid: string | null = (() => {
         if (frame.type === 'session_started') return activeSid // handled below, value unused
         if (frameSessionId) return frameSessionId
         // F-S3 (UAT, browser-panel "Take over"): an untagged (no session_id)
-        // token/done/error frame that is really the server's cancellation
+        // `error` frame that is really the server's cancellation
         // acknowledgment for a BACKGROUND session (cancelStream(sessionId),
         // e.g. the browser panel's "Take over" pausing its own pinned
         // session while a different chat is foreground) must not be
@@ -201,31 +262,20 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         // pending one IS the active session — the ordinary single-session
         // Stop-button flow) falls through unchanged to the existing
         // behaviour below.
+        //
+        // CANCEL_ACK_FRAME_TYPES no longer includes `token`/`done`: both are
+        // session-scoped (SESSION_SCOPED_FRAME_TYPES), so a missing-id
+        // instance of either already returned above — this disambiguation
+        // can only ever apply to `error`, which is global. Reassigning a
+        // session-scoped frame to a guessed session (rather than dropping
+        // it) is exactly the bug cross-family review finding 18 reported.
         if (CANCEL_ACK_FRAME_TYPES.has(frame.type) && pendingCancelAckSids.size === 1) {
           const [onlyPendingSid] = pendingCancelAckSids
           if (onlyPendingSid !== activeSid) return onlyPendingSid
         }
-        if (SESSION_SCOPED_FRAME_TYPES.has(frame.type)) {
-          if (import.meta.env.MODE === 'test') {
-            // In test mode: fall back to active session so test scaffolding stays simple.
-            console.warn('[chat] frame missing session_id — routing to active session', { type: frame.type, activeSid })
-            return activeSid
-          }
-          // In production: drop the frame and surface a one-shot connection error.
-          console.error('[chat] server frame missing session_id — dropping', { type: frame.type })
-          logDiagnostic('chatFrameMissingSessionId', { frameType: frame.type })
-          useConnectionStore.getState().setConnectionError(
-            'internal: server frame missing session_id — please reload'
-          )
-          return null
-        }
         // Global frame (error, ping, pong, device_pairing_*, session_state) — use active.
         return activeSid
       })()
-
-      const originalActiveSid = activeSid
-
-      const store = get()
 
       // HIGH-2: reset unknown-frame counter on every known-good frame.
       runtime.unknownFrameCount = 0
@@ -235,7 +285,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       // handleFrame past its grandfathered line budget).
       advanceReceivedEventTime(frame, targetSid, withBucket)
 
-      if (handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid, withBucket, armRateLimitClear })) {
+      if (handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, armRateLimitClear })) {
         syncForeground()
         return
       }
@@ -1357,73 +1407,14 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
 
         case 'tool_call_start': {
           if (!targetSid) break
-          const parentCallId = frame.parent_call_id
-          if (parentCallId) {
-            const b = get().sessionsById[targetSid] ?? emptySessionState()
-            if (hasOpenSpanFast(b, parentCallId)) {
-              // Temporarily patch active session for attachStepToSpan.
-              if (targetSid === originalActiveSid) {
-                store.attachStepToSpan(parentCallId, {
-                  id: frame.call_id,
-                  call_id: frame.call_id,
-                  tool: frame.tool,
-                  params: frame.params,
-                  status: 'running',
-                })
-              } else {
-                withBucket(targetSid, (bucket) => {
-                  const entry = bucket.spanByParentCallId[parentCallId]
-                  if (!entry) return {}
-                  return produce(bucket, (draft) => {
-                    const msg = draft.messagesById[entry.messageId]
-                    if (!msg?.spans) return
-                    const span = msg.spans[entry.spanIdx]
-                    if (!span) return
-                    span.steps.push({
-                      kind: 'tool' as const,
-                      tool: { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: frame.params, status: 'running' as const },
-                    })
-                  }) as Partial<SessionChatState>
-                })
-              }
-            } else {
-              const bufferKey = `${targetSid}:${parentCallId}`
-              bufferForSpan(bufferKey, frame, (buffered) => {
-                console.warn(`[chat] orphan frame: parent_call_id="${parentCallId}" session="${targetSid}" — subagent_start never arrived within ${ORPHAN_BUFFER_TTL_MS}ms. Releasing as flat tool calls.`)
-                logDiagnostic('chatOrphanFrameReleased', { parentCallId, sessionId: targetSid, ttlMs: ORPHAN_BUFFER_TTL_MS })
-                useUiStore.getState().addToast({
-                  variant: 'default',
-                  message: 'Some subagent steps arrived without their span — displayed as flat tool calls',
-                })
-                withBucket(targetSid, (bucket) => {
-                  const patchToolCalls = { ...bucket.toolCalls }
-                  let patchOrder = [...bucket.toolCallOrder]
-                  const patchText = { ...bucket.textAtToolCallStart }
-                  let patchMsgs = getMessages(bucket)
-                  for (const { frame: bf } of buffered) {
-                    if (bf.type === 'tool_call_start') {
-                      const lastMsg = patchMsgs[patchMsgs.length - 1]
-                      const textSnapshot = (lastMsg?.role === 'assistant' ? lastMsg.content : '') ?? ''
-                      if (!lastMsg || lastMsg.role !== 'assistant') {
-                        const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true, agentId: bf.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined }
-                        patchMsgs = [...patchMsgs, ph]
-                      }
-                      patchToolCalls[bf.call_id] = { id: bf.call_id, call_id: bf.call_id, tool: bf.tool, params: bf.params, status: 'running' }
-                      patchOrder = [...patchOrder, bf.call_id]
-                      patchText[bf.call_id] = textSnapshot
-                    } else if (bf.type === 'tool_call_result') {
-                      if (patchToolCalls[bf.call_id]) {
-                        patchToolCalls[bf.call_id] = { ...patchToolCalls[bf.call_id], result: clampToolResult(bf.result), status: bf.status, duration_ms: bf.duration_ms, error: bf.error }
-                      }
-                    }
-                  }
-                  const msgArrayPatch = applyMessageArray(patchMsgs, { ...bucket, toolCalls: patchToolCalls, toolCallOrder: patchOrder })
-                  return { ...msgArrayPatch, textAtToolCallStart: patchText }
-                })
-              })
-            }
-          } else {
-            withBucket(targetSid, (b) => {
+          // ADR-091 D7/D10: a tool call this session's own turn starts is
+          // always flat, never nested under a subagent span — a genuine
+          // child's own tool calls carry the CHILD's own session_id (I-4)
+          // and never arrive here at all. The out-of-order step buffer
+          // (`pendingByParentCallId`) and the O(1) span-attach path
+          // (`spanByParentCallId`/`hasOpenSpanFast`) that used to nest a
+          // `parent_call_id`-tagged frame into an open span are deleted.
+          withBucket(targetSid, (b) => {
               // Anchor resolution. Default: the raw message-order tail, same
               // as before — this is REPLAY-SAFE and must stay unconditional
               // on role alone (NOT isStreaming): replay-reconstructed
@@ -1568,126 +1559,26 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 }
               }) as Partial<SessionChatState>
             })
-          }
           break
         }
 
         case 'tool_call_result': {
           if (!targetSid) break
           const clampedResult = clampToolResult(frame.result)
-          const parentCallId = frame.parent_call_id
-          if (parentCallId) {
-            const b = get().sessionsById[targetSid] ?? emptySessionState()
-            if (hasOpenSpanFast(b, parentCallId)) {
-              withBucket(targetSid, (bucket) => {
-                const entry = bucket.spanByParentCallId[parentCallId]
-                if (entry) {
-                  return produce(bucket, (draft) => {
-                    const msg = draft.messagesById[entry.messageId]
-                    if (!msg?.spans) return
-                    const span = msg.spans[entry.spanIdx]
-                    if (!span) return
-                    // No `params` key here (bug fix — was `params: {}`, which
-                    // clobbered the real start-time params via the spread
-                    // below and made e.g. a hidden `bash {action:'poll'}`
-                    // step misclassify as visible to ToolCallBadge's
-                    // shouldRenderToolCall, since it saw params={} instead of
-                    // the real args). Mirrors the buffered merge paths above
-                    // (startSpan / subagent_start), which never carried this
-                    // bug because they never included a params key at all.
-                    const step = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, result: clampedResult, status: frame.status ?? 'success' as const, duration_ms: frame.duration_ms, error: frame.error }
-                    const existingIdx = span.steps.findIndex((s) => s.kind === 'tool' && s.tool.call_id === frame.call_id)
-                    if (existingIdx !== -1) {
-                      const existingStep = span.steps[existingIdx]
-                      if (existingStep.kind === 'tool') {
-                        // Spread order matters: existingStep.tool's params
-                        // (recorded at tool_call_start) survive because
-                        // `step` no longer carries a params key to overwrite it.
-                        span.steps[existingIdx] = { kind: 'tool', tool: { ...existingStep.tool, ...step } }
-                      }
-                    } else {
-                      // Genuine race — no tool_call_start was ever recorded
-                      // for this call_id on this span (result arrived first).
-                      // There is no start-time params to inherit here, so
-                      // (only in this orphan-step branch) default to {}.
-                      span.steps.push({ kind: 'tool' as const, tool: { ...step, params: {} } })
-                    }
-                  }) as Partial<SessionChatState>
-                }
-                // Fallback: O(N) scan (index miss — log a warning).
-                console.warn('[chat] tool_call_result: span index miss, falling back to O(N) scan', { parentCallId, callId: frame.call_id })
-                logDiagnostic('chatToolCallResultSpanIndexMiss', { parentCallId, callId: frame.call_id, sessionId: targetSid })
-                for (let i = bucket.messageOrder.length - 1; i >= 0; i--) {
-                  const msgId = bucket.messageOrder[i]
-                  const msg = bucket.messagesById[msgId]
-                  if (msg.role !== 'assistant' || !msg.spans) continue
-                  const spanIdx = msg.spans.findIndex((s) => s.parentCallId === parentCallId)
-                  if (spanIdx === -1) continue
-                  return produce(bucket, (draft) => {
-                    const draftMsg = draft.messagesById[msgId]
-                    const span = draftMsg.spans![spanIdx]
-                    // See the primary (index-hit) branch above for why
-                    // `params` is intentionally absent from this object.
-                    const step = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, result: clampedResult, status: frame.status ?? 'success' as const, duration_ms: frame.duration_ms, error: frame.error }
-                    const existingIdx = span.steps.findIndex((s) => s.kind === 'tool' && s.tool.call_id === frame.call_id)
-                    if (existingIdx !== -1) {
-                      const existingStep = span.steps[existingIdx]
-                      if (existingStep.kind === 'tool') {
-                        span.steps[existingIdx] = { kind: 'tool', tool: { ...existingStep.tool, ...step } }
-                      }
-                    } else {
-                      span.steps.push({ kind: 'tool' as const, tool: { ...step, params: {} } })
-                    }
-                  }) as Partial<SessionChatState>
-                }
-                return {}
-              })
-            } else {
-              const bufferKey = `${targetSid}:${parentCallId}`
-              bufferForSpan(bufferKey, frame, (buffered) => {
-                console.warn(`[chat] orphan frame: parent_call_id="${parentCallId}" session="${targetSid}" — subagent_start never arrived within ${ORPHAN_BUFFER_TTL_MS}ms. Releasing as flat tool calls.`)
-                logDiagnostic('chatOrphanFrameReleased', { parentCallId, sessionId: targetSid, ttlMs: ORPHAN_BUFFER_TTL_MS })
-                useUiStore.getState().addToast({
-                  variant: 'default',
-                  message: 'Some subagent steps arrived without their span — displayed as flat tool calls',
-                })
-                withBucket(targetSid, (bucket) => {
-                  const patchToolCalls = { ...bucket.toolCalls }
-                  let patchOrder = [...bucket.toolCallOrder]
-                  const patchText = { ...bucket.textAtToolCallStart }
-                  const patchMsgs = getMessages(bucket)
-                  for (const { frame: bf } of buffered) {
-                    if (bf.type === 'tool_call_start') {
-                      const lastMsg = patchMsgs[patchMsgs.length - 1]
-                      const textSnapshot = (lastMsg?.role === 'assistant' ? lastMsg.content : '') ?? ''
-                      patchToolCalls[bf.call_id] = { id: bf.call_id, call_id: bf.call_id, tool: bf.tool, params: bf.params, status: 'running' }
-                      patchOrder = [...patchOrder, bf.call_id]
-                      patchText[bf.call_id] = textSnapshot
-                    } else if (bf.type === 'tool_call_result') {
-                      if (patchToolCalls[bf.call_id]) {
-                        patchToolCalls[bf.call_id] = { ...patchToolCalls[bf.call_id], result: clampToolResult(bf.result), status: bf.status, duration_ms: bf.duration_ms, error: bf.error }
-                      }
-                    }
-                  }
-                  const msgArrayPatch = applyMessageArray(patchMsgs, { ...bucket, toolCalls: patchToolCalls, toolCallOrder: patchOrder })
-                  return { ...msgArrayPatch, textAtToolCallStart: patchText }
-                })
-              })
+          // ADR-091 D7/D10: see case 'tool_call_start' — every result here
+          // is for this session's own flat tool call; no span-nesting path.
+          withBucket(targetSid, (b) => {
+            if (!b.toolCalls[frame.call_id]) {
+              return appendUnmatchedToolError(b, frame, clampedResult)
             }
-          } else {
-            withBucket(targetSid, (b) => {
-              if (!b.toolCalls[frame.call_id]) {
-                return appendUnmatchedToolError(b, frame, clampedResult)
-              }
-              return produce(b, (draft) => {
-                const tc = draft.toolCalls[frame.call_id]
-                tc.result = clampedResult
-                tc.status = frame.status ?? 'success'
-                tc.duration_ms = frame.duration_ms
-                tc.error = frame.error
-              }) as Partial<SessionChatState>
-            })
-          }
+            return produce(b, (draft) => {
+              const tc = draft.toolCalls[frame.call_id]
+              tc.result = clampedResult
+              tc.status = frame.status ?? 'success'
+              tc.duration_ms = frame.duration_ms
+              tc.error = frame.error
+            }) as Partial<SessionChatState>
+          })
           break
         }
 
@@ -1719,47 +1610,53 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 draft.messageOrder.push(placeholder.id)
                 lastMsgId = placeholder.id
               }
+              // ADR-091 D7/I-4 (cross-family review finding 19): a
+              // subagent_message/subagent_state that arrived BEFORE this
+              // subagent_start (replay-gap ordering) left its update parked
+              // here, keyed by span_id — apply and clear it now rather than
+              // seeding the span with nothing and waiting for a NEXT update
+              // that may never come.
+              const pendingUpdate = draft.pendingSpanUpdatesBySpanId?.[sf.span_id]
+
+              // ADR-091 D7/I-4: `child_session_id` (additive, CP-0) is now
+              // the open control's target — populated from whichever front
+              // door launched it (`delegate` or `create_task`, both stamp
+              // it — I-4). `producing_session_id`, the ADR-057 relabelling
+              // workaround this delivery supersedes, is still present on the
+              // wire until the coordinated deletion (not yet — the lead
+              // sends it once the Go readers are gone) but is no longer
+              // read here.
               const span: SubagentSpanRunning = {
                 spanId: sf.span_id,
                 parentCallId: sf.parent_call_id,
                 taskLabel: sf.task_label,
                 status: 'running',
-                steps: [],
                 agentId: sf.agent_id,
-                // ADR-057 FR-013/W5c: the child's own routable session id,
-                // when the gateway sent one (see SubagentSpanBase's doc).
-                childSessionId: sf.producing_session_id,
-              }
-              const bufferKey = `${targetSid}:${sf.parent_call_id}`
-              const buffered = pendingByParentCallId[bufferKey] ?? []
-              delete pendingByParentCallId[bufferKey]
-              if (orphanTimers[bufferKey]) {
-                clearTimeout(orphanTimers[bufferKey])
-                delete orphanTimers[bufferKey]
-              }
-              for (const { frame: bf } of buffered) {
-                if (bf.type === 'tool_call_start') {
-                  span.steps.push({ kind: 'tool', tool: { id: bf.call_id, call_id: bf.call_id, tool: bf.tool, params: bf.params, status: 'running' } })
-                } else if (bf.type === 'tool_call_result') {
-                  const existingIdx = span.steps.findIndex((s) => s.kind === 'tool' && s.tool.call_id === bf.call_id)
-                  if (existingIdx !== -1) {
-                    const existing = span.steps[existingIdx]
-                    if (existing.kind === 'tool') {
-                      span.steps[existingIdx] = { kind: 'tool', tool: { ...existing.tool, result: clampToolResult(bf.result), status: bf.status, duration_ms: bf.duration_ms, error: bf.error } }
-                    }
-                  }
-                }
+                childSessionId: sf.child_session_id,
+                statusLine: pendingUpdate?.statusLine,
+                lifecycleState: pendingUpdate?.lifecycleState,
+                // Seeds the status line's "last update N s ago" fallback
+                // (D7 table) from the moment the span itself appears — a
+                // real subagent_message/subagent_state, each carrying its
+                // own created_at, supersedes this the instant one arrives.
+                // subagent_start carries no created_at of its own (wire
+                // gap), so Date.now() is the only source — UNLESS a pending
+                // update (above) already carries the true event time of the
+                // update that arrived first.
+                lastUpdateAt: pendingUpdate?.lastUpdateAt ?? new Date().toISOString(),
               }
               const lastMsg = draft.messagesById[lastMsgId]
               const spanIdx = (lastMsg.spans ?? []).length
               if (!lastMsg.spans) lastMsg.spans = []
               lastMsg.spans.push(span)
-              draft.spanByParentCallId[sf.parent_call_id] = { messageId: lastMsgId, spanIdx }
-              // Parallel index keyed by span_id, consumed by the
-              // subagent_end handler below for an O(1) lookup instead of a
+              // O(1) index keyed by span_id, consumed by the subagent_end/
+              // _message/_state handlers below for O(1) lookup instead of a
               // backward linear scan.
               if (!draft.spanBySpanId) draft.spanBySpanId = {}
               draft.spanBySpanId[sf.span_id] = { messageId: lastMsgId, spanIdx }
+              if (pendingUpdate && draft.pendingSpanUpdatesBySpanId) {
+                delete draft.pendingSpanUpdatesBySpanId[sf.span_id]
+              }
             }) as Partial<SessionChatState>
           })
           break
@@ -1778,15 +1675,17 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   spanId: existingSpan.spanId,
                   parentCallId: existingSpan.parentCallId,
                   taskLabel: existingSpan.taskLabel,
-                  steps: existingSpan.steps,
                   // Defensive fallback: SubagentEndFrame carries its own optional
                   // agent_id; prefer it if the server ever populates it, else
                   // keep the value already stamped by subagent_start.
                   agentId: ef.agent_id ?? existingSpan.agentId,
-                  // Same fallback shape for the child session id (FR-013):
-                  // prefer whatever subagent_end itself carries, else keep
-                  // what subagent_start already stamped.
-                  childSessionId: ef.producing_session_id ?? existingSpan.childSessionId,
+                  // SubagentEndFrame carries no child_session_id of its own
+                  // (only subagent_start does, I-4) — keep whatever
+                  // subagent_start already stamped.
+                  childSessionId: existingSpan.childSessionId,
+                  statusLine: existingSpan.statusLine,
+                  lifecycleState: existingSpan.lifecycleState,
+                  lastUpdateAt: new Date().toISOString(),
                   status: ef.status,
                   durationMs: ef.duration_ms ?? 0,
                   finalResult: ef.final_result,
@@ -1794,8 +1693,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 }
               }
 
-              // O(1) lookup first (mirrors spanByParentCallId/
-              // hasOpenSpanFast). Re-verify the indexed span's own id still
+              // O(1) lookup first. Re-verify the indexed span's own id still
               // matches before trusting it — cheap, and guards against any
               // staleness (e.g. an index entry surviving a code path that
               // doesn't maintain it) rather than silently mutating the wrong
@@ -1805,7 +1703,6 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               const indexedSpan = indexEntry ? indexedMsg?.spans?.[indexEntry.spanIdx] : undefined
               if (indexEntry && indexedMsg?.spans && indexedSpan && indexedSpan.spanId === ef.span_id) {
                 indexedMsg.spans[indexEntry.spanIdx] = buildTerminalSpan(indexedSpan)
-                delete draft.spanByParentCallId[indexedSpan.parentCallId]
                 delete draft.spanBySpanId![ef.span_id]
                 return
               }
@@ -1823,12 +1720,127 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 if (spanIdx === -1) continue
                 const existingSpan = msg.spans[spanIdx]
                 msg.spans[spanIdx] = buildTerminalSpan(existingSpan)
-                delete draft.spanByParentCallId[existingSpan.parentCallId]
                 if (draft.spanBySpanId) delete draft.spanBySpanId[existingSpan.spanId]
                 return
               }
               console.warn('[chat] subagent_end received for unknown span_id', { spanId: ef.span_id })
               logDiagnostic('chatSubagentEndUnknownSpanId', { spanId: ef.span_id, sessionId: targetSid })
+            }) as Partial<SessionChatState>
+          })
+          break
+        }
+
+        // ADR-091 D7/I-4/FR-E-004, FR-E-010: wires what ADR-053 designed and
+        // nothing ever emitted or consumed — the row's status line and
+        // lifecycle state, reduced onto the span record (never nested as a
+        // "step"; there is no child-step nesting left to feed, D10). Kept
+        // beside subagent_start/_end (not in replay-and-status-frames.ts)
+        // since all four subagent_* frames share one span-index lookup.
+        case 'subagent_message': {
+          if (!targetSid) break
+          const mf = frame
+          withBucket(targetSid, (b) => {
+            return produce(b, (draft) => {
+              // Ambiguity resolution (WP-E spec, accepted default): 'steer'
+              // and 'respond' carry no `text` and render as the literal
+              // string 'steered'; every other kind shows its `text` when
+              // present, truncated to 120 characters with an ellipsis. A
+              // kind with no text (e.g. a bare 'artifact' ping) leaves the
+              // existing statusLine untouched rather than blanking it.
+              const nextStatusLine =
+                mf.kind === 'steer' || mf.kind === 'respond'
+                  ? 'steered'
+                  : mf.text
+                    ? mf.text.length > 120 ? `${mf.text.slice(0, 120)}…` : mf.text
+                    : undefined
+
+              function applyToSpan(span: SubagentSpan): SubagentSpan {
+                return {
+                  ...span,
+                  statusLine: nextStatusLine ?? span.statusLine,
+                  lastUpdateAt: mf.created_at,
+                }
+              }
+
+              const indexEntry = draft.spanBySpanId?.[mf.span_id]
+              const indexedMsg = indexEntry ? draft.messagesById[indexEntry.messageId] : undefined
+              const indexedSpan = indexEntry ? indexedMsg?.spans?.[indexEntry.spanIdx] : undefined
+              if (indexEntry && indexedMsg?.spans && indexedSpan && indexedSpan.spanId === mf.span_id) {
+                indexedMsg.spans[indexEntry.spanIdx] = applyToSpan(indexedSpan)
+                return
+              }
+              console.warn('[chat] subagent_message: span index miss, falling back to O(N) scan', { spanId: mf.span_id })
+              logDiagnostic('chatSubagentMessageSpanIndexMiss', { spanId: mf.span_id, sessionId: targetSid })
+              for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+                const msgId = draft.messageOrder[i]
+                const msg = draft.messagesById[msgId]
+                if (msg.role !== 'assistant' || !msg.spans) continue
+                const spanIdx = msg.spans.findIndex((s) => s.spanId === mf.span_id)
+                if (spanIdx === -1) continue
+                msg.spans[spanIdx] = applyToSpan(msg.spans[spanIdx])
+                return
+              }
+              // ADR-091 D7/I-4 (cross-family review finding 19): no span
+              // exists yet anywhere in this session — a genuine replay-gap
+              // ordering (this frame arrived before its span's own
+              // subagent_start), not necessarily a real "unknown" frame.
+              // Park the update; subagent_start applies and clears it.
+              // `patch` omits `statusLine` entirely when there is nothing to
+              // apply (mirrors applyToSpan's own `?? span.statusLine`
+              // no-op above) so a PRIOR pending statusLine from an earlier
+              // subagent_message for the same span_id is never overwritten
+              // with `undefined`.
+              console.warn('[chat] subagent_message received before its span\'s subagent_start — parked as a pending update', { spanId: mf.span_id })
+              logDiagnostic('chatSubagentMessageReplayGap', { spanId: mf.span_id, sessionId: targetSid })
+              draft.pendingSpanUpdatesBySpanId = recordPendingSpanUpdate(
+                draft.pendingSpanUpdatesBySpanId,
+                mf.span_id,
+                nextStatusLine !== undefined
+                  ? { statusLine: nextStatusLine, lastUpdateAt: mf.created_at }
+                  : { lastUpdateAt: mf.created_at },
+              )
+            }) as Partial<SessionChatState>
+          })
+          break
+        }
+
+        case 'subagent_state': {
+          if (!targetSid) break
+          const sf2 = frame
+          withBucket(targetSid, (b) => {
+            return produce(b, (draft) => {
+              function applyToSpan(span: SubagentSpan): SubagentSpan {
+                return { ...span, lifecycleState: sf2.state, lastUpdateAt: sf2.created_at }
+              }
+
+              const indexEntry = draft.spanBySpanId?.[sf2.span_id]
+              const indexedMsg = indexEntry ? draft.messagesById[indexEntry.messageId] : undefined
+              const indexedSpan = indexEntry ? indexedMsg?.spans?.[indexEntry.spanIdx] : undefined
+              if (indexEntry && indexedMsg?.spans && indexedSpan && indexedSpan.spanId === sf2.span_id) {
+                indexedMsg.spans[indexEntry.spanIdx] = applyToSpan(indexedSpan)
+                return
+              }
+              console.warn('[chat] subagent_state: span index miss, falling back to O(N) scan', { spanId: sf2.span_id })
+              logDiagnostic('chatSubagentStateSpanIndexMiss', { spanId: sf2.span_id, sessionId: targetSid })
+              for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+                const msgId = draft.messageOrder[i]
+                const msg = draft.messagesById[msgId]
+                if (msg.role !== 'assistant' || !msg.spans) continue
+                const spanIdx = msg.spans.findIndex((s) => s.spanId === sf2.span_id)
+                if (spanIdx === -1) continue
+                msg.spans[spanIdx] = applyToSpan(msg.spans[spanIdx])
+                return
+              }
+              // ADR-091 D7/I-4 (cross-family review finding 19): see the
+              // matching comment in the 'subagent_message' case above —
+              // same replay-gap parking, keyed by the same pending map.
+              console.warn('[chat] subagent_state received before its span\'s subagent_start — parked as a pending update', { spanId: sf2.span_id })
+              logDiagnostic('chatSubagentStateReplayGap', { spanId: sf2.span_id, sessionId: targetSid })
+              draft.pendingSpanUpdatesBySpanId = recordPendingSpanUpdate(
+                draft.pendingSpanUpdatesBySpanId,
+                sf2.span_id,
+                { lifecycleState: sf2.state, lastUpdateAt: sf2.created_at },
+              )
             }) as Partial<SessionChatState>
           })
           break

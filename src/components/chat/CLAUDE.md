@@ -23,21 +23,28 @@ the script or test for each.
 
 ## Tool-call visibility
 
-- One render filter, `src/lib/toolVisibility.ts`, governs BOTH surfaces: the
-  thread (`shouldRenderToolCall`, `shouldRenderSubagentSpan`) and the
-  ActivityPanel (`shouldRenderToolCallInPanel`, whose default INVERTS the
-  thread's). Never hardcode a second hide-list inside a component — that is how
-  the filter's ground truth drifts.
+- One render filter for the chat THREAD, `src/lib/toolVisibility.ts`'s
+  `shouldRenderToolCall`. Never hardcode a second hide-list inside a
+  component — that is how the filter's ground truth drifts. ADR-091 D7/D10
+  deleted `shouldRenderSubagentSpan` (the SubagentBlock delegation-card gate)
+  along with SubagentBlock itself, and deleted `shouldRenderToolCallInPanel` /
+  ToolCallBadge's `surface="panel"` prop along with the ActivityPanel step
+  list they gated — a child's own frames never arrive in the parent's bucket
+  any more (I-4), so there is no span/step surface left anywhere. The
+  `delegate` tool-call chip (`shouldRenderToolCall`'s `delegate` case) is now
+  the parent chat's ONLY delegation surface, and ADR-091 D7/AC-7 requires it
+  to carry that job: a `run` action (the default) is visible in the normal,
+  non-verbose thread; only `status` (polling) stays hidden.
 - Hiding is render-only: hidden calls still exist in the persisted session
   transcript. Do not "fix" persistence to match what the UI shows.
-- The ActivityPanel fallback is narrower than "fully transparent": subagent
-  spans and background bash sessions only, capped at the 8 most-recently-finished
-  (`RECENTLY_FINISHED_CAP`, `src/hooks/useRunningActivity.ts`). A delegation
-  DENIED at dispatch time never opens a span, so it never reaches the panel —
-  the calling agent's own narration is the only surface for it.
+- The ActivityPanel slide-out (`ActivityPanel.tsx`) is a separate, unrelated
+  surface: a flat per-child status row (status line + open control targeting
+  the child's own session), not a gated list of the child's own tool-call
+  steps — see `src/hooks/useRunningActivity.ts` and its
+  `RECENTLY_FINISHED_CAP`.
 - "Verbose chat" (Settings → Chat, `chat-verbose-switch` in
-  `src/components/settings/ChatSection.tsx`) reveals everything, thread and
-  panel alike.
+  `src/components/settings/ChatSection.tsx`) reveals everything in the
+  thread, `delegate`'s `status` case included.
 
 ## Register
 

@@ -4349,12 +4349,16 @@ export interface components {
             model?: string;
             verdict?: components["schemas"]["JudgeVerdict"];
             /**
-             * @description BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
+             * @description BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
              * @example browser_handover_notice
              * @enum {string}
              */
-            system_subtype?: "browser_handover_notice" | "goal_outcome";
+            system_subtype?: "browser_handover_notice" | "goal_outcome" | "subagent_start" | "subagent_state" | "subagent_message" | "subagent_end";
             goal_outcome?: components["schemas"]["GoalOutcome"];
+            subagent_start?: components["schemas"]["SubagentStartFrame"];
+            subagent_state?: components["schemas"]["SubagentStateFrame"];
+            subagent_message?: components["schemas"]["SubagentMessageFrame"];
+            subagent_end?: components["schemas"]["SubagentEndFrame"];
         };
         /** @description A single tool invocation recorded in a transcript entry. Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts. */
         ToolCall: {
@@ -4369,7 +4373,7 @@ export interface components {
              */
             tool: string;
             /**
-             * @description Outcome of the tool call. "interrupted" is written by spawnSubTurn (pkg/agent/subturn.go) onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+             * @description Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
              * @example success
              * @enum {string}
              */
@@ -13370,7 +13374,7 @@ export interface components {
                 [key: string]: components["schemas"]["WorkspaceMemberConfig"];
             };
         };
-        /** @description A single directed delegation edge in a workspace's delegation graph. The graph is the per-workspace source of truth for who-delegates-to-whom (M5): each edge authorizes from_agent to delegate work to to_agent, in the listed modes, bounded by depth. Membership in the workspace team is the union of all agents referenced by any edge plus the workspace's core_team roster. */
+        /** @description A single directed delegation edge in a workspace's delegation graph. The graph is the per-workspace source of truth for who-delegates-to-whom (M5): each edge authorizes from_agent to delegate work to to_agent, in the listed modes, bounded by depth. Membership in the workspace team is the union of all agents referenced by any edge plus the workspace's core_team roster. Delegation never awaits — a delegating agent hands work to the target and continues; the child runs in parallel and reports back through upward delivery (ADR-091 D4). */
         WorkspaceDelegationEdge: {
             /**
              * @description Agent ID of the delegating agent (the source node). Must be a member of the workspace team (present in core_team or referenced by another edge).
@@ -13514,7 +13518,7 @@ export interface components {
              * @description Plain-prose objective the plan-level judge evaluates against when `dod` is empty (soft tier, ADR D5).
              * @example Ship the v1.0 release with all P0 issues closed and CI green.
              */
-            goal?: string;
+            objective?: string;
             /**
              * @description Optional free-form description.
              * @example Coordinates the v1.0 release train across backend and SPA.
@@ -13593,7 +13597,7 @@ export interface components {
              * @example jim
              */
             owner_agent_id: string;
-            /** @description Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `goal`, ADR D5). */
+            /** @description Plan-level Definition of Done, evaluated by the plan judge each round. Required (non-empty) before `draft -> approved` for agent-authored plans (strict tier); may be empty for human/UI-authored plans (soft tier — the judge then evaluates against `title` + `objective`, ADR D5). */
             dod?: components["schemas"]["AcceptanceCriterion"][];
             /**
              * @description ADR-053 §Contract Surface — persisted planning rationale (see `PlanCreateRequest.rationale`). Plan-lint and the owner-loop correction flow read this alongside member `write_set`/`stream`/ `is_join`.
@@ -13709,7 +13713,7 @@ export interface components {
              * @description Plain-prose objective (used by the plan judge when `dod` is empty).
              * @example Ship the v1.0 release with all P0 issues closed and CI green.
              */
-            goal?: string;
+            objective?: string;
             /**
              * @description Optional free-form description.
              * @example Coordinates the v1.0 release train across backend and SPA.
@@ -13720,7 +13724,7 @@ export interface components {
              * @example jim
              */
             owner_agent_id: string;
-            /** @description Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `goal`). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
+            /** @description Plan-level Definition of Done. Agent-created plans require at least one criterion before approval (strict tier, ADR D5); human/UI creation may leave this empty (soft tier — the plan judge then evaluates against `title` + `objective`). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
             dod?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
              * @description ADR-053 §Contract Surface — persisted planning rationale (the "why" behind the plan's decomposition, e.g. the write-set/stream split chosen and the join points authored). Plan-lint and the owner-loop correction flow read this alongside `write_set`/`stream`/`is_join` on member tasks. Optional — absent for simple plans with no parallel-stream reasoning to record.
@@ -13759,7 +13763,7 @@ export interface components {
              * @description New plain-prose objective.
              * @example Ship the v1.0 release with all P0 issues closed and CI green.
              */
-            goal?: string;
+            objective?: string;
             /**
              * @description New free-form description.
              * @example Coordinates the v1.0 release train across backend and SPA.
@@ -14402,7 +14406,7 @@ export interface components {
              */
             kind: "progress";
             /**
-             * @description Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/subturn.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
+             * @description Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
              * @example 0
              */
             depth: number;
@@ -14864,10 +14868,11 @@ export interface components {
             /** @example 0 */
             generation?: number;
             /**
+             * @description Direction this verdict travels. `session_to_ui` for verdicts meant for the operator; `session_to_parent` for verdicts from a steered child to its steering parent (ADR-091 I-5).
              * @example session_to_ui
              * @enum {string}
              */
-            direction: "session_to_ui";
+            direction: "session_to_ui" | "session_to_parent";
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -14885,11 +14890,29 @@ export interface components {
             /** @example false */
             untrusted_origin: boolean;
             /**
-             * @description The typed `GOAL_STATUS:` marker outcome (US-2). No marker on a turn means "not waiting" — a deterministic fallback, never inferred by a prose classifier, and never represented as a third enum value here (absence of this message IS the not-waiting state).
+             * @description The typed condition outcome. `met` — goal conditions met. `not_met` — goal conditions failed (founder decision, round 10). `waiting_on_user` — waiting on operator input. No marker on a turn means "not waiting" — a deterministic fallback, never inferred by a prose classifier, and never represented as a fourth enum value here (absence of this message IS the not-waiting state).
              * @example met
              * @enum {string}
              */
-            condition: "met" | "waiting_on_user";
+            condition: "met" | "not_met" | "waiting_on_user";
+            /** @description Optional evidence list supporting the verdict. Each entry explains one criterion and whether it was met (ADR-091 I-5, founder decision round 10). */
+            evidence?: {
+                /**
+                 * @description The criterion being evaluated.
+                 * @example checkout complete
+                 */
+                criterion?: string;
+                /**
+                 * @description Whether this criterion was met.
+                 * @example true
+                 */
+                met?: boolean;
+                /**
+                 * @description Optional contextual note about this criterion.
+                 * @example Order confirmed with confirmation number XYZ
+                 */
+                note?: string;
+            }[];
             /**
              * @description The goal this condition applies to (R§8.11 — a session may carry multiple independent goals, each keyed by goal-id).
              * @example goal_01J3ZQK8N2H8VXNRP5T7C9M4WU
@@ -15086,12 +15109,12 @@ export interface components {
              */
             session_id: string;
             /**
-             * @description This session's generation number. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
-             * @example 0
+             * @description This session's generation number. Starts at 1. A `follow_up`/Play mints a new generation via `resumed_from` rather than mutating a terminal record.
+             * @example 1
              */
             generation: number;
             /**
-             * @description The prior generation's `session_id` this record resumed from. Null for generation 0 (the original spawn).
+             * @description The prior generation's `session_id` this record resumed from. Null for generation 1 (the original spawn).
              * @example null
              */
             resumed_from?: string | null;
@@ -15188,6 +15211,104 @@ export interface components {
              * @example 2026-07-22T10:05:00Z
              */
             updated_at: string;
+            /** @description Every record carries its origin: how and where this session was launched (ADR-091 I-1). Kind discriminates the launch path. */
+            origin?: {
+                /**
+                 * @description The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+                 * @example delegate
+                 * @enum {string}
+                 */
+                kind: "delegate" | "task" | "chat" | "channel" | "scheduled" | "heartbeat" | "verifier" | "plan" | "human";
+                /**
+                 * @description For delegate/task-origin sessions, the tool-call id (span key) of the originating delegate or create_task call. Absent for other kinds.
+                 * @example span_01J3ZQK8N2H8VXNRP5T7C9M4WE
+                 */
+                call_id?: string;
+                /**
+                 * @description For task-origin sessions, the persistent task id from the task record (persisted on the task disk-only, by tools/task.go). Absent for delegate-origin and other kinds.
+                 * @example task_01J3ZQK8N2H8VXNRP5T7C9M4WF
+                 */
+                task_id?: string;
+            };
+            /** @description Present for steered sessions (a session launched by another session's delegate or create_task). Absent for ordinary-root sessions that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment). */
+            steered_by?: {
+                /**
+                 * @description The direct parent session; the inbox owner key.
+                 * @example 550e8400-e29b-41d4-a716-446655440001
+                 */
+                steering_session_id: string;
+                /**
+                 * @description The cascade root, verified by walking the chain at launch. Equal to steering_session_id at depth 1.
+                 * @example 550e8400-e29b-41d4-a716-446655440002
+                 */
+                root_session_id: string;
+                /** @description The steering session's own address; where completion wakes it. */
+                reporting_target?: {
+                    /** @example 550e8400-e29b-41d4-a716-446655440001 */
+                    session_id?: string;
+                    /** @example web */
+                    channel?: string;
+                    /** @example chat_01J3ZQK8N2H8VXNRP5T7C9M4WL */
+                    chat_id?: string;
+                };
+                /** @description The gate verdict at launch. */
+                authorization: {
+                    /**
+                     * @description How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
+                     * @example direct
+                     * @enum {string}
+                     */
+                    mode: "direct" | "task";
+                    /**
+                     * @description Remaining delegation depth budget for this child's own onward delegations. Decremented from the edge or global default.
+                     * @example 2
+                     */
+                    remaining_depth: number;
+                };
+                /** @description Creator-set session limits. */
+                limits?: {
+                    /**
+                     * @description Maximum seconds before this delegation is force-cancelled. 0 = the configured default. Scope is the session's lifetime across re-entries (ADR-091 I-1).
+                     * @example 300
+                     */
+                    timeout_seconds?: number;
+                };
+                /**
+                 * @description Tool names excluded for this steered session (e.g., switch_agent). Applied at launch.
+                 * @example [
+                 *       "switch_agent"
+                 *     ]
+                 */
+                tool_exclusions?: string[];
+            };
+            /** @description Present when this session's own record carries a Stop marker, written by the cancel cascade on the stopped node and every reachable non-terminal descendant (ADR-091 I-6). Absent for sessions that were not stopped. No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment). */
+            stop?: {
+                /**
+                 * Format: date-time
+                 * @description RFC3339 timestamp when the Stop marker was written.
+                 * @example 2026-07-22T10:05:00Z
+                 */
+                at: string;
+                /**
+                 * @description The generation this Stop marker names. A revived generation is a newer generation number.
+                 * @example 1
+                 */
+                generation: number;
+                /** @description Who or what initiated the stop. */
+                by: {
+                    /**
+                     * @description Principal kind (agent or human).
+                     * @example human
+                     * @enum {string}
+                     */
+                    kind?: "agent" | "human";
+                    /**
+                     * @description The agent id (if kind=agent) or user id (if kind=human).
+                     * @example user-123
+                     */
+                    id?: string;
+                };
+            };
         };
         /**
          * Goal
@@ -15400,22 +15521,12 @@ export interface components {
              */
             label?: string;
             /**
-             * @description True for a synchronous (blocking) delegation. A synchronous delegation whose child raises a `question` is rejected by default with a clear tool error (never a silent deadlock, MIN-3) unless the caller also sets `allow_blocking_question`.
-             * @example false
-             */
-            wait?: boolean;
-            /**
-             * @description Explicit opt-in (only meaningful with `wait: true`) permitting a bounded human-routed wait on a child `question` instead of the default rejection (P2M-14/MIN-3).
-             * @example false
-             */
-            allow_blocking_question?: boolean;
-            /**
              * @description Continue running after the parent finishes gracefully.
              * @example false
              */
             critical?: boolean;
             /**
-             * @description Maximum seconds before this delegation is force-cancelled. 0 = default (5 min).
+             * @description Maximum seconds before this delegation is force-cancelled. 0 = default (30 min).
              * @example 300
              */
             timeout_seconds?: number;
@@ -15434,6 +15545,8 @@ export interface components {
                  */
                 notes?: string;
             };
+            /** @description Optional goal: criteria + Definition of Done for this delegation. Reuses the shape `create_task` already validates. The delegated session becomes goal-bearing when provided (ADR-091 I-2, D6). */
+            goal?: components["schemas"]["Goal"];
         };
         /**
          * DelegateStatusAction
@@ -15630,6 +15743,11 @@ export interface components {
              * @example 1
              */
             generation: number;
+            /**
+             * @description 1-based position in the admission queue when `state == queued`, else 0. Lets the caller know its place in line for execution (ADR-091 I-2).
+             * @example 1
+             */
+            queue_position?: number;
             /**
              * @description The prior session id this generation resumed from, when applicable.
              * @example 660e8400-e29b-41d4-a716-446655440000
@@ -15957,6 +16075,163 @@ export interface components {
              * @example await answers — per-child unacked ceiling reached
              */
             error?: string;
+        };
+        /**
+         * SubagentStartFrame
+         * @description Server → client (FR-H-004). Opening bracket of a subagent span. Emitted when the agent loop spawns a sub-turn. The SPA uses span_id to group subsequent nested tool_call_start / tool_call_result frames under a collapsible span UI.
+         */
+        SubagentStartFrame: {
+            /** @enum {string} */
+            type: "subagent_start";
+            /** @description Session in which this sub-turn is running. */
+            session_id: string;
+            /** @description Unique identifier for this span. Constructed by the server as "span_" + parent spawn ToolCall.ID. */
+            span_id: string;
+            /** @description The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts. */
+            parent_call_id: string;
+            /** @description Human-readable label for the subagent task, extracted from the spawn call's "label" or "task" parameter (truncated to 60 chars by the server; schema allows up to 100 to accommodate edge cases). */
+            task_label: string;
+            /** @description Agent running the sub-turn. */
+            agent_id?: string;
+            /**
+             * @description Optional session id of the opened child session. Present for steered sessions; absent for legacy subturn spans. Enables the open control on the side panel row (ADR-091 I-4).
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            child_session_id?: string;
+        };
+        /**
+         * SubagentStateFrame
+         * @description Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+         */
+        SubagentStateFrame: {
+            /** @enum {string} */
+            type: "subagent_state";
+            /** @description Session in which the parent's span is running. */
+            session_id: string;
+            /**
+             * @description Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            child_session_id?: string;
+            /** @description Matches the `span_id` from the bracketing `subagent_start` frame. */
+            span_id: string;
+            /**
+             * @description The child's current durable lifecycle state (SessionLifecycleRecord.state).
+             * @example running
+             * @enum {string}
+             */
+            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            /** @description Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3). */
+            steering_receipt?: {
+                /**
+                 * @description The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
+                 * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+                 */
+                correlation_id: string;
+                /**
+                 * Format: date-time
+                 * @example 2026-07-22T10:00:30Z
+                 */
+                applied_at: string;
+            };
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp this state ping was emitted.
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+        };
+        /**
+         * SubagentMessageFrame
+         * @description Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span event riding between the existing `subagent_start`/`subagent_end` brackets, feeding pill/panel/board live as a child pushes typed messages / the parent steers it. Rides the existing since-cursor WS replay (same pattern as `ReplayMessageFrame`).
+         *     SHAPE DECISION (flagged for review): this is a FLAT, UI-facing PROJECTION of the underlying `SessionMessage` — it does not embed the full 12-variant `SessionMessage` discriminated union. Reasons: (1) the full union is hosted INLINE in `openapi.yaml` per ADR-034 specifically because oapi-codegen needs internal component refs inside a `oneOf` — embedding it inside an asyncapi frame would require a second, hand-duplicated copy of all 12 variants inside `asyncapi.yaml` (which does not resolve cross-file `$ref` for its own codegen, per the existing `GoalStatusFrame.yaml` note), multiplying maintenance burden for a live UI ping that only ever needs a handful of display fields; (2) this mirrors the established precedent of `GoalStatusFrame` itself being a flat projection of goal state rather than embedding a full Goal record. Full-fidelity SessionMessage data (every typed field, for every kind) is available via `delegate.inbox`/`delegate.peek` (`DelegateInboxResponse`/`DelegatePeekResponse`) — this frame is a live nudge, not the source of truth.
+         */
+        SubagentMessageFrame: {
+            /** @enum {string} */
+            type: "subagent_message";
+            /** @description Session in which the parent's span is running. */
+            session_id: string;
+            /**
+             * @description Optional session id of the delegated child session this mid-span update is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            child_session_id?: string;
+            /** @description Matches the `span_id` from the bracketing `subagent_start` frame. */
+            span_id: string;
+            /**
+             * @description The underlying SessionMessage's `message_id` — correlates this live ping with the full record fetchable via `delegate.inbox`/`peek`.
+             * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WF
+             */
+            message_id: string;
+            /**
+             * @description The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+             * @example progress
+             * @enum {string}
+             */
+            kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond" | "goal_status";
+            /**
+             * @description Flattened display text (progress.text / checkpoint.summary / blocker.text / question.text / error.text / steer.text / respond.text), when the kind carries one.
+             * @example Scanning pkg/plan for the write-set boundary...
+             */
+            text?: string;
+            /**
+             * @description Present for `kind: progress` when a percentage estimate was given.
+             * @example 40
+             */
+            pct?: number;
+            /**
+             * @description Present for `question`/`decision_request`/`steer`/`respond` — lets the SPA thread a live reply.
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+             */
+            correlation_id?: string;
+            /**
+             * @description Agent ID (or "human") that authored the underlying message.
+             * @example ray
+             */
+            sender_identity: string;
+            /**
+             * @description True when the underlying message's free-text content originated from a child agent and must render in untrusted-content framing (FE-7/MAJ-12).
+             * @example true
+             */
+            untrusted_origin: boolean;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp the underlying message was created.
+             * @example 2026-07-22T10:00:00Z
+             */
+            created_at: string;
+        };
+        /**
+         * SubagentEndFrame
+         * @description Server → client (FR-H-004). Closing bracket of a subagent span. Emitted when the sub-turn finishes. The SPA transitions the span from "running" to a terminal status and records duration and optional result. NOTE: status MUST be validated — the SPA's generated Zod schema (src/lib/api/generated/schemas.ts, built from this enum) rejects any status string not in this set; such frames are dropped.
+         */
+        SubagentEndFrame: {
+            /** @enum {string} */
+            type: "subagent_end";
+            /** @description Session in which this sub-turn ran. */
+            session_id: string;
+            /** @description Matches the span_id from the preceding subagent_start frame. */
+            span_id: string;
+            /**
+             * @description Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
+             * @enum {string}
+             */
+            status: "success" | "error" | "cancelled" | "interrupted" | "timeout" | "parked";
+            /** @description Wall-clock duration of the sub-turn in milliseconds. */
+            duration_ms?: number;
+            /** @description Optional textual summary of the sub-turn's output. */
+            final_result?: string;
+            /**
+             * @description When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
+             * @enum {string}
+             */
+            reason?: "parent_timeout" | "parent_cancelled" | "parent_done_early" | "unknown";
+            /** @description Agent that ran the sub-turn. */
+            agent_id?: string;
+            /** @description The spawn ToolCall.ID that triggered this sub-turn. */
+            parent_call_id?: string;
+            /** @description Internal reason string emitted by the orphan-watchdog synthetic end frame. Not rendered directly in the UI. */
+            message?: string;
         };
         /**
          * ExternalCliTool
@@ -16677,6 +16952,19 @@ export interface operations {
                     "application/json": {
                         /** @example true */
                         success: boolean;
+                        /** @description ADR-091 I-6. Every session the cascade stamped with a Stop marker (the stopped session and each reachable non-terminal descendant). */
+                        reached?: string[];
+                        /** @description ADR-091 I-6. Descendants the cascade could not reach, with why. */
+                        unreachable?: {
+                            id: string;
+                            reason: string;
+                        }[];
+                        /** @description ADR-091 I-6. Sessions whose live turn belonged to a newer generation than the one stamped (a revival landed first); their cancel was refused. */
+                        skipped_newer_generation?: string[];
+                        /** @description ADR-091 I-6. Terminal descendants, left unwritten. */
+                        skipped_terminal?: string[];
+                        /** @description ADR-091 I-6. True when `unreachable` is non-empty — and ONLY then: the cascade could not reach part of the subtree, so this Stop must not be read as complete (WP-D FR-D-001). `skipped_newer_generation` deliberately does NOT set this flag. A session the cascade left alone because a revival had already carried it to a newer generation is a CORRECT outcome, not a failure (ADR-091 D8: "the later instruction wins, which is what the operator asked for"), and WP-D US-1/AS-9 specifies that case with no `partial` and no channel line. Read `skipped_newer_generation` itself to learn which sessions kept running — `partial: false` hides nothing. */
+                        partial?: boolean;
                     };
                 };
             };

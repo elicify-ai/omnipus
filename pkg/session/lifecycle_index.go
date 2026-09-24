@@ -8,10 +8,10 @@
 // X" to cost one file read per child, never a scan of every persisted
 // session_id (pkg/session/lifecycle.go's pre-ADR-057 List did exactly that —
 // scanSessionIDs() + a full Load() per id, unconditionally). This file adds
-// the missing index: an in-memory map from a session's ParentDurableKey (its
+// the missing index: an in-memory map from a session's SteeredBy.SteeringSessionID (its
 // DIRECT parent's own live routing/session id, D1 — see LifecycleRecord's own
 // field doc in lifecycle.go) to the set of session_ids whose own
-// ParentDurableKey equals that value.
+// SteeredBy.SteeringSessionID equals that value.
 //
 // The index is a property of one LifecycleStore instance (like its striped
 // lock), not a package-level global — two LifecycleStore values rooted at
@@ -22,25 +22,30 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
 )
 
-// lifecycleParentIndex maps a durable ParentDurableKey to the set of
-// session_ids that are its DIRECT children (FR-020). Safe for concurrent
-// use: a private sync.RWMutex guards byParent, independent of
-// LifecycleStore's per-session striped lock — an update to this shared map
-// can be triggered from any of the 64 session shards concurrently, so it
-// needs its own synchronization regardless of which shard's Persist call is
-// driving it.
+// LifecycleIndex maps a durable SteeredBy.SteeringSessionID to the set of session_ids
+// that are its DIRECT children (FR-020). Safe for concurrent use: a private
+// sync.RWMutex guards byParent, independent of LifecycleStore's per-session
+// striped lock — an update to this shared map can be triggered from any of
+// the 64 session shards concurrently, so it needs its own synchronization
+// regardless of which shard's Persist call is driving it.
 //
 // Lock ordering: callers that already hold a LifecycleStore per-session
 // shard lock (persistLocked, pruneTerminalOne) may safely also take this
 // mutex — the reverse (holding this mutex while trying to acquire a
 // per-session shard lock) never happens anywhere in this package, so there
 // is no cycle to deadlock on.
-type lifecycleParentIndex struct {
+//
+// Exported (was the unexported lifecycleParentIndex) by ADR-091 landing
+// order I-9, which publishes Report() below on this type — the store's
+// unexported `parentIndex` field name and every pre-existing method are
+// otherwise unchanged.
+type LifecycleIndex struct {
 	mu       sync.RWMutex
 	byParent map[string]map[string]struct{}
 
@@ -54,23 +59,48 @@ type lifecycleParentIndex struct {
 	// race a partial warm.
 	warmMu sync.Mutex
 	warmed atomic.Bool
+
+	// unreadableMu guards unreadable — ADR-091 I-9: every record ensureWarm
+	// could not load (a genuine read/parse error, never a plain "no record
+	// yet") during its most recent scan attempt, recorded instead of only
+	// logged so an operator-facing consumer (boot_sweep.go) can surface
+	// them. Reset at the START of each scan attempt (not appended across
+	// attempts) so Report() always reflects the most recent warm-up, not an
+	// unbounded history.
+	unreadableMu sync.Mutex
+	unreadable   []UnreadableRecord
 }
 
-// newLifecycleParentIndex returns an empty, ready-to-use index.
-func newLifecycleParentIndex() *lifecycleParentIndex {
-	return &lifecycleParentIndex{byParent: make(map[string]map[string]struct{})}
+// UnreadableRecord names one lifecycle record ensureWarm's backfill scan
+// could not load, and why (ADR-091 I-9).
+type UnreadableRecord struct {
+	ID  string
+	Err error
+}
+
+// IndexReport is LifecycleIndex.Report()'s return shape (ADR-091 landing
+// order I-9). `pkg/steer` refers to this same type via a Go type alias
+// (`type IndexReport = session.IndexReport`) rather than pkg/session
+// importing pkg/steer back — see lifecycle_edge.go's package doc for why.
+type IndexReport struct {
+	Unreadable []UnreadableRecord
+}
+
+// newLifecycleIndex returns an empty, ready-to-use index.
+func newLifecycleIndex() *LifecycleIndex {
+	return &LifecycleIndex{byParent: make(map[string]map[string]struct{})}
 }
 
 // add registers childID as a direct child of parentKey. A no-op when either
 // argument is empty — an unattributable or not-yet-parented record (FR-015's
-// degraded mint, or a top-level record with no ParentDurableKey at all) is
+// degraded mint, or a top-level record with no SteeringSessionID at all) is
 // never indexed under an empty key, which would otherwise let every such
-// record collide under LifecycleFilter{ParentDurableKey: ""} — a filter
+// record collide under LifecycleFilter{SteeringSessionID: ""} — a filter
 // value that means "unset" everywhere else on this struct (see
 // LifecycleFilter's own doc comment). Idempotent: adding the same pair twice
 // (e.g. a session's later generations, which all carry the same
-// ParentDurableKey) is harmless.
-func (idx *lifecycleParentIndex) add(parentKey, childID string) {
+// SteeringSessionID) is harmless.
+func (idx *LifecycleIndex) add(parentKey, childID string) {
 	if parentKey == "" || childID == "" {
 		return
 	}
@@ -89,7 +119,7 @@ func (idx *lifecycleParentIndex) add(parentKey, childID string) {
 // discover the staleness via a failed Load. Removes the parentKey bucket
 // entirely once its last child is gone, so a long-running process does not
 // accumulate empty buckets forever. A no-op when the pair is not present.
-func (idx *lifecycleParentIndex) remove(parentKey, childID string) {
+func (idx *LifecycleIndex) remove(parentKey, childID string) {
 	if parentKey == "" || childID == "" {
 		return
 	}
@@ -110,7 +140,7 @@ func (idx *lifecycleParentIndex) remove(parentKey, childID string) {
 // caller never observes the live map. A deterministic (sorted) order keeps
 // List's output stable across repeated queries, matching the sorted order
 // the full-scan path already produces via scanSessionIDs' sort.Strings.
-func (idx *lifecycleParentIndex) children(parentKey string) []string {
+func (idx *LifecycleIndex) children(parentKey string) []string {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	set := idx.byParent[parentKey]
@@ -140,7 +170,7 @@ func (idx *lifecycleParentIndex) children(parentKey string) []string {
 // that alone only indexes records THIS process itself has written. A record
 // persisted by a PRIOR process (the common case immediately after a
 // restart, before the boot sweep or any new delegation has run) exists on
-// disk with a real ParentDurableKey that no in-process Persist call has ever
+// disk with a real SteeringSessionID that no in-process Persist call has ever
 // seen, so relying on Persist-time maintenance alone would silently return
 // zero children for every parent until something happened to re-persist
 // each child — exactly the "success-shaped" silent failure this whole spec
@@ -151,7 +181,7 @@ func (idx *lifecycleParentIndex) children(parentKey string) []string {
 // scanSessionIDs (lifecycle.go) returns (nil, nil) for os.IsNotExist, so a
 // fresh install with no lifecycle directory yet warms successfully with an
 // empty index — it is never treated as a failure to retry.
-func (idx *lifecycleParentIndex) ensureWarm(s *LifecycleStore) error {
+func (idx *LifecycleIndex) ensureWarm(s *LifecycleStore) error {
 	if idx.warmed.Load() {
 		return nil
 	}
@@ -169,21 +199,49 @@ func (idx *lifecycleParentIndex) ensureWarm(s *LifecycleStore) error {
 		// retried by the next ensureWarm call, not latched forever.
 		return fmt.Errorf("session: lifecycle: parent index warm-up: %w", err)
 	}
+	// ADR-091 I-9: this attempt's unreadable list REPLACES the previous
+	// one (not appended) — Report() always reflects the most recent scan,
+	// including a successful retry that resolved an earlier transient
+	// failure. Built up locally and swapped in under unreadableMu once,
+	// rather than mutated in place, so a concurrent Report() call never
+	// observes a partially-built slice.
+	var unreadable []UnreadableRecord
 	for _, id := range ids {
 		rec, loadErr := s.Load(id)
 		if loadErr != nil {
 			if errors.Is(loadErr, ErrLifecycleNotFound) {
-				continue
+				if info, statErr := os.Stat(s.path(id)); statErr != nil || info.Size() == 0 {
+					continue
+				}
+				loadErr = fmt.Errorf("session: lifecycle: %q contains no valid JSONL record", id)
 			}
-			// A single corrupt/unreadable record must not fail warm-up
-			// for every OTHER session — log and continue, mirroring
-			// PruneTerminal's own per-id error handling in lifecycle.go.
+			// A single corrupt/unreadable record must not fail warm-up for
+			// every OTHER session — log AND record it (I-9: no longer
+			// silently skipped), then continue, mirroring PruneTerminal's
+			// own per-id error handling in lifecycle.go.
 			slog.Warn("session: lifecycle: parent index warm-up: load failed, skipping",
 				"session_id", id, "error", loadErr)
+			unreadable = append(unreadable, UnreadableRecord{ID: id, Err: loadErr})
 			continue
 		}
-		idx.add(rec.ParentDurableKey, rec.SessionID)
+		idx.add(rec.SteeringSessionID(), rec.SessionID)
 	}
+	idx.unreadableMu.Lock()
+	idx.unreadable = unreadable
+	idx.unreadableMu.Unlock()
 	idx.warmed.Store(true)
 	return nil
+}
+
+// Report returns every record ensureWarm's most recent scan attempt found
+// unreadable — a genuine read/parse error, never a plain "no record yet"
+// (ADR-091 I-9). Safe for concurrent use; the returned slice
+// is an independent snapshot. Empty (nil) before ensureWarm has run, or
+// after a scan that found nothing unreadable.
+func (idx *LifecycleIndex) Report() IndexReport {
+	idx.unreadableMu.Lock()
+	defer idx.unreadableMu.Unlock()
+	out := make([]UnreadableRecord, len(idx.unreadable))
+	copy(out, idx.unreadable)
+	return IndexReport{Unreadable: out}
 }

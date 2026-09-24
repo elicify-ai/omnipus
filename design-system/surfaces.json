@@ -6354,10 +6354,6 @@
       "lane": 3
     },
     {
-      "source": "src/components/chat/SubagentBlock.tsx",
-      "lane": 5
-    },
-    {
       "source": "src/components/chat/SubagentQuestionMessage.tsx",
       "lane": 5
     },

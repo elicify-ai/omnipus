@@ -1750,7 +1750,7 @@ func (cb *ContextBuilder) ResolveSkillName(name string) (string, bool) {
 // ListSkills() itself. SkillsLoader.ListSkills() is an uncached, full
 // directory scan (ADR-072 Finding D), so a caller that must ALSO inspect the
 // installed-skill list for a reason ResolveSkillName's single ok bool cannot
-// express — e.g. pkg/agent/subturn.go's resolveRequestedSkillForChild, which
+// express — e.g. pkg/agent/subturn_identity.go's resolveRequestedSkillForChild, which
 // needs to distinguish "denied" from "not found" on a failed resolution —
 // can fetch the list once and pass it to both this method and its own
 // fallback check, rather than triggering two full scans back-to-back on

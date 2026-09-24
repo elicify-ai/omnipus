@@ -68,6 +68,7 @@ func newSetCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer store.Close()
 			if err := store.Set(name, value); err != nil {
 				return fmt.Errorf("failed to store credential: %w", err)
 			}
@@ -88,6 +89,7 @@ func newListCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer store.Close()
 			names, err := store.List()
 			if err != nil {
 				return fmt.Errorf("failed to list credentials: %w", err)
@@ -128,6 +130,7 @@ func newDeleteCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer store.Close()
 			if err := store.Delete(name); err != nil {
 				return fmt.Errorf("failed to delete credential: %w", err)
 			}
@@ -150,6 +153,7 @@ func newRotateCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer store.Close()
 
 			fmt.Println("Enter current passphrase to verify existing credentials, then a new passphrase.")
 			newPass, err := credentials.PromptNewPassphrase()

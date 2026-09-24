@@ -140,7 +140,8 @@ describe('ExecutorSelector — remote-a2a reserved note', () => {
   // Traces to: wave2 findings-fix cycle — the note used to (incorrectly)
   // claim the agent "will fall back to the native runtime until A2A
   // resolution ships." That was verified false against the backend
-  // (pkg/agent/external_dispatch.go / pkg/agent/subturn.go), which reject
+  // (pkg/agent/external_dispatch.go, still live; pre-ADR-091 also
+  // pkg/agent/subturn.go, since deleted), which reject
   // remote-a2a sub-turns with an error rather than silently falling back to
   // native. The copy was corrected to state the sub-turn fails with an
   // error. The generic "reserved — not available in v0.1.0" substring

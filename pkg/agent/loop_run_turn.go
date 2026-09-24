@@ -168,9 +168,8 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	// site's comment for why the ORDER relative to Finish is load-bearing
 	// (FIX 1/5c live-verification finding).
 
-	// Inject turnState and AgentLoop into context so tools (e.g. delegate) can retrieve them.
+	// Inject turnState into context so tools (e.g. delegate) can retrieve it.
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = withTurnState(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts)
-	rc.rx.rr.rq.ri.rf.rt.turnCtx = WithAgentLoop(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.al)
 	// SEC-15: Inject agent ID so audit entries carry the agent identity.
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithAgentID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.agent.ID)
 	// Inject session key so switch_agent can address the session.
@@ -229,14 +228,19 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	// top-level turns and delegated children alike, since both resolve
 	// ts.agent.ID the same way.
 	//
-	// STALE-COMMENT CORRECTION (FIX 1 re-review): this used to say
-	// spawnSubTurn never threads WorkspaceID into a child's processOptions,
-	// making ts.opts.WorkspaceID structurally always "" for a delegated
-	// child. That is no longer true — spawnSubTurn (pkg/agent/subturn.go)
-	// now inherits WorkspaceID from the PARENT turn (session/room context,
-	// same as Channel/ChatID; see that struct literal's own comment for why
-	// this is deliberately NOT covered by ADR-032's target-identity
-	// inheritance rule). A delegated child's ts.opts.WorkspaceID can
+	// STALE-COMMENT CORRECTION (FIX 1 re-review): this used to say the
+	// pre-ADR-091 spawnSubTurn never threaded WorkspaceID into a child's
+	// processOptions, making ts.opts.WorkspaceID structurally always "" for a
+	// delegated child. That was no longer true even before ADR-091 deleted
+	// spawnSubTurn — it had come to inherit WorkspaceID from the PARENT turn
+	// (session/room context, same as Channel/ChatID; see that struct
+	// literal's own comment for why this is deliberately NOT covered by
+	// ADR-032's target-identity inheritance rule). Today,
+	// steer_reconstruct.go::reconstructSteeredTurn sets opts.WorkspaceID from
+	// rec.WorkspaceID (persisted at launch by steer_launcher.go's
+	// launchSteered, itself inherited from the steering session), so the
+	// same non-empty-for-a-delegated-child behavior continues under the new
+	// architecture. A delegated child's ts.opts.WorkspaceID can
 	// therefore be non-empty today, which is exactly what lets it
 	// participate in FindForAgentPreferring's tie-break below when the
 	// child agent belongs to more than one workspace's CoreTeam — it does

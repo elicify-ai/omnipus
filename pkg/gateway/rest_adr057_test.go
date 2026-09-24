@@ -546,12 +546,19 @@ func u18SeedUploads(t *testing.T, id string) string {
 func u18PersistLifecycleChild(t *testing.T, ls *session.LifecycleStore, childID, parentID string) {
 	t.Helper()
 	rec := &session.LifecycleRecord{
-		SessionID:        childID,
-		State:            session.LifecycleRunning,
-		OwnerScopeKind:   session.OwnerScopeParentSession,
-		OwnerScopeID:     parentID,
-		ParentDurableKey: parentID,
-		ParentAgentID:    "u18-agent",
+		SessionID:      childID,
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeParentSession,
+		OwnerScopeID:   parentID,
+		// Generation and RootSessionID are REQUIRED by
+		// session.LifecycleStore.persistLocked (ADR-091): a record minted
+		// at generation 0, or a SteeredBy edge with no root, is refused at
+		// the write choke point. The real launcher always sets both, so a
+		// fixture omitting them was testing a shape production cannot
+		// produce.
+		Generation:    1,
+		SteeredBy:     &session.SteeredBy{SteeringSessionID: parentID, RootSessionID: parentID},
+		ParentAgentID: "u18-agent",
 	}
 	require.NoError(t, ls.Persist(rec), "fixture: persist lifecycle record %q (parent %q)", childID, parentID)
 }

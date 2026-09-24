@@ -893,12 +893,12 @@ func (h *BrowserWSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // WSHandler.authenticateWS (websocket.go) exactly — see that function's doc
 // for the full rationale (cookie checked before the blocking frame read so a
 // cookie-only client, which sends no frame at all post-Wave-1, isn't stuck
-// waiting on one). The frame path's identity resolution is unchanged: every
-// account in Gateway.Users first (via the shared resolveBearerIdentity
-// helper), then Gateway.CLIToken, then the legacy OMNIPUS_BEARER_TOKEN env
-// var, then dev_mode_bypass — so browser-live can never authenticate a
-// caller chat would have rejected, or vice versa. That ordering is
-// unchanged: the fast-fail gate added between the cookie check and the frame
+// waiting on one). The frame path resolves identity through the shared
+// resolveBearerIdentity helper (auth.go), then the legacy
+// OMNIPUS_BEARER_TOKEN env var, then dev_mode_bypass. Chat uses the same
+// helper, so browser-live cannot authenticate a caller chat would have
+// rejected, or vice versa. The fast-fail gate added between the cookie
+// check and the frame
 // read (classifyWSAuthRefusal, websocket.go) only ever REFUSES, so it cannot
 // promote any caller past an identity check. On failure this has already
 // written an error frame + close message; the caller must return without

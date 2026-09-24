@@ -5206,16 +5206,6 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.subagent-spans-historical-agenttype-wiring.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.subagent-spans-live-visibility.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.tab-ring.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
@@ -5347,16 +5337,6 @@
     },
     {
       "path": "src/components/chat/OmnipusRuntimeProvider.reseed.test.ts",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/SubagentBlock.edge.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/SubagentBlock.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },

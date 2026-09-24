@@ -30,7 +30,8 @@ import (
 // and it would write its own loads back into the parent's bucket.
 //
 // That is exactly what happened before ADR-057, and it happened at the CALLER,
-// not here: spawnSubTurn built the child's processOptions with
+// not here: the pre-ADR-057 (and later, pre-ADR-091 — since deleted)
+// spawnSubTurn built the child's processOptions with
 // `TranscriptSessionID: parentTS.transcriptSessionID`, so this helper — behaving
 // correctly, preferring the transcript id — handed the child the parent's key.
 // Once each child owns a real session and carries its own transcript id, the
@@ -72,8 +73,11 @@ const manifestBucketKeySep = "\x1f"
 // tools.ToolAgentID(ctx)) and the readers (buildCompressedToolDefs,
 // buildToolManifestNote, via ts.agent.ID) MUST derive agentID from the same
 // value — verified identical on every path including delegation, since
-// spawnSubTurn sets the child's agent.ID from execSource.ID and the child's
-// own runTurn stamps that same id via tools.WithAgentID (ADR-032/ADR-057).
+// today steer_reconstruct.go::reconstructSteeredTurn resolves the child's
+// agent from rec.AgentID (persisted at launch from the target agent id;
+// pre-ADR-091, the deleted spawnSubTurn set the child's agent.ID from
+// execSource.ID the same way) and the child's own runTurn stamps that same
+// id via tools.WithAgentID (ADR-032/ADR-057).
 //
 // Returns "" when the session component is "" (manifestSessionID's own
 // deliberate no-op key), preserving the existing behavior where

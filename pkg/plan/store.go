@@ -245,7 +245,7 @@ func (s *Store) Create(p *Plan) error {
 // Patch is a partial update applied by Update. Only non-nil fields are written.
 type Patch struct {
 	Title        *string
-	Goal         *string
+	Objective    *string
 	Description  *string
 	OwnerAgentID *string
 	DoD          *[]task.AcceptanceCriterion
@@ -389,11 +389,11 @@ func (su *storeUpdateLocked) loadAndApplyFields() (*Plan, bool, error) {
 		}
 		su.p.Title = trimmedTitle
 	}
-	if su.patch.Goal != nil {
-		if len([]rune(*su.patch.Goal)) > maxPlanGoalRunes {
-			return nil, true, verr("goal must be %d characters or fewer", maxPlanGoalRunes)
+	if su.patch.Objective != nil {
+		if len([]rune(*su.patch.Objective)) > maxPlanObjectiveRunes {
+			return nil, true, verr("objective must be %d characters or fewer", maxPlanObjectiveRunes)
 		}
-		su.p.Goal = *su.patch.Goal
+		su.p.Objective = *su.patch.Objective
 	}
 	if su.patch.Description != nil {
 		if len([]rune(*su.patch.Description)) > maxPlanDescriptionRunes {
@@ -653,7 +653,7 @@ func (su *storeUpdateLocked) persist() (*Plan, error) {
 	// combination violates (e.g. FailedReason set without State==failed in
 	// the same call — the per-field FailedReason check above only validates
 	// the enum value, not this coupling; normalize() re-checks the whole
-	// object). Every field normalize() re-validates (title/goal/description/
+	// object). Every field normalize() re-validates (title/objective/description/
 	// workspace_id/owner_agent_id/state/DoD/bounds) already has an on-disk
 	// value that passed normalize() at Create time or a prior Update, so
 	// these re-checks are a no-op whenever the field itself wasn't patched

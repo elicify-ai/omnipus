@@ -6,26 +6,39 @@
 // review-wave fixes to pkg/agent/session_messaging_wire.go and
 // pkg/agent/cancel.go:
 //
-//   - Defect 1: delegate action="cancel" now wires ScopeSubtree (D8/R-13),
-//     proven END TO END through the REAL wiring call site — not just the
-//     al.Interrupt primitive session_messaging_wire_adr057_test.go already
-//     covers. That file's TestSetCancelHooks_ChildCancelReachesSubtree /
+//   - Defect 1: a delegate action="cancel" must reach the target child's own
+//     grandchild (D8/R-13), proven END TO END through the REAL wiring call
+//     site — not just the al.Interrupt primitive
+//     session_messaging_wire_adr057_test.go already covers. That file's
+//     TestSetCancelHooks_ChildCancelReachesSubtree /
 //     TestSetCancelHooks_HardVariantAlsoUsesScopeSubtree call al.Interrupt /
 //     al.InterruptSessionHard DIRECTLY with an explicit scope constant, so
-//     they pass identically regardless of which scope
+//     they pass identically regardless of what
 //     wireSessionMessagingForAgent actually wires — they document/pin the
 //     scope CONTRACT but do not exercise the wiring itself. TestDelegate...
 //     below closes that gap: it drives a REAL *tools.DelegateTool registered
 //     by a REAL *AgentLoop's own boot path, wires it via the REAL
 //     SetSessionMessagingStores → wireSessionMessagingForAgent path, and
 //     invokes the tool's real action="cancel" dispatch — the actual
-//     regression surface a future "simplify this back to ScopeSelfOnly" edit
-//     would break.
+//     regression surface a future edit that narrows the reach would break.
+//
+//     [ADR-091] The ASSERTION is unchanged; its FIXTURE is not. The original
+//     fixture linked the grandchild to the child only by the in-memory
+//     parentTurnID chain, because ScopeSubtree walked that chain. ADR-091
+//     deleted the sub-turn path, so no steered turn carries a parentTurnID
+//     any more and that chain reaches nothing in production; the wiring now
+//     walks the DURABLE parent-child edge (steer_delegate_cancel.go::
+//     cancelDelegatedSubtree), which every real session has. The fixture
+//     below therefore persists a lifecycle record for the grandchild too —
+//     the shape a real delegation has — and the same assertion now exercises
+//     the mechanism production actually uses.
+//
 //   - Defect 2/4: CollectDescendantSessionIDs (hoisted, pkg/agent/cancel.go)
 //     now returns a non-nil error when a lifecycleStore.List call fails
 //     partway through the walk, instead of silently truncating the returned
 //     set. Proven against a REAL on-disk session.LifecycleStore with one
 //     corrupted node, per binding Rule 1 (no spies).
+//
 //   - Defect 3b: RequestCancel's PHASE-A/Interrupt consistency guard now
 //     detects a same-SIZE-but-different-MEMBERSHIP mismatch, not just a
 //     length mismatch.
@@ -77,12 +90,25 @@ func TestDelegateCancel_WiredThroughRealAgentLoop_ReachesGrandchild(t *testing.T
 	// parent.sessionKey (the caller-owner key the test's context asserts).
 	lifecycleStore := session.NewLifecycleStore(t.TempDir())
 	require.NoError(t, lifecycleStore.Persist(&session.LifecycleRecord{
-		SessionID:        child.sessionKey,
-		State:            session.LifecycleRunning,
-		OwnerScopeKind:   session.OwnerScopeParentSession,
-		OwnerScopeID:     parent.sessionKey,
-		ParentDurableKey: parent.sessionKey,
-		AgentID:          "main",
+		SessionID:      child.sessionKey,
+		Generation:     1,
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeParentSession,
+		OwnerScopeID:   parent.sessionKey,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parent.sessionKey, RootSessionID: parent.sessionKey},
+		AgentID:        "main",
+	}))
+	// The grandchild's own record IS the parent-child edge the cascade walks
+	// (ADR-091 I-6 / CollectDescendantSessionIDs). Every delegated session
+	// has one — Launch writes it before the child's first turn exists.
+	require.NoError(t, lifecycleStore.Persist(&session.LifecycleRecord{
+		SessionID:      grandchild.sessionKey,
+		Generation:     1,
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeParentSession,
+		OwnerScopeID:   child.sessionKey,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: child.sessionKey, RootSessionID: parent.sessionKey},
+		AgentID:        "main",
 	}))
 
 	// Real production wiring: installs the store AND re-wires every
@@ -123,6 +149,12 @@ func TestDelegateCancel_WiredThroughRealAgentLoop_ReachesGrandchild(t *testing.T
 			"must reach the child's own grandchild — this is the ADR-057 D8/R-13 fix. Before it, "+
 			"session_messaging_wire.go wired ScopeSelfOnly and this assertion would fail: the "+
 			"grandchild (and any background shells it owns) would be left running forever")
+
+	// The reach is a SUBTREE, not a sweep: the caller's own turn is never a
+	// descendant of the session it cancelled and must be untouched.
+	parentInterrupted, _ := parent.gracefulInterruptRequested()
+	assert.False(t, parentInterrupted,
+		"cancelling a child must never reach the caller's own turn")
 }
 
 // TestCollectDescendantSessionIDs_PartialFailureReturnsErrorAndPartialSet is
@@ -150,26 +182,26 @@ func TestCollectDescendantSessionIDs_PartialFailureReturnsErrorAndPartialSet(t *
 		badGrandkid  = "sess_fix5_bad_grandkid"  // badChild's child — unreachable once badChild's list fails
 	)
 	require.NoError(t, ls.Persist(&session.LifecycleRecord{
-		SessionID: healthyChild, State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: root, ParentDurableKey: root,
+		SessionID: healthyChild, Generation: 1, State: session.LifecycleRunning,
+		Origin: &session.Origin{Kind: session.OriginKindDelegate}, SteeredBy: &session.SteeredBy{
+			SteeringSessionID: root, RootSessionID: root,
+		}, OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: root,
 	}))
 	require.NoError(t, ls.Persist(&session.LifecycleRecord{
-		SessionID: badChild, State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: root, ParentDurableKey: root,
+		SessionID: badChild, Generation: 1, State: session.LifecycleRunning,
+		Origin: &session.Origin{Kind: session.OriginKindDelegate}, SteeredBy: &session.SteeredBy{
+			SteeringSessionID: root, RootSessionID: root,
+		}, OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: root,
 	}))
 	require.NoError(t, ls.Persist(&session.LifecycleRecord{
-		SessionID: badGrandkid, State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: badChild, ParentDurableKey: badChild,
+		SessionID: badGrandkid, Generation: 1, State: session.LifecycleRunning,
+		Origin: &session.Origin{Kind: session.OriginKindDelegate}, SteeredBy: &session.SteeredBy{
+			SteeringSessionID: badChild, RootSessionID: root,
+		}, OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: badChild,
 	}))
 
-	// Force ls.List(LifecycleFilter{ParentDurableKey: badChild}) to error:
-	// listByParentDurableKey resolves badChild's children from the in-memory
-	// parent index (here: [badGrandkid]) and then calls s.Load(badGrandkid)
-	// for each — if THAT Load fails with anything other than
-	// ErrLifecycleNotFound (a torn/missing-file self-heals silently; see
-	// lifecycle.go's own doc comment), the WHOLE List call returns that
-	// error immediately, exactly the "one corrupt record fails the whole
-	// query" defect. Reproduced against genuine on-disk state (binding Rule
+	// Force the steered-by walk's per-record Load(badGrandkid) to error.
+	// Reproduced against genuine on-disk state (binding Rule
 	// 1, no spies): overwrite badGrandkid's own .jsonl with a single line
 	// longer than LifecycleStore's 10MB bufio.Scanner buffer, which makes
 	// scanner.Err() return bufio.ErrTooLong — a real I/O-layer failure, not

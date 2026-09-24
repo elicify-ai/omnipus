@@ -15,8 +15,66 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/google/uuid"
 )
+
+// steerAudienceMu guards steerAudienceResolver/steerBoundaryObserver —
+// ADR-091 I-5's injected dependencies for boundary 6
+// (FR-B-001/FR-B-014). Package-level (not a wsStreamer field) because
+// wsStreamer itself is defined in websocket.go — adding a new per-instance
+// field there is a cross-file change, not something this
+// lane edits directly. The package-var-plus-setter shape has one other
+// user in this package: SetGatewaySteerAudienceDeps below is its only
+// writer. (This used to cite pkg/tools/message_parent.go's
+// logMessageParentWakeFailure as the precedent; that symbol was deleted and
+// message_parent.go now has no package-level vars at all.)
+var (
+	steerAudienceMu       sync.RWMutex
+	steerAudienceResolver steer.AudienceResolver
+	steerBoundaryObserver steer.BoundaryObserver = steer.NopBoundaryObserver{}
+)
+
+// SetGatewaySteerAudienceDeps wires ADR-091 I-5's injected
+// steer.AudienceResolver/BoundaryObserver for boundary 6 (webchat
+// streaming). A nil observer defaults to steer.NopBoundaryObserver{}.
+func SetGatewaySteerAudienceDeps(resolver steer.AudienceResolver, observer steer.BoundaryObserver) {
+	if observer == nil {
+		observer = steer.NopBoundaryObserver{}
+	}
+	steerAudienceMu.Lock()
+	steerAudienceResolver = resolver
+	steerBoundaryObserver = observer
+	steerAudienceMu.Unlock()
+}
+
+// steeredAudienceNotUser resolves sessionID's audience ONCE (called only
+// from each streamer's own one-time shadow-resolution block, mirroring
+// claimStreamOwnership's lazy-once pattern — never per token) and reports
+// whether delivery must be suppressed because the audience cannot be
+// established. AudienceSteeringSession is allowed here because targets are
+// already selected by the producer's own session ID; this lets a viewer who
+// deliberately opens that child see its output without leaking it to the
+// parent's connection. Calls
+// steer.BoundaryObserver.Observe before returning (FR-B-014). A never-wired
+// resolver (nil) answers false — today's unrestricted behaviour.
+func steeredAudienceNotUser(ctx context.Context, sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	steerAudienceMu.RLock()
+	resolver, observer := steerAudienceResolver, steerBoundaryObserver
+	steerAudienceMu.RUnlock()
+	if resolver == nil {
+		return false
+	}
+	audience, _, err := resolver.Audience(ctx, sessionID)
+	if err != nil {
+		audience = steer.AudienceNone
+	}
+	observer.Observe(steer.BoundaryWebchatStreaming, sessionID, audience)
+	return audience == steer.AudienceNone
+}
 
 // GetStreamer implements bus.StreamDelegate.
 //
@@ -98,7 +156,7 @@ func (h *WSHandler) GetStreamer(_ context.Context, channel, chatID, sessionID st
 	h.liveStreamers[sid] = streamer
 	h.mu.Unlock()
 	if pending, ok := h.takePendingMessageStatus(sid); ok {
-		sendPendingMessageWorking(sid, pending)
+		sendPendingMessageWorking(h, sid, pending)
 	}
 
 	return streamer, true
@@ -478,7 +536,7 @@ func (s *wsStreamer) SetContinuationContent(full string) {
 	s.statsMu.Unlock()
 }
 
-func (s *wsStreamer) Update(_ context.Context, content string) error {
+func (s *wsStreamer) Update(ctx context.Context, content string) error {
 	s.statsMu.Lock()
 	producerAgentID := s.agentID
 	// Live-stream ownership gate (see WSHandler.streamOwners' doc comment):
@@ -525,12 +583,19 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	// its own reason to exist, stated above. Live-verified: reproduced the
 	// leak (a second, delegate-authored top-level bubble with raw narration)
 	// via a background delegation canceled mid-flight, confirmed the fix
-	// removes it. A root/non-delegated turn is unaffected — this branch only
-	// ever narrows behavior for parentSpawnCallID != "".
+	// removes it. A root/non-delegated turn is unaffected.
+	//
+	// ADR-091 D7: "delegation-specific stream shadowing
+	// (websocket_streamer.go::isShadowStream on parentSpawnCallID) ...
+	// become dead and are deleted" — every ADR-091 steered session gets
+	// its OWN session id (D1), so per-session routing
+	// (resolveSessionConnsLocked below) already isolates it structurally;
+	// the parentSpawnCallID-triggered branch that used to sit here is
+	// removed. steeredAudienceNotUser (below) is the permanent, general
+	// form of the same containment (boundary 6, FR-B-001) — same-session
+	// ownership is kept unchanged.
 	if !s.shadowResolved {
-		if s.parentSpawnCallID != "" {
-			s.isShadowStream = true
-		} else if s.turnID != "" && s.sessionID != "" && s.channel != nil && s.channel.wsHandler != nil {
+		if s.turnID != "" && s.sessionID != "" && s.channel != nil && s.channel.wsHandler != nil {
 			// ADR-082 review F6: keyed by sessionID, not s.chatID — delivery
 			// itself is resolved purely by session (resolveSessionConnsLocked),
 			// so ownership must be too, or two turns with different ORIGIN
@@ -539,6 +604,9 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 			// session's bound connections would never contend for the slot and
 			// could interleave their live tokens into the same viewers.
 			s.isShadowStream = !claimStreamOwnership(&s.channel.wsHandler.streamOwners, s.sessionID, s.turnID)
+		}
+		if steeredAudienceNotUser(ctx, s.sessionID) {
+			s.isShadowStream = true
 		}
 		s.shadowResolved = true
 	}
@@ -782,11 +850,15 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 	// isShadowStream=false (treated as live), which is wrong for a child
 	// sub-turn that happened to stream zero tokens of its own.
 	if !wsf.s.shadowResolved {
-		if wsf.parentSpawnCallID != "" {
-			wsf.s.isShadowStream = true
-		} else if wsf.turnID != "" && wsf.s.sessionID != "" && wsf.s.channel != nil && wsf.s.channel.wsHandler != nil {
+		// ADR-091 D7: the parentSpawnCallID-triggered branch that used to
+		// sit here is removed — see the identical note at Update()'s own
+		// shadow-resolution block, which this mirrors exactly.
+		if wsf.turnID != "" && wsf.s.sessionID != "" && wsf.s.channel != nil && wsf.s.channel.wsHandler != nil {
 			// ADR-082 review F6: keyed by sessionID — see Update's identical gate.
 			wsf.s.isShadowStream = !claimStreamOwnership(&wsf.s.channel.wsHandler.streamOwners, wsf.s.sessionID, wsf.turnID)
+		}
+		if steeredAudienceNotUser(context.Background(), wsf.s.sessionID) {
+			wsf.s.isShadowStream = true
 		}
 		wsf.s.shadowResolved = true
 	}
@@ -806,6 +878,21 @@ func (wsf *wsStreamerFinalize) sendDone() {
 	// visibility — only the live-facing signals (done frame, fan-out,
 	// markStreamed) are gated.
 	if !wsf.shadow {
+		// Review finding 12: "treat a done as implying working" + "clear or
+		// expire pending entries at turn end". Flush BEFORE the done frame
+		// itself goes out, so any client-message tick that never got
+		// consumed by a mid-turn GetStreamer call (a round that opened no
+		// streamer, e.g. a non-streaming reply) still reaches "working"
+		// rather than staying stuck on "Received" — and, either way, the
+		// entry cannot survive to be popped by a LATER, unrelated turn on
+		// this same session (see flushPendingMessageStatusesAsWorking's doc
+		// comment). Not run for a shadow (delegated-child) stream: that
+		// turn's own completion is not the completion the user's own
+		// message is waiting on.
+		if h := wsf.s.wsHandler(); h != nil && wsf.s.sessionID != "" {
+			h.flushPendingMessageStatusesAsWorking(wsf.s.sessionID)
+		}
+
 		// ADR-082 D2/FR-014: send one done frame PER bound connection, each
 		// carrying that connection's own TokensDropped — a drop on one
 		// connection's send buffer must never be reported (or withheld) on

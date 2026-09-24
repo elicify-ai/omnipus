@@ -358,6 +358,31 @@ Omnipus stores credential values in an encrypted file. Settings refer to credent
 
 Rotation re-encrypts the whole vault with the new passphrase. Back up the new passphrase because Omnipus needs it to unlock the vault later.
 
+Each stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open.
+
+Installations from an earlier release are upgraded automatically, once. The first time the upgraded gateway (or any `omnipus` command) opens the vault, it re-encrypts every entry with its name, using the same master key, and saves the whole file in one step. You do not re-enter anything. The upgrade is recorded in the audit log as `credentials.store_migrated`, with the number of entries and no names or values. After it, the vault never reads the old format again.
+
+What the upgrade cannot protect against. The old format did not record which name a value belonged to, so a swap made to an old-format vault file cannot be detected. For example, someone who can write to your Omnipus home folder swaps your model provider key with another key; the upgrade cannot tell, and keeps the swap.
+
+This risk does not end at the first start. It lasts as long as your vault is still opened by the same master key or passphrase it had before the upgrade. Anyone who can write to your Omnipus home folder and still holds a copy of the pre-upgrade vault file can, at any later time:
+
+1. swap values inside that old copy,
+2. delete the upgrade record `credentials.json.migrated` (it sits in the same folder, so the same person can delete it), and
+3. put the old copy back.
+
+The next start then upgrades it again and keeps the swap. The upgrade record only stops accidental or careless restores.
+
+What closes it:
+
+| How your vault is opened | What to do after upgrading |
+|---|---|
+| Passphrase typed at start-up | Run `omnipus credentials rotate` and choose a new passphrase. The upgrade already re-keys the vault under fresh random data, so an old copy cannot be mixed with anything saved after the upgrade. Only changing the passphrase stops a whole old copy from opening. |
+| Key file (`master.key`, `OMNIPUS_KEY_FILE`) or `OMNIPUS_MASTER_KEY` | Change the master key. There is no command yet that does this while keeping your stored values. The supported way is to stop the gateway, back up and remove the old key, create a new one, remove `credentials.json`, start again, and re-enter each credential. Until then, protect old copies of `credentials.json` (backups, sync folders) as carefully as the key itself. `omnipus credentials rotate` also works, but it switches the installation to a passphrase you must type at every start, which does not suit an unattended server. |
+
+A later release will remove the upgrade step entirely. From then on an old-format vault is refused outright, and this risk ends for everyone.
+
+If any entry cannot be opened during the upgrade, nothing is changed and the gateway does not start. The error names each entry at fault. See [troubleshooting](troubleshooting.md#credentials-stop-working-after-an-upgrade).
+
 ## How to review security activity
 
 1. Open **Settings**, select **Security**, then open **Advanced / technical details**.
@@ -377,7 +402,8 @@ The viewer refreshes every 30 seconds. The log includes security events, policy 
 - Secret filtering is best-effort and can be switched off. It only knows registered credential values. Rotate a secret if you think it was exposed.
 - Removing a credential is permanent. Services that refer to it may stop working.
 - Losing the master key makes the encrypted credential store permanently inaccessible.
-- **God-mode** under **Settings**, **Gateway** disables the kernel sandbox and outbound-network restrictions for every agent. For tools, it sets the **global** policy to Allow for every tool and removes the permission prompts that come from that global policy — including Auto-approve's: Auto-approve only ever matters for a tool set to Ask, and God Mode leaves none set to Ask globally, and is also explicitly switched off in God Mode regardless *(as of 2026-09-24, this is no longer "because there is no sandbox left" — Auto-approve does not need a sandbox any more; God Mode turns it off by its own design, D1)*. It does **not** override an agent's own tool policy: a tool an agent denies itself stays denied, and a tool that agent asks about still asks. Audit logging, prompt protection, and rate limiting remain active. Enabling it requires your password and may require a gateway restart.
+- Omnipus overwrites the master key in memory at shutdown and when a command finishes, best-effort only — nothing in this programming environment can guarantee that every copy of a value in memory is erased, so a memory dump taken while the key was in use may still contain it.
+- **God-mode** under **Settings**, **Gateway** disables the kernel sandbox, outbound-network restrictions, and shell guard for every agent. For tools, it sets the **global** policy to Allow for every tool and removes the permission prompts that come from that global policy — including Auto-approve's: Auto-approve only ever matters for a tool set to Ask, and God Mode leaves none set to Ask globally, and is also explicitly switched off in God Mode regardless *(as of 2026-09-24, this is no longer "because there is no sandbox left" — Auto-approve does not need a sandbox any more; God Mode turns it off by its own design, D1)*. It does **not** override an agent's own tool policy: a tool an agent denies itself stays denied, and a tool that agent asks about still asks. Audit logging, prompt protection, and rate limiting remain active. Enabling it requires your password and may require a gateway restart.
 
 ## Related pages
 
