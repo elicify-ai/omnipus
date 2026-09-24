@@ -820,7 +820,10 @@
       "exports": [
         "tokens",
         "resolvedTokens",
-        "TokenId"
+        "TokenId",
+        "statusTokens",
+        "statusResolvedTokens",
+        "motionResolvedTokens"
       ],
       "publicExports": [
         "tokens",
