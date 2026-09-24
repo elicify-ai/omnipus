@@ -610,3 +610,98 @@ describe('BE-DESIGN.md §6.3, Opus review round 6 R-J — a new turn never appen
     expect(idxUser2).toBeLessThan(idxB)
   })
 })
+
+// Round 7 — orchestrator real-browser follow-up on R-J: the previous fix
+// (a turn_id cross-check) was necessary but not sufficient. Real captured
+// wire shape (the turn genuinely is NOT new — ADR-070 absorbs a steer into
+// the SAME running turn): t001-t006 (message_id a382, turn_id mia-turn-5,
+// seq 324-329) -> client sends "steer" -> user_message echo (seq 330) +
+// message_status received/working -> t007-t060 SAME message_id a382, SAME
+// turn_id (seq 333-386, N2's reopen-after-steer case) -> a NEW message_id
+// e29a, SAME turn_id mia-turn-5, t001-t060 (seq 387-446) -> done{message_id:
+// e29a, turn_id: mia-turn-5} seq 447. Required rule: one bubble per turn
+// SEGMENT — a user message inside a running turn ends the segment. The
+// SAME message_id keeps appending to bubble 1 (N2, kept). A DIFFERENT
+// message_id arriving after a steer boundary must open a NEW bubble placed
+// AFTER that user message — NOT merge into bubble 1 just because turn_id
+// still matches.
+describe('BE-DESIGN.md §6.3, Opus review round 7 — a user message mid-turn ends the bubble SEGMENT, even when turn_id is unchanged', () => {
+  it('round 2 (new message_id, same turn_id, after a steer) opens its own bubble after the steer message, not merged into round 1', () => {
+    const TURN = 'mia-turn-5'
+    const MSG_1 = 'a382'
+    const MSG_2 = 'e29a'
+    const sent: unknown[] = []
+    const conn = { send: (f: unknown) => { sent.push(f); return true }, close: () => {}, isConnected: true }
+    useConnectionStore.setState({ connection: conn, isConnected: true } as never)
+    useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'mia' })
+    useChatStore.setState({ sessionsById: {}, messages: [], messagesById: {}, isStreaming: false } as never)
+
+    // Round 1, first segment: t001-t006, seq 324-329.
+    let seq = 323
+    for (let i = 1; i <= 6; i++) {
+      seq += 1
+      useChatStore.getState().handleFrame({
+        type: 'token', session_id: SID, content: `t${String(i).padStart(3, '0')} `, message_id: MSG_1, turn_id: TURN, agent_id: 'mia', seq,
+      } as WsReceiveFrame)
+    }
+    useChatStore.setState({ isStreaming: true })
+
+    // Client steers — absorbed into the SAME running turn (ADR-070), not a
+    // new turn.
+    useChatStore.getState().sendMessage('steer')
+    expect(sent).toHaveLength(1)
+    const steerFrame = sent[0] as { client_message_id?: string }
+    seq += 1 // user_message echo, seq 330
+    useChatStore.getState().handleFrame({
+      type: 'user_message', session_id: SID, id: 'srv-steer-id', client_message_id: steerFrame.client_message_id, content: 'steer', timestamp: '2026-09-24T00:00:00Z', seq,
+    } as WsReceiveFrame)
+    seq += 1
+    useChatStore.getState().handleFrame({
+      type: 'message_status', session_id: SID, client_message_id: steerFrame.client_message_id, state: 'received', seq,
+    } as WsReceiveFrame)
+    seq += 1
+    useChatStore.getState().handleFrame({
+      type: 'message_status', session_id: SID, client_message_id: steerFrame.client_message_id, state: 'working', seq,
+    } as WsReceiveFrame)
+
+    // Round 1 continues — SAME message_id a382, SAME turn — must keep
+    // appending to bubble 1 (N2's reopen-after-steer case, kept).
+    for (let i = 7; i <= 60; i++) {
+      seq += 1
+      useChatStore.getState().handleFrame({
+        type: 'token', session_id: SID, content: `t${String(i).padStart(3, '0')} `, message_id: MSG_1, turn_id: TURN, agent_id: 'mia', seq,
+      } as WsReceiveFrame)
+    }
+
+    // Round 2 — a NEW message_id, SAME turn_id, arriving AFTER the steer.
+    // This must open its OWN bubble, positioned after the steer message.
+    for (let i = 1; i <= 60; i++) {
+      seq += 1
+      useChatStore.getState().handleFrame({
+        type: 'token', session_id: SID, content: `t${String(i).padStart(3, '0')} `, message_id: MSG_2, turn_id: TURN, agent_id: 'mia', seq,
+      } as WsReceiveFrame)
+    }
+    seq += 1
+    useChatStore.getState().handleFrame({
+      type: 'done', session_id: SID, message_id: MSG_2, turn_id: TURN, seq, stats: { tokens: 60, cost: 0.01 },
+    } as WsReceiveFrame)
+
+    const b = useChatStore.getState().sessionsById[SID]!
+    const order = b.messageOrder.map((id) => b.messagesById[id])
+    const asst = order.filter((m) => m.role === 'assistant')
+    const users = order.filter((m) => m.role === 'user')
+
+    expect(users).toHaveLength(1)
+    // TWO separate bubbles — round 2 must never merge into round 1's.
+    expect(asst).toHaveLength(2)
+    const expectedRound1 = Array.from({ length: 60 }, (_, i) => `t${String(i + 1).padStart(3, '0')} `).join('')
+    expect(asst[0].content).toBe(expectedRound1)
+    expect(asst[1].content).toBe(expectedRound1)
+    // Order: round-1 bubble < steer message < round-2 bubble.
+    const idxRound1 = b.messageOrder.indexOf(asst[0].id)
+    const idxSteer = b.messageOrder.indexOf(users[0].id)
+    const idxRound2 = b.messageOrder.indexOf(asst[1].id)
+    expect(idxRound1).toBeLessThan(idxSteer)
+    expect(idxSteer).toBeLessThan(idxRound2)
+  })
+})

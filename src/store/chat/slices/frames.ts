@@ -355,8 +355,22 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
   // continuation): register the new message_id onto that SAME bubble
   // instead of starting a second one.
   if (turnId) {
+    // A user message (the sender's own steer, or its server echo) ends the
+    // current turn SEGMENT (ADR-070 round 2 fix): once one has been placed,
+    // an EARLIER assistant bubble of this same turn_id is round 1's, not a
+    // candidate for round 2's new message_id — round 2 gets its own bubble,
+    // placed after that user message. Only a candidate at or after the last
+    // user message may still be merged into.
+    let lastUserIdx = -1
+    for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+      if (draft.messagesById[draft.messageOrder[i]]?.role === 'user') {
+        lastUserIdx = i
+        break
+      }
+    }
     let turnBubbleId: string | null = null
     for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+      if (i < lastUserIdx) break // crossed the segment boundary — stop looking
       const id = draft.messageOrder[i]
       const m = draft.messagesById[id]
       if (m?.role !== 'assistant' || m.turnId !== turnId) continue
