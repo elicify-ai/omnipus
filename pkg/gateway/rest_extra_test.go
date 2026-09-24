@@ -323,7 +323,8 @@ func TestDoctorGodModeArmed_HighSeverity(t *testing.T) {
 	require.NotNil(t, found, "armed god-mode (sandbox.god_mode=true) must produce a god-mode-armed issue")
 	assert.Equal(t, "high", found["severity"],
 		"god-mode-armed must be high severity — strictly worse than the medium sandbox-disabled check, "+
-			"since it disables the sandbox, egress restrictions, AND the shell guard simultaneously")
+			"since it disables the sandbox's filesystem confinement AND opens egress simultaneously, "+
+			"floored at allow for every tool (it does not disable the shell's outside-workspace write refusal)")
 	assert.NotEmpty(t, found["title"])
 	assert.NotEmpty(t, found["description"])
 	assert.NotEmpty(t, found["recommendation"])
