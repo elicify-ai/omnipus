@@ -45,8 +45,8 @@ import (
 // no matching pkg/agent/tool_denial.go table row must fail THIS test, not
 // default silently at runtime.
 func TestAllApprovalDenialReasons_EveryMemberClassifiesAsKnown(t *testing.T) {
-	require.Len(t, allApprovalDenialReasons, 8,
-		"six approvals.go literals + internal_error + session canceled; approved must stay excluded")
+	require.Len(t, allApprovalDenialReasons, 9,
+		"seven approvals.go literals (including missing_turn_id, D-03) + internal_error + session canceled; approved must stay excluded")
 
 	seen := make(map[string]bool, len(allApprovalDenialReasons))
 	for _, reason := range allApprovalDenialReasons {

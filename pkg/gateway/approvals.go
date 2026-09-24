@@ -47,6 +47,13 @@ const (
 	ApprovalStateDeniedRestart           ApprovalState = "denied_restart"
 	ApprovalStateDeniedSaturated         ApprovalState = "denied_saturated"
 	ApprovalStateDeniedBatchShortCircuit ApprovalState = "denied_batch_short_circuit"
+
+	// ApprovalStateDeniedMissingTurnID is a fail-closed refusal issued
+	// BEFORE the entry is ever pending — see requestApproval's turnID==""
+	// guard (D-03, ADR-092). Mirrors denied_saturated's "skip-pending path"
+	// shape: the caller never sees a pending state at all, only this
+	// terminal one, delivered synchronously via a pre-filled resultCh.
+	ApprovalStateDeniedMissingTurnID ApprovalState = "denied_missing_turn_id"
 )
 
 // isTerminal returns true for every terminal state.
@@ -58,7 +65,8 @@ func (s ApprovalState) isTerminal() bool {
 		ApprovalStateDeniedCancel,
 		ApprovalStateDeniedRestart,
 		ApprovalStateDeniedSaturated,
-		ApprovalStateDeniedBatchShortCircuit:
+		ApprovalStateDeniedBatchShortCircuit,
+		ApprovalStateDeniedMissingTurnID:
 		return true
 	case ApprovalStatePending:
 		return false
@@ -215,10 +223,24 @@ const (
 	// replacing the literal in cancel.go, which is outside this unit's
 	// ownership.
 	denialReasonSessionCanceled = "session canceled"
+
+	// denialReasonMissingTurnID is requestApproval's fail-closed refusal
+	// reason (D-03, ADR-092, 2026-09-24 UAT): an approval request with an
+	// empty turn id can never reach a human — the wire contract
+	// (contracts/components/schemas/ToolApprovalRequiredFrame.yaml)
+	// requires turn_id at minLength 1, and the SPA's generated Zod schema
+	// silently drops any tool_approval_required frame that fails that
+	// check (src/lib/ws.ts's parseFrameSafe), before it ever reaches
+	// useToolApprovalStore.enqueue. Unlike the pre-existing empty-
+	// actingSessionID guard (which still creates a pending entry — merely
+	// uncancellable, not invisible), a missing turn id means NO client can
+	// ever render a card for the entry at all, so requestApproval refuses
+	// it outright instead of leaving it to resolve on the 600s timeout.
+	denialReasonMissingTurnID = "missing_turn_id"
 )
 
 // allApprovalDenialReasons is every denial reason this package can hand to
-// agent.ClassifyDenial (ADR-058 FR-058-04): the six literals emitted
+// agent.ClassifyDenial (ADR-058 FR-058-04): the seven literals emitted
 // directly in this file, plus internal_error
 // (policy_approver.go::policyApproverAdapter.RequestApproval's nil-entry
 // branch) and session canceled (pkg/agent/cancel.go::AgentLoop.RequestCancel,
@@ -227,7 +249,7 @@ const (
 //
 // Coverage caveat, stated honestly rather than implied: this slice is
 // exhaustive over the reasons THIS FILE's own call sites are known to
-// produce today — the six inline literals plus the two out-of-file values
+// produce today — the seven inline literals plus the two out-of-file values
 // above, each traced to its actual caller. It is NOT exhaustive over every
 // string cancelAllPendingForSessions could theoretically be called with:
 // that function's reason parameter is caller-supplied (see its doc
@@ -249,6 +271,7 @@ var allApprovalDenialReasons = []string{
 	denialReasonRestart,
 	denialReasonInternalError,
 	denialReasonSessionCanceled,
+	denialReasonMissingTurnID,
 }
 
 // approvalRegistryV2 is the central in-process approval registry (FR-016, FR-070).
@@ -292,6 +315,15 @@ type approvalRegistryV2 struct {
 	// observable defect rather than a mystery stall, and the counter is
 	// asserted by test rather than a log scrape.
 	missingActingSessionID atomic.Int64
+
+	// missingTurnID counts requestApproval calls that supplied an empty
+	// turn id (D-03, ADR-092). Unlike missingActingSessionID (which still
+	// admits the entry as pending, merely uncancellable), a missing turn id
+	// makes the resulting WS frame invisible to every client outright — see
+	// denialReasonMissingTurnID's doc comment — so the request is refused
+	// immediately rather than admitted; this counter is the observable
+	// signal that a call site regressed and is asserted by test.
+	missingTurnID atomic.Int64
 
 	// resolutionListener, when non-nil, is told about EVERY pending→terminal
 	// transition, whatever caused it: an explicit decision (resolve), the
@@ -380,11 +412,57 @@ func (r *approvalRegistryV2) scheduleTerminalDelete(approvalID string) {
 // Returns (entry, true) if accepted.
 // Returns (saturatedEntry, false) if the saturation cap is reached; the returned
 // entry is already in denied_saturated state (FR-016, MAJ-009).
+// Returns (missingTurnIDEntry, false) if turnID is empty; the returned entry
+// is already in denied_missing_turn_id state (D-03, ADR-092) — see below.
 func (r *approvalRegistryV2) requestApproval(
 	toolCallID, toolName string,
 	args map[string]any,
 	agentID, actingSessionID, turnID string,
 ) (*approvalEntry, bool) {
+	if turnID == "" {
+		// Defense in depth (D-03, ADR-092, 2026-09-24 UAT tester t5): fail
+		// CLOSED, unlike the actingSessionID=="" branch below, which still
+		// admits the entry as pending. The difference is deliberate: an
+		// empty acting session id merely makes an entry uncancellable (it
+		// still resolves — on the human's click or, worst case, the 600s
+		// timeout) because the WS frame still carries a valid turn id and a
+		// client CAN render and answer the card. An empty turn id means NO
+		// client can ever render a card for the entry at all — the wire
+		// contract (contracts/components/schemas/ToolApprovalRequiredFrame.yaml)
+		// requires turn_id at minLength 1, and the SPA's generated Zod
+		// schema silently drops any frame that fails it (src/lib/ws.ts's
+		// parseFrameSafe) before it ever reaches useToolApprovalStore.enqueue.
+		// Admitting it as pending would leave the calling tool hanging on
+		// "Running..." for the full timeout with nothing any operator could
+		// ever see or answer — exactly the D-03 defect. So this refuses the
+		// request immediately instead: no WS broadcast (accepted=false,
+		// mirroring the saturated path below, whose caller also skips the
+		// broadcast), an instantly-delivered denial, and a loud log so a
+		// caller that regresses this again is caught immediately rather
+		// than by a UAT tester watching a spinner.
+		total := r.missingTurnID.Add(1)
+		slog.Error("approval: refusing request with empty turn id — a tool_approval_required frame with turn_id:\"\" fails the wire contract's minLength:1 and is silently dropped client-side, so the request would hang until timeout with no card ever rendered; denying immediately instead",
+			"tool", toolName,
+			"tool_call_id", toolCallID,
+			"agent_id", agentID,
+			"acting_session_id", actingSessionID,
+			"missing_turn_id_total", total)
+		synthetic := &approvalEntry{
+			ApprovalID: uuid.New().String(),
+			ToolCallID: toolCallID,
+			ToolName:   toolName,
+			Args:       args,
+			AgentID:    agentID,
+			SessionID:  actingSessionID,
+			TurnID:     turnID,
+			CreatedAt:  time.Now(),
+			state:      ApprovalStateDeniedMissingTurnID,
+			resultCh:   make(chan ApprovalOutcome, 1),
+		}
+		synthetic.resultCh <- ApprovalOutcome{Approved: false, Reason: denialReasonMissingTurnID}
+		return synthetic, false
+	}
+
 	if actingSessionID == "" {
 		total := r.missingActingSessionID.Add(1)
 		slog.Warn("approval: request has no acting session id — the entry cannot be cancelled and will only resolve on timeout",
