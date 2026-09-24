@@ -4,7 +4,6 @@ import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 import { chatInput, selectAgent, waitForConnected } from './fixtures/selectors';
-import { enableVerboseChat } from './fixtures/verbose-chat';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
@@ -152,18 +151,35 @@ async function waitForReplayDone(page: Page): Promise<void> {
   await waitForConnected(page, { timeout: 30_000 })
 }
 
+// ── Activity panel helpers (ADR-091 D7/FR-E-004) ────────────────────────────────
+// Mirrors replay-fidelity.spec.ts's / delegation-hidden.spec.ts's own helper of
+// the same name. Idempotent open avoids steered-session-stop.spec.ts's
+// documented trap: a second unconditional click while the panel is already
+// open lands on the Radix Sheet's own overlay, not the bar.
+async function openActivityPanel(page: Page): Promise<void> {
+  const bar = page.locator('[data-testid="activity-bar"]');
+  await expect(bar).toBeVisible({ timeout: 15_000 });
+  if ((await bar.getAttribute('aria-expanded')) !== 'true') {
+    await bar.click();
+  }
+  await expect(bar).toHaveAttribute('aria-expanded', 'true', { timeout: 15_000 });
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 test.beforeEach(async ({ page }) => {
-  // Delegation visuals (SubagentBlock cards) are verbose-only in the chat
-  // thread since commit 8e1bf1b9 (shouldRenderSubagentSpan gates on
-  // verboseChatEnabled, default false — src/store/chatPreferences.ts). Test
-  // (b) below asserts the sub-turn MECHANICS (collapsed→expanded, nested
-  // tool-call badges) via [data-testid="subagent-collapsed"] as its
-  // thread-based signal, so this file opts into verbose chat to keep that
-  // signal working — independent of the default (non-verbose) display
-  // policy, which is covered separately by delegation-hidden.spec.ts.
-  await enableVerboseChat(page);
+  // UPDATE 2026-09-24 (lane sq-gwfix): this file used to opt into verbose
+  // chat here so test (b) could use [data-testid="subagent-collapsed"] as
+  // its thread-based signal. ADR-091 D7/D10 (66362240d) deleted that
+  // component and its gate unconditionally — there is nothing left to opt
+  // into verbose chat FOR. Test (b) now asserts the `delegate` tool-call
+  // chip and the child's own bash call, both of which
+  // src/lib/toolVisibility.ts's shouldRenderToolCall renders in the
+  // DEFAULT, non-verbose thread already (ADR-091 D7/AC-7; bash foreground
+  // calls are visible unconditionally too) — matching
+  // replay-fidelity.spec.ts's own "no verbose-chat opt-in anywhere in this
+  // file" precedent. Test (a) never depended on verbose chat either (it
+  // seeds a transcript with no tool_calls at all).
   await page.goto('/');
 });
 
@@ -240,33 +256,66 @@ test(
   },
 );
 
-// BDD Scenario 1 (sprint-h-subagent-block-spec.md line 207):
-//   Given the chat view is mounted on a live session
-//   And the assistant issues a delegate tool call with label="audit go files"
-//   When the backend fires EventKindSubTurnSpawn
-//   Then [data-testid="subagent-collapsed"] appears
-//   And clicking it reveals [data-testid="subagent-expanded"]
-//   And the expanded region contains ≥1 [data-testid="tool-call-badge"] (FR-H-008)
+// REWRITTEN 2026-09-24 (lane sq-gwfix, coordinator-flagged loose end from CI
+// run 35997069836's delegation-hidden.spec.ts fix).
 //
-// BDD Scenario 4 (line 241):
-//   Given a collapsed SubagentBlock with 2 nested tool calls
-//   When the user clicks the collapsed header
-//   Then [data-testid="subagent-expanded"] is rendered
-//   And the expanded region contains tool-call-badge elements
+// This test used to wait up to 150s (test.slow() budget 270s) for
+// [data-testid="subagent-collapsed"] to appear, then click it and assert a
+// nested [data-testid="tool-call-badge"] inside its expanded region — the
+// child's own `bash` call rendered NESTED inside the parent's block. That
+// element has zero producers left in src/ (ADR-091 D7/D10, commit
+// 66362240d deleted SubagentBlock/shouldRenderSubagentSpan unconditionally)
+// so the wait was guaranteed to burn its full real-LLM budget and fail —
+// not a flake, a structural dead end that was also paying for two live LLM
+// round-trips (parent delegate + subagent bash) on every run for nothing.
 //
-// Traces to: sprint-h-subagent-block-spec.md TDD row 20, SC-H-001
+// BDD Scenario 1/4's underlying guarantee — "a delegation is visible, and
+// the reader can see the child's own step(s) by drilling in" — is NOT gone;
+// it moved. Re-pointed at the surfaces that replaced the card (same
+// pattern as replay-fidelity.spec.ts's test (b)):
+//   1. THREAD — the `delegate` tool-call chip is the parent's now-only
+//      delegation surface (shouldRenderToolCall's `delegate` case, ADR-091
+//      D7/AC-7 — visible unconditionally, not gated by verbose chat).
+//   2. THREAD — zero subagent-collapsed elements, ever (the guard: proves
+//      the deleted card hasn't quietly come back).
+//   3. THREAD — the child's OWN bash call does NOT render in the PARENT's
+//      thread (a child's frames carry the child's own session_id now, I-4
+//      — nothing to nest).
+//   4. PANEL — the Activity panel row for this delegation, with its open
+//      control into the child's own session (ActivityPanel.tsx, ADR-091
+//      D7/FR-E-004) — the surface that replaced "click the collapsed
+//      header".
+//   5. CHILD SESSION — opening it reveals the child's own bash tool-call
+//      chip (`data-tool="bash"`) — this is where "the expanded region
+//      contains ≥1 tool-call-badge" moved to. Same user-visible guarantee
+//      (a reader CAN see the child's own step), different surface.
+//
+// Timeout re-derived, not inherited (per this lane's brief): the old 150s
+// existed because the OLD flow needed the SAME two LLM round-trips to
+// complete before the collapsed block could even mount — the box was
+// downstream of both calls finishing. The delegate chip below needs only
+// the PARENT's turn to emit the tool call, not the child's own execution —
+// structurally faster, so it gets its own shorter budget, and the
+// child's-own-bash-visible assertion (which DOES depend on the child
+// finishing) gets a budget sized to that step alone rather than the old
+// combined number.
 test(
-  '(b) collapsed subagent display: delegate output renders as collapsed block, expandable',
+  '(b) delegate output is visible via the delegate chip and Activity panel; the child\'s own bash call is visible only in its own session',
   async ({ page }) => {
     // T0.1: OPENROUTER_API_KEY_CI soft-skip removed. The key is required in CI;
     // its absence is a CI configuration failure, not a per-test skip condition.
     // If OPENROUTER_API_KEY_CI is unset, the LLM call below will fail and the
     // test will fail honestly — which is the correct behavior.
 
-    // test.slow() triples the global 90s test timeout to 270s. Real-LLM
-    // delegate under suite load occasionally takes 40-60s; the test passes
-    // in 5-15s alone.
-    test.slow();
+    // 300s: sized to the two waits that actually gate this test, not
+    // inherited from the old combined 270s. The delegate badge only needs
+    // the PARENT's own tool-call emission (a single round trip — other
+    // specs in this shard document 40-90s for that alone); the child's own
+    // bash badge needs the CHILD to actually start executing, the same
+    // underlying "two round trips" wait the old 150s collapsed-block
+    // budget was measuring, so that one keeps a comparable number rather
+    // than being guessed smaller.
+    test.setTimeout(300_000);
 
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
@@ -277,18 +326,20 @@ test(
     // below. Without this, a page-load-time reconnect blip can leave the
     // composer looking usable while the first message it sends lands in
     // the outbound queue instead of the wire — the delegate call never
-    // fires, and the test hangs to its full test.slow() timeout waiting on
-    // a subagent-collapsed block that will never appear.
+    // fires, and the test hangs to its full timeout waiting on a chip that
+    // will never appear.
     await expect(input).toBeEnabled({ timeout: 15_000 });
     await waitForConnected(page, { timeout: 15_000 });
 
     // Route to Jim: the default agent Mia is a guide whose policy excludes the
     // `delegate` tool (verified in CI: `ToolSearch(load): ... Rejected: delegate — denied
     // by this agent's policy`) and whose persona declines to delegate — she answers
-    // in prose offering create_task/switch_agent instead, so no SubagentBlock ever
+    // in prose offering create_task/switch_agent instead, so no delegate chip ever
     // renders. Every delegate-dependent spec switches to Jim (see subagent.spec.ts
     // startFreshChat); Jim is the general-purpose task agent and can delegate.
     await selectAgent(page, /Jim/i);
+
+    const label = `handoff-b-${Date.now()}`;
 
     // Deterministic prompt: explicit tool name, exact arguments, no prose allowed.
     // The subagent's tool policy is the RESOLVED TARGET agent's policy, never the
@@ -299,52 +350,92 @@ test(
     // al.GetRegistry().GetAgent(rec.AgentID) and hands to newTurnState).
     // Worker (id "worker") is the only target in Jim's delegation graph whose
     // ADR-090 policy allows bash, so the delegate call pins agent_id="worker" —
-    // the mandated bash call would be denied under any other target. The subagent
-    // calls `bash` once, producing the tool_call_badge the expanded block asserts.
+    // the mandated bash call would be denied under any other target.
     await input.fill(
       [
         'Call the `delegate` tool exactly once, right now, with these arguments:',
         '  agent_id: "worker"',
-        '  label: "handoff-b test"',
+        `  label: "${label}"`,
         '  task: "You are the subagent. Call the `bash` tool ONCE with action=\\"run\\" and command=\\"echo hello\\". Then reply with the single word \\"done\\". Do not use any other tool."',
         'Do not reply in prose. Do not call any other tool. Call delegate now.',
       ].join('\n'),
     );
     await input.press('Enter');
 
-    // Wait up to 150s for a subagent-collapsed block to appear under
-    // real-LLM determinism — delegate requires two LLM round-trips (parent
-    // tool call + subagent execution). google/gemini-2.5-flash's combined
-    // round-trip latency can still exceed 90s under OpenRouter load (the
-    // generous budget below stays safe; gemini is generally faster than the
-    // prior model). test.slow() gives 270s total; 150s here leaves
-    // 120s for the click + expand assertions below.
-    // Structural assertion: if no delegate occurred the test fails honestly.
-    const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]');
-    await expect(collapsedBlock).toBeVisible({ timeout: 150_000 });
+    // (1) THREAD — the delegate tool-call chip is the parent's only
+    // delegation surface, visible unconditionally (ADR-091 D7/AC-7). This
+    // needs only the PARENT's own turn to emit the call — no child
+    // round-trip required — so it resolves fast.
+    const delegateBadge = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]');
+    await expect(delegateBadge.first()).toBeVisible({ timeout: 60_000 });
 
-    // Assert: at least one collapsed block is present with correct structure.
-    const blockCount = await collapsedBlock.count();
-    expect(blockCount, 'at least one SubagentBlock must be rendered').toBeGreaterThanOrEqual(1);
+    // (2) THREAD — the guard: zero subagent-collapsed elements, ever.
+    await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
 
-    // BDD Scenario 4: click the collapsed header → expanded region appears.
-    await collapsedBlock.first().click();
+    // (3) THREAD — the child's own bash call does NOT render in the
+    // PARENT's thread — a child's frames carry the child's own session_id
+    // now (I-4), so there is nothing to nest here regardless of how long
+    // this test waits.
+    await expect(page.locator('[data-testid="tool-call-badge"][data-tool="bash"]')).toHaveCount(0);
 
-    const expandedBlock = page.locator('[data-testid="subagent-expanded"]');
-    await expect(expandedBlock).toBeVisible({ timeout: 10_000 });
-
-    // Assert: expanded block has at least one tool-call-badge (the subagent called shell).
-    // Structural assertion: checks [data-testid="tool-call-badge"] presence.
-    // 60s budget: the subagent's first LLM round-trip (tool-call emission) can
-    // take 10-50s under suite load on google/gemini-2.5-flash; the previous
-    // 10s budget was tighter than the LLM's documented latency floor.
-    const toolCallBadges = expandedBlock.locator('[data-testid="tool-call-badge"]');
-    await expect(toolCallBadges.first()).toBeVisible({ timeout: 60_000 });
-
-    // a11y baseline check on subagent elements (BDD Scenario 11, FR-H-008).
-    // Traces to: sprint-h-subagent-block-spec.md line 316 (Scenario 11)
+    // a11y baseline check on the delegate chip, BEFORE navigating away to
+    // the child's session below (the parent's thread, delegate chip
+    // included, leaves the DOM once the chat surface rebinds to the child).
+    // Traces to: sprint-h-subagent-block-spec.md line 316 (Scenario 11) —
+    // same accessibility guarantee SubagentBlock used to carry, re-pointed
+    // at the surface that replaced it.
     await expectA11yClean(page, {
-      include: ['[data-testid^="subagent-"]'],
+      include: ['[data-testid="tool-call-badge"]'],
+    });
+
+    // (4) PANEL — the row that replaced "click the collapsed header":
+    // opens the Activity panel, finds this delegation's row, and its open
+    // control into the child's own session.
+    await openActivityPanel(page);
+    const row = page.locator('[data-testid="activity-row"]', { hasText: label });
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    // child_session_id arrives WITH subagent_start (steer_frames.go's
+    // deliverSubagentStart sets it unconditionally at launch, not once the
+    // child finishes) — the open control should already be present the
+    // moment the row itself is.
+    const openControl = row.locator('[data-testid="activity-row-open"]');
+    await expect(openControl).toBeVisible({ timeout: 15_000 });
+
+    // (5) CHILD SESSION — this is where "the expanded region contains
+    // tool-call-badge elements" moved to. Not a `toHaveURL(/sessions\//)`
+    // check: SessionRoute redirects a worker session's deep link straight
+    // to its workspace chat tab (same reasoning as
+    // steered-session-reachability.spec.ts's own comment on this exact
+    // seam) — the reliable "which session is this chat surface bound to
+    // now" signal is ChatScreen's own data-active-session-id attribute.
+    const parentSurface = page.locator('[data-active-session-id]').first();
+    const parentSessionID = await parentSurface.getAttribute('data-active-session-id');
+    await openControl.click();
+    const boundSurface = page.locator('[data-active-session-id]').first();
+    await expect
+      .poll(
+        async () => {
+          const id = await boundSurface.getAttribute('data-active-session-id');
+          return id && id !== parentSessionID && id !== '__pending' ? id : null;
+        },
+        { timeout: 15_000 },
+      )
+      .not.toBeNull();
+
+    // The child's own bash call, visible in its OWN session (bash is
+    // foreground-by-default and therefore unconditionally visible per
+    // toolVisibility.ts — no verbose-chat opt-in needed here either).
+    const childBashBadge = page.locator('[data-testid="tool-call-badge"][data-tool="bash"]');
+    await expect(
+      childBashBadge.first(),
+      'the child\'s own bash call must be visible in the child\'s own session — this is where the deleted nested-tool-call-badge assertion moved to',
+    ).toBeVisible({ timeout: 150_000 });
+
+    // a11y baseline check on the child's own bash chip, now that the chat
+    // surface is bound to the child's session — completes the Scenario 11
+    // coverage the two checks in this test now split across both surfaces.
+    await expectA11yClean(page, {
+      include: ['[data-testid="tool-call-badge"]'],
     });
   },
 );
