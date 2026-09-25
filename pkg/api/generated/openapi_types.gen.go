@@ -4772,6 +4772,153 @@ func (e LibraryPreviewTokenResponseScope) Valid() bool {
 	}
 }
 
+// Defines values for MailFolderSlug.
+const (
+	MailFolderSlugDrafts MailFolderSlug = "drafts"
+	MailFolderSlugInbox  MailFolderSlug = "inbox"
+	MailFolderSlugSent   MailFolderSlug = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderSlug enum.
+func (e MailFolderSlug) Valid() bool {
+	switch e {
+	case MailFolderSlugDrafts:
+		return true
+	case MailFolderSlugInbox:
+		return true
+	case MailFolderSlugSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListFoldersSlug.
+const (
+	MailFolderListFoldersSlugDrafts MailFolderListFoldersSlug = "drafts"
+	MailFolderListFoldersSlugInbox  MailFolderListFoldersSlug = "inbox"
+	MailFolderListFoldersSlugSent   MailFolderListFoldersSlug = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListFoldersSlug enum.
+func (e MailFolderListFoldersSlug) Valid() bool {
+	switch e {
+	case MailFolderListFoldersSlugDrafts:
+		return true
+	case MailFolderListFoldersSlugInbox:
+		return true
+	case MailFolderListFoldersSlugSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailMessageFolder.
+const (
+	MailMessageFolderDrafts MailMessageFolder = "drafts"
+	MailMessageFolderInbox  MailMessageFolder = "inbox"
+	MailMessageFolderSent   MailMessageFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailMessageFolder enum.
+func (e MailMessageFolder) Valid() bool {
+	switch e {
+	case MailMessageFolderDrafts:
+		return true
+	case MailMessageFolderInbox:
+		return true
+	case MailMessageFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailMessagePageMessagesFolder.
+const (
+	MailMessagePageMessagesFolderDrafts MailMessagePageMessagesFolder = "drafts"
+	MailMessagePageMessagesFolderInbox  MailMessagePageMessagesFolder = "inbox"
+	MailMessagePageMessagesFolderSent   MailMessagePageMessagesFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailMessagePageMessagesFolder enum.
+func (e MailMessagePageMessagesFolder) Valid() bool {
+	switch e {
+	case MailMessagePageMessagesFolderDrafts:
+		return true
+	case MailMessagePageMessagesFolderInbox:
+		return true
+	case MailMessagePageMessagesFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailMessageSummaryFolder.
+const (
+	MailMessageSummaryFolderDrafts MailMessageSummaryFolder = "drafts"
+	MailMessageSummaryFolderInbox  MailMessageSummaryFolder = "inbox"
+	MailMessageSummaryFolderSent   MailMessageSummaryFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailMessageSummaryFolder enum.
+func (e MailMessageSummaryFolder) Valid() bool {
+	switch e {
+	case MailMessageSummaryFolderDrafts:
+		return true
+	case MailMessageSummaryFolderInbox:
+		return true
+	case MailMessageSummaryFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailSummaryListItemsWatcherState.
+const (
+	MailSummaryListItemsWatcherStateBackoff MailSummaryListItemsWatcherState = "backoff"
+	MailSummaryListItemsWatcherStateError   MailSummaryListItemsWatcherState = "error"
+	MailSummaryListItemsWatcherStateOk      MailSummaryListItemsWatcherState = "ok"
+)
+
+// Valid indicates whether the value is a known member of the MailSummaryListItemsWatcherState enum.
+func (e MailSummaryListItemsWatcherState) Valid() bool {
+	switch e {
+	case MailSummaryListItemsWatcherStateBackoff:
+		return true
+	case MailSummaryListItemsWatcherStateError:
+		return true
+	case MailSummaryListItemsWatcherStateOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailboxNewMailSummaryWatcherState.
+const (
+	MailboxNewMailSummaryWatcherStateBackoff MailboxNewMailSummaryWatcherState = "backoff"
+	MailboxNewMailSummaryWatcherStateError   MailboxNewMailSummaryWatcherState = "error"
+	MailboxNewMailSummaryWatcherStateOk      MailboxNewMailSummaryWatcherState = "ok"
+)
+
+// Valid indicates whether the value is a known member of the MailboxNewMailSummaryWatcherState enum.
+func (e MailboxNewMailSummaryWatcherState) Valid() bool {
+	switch e {
+	case MailboxNewMailSummaryWatcherStateBackoff:
+		return true
+	case MailboxNewMailSummaryWatcherStateError:
+		return true
+	case MailboxNewMailSummaryWatcherStateOk:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for McpServerStatus.
 const (
 	McpServerStatusConnected    McpServerStatus = "connected"
@@ -12227,6 +12374,90 @@ func (e ListWorkspacesParamsStatus) Valid() bool {
 	}
 }
 
+// Defines values for ListMailMessagesParamsFolder.
+const (
+	ListMailMessagesParamsFolderDrafts ListMailMessagesParamsFolder = "drafts"
+	ListMailMessagesParamsFolderInbox  ListMailMessagesParamsFolder = "inbox"
+	ListMailMessagesParamsFolderSent   ListMailMessagesParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the ListMailMessagesParamsFolder enum.
+func (e ListMailMessagesParamsFolder) Valid() bool {
+	switch e {
+	case ListMailMessagesParamsFolderDrafts:
+		return true
+	case ListMailMessagesParamsFolderInbox:
+		return true
+	case ListMailMessagesParamsFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetMailMessageParamsFolder.
+const (
+	GetMailMessageParamsFolderDrafts GetMailMessageParamsFolder = "drafts"
+	GetMailMessageParamsFolderInbox  GetMailMessageParamsFolder = "inbox"
+	GetMailMessageParamsFolderSent   GetMailMessageParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the GetMailMessageParamsFolder enum.
+func (e GetMailMessageParamsFolder) Valid() bool {
+	switch e {
+	case GetMailMessageParamsFolderDrafts:
+		return true
+	case GetMailMessageParamsFolderInbox:
+		return true
+	case GetMailMessageParamsFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetMailAttachmentParamsFolder.
+const (
+	GetMailAttachmentParamsFolderDrafts GetMailAttachmentParamsFolder = "drafts"
+	GetMailAttachmentParamsFolderInbox  GetMailAttachmentParamsFolder = "inbox"
+	GetMailAttachmentParamsFolderSent   GetMailAttachmentParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the GetMailAttachmentParamsFolder enum.
+func (e GetMailAttachmentParamsFolder) Valid() bool {
+	switch e {
+	case GetMailAttachmentParamsFolderDrafts:
+		return true
+	case GetMailAttachmentParamsFolderInbox:
+		return true
+	case GetMailAttachmentParamsFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MarkMailMessageSeenParamsFolder.
+const (
+	MarkMailMessageSeenParamsFolderDrafts MarkMailMessageSeenParamsFolder = "drafts"
+	MarkMailMessageSeenParamsFolderInbox  MarkMailMessageSeenParamsFolder = "inbox"
+	MarkMailMessageSeenParamsFolderSent   MarkMailMessageSeenParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MarkMailMessageSeenParamsFolder enum.
+func (e MarkMailMessageSeenParamsFolder) Valid() bool {
+	switch e {
+	case MarkMailMessageSeenParamsFolderDrafts:
+		return true
+	case MarkMailMessageSeenParamsFolderInbox:
+		return true
+	case MarkMailMessageSeenParamsFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
 // AboutResponse Gateway metadata returned by GET /api/v1/about.
 type AboutResponse struct {
 	// Arch CPU architecture (GOARCH).
@@ -17421,6 +17652,282 @@ type LoginResponse struct {
 	Warning *string `json:"warning,omitempty"`
 }
 
+// MailAttachment Attachment descriptor on MailMessage (D28 — inbound messages, drafts and sent copies). The gateway never returns raw MIME names: filename is sanitized for download (no path separators, edge case 21) and the same sanitized name is what the download endpoint serves.
+type MailAttachment struct {
+	// ContentType The MIME part's declared content type, as listed. (The download endpoint serves with an extension-derived content type instead — MC-42.)
+	ContentType string `json:"content_type"`
+
+	// Filename Sanitized attachment filename — no path separators, never trusted raw from the MIME part (MC-32; the same sanitized form is served on the download's Content-Disposition per MC-42).
+	Filename string `json:"filename"`
+
+	// PartIndex Index of the MIME part within the message — the {partIndex} path parameter of the download endpoint (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}).
+	PartIndex int `json:"part_index"`
+
+	// SizeBytes Decoded attachment size in bytes.
+	SizeBytes int `json:"size_bytes"`
+}
+
+// MailFolder One of the three mail folders (D5 — Inbox, Sent, Drafts) for one mailbox, as listed live from the mail server. Counts are live IMAP values at request time; the unread count exists for the Inbox only and is null everywhere else (round-1 MIN-005).
+type MailFolder struct {
+	// DisplayName The mail server's real folder name for this slug (the per-mailbox sent_folder_name / drafts_folder_name override applies, else the auto-resolved standard name).
+	DisplayName string `json:"display_name"`
+
+	// Slug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
+	Slug MailFolderSlug `json:"slug"`
+
+	// Total Live message count of the folder.
+	Total int `json:"total"`
+
+	// UnreadCount Live IMAP UNSEEN count. Present for the Inbox only; null for Sent and Drafts (round-1 MIN-005). The watcher's per-mailbox unseen_total is the only other unread surface — the list endpoint never filters by it (round-2 OBS-001 dropped the unseen_only query parameter).
+	UnreadCount *int `json:"unread_count"`
+}
+
+// MailFolderSlug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
+type MailFolderSlug string
+
+// MailFolderList The three mail folders (D5) of one mailbox with live counts — the response of GET /workspaces/{id}/mail/{agentId}/folders.
+type MailFolderList struct {
+	// Folders Exactly the three D5 folders (Inbox, Sent, Drafts).
+	Folders []struct {
+		// DisplayName The mail server's real folder name for this slug (the per-mailbox sent_folder_name / drafts_folder_name override applies, else the auto-resolved standard name).
+		DisplayName string `json:"display_name"`
+
+		// Slug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
+		Slug MailFolderListFoldersSlug `json:"slug"`
+
+		// Total Live message count of the folder.
+		Total int `json:"total"`
+
+		// UnreadCount Live IMAP UNSEEN count. Present for the Inbox only; null for Sent and Drafts (round-1 MIN-005). The watcher's per-mailbox unseen_total is the only other unread surface — the list endpoint never filters by it (round-2 OBS-001 dropped the unseen_only query parameter).
+		UnreadCount *int `json:"unread_count"`
+	} `json:"folders"`
+}
+
+// MailFolderListFoldersSlug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
+type MailFolderListFoldersSlug string
+
+// MailMessage Full message for the Mail panel read path (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}) and the response of a panel draft edit (PUT .../folders/drafts/messages/{ref}). Carries every MailMessageSummary field plus the read-path extras. Fetching never writes flags (BODY.PEEK — round-2 MAJ-003); the only \Seen writers are the panel's seen endpoint and agent read_message (D38). bcc is returned only on the owner's own copies (drafts and Sent) and is null otherwise (§2.3 note). No message body text is persisted anywhere by Omnipus (D6) — this object is assembled live from the mail server.
+type MailMessage struct {
+	// Attachments Attachment descriptors (D28) — sanitized names, part indices.
+	Attachments []struct {
+		// ContentType The MIME part's declared content type, as listed. (The download endpoint serves with an extension-derived content type instead — MC-42.)
+		ContentType string `json:"content_type"`
+
+		// Filename Sanitized attachment filename — no path separators, never trusted raw from the MIME part (MC-32; the same sanitized form is served on the download's Content-Disposition per MC-42).
+		Filename string `json:"filename"`
+
+		// PartIndex Index of the MIME part within the message — the {partIndex} path parameter of the download endpoint (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}).
+		PartIndex int `json:"part_index"`
+
+		// SizeBytes Decoded attachment size in bytes.
+		SizeBytes int `json:"size_bytes"`
+	} `json:"attachments"`
+
+	// Bcc Bcc addresses — returned only on the owner's own copies (drafts and Sent); null on every other message (§2.3 note, D29/R2-3).
+	Bcc *[]string `json:"bcc"`
+
+	// BodyMarkdown The draft's editable Markdown source: the stored text/markdown part of an Omnipus draft whose X-Omnipus-Render-Hash matches the rendered text part; otherwise the server-derived Markdown of a foreign draft (FR-030) with markdown_lossy=true. Null on non-draft messages without an editable source.
+	BodyMarkdown *string `json:"body_markdown"`
+
+	// BodyText Decoded plain-text body.
+	BodyText string `json:"body_text"`
+
+	// Cc Cc addresses (D26).
+	Cc []string `json:"cc"`
+
+	// Date Message date (RFC 3339).
+	Date time.Time `json:"date"`
+
+	// Folder The folder slug the message lives in (MC-5).
+	Folder MailMessageFolder `json:"folder"`
+
+	// From The From address (addr-spec).
+	From string `json:"from"`
+
+	// FromName Display name of the sender when present, else null.
+	FromName *string `json:"from_name"`
+
+	// HasHtml Whether an HTML body part exists. The HTML itself is never in this object — it is served only through the token-gated mail-preview routes (D13, §2.3a).
+	HasHtml bool `json:"has_html"`
+
+	// InReplyTo In-Reply-To Message-ID when present, else null.
+	InReplyTo *string `json:"in_reply_to"`
+
+	// IsDraft Whether the message carries the \Draft flag (MC-14).
+	IsDraft bool `json:"is_draft"`
+
+	// IsOmnipusDraft Whether the X-Omnipus-Draft header is present (FR-029).
+	IsOmnipusDraft bool `json:"is_omnipus_draft"`
+
+	// MarkdownLossy True when body_markdown was derived rather than read from a stored text/markdown part — editing such a draft may lose formatting (D24; the panel states the loss plainly).
+	MarkdownLossy bool `json:"markdown_lossy"`
+
+	// MessageId The Message-ID header value, or null when the mail carries none.
+	MessageId *string `json:"message_id"`
+
+	// ReadByAgent Whether the flag list carries the $OmnipusAgentRead keyword (D38, FR-039) — derived per fetch, never stored by Omnipus.
+	ReadByAgent bool `json:"read_by_agent"`
+
+	// References References header (thread chain) when present, else null.
+	References *string `json:"references"`
+
+	// ReplyTo Reply-To address when the message carries one, else null.
+	ReplyTo *string `json:"reply_to"`
+
+	// Seen Whether the message carries the \Seen flag.
+	Seen bool `json:"seen"`
+
+	// Subject Decoded subject (RFC 2047 decoded).
+	Subject string `json:"subject"`
+
+	// To To addresses.
+	To []string `json:"to"`
+
+	// Uid IMAP UID of the message within its folder.
+	Uid int `json:"uid"`
+
+	// Uidvalidity IMAP UIDVALIDITY of the folder.
+	Uidvalidity int `json:"uidvalidity"`
+}
+
+// MailMessageFolder The folder slug the message lives in (MC-5).
+type MailMessageFolder string
+
+// MailMessagePage One page of mail message envelopes (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). Truncation is explicit — the page never silently drops rows (mirrors pkg/email/transport.go::SearchResult's explicit-truncation contract).
+type MailMessagePage struct {
+	// Messages The envelopes of this page, newest first.
+	Messages []struct {
+		// Cc Cc addresses (D26 — recipient lists on every mail surface).
+		Cc []string `json:"cc"`
+
+		// Date Message date (RFC 3339).
+		Date time.Time `json:"date"`
+
+		// Folder The folder slug the message was listed from (MC-5).
+		Folder MailMessagePageMessagesFolder `json:"folder"`
+
+		// From The From address (addr-spec).
+		From string `json:"from"`
+
+		// FromName Display name of the sender when present, else null.
+		FromName *string `json:"from_name"`
+
+		// IsDraft Whether the message carries the \Draft flag (MC-14).
+		IsDraft bool `json:"is_draft"`
+
+		// IsOmnipusDraft Whether the X-Omnipus-Draft header is present (FR-029) — an agent-created draft the approval panel can edit losslessly.
+		IsOmnipusDraft bool `json:"is_omnipus_draft"`
+
+		// MessageId The Message-ID header value, or null when the inbound mail carries none (some mail does). Mid-style refs cannot address such a message.
+		MessageId *string `json:"message_id"`
+
+		// ReadByAgent Whether the message's flag list carries the $OmnipusAgentRead keyword (D38, FR-039). Derived from the fetched flag list on every fetch — never stored by Omnipus (D6). When the mail server rejects custom keywords the value is false and nothing errors (MC-36).
+		ReadByAgent bool `json:"read_by_agent"`
+
+		// Seen Whether the message carries the \Seen flag.
+		Seen bool `json:"seen"`
+
+		// Subject Decoded subject (RFC 2047 decoded).
+		Subject string `json:"subject"`
+
+		// To To addresses.
+		To []string `json:"to"`
+
+		// Uid IMAP UID of the message within its folder (valid under uidvalidity).
+		Uid int `json:"uid"`
+
+		// Uidvalidity IMAP UIDVALIDITY of the folder — the epoch the uid is valid in. A changed uidvalidity renumbers uids; the mid: ref form survives that (round-1 MAJ-005, D21).
+		Uidvalidity int `json:"uidvalidity"`
+	} `json:"messages"`
+
+	// NextBeforeUid The before_uid cursor for the next page when truncated is true; null when this page is the last one.
+	NextBeforeUid *int `json:"next_before_uid"`
+
+	// Truncated Whether more messages exist beyond this page.
+	Truncated bool `json:"truncated"`
+}
+
+// MailMessagePageMessagesFolder The folder slug the message was listed from (MC-5).
+type MailMessagePageMessagesFolder string
+
+// MailMessageSummary Envelope row for one mail message as shown in a Mail panel list result (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). All fields are always serialized; nullable fields are the ones the mail server itself may leave unset (round-1 MIN-003 — types and nullability explicit). Fetches behind this row never change flags (BODY.PEEK / EXAMINE — round-2 MAJ-003).
+type MailMessageSummary struct {
+	// Cc Cc addresses (D26 — recipient lists on every mail surface).
+	Cc []string `json:"cc"`
+
+	// Date Message date (RFC 3339).
+	Date time.Time `json:"date"`
+
+	// Folder The folder slug the message was listed from (MC-5).
+	Folder MailMessageSummaryFolder `json:"folder"`
+
+	// From The From address (addr-spec).
+	From string `json:"from"`
+
+	// FromName Display name of the sender when present, else null.
+	FromName *string `json:"from_name"`
+
+	// IsDraft Whether the message carries the \Draft flag (MC-14).
+	IsDraft bool `json:"is_draft"`
+
+	// IsOmnipusDraft Whether the X-Omnipus-Draft header is present (FR-029) — an agent-created draft the approval panel can edit losslessly.
+	IsOmnipusDraft bool `json:"is_omnipus_draft"`
+
+	// MessageId The Message-ID header value, or null when the inbound mail carries none (some mail does). Mid-style refs cannot address such a message.
+	MessageId *string `json:"message_id"`
+
+	// ReadByAgent Whether the message's flag list carries the $OmnipusAgentRead keyword (D38, FR-039). Derived from the fetched flag list on every fetch — never stored by Omnipus (D6). When the mail server rejects custom keywords the value is false and nothing errors (MC-36).
+	ReadByAgent bool `json:"read_by_agent"`
+
+	// Seen Whether the message carries the \Seen flag.
+	Seen bool `json:"seen"`
+
+	// Subject Decoded subject (RFC 2047 decoded).
+	Subject string `json:"subject"`
+
+	// To To addresses.
+	To []string `json:"to"`
+
+	// Uid IMAP UID of the message within its folder (valid under uidvalidity).
+	Uid int `json:"uid"`
+
+	// Uidvalidity IMAP UIDVALIDITY of the folder — the epoch the uid is valid in. A changed uidvalidity renumbers uids; the mid: ref form survives that (round-1 MAJ-005, D21).
+	Uidvalidity int `json:"uidvalidity"`
+}
+
+// MailMessageSummaryFolder The folder slug the message was listed from (MC-5).
+type MailMessageSummaryFolder string
+
+// MailSummaryList Watcher-driven badge summary for every mailbox in a workspace (GET /workspaces/{id}/mail/summary) — one MailboxNewMailSummary per (agent, workspace) mailbox pair. Served from saved watcher state; never dials IMAP.
+type MailSummaryList struct {
+	// Items One entry per mailbox in the workspace.
+	Items []struct {
+		// AgentId ID of the agent owning the mailbox (the workspace rides the path).
+		AgentId string `json:"agent_id"`
+
+		// LastErrorClass Sanitized error class of the last failed cycle, from the closed enum timeout|dns|connect_refused|auth_failed|tls|folder_missing|server_error (MC-8); null when the last cycle succeeded.
+		LastErrorClass *string `json:"last_error_class"`
+
+		// LastSeenUid Highest UID the watcher has seen (MC-31 baselining applies); null before the first state was saved. Makes UID advance observable.
+		LastSeenUid *int `json:"last_seen_uid"`
+
+		// LastSuccessAt RFC 3339 instant of the last successful watcher cycle; null when no cycle has ever succeeded (round-2 MAJ-019 — ok never lies about blindness).
+		LastSuccessAt *time.Time `json:"last_success_at"`
+
+		// NextAttemptAt RFC 3339 instant of the watcher's next attempt while backing off (D29/R2-8 — the badge renders "retrying at hh:mm"); null otherwise.
+		NextAttemptAt *time.Time `json:"next_attempt_at"`
+
+		// UnseenTotal The mailbox's live IMAP UNSEEN count as of the watcher's last completed cycle (A11).
+		UnseenTotal int `json:"unseen_total"`
+
+		// WatcherState The watcher's cycle state: ok (last cycle succeeded), error (last cycle failed, next attempt not yet deferred), backoff (failing repeatedly — next_attempt_at carries the next try).
+		WatcherState MailSummaryListItemsWatcherState `json:"watcher_state"`
+	} `json:"items"`
+}
+
+// MailSummaryListItemsWatcherState The watcher's cycle state: ok (last cycle succeeded), error (last cycle failed, next attempt not yet deferred), backoff (failing repeatedly — next_attempt_at carries the next try).
+type MailSummaryListItemsWatcherState string
+
 // Mailbox One (agent, workspace) email mailbox account (M11). Email is a TOOL surface, not a conversational channel: a mailbox belongs to exactly one (agent, workspace) pair — an agent can hold a different mailbox in each workspace it belongs to (different roles, different inboxes), and several agents may each have mailboxes in the same workspace. The mailbox password is stored in the encrypted credential store and is NEVER returned by this endpoint — the `configured` flag reports whether a password is on file.
 type Mailbox struct {
 	// AgentId ID of the agent that owns this mailbox.
@@ -17534,6 +18041,33 @@ type MailboxListResponse struct {
 		WorkspaceId string `json:"workspace_id"`
 	} `json:"mailboxes"`
 }
+
+// MailboxNewMailSummary Watcher-driven badge state for one mailbox (GET /workspaces/{id}/mail/summary). Served from the watcher's saved state file — this response never dials IMAP (D29/R2-5, FR-033); the only reference metadata Omnipus stores for a mailbox is this UID/count/error-class state (D6). watcher_state ok never lies about blindness: last_success_at is null until a cycle has actually succeeded, and last_seen_uid makes UID advance observable (round-2 MAJ-019).
+type MailboxNewMailSummary struct {
+	// AgentId ID of the agent owning the mailbox (the workspace rides the path).
+	AgentId string `json:"agent_id"`
+
+	// LastErrorClass Sanitized error class of the last failed cycle, from the closed enum timeout|dns|connect_refused|auth_failed|tls|folder_missing|server_error (MC-8); null when the last cycle succeeded.
+	LastErrorClass *string `json:"last_error_class"`
+
+	// LastSeenUid Highest UID the watcher has seen (MC-31 baselining applies); null before the first state was saved. Makes UID advance observable.
+	LastSeenUid *int `json:"last_seen_uid"`
+
+	// LastSuccessAt RFC 3339 instant of the last successful watcher cycle; null when no cycle has ever succeeded (round-2 MAJ-019 — ok never lies about blindness).
+	LastSuccessAt *time.Time `json:"last_success_at"`
+
+	// NextAttemptAt RFC 3339 instant of the watcher's next attempt while backing off (D29/R2-8 — the badge renders "retrying at hh:mm"); null otherwise.
+	NextAttemptAt *time.Time `json:"next_attempt_at"`
+
+	// UnseenTotal The mailbox's live IMAP UNSEEN count as of the watcher's last completed cycle (A11).
+	UnseenTotal int `json:"unseen_total"`
+
+	// WatcherState The watcher's cycle state: ok (last cycle succeeded), error (last cycle failed, next attempt not yet deferred), backoff (failing repeatedly — next_attempt_at carries the next try).
+	WatcherState MailboxNewMailSummaryWatcherState `json:"watcher_state"`
+}
+
+// MailboxNewMailSummaryWatcherState The watcher's cycle state: ok (last cycle succeeded), error (last cycle failed, next attempt not yet deferred), backoff (failing repeatedly — next_attempt_at carries the next try).
+type MailboxNewMailSummaryWatcherState string
 
 // McpServer An MCP server entry as returned by GET /mcp-servers and POST /mcp-servers.
 type McpServer struct {
@@ -25785,6 +26319,27 @@ type ListWorkspacesParamsStatus string
 type DeleteWorkspaceParams struct {
 	Revision ConfigurationRevision `form:"revision" json:"revision"`
 }
+
+// ListMailMessagesParams defines parameters for ListMailMessages.
+type ListMailMessagesParams struct {
+	// Limit Page size. Zero, negative or absent means the default 20; values above 100 are clamped to 100 (MC-6, mirrors clampLimit in pkg/email/transport.go). A non-integer value is rejected 400.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// BeforeUid Cursor — list envelopes with uid lower than this value (from MailMessagePage.next_before_uid of the previous page).
+	BeforeUid *int `form:"before_uid,omitempty" json:"before_uid,omitempty"`
+}
+
+// ListMailMessagesParamsFolder defines parameters for ListMailMessages.
+type ListMailMessagesParamsFolder string
+
+// GetMailMessageParamsFolder defines parameters for GetMailMessage.
+type GetMailMessageParamsFolder string
+
+// GetMailAttachmentParamsFolder defines parameters for GetMailAttachment.
+type GetMailAttachmentParamsFolder string
+
+// MarkMailMessageSeenParamsFolder defines parameters for MarkMailMessageSeen.
+type MarkMailMessageSeenParamsFolder string
 
 // CreateAgentJSONRequestBody defines body for CreateAgent for application/json ContentType.
 type CreateAgentJSONRequestBody = AgentCreateRequest

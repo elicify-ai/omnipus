@@ -1,0 +1,97 @@
+title: MailMessageSummary
+description: >
+  Envelope row for one mail message as shown in a Mail panel list result
+  (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). All fields
+  are always serialized; nullable fields are the ones the mail server itself
+  may leave unset (round-1 MIN-003 — types and nullability explicit). Fetches
+  behind this row never change flags (BODY.PEEK / EXAMINE — round-2 MAJ-003).
+type: object
+additionalProperties: false
+required:
+  - message_id
+  - uid
+  - uidvalidity
+  - folder
+  - subject
+  - from
+  - from_name
+  - to
+  - cc
+  - date
+  - seen
+  - is_draft
+  - is_omnipus_draft
+  - read_by_agent
+properties:
+  message_id:
+    type: string
+    nullable: true
+    description: >
+      The Message-ID header value, or null when the inbound mail carries none
+      (some mail does). Mid-style refs cannot address such a message.
+    example: "<abc123@example.com>"
+  uid:
+    type: integer
+    description: IMAP UID of the message within its folder (valid under uidvalidity).
+    example: 123
+  uidvalidity:
+    type: integer
+    description: >
+      IMAP UIDVALIDITY of the folder — the epoch the uid is valid in. A
+      changed uidvalidity renumbers uids; the mid: ref form survives that
+      (round-1 MAJ-005, D21).
+    example: 456
+  folder:
+    type: string
+    enum:
+      - inbox
+      - sent
+      - drafts
+    description: The folder slug the message was listed from (MC-5).
+    example: "inbox"
+  subject:
+    type: string
+    description: Decoded subject (RFC 2047 decoded).
+    example: "Quarterly report"
+  from:
+    type: string
+    description: The From address (addr-spec).
+    example: "dana@example.com"
+  from_name:
+    type: string
+    nullable: true
+    description: Display name of the sender when present, else null.
+    example: "Dana Example"
+  to:
+    type: array
+    description: To addresses.
+    items:
+      type: string
+  cc:
+    type: array
+    description: Cc addresses (D26 — recipient lists on every mail surface).
+    items:
+      type: string
+  date:
+    type: string
+    format: date-time
+    description: Message date (RFC 3339).
+    example: "2026-09-26T10:30:00Z"
+  seen:
+    type: boolean
+    description: Whether the message carries the \Seen flag.
+  is_draft:
+    type: boolean
+    description: Whether the message carries the \Draft flag (MC-14).
+  is_omnipus_draft:
+    type: boolean
+    description: >
+      Whether the X-Omnipus-Draft header is present (FR-029) — an
+      agent-created draft the approval panel can edit losslessly.
+  read_by_agent:
+    type: boolean
+    description: >
+      Whether the message's flag list carries the $OmnipusAgentRead keyword
+      (D38, FR-039). Derived from the fetched flag list on every fetch —
+      never stored by Omnipus (D6). When the mail server rejects custom
+      keywords the value is false and nothing errors (MC-36).

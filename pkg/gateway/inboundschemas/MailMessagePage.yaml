@@ -1,0 +1,28 @@
+title: MailMessagePage
+description: >
+  One page of mail message envelopes (GET
+  /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). Truncation is
+  explicit — the page never silently drops rows (mirrors
+  pkg/email/transport.go::SearchResult's explicit-truncation contract).
+type: object
+additionalProperties: false
+required:
+  - messages
+  - truncated
+  - next_before_uid
+properties:
+  messages:
+    type: array
+    description: The envelopes of this page, newest first.
+    items:
+      $ref: ./MailMessageSummary.yaml
+  truncated:
+    type: boolean
+    description: Whether more messages exist beyond this page.
+  next_before_uid:
+    type: integer
+    nullable: true
+    description: >
+      The before_uid cursor for the next page when truncated is true; null
+      when this page is the last one.
+    example: 87

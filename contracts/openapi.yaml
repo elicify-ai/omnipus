@@ -57,6 +57,15 @@ tags:
     would otherwise also match it.
 - name: Preview
   description: Agent-generated preview content served on the main gateway listener at /preview/ (token-authenticated, ADR-044)
+- name: Mail
+  description: >
+    Workspace mail surface — live IMAP reads over the ADR-033 (agent,
+    workspace) mailbox pairs (email-mail-view-spec §2.3). Nothing is stored
+    locally (D6): every response is assembled live from the mail server;
+    fetches never change flags (BODY.PEEK). The mail-preview HTML serve
+    routes are deliberately NOT in this document — they are token-only paths
+    on the non-API /mail-preview/ prefix (§2.3a, security sign-off C1) and
+    carry no JSON contract, mirroring the Library serving-prefix precedent.
 - name: Knowledge
   description: >
     Knowledge-base read surface over a mounted collection inside a workspace
@@ -1687,6 +1696,22 @@ components:
       $ref: ./components/schemas/MailboxConfigureRequest.yaml
     MailboxListResponse:
       $ref: ./components/schemas/MailboxListResponse.yaml
+    MailFolder:
+      $ref: ./components/schemas/MailFolder.yaml
+    MailFolderList:
+      $ref: ./components/schemas/MailFolderList.yaml
+    MailMessageSummary:
+      $ref: ./components/schemas/MailMessageSummary.yaml
+    MailMessagePage:
+      $ref: ./components/schemas/MailMessagePage.yaml
+    MailMessage:
+      $ref: ./components/schemas/MailMessage.yaml
+    MailAttachment:
+      $ref: ./components/schemas/MailAttachment.yaml
+    MailboxNewMailSummary:
+      $ref: ./components/schemas/MailboxNewMailSummary.yaml
+    MailSummaryList:
+      $ref: ./components/schemas/MailSummaryList.yaml
     BackupCreateResponse:
       $ref: ./components/schemas/BackupCreateResponse.yaml
     OnboardingStatusResponse:
@@ -9938,6 +9963,456 @@ paths:
           $ref: '#/components/responses/429TooManyRequests'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+
+  /workspaces/{id}/mail/{agentId}/folders:
+    get:
+      operationId: listMailFolders
+      summary: List the three mail folders of one mailbox with live counts
+      description: >
+        Returns Inbox, Sent and Drafts (D5) for the (agent, workspace) mailbox
+        with live IMAP counts (email-mail-view-spec §2.3). One IMAP session per
+        request (round-1 MAJ-012); automatic panel refreshes never dial while
+        the watcher is backing off — they return the saved error class plus
+        next_attempt_at immediately (D29/R2-9). Identical concurrent refreshes
+        coalesce so N tabs cost one IMAP login per tick. 502 carries a
+        sanitized error class from the closed enum
+        timeout|dns|connect_refused|auth_failed|tls|folder_missing|server_error
+        in the body's code field (MC-8); raw upstream text is logged
+        server-side only.
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Workspace ID.
+        schema:
+          type: string
+        example: ws_my_workspace
+      - name: agentId
+        in: path
+        required: true
+        description: ID of the mailbox-owning agent.
+        schema:
+          type: string
+        example: mia
+      responses:
+        '200':
+          description: The mailbox's three folders with live counts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailFolderList'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Workspace, agent, or mailbox pair not found (getAgentMailbox precedent).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: >
+            Mail server unreachable — the body's code field carries a
+            sanitized error class from the closed enum (MC-8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /workspaces/{id}/mail/{agentId}/folders/{folder}/messages:
+    get:
+      operationId: listMailMessages
+      summary: List one page of message envelopes for one folder
+      description: >
+        Envelope page for the folder (email-mail-view-spec §2.3). Messages are
+        addressed folder-scoped (round-1 MAJ-005, D21); listings exclude
+        \Deleted messages (round-2 MIN-005). Fetches never change flags
+        (BODY.PEEK / EXAMINE — round-2 MAJ-003): nothing in the list path
+        marks anything read. The round-1 unseen_only query parameter was
+        dropped (round-2 OBS-001) — the watcher's unseen_total is the only
+        unread surface.
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Workspace ID.
+        schema:
+          type: string
+        example: ws_my_workspace
+      - name: agentId
+        in: path
+        required: true
+        description: ID of the mailbox-owning agent.
+        schema:
+          type: string
+        example: mia
+      - name: folder
+        in: path
+        required: true
+        description: Folder slug — exactly inbox, sent or drafts (MC-5).
+        schema:
+          type: string
+          enum:
+          - inbox
+          - sent
+          - drafts
+      - name: limit
+        in: query
+        required: false
+        description: >
+          Page size. Zero, negative or absent means the default 20; values
+          above 100 are clamped to 100 (MC-6, mirrors clampLimit in
+          pkg/email/transport.go). A non-integer value is rejected 400.
+        schema:
+          type: integer
+          default: 20
+      - name: before_uid
+        in: query
+        required: false
+        description: >
+          Cursor — list envelopes with uid lower than this value (from
+          MailMessagePage.next_before_uid of the previous page).
+        schema:
+          type: integer
+      responses:
+        '200':
+          description: One explicit-truncation page of envelopes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailMessagePage'
+        '400':
+          description: Unknown folder slug or malformed limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Workspace, agent, or mailbox pair not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: >
+            Mail server failure — sanitized error class in the body's code
+            field (MC-8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}:
+    get:
+      operationId: getMailMessage
+      summary: Fetch one full message by folder-scoped ref
+      description: >
+        Full message for the Mail panel read path (email-mail-view-spec
+        §2.3). Never writes flags — the fetch is BODY.PEEK (round-2 MAJ-003).
+        The ref is folder-scoped (round-1 MAJ-005, D21): uid form is always
+        resolvable from a list row; mid form searches only the addressed
+        folder, among non-\Deleted messages only (round-2 MIN-005 — a
+        no-UIDPLUS server keeps the old copy of an edited draft in the folder
+        with \Deleted and the same Message-ID), resolving multiple hits to the
+        highest UID — never by INTERNALDATE (round-2 MIN-005). Draft actions
+        resolve only inside drafts (MC-13).
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Workspace ID.
+        schema:
+          type: string
+        example: ws_my_workspace
+      - name: agentId
+        in: path
+        required: true
+        description: ID of the mailbox-owning agent.
+        schema:
+          type: string
+        example: mia
+      - name: folder
+        in: path
+        required: true
+        description: Folder slug — exactly inbox, sent or drafts (MC-5).
+        schema:
+          type: string
+          enum:
+          - inbox
+          - sent
+          - drafts
+      - name: ref
+        in: path
+        required: true
+        description: >
+          Folder-scoped message reference: `uid:<uidvalidity>:<uid>` (what
+          every list row carries) or `mid:<Message-ID>` (what chat links
+          carry — stable across UID renumbering). Message-ID validation for
+          the mid form: `<...@...>` shape, max 998 bytes, no CR/LF (the value
+          feeds an IMAP SEARCH string; percent-encoded in the URL).
+        schema:
+          type: string
+          minLength: 5
+        example: "uid:456:123"
+      responses:
+        '200':
+          description: The full message.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailMessage'
+        '400':
+          description: Malformed ref or failed Message-ID validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Message not found in the addressed folder (includes a pair with no mailbox; MC-13 — no body or folder leakage).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: >
+            Mail server failure — sanitized error class in the body's code
+            field (MC-8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/seen:
+    post:
+      operationId: markMailMessageSeen
+      summary: Mark one message seen (the panel calls this once on open)
+      description: >
+        Marks exactly the addressed message \Seen (FR-020, email-mail-view-spec
+        §2.3). A GET of folders/messages never writes flags, so the flag write
+        is its own endpoint (round-2 MAJ-003). Idempotent: an already-seen
+        message is a no-op 204. This endpoint and agent read_message (D38)
+        are the ONLY \Seen writers in the product; the watcher never writes
+        flags (FR-023).
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Workspace ID.
+        schema:
+          type: string
+        example: ws_my_workspace
+      - name: agentId
+        in: path
+        required: true
+        description: ID of the mailbox-owning agent.
+        schema:
+          type: string
+        example: mia
+      - name: folder
+        in: path
+        required: true
+        description: Folder slug — exactly inbox, sent or drafts (MC-5).
+        schema:
+          type: string
+          enum:
+          - inbox
+          - sent
+          - drafts
+      - name: ref
+        in: path
+        required: true
+        description: >
+          Folder-scoped message reference: `uid:<uidvalidity>:<uid>` or
+          `mid:<Message-ID>` (same rules as the read endpoint).
+        schema:
+          type: string
+          minLength: 5
+        example: "uid:456:123"
+      responses:
+        '204':
+          description: The message is marked seen (or already was). No response body.
+        '400':
+          description: Malformed ref.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Message not found in the addressed folder.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: >
+            Mail server failure — sanitized error class in the body's code
+            field (MC-8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}:
+    get:
+      operationId: getMailAttachment
+      summary: Download one attachment part of one message
+      description: >
+        Streams one MIME attachment part (D28, email-mail-view-spec §2.3).
+        Served with Content-Disposition: attachment always — an .html
+        attachment is never inline (MC-42) — plus X-Content-Type-Options:
+        nosniff, an extension-derived content type (extension decides, never
+        the bytes nor the MIME part's self-declared type), and the RFC 6266
+        dual-encoded filename from the sanitized MailAttachment.filename. No
+        CSP on attachment responses (Library MV-13 second half). The
+        download never changes flags.
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Workspace ID.
+        schema:
+          type: string
+        example: ws_my_workspace
+      - name: agentId
+        in: path
+        required: true
+        description: ID of the mailbox-owning agent.
+        schema:
+          type: string
+        example: mia
+      - name: folder
+        in: path
+        required: true
+        description: Folder slug — exactly inbox, sent or drafts (MC-5).
+        schema:
+          type: string
+          enum:
+          - inbox
+          - sent
+          - drafts
+      - name: ref
+        in: path
+        required: true
+        description: >
+          Folder-scoped message reference: `uid:<uidvalidity>:<uid>` or
+          `mid:<Message-ID>` (same rules as the read endpoint).
+        schema:
+          type: string
+          minLength: 5
+        example: "uid:456:123"
+      - name: partIndex
+        in: path
+        required: true
+        description: MIME part index from MailAttachment.part_index.
+        schema:
+          type: integer
+      responses:
+        '200':
+          description: >
+            The part's bytes. Content type is extension-derived (MC-42); the
+            document's application/octet-stream is the generic fallback —
+            the response's actual Content-Type header decides.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Malformed ref or part index.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Message or attachment part absent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: >
+            Mail server failure — sanitized error class in the body's code
+            field (MC-8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /workspaces/{id}/mail/summary:
+    get:
+      operationId: getWorkspaceMailSummary
+      summary: Watcher-driven badge summary for the workspace's mailboxes
+      description: >
+        Per-mailbox watcher badge state (MailSummaryList) served from the
+        watcher's saved state files — this endpoint never dials IMAP
+        (D29/R2-5, FR-033). Refreshed by the SPA every 60 s from this saved
+        state (round-2 R2-5). A mailbox in error/backoff reports its class
+        and next_attempt_at so the badge can say "retrying at hh:mm"
+        (D29/R2-8); watcher_state ok never lies (round-2 MAJ-019).
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Workspace ID.
+        schema:
+          type: string
+        example: ws_my_workspace
+      responses:
+        '200':
+          description: One summary entry per mailbox in the workspace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailSummaryList'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Workspace not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /workspaces/{id}/delegation:
     get:

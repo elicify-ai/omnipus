@@ -1,0 +1,149 @@
+title: MailMessage
+description: >
+  Full message for the Mail panel read path (GET
+  /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}) and the
+  response of a panel draft edit (PUT .../folders/drafts/messages/{ref}).
+  Carries every MailMessageSummary field plus the read-path extras. Fetching
+  never writes flags (BODY.PEEK — round-2 MAJ-003); the only \Seen writers
+  are the panel's seen endpoint and agent read_message (D38). bcc is
+  returned only on the owner's own copies (drafts and Sent) and is null
+  otherwise (§2.3 note). No message body text is persisted anywhere by
+  Omnipus (D6) — this object is assembled live from the mail server.
+type: object
+additionalProperties: false
+required:
+  - message_id
+  - uid
+  - uidvalidity
+  - folder
+  - subject
+  - from
+  - from_name
+  - to
+  - cc
+  - date
+  - seen
+  - is_draft
+  - is_omnipus_draft
+  - read_by_agent
+  - reply_to
+  - in_reply_to
+  - references
+  - body_text
+  - has_html
+  - bcc
+  - attachments
+  - body_markdown
+  - markdown_lossy
+properties:
+  message_id:
+    type: string
+    nullable: true
+    description: The Message-ID header value, or null when the mail carries none.
+    example: "<abc123@example.com>"
+  uid:
+    type: integer
+    description: IMAP UID of the message within its folder.
+    example: 123
+  uidvalidity:
+    type: integer
+    description: IMAP UIDVALIDITY of the folder.
+    example: 456
+  folder:
+    type: string
+    enum:
+      - inbox
+      - sent
+      - drafts
+    description: The folder slug the message lives in (MC-5).
+    example: "drafts"
+  subject:
+    type: string
+    description: Decoded subject (RFC 2047 decoded).
+    example: "Quarterly report"
+  from:
+    type: string
+    description: The From address (addr-spec).
+    example: "assistant@example.com"
+  from_name:
+    type: string
+    nullable: true
+    description: Display name of the sender when present, else null.
+  to:
+    type: array
+    description: To addresses.
+    items:
+      type: string
+  cc:
+    type: array
+    description: Cc addresses (D26).
+    items:
+      type: string
+  date:
+    type: string
+    format: date-time
+    description: Message date (RFC 3339).
+    example: "2026-09-26T10:30:00Z"
+  seen:
+    type: boolean
+    description: Whether the message carries the \Seen flag.
+  is_draft:
+    type: boolean
+    description: Whether the message carries the \Draft flag (MC-14).
+  is_omnipus_draft:
+    type: boolean
+    description: Whether the X-Omnipus-Draft header is present (FR-029).
+  read_by_agent:
+    type: boolean
+    description: >
+      Whether the flag list carries the $OmnipusAgentRead keyword (D38,
+      FR-039) — derived per fetch, never stored by Omnipus.
+  reply_to:
+    type: string
+    nullable: true
+    description: Reply-To address when the message carries one, else null.
+  in_reply_to:
+    type: string
+    nullable: true
+    description: In-Reply-To Message-ID when present, else null.
+  references:
+    type: string
+    nullable: true
+    description: References header (thread chain) when present, else null.
+  body_text:
+    type: string
+    description: Decoded plain-text body.
+  has_html:
+    type: boolean
+    description: >
+      Whether an HTML body part exists. The HTML itself is never in this
+      object — it is served only through the token-gated mail-preview routes
+      (D13, §2.3a).
+  bcc:
+    type: array
+    nullable: true
+    description: >
+      Bcc addresses — returned only on the owner's own copies (drafts and
+      Sent); null on every other message (§2.3 note, D29/R2-3).
+    items:
+      type: string
+  attachments:
+    type: array
+    description: Attachment descriptors (D28) — sanitized names, part indices.
+    items:
+      $ref: ./MailAttachment.yaml
+  body_markdown:
+    type: string
+    nullable: true
+    description: >
+      The draft's editable Markdown source: the stored text/markdown part of
+      an Omnipus draft whose X-Omnipus-Render-Hash matches the rendered text
+      part; otherwise the server-derived Markdown of a foreign draft
+      (FR-030) with markdown_lossy=true. Null on non-draft messages without
+      an editable source.
+  markdown_lossy:
+    type: boolean
+    description: >
+      True when body_markdown was derived rather than read from a stored
+      text/markdown part — editing such a draft may lose formatting (D24;
+      the panel states the loss plainly).

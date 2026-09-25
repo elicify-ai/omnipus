@@ -1878,6 +1878,79 @@ type Mailbox = {
   sent_folder_name?: string | undefined;
   drafts_folder_name?: string | undefined;
 };
+type MailFolderList = {
+  folders: Array<MailFolder>;
+};
+type MailFolder = {
+  slug: "inbox" | "sent" | "drafts";
+  display_name: string;
+  total: number;
+  unread_count: number | null;
+};
+type MailMessagePage = {
+  messages: Array<MailMessageSummary>;
+  truncated: boolean;
+  next_before_uid: number | null;
+};
+type MailMessageSummary = {
+  message_id: string | null;
+  uid: number;
+  uidvalidity: number;
+  folder: "inbox" | "sent" | "drafts";
+  subject: string;
+  from: string;
+  from_name: string | null;
+  to: Array<string>;
+  cc: Array<string>;
+  date: string;
+  seen: boolean;
+  is_draft: boolean;
+  is_omnipus_draft: boolean;
+  read_by_agent: boolean;
+};
+type MailMessage = {
+  message_id: string | null;
+  uid: number;
+  uidvalidity: number;
+  folder: "inbox" | "sent" | "drafts";
+  subject: string;
+  from: string;
+  from_name: string | null;
+  to: Array<string>;
+  cc: Array<string>;
+  date: string;
+  seen: boolean;
+  is_draft: boolean;
+  is_omnipus_draft: boolean;
+  read_by_agent: boolean;
+  reply_to: string | null;
+  in_reply_to: string | null;
+  references: string | null;
+  body_text: string;
+  has_html: boolean;
+  bcc: Array<string> | null;
+  attachments: Array<MailAttachment>;
+  body_markdown: string | null;
+  markdown_lossy: boolean;
+};
+type MailAttachment = {
+  part_index: number;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+};
+type MailSummaryList = {
+  items: Array<MailboxNewMailSummary>;
+};
+type MailboxNewMailSummary = {
+  agent_id: string;
+  unseen_total: number;
+  watcher_state: "ok" | "error" | "backoff";
+  last_error_class: string | null;
+  last_success_at: string | null;
+  last_seen_uid: number | null;
+  next_attempt_at: string | null;
+};
 type OperationResult = {
   success: boolean;
   error?: string | undefined;
@@ -5727,6 +5800,81 @@ export const RelationWriteResponse: z.ZodType<RelationWriteResponse> = z.object(
     warnings: z.array(z.string().min(1)),
   }
 );
+export const MailFolder: z.ZodType<MailFolder> = z.object({
+  slug: z.enum(["inbox", "sent", "drafts"]),
+  display_name: z.string(),
+  total: z.number().int(),
+  unread_count: z.number().int().nullable(),
+});
+export const MailFolderList: z.ZodType<MailFolderList> = z.object({
+  folders: z.array(MailFolder),
+});
+export const MailMessageSummary: z.ZodType<MailMessageSummary> = z.object({
+  message_id: z.string().nullable(),
+  uid: z.number().int(),
+  uidvalidity: z.number().int(),
+  folder: z.enum(["inbox", "sent", "drafts"]),
+  subject: z.string(),
+  from: z.string(),
+  from_name: z.string().nullable(),
+  to: z.array(z.string()),
+  cc: z.array(z.string()),
+  date: z.string().datetime({ offset: true }),
+  seen: z.boolean(),
+  is_draft: z.boolean(),
+  is_omnipus_draft: z.boolean(),
+  read_by_agent: z.boolean(),
+});
+export const MailMessagePage: z.ZodType<MailMessagePage> = z.object({
+  messages: z.array(MailMessageSummary),
+  truncated: z.boolean(),
+  next_before_uid: z.number().int().nullable(),
+});
+export const MailAttachment: z.ZodType<MailAttachment> = z.object({
+  part_index: z.number().int(),
+  filename: z.string(),
+  content_type: z.string(),
+  size_bytes: z.number().int(),
+});
+export const MailMessage: z.ZodType<MailMessage> = z.object({
+  message_id: z.string().nullable(),
+  uid: z.number().int(),
+  uidvalidity: z.number().int(),
+  folder: z.enum(["inbox", "sent", "drafts"]),
+  subject: z.string(),
+  from: z.string(),
+  from_name: z.string().nullable(),
+  to: z.array(z.string()),
+  cc: z.array(z.string()),
+  date: z.string().datetime({ offset: true }),
+  seen: z.boolean(),
+  is_draft: z.boolean(),
+  is_omnipus_draft: z.boolean(),
+  read_by_agent: z.boolean(),
+  reply_to: z.string().nullable(),
+  in_reply_to: z.string().nullable(),
+  references: z.string().nullable(),
+  body_text: z.string(),
+  has_html: z.boolean(),
+  bcc: z.array(z.string()).nullable(),
+  attachments: z.array(MailAttachment),
+  body_markdown: z.string().nullable(),
+  markdown_lossy: z.boolean(),
+});
+export const MailboxNewMailSummary: z.ZodType<MailboxNewMailSummary> = z.object(
+  {
+    agent_id: z.string(),
+    unseen_total: z.number().int(),
+    watcher_state: z.enum(["ok", "error", "backoff"]),
+    last_error_class: z.string().nullable(),
+    last_success_at: z.string().datetime({ offset: true }).nullable(),
+    last_seen_uid: z.number().int().nullable(),
+    next_attempt_at: z.string().datetime({ offset: true }).nullable(),
+  }
+);
+export const MailSummaryList: z.ZodType<MailSummaryList> = z.object({
+  items: z.array(MailboxNewMailSummary),
+});
 export const WorkspaceDelegation: z.ZodType<WorkspaceDelegation> = z.object({
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   persistence_status: ConfigurationPersistenceStatus.optional(),
@@ -13991,6 +14139,324 @@ Returns HTTP 201 on success.
         status: 500,
         description: `Storage failed; reports actual saved state.`,
         schema: ConfigurationMutationFailureState,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/mail/:agentId/folders",
+    alias: "listMailFolders",
+    description: `Returns Inbox, Sent and Drafts (D5) for the (agent, workspace) mailbox with live IMAP counts (email-mail-view-spec §2.3). One IMAP session per request (round-1 MAJ-012); automatic panel refreshes never dial while the watcher is backing off — they return the saved error class plus next_attempt_at immediately (D29/R2-9). Identical concurrent refreshes coalesce so N tabs cost one IMAP login per tick. 502 carries a sanitized error class from the closed enum timeout|dns|connect_refused|auth_failed|tls|folder_missing|server_error in the body&#x27;s code field (MC-8); raw upstream text is logged server-side only.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: MailFolderList,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace, agent, or mailbox pair not found (getAgentMailbox precedent).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server unreachable — the body&#x27;s code field carries a sanitized error class from the closed enum (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages",
+    alias: "listMailMessages",
+    description: `Envelope page for the folder (email-mail-view-spec §2.3). Messages are addressed folder-scoped (round-1 MAJ-005, D21); listings exclude \Deleted messages (round-2 MIN-005). Fetches never change flags (BODY.PEEK / EXAMINE — round-2 MAJ-003): nothing in the list path marks anything read. The round-1 unseen_only query parameter was dropped (round-2 OBS-001) — the watcher&#x27;s unseen_total is the only unread surface.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "limit",
+        type: "Query",
+        schema: z.number().int().optional().default(20),
+      },
+      {
+        name: "before_uid",
+        type: "Query",
+        schema: z.number().int().optional(),
+      },
+    ],
+    response: MailMessagePage,
+    errors: [
+      {
+        status: 400,
+        description: `Unknown folder slug or malformed limit.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace, agent, or mailbox pair not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages/:ref",
+    alias: "getMailMessage",
+    description: `Full message for the Mail panel read path (email-mail-view-spec §2.3). Never writes flags — the fetch is BODY.PEEK (round-2 MAJ-003). The ref is folder-scoped (round-1 MAJ-005, D21): uid form is always resolvable from a list row; mid form searches only the addressed folder, among non-\Deleted messages only (round-2 MIN-005 — a no-UIDPLUS server keeps the old copy of an edited draft in the folder with \Deleted and the same Message-ID), resolving multiple hits to the highest UID — never by INTERNALDATE (round-2 MIN-005). Draft actions resolve only inside drafts (MC-13).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+    ],
+    response: MailMessage,
+    errors: [
+      {
+        status: 400,
+        description: `Malformed ref or failed Message-ID validation.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Message not found in the addressed folder (includes a pair with no mailbox; MC-13 — no body or folder leakage).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages/:ref/attachments/:partIndex",
+    alias: "getMailAttachment",
+    description: `Streams one MIME attachment part (D28, email-mail-view-spec §2.3). Served with Content-Disposition: attachment always — an .html attachment is never inline (MC-42) — plus X-Content-Type-Options: nosniff, an extension-derived content type (extension decides, never the bytes nor the MIME part&#x27;s self-declared type), and the RFC 6266 dual-encoded filename from the sanitized MailAttachment.filename. No CSP on attachment responses (Library MV-13 second half). The download never changes flags.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+      {
+        name: "partIndex",
+        type: "Path",
+        schema: z.number().int(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Malformed ref or part index.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Message or attachment part absent.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages/:ref/seen",
+    alias: "markMailMessageSeen",
+    description: `Marks exactly the addressed message \Seen (FR-020, email-mail-view-spec §2.3). A GET of folders/messages never writes flags, so the flag write is its own endpoint (round-2 MAJ-003). Idempotent: an already-seen message is a no-op 204. This endpoint and agent read_message (D38) are the ONLY \Seen writers in the product; the watcher never writes flags (FR-023).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Malformed ref.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Message not found in the addressed folder.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/mail/summary",
+    alias: "getWorkspaceMailSummary",
+    description: `Per-mailbox watcher badge state (MailSummaryList) served from the watcher&#x27;s saved state files — this endpoint never dials IMAP (D29/R2-5, FR-033). Refreshed by the SPA every 60 s from this saved state (round-2 R2-5). A mailbox in error/backoff reports its class and next_attempt_at so the badge can say &quot;retrying at hh:mm&quot; (D29/R2-8); watcher_state ok never lies (round-2 MAJ-019).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: MailSummaryList,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace not found.`,
+        schema: ErrorResponse,
       },
     ],
   },

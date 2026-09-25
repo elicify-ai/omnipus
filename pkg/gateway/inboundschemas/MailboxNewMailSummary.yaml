@@ -1,0 +1,72 @@
+title: MailboxNewMailSummary
+description: >
+  Watcher-driven badge state for one mailbox (GET
+  /workspaces/{id}/mail/summary). Served from the watcher's saved state file
+  — this response never dials IMAP (D29/R2-5, FR-033); the only reference
+  metadata Omnipus stores for a mailbox is this UID/count/error-class state
+  (D6). watcher_state ok never lies about blindness: last_success_at is null
+  until a cycle has actually succeeded, and last_seen_uid makes UID advance
+  observable (round-2 MAJ-019).
+type: object
+additionalProperties: false
+required:
+  - agent_id
+  - unseen_total
+  - watcher_state
+  - last_error_class
+  - last_success_at
+  - last_seen_uid
+  - next_attempt_at
+properties:
+  agent_id:
+    type: string
+    description: ID of the agent owning the mailbox (the workspace rides the path).
+    example: "mia"
+  unseen_total:
+    type: integer
+    description: >
+      The mailbox's live IMAP UNSEEN count as of the watcher's last completed
+      cycle (A11).
+    example: 3
+  watcher_state:
+    type: string
+    enum:
+      - ok
+      - error
+      - backoff
+    description: >
+      The watcher's cycle state: ok (last cycle succeeded), error (last cycle
+      failed, next attempt not yet deferred), backoff (failing repeatedly —
+      next_attempt_at carries the next try).
+    example: "ok"
+  last_error_class:
+    type: string
+    nullable: true
+    description: >
+      Sanitized error class of the last failed cycle, from the closed enum
+      timeout|dns|connect_refused|auth_failed|tls|folder_missing|server_error
+      (MC-8); null when the last cycle succeeded.
+    example: "timeout"
+  last_success_at:
+    type: string
+    format: date-time
+    nullable: true
+    description: >
+      RFC 3339 instant of the last successful watcher cycle; null when no
+      cycle has ever succeeded (round-2 MAJ-019 — ok never lies about
+      blindness).
+    example: "2026-09-26T10:30:00Z"
+  last_seen_uid:
+    type: integer
+    nullable: true
+    description: >
+      Highest UID the watcher has seen (MC-31 baselining applies); null
+      before the first state was saved. Makes UID advance observable.
+  next_attempt_at:
+    type: string
+    format: date-time
+    nullable: true
+    description: >
+      RFC 3339 instant of the watcher's next attempt while backing off
+      (D29/R2-8 — the badge renders "retrying at hh:mm"); null otherwise.
+    example: "2026-09-26T10:32:00Z"
