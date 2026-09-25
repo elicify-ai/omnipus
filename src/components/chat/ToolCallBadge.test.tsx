@@ -471,10 +471,24 @@ describe('ToolCallBadge — verbose chat gate', () => {
 
   // ADR-091 D7/AC-7: the parent's chat must show exactly the one line a
   // delegation produces — the span/step surfaces this case used to defer to
-  // (SubagentBlock, shouldRenderSubagentSpan) are deleted, so this tool-call
-  // line is now the thread's only delegation surface and must be visible by
-  // default, not gated behind verbose chat.
-  it('shows a delegate run by default (action=run, async=true)', () => {
+  // (SubagentBlock, shouldRenderSubagentSpan) are deleted. The delegation
+  // surface in the DEFAULT thread is now the grey event line, not this badge:
+  // delegation-chat-surface-spec D2 — "The grey lines are the default view" —
+  // and ADR-091 AC-7 — "the parent's chat shows only the `delegate` line".
+  // Verbose chat is unchanged and still shows every delegate badge (D2).
+  // Both halves are asserted so neither direction can regress silently.
+  it('hides a delegate run in the default thread — the grey event line is the surface (spec D2)', () => {
+    useChatPreferencesStore.setState({ verboseChatEnabled: false })
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({ tool: 'delegate', params: {}, status: 'success' })}
+      />
+    )
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+  })
+
+  it('shows a delegate run when verbose chat is on (spec D2 — verbose is unchanged)', () => {
+    useChatPreferencesStore.setState({ verboseChatEnabled: true })
     render(
       <ToolCallBadge
         toolCall={makeToolCall({ tool: 'delegate', params: {}, status: 'success' })}
@@ -497,10 +511,29 @@ describe('ToolCallBadge — verbose chat gate', () => {
     expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
   })
 
-  // ADR-091 D7/AC-7: delegate never consults isError — a 'run' call is
-  // already visible unconditionally (see the "shows a delegate run by
-  // default" test above), so an error status changes nothing for it.
-  it('a delegate run with an error status stays VISIBLE — same as any other outcome (ADR-091 D7/AC-7)', () => {
+  // delegate never consults isError — the error/marshal-failure override that
+  // forces ToolSearch visible does not apply to delegate (ToolCallBadge.tsx's
+  // own header comment). That invariant is unchanged by spec D2; what changed
+  // is which side of the verbose gate it is observable on. Asserted on BOTH
+  // sides, because "isError is not consulted" is only meaningful if an error
+  // call behaves exactly like a success call in each mode.
+  it('a delegate run with an error status is still hidden by default — no isError exception (spec D2)', () => {
+    useChatPreferencesStore.setState({ verboseChatEnabled: false })
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({
+          tool: 'delegate',
+          params: {},
+          status: 'error',
+          error: 'delegation_denied',
+        })}
+      />
+    )
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+  })
+
+  it('a delegate run with an error status renders in verbose chat — same as a success call', () => {
+    useChatPreferencesStore.setState({ verboseChatEnabled: true })
     render(
       <ToolCallBadge
         toolCall={makeToolCall({

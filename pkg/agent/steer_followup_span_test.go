@@ -48,7 +48,7 @@ func TestFollowUpGeneration_OwnSpanDoesNotOverwriteOriginal(t *testing.T) {
 	rec.Generation = 2
 	rec.State = session.LifecycleQueued
 	rec.ResumedFrom = childID
-	if err := lifecycle.Persist(rec); err != nil {
+	if err = lifecycle.Persist(rec); err != nil {
 		t.Fatalf("persist generation 2: %v", err)
 	}
 	rec2, err := lifecycle.Load(childID)
@@ -120,7 +120,7 @@ func TestSteeringReceipt_FollowUpGenerationUsesOwnSpan(t *testing.T) {
 	}
 	rec.Generation = 2
 	rec.State = session.LifecycleRunning
-	if err := lifecycle.Persist(rec); err != nil {
+	if err = lifecycle.Persist(rec); err != nil {
 		t.Fatalf("persist generation 2: %v", err)
 	}
 	al.deliverSteeringReceiptsForInjection(childID, []string{"corr-follow-up"})

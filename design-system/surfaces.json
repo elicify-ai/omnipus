@@ -7468,6 +7468,14 @@
     {
       "source": "src/components/layout/GodModeIndicators.tsx",
       "lane": 7
+    },
+    {
+      "source": "src/components/chat/DelegationEventLine.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useChatDelegationEvents.ts",
+      "lane": 3
     }
   ]
 }
