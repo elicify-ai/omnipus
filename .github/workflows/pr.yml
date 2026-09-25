@@ -985,11 +985,19 @@ jobs:
           cp /tmp/ci-evidence/design-system-evidence/test-results/design-system-storybook-webkit.json test-results/
           cp /tmp/ci-evidence/design-system-evidence/docs/internal/design/evidence/design-system-production-provenance.json docs/internal/design/evidence/
 
-          # Copy per-project browser evidence files for merging
-          cp /tmp/ci-evidence/design-system-browser-evidence-chromium/test-results/design-system-browser-chromium.json test-results/
-          cp /tmp/ci-evidence/design-system-browser-evidence-firefox/test-results/design-system-browser-firefox.json test-results/
-          cp /tmp/ci-evidence/design-system-browser-evidence-webkit/test-results/design-system-browser-webkit.json test-results/
-          cp /tmp/ci-evidence/design-system-browser-evidence-chromium-coarse-pointer/test-results/design-system-browser-chromium-coarse-pointer.json test-results/
+          # Copy per-project browser evidence files for merging.
+          # NO test-results/ segment in these SOURCE paths, unlike the four
+          # above: upload-artifact roots an artifact at the least common
+          # ancestor of the files it matched. The design-system-evidence
+          # upload lists two different directories, so its LCA is the
+          # workspace root and the test-results/ prefix survives. Each
+          # per-project browser upload passes a SINGLE file under
+          # test-results/, so that directory IS the LCA and is stripped —
+          # the json sits at the artifact root.
+          cp /tmp/ci-evidence/design-system-browser-evidence-chromium/design-system-browser-chromium.json test-results/
+          cp /tmp/ci-evidence/design-system-browser-evidence-firefox/design-system-browser-firefox.json test-results/
+          cp /tmp/ci-evidence/design-system-browser-evidence-webkit/design-system-browser-webkit.json test-results/
+          cp /tmp/ci-evidence/design-system-browser-evidence-chromium-coarse-pointer/design-system-browser-chromium-coarse-pointer.json test-results/
 
           # Merge all per-project browser evidence files into a single design-system-browser.json
           node scripts/design-system/merge-browser-evidence.mjs
@@ -2842,9 +2850,21 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ matrix.group }}" = "preview-isolation" ]; then
+            # firefox and webkit DO need system libraries the runner image
+            # does not ship, so this branch keeps --with-deps.
             npx playwright install --with-deps chromium firefox webkit
           else
-            npx playwright install --with-deps chromium
+            # NO --with-deps: chromium's shared libraries are already present
+            # on ubuntu-24.04 runners. --with-deps runs `apt-get update` as
+            # root, which makes every one of these shards depend on an
+            # external apt mirror being reachable for the whole fetch. On
+            # 2026-09-24 packages.microsoft.com returned 403 for a ~2s window
+            # and killed E2E — ui-render (run 36052294491) before a single
+            # spec executed: 27 other jobs in the same run fetched the
+            # identical InRelease file fine, one 2.44s earlier. The job then
+            # failed a second time downstream on a missing Playwright report,
+            # which reads like a test failure and is not one.
+            npx playwright install chromium
           fi
 
       - name: Verify Playwright browser binaries exist (preview-isolation shard)

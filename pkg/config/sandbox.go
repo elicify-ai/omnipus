@@ -540,8 +540,10 @@ type OmnipusSandboxConfig struct {
 	//     rules are enforced inside the shell tool, downstream of
 	//     resolveEffectivePolicyWith's God Mode floor, so the floor cannot
 	//     erase them");
-	//   - forces the kernel sandbox off (full host fs + syscalls) and
-	//     network egress open (no D8 port-level containment) for the fixed
+	//   - forces the kernel sandbox's filesystem confinement off (full host
+	//     fs; seccomp's syscall filter stays installed process-wide and
+	//     cannot be removed per-child, so it still applies) and network
+	//     egress open (no D8 port-level containment) for the fixed
 	//     "bash" tool (ADR-036 unified the retired
 	//     "exec"/"workspace_shell"/"workspace_shell_bg" tools into it).
 	// Audit logging, the prompt-injection guard, and rate limiting are NOT
@@ -593,8 +595,12 @@ type OmnipusSandboxConfig struct {
 	// deny-by-default) and only asks when the command needs more than the
 	// sandbox allows — so a fresh install prompts for genuinely
 	// sandbox-escaping, network-reaching, or secret-touching commands, not
-	// for everything. Where no kernel sandbox is active, Auto behaves
-	// exactly like Ask (D1's Auto→Ask fallback) — this field does not
+	// for everything. Auto no longer requires an enforcing kernel sandbox
+	// (2026-09-24 founder decision, ADR-092 D1/D8): where no kernel sandbox
+	// is active, Auto still applies rather than falling back to Ask — the
+	// UI badge instead reads "Auto — no sandbox," and a shell command runs
+	// without a prompt only when it is read-only or covered by an operator
+	// allow rule; every other shell command asks first. This field does not
 	// change that. Tighten-only below this global default at the per-agent
 	// (AgentAutoApproveDisabled) and per-chat levels, enforced server-side
 	// (D1's tighten-only merge); loosening past this value requires the

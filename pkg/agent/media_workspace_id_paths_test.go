@@ -143,6 +143,7 @@ func TestContinueWithSteeringMessages_MediaToolDelivery_StampsWorkspaceID(t *tes
 		context.Background(), defaultAgent,
 		"agent:"+defaultAgent.ID+":main", "telegram", "chat1", "sales",
 		[]providers.Message{{Role: "user", Content: "please continue"}},
+		nil,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "Here is the screenshot.", resp)

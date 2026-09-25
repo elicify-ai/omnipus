@@ -228,7 +228,7 @@ func TestAgentLoop_Steer_Enqueues(t *testing.T) {
 		t.Fatalf("expected 1 steering message, got %d", al.steering.len())
 	}
 
-	msgs := al.dequeueSteeringMessages()
+	msgs, _ := al.dequeueSteeringMessages()
 	if len(msgs) != 1 || msgs[0].Content != "interrupt me" {
 		t.Fatalf("unexpected dequeued message: %v", msgs)
 	}
@@ -1120,7 +1120,7 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 		t.Fatalf("expected 2 provider calls, got %d", calls)
 	}
 
-	if msgs := al.dequeueSteeringMessagesForScope(sessionKey); len(msgs) != 0 {
+	if msgs, _ := al.dequeueSteeringMessagesForScope(sessionKey); len(msgs) != 0 {
 		t.Fatalf("expected steering queue to be empty after continuation, got %v", msgs)
 	}
 }

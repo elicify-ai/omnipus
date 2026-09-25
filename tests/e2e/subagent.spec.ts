@@ -751,6 +751,47 @@ test(
     // Guard: zero subagent-collapsed elements, ever.
     await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
 
+    // Test 3 FIRST, moved up (was last) — IN-FLIGHT ANCHOR, same fix as
+    // delegation-hidden.spec.ts and this file's tests (b)/(d) (commit
+    // 8c4892c29 — this test (e) was missed by that pass). ActivityBar.tsx
+    // only mounts the bar while shouldMount(=hasOpenAgentChildren||
+    // panelOpen||hasFailedRecent) is true; a purely-successful completed
+    // delegation satisfies none of the three once its subagent_end has
+    // landed (recentlyFinished's cap only keeps the bar reachable for
+    // FAILED items — ActivityBar.tsx's isFailedStatus). The old ordering
+    // opened the panel only after both axe passes and the delegate toggle
+    // reaching a terminal state; CI job 107857384500's failure trace shows
+    // that was already too late — the child had finished (delegateToggle
+    // went enabled a mere 10ms after the wait for it started in that same
+    // run, proving the delegate TOOL CALL's own status is an async launch
+    // ack, NOT a "child is done" signal, so it bought no real safety
+    // margin) and the bar never appeared even once across the full 15s
+    // timeout; the failure's own ARIA snapshot already showed the complete
+    // "delegation is done" transcript. Opening right after the in-flight
+    // anchor, before anything else runs, is the only reliably-mountable
+    // moment — see the panel-close comment below for why this can't simply
+    // stay open through Tests 1/2 instead.
+    await openActivityPanel(page);
+    const row = page.locator('[data-testid="activity-row"]', { hasText: label });
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await expectA11yClean(page, {
+      include: ['[data-testid="activity-row"]'],
+    });
+
+    // Close the panel before Tests 1/2 (moved below, was first): ActivityPanel.tsx's
+    // <Sheet> is a modal Radix Dialog (`modal` defaults true, never
+    // overridden here) whose Portal mounts at document.body — Radix's
+    // hideOthers applies aria-hidden to everything outside that portal
+    // while open, INCLUDING the delegate chip in the main thread. Scanning
+    // the chip with the panel still open would not fail Tests 1/2 — it
+    // would silently scan nothing (axe skips aria-hidden subtrees),
+    // turning both into a vacuous pass instead of a real check. Escape is
+    // Radix's own built-in close path (same pattern as
+    // accessibility.spec.ts's sign-in-dialog test) and flips panelOpen
+    // back to false via ActivityBar.tsx's onOpenChange={setPanelOpen}.
+    await page.keyboard.press('Escape');
+    await expect(row).not.toBeVisible();
+
     // Test 1: axe against the delegate chip's COLLAPSED state.
     // Traces to: sprint-h-subagent-block-spec.md Scenario 11 — "collapsed SubagentBlock"
     await expectA11yClean(page, {
@@ -767,17 +808,6 @@ test(
     await delegateToggle.click();
     await expectA11yClean(page, {
       include: ['[data-testid="tool-call-badge"]'],
-    });
-
-    // Test 3: the Activity panel row — the surface that replaced "expand to
-    // see the child's status", covering territory the old two-state check
-    // never reached (SubagentBlock's own expanded region showed nested
-    // steps, not a durable per-child status row).
-    await openActivityPanel(page);
-    const row = page.locator('[data-testid="activity-row"]', { hasText: label });
-    await expect(row).toBeVisible({ timeout: 30_000 });
-    await expectA11yClean(page, {
-      include: ['[data-testid="activity-row"]'],
     });
   },
 );

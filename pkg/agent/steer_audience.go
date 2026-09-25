@@ -435,7 +435,7 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 		al.deliverSubagentMessage(ownerKey, childRec, kind, deliverySummary(msg), nil)
 	}
 	if state := subagentStateForOutcome(event.Outcome); state != "" {
-		al.deliverSubagentState(ownerKey, childRec, state)
+		al.deliverSubagentState(ownerKey, childRec, state, nil)
 	}
 	if isTerminalOutcome(event.Outcome) {
 		al.deliverSubagentEnd(ownerKey, childRec, event.Outcome)

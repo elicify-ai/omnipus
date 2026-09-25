@@ -52,17 +52,25 @@ type agentLoopRunTurnFallbacks struct {
 
 // agentLoopRunTurnIteration carries the shared state of runTurn across its stages.
 type agentLoopRunTurnIteration struct {
-	rf                           *agentLoopRunTurnFallbacks
-	turnMediaStore               media.MediaStore
-	turnCatalog                  *catalog.Catalog
-	turnRefcounter               *sessionRefcounter
-	turnStatus                   TurnEndStatus
-	wsDir                        string
-	messages                     []providers.Message
-	cfg                          *config.Config
-	maxMediaSize                 int
-	activeModel                  string
-	pendingMessages              []providers.Message
+	rf              *agentLoopRunTurnFallbacks
+	turnMediaStore  media.MediaStore
+	turnCatalog     *catalog.Catalog
+	turnRefcounter  *sessionRefcounter
+	turnStatus      TurnEndStatus
+	wsDir           string
+	messages        []providers.Message
+	cfg             *config.Config
+	maxMediaSize    int
+	activeModel     string
+	pendingMessages []providers.Message
+	// pendingSteeringReceipts is issue #870's parallel correlation-id slice
+	// for pendingMessages — index i's id (possibly "") belongs to message i.
+	// Every append/assign to pendingMessages must append/assign the same
+	// number of entries here, in the same order, so the single injection
+	// block (loop_run_turn.go's "Inject pending steering messages") can
+	// stamp applied_at and emit one steering_receipt per genuinely injected
+	// steer, never for one still queued.
+	pendingSteeringReceipts      []string
 	toolCallTruncationRepairUsed bool
 	gracefulTerminal             bool
 	ret0                         turnResult

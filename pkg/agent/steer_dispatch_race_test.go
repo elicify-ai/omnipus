@@ -156,23 +156,6 @@ func TestDispatch_FinishedTurnReleasesItsSlotAndPromotesTheQueue(t *testing.T) {
 	}
 }
 
-// waitForActiveTurn polls for the turn registered under sessionID. The
-// promotion is deliberately asynchronous (drainSteerQueue dispatches the FIFO
-// head in its own goroutine so a finishing turn never blocks on the next
-// one), so there is nothing to await synchronously.
-func waitForActiveTurn(t *testing.T, al *AgentLoop, sessionID string, within time.Duration) *turnState {
-	t.Helper()
-	deadline := time.Now().Add(within)
-	for time.Now().Before(deadline) {
-		if ts := al.getActiveTurnState(sessionID); ts != nil {
-			return ts
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("no turn was ever registered for session %s within %s — the queue never moved", sessionID, within)
-	return nil
-}
-
 // TestDispatch_StopLandingAfterTheSnapshotSurvivesAndTheTurnNeverStarts
 // proves I-2/I-6 and landing order §0 ("Stop stamps a durable marker on every
 // session it reaches, and no dispatch starts a turn on a stamped session")

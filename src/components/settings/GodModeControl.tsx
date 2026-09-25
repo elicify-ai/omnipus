@@ -3,11 +3,16 @@
  *
  * God-mode is the single global "bypass-permissions" switch. When ON it:
  *   - flips every agent's tool permissions from "ask" → "allow" (no prompts),
- *   - disables the kernel sandbox (full host filesystem + syscalls),
+ *   - disables the kernel sandbox's filesystem confinement (full host
+ *     filesystem) and network port controls for the shell's child process —
+ *     seccomp's syscall filter stays installed process-wide and cannot be
+ *     removed per-child, so it still applies,
  *   - opens outbound network egress (no network pre-flight, ADR-092 D8).
  * Audit logging, the prompt-guard, and rate limiting STAY ON — and operator
  * `command_rules` deny entries (ADR-092 D3) still refuse a matching command,
  * since they are enforced inside the shell tool, downstream of this floor.
+ * The shell's own outside-workspace write refusal also survives — it just
+ * never prompts under god mode, it still hard-denies.
  *
  * Because it removes capability restraints globally, flipping it ALWAYS asks for
  * a confirmation first (ADR-0008 ruling 6) — a dialog that names the change and

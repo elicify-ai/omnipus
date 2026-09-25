@@ -460,7 +460,7 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 	waitFor(t, 2*time.Second, func() bool {
 		return al.pendingSteeringCountForScope(scope) == 1
 	})
-	drained := al.dequeueSteeringMessagesForScope(scope)
+	drained, _ := al.dequeueSteeringMessagesForScope(scope)
 	if len(drained) != 1 {
 		t.Fatalf("(2) expected the respond text queued warm in the child's steering scope, got: %+v", drained)
 	}
