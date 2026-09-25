@@ -234,10 +234,22 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 		if errors.Is(err, ErrRequestedSkillDenied) || errors.Is(err, ErrRequestedSkillNotFound) {
 			return requestedSkillDispatchFailureResult(targetAgentID, strings.TrimSpace(dt.requestedSkill), err)
 		}
+		// ADR-093 D5: an unavailable steering conversation is a normal,
+		// recoverable outcome - the model is told how to recover (a new
+		// message in this conversation resumes it), never shown store
+		// machinery text (issue #890).
+		if steer.IsSteeringUnavailable(err) {
+			return ErrorResult(steer.SteeringUnavailableMessage).WithError(err)
+		}
 		return ErrorResult(fmt.Sprintf("delegate: launch: %v", err)).WithError(err)
 	}
 	dispatch, err := dt.t.launcher.Dispatch(dt.ctx, launch.SessionID, launch.Generation)
 	if err != nil {
+		// ADR-093 D5: dispatch refusals for an inactive conversation map to
+		// the same plain sentence - never store machinery text.
+		if steer.IsSteeringUnavailable(err) {
+			return ErrorResult(steer.SteeringUnavailableMessage).WithError(err)
+		}
 		return ErrorResult(fmt.Sprintf("delegate: dispatch: %v", err)).WithError(err)
 	}
 

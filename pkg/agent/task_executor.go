@@ -1252,6 +1252,22 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 		if sessions := te.agentLoop.GetSessionStore(); sessions != nil {
 			if _, err := sessions.GetMeta(t.OriginSessionID); err == nil {
 				steeringSessionID = t.OriginSessionID
+				// ADR-093 D6: a task from a stopped or finished chat runs as
+				// an ordinary root - the task's start never revives the
+				// creating conversation (only a human message or a parent
+				// follow-up revives). Emptying the steering id here drops the
+				// launch to launchOrdinaryRoot, so the task runs against the
+				// task's own workspace/owner instead of the inactive chat.
+				// The loop's own lifecycle store, not te.lifecycleStore: the
+				// loop's store is always wired (it is the store the revival
+				// paths read), while the executor's optional injection may be
+				// nil.
+				if lifecycle := te.agentLoop.GetSessionLifecycleStore(); lifecycle != nil {
+					if rec, lerr := lifecycle.Load(t.OriginSessionID); lerr == nil &&
+						(rec.Terminal() || (rec.Stop != nil && rec.Stop.Generation == rec.Generation)) {
+						steeringSessionID = ""
+					}
+				}
 			}
 		}
 	}
@@ -1273,6 +1289,12 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 	}
 	launched, err := te.launcher.Launch(ctx, req)
 	if err != nil {
+		// ADR-093 D5: the same plain sentence as the delegate tool when
+		// the launch is refused because the conversation is not active
+		// (e.g. the creator stopped between the gate above and Launch).
+		if steer.IsSteeringUnavailable(err) {
+			return "", errors.New(steer.SteeringUnavailableMessage)
+		}
 		return "", fmt.Errorf("task_executor: StartTaskNow: launch: %w", err)
 	}
 	updated, err := te.store.Update(t.ID, task.Patch{SessionID: &launched.SessionID})
