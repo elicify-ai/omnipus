@@ -168,7 +168,9 @@ Guards are wired into CI via `scripts/guards.sh` (`make lint-guards`); discovery
 
 ## Spec-Driven Workflow
 
-When implementing features: (1) read the relevant BRD/spec section(s); (2) `/plan-spec` for TDD/BDD specs; (3) `/grill-spec` to stress-test; (4) `/taskify` to decompose; (5) implement in Plan Mode first; (6) `/grill-code` to verify compliance.
+Change delivery is sized — small (build, 1 reviewer), standard (build with tests, 3 reviewers), feature (spec-driven, 8-reviewer gate) — full flow, gates and roles: `docs/internal/design/dev-team-setup-design-2026-09-25.md`. `/taskify` is retired; task decomposition is team-lead's planning job (`omnipus-planning-orchestration`).
+
+Feature-size work: founder interview (`interview-me`) → an ADR only if a design decision is still open (`architect` writes it; exactly one `grill-spec` ADR-mode round, one correction round) → spec (`plan-spec`) → exactly two `grill-spec` grill-and-fix rounds, with a founder interview after each grill before its fix → any remaining blocking finding escalated to the founder → team-lead plans → RED/GREEN/CHECK → the 8-reviewer gate → founder's yes → land. `grill-code` reviews the landed code against the spec, complementing the gate. `spec-sync` keeps the spec's `Status:` field current after landing. Skills: `.claude/skills/plan-spec/`, `.claude/skills/grill-spec/`, `.claude/skills/grill-code/`, `.claude/skills/spec-sync/`.
 
 ## Issue & Project Board Conventions
 

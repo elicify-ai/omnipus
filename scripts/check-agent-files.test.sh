@@ -868,6 +868,81 @@ ge=$?
 assert_exit_code "fph-exit" 0 "$ge"
 assert_output_not_contains "fph-no-check6" "check6:" "$TMP_BASE/fph.out"
 
+# ─── Spec-process hand-off (S1/S2/S3/S4 -> S5): the four spec skills are
+#     now scanned and isolated like every other dev-team skill ────────────
+
+echo ""
+echo "Case 15 (S1/S3/S4 hand-off): check 4 now scans a spec-process skill file (plan-spec/grill-spec/grill-code/spec-sync were previously invisible to every content check)"
+T="$(clone_baseline c15)"
+mkdir -p "$T/.claude/skills/grill-code"
+cat > "$T/.claude/skills/grill-code/SKILL.md" <<'EOF'
+---
+name: grill-code
+description: Adversarial code review against the spec (fixture).
+---
+
+# grill-code (fixture)
+
+Last reviewed: 2026-09-25
+
+Run go build ./... before committing.
+EOF
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/c15.out" 2>&1
+ge=$?
+assert_exit_code "c15-exit" 1 "$ge"
+assert_output_contains "c15-check4" "check4:" "$TMP_BASE/c15.out"
+assert_output_contains "c15-file" "grill-code/SKILL.md" "$TMP_BASE/c15.out"
+assert_output_contains "c15-detail" "go build ./... (whole-repo target)" "$TMP_BASE/c15.out"
+
+echo ""
+echo "Case 16 (S5 task 5 mapping): team-lead may cite plan-spec — no check6 finding"
+T="$(clone_baseline c16)"
+mkdir -p "$T/.claude/skills/plan-spec"
+cat > "$T/.claude/skills/plan-spec/SKILL.md" <<'EOF'
+---
+name: plan-spec
+description: Writes a feature spec from the founder's interview (fixture).
+---
+
+# plan-spec (fixture)
+
+Last reviewed: 2026-09-25
+
+Fixture plan-spec skill body.
+EOF
+# Backticks below must stay literal (a fixture skill citation).
+# shellcheck disable=SC2016
+append_line "$T/.claude/agents/team-lead.md" 'Write the feature spec with the `plan-spec` skill.'
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/c16.out" 2>&1
+ge=$?
+assert_exit_code "c16-exit" 0 "$ge"
+assert_output_not_contains "c16-no-check6" "check6:" "$TMP_BASE/c16.out"
+
+echo ""
+echo "Case 17 (S5 task 5 mapping): security-lead citing grill-code is OUTSIDE its allowed set — check6 fires"
+T="$(clone_baseline c17)"
+mkdir -p "$T/.claude/skills/grill-code"
+cat > "$T/.claude/skills/grill-code/SKILL.md" <<'EOF'
+---
+name: grill-code
+description: Adversarial code review against the spec (fixture).
+---
+
+# grill-code (fixture)
+
+Last reviewed: 2026-09-25
+
+Fixture grill-code skill body.
+EOF
+# Backticks below must stay literal (a fixture skill citation).
+# shellcheck disable=SC2016
+append_line "$T/.claude/agents/security-lead.md" 'Also consult the `grill-code` skill for review framing.'
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/c17.out" 2>&1
+ge=$?
+assert_exit_code "c17-exit" 1 "$ge"
+assert_output_contains "c17-check6" "check6:" "$TMP_BASE/c17.out"
+assert_output_contains "c17-detail" "outside role 'security-lead' allowed set" "$TMP_BASE/c17.out"
+
 # ─── REAL: the real repository was never touched ───────────────────────────
 
 echo ""
