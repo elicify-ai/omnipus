@@ -11,6 +11,7 @@ import type { StoreApi } from 'zustand'
 import { produce } from 'immer'
 import type {
   CatchUpCompleteFrame,
+  SessionSnapshotFrame,
   UserMessageFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { applySnapshotHistoryWipe, cursorFromTerminalFrame } from '../cursor'
@@ -53,7 +54,19 @@ export function handleCatchUpFrame({ frame, targetSid, withBucket }: CatchUpFram
       // `cursor: bucket.cursor` default (unchanged, preserved-as-is) applies
       // here instead, meaning a failed rebuild simply leaves the cursor
       // wherever it already was (null on a first-ever attach).
-      withBucket(targetSid, (b) => applySnapshotHistoryWipe(b))
+      // #823 review round 9 — carried through the wipe below (as a plain
+      // field write after it, same pattern as wipedOpenTurnIds) so
+      // catch_up_complete's sweep can tell, once the replay finishes,
+      // whether THIS rebuild was answering a restarted gateway
+      // specifically. Deliberately narrower than "any reason" —
+      // retention_exceeded means old history was trimmed, not that a turn
+      // was interrupted, so an orphaned last user message there must NOT
+      // be treated as unanswered.
+      const snapshotFrame = frame as SessionSnapshotFrame
+      withBucket(targetSid, (b) => {
+        const wiped = applySnapshotHistoryWipe(b)
+        return { ...wiped, snapshotWasBootMismatch: snapshotFrame.reason === 'boot_mismatch' }
+      })
       return true
     }
 
@@ -157,6 +170,26 @@ export function handleCatchUpFrame({ frame, targetSid, withBucket }: CatchUpFram
           }
         }
         draft.wipedOpenTurnIds = undefined
+
+        // #823 review round 9 (real-browser evidence, CI run 36081327151):
+        // a turn killed before a single token streamed leaves NO assistant
+        // message at all — the in-flight projection lived only in the
+        // crashed process's memory, and only a completed turn is ever
+        // persisted. confirmedUnfinished (above) has nothing to attach to
+        // in that case. Narrowly scoped to the one case design §6.5/
+        // scenario h actually asks for: this rebuild specifically answered
+        // a restarted gateway (not any snapshot reason — retention_exceeded
+        // means old history was trimmed, not that a turn was cut short),
+        // the transcript's LAST entry is a user message (so nothing
+        // answered it), and no turn is running now to still answer it.
+        if (draft.snapshotWasBootMismatch && !draft.activeTurnId) {
+          const lastId = draft.messageOrder[draft.messageOrder.length - 1]
+          const lastMsg = lastId ? draft.messagesById[lastId] : undefined
+          draft.unansweredLastUserMessageId = lastMsg?.role === 'user' ? lastMsg.id : null
+        } else {
+          draft.unansweredLastUserMessageId = null
+        }
+        draft.snapshotWasBootMismatch = undefined
       }))
       return true
     }

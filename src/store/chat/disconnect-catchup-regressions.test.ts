@@ -886,3 +886,98 @@ describe('Round 8 — gateway restart mid-stream, real content already streamed'
     expect(asst!.confirmedUnfinished).toBe(true)
   })
 })
+
+// CI run 36081327151, real ARIA snapshot at failure (orchestrator, via HTTP
+// range requests on the CI artifact zip): after a gateway restart that
+// killed a turn BEFORE any token streamed, the persisted transcript's last
+// entry is just the user's question — no assistant bubble ever gets
+// created at all (the in-flight projection lived only in the crashed
+// process's memory; only completed turns get persisted). There is no
+// message for confirmedUnfinished to land on. This is the real gap: an
+// unanswered last user message, after a boot_mismatch snapshot rebuild,
+// with no active turn, must still show "couldn't be finished · Generate
+// again" — attached to the exchange itself, not a (nonexistent) assistant
+// message.
+describe('Round 9 — a turn killed before any token streamed leaves no assistant bubble at all', () => {
+  it('the last user message is flagged unanswered after a boot_mismatch snapshot with no active turn', () => {
+    const SID = 'sess-regress-i2'
+    useSessionStore.setState({ activeSessionId: SID })
+
+    useChatStore.getState().handleFrame({
+      type: 'session_snapshot', session_id: SID, seq: 3, boot_id: 'boot-fresh', reason: 'boot_mismatch',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-fresh', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'replay_message', session_id: SID, role: 'user', id: 'entry-user-1', content: 'question before the restart', timestamp: '2026-01-01T00:00:00Z',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'catch_up_complete', session_id: SID, seq: 3, boot_id: 'boot-fresh', mode: 'snapshot',
+    } as WsReceiveFrame)
+
+    const b = useChatStore.getState().sessionsById[SID]!
+    expect(b.activeTurnId).toBeNull()
+    expect(b.unansweredLastUserMessageId).toBe('entry-user-1')
+  })
+
+  it('does NOT flag a normal completed exchange (assistant reply present)', () => {
+    const SID = 'sess-regress-i3'
+    useSessionStore.setState({ activeSessionId: SID })
+    useChatStore.getState().handleFrame({
+      type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-fresh', reason: 'boot_mismatch',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-fresh', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'replay_message', session_id: SID, role: 'user', id: 'entry-user-1', content: 'a normal question', timestamp: '2026-01-01T00:00:00Z',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'replay_message', session_id: SID, role: 'assistant', id: 'entry-asst-1', content: 'a normal, complete answer', agent_id: 'mia', timestamp: '2026-01-01T00:00:05Z',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'catch_up_complete', session_id: SID, seq: 4, boot_id: 'boot-fresh', mode: 'snapshot',
+    } as WsReceiveFrame)
+    const b = useChatStore.getState().sessionsById[SID]!
+    expect(b.unansweredLastUserMessageId).toBeNull()
+  })
+
+  it('does NOT flag when reason is retention_exceeded (old data trimmed, not a crash signal)', () => {
+    const SID = 'sess-regress-i4'
+    useSessionStore.setState({ activeSessionId: SID })
+    useChatStore.getState().handleFrame({
+      type: 'session_snapshot', session_id: SID, seq: 3, boot_id: 'boot-same', reason: 'retention_exceeded',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-same', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'replay_message', session_id: SID, role: 'user', id: 'entry-user-1', content: 'question, older reply pruned by retention', timestamp: '2026-01-01T00:00:00Z',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'catch_up_complete', session_id: SID, seq: 3, boot_id: 'boot-same', mode: 'snapshot',
+    } as WsReceiveFrame)
+    const b = useChatStore.getState().sessionsById[SID]!
+    expect(b.unansweredLastUserMessageId).toBeNull()
+  })
+
+  it('does NOT flag while a turn is still genuinely active', () => {
+    const SID = 'sess-regress-i5'
+    useSessionStore.setState({ activeSessionId: SID })
+    useChatStore.getState().handleFrame({
+      type: 'session_snapshot', session_id: SID, seq: 3, boot_id: 'boot-fresh', reason: 'boot_mismatch',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-fresh', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z', active_turn: { turn_id: 'turn-live', agent_id: 'mia', started_at: '2026-01-01T00:00:00Z' },
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'replay_message', session_id: SID, role: 'user', id: 'entry-user-1', content: 'question, turn still running', timestamp: '2026-01-01T00:00:00Z',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'catch_up_complete', session_id: SID, seq: 3, boot_id: 'boot-fresh', mode: 'snapshot',
+    } as WsReceiveFrame)
+    const b = useChatStore.getState().sessionsById[SID]!
+    expect(b.unansweredLastUserMessageId).toBeNull()
+  })
+})

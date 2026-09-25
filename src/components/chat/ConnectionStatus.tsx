@@ -492,3 +492,27 @@ export function AssistantMessageConnectionStatus({ messageId, agentName }: { mes
   }
   return <AssistantConnectionStatus state={display.answer} agentName={agentName} onGenerateAgain={generateAgain} />
 }
+
+// #823 review round 9 (real-browser evidence, CI run 36081327151, scenario
+// h): a turn killed before any token streamed leaves no assistant message
+// at all for AssistantMessageConnectionStatus above to attach to —
+// catch_up_complete's sweep (catchup-frames.ts) can only mark an EXISTING
+// bubble unfinished. This sibling component renders the identical
+// "couldn't be finished · Generate again" state for the exchange itself,
+// keyed off the user message rather than a (nonexistent) reply, driven by
+// SessionChatState.unansweredLastUserMessageId — that field's own doc
+// comment covers the exact scope (boot_mismatch specifically, not
+// retention_exceeded, and only when the exchange truly has no reply and no
+// turn is running).
+export function UnansweredUserMessageStatus({ messageId, agentName }: { messageId: string; agentName: string }) {
+  const activeSessionId = useSessionStore((state) => state.activeSessionId)
+  const unanswered = useChatStore((state) => {
+    if (activeSessionId == null) return false
+    return state.sessionsById[activeSessionId]?.unansweredLastUserMessageId === messageId
+  })
+  if (!unanswered) return null
+  const generateAgain = () => {
+    useChatStore.getState().resendMessage(messageId)
+  }
+  return <AssistantConnectionStatus state="unfinished" agentName={agentName} onGenerateAgain={generateAgain} />
+}

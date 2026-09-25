@@ -365,6 +365,29 @@ export interface SessionChatState {
    * turn matching one of these ids, and cleared once that sweep runs.
    */
   wipedOpenTurnIds?: string[]
+  /**
+   * #823 review round 9 — after a boot_mismatch (or equivalent
+   * gateway-restarted) snapshot rebuild, the transcript's LAST entry
+   * was a user message with no assistant reply and no active turn: the
+   * turn was killed before a single token streamed, so no assistant
+   * bubble was ever created for confirmedUnfinished to attach to. Set
+   * by catch_up_complete's sweep (catchup-frames.ts) to the LAST user
+   * message's id; the render layer uses it to show "couldn't be
+   * finished · Generate again" for that exchange specifically.
+   * Deliberately narrower than "any snapshot with no active turn":
+   * retention_exceeded means old history was trimmed, not that a turn
+   * was interrupted, so a trimmed reply must NOT show this.
+   */
+  unansweredLastUserMessageId?: string | null
+  /**
+   * #823 review round 9 — true for exactly one catch_up_complete cycle:
+   * set by session_snapshot when frame.reason === 'boot_mismatch',
+   * carried through the history wipe (like wipedOpenTurnIds), and read
+   * (then cleared) by catch_up_complete's sweep. Never persisted beyond
+   * that one cycle — a LATER, unrelated snapshot for this session must
+   * not accidentally inherit a stale true from an earlier restart.
+   */
+  snapshotWasBootMismatch?: boolean
   sessionTokens: number
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
