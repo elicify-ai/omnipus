@@ -1,5 +1,7 @@
 # ADR-021 — Re-auth Consent Gate Scope for v0.1.0
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Status:** Accepted
 **Date:** 2026-06-14
 **Deciders:** backend-lead, architect
@@ -95,14 +97,17 @@ The gate **deliberately does NOT yet cover** the following mutations in v0.1.0:
 - Credential-vault writes, channel-secret configuration, and user-management mutations
   can be performed in v0.1.0 with only the standard auth + admin-role gate — no
   password re-confirmation. In a shared or compromised-session scenario this is a
-  weaker posture than the gated routes. Accepted for v0.1.0; tracked for v0.2.
+  weaker posture than the gated routes. Accepted for v0.1.0; the extension was
+  deferred (the v0.2 label was retired 2026-09-25 — no release scheduled).
 
 ## Follow-up
 
-- **v0.2 hardening:** extend `requireReAuth` to `setCredential` / `deleteCredential`,
+- **Deferred hardening (was "v0.2"; the label was retired 2026-09-25 — no release
+  scheduled):** extend `requireReAuth` to `setCredential` / `deleteCredential`,
   `configureChannel` secret writes, and user-management mutations
   (create / delete / role / password reset), each with a positive + negative test
   mirroring the pattern in `pkg/gateway/reauth_gate_test.go`. Revisit this ADR's
   exclusion table when that work lands and move the routes from "excluded" to "covered".
 - Revisit the single-use, in-memory token model if multi-user deployments become a
-  v0.2+ target (per-user concurrent consent tokens, persistence across restart).
+  target (per-user concurrent consent tokens, persistence across restart; the v0.2+
+  framing was retired 2026-09-25 — revisit is unscheduled).

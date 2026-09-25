@@ -1,5 +1,7 @@
 # ADR-048: Live-browser capture requires the DEFAULT browser context — amends ADR-047 D2 and ADR-043 D2
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** **Accepted — 2026-07-18** (operator: Daniel Piatkowski — "the shared
   cookie jar is currently ok"; Option A ratified for v1). Option B (per-agent Chrome
   instances, real isolation) is tracked for later in
@@ -52,7 +54,7 @@ hatch if cross-agent cookie isolation becomes a hard requirement.
 | C1 — `getDisplayMedia` + auto-select-by-title | Yes | Preserved | Title-matching fragile for a navigating tab; consent surface reintroduced | Rejected |
 | C2 — per-context extension page | — | — | **Proven dead** (`ERR_BLOCKED_BY_CLIENT`) | Rejected |
 | C3 — CDP screencast frames → WebRTC | Yes | Preserved | Reintroduces superseded ADR-044 A2 topology; **video-only → fails FR-A1 audio** | Rejected |
-| D — migrate live-viewed tab into default context on attach | Yes | Partial | Racy cross-context tab migration; high complexity | Deferred (possible v0.3) |
+| D — migrate live-viewed tab into default context on attach | Yes | Partial | Racy cross-context tab migration; high complexity | Deferred (no release scheduled — the v0.3 label was retired 2026-09-25) |
 
 ## Recommendation & confidence
 

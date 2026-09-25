@@ -1,5 +1,7 @@
 # Draft architecture — documentation map
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Status:** draft (2026-09-12; re-validated 2026-09-15 after the library-improvements merge ff11e8249; not implemented, not an ADR, not a spec)
 **Companion:** [draft-module-map.md](draft-module-map.md) (code). This note is the same idea for **docs**. The companion is adding a **knowledge** product module for the same feature this note calls Knowledge Base — cross-reference it, don't duplicate its module boundary here.
 **Do not:** rewrite user guides or delete `docs/internal/_archive/preview-doc-v03-concept/` until this is accepted.

@@ -1,5 +1,7 @@
 # ADR-072 — Skill activation and loading: an on-demand `Skill` tool, the per-agent grant as the real gate, and a project's own skills and instructions
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** **Accepted** — **revision 5** (2026-09-01, HEAD `f101a9b4`; ratified by the founder —
   see §6 resolutions). All six founder-only questions are closed; §5 records the twenty-three
   resolvable from the code. Two of the six answers added mechanisms rather than merely selecting an
@@ -64,7 +66,7 @@
 - **Answers:** [elicify-ai/omnipus#663](https://github.com/elicify-ai/omnipus/issues/663)
   ("Skill activation model is wrong: SkillsFilter auto-loads every turn instead of gating an
   agent-invoked skill tool")
-- **Phase:** v0.3 (per CLAUDE.md's routing rule — skills/workspaces/plugins → v0.3, issue #156)
+- **Phase:** Workspaces-class at drafting (per the routing rule then in force — skills/workspaces/plugins, issue #156; the v0.3 release label was retired 2026-09-25)
 - **Related:**
   [ADR-071](ADR-071-tool-manifest-tier-redesign.md) (`ToolSearch`; index-in-context, content
   on demand — **the precedent this ADR is built on**, especially D1, §3.2.2 and §4.1);

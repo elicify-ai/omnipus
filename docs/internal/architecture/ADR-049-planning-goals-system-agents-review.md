@@ -1,5 +1,7 @@
 # Adversarial Review: ADR-049 — Planning & Goals, Plan entity, evidence-ladder judge, System Agents
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Spec reviewed**: `docs/internal/architecture/ADR-049-planning-goals-system-agents.md`
 **Review date**: 2026-07-19
 **Review mode**: generic-markdown (ADR, ratification format)
