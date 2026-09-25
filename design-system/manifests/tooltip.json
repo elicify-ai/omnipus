@@ -35,7 +35,7 @@
       "kind": "unit",
       "applicable": true,
       "file": "src/components/ui/tooltip.test.tsx",
-      "test": "Tooltip — accessibility contract > Escape dismisses the bubble WITHOUT moving focus off the trigger (not a focus trap)"
+      "test": "Tooltip — accessibility contract Escape dismisses the bubble WITHOUT moving focus off the trigger (not a focus trap)"
     },
     {
       "id": "tooltip-interaction",
