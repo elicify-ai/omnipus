@@ -56,3 +56,24 @@ properties:
     description: >
       True when a mailbox password is present in the credential store (the
       mailbox can authenticate). The password value itself is never returned.
+  signature_html:
+    type: string
+    maxLength: 16384
+    description: >
+      Optional per-mailbox HTML signature (D2). Sanitized on save with the
+      dedicated signature policy — operator HTML never ships raw into
+      outbound mail. The plain-text signature part is derived at compose
+      time and never stored. Absent or empty means no signature is applied.
+      This is configuration, not mail content: storing it in config.json
+      does not violate the no-local-mail-store rule (D6). A value longer
+      than 16,384 characters is rejected with HTTP 400 on configure.
+  sent_folder_name:
+    type: string
+    description: >
+      Advanced override for the mailbox's Sent folder name. Empty (default)
+      means the folder is auto-resolved by its standard name.
+  drafts_folder_name:
+    type: string
+    description: >
+      Advanced override for the mailbox's Drafts folder name. Empty (default)
+      means the folder is auto-resolved by its standard name.

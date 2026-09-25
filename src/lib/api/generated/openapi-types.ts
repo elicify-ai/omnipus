@@ -11800,6 +11800,12 @@ export interface components {
             username?: string;
             /** @description True when a mailbox password is present in the credential store (the mailbox can authenticate). The password value itself is never returned. */
             configured: boolean;
+            /** @description Optional per-mailbox HTML signature (D2). Sanitized on save with the dedicated signature policy — operator HTML never ships raw into outbound mail. The plain-text signature part is derived at compose time and never stored. Absent or empty means no signature is applied. This is configuration, not mail content: storing it in config.json does not violate the no-local-mail-store rule (D6). A value longer than 16,384 characters is rejected with HTTP 400 on configure. */
+            signature_html?: string;
+            /** @description Advanced override for the mailbox's Sent folder name. Empty (default) means the folder is auto-resolved by its standard name. */
+            sent_folder_name?: string;
+            /** @description Advanced override for the mailbox's Drafts folder name. Empty (default) means the folder is auto-resolved by its standard name. */
+            drafts_folder_name?: string;
         };
         /**
          * MailboxConfigureRequest
@@ -11835,6 +11841,12 @@ export interface components {
             username: string;
             /** @description Mailbox password (or app password). Routed to the encrypted credential store; never persisted inline. Omit to keep the existing stored password; send an empty string to clear it. */
             password?: string;
+            /** @description Optional per-mailbox HTML signature (D2). Sanitized on save with the dedicated signature policy before it is persisted. A value longer than 16,384 characters is rejected with HTTP 400. The plain-text signature part is derived at compose time, never stored. Absent or empty means no signature is applied. */
+            signature_html?: string;
+            /** @description Advanced override for the mailbox's Sent folder name. Empty (default) means the folder is auto-resolved by its standard name. */
+            sent_folder_name?: string;
+            /** @description Advanced override for the mailbox's Drafts folder name. Empty (default) means the folder is auto-resolved by its standard name. */
+            drafts_folder_name?: string;
         };
         /**
          * MailboxListResponse

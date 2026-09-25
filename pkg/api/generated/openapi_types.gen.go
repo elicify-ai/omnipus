@@ -17429,6 +17429,9 @@ type Mailbox struct {
 	// Configured True when a mailbox password is present in the credential store (the mailbox can authenticate). The password value itself is never returned.
 	Configured bool `json:"configured"`
 
+	// DraftsFolderName Advanced override for the mailbox's Drafts folder name. Empty (default) means the folder is auto-resolved by its standard name.
+	DraftsFolderName *string `json:"drafts_folder_name,omitempty"`
+
 	// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply) are registered for the owning agent.
 	Enabled bool `json:"enabled"`
 
@@ -17437,6 +17440,12 @@ type Mailbox struct {
 
 	// ImapPort IMAP server port. Defaults to 993 when omitted.
 	ImapPort *int `json:"imap_port,omitempty"`
+
+	// SentFolderName Advanced override for the mailbox's Sent folder name. Empty (default) means the folder is auto-resolved by its standard name.
+	SentFolderName *string `json:"sent_folder_name,omitempty"`
+
+	// SignatureHtml Optional per-mailbox HTML signature (D2). Sanitized on save with the dedicated signature policy — operator HTML never ships raw into outbound mail. The plain-text signature part is derived at compose time and never stored. Absent or empty means no signature is applied. This is configuration, not mail content: storing it in config.json does not violate the no-local-mail-store rule (D6). A value longer than 16,384 characters is rejected with HTTP 400 on configure.
+	SignatureHtml *string `json:"signature_html,omitempty"`
 
 	// SmtpHost SMTP server hostname.
 	SmtpHost *string `json:"smtp_host,omitempty"`
@@ -17453,6 +17462,9 @@ type Mailbox struct {
 
 // MailboxConfigureRequest Request body to configure one (agent, workspace) mailbox account (M11). The target agent and workspace are both path parameters (PUT /agents/{id}/mailboxes/{workspaceId}) — an agent can hold a different mailbox in each workspace it belongs to. The password, when present, is routed into the encrypted credential store and persisted only as a credential reference — it is never written to config.json. Omitting the password leaves any existing stored password unchanged; sending an empty string clears it.
 type MailboxConfigureRequest struct {
+	// DraftsFolderName Advanced override for the mailbox's Drafts folder name. Empty (default) means the folder is auto-resolved by its standard name.
+	DraftsFolderName *string `json:"drafts_folder_name,omitempty"`
+
 	// Enabled Whether to register the email tools for the owning agent.
 	Enabled bool `json:"enabled"`
 
@@ -17464,6 +17476,12 @@ type MailboxConfigureRequest struct {
 
 	// Password Mailbox password (or app password). Routed to the encrypted credential store; never persisted inline. Omit to keep the existing stored password; send an empty string to clear it.
 	Password *string `json:"password,omitempty"`
+
+	// SentFolderName Advanced override for the mailbox's Sent folder name. Empty (default) means the folder is auto-resolved by its standard name.
+	SentFolderName *string `json:"sent_folder_name,omitempty"`
+
+	// SignatureHtml Optional per-mailbox HTML signature (D2). Sanitized on save with the dedicated signature policy before it is persisted. A value longer than 16,384 characters is rejected with HTTP 400. The plain-text signature part is derived at compose time, never stored. Absent or empty means no signature is applied.
+	SignatureHtml *string `json:"signature_html,omitempty"`
 
 	// SmtpHost SMTP server hostname.
 	SmtpHost string `json:"smtp_host"`
@@ -17485,6 +17503,9 @@ type MailboxListResponse struct {
 		// Configured True when a mailbox password is present in the credential store (the mailbox can authenticate). The password value itself is never returned.
 		Configured bool `json:"configured"`
 
+		// DraftsFolderName Advanced override for the mailbox's Drafts folder name. Empty (default) means the folder is auto-resolved by its standard name.
+		DraftsFolderName *string `json:"drafts_folder_name,omitempty"`
+
 		// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply) are registered for the owning agent.
 		Enabled bool `json:"enabled"`
 
@@ -17493,6 +17514,12 @@ type MailboxListResponse struct {
 
 		// ImapPort IMAP server port. Defaults to 993 when omitted.
 		ImapPort *int `json:"imap_port,omitempty"`
+
+		// SentFolderName Advanced override for the mailbox's Sent folder name. Empty (default) means the folder is auto-resolved by its standard name.
+		SentFolderName *string `json:"sent_folder_name,omitempty"`
+
+		// SignatureHtml Optional per-mailbox HTML signature (D2). Sanitized on save with the dedicated signature policy — operator HTML never ships raw into outbound mail. The plain-text signature part is derived at compose time and never stored. Absent or empty means no signature is applied. This is configuration, not mail content: storing it in config.json does not violate the no-local-mail-store rule (D6). A value longer than 16,384 characters is rejected with HTTP 400 on configure.
+		SignatureHtml *string `json:"signature_html,omitempty"`
 
 		// SmtpHost SMTP server hostname.
 		SmtpHost *string `json:"smtp_host,omitempty"`

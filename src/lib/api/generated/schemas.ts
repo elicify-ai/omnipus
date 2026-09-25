@@ -1874,6 +1874,9 @@ type Mailbox = {
   smtp_port?: number | undefined;
   username?: string | undefined;
   configured: boolean;
+  signature_html?: string | undefined;
+  sent_folder_name?: string | undefined;
+  drafts_folder_name?: string | undefined;
 };
 type OperationResult = {
   success: boolean;
@@ -4020,6 +4023,9 @@ export const Mailbox: z.ZodType<Mailbox> = z.object({
   smtp_port: z.number().int().optional(),
   username: z.string().optional(),
   configured: z.boolean(),
+  signature_html: z.string().max(16384).optional(),
+  sent_folder_name: z.string().optional(),
+  drafts_folder_name: z.string().optional(),
 });
 export const MailboxConfigureRequest = z.object({
   enabled: z.boolean(),
@@ -4029,6 +4035,9 @@ export const MailboxConfigureRequest = z.object({
   smtp_port: z.number().int().optional(),
   username: z.string(),
   password: z.string().optional(),
+  signature_html: z.string().max(16384).optional(),
+  sent_folder_name: z.string().optional(),
+  drafts_folder_name: z.string().optional(),
 });
 export const MailboxListResponse: z.ZodType<MailboxListResponse> = z.object({
   mailboxes: z.array(Mailbox),
