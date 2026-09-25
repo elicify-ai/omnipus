@@ -313,12 +313,20 @@ func (al *AgentLoop) reviveInactiveInbound(msg bus.InboundMessage) (bool, error)
 	}
 	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}
 	if class == steer.ClassOrdinaryRoot {
-		if rerr := al.reviveRecordForHumanTurn(context.Background(), sessionID, by); rerr != nil {
+		// ADR-093 D4 + MIN-001: the revival itself is synchronous (the message
+		// must not be queued while the record is still terminal), but the TURN
+		// is not run inline — enqueueSteeringFromMessage is called from Run's
+		// dispatch loop, and an inline processMessage would block the pump for
+		// a whole turn (gate review F1) and return the turn's error as an
+		// "enqueue rejected" signal that session_worker's fallback answers by
+		// queuing the SAME message again (silent-failure-hunter #1: two runs,
+		// one per turn). runRevivedOrdinaryTurn owns the message from here:
+		// exactly one run, published like every other inbound turn (CC-1),
+		// under the Run-scoped context (CC-2), failures error-level.
+		if rerr := al.reviveRecordForHumanTurn(al.inboundRunContext(), sessionID, by); rerr != nil {
 			return false, fmt.Errorf("enqueueSteeringFromMessage: revive ordinary root %q: %w", sessionID, rerr)
 		}
-		if _, _, perr := al.processMessage(context.Background(), msg); perr != nil {
-			return false, fmt.Errorf("enqueueSteeringFromMessage: ordinary turn on revived root %q: %w", sessionID, perr)
-		}
+		al.runRevivedOrdinaryTurn(msg, sessionID)
 		return true, nil
 	}
 	revived, rerr := al.ReviveStoppedSession(context.Background(), sessionID, by, msg.Content)

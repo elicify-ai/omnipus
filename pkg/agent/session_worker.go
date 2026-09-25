@@ -148,7 +148,12 @@ func (w *sessionWorker) enqueue(msg bus.InboundMessage) bool {
 		if err := w.parent.enqueueSteeringFromMessage(msg); err == nil {
 			return true
 		} else {
-			logger.DebugCF("agent.worker", "Steering enqueue rejected — falling back to inbox",
+			// A steering-rejected error here means the message was NOT accepted
+			// by the steering path (classify failure, revive failure). It is
+			// about to run again from the inbox — the fallback that made
+			// silent-failure-hunter #1 into two runs — so the rejection reason
+			// must be visible at the default log level, not Debug.
+			logger.WarnCF("agent.worker", "Steering enqueue rejected — falling back to inbox",
 				map[string]any{"scope": w.scope, "error": err.Error()})
 		}
 	}

@@ -495,6 +495,26 @@ type AgentLoop struct {
 	// atomically via the atomic.Pointer so Stop() can be called before Run.
 	stopCancel atomic.Pointer[context.CancelFunc]
 
+	// inboundCtx is the run-scoped context Run executes under, stored at
+	// startup alongside stopCancel. A revived ordinary-root turn
+	// (revive_support.go::runRevivedOrdinaryTurn) runs under THIS context —
+	// not context.Background() — so the same Stop that ends the dispatch
+	// loop cancels it and shutdown's WaitForActiveRequests drains it like
+	// every other in-flight request (ADR-093 gate fix, architect CC-2).
+	// The accessor falls back to context.Background() only before Run has
+	// stored a context (test loops that never call Run).
+	inboundCtx atomic.Pointer[context.Context]
+
+	// revivalFailures remembers the most recent failed revive attempt per
+	// session id (revive_support.go::revivalFailure). The D2 launch backstop
+	// (steer_launcher.go::launchSteered) consults it so a refusal for a
+	// session whose resume attempt is itself failing tells the truth
+	// ("resuming this conversation failed: <plain cause>") instead of the
+	// send-a-new-message sentence that just failed (ADR-093 gate fix,
+	// silent-failure-hunter #6). Entries are cleared on the next successful
+	// revive; nothing here is authoritative — the lifecycle record is.
+	revivalFailures sync.Map
+
 	// cancelAbuse is the shared abuse detector used by RequestCancel across all
 	// four cancel entry points (web, Tier A /cancel, Tier B text-parsing, CLI).
 	// Initialized in NewAgentLoop; always non-nil after construction.
@@ -887,6 +907,11 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 	al.stopCancel.Store(&runCancel)
+	// Revived inbound turns (revive_support.go) run under the same run-scoped
+	// context as the dispatch loop itself (architect CC-2: a resumed turn is
+	// cancelled by the same Stop that ends the loop and drained by
+	// WaitForActiveRequests — no context.Background()).
+	al.inboundCtx.Store(&runCtx)
 
 	if err := al.ensureHooksInitialized(runCtx); err != nil {
 		return err
