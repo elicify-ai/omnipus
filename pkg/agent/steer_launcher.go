@@ -421,6 +421,16 @@ func (l *SteerLauncher) launchSteered(
 			if existed != preParentExisted || (existed && !sameSteeringEdge(parentRec, preParent)) {
 				return nil, fmt.Errorf("steering edge changed while launch was acquiring the parent lock")
 			}
+			// ADR-093 D2: a launch whose steering conversation is not active
+			// is refused outright, under the parent lock, before anything is
+			// created — no child lifecycle record, no unified session, no
+			// goal record. The sentinel is steer.ErrSteeringStopped (never a
+			// store invariant text); the tool layer maps it to D5's plain
+			// sentence telling the model a new message resumes the
+			// conversation.
+			if parentRec.Terminal() || (parentRec.Stop != nil && parentRec.Stop.Generation == parentRec.Generation) {
+				return nil, steer.ErrSteeringStopped
+			}
 			steererMeta, metaErr := sessions.GetMeta(req.SteeringSessionID)
 			if metaErr != nil {
 				return nil, fmt.Errorf("steer: launch: %w: resolve steering session %q: %w",
@@ -469,14 +479,6 @@ func (l *SteerLauncher) launchSteered(
 				Limits:         req.Limits,
 				ToolExclusions: req.ToolExclusions,
 			}
-			// I-1 US-4/AS-6: a launch under a parent carrying a Stop
-			// marker for its CURRENT generation is stamped at launch and
-			// never starts.
-			var stopStamp *session.Stop
-			if parentRec.Stop != nil && parentRec.Stop.Generation == parentRec.Generation {
-				stopStamp = &session.Stop{At: parentRec.Stop.At, Generation: 1, By: parentRec.Stop.By}
-			}
-
 			if _, err := sessions.CreateSessionWithID(childID, req.SteeringSessionID, sessionType, "", req.TargetAgentID); err != nil {
 				return nil, fmt.Errorf("steer: launch: %w: identity: %w", steer.ErrStoreWrite, err)
 			}
@@ -506,7 +508,6 @@ func (l *SteerLauncher) launchSteered(
 				ParentAgentID:  parentAgentID,
 				Origin:         &origin,
 				SteeredBy:      steeredBy,
-				Stop:           stopStamp,
 			}, nil
 		},
 	)

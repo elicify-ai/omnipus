@@ -51,4 +51,25 @@ var (
 	// ErrTerminal is returned by Dispatch of a terminal session with no
 	// follow-up.
 	ErrTerminal = errors.New("steer: dispatch: session is terminal")
+
+	// ErrSteeringStopped is ADR-093 D2's launch-time backstop: a launch whose
+	// steering conversation's own lifecycle record is terminal — or carries a
+	// Stop marker for its current generation — is refused before anything is
+	// created (no child record, no unified session, no goal). Callers map it
+	// through IsSteeringUnavailable to ADR-093 D5's plain sentence instead of
+	// surfacing store machinery text.
+	ErrSteeringStopped = errors.New("steer: launch: steering conversation is not active (its record is terminal, or stopped for its current generation)")
 )
+
+// IsSteeringUnavailable reports whether err is one of the refusal sentinels
+// that mean "this conversation cannot take the delegation right now because
+// it is not active" (ADR-093 D5): the launch-time backstop
+// (ErrSteeringStopped) or a dispatch refusal (ErrDispatchCancelled,
+// ErrTerminal, ErrStaleGeneration). Callers map these to the D5 sentence
+// instead of surfacing store machinery text.
+func IsSteeringUnavailable(err error) bool {
+	return errors.Is(err, ErrSteeringStopped) ||
+		errors.Is(err, ErrDispatchCancelled) ||
+		errors.Is(err, ErrTerminal) ||
+		errors.Is(err, ErrStaleGeneration)
+}
