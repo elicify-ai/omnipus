@@ -5,8 +5,8 @@ source_repo: https://github.com/elicify-ai/elicify-Skills
 source_branch: feat/elicify-document-skills
 source_commit: 687242a67612744c88aa1c6b4ac0a56a5537cde3
 upstream_subpath: skills/elicify-test-writing
-date_vendored: 2026-09-25
-derived: false
+copy_date: 2026-09-25
+copy_or_derived: copy
 
 # When the source moves to `main` (once elicify-Skills PR #1 and the
 # `feat/test-integrity-audit-skill` branch merge), update `source_branch`

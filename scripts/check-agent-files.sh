@@ -258,13 +258,35 @@ if os.path.isdir(SKILLS_DIR):
 discovered_skill_names = {name for name, _p in skill_md_files}
 dev_skill_files = [(n, p) for n, p in skill_md_files if n in DEV_TEAM_SKILLS]
 
+# Vendored directories (design 6.4, lead default C4): any directory under
+# .claude/skills/ that carries a SOURCE.yaml at its root is a vendored copy,
+# byte-for-byte from an upstream repo. Content checks (2, 4, 5, 10) never
+# fire inside one — only SOURCE.yaml itself (check 9) and the discovery/
+# name-existence checks apply. Detected generically by SOURCE.yaml's
+# presence, not by the VENDORED_SKILLS name list, so a future vendored
+# skill is exempt automatically.
+VENDORED_ROOT_DIRS = []
+if os.path.isdir(SKILLS_DIR):
+    for root, _dirs, files in os.walk(SKILLS_DIR):
+        if "SOURCE.yaml" in files:
+            VENDORED_ROOT_DIRS.append(os.path.abspath(root))
+
+
+def is_vendored_path(path):
+    ap = os.path.abspath(path)
+    for d in VENDORED_ROOT_DIRS:
+        if ap == d or ap.startswith(d + os.sep):
+            return True
+    return False
+
+
 all_files_under_agents_and_skills = list(agent_files)
 if os.path.isdir(SKILLS_DIR):
     for root, _dirs, files in os.walk(SKILLS_DIR):
         for fn in files:
             all_files_under_agents_and_skills.append(os.path.join(root, fn))
 
-cited_files = list(agent_files) + [p for _n, p in dev_skill_files]
+cited_files = [f for f in (list(agent_files) + [p for _n, p in dev_skill_files]) if not is_vendored_path(f)]
 
 agent_basenames = {os.path.splitext(os.path.basename(p))[0] for p in agent_files}
 
@@ -407,13 +429,24 @@ for path in agent_files:
     skind, sval = parse_yaml_field(fm, "skills")
     fm_skills = sval if skind == "list" else ([] if skind != "scalar" or not sval else [sval])
 
+    # cited: every backtick token that looks like a skill citation, used for
+    # check 3 (existence) — the allow-marker does NOT cover check 3 (design
+    # 8.2 lists checks 2, 4, 5, 6 and 10 only). cited_unmarked: the subset
+    # cited on a line without `# agent-guard: allow` — used for check 6
+    # (isolation), which the marker does cover, e.g. a role's file that
+    # legitimately *describes* another role's on-demand skill in prose
+    # rather than loading it itself.
     cited = set(fm_skills)
+    cited_unmarked = set(fm_skills)
     for i, line in enumerate(text.splitlines(), start=1):
         if "skill" not in line.lower():
             continue
+        line_marked = allowed_line(line)
         for tok in BACKTICK_RE.findall(line):
             if SKILL_SHAPE_RE.match(tok):
                 cited.add(tok)
+                if not line_marked:
+                    cited_unmarked.add(tok)
 
     if "omnipus-shared-rules" not in text:
         finding(3, "%s: does not name omnipus-shared-rules" % relpath(path))
@@ -423,7 +456,7 @@ for path in agent_files:
         if not exists:
             finding(3, "%s: cites skill '%s' which does not exist under .claude/skills/ and is not on the user-level allowlist" % (relpath(path), name))
 
-        if isolation_universe(name) and not role_allowed(role, name):
+        if isolation_universe(name) and not role_allowed(role, name) and name in cited_unmarked:
             finding(6, "%s: cites skill '%s' outside role '%s' allowed set" % (relpath(path), name, role))
 
 if "omnipus-shared-rules" not in discovered_skill_names:
@@ -579,6 +612,8 @@ for name in sorted(VENDORED_SKILLS):
 BRANCH_RE = re.compile(r"\brelease/v\d+(?:\.\d+){0,2}\b")
 for path in all_files_under_agents_and_skills:
     if not os.path.isfile(path) or not is_text_file(path):
+        continue
+    if is_vendored_path(path):
         continue
     for i, line in enumerate(read_text(path).splitlines(), start=1):
         if allowed_line(line):

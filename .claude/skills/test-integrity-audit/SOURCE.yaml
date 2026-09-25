@@ -7,8 +7,8 @@ source_repo: https://github.com/elicify-ai/elicify-Skills
 source_branch: feat/test-integrity-audit-skill
 source_commit: d87fdcf6c8ba4cfdc22c0735793d7258bd9dc3f9
 upstream_subpath: skills/test-integrity-audit
-date_vendored: 2026-09-25
-derived: false
+copy_date: 2026-09-25
+copy_or_derived: copy
 
 # The branch can be rebased or change before merging, and the reference
 # below goes stale the moment it lands on `main`. When elicify-Skills PR

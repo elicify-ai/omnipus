@@ -30,6 +30,10 @@
 #         longer absolute, outside-repo path
 #   FP-f  check 9's upstream-drift comparison is WARN-only and never fails
 #         the exit code
+#   FP-g  a vendored directory (SOURCE.yaml present) is exempt from content
+#         checks 2/4/5/10 — it is copied byte-for-byte and never edited
+#   FP-h  the allow-marker suppresses a check-6 isolation hit (design 8.2
+#         names check 6 as marker-covered)
 #   REAL  the real repository is never touched by any of the above
 #
 # Exit code: 0 if every assertion passes, 1 if any fails.
@@ -600,6 +604,31 @@ REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/fpf.out" 2>&1
 ge=$?
 assert_exit_code "fpf-exit" 0 "$ge"
 assert_output_contains "fpf-warn" "WARN check9:" "$TMP_BASE/fpf.out"
+
+echo ""
+echo "FP-g: a vendored directory (SOURCE.yaml present) is exempt from content checks 2/4/5/10 — copied byte-for-byte, never edited"
+T="$(clone_baseline fp_g)"
+append_line "$T/.claude/skills/elicify-test-writing/SKILL.md" \
+  'See docs/does-not-exist-vendored.md and run go build ./... and mind the exec allowlist and release/v0.1.1.'
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/fpg.out" 2>&1
+ge=$?
+assert_exit_code "fpg-exit" 0 "$ge"
+assert_output_not_contains "fpg-no-check2" "does-not-exist-vendored" "$TMP_BASE/fpg.out"
+assert_output_not_contains "fpg-no-check4" "go build ./... (untagged)" "$TMP_BASE/fpg.out"
+assert_output_not_contains "fpg-no-check5" "check5:" "$TMP_BASE/fpg.out"
+assert_output_not_contains "fpg-no-check10" "hard-coded integration branch" "$TMP_BASE/fpg.out"
+
+echo ""
+echo "FP-h: the '# agent-guard: allow' marker suppresses a check-6 isolation hit (design 8.2 lists check 6)"
+T="$(clone_baseline fp_h)"
+# Backticks below must stay literal (a fixture skill citation).
+# shellcheck disable=SC2016
+append_line "$T/.claude/agents/backend-lead.md" \
+  'qa-lead on CHECK also loads the `omnipus-frontend-rules` skill in this sentence only to describe it, never to load it itself. # agent-guard: allow'
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/fph.out" 2>&1
+ge=$?
+assert_exit_code "fph-exit" 0 "$ge"
+assert_output_not_contains "fph-no-check6" "check6:" "$TMP_BASE/fph.out"
 
 # ─── REAL: the real repository was never touched ───────────────────────────
 
