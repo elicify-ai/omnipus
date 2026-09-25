@@ -226,3 +226,56 @@ describe('Tooltip — accessibility contract', () => {
     )
   })
 })
+
+// ── interactive mode (2026-09-25: added for the God Mode corner dot) ────────
+//
+// When the child is itself an interactive control (a link, a button), the
+// child must remain the ONE tab stop and the owner of its own hit area:
+// the wrapper span drops its tabIndex and its [data-ds-action] hit-region
+// expander (that ::before overlay would swallow clicks meant for the child
+// — the later sibling wins an overlap), and aria-describedby moves onto the
+// child while the bubble is open. Hover and child focus still reveal the
+// bubble (React's delegated onFocus reaches the wrapper from inside).
+describe('Tooltip — interactive mode', () => {
+  it('leaves the child as the tab stop: wrapper is tabIndex -1 with no data-ds-action expander', () => {
+    render(
+      <Tooltip interactive content="Explanation text">
+        <a href="/settings">Go</a>
+      </Tooltip>,
+    )
+    const link = screen.getByRole('link', { name: 'Go' })
+    const wrapper = link.parentElement as HTMLElement
+    expect(wrapper.tabIndex).toBe(-1)
+    expect(wrapper.hasAttribute('data-ds-action')).toBe(false)
+  })
+
+  it('reveals the bubble on child focus and associates it via aria-describedby on the CHILD (not the wrapper)', () => {
+    render(
+      <Tooltip interactive content="Explanation text">
+        <a href="/settings">Go</a>
+      </Tooltip>,
+    )
+    const link = screen.getByRole('link', { name: 'Go' })
+    expect(link).not.toHaveAttribute('aria-describedby')
+
+    fireEvent.focus(link)
+    const bubble = screen.getByRole('tooltip')
+    expect(bubble).toHaveTextContent('Explanation text')
+    expect(link).toHaveAttribute('aria-describedby', bubble.id)
+    expect(link.parentElement).not.toHaveAttribute('aria-describedby')
+
+    fireEvent.blur(link)
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    expect(link).not.toHaveAttribute('aria-describedby')
+  })
+
+  it('reveals the bubble on hover over the child', () => {
+    render(
+      <Tooltip interactive content="Explanation text">
+        <a href="/settings">Go</a>
+      </Tooltip>,
+    )
+    fireEvent.mouseEnter(screen.getByRole('link', { name: 'Go' }))
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Explanation text')
+  })
+})

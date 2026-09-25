@@ -27,9 +27,9 @@ export interface DevModeBypassQuery {
  *
  * Extracted from GodModeControl.tsx (commit 671a68ad6), which had this
  * exact `useQuery(['app-state'], fetchAppState)` + `=== true` block
- * duplicated twice in the same file (GodModeControl and
- * GodModeActiveBanner) — the second copy is exactly how a THIRD caller
- * would have drifted from the other two instead of sharing one definition.
+ * duplicated twice in the same file — the second copy is exactly how a
+ * THIRD caller would have drifted from the other two instead of sharing one
+ * definition.
  */
 export function useDevModeBypassKnown(): DevModeBypassQuery {
   const { data: appState } = useQuery({

@@ -57,6 +57,9 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
     ...actual,
     useQuery: vi.fn().mockImplementation(({ queryKey }: { queryKey: unknown[] }) => {
       const key = JSON.stringify(queryKey)
+      if (key.includes('app-state')) {
+        return { data: { onboarding_complete: true, dev_mode_bypass: false }, isLoading: false, isError: false }
+      }
       if (key.includes('archived')) {
         return { data: [], isLoading: false, isError: false }
       }
@@ -80,6 +83,7 @@ vi.mock('@/store/sidebar', () => ({
     const state = { toggle: mockToggle, isOpen: false, isPinned: false }
     return selector ? selector(state) : state
   },
+  SIDEBAR_PIN_BREAKPOINT: 1024,
 }))
 
 // Session store — only enterWorkspaceChat matters for the container
@@ -410,5 +414,37 @@ describe('WorkspaceTabContainer — the route binds the active workspace', () =>
     })
 
     expect(mockSetActiveWorkspaceId).not.toHaveBeenCalledWith('inbox')
+  })
+})
+
+// ── God Mode dot removal (founder decision 2026-09-25 revision 2) ────────────
+//
+// The per-hamburger dot is deleted: AppShell renders ONE corner indicator
+// app-wide instead (covered in AppShell.test.tsx). Pin the removal so a
+// merge cannot resurrect the per-button variant as a "conflict-free
+// addition": no dot testid, no God Mode extension of the hamburger's
+// accessible name.
+describe('WorkspaceTabContainer — God Mode dot removal (2026-09-25)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // Mirror the layout describe's resets — earlier describes mutate these
+    // (the workspace-switch tests move mockWorkspaceId to ws-2), and a stale
+    // id makes the container render its "Workspace not found" state instead
+    // of the top bar.
+    mockPathname = '/workspaces/ws-1/chat'
+    mockWorkspaceId = 'ws-1'
+    mockWorkspaceName = 'My Workspace'
+  })
+
+  it('renders no God Mode dot on the hamburger and keeps its plain accessible name', async () => {
+    await act(async () => {
+      render(<WorkspaceTabContainer workspaceId="ws-1" />)
+    })
+
+    expect(screen.getByTestId('workspace-hamburger')).toBeTruthy()
+    expect(screen.queryByTestId('sidebar-god-mode-dot')).toBeNull()
+    expect(
+      screen.queryByRole('button', { name: 'Toggle navigation sidebar — God Mode is on' })
+    ).toBeNull()
   })
 })

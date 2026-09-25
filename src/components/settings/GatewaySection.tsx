@@ -89,7 +89,7 @@ function UnauthenticatedBanner({ devModeBypass }: UnauthBannerProps) {
   )
 }
 
-export function GatewaySection() {
+export function GatewaySection({ focusGodMode }: { focusGodMode?: boolean }) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const [copied, setCopied] = useState(false)
@@ -517,8 +517,10 @@ export function GatewaySection() {
 
       <Separator />
 
-      {/* O14: God-mode switch (danger zone) — step-up-gated global override. */}
-      <GodModeControl />
+      {/* O14: God-mode switch (danger zone) — step-up-gated global override.
+          focusGodMode routes the ?focus=god-mode landing from the sidebar
+          pill / app-shell corner dot (2026-09-25). */}
+      <GodModeControl focusOnMount={focusGodMode} />
 
       <Separator />
 

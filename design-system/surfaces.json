@@ -7464,6 +7464,10 @@
     {
       "source": "src/components/chat/composer/AutoApprovePicker.tsx",
       "lane": 3
+    },
+    {
+      "source": "src/components/layout/GodModeIndicators.tsx",
+      "lane": 7
     }
   ]
 }

@@ -43,41 +43,31 @@
  * the restart modal never opens on disable.
  */
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Warning, ShieldCheck, SpinnerGap } from '@phosphor-icons/react'
 import { fetchGodMode, setGodMode, getErrorMessage } from '@/lib/api'
-import { isApiError } from '@/lib/api-error'
 import { useUiStore } from '@/store/ui'
 import { Button } from '@/components/ui/button'
 import { useDevModeBypassKnown } from '@/hooks/useDevModeBypassKnown'
+import { isBypassUnavailable } from '@/hooks/useGodModeLiveStatus'
 import { useStepUp } from './useStepUp'
 import { isReAuthCancelled } from './useReAuthGate'
 import { GatewayRestartModal } from './GatewayRestartModal'
 
-// GET /api/v1/gateway/god-mode is gated by adminWrap (withAuth →
-// RequireNotBypass) — pkg/gateway/rest_god_mode.go:49. Under
-// gateway.dev_mode_bypass=true, RequireNotBypass returns 503 BEFORE the
-// handler runs (pkg/gateway/middleware/bypass_gate.go), every single time —
-// not an outage, an expected "this surface is disabled while bypass is
-// active" response. Treating that 503 the same as a transport failure
-// produced a permanent, false "gateway may be offline" banner on every
-// screen for any dev-mode-bypass install. A genuine failure (network down,
-// 500, anything else) must still surface normally.
-function isBypassUnavailable(err: unknown): boolean {
-  return isApiError(err) && err.status === 503
-}
-
-export function GodModeControl() {
+export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolean } = {}) {
   const { addToast } = useUiStore()
   const stepUp = useStepUp()
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
-  // See GodModeActiveBanner's matching comment below: GET /api/v1/gateway/
-  // god-mode always 503s under dev_mode_bypass, so skip the doomed request
-  // once dev_mode_bypass (shared ['app-state'] cache entry, same key
-  // AppShell already fetches — see useDevModeBypassKnown) says it's on,
-  // rather than firing it and explaining the error away afterward.
+  // GET /api/v1/gateway/god-mode always 503s under dev_mode_bypass, so skip
+  // the doomed request once dev_mode_bypass (shared ['app-state'] cache
+  // entry, same key AppShell already fetches — see useDevModeBypassKnown)
+  // says it's on, rather than firing it and explaining the error away
+  // afterward. (isBypassUnavailable's full rationale lives in
+  // useGodModeLiveStatus, which shares it.)
   const { known: devModeBypassKnown, resolved: appStateResolved } = useDevModeBypassKnown()
 
   const { data: godMode, isLoading: godModeIsLoading, isError, error } = useQuery({
@@ -213,6 +203,28 @@ export function GodModeControl() {
 
   const busy = isSaving
 
+  // focusOnMount (?focus=god-mode, founder decision 2026-09-25): the sidebar
+  // God Mode pill and the app-shell corner dot navigate here so the click
+  // lands the operator ON this control. Gated on !isLoading: the switch is
+  // disabled while its own query is in flight (disabled buttons are not
+  // focusable), so focusing before it settles would silently no-op.
+  // The param is ONE-SHOT intent, so it is consumed here: after focusing,
+  // it is stripped from the URL with a replace navigation. Radix
+  // TabsContent unmounts inactive tabs, so a lingering ?focus would re-run
+  // this effect on every away-and-back to the Gateway tab and steal focus
+  // again (review round 2, finding 1). Only `focus` is dropped — the
+  // ?tab=gateway the indicators pair with it stays.
+  useEffect(() => {
+    if (!focusOnMount || isLoading) return
+    document.getElementById('god-mode-control')?.scrollIntoView({ block: 'center' })
+    document.getElementById('god-mode-toggle')?.focus()
+    void navigate({
+      to: '/settings',
+      search: (prev) => ({ ...prev, focus: undefined }),
+      replace: true,
+    })
+  }, [focusOnMount, isLoading, navigate])
+
   return (
     <div className="space-y-[var(--space-2-5)]">
       <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">
@@ -220,6 +232,7 @@ export function GodModeControl() {
       </h3>
 
       <div
+        id="god-mode-control"
         data-testid="god-mode-control"
         className={[
           'rounded-lg border px-[var(--space-3)] py-[var(--space-3)] transition-colors',
@@ -341,6 +354,7 @@ export function GodModeControl() {
               contract exactly (see file header). */}
           <Button
             type="button"
+            id="god-mode-toggle"
             variant="ghost"
             role="switch"
             aria-checked={persisted}
@@ -381,150 +395,6 @@ export function GodModeControl() {
         open={restartModalOpen}
         onClose={() => setRestartModalOpen(false)}
       />
-    </div>
-  )
-}
-
-/**
- * GodModeActiveBanner — persistent, app-wide indicator (ADR-092 FR-034:
- * rendered from AppShell, not just the Gateway section) shown while god-mode
- * is active. Reads the live state from AppState; renders nothing when
- * god-mode is off. Carries its own working "Turn off" action — a move to
- * AppShell means the banner can be on screen with no GodModeControl toggle
- * anywhere nearby, so "turn it off below" is no longer a real instruction.
- */
-export function GodModeActiveBanner() {
-  const { addToast } = useUiStore()
-  const stepUp = useStepUp()
-  const queryClient = useQueryClient()
-
-  // Shares AppShell's own ['app-state'] cache entry (same queryKey,
-  // staleTime 60s, via useDevModeBypassKnown) — this is not a second network
-  // round trip on a page that already renders AppShell. `dev_mode_bypass` is
-  // what the god-mode query is doomed against (see isBypassUnavailable's doc
-  // comment above): reading it here lets the doomed request be skipped
-  // entirely, rather than fired and then explained away. Before this fix,
-  // GodModeActiveBanner mounts on EVERY page (ADR-092 FR-034 moved it
-  // app-wide) and fired ['god-mode'] unconditionally, so a dev_mode_bypass
-  // install produced a real 503 — retried 3 times by the query client's
-  // default retry — on every single page load, 4 browser console errors per
-  // load. E2E CI runs with dev_mode_bypass:true (see .github/workflows/pr.yml
-  // "Seed gateway config"), so this fired on every spec that loaded a page at
-  // all; only specs opting into the `consoleErrors` fixture
-  // (tests/e2e/subagent.spec.ts (d)) asserted on it and went red.
-  const { known: devModeBypassKnown, resolved: appStateResolved } = useDevModeBypassKnown()
-
-  const { data: godMode, isError, error } = useQuery({
-    queryKey: ['god-mode'],
-    queryFn: fetchGodMode,
-    // Only fire once app-state has resolved AND confirmed bypass is off.
-    // While appState is still loading, the query stays disabled (not an
-    // error) — `enabled` below reads false and the banner renders nothing,
-    // which is correct: there is nothing yet to report either way. The
-    // moment appState resolves with dev_mode_bypass:false, this flips
-    // enabled:true and the query fires exactly as before.
-    enabled: appStateResolved && !devModeBypassKnown,
-  })
-  // Known from appState (the common case — no doomed request was even
-  // made) OR a genuine 503 the query itself hit (defense in depth, e.g. a
-  // late toggle of dev_mode_bypass mid-session before appState refetches).
-  const bypassUnavailable = devModeBypassKnown || isBypassUnavailable(error)
-
-  const enabled = godMode?.enabled === true
-
-  const { mutateAsync: disableAsync, isPending: isDisabling } = useMutation({
-    mutationFn: (vars: { token?: string }) =>
-      vars.token === undefined ? setGodMode(false) : setGodMode(false, vars.token),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['god-mode'] })
-      queryClient.invalidateQueries({ queryKey: ['config'] })
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-      queryClient.invalidateQueries({ queryKey: ['pending-restart'] })
-      addToast({ message: 'God-mode disabled', variant: 'success' })
-    },
-    onError: (err: unknown) => {
-      addToast({ message: getErrorMessage(err, 'Could not change god-mode'), variant: 'error' })
-    },
-  })
-
-  function requestDisable() {
-    if (isDisabling) return
-    void stepUp
-      .gate((token) => disableAsync({ token }), {
-        title: 'Disable god mode?',
-        body: 'Agents go back to asking permission, and the sandbox around their code is switched back on.',
-        confirmLabel: 'Disable god mode',
-      })
-      .catch((err: unknown) => {
-        // A cancelled gate sent nothing — stay silent. A real failure already
-        // toasted once via disableAsync's own onError; do not toast twice.
-        if (isReAuthCancelled(err)) return
-      })
-  }
-
-  // Genuinely off (query succeeded and reported enabled=false) — nothing to
-  // warn about. NB: this must NOT be reached on a fetch failure — `enabled`
-  // collapses to false when `godMode` is undefined, which is indistinguishable
-  // from "really off" unless we check `isError` too. A transport error must
-  // never silently look like "sandboxing is definitely on" — that is exactly
-  // the moment an operator most needs a signal, not silence.
-  if (!enabled && !isError) return null
-
-  // Under dev_mode_bypass the god-mode status endpoint always 503s
-  // (RequireNotBypass fires before the handler runs) — an expected
-  // "unavailable in this mode" response, not a real outage. Rendering the
-  // "gateway may be offline" warning here would put a false alarm on every
-  // screen for the lifetime of any dev-mode-bypass install. Say nothing;
-  // the dedicated dev-mode-bypass banner (AppShell) already covers this case.
-  if (bypassUnavailable) return null
-
-  if (isError) {
-    return (
-      <div
-        role="alert"
-        data-testid="god-mode-status-unknown-banner"
-        className="flex items-start gap-[var(--space-2-5)] rounded-lg border border-[var(--color-warning)]/60 bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-2-5)]"
-      >
-        <Warning size={18} weight="fill" className="shrink-0 mt-[var(--space-0-5)] text-[var(--color-warning)]" />
-        <div className="space-y-[var(--space-1)]">
-          <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-warning)]">God-mode status unavailable</p>
-          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]/80">
-            Could not fetch god-mode status from the gateway — it may be offline. If god-mode was
-            previously active, sandboxing may still be disabled right now and this banner cannot
-            confirm it either way. Check your connection and reload.
-          </p>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div
-      role="alert"
-      data-testid="god-mode-active-banner"
-      className="flex items-start gap-[var(--space-2-5)] rounded-lg border border-[var(--color-error)]/60 bg-[var(--color-error)]/10 px-[var(--space-3)] py-[var(--space-2-5)]"
-    >
-      <Warning size={18} weight="fill" className="shrink-0 mt-[var(--space-0-5)] text-[var(--color-error)]" />
-      <div className="min-w-0 flex-1 space-y-[var(--space-1)]">
-        <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-error)]">God-mode is active</p>
-        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]/80">
-          All permission prompts are bypassed and the kernel sandbox and network restrictions are disabled
-          for every agent. Configured deny rules still refuse a matching command. Audit logging, the
-          prompt-guard, and rate limiting remain on.
-        </p>
-      </div>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        data-testid="god-mode-banner-turn-off"
-        disabled={isDisabling}
-        onClick={requestDisable}
-        className="shrink-0 border-[var(--color-error)]/60 text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
-      >
-        {isDisabling ? 'Turning off…' : 'Turn off'}
-      </Button>
-      {stepUp.dialogs}
     </div>
   )
 }

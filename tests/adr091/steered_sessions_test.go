@@ -830,6 +830,20 @@ func TestE2E_StopSurvivesRestart(t *testing.T) {
 		t.Logf("B's Stop was carried out inside the restart window: %q -> %q at generation %d "+
 			"(marker %+v spent)", stopped.State, reopened.State, reopened.Generation, stopped.Stop)
 	}
+	// The stop marker can be SPENT between the post-reboot snapshot above and the
+	// Revive below. B's own turn may finish unwinding in that window, land terminal,
+	// and clear the now-carried-out marker -- both clearing sites
+	// (steer_completion.go, steer_cancel.go) clear ONLY a current-generation marker,
+	// by founder decision 2026-09-24. `reopened` is therefore a stale baseline by the
+	// time Revive runs, and comparing against it reported "Revive discarded the older
+	// stop marker" in CI (run 36120145669) when nothing had discarded anything: the
+	// marker was spent, then Revive correctly had none to retain. Re-read here so the
+	// baseline is the state Revive actually saw.
+	preRevive, err := h.tree.Deps().LifecycleStore.Load(h.tree.B.SessionID)
+	if err != nil {
+		t.Fatalf("load B immediately before Revive: %v", err)
+	}
+
 	newGeneration, err := h.tree.Revive(h.tree.B.SessionID)
 	if err != nil {
 		t.Fatalf("Revive(B): %v", err)
@@ -850,7 +864,7 @@ func TestE2E_StopSurvivesRestart(t *testing.T) {
 	if revived.Stopped() {
 		t.Fatalf("B is still live-stopped after Revive: marker %+v at generation %d", revived.Stop, revived.Generation)
 	}
-	if reopened.Stop != nil {
+	if preRevive.Stop != nil {
 		if revived.Stop == nil || revived.Stop.Generation != oldGeneration {
 			t.Fatalf("Revive discarded the older stop marker: before=%+v after=%+v — an earlier "+
 				"generation's marker is inert history a revival retains", reopened.Stop, revived.Stop)

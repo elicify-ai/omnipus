@@ -6,13 +6,13 @@ import { ToastContainer } from '@/components/ui/toast-container'
 import { Button } from '@/components/ui/button'
 import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
 import { CrossWorkspaceApprovalBanner } from '@/components/layout/CrossWorkspaceApprovalBanner'
-import { GodModeActiveBanner } from '@/components/settings/GodModeControl'
 import { MediaLightbox } from '@/components/chat/MediaLightbox'
 import { BrowserLivePanel } from '@/components/browser/BrowserLivePanel'
 import { LibraryPanel } from '@/components/library/LibraryPanel'
 import { SearchModal } from '@/components/search/SearchModal'
 import { OmnipusRuntimeProvider } from '@/components/chat/OmnipusRuntimeProvider'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
+import { GodModeCornerDot } from './GodModeIndicators'
 import { queryClient } from '@/lib/queryClient'
 import { fetchTasks, fetchAgents, fetchAppState, fetchNotifications } from '@/lib/api'
 import { useConnectionStore } from '@/store/connection'
@@ -222,9 +222,12 @@ export function AppShell() {
           )}
 
           {/* App-state fetch failed — dev-mode-bypass status is unknown, not
-              confirmed off. Must not silently vanish like the security-relevant
-              GodModeActiveBanner must not on its own fetch failure: show an
-              explicit "status unknown" indicator instead of nothing. */}
+              confirmed off. Must not silently vanish on its own fetch
+              failure: show an explicit "status unknown" indicator instead of
+              nothing. (The God Mode indicators deliberately do NOT have such
+              a variant — founder decision 2026-09-25: red when on, invisible
+              otherwise; this banner is the failure surface for unknown
+              gateway state.) */}
           {appStateError && (
             <div
               data-testid="app-state-fetch-error-banner"
@@ -237,14 +240,6 @@ export function AppShell() {
               </span>
             </div>
           )}
-
-          {/* ADR-092 FR-034: god-mode-active banner, relocated app-wide from
-              the Gateway settings section — a real user or agent can trip
-              God Mode from any screen, so the warning (and its "Turn off"
-              action) must be visible from any screen too, not just Gateway. */}
-          <div className="px-[var(--space-3)] pt-[var(--space-2)] shrink-0">
-            <GodModeActiveBanner />
-          </div>
 
           {/* Cross-workspace tool-approval notice — founder decision
               2026-09-14. Ambient, non-blocking: an approval waiting in a
@@ -298,6 +293,20 @@ export function AppShell() {
           why popping THIS one out does not close the docked copy (no
           exclusive control lock to hand over, unlike the live browser). */}
       <LibraryPanel />
+
+      {/* God Mode corner dot (founder decision 2026-09-25) — rendered ONCE
+          here at the SHELL ROOT, outside the ErrorBoundary, and — review
+          round 2, finding 3 — deliberately NOT inside <main>: on a
+          phone-width takeover the docked panels above collapse <main> to
+          zero width and inert it, which would make a dot in there invisible
+          and unclickable exactly while God Mode is on. At the root,
+          absolute + z-40 keeps it above the static panels and outside the
+          inert region, and a crashed screen cannot take the indicator down
+          with it. Shows only while god-mode is on AND the sidebar is
+          hidden; anchored just below the 44px chrome-header band so its
+          hit area never overlaps the sidebar-open hamburger — see
+          GodModeIndicators.tsx for the full geometry. */}
+      <GodModeCornerDot />
     </div>
   )
 }

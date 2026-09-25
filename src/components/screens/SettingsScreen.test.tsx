@@ -32,7 +32,15 @@ import type { AboutInfo } from '@/lib/api'
 vi.mock('@/components/settings/ProvidersSection', () => ({ ProvidersSection: () => null }))
 vi.mock('@/components/settings/IntegrationsSection', () => ({ IntegrationsSection: () => null }))
 vi.mock('@/components/settings/SecuritySection', () => ({ SecuritySection: () => null }))
-vi.mock('@/components/settings/GatewaySection', () => ({ GatewaySection: () => null }))
+// The GatewaySection stub echoes its props (ContextSection pattern) so the
+// ?focus=god-mode forwarding test below can observe what the shell passed.
+vi.mock('@/components/settings/GatewaySection', () => ({
+  GatewaySection: (props: { focusGodMode?: boolean }) => (
+    <div data-testid="gateway-section-stub">
+      {props.focusGodMode ? 'focus-god-mode' : 'no-focus'}
+    </div>
+  ),
+}))
 vi.mock('@/components/settings/DataSection', () => ({ DataSection: () => null }))
 vi.mock('@/components/settings/AboutSection', () => ({ AboutSection: () => null }))
 vi.mock('@/components/settings/DevicesSection', () => ({ DevicesSection: () => null }))
@@ -142,5 +150,65 @@ describe('SettingsScreen — Models tab (ADR-066 D9)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('context-section-stub')).toHaveTextContent('ollama/qwen3:8b'),
     )
+  })
+})
+
+// Founder decision 2026-09-25: the sidebar God Mode pill and the app-shell
+// corner dot navigate to /settings?tab=gateway&focus=god-mode. This pins the
+// shell's half of that chain — the route parses the search params and
+// SettingsScreen forwards focusGodMode into the Gateway tab's section (the
+// scroll+focus landing itself is asserted in GodModeControl.test.tsx).
+describe('SettingsScreen — ?focus=god-mode forwarding', () => {
+  it('forwards focusGodMode to GatewaySection on the gateway tab', async () => {
+    vi.mocked(api.fetchAboutInfo).mockResolvedValue(ABOUT_INFO_OK)
+    renderScreen({ initialTab: 'gateway', focusGodMode: true })
+    await waitFor(() =>
+      expect(screen.getByTestId('gateway-section-stub')).toHaveTextContent('focus-god-mode'),
+    )
+  })
+
+  it('passes nothing through when the flag is absent — differentiation', async () => {
+    vi.mocked(api.fetchAboutInfo).mockResolvedValue(ABOUT_INFO_OK)
+    renderScreen({ initialTab: 'gateway' })
+    await waitFor(() =>
+      expect(screen.getByTestId('gateway-section-stub')).toHaveTextContent('no-focus'),
+    )
+  })
+})
+
+// Review round 2, finding 2: clicking the God Mode pill / corner dot while
+// ALREADY on /settings (on another tab) must switch to the Gateway tab.
+// TanStack Router re-renders — does NOT remount — the route component on a
+// search-only change, so this simulates exactly that shape: the same
+// SettingsScreen instance receiving changed initialTab/focusGodMode props.
+// Radix Tabs applies defaultValue only on mount, so without a remount key
+// the visible tab would silently stay on Providers.
+describe('SettingsScreen — tab switch on route search change', () => {
+  it('switches to the Gateway tab when initialTab changes on a search-only re-render', async () => {
+    vi.mocked(api.fetchAboutInfo).mockResolvedValue(ABOUT_INFO_OK)
+    const client = makeClient()
+
+    const { rerender } = render(
+      <QueryClientProvider client={client}>
+        <SettingsScreen initialTab="providers" />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { selected: true })).toHaveTextContent('Providers')
+    })
+    // Gateway content is not mounted while Providers is the active tab.
+    expect(screen.queryByTestId('gateway-section-stub')).not.toBeInTheDocument()
+
+    rerender(
+      <QueryClientProvider client={client}>
+        <SettingsScreen initialTab="gateway" focusGodMode />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { selected: true })).toHaveTextContent('Gateway')
+    })
+    expect(screen.getByTestId('gateway-section-stub')).toHaveTextContent('focus-god-mode')
   })
 })

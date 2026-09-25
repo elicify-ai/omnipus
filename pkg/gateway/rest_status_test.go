@@ -174,8 +174,8 @@ func TestHandleStateGET(t *testing.T) {
 // bypass is active." The field existed in the contract and in the generated
 // Go/TS types (gen.AppState.DevModeBypass) but HandleState's GET branch never
 // set it on the response map — every SPA gate keyed on
-// `appState?.dev_mode_bypass === true` (GodModeControl / GodModeActiveBanner,
-// commit 671a68ad6) therefore always read false, even under
+// `appState?.dev_mode_bypass === true` (GodModeControl / the sidebar God Mode
+// pill, commit 671a68ad6) therefore always read false, even under
 // gateway.dev_mode_bypass=true, and never actually engaged. Confirmed via
 // CI run 35990283526's gateway.log: 79
 // gateway.admin_route_blocked_by_bypass_gate 503s on
