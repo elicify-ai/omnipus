@@ -61,11 +61,14 @@ Formats and procedures: `knowledge/coordination-ledger.md`. The core rules:
 - **Claims are information, not ownership** — a claim never blocks anyone; work proceeds
   merge-later. The only enforced state is **holds** and the **landing lock**, both
   enforced mechanically at push time by the pre-push hook.
-- **Landing** (any actor): announce and take the lock → merge the latest integration
-  branch into the work branch → re-check on that result (affected-area CI plus a
-  conflict-resolution review — never the full size gate again) → founder yes in chat →
-  push → release the lock, post the landed commit, close the resolved issues citing the
-  commit.
+- **Landing** (any actor, Round 18): ask the founder first (batched, §5) → on a yes,
+  take the lock → merge the latest integration branch into the work branch → re-check on
+  that result (affected-area CI plus a conflict-resolution review — never the full size
+  gate again) → push (with both `OMNIPUS_INTEGRATION_BRANCH` and `OMNIPUS_SQUAD_ID` set
+  in the push command itself) → release the lock, post the landed commit, close the
+  resolved issues citing the commit. The lock is taken at landing time, after the yes —
+  never held across CI or across the wait for the founder's reply. Exact sequence and
+  line formats: `knowledge/coordination-ledger.md`.
 - **In-session squads never land themselves** — a squad-lead subagent finishes with a
   fully gated branch and hands it back to team-lead, which asks the founder (asks
   batched, §5) and lands. Separate-session squads land themselves under the lock.
@@ -108,8 +111,10 @@ these classes asks first:
 3. Dispatching an independent team or squad on backlog work with no dependency on
    in-flight work — **capacity check first** (§3).
 4. Reviews and docs checks on ready branches — and security scans on ready branches once
-   the rollout test proves an agent can start them; until then, security-lead recommends
-   the scan and the founder starts it.
+   the rollout test proves an agent can start them. **Not proven until this line says
+   otherwise: as written, that test has not passed, so security-lead recommends the scan
+   and the founder starts it via `/claude-security` — do not assume the agent-started
+   path is live without checking this line first.**
 
 Never allowed, idle time or not: landing anything without its full gate plus the
 founder's yes — the landing rule has no idle-time shortcut; skipping, narrowing or

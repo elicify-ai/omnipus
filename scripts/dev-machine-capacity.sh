@@ -27,14 +27,11 @@
 #   - Active dispatches (advisory) — counted from the coordination ledger's
 #     squads/*.md files: rows with status=in-flight, NOT a process count
 #     (design: "no process sniffing: the ledger knows what is actually
-#     running, the process table does not"). Unlike CPU, its own row carries
-#     no "never holds alone" qualifier, and it is the load-bearing width
-#     signal that replaces the deleted agent-process count, so crossing its
-#     own ceiling holds by itself.
-#   [INFERRED reading — the design states CPU's qualifier explicitly and
-#   leaves active-dispatches unqualified; this script takes the absence of
-#   the qualifier at face value. Flagged in the L10 report as an ambiguity
-#   with this resolution, for team-lead/architect to confirm or override.]
+#     running, the process table does not"). Founder-ruled 2026-09-25
+#     (Round 18): the squad count is advisory only, exactly like CPU — only
+#     memory and disk can hold new work by themselves; the count is shown
+#     as information and folded into the reason text only once memory or
+#     disk has already produced a HOLD.
 #
 # MEMORY MEASUREMENT
 #   macOS: vm_stat, page size from `pagesize`(1) (never a hard-coded 16384 —
@@ -49,8 +46,9 @@
 #   hidden, per the no-fabricated-gaps rule.]
 #
 # EXIT CODE: 0 whether the verdict is OK or HOLD (parse the verdict line —
-# this is a status report, not a guard). Exit 2 only when a measurement
-# could not be taken at all on this platform.
+# this is a status report, not a guard). Exit 2 only when a hard signal
+# (memory or disk) could not be measured at all on this platform — the
+# verdict cannot be trusted in that case, so treat exit 2 as a HOLD.
 #
 # ENV OVERRIDES (all optional; defaults are the design's proposed numbers)
 #   DEV_CAPACITY_MIN_FREE_MEM_GB          default 4
@@ -61,11 +59,14 @@
 #   DEV_CAPACITY_CPU_SAMPLE_INTERVAL_SEC  default 30
 #   DEV_CAPACITY_MAX_DISPATCHES           default 12
 #   DEV_CAPACITY_LEDGER_DIR               default /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination
+#   DEV_CAPACITY_OS_OVERRIDE              test-only: forces what the memory branch sees in
+#                                          place of `uname -s`, so the selftest can exercise
+#                                          the exit-2 "unmeasurable platform" path without root
 #
 # USAGE
 #   scripts/dev-machine-capacity.sh
 #   DEV_CAPACITY_MIN_FREE_MEM_GB=99999 scripts/dev-machine-capacity.sh   # force a HOLD
-#   scripts/dev-machine-capacity.sh --self-test                          # scratch-repo self-check (see bottom)
+#   scripts/dev-machine-capacity.selftest.sh                             # scratch-ledger self-check, run this file directly
 
 set -u
 
@@ -78,7 +79,7 @@ CPU_SAMPLE_INTERVAL_SEC="${DEV_CAPACITY_CPU_SAMPLE_INTERVAL_SEC:-30}"
 MAX_DISPATCHES="${DEV_CAPACITY_MAX_DISPATCHES:-12}"
 LEDGER_DIR="${DEV_CAPACITY_LEDGER_DIR:-/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination}"
 
-os="$(uname -s)"
+os="${DEV_CAPACITY_OS_OVERRIDE:-$(uname -s)}"
 
 # ---- memory -----------------------------------------------------------------
 mem_avail_gb="unknown"
@@ -118,6 +119,20 @@ disk_target="$WORKSPACE_DIR"
 disk_free_kb="$(df -Pk "$disk_target" 2>/dev/null | awk 'NR==2 {print $4}')"
 if [ -n "${disk_free_kb:-}" ]; then
   disk_free_gb="$(awk -v k="$disk_free_kb" 'BEGIN { printf "%.2f", k/1048576 }')"
+fi
+
+# ---- hard signals must be measurable, or the verdict cannot be trusted -----
+if [ "$mem_avail_gb" = "unknown" ] || [ "$disk_free_gb" = "unknown" ]; then
+  unmeasured=""
+  [ "$mem_avail_gb" = "unknown" ] && unmeasured="memory"
+  if [ "$disk_free_gb" = "unknown" ]; then
+    [ -n "$unmeasured" ] && unmeasured="${unmeasured}, disk" || unmeasured="disk"
+  fi
+  echo "dev-machine-capacity: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "  memory available: ${mem_avail_gb} GB (floor ${MIN_FREE_MEM_GB} GB)"
+  echo "  disk free (${disk_target}): ${disk_free_gb} GB (floor ${MIN_FREE_DISK_GB} GB)"
+  echo "CAPACITY: UNKNOWN -- could not measure: ${unmeasured} on this platform; treat as HOLD until fixed" >&2
+  exit 2
 fi
 
 # ---- CPU ------------------------------------------------------------------
@@ -163,7 +178,10 @@ fi
 # ---- active dispatches (ledger, not process count) -------------------------
 in_flight_count=0
 if [ -d "$LEDGER_DIR/squads" ]; then
-  in_flight_count="$(grep -l 'status=in-flight' "$LEDGER_DIR"/squads/*.md 2>/dev/null | wc -l | tr -d ' ')"
+  # Match only a real row (line starts with "squad=") that also carries
+  # status=in-flight -- a commented-out template line ("# squad=... status=
+  # in-flight") must never count.
+  in_flight_count="$(grep -lE '^squad=.*status=in-flight' "$LEDGER_DIR"/squads/*.md 2>/dev/null | wc -l | tr -d ' ')"
 fi
 in_flight_count="${in_flight_count:-0}"
 
@@ -186,15 +204,20 @@ if [ "$disk_free_gb" != "unknown" ]; then
   fi
 fi
 
-dispatch_hold="false"
+dispatch_over="false"
 if [ "$in_flight_count" -gt "$MAX_DISPATCHES" ] 2>/dev/null; then
-  dispatch_hold="true"
-  reasons+=("active dispatches: ${in_flight_count} in-flight > ${MAX_DISPATCHES} ceiling")
+  dispatch_over="true"
 fi
 
-# CPU never holds alone (design 5.6): only cited once something else holds.
+# CPU and active dispatches are both advisory only (Round 18): neither ever
+# holds by itself -- only memory and disk can. Each is folded into the
+# reason text solely once memory or disk has already produced a HOLD, to
+# describe real contention rather than gate on a spike or a busy day.
 if [ "$cpu_sustained_high" = "true" ] && [ "${#reasons[@]}" -gt 0 ]; then
   reasons+=("cpu: sustained >= ${CPU_THRESHOLD_PCT}% of ${logical_cores} logical cores")
+fi
+if [ "$dispatch_over" = "true" ] && [ "${#reasons[@]}" -gt 0 ]; then
+  reasons+=("active dispatches: ${in_flight_count} in-flight > ${MAX_DISPATCHES} ceiling (advisory, informational only)")
 fi
 
 # ---- print measurements, then the verdict ------------------------------------

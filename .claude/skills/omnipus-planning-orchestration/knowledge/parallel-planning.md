@@ -23,7 +23,8 @@ units (no path between them in either direction) can share a wave.
 - Prefer decomposition into disjoint file trees — the same discipline the v0.1
   implementation plan uses per wave (`docs/internal/v01-implementation-plan.md`).
 - A same-file overlap **does not serialise anything**: both streams run, each in its own
-  worktree and branch, and the conflict is resolved at merge time (landing step 2).
+  worktree and branch, and the conflict is resolved at merge time (landing step 3 —
+  "merge the latest integration branch", `knowledge/coordination-ledger.md`).
   Mark every such pair **parallel-merge-later** in the plan so the cost is visible and
   the landing actor expects the conflict.
 - Non-negotiable either way: **never two writers in one working copy**. Sharing a
