@@ -139,7 +139,7 @@ Changing God Mode always asks you to re-type your password. After that:
 - Turning it on shows a warning-styled "God-mode enabled" message — or, on a boot not yet authorized, "God-mode authorized — restart the gateway to activate it."
 - Turning it off shows "God-mode disabled."
 
-While God Mode is on, a banner reading "God-mode is active" is shown on every screen, with its own "Turn off" button — not only on the Gateway settings page, since an agent can trip it from anywhere.
+While God Mode is on, the sidebar shows a small red "God Mode" pill next to the omnipus.ai wordmark — clicking it opens **Settings**, **Gateway**, at the God Mode control — and the chat header keeps its red "God Mode" badge. When the sidebar is hidden, the button that opens it carries a small red dot instead, and its tooltip-style label mentions God Mode. If the app cannot tell whether God Mode is on, the pill turns amber and reads "God Mode ?" rather than staying silent. (Changed 2026-09-25 — an app-wide "God-mode is active" banner with its own "Turn off" button used to show on every screen; the Settings → Gateway control itself is unchanged.)
 
 The Security screen's health summary also raises a high-severity "God-mode is armed" warning whenever it is switched on, or authorized and waiting for a restart, with a link back to **Settings**, **Security**, **Danger zone**.
 

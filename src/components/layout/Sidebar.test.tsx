@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSidebarStore } from '@/store/sidebar'
-import { fetchWorkspaces, fetchSessions, fetchSessionPage, logout } from '@/lib/api'
+import { fetchWorkspaces, fetchSessions, fetchSessionPage, logout, fetchAppState, fetchGodMode } from '@/lib/api'
 import type { Session } from '@/lib/api'
 
 // JSDOM does not implement window.matchMedia — Sidebar uses it for pin breakpoint detection.
@@ -42,17 +42,25 @@ async function openUserMenu() {
 // Mock TanStack Router — Sidebar uses useLocation and useNavigate.
 // mockNavigate is a stable module-level spy (not a fresh vi.fn() per call)
 // so tests (e.g. the FR-020 sign-out test below) can assert on it.
+// The Link double folds `search` into the href so the God Mode pill test
+// can assert the full /settings?tab=gateway target.
 const mockNavigate = vi.fn()
 vi.mock('@tanstack/react-router', () => ({
   useLocation: () => ({ pathname: '/' }),
   useNavigate: () => mockNavigate,
-  Link: ({ children, to, onClick, className }: {
+  Link: ({ children, to, search, onClick, className, ...rest }: {
     children: React.ReactNode
     to: string
+    search?: Record<string, string>
     onClick?: () => void
     className?: string
-  }) => (
-    <a href={to} onClick={onClick} className={className}>
+  } & Record<string, unknown>) => (
+    <a
+      href={search ? `${to}?${new URLSearchParams(search).toString()}` : to}
+      onClick={onClick}
+      className={className}
+      {...rest}
+    >
       {children}
     </a>
   ),
@@ -82,6 +90,19 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSessions: vi.fn().mockResolvedValue([]),
     fetchAgents: vi.fn().mockResolvedValue([]),
     fetchSessionPage: vi.fn().mockResolvedValue({ sessions: [] }),
+    // God Mode pill (useGodModeLiveStatus) — default to a definitive "off"
+    // so the pill renders nothing in the suites that are not about it.
+    fetchAppState: vi.fn().mockResolvedValue({
+      onboarding_complete: true,
+      dev_mode_bypass: false,
+      identity: { mode: 'platform', edition: 'hosted', signed_in: true },
+    } as never),
+    fetchGodMode: vi.fn().mockResolvedValue({
+      enabled: false,
+      available: true,
+      supported: true,
+      persisted: false,
+    }),
     workspacesQueryKeys: {
       list: (params?: unknown) => ['workspaces', params],
     },
@@ -977,5 +998,126 @@ describe('Sidebar — FR-020 sign-out calls server logout before local teardown'
     })
 
     expect(queryClient.getQueryData(['test-cache-key'])).toBeUndefined()
+  })
+})
+
+// ── God Mode pill (founder decision 2026-09-25) ──────────────────────────────
+//
+// The pill in the sidebar brand row replaces the deleted app-wide
+// GodModeActiveBanner: red Badge reading "God Mode" while god-mode is live,
+// warning variant reading "God Mode ?" when the status is unknown, nothing
+// when off (or under dev_mode_bypass — the dedicated dev-mode banner in
+// AppShell owns that state). Clicking navigates to Settings → Gateway; the
+// pill never toggles god-mode itself (that keeps its step-up gate in
+// GodModeControl).
+describe('Sidebar — God Mode pill (2026-09-25)', () => {
+  beforeEach(() => {
+    // This file has no file-level clearAllMocks, so calls (and
+    // mockResolvedValue overrides) from earlier describes would otherwise
+    // leak in. clearAllMocks clears call history only — factory-set
+    // implementations survive — then the defaults are re-pinned below.
+    vi.clearAllMocks()
+    vi.mocked(fetchAppState).mockResolvedValue({
+      onboarding_complete: true,
+      dev_mode_bypass: false,
+      identity: { mode: 'platform', edition: 'hosted', signed_in: true },
+    } as never)
+    vi.mocked(fetchGodMode).mockResolvedValue({
+      enabled: false,
+      available: true,
+      supported: true,
+      persisted: false,
+    })
+  })
+
+  it('renders the red pill in the brand row when god-mode is on', async () => {
+    vi.mocked(fetchGodMode).mockResolvedValue({
+      enabled: true,
+      available: true,
+      supported: true,
+      persisted: true,
+    })
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    const pill = await screen.findByTestId('sidebar-god-mode-pill')
+    expect(pill).toHaveTextContent('God Mode')
+    expect(pill).toHaveAttribute('aria-label', 'God Mode is on — open settings to turn it off')
+    expect(screen.queryByTestId('sidebar-god-mode-unknown')).not.toBeInTheDocument()
+  })
+
+  it('renders nothing when god-mode is off', async () => {
+    // The pill lives inside the sidebar content — open the overlay so it
+    // actually mounts (the file-level beforeEach resets the store closed).
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+    await waitFor(() => expect(fetchGodMode).toHaveBeenCalled())
+    expect(screen.queryByTestId('sidebar-god-mode-pill')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-god-mode-unknown')).not.toBeInTheDocument()
+  })
+
+  // The deleted banner's safety property, carried over: a fetch failure must
+  // NOT collapse into the same falsy state as "god-mode is genuinely off" —
+  // silence would read exactly like "sandboxing is confirmed on".
+  it('renders the warning unknown variant when the status fetch fails', async () => {
+    vi.mocked(fetchGodMode).mockRejectedValue(new Error('network error'))
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    const pill = await screen.findByTestId('sidebar-god-mode-unknown')
+    expect(pill).toHaveTextContent('God Mode ?')
+    expect(pill).toHaveAttribute('aria-label', 'God Mode status unknown')
+    expect(screen.queryByTestId('sidebar-god-mode-pill')).not.toBeInTheDocument()
+  })
+
+  it('renders nothing under dev_mode_bypass and never fires the doomed god-mode request', async () => {
+    vi.mocked(fetchAppState).mockResolvedValue({
+      onboarding_complete: true,
+      dev_mode_bypass: true,
+      identity: { mode: 'platform', edition: 'hosted', signed_in: true },
+    } as never)
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    await waitFor(() => expect(fetchAppState).toHaveBeenCalled())
+    expect(fetchGodMode).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('sidebar-god-mode-pill')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-god-mode-unknown')).not.toBeInTheDocument()
+  })
+
+  it('clicking the pill navigates to Settings → Gateway and closes the overlay sidebar', async () => {
+    vi.mocked(fetchGodMode).mockResolvedValue({
+      enabled: true,
+      available: true,
+      supported: true,
+      persisted: true,
+    })
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    const pill = await screen.findByTestId('sidebar-god-mode-pill')
+    // The Gateway tab is the target — the GodModeControl switch lives there.
+    expect(pill).toHaveAttribute('href', '/settings?tab=gateway')
+
+    fireEvent.click(pill)
+    // Overlay discipline shared with every other sidebar nav affordance:
+    // navigating from the open overlay closes it.
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+  })
+
+  it('clicking the pill from a pinned sidebar leaves the panel open', async () => {
+    vi.mocked(fetchGodMode).mockResolvedValue({
+      enabled: true,
+      available: true,
+      supported: true,
+      persisted: true,
+    })
+    // matchMedia is mocked matches:true → canPin=true → truly pinned.
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    const pill = await screen.findByTestId('sidebar-god-mode-pill')
+    fireEvent.click(pill)
+    expect(useSidebarStore.getState().isOpen).toBe(true)
   })
 })
