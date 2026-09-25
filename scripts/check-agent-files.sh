@@ -146,6 +146,17 @@ DEV_TEAM_SKILLS = {
     "elicify-test-writing",
     "test-integrity-audit",
     "omnipus-planning-orchestration",
+    # Spec-process rewrite (S1/S2/S3/S4, hand-off to S5): the four fixed
+    # spec skills are repo-owned dev-team skills, not vendored (no
+    # SOURCE.yaml — the "Last reviewed" header check therefore DOES apply
+    # to them, same as every other non-vendored entry above). Before this
+    # addition they were invisible to every content check (2, 4, 5, 10)
+    # and to check 8's header requirement — a false green (S1/S3/S4
+    # hand-off, spec-process rewrite).
+    "plan-spec",
+    "grill-spec",
+    "grill-code",
+    "spec-sync",
 }
 VENDORED_SKILLS = {"elicify-test-writing", "test-integrity-audit"}
 USER_LEVEL_ALLOWLIST = {"webapp-testing", "elicify-ui-ux-design"}
@@ -420,12 +431,24 @@ BACKTICK_RE = re.compile(r"`([a-zA-Z][a-zA-Z0-9_-]*)`")
 SKILL_SHAPE_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)+$")
 
 
+# Spec-process rewrite skills (S1/S2/S3/S4, hand-off to S5): named here so
+# check 6's role-isolation gate applies to them at all — without this they
+# fall outside isolation_universe() entirely and any role could cite any of
+# the four with no check6 finding. LANES.md S5 task 5 fixes the mapping:
+# team-lead and squad-lead may cite all four; architect may cite grill-spec
+# only; qa-lead and the developers (backend-lead, frontend-lead) may cite
+# grill-code only.
+SPEC_PROCESS_SKILLS = {"plan-spec", "grill-spec", "grill-code", "spec-sync"}
+
+
 def isolation_universe(name):
     if name.startswith("omnipus-"):
         return True
     if name.startswith("gitnexus"):
         return True
     if name in {"ux-heuristics-review", "elicify-ui-ux-design", "elicify-test-writing", "test-integrity-audit"}:
+        return True
+    if name in SPEC_PROCESS_SKILLS:
         return True
     return False
 
@@ -434,26 +457,28 @@ def role_allowed(role, skill):
     if skill == "omnipus-shared-rules":
         return True
     if role == "backend-lead":
-        if skill in {"omnipus-backend-rules", "omnipus-failure-triage"}:
+        if skill in {"omnipus-backend-rules", "omnipus-failure-triage", "grill-code"}:
             return True
         return skill.startswith("gitnexus")
     if role == "frontend-lead":
         if skill in {"omnipus-frontend-rules", "omnipus-failure-triage", "omnipus-design-system",
-                      "ux-heuristics-review", "elicify-ui-ux-design"}:
+                      "ux-heuristics-review", "elicify-ui-ux-design", "grill-code"}:
             return True
         return skill.startswith("gitnexus")
     if role == "security-lead":
         return skill.startswith("gitnexus")
     if role == "qa-lead":
-        if skill in {"elicify-test-writing", "test-integrity-audit"}:
+        if skill in {"elicify-test-writing", "test-integrity-audit", "grill-code"}:
             return True
         return skill.startswith("gitnexus")
     if role == "architect":
-        if skill in {"ux-heuristics-review", "elicify-ui-ux-design"}:
+        if skill in {"ux-heuristics-review", "elicify-ui-ux-design", "grill-spec"}:
             return True
         return skill.startswith("gitnexus")
     if role in {"team-lead", "squad-lead"}:
-        return skill == "omnipus-planning-orchestration"
+        if skill == "omnipus-planning-orchestration":
+            return True
+        return skill in SPEC_PROCESS_SKILLS
     # uat-tester, uat-validator, docs-verifier, prometheus-prompt-engineer:
     # only the shared skill (handled above).
     return False
