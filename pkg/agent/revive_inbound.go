@@ -20,6 +20,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -41,8 +42,12 @@ func reviveInboundIsHumanTurn(msg bus.InboundMessage) bool {
 
 // inboundRevivable reports whether sessionID's lifecycle record is terminal
 // or durably stopped at its current generation — the two states ADR-093 D4
-// lets an ordinary human message revive. No record, an unreadable record or
-// a blank id is not revivable: nothing to revive, nothing to guess about.
+// lets an ordinary human message revive. No record (ErrLifecycleNotFound), a
+// blank id or a missing store is not revivable: nothing to revive, nothing to
+// guess about. Any OTHER Load error is a real read failure: it is logged at
+// error level with the session id and still reads as "not revivable" (the
+// turn must run), but the log keeps a broken record from being
+// indistinguishable from a healthy one afterwards (gate SFH#2).
 func (al *AgentLoop) inboundRevivable(sessionID string) bool {
 	sessionID = strings.TrimSpace(sessionID)
 	store := al.GetSessionLifecycleStore()
@@ -51,6 +56,10 @@ func (al *AgentLoop) inboundRevivable(sessionID string) bool {
 	}
 	rec, err := store.Load(sessionID)
 	if err != nil {
+		if !errors.Is(err, session.ErrLifecycleNotFound) {
+			logger.ErrorCF("agent", "adr093: inbound revival check could not read the lifecycle record",
+				map[string]any{"session_id": sessionID, "error": err.Error()})
+		}
 		return false
 	}
 	return rec.Terminal() || rec.Stopped()
@@ -67,16 +76,39 @@ func (al *AgentLoop) inboundRevivable(sessionID string) bool {
 // (ReviveStoppedSession) is the caller's routing decision.
 func (al *AgentLoop) reviveRecordForHumanTurn(ctx context.Context, sessionID string, by steer.Principal) error {
 	if _, err := al.steerCanceller().Revive(ctx, sessionID, by); err != nil {
+		al.markRevivalFailure(sessionID, err)
 		return err
 	}
+	// The record is live on its new generation from here — drop any stale
+	// revival-failure memory so a later, genuine stop-refusal is not
+	// mislabelled as a revival failure (gate SFH#6).
+	al.clearRevivalFailure(sessionID)
+	al.resetUnifiedMetaStatusActive(sessionID)
+	return nil
+}
+
+// resetUnifiedMetaStatusActive is the shared post-revive session-list status
+// reset (ADR-093 MIN-002), used by the human-message path
+// (reviveRecordForHumanTurn) and the child-revive path (steering.go::
+// ReviveStoppedSession). It never reports success falsely (gate SFH#4): a
+// failed SetMeta or a missing store is error-logged with the session id — but
+// not returned as an error, because every caller has already completed the
+// actual revive by the time this runs; returning the failure here would make
+// runInboundTurnWithRevival log the FALSE claim that the revive failed and
+// the turn runs unrevived when the record is in fact live on its new
+// generation. reconcileUnifiedMetaStatus (boot_sweep.go) repairs a
+// still-stale list status on the next boot.
+func (al *AgentLoop) resetUnifiedMetaStatusActive(sessionID string) {
 	if store := al.ResolveSessionStore(sessionID); store != nil {
 		active := session.StatusActive
 		if err := store.SetMeta(sessionID, session.MetaPatch{Status: &active}); err != nil {
-			logger.WarnCF("agent", "adr093: revival could not reset the unified meta status to active",
+			logger.ErrorCF("agent", "adr093: record revived, but resetting the session-list status to active failed",
 				map[string]any{"session_id": sessionID, "error": err.Error()})
 		}
+		return
 	}
-	return nil
+	logger.ErrorCF("agent", "adr093: record revived, but no session store owns this session — the session-list status was not reset to active",
+		map[string]any{"session_id": sessionID})
 }
 
 // runInboundTurnWithRevival is processMessage's turn admission (ADR-093 D4):
@@ -94,7 +126,16 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 	if reviveInboundIsHumanTurn(msg) && al.inboundRevivable(msg.SessionID) {
 		if err := al.reviveRecordForHumanTurn(ctx, msg.SessionID,
 			steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}); err != nil {
-			logger.WarnCF("agent", "adr093: inbound revival failed; the turn runs unrevived",
+			// Gate SFH#6: this is an error, not a warning. The human message
+			// that was supposed to resume the chat could not revive it, and
+			// everything a delegate refusal says afterwards depends on this
+			// fact being recorded (reviveRecordForHumanTurn already recorded
+			// it in the revival-failure memory, which the D2 launch backstop
+			// consults). The turn still runs unrevived — kept deliberately,
+			// the message itself must not be lost — but a delegate call in it
+			// now refuses with the truthful revival-failed sentence instead
+			// of send-a-new-message, which just failed to work.
+			logger.ErrorCF("agent", "adr093: inbound revival failed; the turn runs unrevived and delegation will refuse truthfully",
 				map[string]any{"session_id": msg.SessionID, "error": err.Error()})
 		}
 	}

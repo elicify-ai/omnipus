@@ -303,7 +303,15 @@ func (al *AgentLoop) reviveInactiveInbound(msg bus.InboundMessage) (bool, error)
 		return false, nil
 	}
 	rec, err := lifecycle.Load(sessionID)
-	if err != nil || !(rec.Terminal() || rec.Stopped()) {
+	if err != nil {
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			return false, nil
+		}
+		logger.ErrorCF("agent", "adr093: could not read the lifecycle record while routing an inbound message",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return false, fmt.Errorf("enqueueSteeringFromMessage: load %q: %w", sessionID, err)
+	}
+	if !(rec.Terminal() || rec.Stopped()) {
 		return false, nil
 	}
 	classifier := NewSteerRecordClassifier(lifecycle, al.ResolveSessionStore(sessionID))
@@ -390,8 +398,23 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 	}
 	newGeneration, rerr := al.steerCanceller().Revive(ctx, sessionID, by)
 	if rerr != nil {
+		// Gate SFH#6: record the failed revive so the D2 launch backstop
+		// refuses truthfully instead of send-a-new-message — the user's
+		// revive attempt itself just failed, so pointing at "send another
+		// message" repeats the failure. Sibling site:
+		// reviveRecordForHumanTurn.
+		al.markRevivalFailure(sessionID, rerr)
 		return false, fmt.Errorf("steer: revive %q: %w", sessionID, rerr)
 	}
+	// ADR-093 MIN-002 (gate SFH#5): the child revive now resets the
+	// session-list status to active with the same helper the human-message
+	// path uses, so a resumed child no longer stays "interrupted" in the
+	// session list while it runs. Failures are error-logged, never
+	// success-pretended (gate SFH#4). The failed-revive memory is dropped
+	// too: the session IS live again, so a later refusal must not be
+	// mislabelled (gate SFH#6).
+	al.clearRevivalFailure(sessionID)
+	al.resetUnifiedMetaStatusActive(sessionID)
 	// al.dispatchSteeredSession IS steer.SessionLauncher.Dispatch's own body
 	// (SteerLauncher.Dispatch, steer_launcher.go: "a thin delegate onto
 	// AgentLoop.dispatchSteeredSession") — called directly here, exactly as
