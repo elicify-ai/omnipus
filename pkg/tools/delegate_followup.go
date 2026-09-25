@@ -143,11 +143,12 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	}
 
 	// [Finding 1, ADR-091 fix lane 2 — Q17/D8] A session carrying a Stop
-	// marker for its OWN current generation is checked FIRST, off the plain
-	// Load above — terminal or not: the founder's decision is that only a
-	// newer instruction revives a stopped session, as a new generation,
-	// never the steering queue (which a stopped session has no live
-	// consumer left to drain). Deliberately NOT folded into the
+	// marker for its OWN current generation — OR a terminal record (ADR-093
+	// D4) — is checked FIRST, off the plain Load above: the founder's
+	// decision is that only a newer instruction revives a stopped session,
+	// as a new generation, never the steering queue (which a stopped session
+	// has no live consumer left to drain). BOTH states revive through
+	// ReviveStoppedSession in the branch below. Deliberately NOT folded into the
 	// Mutate-based terminal-rejection closure below: a Stop marker, once
 	// stamped for a generation, is retained forever as inert history (see
 	// SteerCanceller.Revive's own doc comment) — the same "checked off a
@@ -214,6 +215,11 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		if cur == nil {
 			return session.ErrLifecycleNotFound
 		}
+		// A record already terminal (or Stop-stamped) never reaches this
+		// closure — the branch above revived it. This check exists ONLY for
+		// the race where the record becomes terminal between the plain Load
+		// and this lock-protected re-read; its "cannot be steered" string is
+		// a refusal for that race alone.
 		if cur.Terminal() {
 			return fmt.Errorf("session %s is terminal (%s) and cannot be steered", sessionID, cur.State)
 		}

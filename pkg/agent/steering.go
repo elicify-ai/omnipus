@@ -291,8 +291,10 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 // false and the caller enqueues too.
 //
 // An ordinary root is revived and then run as a fresh inbound turn (MAJ-003:
-// never a steered redispatch, never the steered instruction write). Every
-// other class keeps the pre-ADR-093 revive-and-redispatch.
+// never a steered redispatch, never the steered instruction write). Damaged
+// and legacy rows (nil classify error, not an ordinary root) keep the
+// pre-ADR-093 revive-and-redispatch; a classify ERROR — including unreadable
+// metadata — fails the enqueue and does NOT revive.
 func (al *AgentLoop) reviveInactiveInbound(msg bus.InboundMessage) (bool, error) {
 	sessionID := strings.TrimSpace(msg.SessionID)
 	if sessionID == "" {
@@ -353,11 +355,15 @@ func (al *AgentLoop) reviveInactiveInbound(msg bus.InboundMessage) (bool, error)
 // tool's own steer/respond enqueued into a steering queue no live turn would
 // ever drain, silently orphaning the message.
 //
-// Returns (false, nil) when sessionID is neither terminal nor durably stopped
-// at its current generation (ADR-093 D4) — the caller's ordinary path applies
-// instead. instruction, when non-blank, is appended to the session's durable
-// history BEFORE dispatch, exactly like follow_up's own appendFollowUpInstruction
-// (pkg/tools/delegate_followup.go), so the reconstructed turn actually sees it.
+// Returns (false, nil) when the record is neither terminal nor durably
+// stopped at its current generation (ADR-093 D4) — the caller's ordinary path
+// applies instead. A TERMINAL record (a finished child) takes this same
+// revive path — ADR-093 D4 keeps a terminal child resumable until
+// housekeeping deletes it; SteerCanceller.Revive accepts both states.
+// instruction, when non-blank, is appended to the session's durable history
+// BEFORE dispatch, exactly like follow_up's own appendFollowUpInstruction
+// (pkg/tools/delegate_followup.go), so the reconstructed turn actually sees
+// it.
 func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error) {
 	if al == nil {
 		return false, fmt.Errorf("steer: revive %q: no AgentLoop wired", sessionID)
@@ -370,10 +376,9 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 	if err != nil {
 		return false, err
 	}
-	// Not terminal and not stopped for this generation: nothing to revive.
-	// A terminal child stays on the revive path (ADR-093 D4) until housekeeping
-	// deletes it. SteerCanceller.Revive already accepts that record; this check
-	// used to reject it, and so did executeSteer's routing predicate.
+	// Neither terminal nor durably stopped for this generation: nothing to
+	// revive — the caller's ordinary path applies. (A terminal child takes
+	// the revive path below, not this decline branch.)
 	if !rec.Terminal() && !rec.Stopped() {
 		return false, nil
 	}
