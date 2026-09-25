@@ -43,7 +43,7 @@ export type DelegationEventKind =
   /** A background shell command was stopped on purpose (killed / cancelled by the agent). */
   | 'bash_stopped'
 
-export interface DelegationEvent {
+export interface DelegationEvent { // not-wire-format: UI-derived grey chat line model computed client-side from store state; spec non-goal: no new wire fields
   /**
    * Stable, deterministic identity — the dedupe key. Identical for the live event
    * and the same event rebuilt from history. E.g. `finished:<childSessionId>`,

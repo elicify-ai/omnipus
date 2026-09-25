@@ -33,7 +33,7 @@ export type DelegationLifecycleState =
   | string
 
 /** The span fields this derivation reads. `finalResult` / `statusLine` are ignored on purpose (D1). */
-export interface DelegationSpanView {
+export interface DelegationSpanView { // not-wire-format: read-only UI projection of a store span for line derivation, built client-side and never serialised over REST/WS
   spanId: string
   parentCallId: string
   taskLabel: string
@@ -59,7 +59,7 @@ export interface DelegationSpanView {
   lastUpdateAt?: string
 }
 
-export interface DelegationMessageView {
+export interface DelegationMessageView { // not-wire-format: read-only UI projection of a chat message for line derivation, built client-side and never sent over the gateway boundary
   id: string
   timestamp: string
   spans?: DelegationSpanView[]
@@ -71,7 +71,7 @@ export interface DelegationMessageView {
  * baked onto a message). A rebuilt session has those same calls on the
  * messages and an empty live map — both shapes must derive the same events.
  */
-export interface DelegationEventSource {
+export interface DelegationEventSource { // not-wire-format: in-memory input bundle for the pure derivation function, assembled in the browser and never serialised
   sessionId: string
   messages: DelegationMessageView[]
   liveToolCalls?: Record<string, ToolCall>
@@ -84,25 +84,25 @@ export interface DelegationEventSource {
 
 const POLL_ACTIONS = new Set(['status', 'peek', 'inbox', 'inbox_ack'])
 
-interface PlacedCall {
+interface PlacedCall { // not-wire-format: internal derivation helper pairing a tool call with its message index, local to this module, never on the wire
   call: ToolCall
   messageIndex: number
   anchorMessageId?: string
 }
 
-interface PlacedSpan {
+interface PlacedSpan { // not-wire-format: internal derivation helper pairing a span with its message index, local to this module, never on the wire
   span: DelegationSpanView
   messageIndex: number
   anchorMessageId: string
 }
 
-interface Draft {
+interface Draft { // not-wire-format: internal pre-stamp event record used only inside the derivation pass, never serialised or sent anywhere
   event: DelegationEvent
   messageIndex: number
   seq: number
 }
 
-interface BashStory {
+interface BashStory { // not-wire-format: internal accumulator of one background command's observed polls during derivation, local only, never on the wire
   command: string
   launchCallId?: string
   firstCallId?: string
