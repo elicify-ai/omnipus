@@ -32,7 +32,15 @@ import type { AboutInfo } from '@/lib/api'
 vi.mock('@/components/settings/ProvidersSection', () => ({ ProvidersSection: () => null }))
 vi.mock('@/components/settings/IntegrationsSection', () => ({ IntegrationsSection: () => null }))
 vi.mock('@/components/settings/SecuritySection', () => ({ SecuritySection: () => null }))
-vi.mock('@/components/settings/GatewaySection', () => ({ GatewaySection: () => null }))
+// The GatewaySection stub echoes its props (ContextSection pattern) so the
+// ?focus=god-mode forwarding test below can observe what the shell passed.
+vi.mock('@/components/settings/GatewaySection', () => ({
+  GatewaySection: (props: { focusGodMode?: boolean }) => (
+    <div data-testid="gateway-section-stub">
+      {props.focusGodMode ? 'focus-god-mode' : 'no-focus'}
+    </div>
+  ),
+}))
 vi.mock('@/components/settings/DataSection', () => ({ DataSection: () => null }))
 vi.mock('@/components/settings/AboutSection', () => ({ AboutSection: () => null }))
 vi.mock('@/components/settings/DevicesSection', () => ({ DevicesSection: () => null }))
@@ -141,6 +149,29 @@ describe('SettingsScreen — Models tab (ADR-066 D9)', () => {
     renderScreen({ initialTab: 'models', prefillOverride: { provider: 'ollama', model: 'qwen3:8b' } })
     await waitFor(() =>
       expect(screen.getByTestId('context-section-stub')).toHaveTextContent('ollama/qwen3:8b'),
+    )
+  })
+})
+
+// Founder decision 2026-09-25: the sidebar God Mode pill and the app-shell
+// corner dot navigate to /settings?tab=gateway&focus=god-mode. This pins the
+// shell's half of that chain — the route parses the search params and
+// SettingsScreen forwards focusGodMode into the Gateway tab's section (the
+// scroll+focus landing itself is asserted in GodModeControl.test.tsx).
+describe('SettingsScreen — ?focus=god-mode forwarding', () => {
+  it('forwards focusGodMode to GatewaySection on the gateway tab', async () => {
+    vi.mocked(api.fetchAboutInfo).mockResolvedValue(ABOUT_INFO_OK)
+    renderScreen({ initialTab: 'gateway', focusGodMode: true })
+    await waitFor(() =>
+      expect(screen.getByTestId('gateway-section-stub')).toHaveTextContent('focus-god-mode'),
+    )
+  })
+
+  it('passes nothing through when the flag is absent — differentiation', async () => {
+    vi.mocked(api.fetchAboutInfo).mockResolvedValue(ABOUT_INFO_OK)
+    renderScreen({ initialTab: 'gateway' })
+    await waitFor(() =>
+      expect(screen.getByTestId('gateway-section-stub')).toHaveTextContent('no-focus'),
     )
   })
 })

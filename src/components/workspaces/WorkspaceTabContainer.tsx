@@ -15,7 +15,6 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Card } from '@/components/ui/card'
 import { WorkspaceTabBar, resolveActiveSegment } from './WorkspaceTabBar'
-import { GodModeSidebarDot, useGodModeSidebarDot } from '@/components/layout/GodModeIndicators'
 
 // React context carrying the resolved workspace to every tab.
 const WorkspaceContext = createContext<Workspace | null>(null)
@@ -154,10 +153,6 @@ function WorkspaceTabContainerView({
 }) {
   const location = useLocation()
   const activeSegment = resolveActiveSegment(location.pathname, workspace.id)
-  // God Mode dot (founder decision 2026-09-25): while god-mode is on and the
-  // sidebar — and its pill — are off screen, the dot marks this button and
-  // the accessible name says why. See GodModeIndicators.tsx.
-  const godModeDot = useGodModeSidebarDot()
 
   return (
     <WorkspaceContext.Provider value={workspace}>
@@ -169,7 +164,11 @@ function WorkspaceTabContainerView({
             WorkspaceTabBar's own full-strip/dropdown breakpoint).
             No secondary breadcrumb row: the tab strip already names the
             workspace + active view, so a second chrome line was redundant and
-            broke the flat 44px shell alignment. */}
+            broke the flat 44px shell alignment.
+            The God Mode corner dot that used to live on this hamburger is
+            deleted (founder decision 2026-09-25 revision 2) — AppShell
+            renders one app-wide corner indicator instead; see
+            GodModeIndicators.tsx. */}
         <header
           role="banner"
           className="@container flex items-center h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
@@ -178,13 +177,12 @@ function WorkspaceTabContainerView({
           <IconButton
             id="sidebar-hamburger"
             onClick={toggle}
-            aria-label={godModeDot ? 'Toggle navigation sidebar — God Mode is on' : 'Toggle navigation sidebar'}
+            aria-label="Toggle navigation sidebar"
             data-testid="workspace-hamburger"
             variant="ghost"
             className="relative h-chrome-header min-h-chrome-header w-11 rounded-none text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
           >
             <List size={20} />
-            <GodModeSidebarDot />
           </IconButton>
 
           {/* The workspace name renders INSIDE WorkspaceTabBar as the first

@@ -25,6 +25,11 @@ const settingsSearchSchema = z.object({
   tab: z.enum(SETTINGS_TABS).optional().catch(undefined),
   provider: z.string().min(1).max(64).optional().catch(undefined),
   model: z.string().min(1).max(256).optional().catch(undefined),
+  // ?focus=god-mode — the target of the sidebar God Mode pill and the app
+  // shell's corner dot (founder decision 2026-09-25): pairs with
+  // ?tab=gateway so the click lands the operator ON the GodModeControl
+  // switch, scrolled into view and focused, not just on the right tab.
+  focus: z.enum(['god-mode']).optional().catch(undefined),
 })
 
 // autoCodeSplitting (vite.config.ts) extracts this component into its own lazy
@@ -36,9 +41,15 @@ export const Route = createFileRoute('/_app/settings')({
 })
 
 function SettingsRoute() {
-  const { tab, provider, model } = Route.useSearch()
+  const { tab, provider, model, focus } = Route.useSearch()
   const prefillOverride = provider && model ? { provider, model } : undefined
   // A pre-fill only makes sense on the Models tab — land there even without ?tab=.
   const initialTab: SettingsTab = tab ?? (prefillOverride ? 'models' : 'providers')
-  return <SettingsScreen initialTab={initialTab} prefillOverride={prefillOverride} />
+  return (
+    <SettingsScreen
+      initialTab={initialTab}
+      prefillOverride={prefillOverride}
+      focusGodMode={focus === 'god-mode'}
+    />
+  )
 }

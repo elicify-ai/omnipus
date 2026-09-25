@@ -35,9 +35,11 @@ export interface SettingsScreenProps { // not-wire-format: React props from the 
   initialTab?: SettingsTab
   /** `?provider=&model=` — T068-29 / ADR-068 X-08: pre-fill a Models → Model overrides row. */
   prefillOverride?: { provider: string; model: string }
+  /** `?focus=god-mode` — scroll to and focus the God Mode control on the Gateway tab (target of the sidebar pill / corner dot). */
+  focusGodMode?: boolean
 }
 
-export function SettingsScreen({ initialTab = 'providers', prefillOverride }: SettingsScreenProps = {}) {
+export function SettingsScreen({ initialTab = 'providers', prefillOverride, focusGodMode }: SettingsScreenProps = {}) {
   const { data: aboutInfo, isError: aboutInfoError } = useQuery({
     queryKey: ['about'],
     queryFn: fetchAboutInfo,
@@ -106,7 +108,7 @@ export function SettingsScreen({ initialTab = 'providers', prefillOverride }: Se
           </TabsContent>
 
           <TabsContent value="gateway">
-            <GatewaySection />
+            <GatewaySection focusGodMode={focusGodMode} />
           </TabsContent>
 
           <TabsContent value="data">

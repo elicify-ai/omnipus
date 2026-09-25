@@ -22,7 +22,7 @@
  * switch only.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -335,5 +335,56 @@ describe('GodModeControl', () => {
       expect(api.setGodMode).toHaveBeenCalledWith(false)
     })
     expect(screen.queryByText(/gateway restart required/i)).not.toBeInTheDocument()
+  })
+})
+
+// ── focusOnMount (?focus=god-mode, founder decision 2026-09-25) ──────────────
+//
+// The sidebar God Mode pill and the app-shell corner dot navigate to
+// /settings?tab=gateway&focus=god-mode; GatewaySection forwards the flag and
+// this control must scroll itself into view and focus the switch, so the
+// click lands the operator ON the control rather than merely on the right
+// tab.
+describe('GodModeControl — focusOnMount (?focus=god-mode)', () => {
+  // jsdom does not implement Element.prototype.scrollIntoView — stub it so
+  // the effect's scroll call is observable instead of throwing.
+  const scrollIntoView = vi.fn()
+  beforeAll(() => {
+    Element.prototype.scrollIntoView = scrollIntoView
+  })
+
+  function renderControlFocused() {
+    return render(
+      <QueryClientProvider client={makeClient()}>
+        <GodModeControl focusOnMount />
+      </QueryClientProvider>,
+    )
+  }
+
+  it('scrolls the control into view and focuses the switch once loading settles', async () => {
+    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_ON)
+
+    renderControlFocused()
+
+    const toggle = await screen.findByTestId('god-mode-toggle')
+    await waitFor(() => {
+      expect(toggle).toHaveFocus()
+    })
+    // The scroll targets the control card (the anchor the dot/pill name),
+    // centered in the settings scroll container.
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' })
+    expect(document.getElementById('god-mode-control')).toBe(toggle.closest('#god-mode-control'))
+  })
+
+  it('does not scroll or steal focus when focusOnMount is absent', async () => {
+    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_ON)
+
+    renderControl()
+
+    const toggle = await screen.findByTestId('god-mode-toggle')
+    await waitFor(() => expect(toggle).toBeEnabled())
+    expect(toggle).not.toHaveFocus()
+    expect(scrollIntoView).not.toHaveBeenCalled()
   })
 })

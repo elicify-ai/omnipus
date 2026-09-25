@@ -12,6 +12,7 @@ import { LibraryPanel } from '@/components/library/LibraryPanel'
 import { SearchModal } from '@/components/search/SearchModal'
 import { OmnipusRuntimeProvider } from '@/components/chat/OmnipusRuntimeProvider'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
+import { GodModeCornerDot } from './GodModeIndicators'
 import { queryClient } from '@/lib/queryClient'
 import { fetchTasks, fetchAgents, fetchAppState, fetchNotifications } from '@/lib/api'
 import { useConnectionStore } from '@/store/connection'
@@ -223,8 +224,10 @@ export function AppShell() {
           {/* App-state fetch failed — dev-mode-bypass status is unknown, not
               confirmed off. Must not silently vanish on its own fetch
               failure: show an explicit "status unknown" indicator instead of
-              nothing (the sidebar God Mode pill keeps the same property for
-              god-mode itself — see GodModeIndicators.tsx). */}
+              nothing. (The God Mode indicators deliberately do NOT have such
+              a variant — founder decision 2026-09-25: red when on, invisible
+              otherwise; this banner is the failure surface for unknown
+              gateway state.) */}
           {appStateError && (
             <div
               data-testid="app-state-fetch-error-banner"
@@ -250,6 +253,14 @@ export function AppShell() {
             <ErrorBoundary>
               <Outlet />
             </ErrorBoundary>
+            {/* God Mode corner dot (founder decision 2026-09-25) — rendered
+                ONCE here, outside the ErrorBoundary, so every route is
+                covered (including Library, the live-browser view and admin
+                chat, which have no sidebar button), and a crashed screen
+                does not take the indicator down with it. Shows only while
+                god-mode is on AND the sidebar is hidden; see
+                GodModeIndicators.tsx. */}
+            <GodModeCornerDot />
           </main>
         </OmnipusRuntimeProvider>
       </div>

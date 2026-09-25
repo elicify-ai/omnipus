@@ -16,31 +16,27 @@ export function isBypassUnavailable(err: unknown): boolean {
   return isApiError(err) && err.status === 503
 }
 
-export type GodModeLiveStatus = 'on' | 'off' | 'unknown'
-
 /**
- * useGodModeLiveStatus — the tri-state answer to "is god-mode live right
- * now", shared by the sidebar God Mode pill and the sidebar-open-button dot
- * (`src/components/layout/GodModeIndicators.tsx`), which replaced the
- * app-wide GodModeActiveBanner (founder decision 2026-09-25).
+ * useGodModeOn — the boolean answer to "is god-mode live right now", shared
+ * by the sidebar God Mode pill and the app-shell corner dot
+ * (`src/components/layout/GodModeIndicators.tsx`).
  *
- *   'on'      — the query succeeded and reported enabled=true.
- *   'unknown' — the query FAILED (non-bypass error): the app cannot tell
- *               whether god-mode is on, and silence here would read exactly
- *               like "sandboxing is confirmed on". Callers must surface this
- *               (the pill's warning variant), never collapse it to 'off'.
- *   'off'     — everything else: confirmed off, still loading, or the god
- *               mode endpoint is known-unavailable under dev_mode_bypass.
+ * Founder decision 2026-09-25 (revision 2, overriding the earlier amber
+ * suggestion): the God Mode indicators are RED when god-mode is on and
+ * INVISIBLE in every other state — off, still loading, fetch error, and
+ * dev-mode bypass. There is no amber or "unknown" variant anywhere; a fetch
+ * failure must NOT surface as an indicator (the gateway-state fetch-error
+ * banner in AppShell still covers "the app cannot reach the gateway").
  *
- * Shares AppShell's own ['app-state'] cache entry (via useDevModeBypassKnown)
- * and the ['god-mode'] entry GodModeControl already fetches on the Gateway
- * screen — not additional network round trips. The doomed-request skip
- * (enabled: appStateResolved && !devModeBypassKnown) is the 2026-09-24 fix
- * that stopped a dev-mode-bypass install from firing a real 503 (retried 3×
- * by the query client) on every page load; see useDevModeBypassKnown for the
- * shared-cache history.
+ * Shares AppShell's own ['app-state'] cache entry (via
+ * useDevModeBypassKnown) and the ['god-mode'] entry GodModeControl already
+ * fetches on the Gateway screen — not additional network round trips. The
+ * doomed-request skip (enabled: appStateResolved && !devModeBypassKnown) is
+ * the 2026-09-24 fix that stopped a dev-mode-bypass install from firing a
+ * real 503 (retried 3× by the query client) on every page load; see
+ * useDevModeBypassKnown for the shared-cache history.
  */
-export function useGodModeLiveStatus(): GodModeLiveStatus {
+export function useGodModeOn(): boolean {
   const { known: devModeBypassKnown, resolved: appStateResolved } = useDevModeBypassKnown()
 
   const { data: godMode, isError, error } = useQuery({
@@ -48,20 +44,15 @@ export function useGodModeLiveStatus(): GodModeLiveStatus {
     queryFn: fetchGodMode,
     // Only fire once app-state has resolved AND confirmed bypass is off.
     // While appState is still loading the query stays disabled (not an
-    // error) and the status reads 'off' — there is nothing yet to report
-    // either way.
+    // error) and this reads false — nothing to report.
     enabled: appStateResolved && !devModeBypassKnown,
   })
 
   // Known from appState (the common case — no doomed request was even made)
   // OR a genuine 503 the query itself hit (defense in depth, e.g. a late
   // toggle of dev_mode_bypass mid-session before appState refetches). Must
-  // be checked BEFORE isError: under bypass the endpoint 503s by design, and
-  // reading that as 'unknown' would put a false alarm on every screen for
-  // the lifetime of any dev-mode-bypass install.
+  // be checked BEFORE isError: under bypass the endpoint 503s by design.
   const bypassUnavailable = devModeBypassKnown || isBypassUnavailable(error)
 
-  if (bypassUnavailable) return 'off'
-  if (isError) return 'unknown'
-  return godMode?.enabled === true ? 'on' : 'off'
+  return !bypassUnavailable && !isError && godMode?.enabled === true
 }

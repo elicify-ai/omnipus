@@ -90,7 +90,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSessions: vi.fn().mockResolvedValue([]),
     fetchAgents: vi.fn().mockResolvedValue([]),
     fetchSessionPage: vi.fn().mockResolvedValue({ sessions: [] }),
-    // God Mode pill (useGodModeLiveStatus) — default to a definitive "off"
+    // God Mode pill (useGodModeOn in useGodModeLiveStatus.ts) — default to a
+    // definitive "off"
     // so the pill renders nothing in the suites that are not about it.
     fetchAppState: vi.fn().mockResolvedValue({
       onboarding_complete: true,
@@ -1004,12 +1005,12 @@ describe('Sidebar — FR-020 sign-out calls server logout before local teardown'
 // ── God Mode pill (founder decision 2026-09-25) ──────────────────────────────
 //
 // The pill in the sidebar brand row replaces the deleted app-wide
-// GodModeActiveBanner: red Badge reading "God Mode" while god-mode is live,
-// warning variant reading "God Mode ?" when the status is unknown, nothing
-// when off (or under dev_mode_bypass — the dedicated dev-mode banner in
-// AppShell owns that state). Clicking navigates to Settings → Gateway; the
-// pill never toggles god-mode itself (that keeps its step-up gate in
-// GodModeControl).
+// GodModeActiveBanner. Founder ruling 2026-09-25 (revision 2): RED when
+// god-mode is on, INVISIBLE in every other state — off, unknown (fetch
+// error), loading, dev_mode_bypass. There is no amber/unknown variant
+// anywhere. Clicking navigates to Settings → Gateway at the God Mode control
+// (?focus=god-mode scrolls to + focuses it); the pill never toggles god-mode
+// itself (that keeps its step-up gate in GodModeControl).
 describe('Sidebar — God Mode pill (2026-09-25)', () => {
   beforeEach(() => {
     // This file has no file-level clearAllMocks, so calls (and
@@ -1043,7 +1044,6 @@ describe('Sidebar — God Mode pill (2026-09-25)', () => {
     const pill = await screen.findByTestId('sidebar-god-mode-pill')
     expect(pill).toHaveTextContent('God Mode')
     expect(pill).toHaveAttribute('aria-label', 'God Mode is on — open settings to turn it off')
-    expect(screen.queryByTestId('sidebar-god-mode-unknown')).not.toBeInTheDocument()
   })
 
   it('renders nothing when god-mode is off', async () => {
@@ -1053,21 +1053,21 @@ describe('Sidebar — God Mode pill (2026-09-25)', () => {
     render(<Sidebar />, { wrapper: makeWrapper() })
     await waitFor(() => expect(fetchGodMode).toHaveBeenCalled())
     expect(screen.queryByTestId('sidebar-god-mode-pill')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('sidebar-god-mode-unknown')).not.toBeInTheDocument()
   })
 
-  // The deleted banner's safety property, carried over: a fetch failure must
-  // NOT collapse into the same falsy state as "god-mode is genuinely off" —
-  // silence would read exactly like "sandboxing is confirmed on".
-  it('renders the warning unknown variant when the status fetch fails', async () => {
+  // Founder ruling 2026-09-25 (revision 2), pinning the deleted unknown
+  // variant's absence: a fetch failure must render NOTHING — no amber "God
+  // Mode ?" pill. This deliberately supersedes the deleted banner's
+  // "never silence an unknown status" property for this indicator.
+  it('renders nothing when the status fetch fails — no unknown variant (2026-09-25 ruling)', async () => {
     vi.mocked(fetchGodMode).mockRejectedValue(new Error('network error'))
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    const pill = await screen.findByTestId('sidebar-god-mode-unknown')
-    expect(pill).toHaveTextContent('God Mode ?')
-    expect(pill).toHaveAttribute('aria-label', 'God Mode status unknown')
+    await waitFor(() => expect(fetchGodMode).toHaveBeenCalled())
     expect(screen.queryByTestId('sidebar-god-mode-pill')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-god-mode-unknown')).not.toBeInTheDocument()
+    expect(screen.queryByText('God Mode ?')).not.toBeInTheDocument()
   })
 
   it('renders nothing under dev_mode_bypass and never fires the doomed god-mode request', async () => {
@@ -1085,7 +1085,7 @@ describe('Sidebar — God Mode pill (2026-09-25)', () => {
     expect(screen.queryByTestId('sidebar-god-mode-unknown')).not.toBeInTheDocument()
   })
 
-  it('clicking the pill navigates to Settings → Gateway and closes the overlay sidebar', async () => {
+  it('clicking the pill navigates to Settings → Gateway at the God Mode control and closes the overlay sidebar', async () => {
     vi.mocked(fetchGodMode).mockResolvedValue({
       enabled: true,
       available: true,
@@ -1096,8 +1096,10 @@ describe('Sidebar — God Mode pill (2026-09-25)', () => {
     render(<Sidebar />, { wrapper: makeWrapper() })
 
     const pill = await screen.findByTestId('sidebar-god-mode-pill')
-    // The Gateway tab is the target — the GodModeControl switch lives there.
-    expect(pill).toHaveAttribute('href', '/settings?tab=gateway')
+    // The Gateway tab is the target and ?focus=god-mode lands the operator
+    // on the control (scroll + focus) — the GodModeControl switch lives
+    // there. URLSearchParams keeps insertion order: tab, then focus.
+    expect(pill).toHaveAttribute('href', '/settings?tab=gateway&focus=god-mode')
 
     fireEvent.click(pill)
     // Overlay discipline shared with every other sidebar nav affordance:

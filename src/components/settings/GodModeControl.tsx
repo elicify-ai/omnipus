@@ -43,7 +43,7 @@
  * the restart modal never opens on disable.
  */
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Warning, ShieldCheck, SpinnerGap } from '@phosphor-icons/react'
 import { fetchGodMode, setGodMode, getErrorMessage } from '@/lib/api'
@@ -55,7 +55,7 @@ import { useStepUp } from './useStepUp'
 import { isReAuthCancelled } from './useReAuthGate'
 import { GatewayRestartModal } from './GatewayRestartModal'
 
-export function GodModeControl() {
+export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolean } = {}) {
   const { addToast } = useUiStore()
   const stepUp = useStepUp()
   const queryClient = useQueryClient()
@@ -201,6 +201,17 @@ export function GodModeControl() {
 
   const busy = isSaving
 
+  // focusOnMount (?focus=god-mode, founder decision 2026-09-25): the sidebar
+  // God Mode pill and the app-shell corner dot navigate here so the click
+  // lands the operator ON this control. Gated on !isLoading: the switch is
+  // disabled while its own query is in flight (disabled buttons are not
+  // focusable), so focusing before it settles would silently no-op.
+  useEffect(() => {
+    if (!focusOnMount || isLoading) return
+    document.getElementById('god-mode-control')?.scrollIntoView({ block: 'center' })
+    document.getElementById('god-mode-toggle')?.focus()
+  }, [focusOnMount, isLoading])
+
   return (
     <div className="space-y-[var(--space-2-5)]">
       <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">
@@ -208,6 +219,7 @@ export function GodModeControl() {
       </h3>
 
       <div
+        id="god-mode-control"
         data-testid="god-mode-control"
         className={[
           'rounded-lg border px-[var(--space-3)] py-[var(--space-3)] transition-colors',
@@ -329,6 +341,7 @@ export function GodModeControl() {
               contract exactly (see file header). */}
           <Button
             type="button"
+            id="god-mode-toggle"
             variant="ghost"
             role="switch"
             aria-checked={persisted}

@@ -1,7 +1,6 @@
 import { List } from '@phosphor-icons/react'
 import { IconButton } from '@/components/ui/icon-button'
 import { useSidebarStore } from '@/store/sidebar'
-import { GodModeSidebarDot, useGodModeSidebarDot } from './GodModeIndicators'
 
 interface ScreenHeaderProps {
   title: string
@@ -18,6 +17,10 @@ interface ScreenHeaderProps {
  * Height is locked to the shared chrome header token (`h-chrome-header` =
  * 44px) and has no bottom border so it lines up with the workspace top bar and
  * open panel headers (flat shell chrome).
+ *
+ * The God Mode corner dot that used to live on this hamburger is deleted
+ * (founder decision 2026-09-25 revision 2) — AppShell renders one app-wide
+ * corner indicator instead; see GodModeIndicators.tsx.
  */
 export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
   const toggle = useSidebarStore((s) => s.toggle)
@@ -25,10 +28,6 @@ export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
   // without it, a screen reader user has no way to know whether activating
   // the hamburger will open or close the sidebar.
   const isOpen = useSidebarStore((s) => s.isOpen)
-  // God Mode dot (founder decision 2026-09-25): while god-mode is on and the
-  // sidebar — and its pill — are off screen, the dot marks this button and
-  // the accessible name says why. See GodModeIndicators.tsx.
-  const godModeDot = useGodModeSidebarDot()
 
   return (
     <header
@@ -41,12 +40,11 @@ export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
         type="button"
         variant="ghost"
         onClick={toggle}
-        aria-label={godModeDot ? 'Toggle navigation sidebar — God Mode is on' : 'Toggle navigation sidebar'}
+        aria-label="Toggle navigation sidebar"
         aria-expanded={isOpen}
         className="relative h-chrome-header min-h-chrome-header w-10 -ml-[var(--space-2)] rounded-md text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
       >
         <List size={20} />
-        <GodModeSidebarDot />
       </IconButton>
 
       {/* Screen title */}

@@ -18,6 +18,21 @@ export interface TooltipProps {
   side?: 'top' | 'bottom'
   className?: string
   'data-testid'?: string
+  /**
+   * Set when `children` is itself an interactive control (a link or
+   * button): the wrapper stops being a tab stop (tabIndex -1) and drops its
+   * `[data-ds-action]` hit-region expander — that ::before overlay would
+   * swallow pointer events meant for the child control (the later sibling
+   * wins an overlap) — leaving the child as the ONE tab stop and the owner
+   * of its own hit area. Hover still reveals the bubble via the wrapper's
+   * mouseenter, and child focus reveals it too: React's onFocus/onBlur are
+   * delegated and bubble, so a focus inside the child reaches the wrapper.
+   * While open, `aria-describedby` is cloned onto the child (the element a
+   * screen reader is actually on), which means this mode owns that
+   * attribute — a child carrying its own aria-describedby would have it
+   * overridden.
+   */
+  interactive?: boolean
 }
 
 // Matches the global spacing scale's --space-2 (8px) — the minimum gap kept
@@ -54,7 +69,7 @@ const CLOSE_GRACE_MS = 120
 // measurement on open, not a continuous positioning engine: it nudges the
 // bubble back inside the viewport with a small horizontal shift and leaves
 // vertical placement (`side`) exactly where the caller asked for it.
-export function Tooltip({ content, label, children, side = 'top', className, ...rest }: TooltipProps) {
+export function Tooltip({ content, label, children, side = 'top', className, interactive = false, ...rest }: TooltipProps) {
   const [open, setOpen] = useState(false)
   const tooltipId = useId()
   const bubbleRef = useRef<HTMLSpanElement>(null)
@@ -121,13 +136,24 @@ export function Tooltip({ content, label, children, side = 'top', className, ...
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [open])
 
+  // In interactive mode the wrapper is a non-tab-stop shell around the child
+  // control and the bubble's aria-describedby moves onto the child (see the
+  // prop's doc comment). Children.only fails loudly on a non-element or
+  // multi-child `children` — exactly the misuse this mode cannot handle
+  // (the child must be the single control the bubble describes).
+  const triggerChild = interactive
+    ? React.cloneElement(React.Children.only(children) as React.ReactElement<{ 'aria-describedby'?: string }>, {
+        'aria-describedby': open ? tooltipId : undefined,
+      })
+    : children
+
   return (
     <span className="relative inline-flex">
       <span
-        tabIndex={0}
-        data-ds-action=""
-        aria-label={label}
-        aria-describedby={open ? tooltipId : undefined}
+        tabIndex={interactive ? -1 : 0}
+        data-ds-action={interactive ? undefined : ''}
+        aria-label={interactive ? undefined : label}
+        aria-describedby={interactive ? undefined : open ? tooltipId : undefined}
         onMouseEnter={openNow}
         onMouseLeave={scheduleClose}
         onFocus={openNow}
@@ -145,7 +171,7 @@ export function Tooltip({ content, label, children, side = 'top', className, ...
         className="relative inline-flex"
         {...rest}
       >
-        {children}
+        {triggerChild}
       </span>
       {open && (
         <span

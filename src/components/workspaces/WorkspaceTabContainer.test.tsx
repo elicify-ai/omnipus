@@ -50,11 +50,6 @@ let mockWorkspaceName = 'My Workspace'
 // the active (non-archived) workspaces list.
 let mockWorkspacesError = false
 const mockRefetchWorkspaces = vi.fn()
-// God Mode dot (founder decision 2026-09-25): the hamburger's status hook
-// reads the ['god-mode'] query; default to a definitive "off" so the dot
-// renders nothing in the suites that are not about it. ['app-state'] (the
-// query's gate) answers bypass-off so the god-mode branch is always reached.
-let mockGodModeStatus: { enabled?: boolean } = { enabled: false }
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
@@ -64,9 +59,6 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       const key = JSON.stringify(queryKey)
       if (key.includes('app-state')) {
         return { data: { onboarding_complete: true, dev_mode_bypass: false }, isLoading: false, isError: false }
-      }
-      if (key.includes('god-mode')) {
-        return { data: mockGodModeStatus, isLoading: false, isError: false }
       }
       if (key.includes('archived')) {
         return { data: [], isLoading: false, isError: false }
@@ -91,8 +83,6 @@ vi.mock('@/store/sidebar', () => ({
     const state = { toggle: mockToggle, isOpen: false, isPinned: false }
     return selector ? selector(state) : state
   },
-  // GodModeIndicators (the hamburger's God Mode dot) reads the breakpoint
-  // for its pin-viewport media query.
   SIDEBAR_PIN_BREAKPOINT: 1024,
 }))
 
@@ -427,44 +417,31 @@ describe('WorkspaceTabContainer — the route binds the active workspace', () =>
   })
 })
 
-// ── God Mode dot (founder decision 2026-09-25) ───────────────────────────────
+// ── God Mode dot removal (founder decision 2026-09-25 revision 2) ────────────
 //
-// The workspace top bar's hamburger is the sidebar-open button on the
-// primary screen; while god-mode is on and the sidebar (and its pill) is off
-// screen, it carries the red dot and a God Mode accessible name. See
-// src/components/layout/GodModeIndicators.tsx; the fuller dot matrix (off,
-// unknown, overlay-open, pinned) is covered in ScreenHeader.test.tsx — the
-// same hook drives both buttons.
-describe('WorkspaceTabContainer — God Mode dot (2026-09-25)', () => {
+// The per-hamburger dot is deleted: AppShell renders ONE corner indicator
+// app-wide instead (covered in AppShell.test.tsx). Pin the removal so a
+// merge cannot resurrect the per-button variant as a "conflict-free
+// addition": no dot testid, no God Mode extension of the hamburger's
+// accessible name.
+describe('WorkspaceTabContainer — God Mode dot removal (2026-09-25)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // Mirror the layout describe's resets — earlier describes mutate these
     // (the workspace-switch tests move mockWorkspaceId to ws-2), and a stale
     // id makes the container render its "Workspace not found" state instead
-    // of the top bar the dot lives in.
+    // of the top bar.
     mockPathname = '/workspaces/ws-1/chat'
     mockWorkspaceId = 'ws-1'
     mockWorkspaceName = 'My Workspace'
-    mockGodModeStatus = { enabled: false }
   })
 
-  it('shows the dot and a God Mode accessible name on the hamburger when god-mode is on and the sidebar is hidden', async () => {
-    mockGodModeStatus = { enabled: true }
+  it('renders no God Mode dot on the hamburger and keeps its plain accessible name', async () => {
     await act(async () => {
       render(<WorkspaceTabContainer workspaceId="ws-1" />)
     })
 
-    expect(screen.getByTestId('sidebar-god-mode-dot')).toBeTruthy()
-    expect(
-      screen.getByRole('button', { name: 'Toggle navigation sidebar — God Mode is on' })
-    ).toBeTruthy()
-  })
-
-  it('shows no dot when god-mode is off', async () => {
-    await act(async () => {
-      render(<WorkspaceTabContainer workspaceId="ws-1" />)
-    })
-
+    expect(screen.getByTestId('workspace-hamburger')).toBeTruthy()
     expect(screen.queryByTestId('sidebar-god-mode-dot')).toBeNull()
     expect(
       screen.queryByRole('button', { name: 'Toggle navigation sidebar — God Mode is on' })
