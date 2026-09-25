@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	agent "github.com/elicify-ai/omnipus/pkg/agent"
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/media"
@@ -648,7 +649,7 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 			// persistSubagentEntry), so sr.sessionID (the transcript this
 			// entry was read FROM) is always correct regardless of
 			// whatever SessionId the stored frame happens to carry.
-			frame := *entry.SubagentEnd
+			frame := replayedSubagentEnd(entry)
 			frame.SessionId = sr.sessionID
 			if err2 := emitFrame(frame); err2 != nil {
 				return streamReplayStateReturn, err2
@@ -752,6 +753,7 @@ func (sr *streamReplayState) dispatchPersistedSubagentStart(entry session.Transc
 	// carry.
 	f := *entry.SubagentStart
 	f.SessionId = sr.sessionID
+	f.SpanId = canonicalReplaySpanID(entry.ID, f.SpanId, f.ParentCallId)
 	if err2 := emitFrame(f); err2 != nil {
 		return streamReplayStateReturn, err2, true
 	}
@@ -1044,10 +1046,12 @@ func (sr *streamReplayState) classifyToolCall(ei int, entry session.TranscriptEn
 	// does not require any child tool calls to exist.
 	sr.isSpawnParent = isDelegateSpawnCall
 
-	// spanID mirrors pkg/agent/steer_frames.go's subagentSpanID convention
-	// ("span_" + the originating tool-call id) so the persisted-span
-	// indexes below key the same way a live push and a persisted entry do.
-	sr.spanID = "span_" + sr.tcID
+	// spanID is generation 1 of the shared rule (agent.SubagentSpanID).
+	// This tool call is the original delegate/spawn/create_task call, which
+	// is generation 1. A follow-up generation is not a second tool call: its
+	// bracket is a persisted subagent_start/subagent_end, rebuilt by
+	// canonicalReplaySpanID from the entry id.
+	sr.spanID = agent.SubagentSpanID(sr.tcID, 1)
 
 	// stillActive (finding 1 fix — see dispatchSpecialEntry's subagent_end
 	// case above for the full root-cause writeup) is true when this
@@ -1071,7 +1075,7 @@ func (sr *streamReplayState) classifyToolCall(ei int, entry session.TranscriptEn
 
 // buildSubagentStart builds the start frame for a delegated subagent span.
 func (sr *streamReplayState) buildSubagentStart(tc session.ToolCall) {
-	sr.spanID = "span_" + sr.tcID
+	sr.spanID = agent.SubagentSpanID(sr.tcID, 1)
 	taskLabel := resolveTaskLabel(tc)
 	sr.spanAgentID = sr.effectiveAgentID
 	if realAgentID, ok := sr.spanRealAgentIDs[sr.tcID]; ok && realAgentID != "" {
@@ -1321,6 +1325,75 @@ func buildSpanRealAgentIDs(entries []session.TranscriptEntry, withChildren map[s
 	return realAgentIDs
 }
 
+// replayedSubagentEnd copies a persisted subagent_end and rebuilds its span
+// id. The session stamp stays with the caller, which knows which transcript
+// is being read. Split out so dispatchSpecialEntry stays under the line budget.
+func replayedSubagentEnd(entry session.TranscriptEntry) generated.SubagentEndFrame {
+	frame := *entry.SubagentEnd
+	parentCallID := ""
+	if frame.ParentCallId != nil {
+		parentCallID = *frame.ParentCallId
+	}
+	frame.SpanId = canonicalReplaySpanID(entry.ID, frame.SpanId, parentCallID)
+	return frame
+}
+
+// followUpGenerationFromEntryID reads the generation a follow-up bracket
+// recorded in its transcript entry id ("<callID>:g<N>:start" or ":end").
+// Generation 1 keeps the historical "<callID>:start|end" form, which this
+// returns 0 for. The wire frame has no generation field; the entry id is
+// the persisted field that carries it.
+func followUpGenerationFromEntryID(id string) int {
+	const marker = ":g"
+	i := strings.LastIndex(id, marker)
+	if i < 0 {
+		return 0
+	}
+	rest := id[i+len(marker):]
+	colon := strings.IndexByte(rest, ':')
+	if colon <= 0 {
+		return 0
+	}
+	bracket := rest[colon+1:]
+	if bracket != "start" && bracket != "end" {
+		return 0
+	}
+	n, err := strconv.Atoi(rest[:colon])
+	if err != nil || n < 2 {
+		return 0
+	}
+	return n
+}
+
+// generationOneBracketEntry reports a production generation-1 start or end
+// entry id, including one a later tidy-up suffixed. A follow-up entry id
+// (":g<N>:") is not one of these.
+func generationOneBracketEntry(id string) bool {
+	if followUpGenerationFromEntryID(id) >= 2 {
+		return false
+	}
+	return strings.HasSuffix(id, ":start") || strings.HasSuffix(id, ":end")
+}
+
+// canonicalReplaySpanID is the span id a cold load must emit for one
+// persisted subagent_start or subagent_end. Generation N >= 2 is rebuilt
+// with agent.SubagentSpanID so it matches the live push even when the
+// stored span_id is the pre-fix bare id. Generation 1 is forced back to
+// the bare id, so a later tidy-up that suffixes it cannot orphan spans
+// already on disk. Anything else keeps the stored id.
+func canonicalReplaySpanID(entryID, storedSpanID, parentCallID string) string {
+	if parentCallID == "" {
+		return storedSpanID
+	}
+	if gen := followUpGenerationFromEntryID(entryID); gen >= 2 {
+		return agent.SubagentSpanID(parentCallID, gen)
+	}
+	if generationOneBracketEntry(entryID) {
+		return agent.SubagentSpanID(parentCallID, 1)
+	}
+	return storedSpanID
+}
+
 // buildPersistedSubagentSpanIndexes scans entries once for every persisted
 // subagent_start / subagent_end system entry (steer_frames.go's
 // deliverSubagentStart/deliverSubagentEnd, ADR-091 D7/I-4) and returns the
@@ -1336,12 +1409,20 @@ func buildPersistedSubagentSpanIndexes(entries []session.TranscriptEntry) (start
 		}
 		switch entry.SystemSubtype {
 		case session.SystemSubtypeSubagentStart:
-			if entry.SubagentStart != nil && entry.SubagentStart.SpanId != "" {
-				starts[entry.SubagentStart.SpanId] = true
+			if entry.SubagentStart != nil {
+				if id := canonicalReplaySpanID(entry.ID, entry.SubagentStart.SpanId, entry.SubagentStart.ParentCallId); id != "" {
+					starts[id] = true
+				}
 			}
 		case session.SystemSubtypeSubagentEnd:
-			if entry.SubagentEnd != nil && entry.SubagentEnd.SpanId != "" {
-				ends[entry.SubagentEnd.SpanId] = true
+			if entry.SubagentEnd != nil {
+				parentCallID := ""
+				if entry.SubagentEnd.ParentCallId != nil {
+					parentCallID = *entry.SubagentEnd.ParentCallId
+				}
+				if id := canonicalReplaySpanID(entry.ID, entry.SubagentEnd.SpanId, parentCallID); id != "" {
+					ends[id] = true
+				}
 			}
 		}
 	}
