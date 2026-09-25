@@ -101,10 +101,12 @@ report which checks never ran — do not treat the green as full coverage.
 
 ### 8. One narrow local test only
 
-- Go: at most ONE narrow local test, only as
+- Go: at most ONE narrow local test process at a time, only as
   `CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/<one>/` —
   never multiple Go suites in parallel, never the full local suite (it OOM-kills this
   shared environment; CI is the authority). Push the branch and read the checks instead.
+  One-at-a-time allows repeats: the red run in step 1 and the green run after the fix
+  are two processes, run one after another, never in parallel.
 - SPA: `npx vitest run <one-file>`.
 - Your step-1 reproduction is the red evidence the fix's green is measured against —
   show both in the report.

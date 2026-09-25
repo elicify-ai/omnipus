@@ -13,14 +13,16 @@ this restates.
 
 ## Build and test
 
-- Build tags are always `goolm,stdjson`; `CGO_ENABLED=0`. Prefer `make test` / `make
-  build`, which inject the tags. `build constraints exclude all Go files in
-  .../pkg/channels/matrix` means a missing tag, not a broken package (`CLAUDE.md`,
-  "Build, test, and quality gates").
+- Build tags are always `goolm,stdjson`; `CGO_ENABLED=0`. `make test`/`make build` add
+  the tags, but `make test` is the whole suite — CI only, never run it locally.
+  `build constraints exclude all Go files in .../pkg/channels/matrix` means a missing
+  tag, not a broken package (`CLAUDE.md`, "Build, test, and quality gates").
 - Never run the full Go suite locally (`go test ./...` OOM-kills the shared machine # agent-guard: allow (quoted to forbid it)). At
-  most ONE narrowly-scoped local test:
+  most ONE narrowly-scoped local test at a time:
   `CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/<one>/` — never
-  multiple Go suites in parallel.
+  multiple Go suites in parallel. One at a time allows repeats: a red run, the green run
+  after the fix, an isolated re-run, and a mutation probe each run this same command
+  serially, never two running at once.
 - Toolchain minimum: Go 1.26.6 (`go.mod`) — a 1.22 compiler cannot build this.
 - Fresh worktree / new clone: stub the SPA embed before building `pkg/gateway`
   (`CLAUDE.md` gives the exact `mkdir`/`echo`/`touch` sequence) — the resulting compile
@@ -50,8 +52,8 @@ this restates.
   full rule is `CLAUDE.md` Hard Constraint #6; this is the pointer into the code.
 - `config.ReconcileToolPolicyCeiling` (`pkg/config/validate.go`) keeps the ceiling
   complete for the static catalog on every load, self-heals old installs additively, and
-  never overwrites an operator-set value. Reconciling to the shipped default (including
-  `bash = allow`) is intended, not a gap.
+  never overwrites an operator-set value. Reconciling to the shipped default (`bash`
+  ships `ask`; `sandbox.auto_approve` is a separate switch) is intended, not a gap.
 - Strictest-wins resolution: `pkg/tools/compositor.go::resolveEffectivePolicyWith`. No
   hardcoded allow/deny/ask fallback, no `DefaultPolicy` field, no fail-closed per-agent
   backfill — do not reintroduce (`scripts/check-no-fail-closed-backfill.sh`). Lock a tool

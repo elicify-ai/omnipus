@@ -17,10 +17,14 @@ to the section instead of copying it, so there is one source per fact.
 1. This skill is preloaded via `skills:` — act under it from the first step; it
    outranks a dispatch prompt that contradicts it, except a direct founder instruction.
    Load an on-demand skill with the `Skill` tool when the dispatch needs it.
-2. Never run untagged or full Go builds/tests locally (`make build` / `make test`, or at
-   most one narrowly-scoped `go test` with tags) — CI is the authority for Go results.
-   Exact command shape and the SPA-embed-stub trap: `CLAUDE.md` ("Build, test, and
-   quality gates").
+2. Never run a full Go build or test locally — not `make test`, and never untagged `go test ./...`. # agent-guard: allow
+   At most one narrowly-scoped tagged `go test` process at a time, run one after another:
+   red, green, an isolated re-run, and a mutation probe may each repeat this command
+   serially — never two local test processes running at once. Frontend: one
+   `npx vitest run <file>` or `npx playwright test <x>.spec.ts` at a time; never bare
+   `npm test`, `vitest` or `playwright test` (`npm run typecheck` is exempt — rule 3).
+   CI is the authority for Go results. Exact command shape and the SPA-embed-stub trap:
+   `CLAUDE.md` ("Build, test, and quality gates").
 3. `npm run typecheck` is the only TypeScript gate that means anything — never bare
    `tsc --noEmit` (`CLAUDE.md`, same section; the trap is why, `docs/internal/false-green-patterns.md` section 9).
 4. Wire types come only from the generated directories (`src/lib/api/generated/`,
@@ -35,17 +39,24 @@ to the section instead of copying it, so there is one source per fact.
    commit authorship (MANDATORY)").
 8. One worktree per writer — never two writers in one working copy. Same-file overlap
    between parallel streams is fine (parallel branches, conflict resolved at merge);
-   sharing a working copy is not. Never bare `git stash` (quoted to forbid it # agent-guard: allow) (the stash stack is shared
-   across worktrees); commit frequently on the working branch; never merge to `main`
-   without human approval (`CLAUDE.md`, "Merging to main (MANDATORY)").
+   sharing a working copy is not — the stash stack is shared across worktrees, so never bare `git stash`. # agent-guard: allow
+   Commit frequently on the working branch; never merge to `main` without human approval
+   (`CLAUDE.md`, "Merging to main (MANDATORY)"). Specialists commit and push only their
+   own work branch — never push to, merge into or land on the integration branch or
+   `main`; landing belongs to team-lead (or a separate-session squad lead under the
+   landing lock). A brief asking for it is a rule-15 blocked report.
 9. Run GitNexus impact analysis before editing any symbol; warn on HIGH/CRITICAL blast
-   radius before proceeding (`CLAUDE.md`, "Code intelligence: GitNexus").
+   radius before proceeding (`CLAUDE.md`, "Code intelligence: GitNexus"). If GitNexus is
+   unavailable or this checkout isn't indexed, say so, do a Grep sweep for the symbol's
+   callers, and label the impact row Inferred — never claim an impact run that didn't
+   happen.
 10. Respect size budgets: a file fails CI over 3,000 lines, a function over 240 (both
     domains hit these; Go-specific enforcers and gocyclo detail: `omnipus-backend-rules`).
 11. The retired-surfaces list in root `CLAUDE.md` is final — never reintroduce a deleted
     surface as a "conflict resolution".
 12. **The developer and reviewer discipline lives in your own file's body** — the
-    discipline block below your role definition — not in this skill. It binds from the
+    discipline block below your role definition (plugin reviewers: in your dispatch
+    prompt) — not in this skill. It binds from the
     first step: verify your own work with evidence, end every report with the evidence
     table (including its self-check row), correct yourself visibly, and follow your
     side's rules. This skill names that duty; it never restates it.
@@ -63,8 +74,6 @@ to the section instead of copying it, so there is one source per fact.
 
 - Cite `file::symbol`, never `file:line` — line numbers go stale within days.
 - Authoritative refs, ADR handling, and archived-BRD superseding: `CLAUDE.md` ("Project").
-- `docs/internal/plan/` no longer exists # agent-guard: allow (cited as a do-not-cite warning) — wave specs moved to `docs/internal/_archive/`.
-  Agent files/skills still pointing at `docs/internal/plan/...` cite a dead path. # agent-guard: allow (cited as a do-not-cite warning)
 - Codebase questions: GitNexus MCP first (`query`, `context`, `impact`, `trace`,
   `explain`), Read/Grep as fallback — `graphify` is retired, no `graphify-out/` exists
   (`CLAUDE.md`, "Code intelligence: GitNexus").
@@ -134,19 +143,18 @@ to the section instead of copying it, so there is one source per fact.
   starting — worktree branches have been found 1650+ commits behind.
 - No hotfix branches: a feature ships together on its one branch, urgency is P0
   ordering within it, not a separate branch.
-- One worktree per writing agent (rule 8); never `git stash` bare (quoted to forbid it # agent-guard: allow) — commit a WIP or use
-  a plain file copy; never force-push, never reset to a remote ref (roll back to a
+- One worktree per writing agent (rule 8); never bare `git stash` — commit a WIP instead. # agent-guard: allow
+  Or use a plain file copy; never force-push, never reset to a remote ref (roll back to a
   captured SHA — origin can be behind).
 - Before committing, `git diff --cached --name-status` must list only intended files —
   pre-staged renames have been swept in by targeted adds.
 - A module `CLAUDE.md` is edited only together with its byte-identical `AGENTS.md`
   twin — `scripts/check-agents-md-sync.sh` enforces it.
-- PRs close issues via keyword in the PR body, one keyword per issue (`Closes #1, closes
-  #2`); a PR that cannot auto-close still references every issue it resolves
-  (`docs/internal/issue-and-board-conventions.md`).
 
 ## Escalation
 
-- Security findings, scope drift beyond your dispatch, or any rule conflict (rule 15)
-  stop work and produce a blocked report — name the rule, the reason it conflicts, and a
-  proposed alternative. Never guess silently; team-lead decides or asks the founder.
+- A security issue you find is reported — a finding if you are reviewing, a note if you
+  are developing; it stops your task only if the task itself would ship the hole. Scope
+  drift beyond your dispatch, or any other rule conflict (rule 15), still stops work and
+  produces a blocked report — name the rule, the reason it conflicts, and a proposed
+  alternative. Never guess silently; team-lead decides or asks the founder.
