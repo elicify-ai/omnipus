@@ -602,6 +602,24 @@ test.describe('UAT Group C — the live browser panel', () => {
     // product. /large is the plan's own host and is several screens deep.
     await navigateLiveBrowser(page, `${HEROKU}/large`);
     await waitForViewportInput(page);
+    // The viewport handoff text clearing means input resumed — it says
+    // nothing about the decode pipeline. UAT-13 flaked on CI (job
+    // 107857384754, run 36066315713): the connection verdict was already
+    // 'video' and the WebRTC debug dump showed a healthy, connected peer
+    // with RTP already arriving (bytesReceived=160, packetsReceived=4) but
+    // framesDecoded=0 at the instant sampleFrame() grabbed a frame — a
+    // genuine startup race between "peer connected" and "first frame
+    // actually decoded", not a real black-video regression (the very next
+    // attempt decoded frames immediately and passed with mean luminance
+    // 243.8). Wait on the real, already-available signal
+    // (HTMLVideoElement.getVideoPlaybackQuality — see decodedFrames() below)
+    // instead of sampling blind the instant the handoff text disappears.
+    await expect
+      .poll(() => decodedFrames(video), {
+        message: 'no frame was ever decoded before the luminance sample — see decodedFrames()',
+        timeout: 15_000,
+      })
+      .toBeGreaterThan(0);
     const loaded = await sampleFrame(video);
     await saveFrame(testInfo, 'frame-loaded.png', loaded);
     const lum = meanLuminance(loaded);
