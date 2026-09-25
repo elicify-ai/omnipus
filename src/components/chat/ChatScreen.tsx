@@ -58,6 +58,9 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
+import { delegationEventsAfterMessage, delegationEventsAtEnd } from '@/lib/delegationEventPlacement'
+import { DelegationEventLineList } from './DelegationEventLine'
+import { useChatDelegationEvents } from './useChatDelegationEvents'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
 import { getMessageStatusSuffix, INTERRUPTED_SUFFIX_TEXT, CUT_OFF_SUFFIX_TEXT } from '@/lib/truncation'
@@ -386,15 +389,9 @@ function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): str
   return 'Working in the background…'
 }
 
-// ADR-091 D7/AC-7: `deriveDelegateThinkingLabel` ("Delegating to <name>…" /
-// "Delegating…" for a hidden `delegate` 'run' call) is deleted — a `run`
-// call is visible unconditionally now (toolVisibility.ts's
-// shouldRenderToolCall), so `deriveHiddenRunningToolLabel` below always
-// returns null for it before ever reaching a delegate-specific branch (its
-// own `shouldRenderToolCall` check short-circuits first). The one delegate
-// sub-case that still hides, `status` (polling), has no specific-label rule
-// and falls through to the generic rotating pool, same as any other hidden
-// tool with no rule.
+// `deriveDelegateThinkingLabel` stays deleted. A hidden `delegate` call
+// (every action, unless verbose chat is on) has no specific thinking label
+// and falls through to the generic rotating pool, same as a status poll.
 
 /**
  * Finds the LAST tool-call part in a live message's `content` whose live
@@ -404,11 +401,10 @@ function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): str
  * shouldRenderToolCall — derives a specific, stable label for it.
  *
  * Returns null (generic rotating pool applies) when: the tool is visible
- * (its own chip already shows progress — a `delegate` 'run' call included,
- * ADR-091 D7/AC-7: it is visible unconditionally now, so it never reaches
- * this function's tool-name branches below), it's ToolSearch, a delegate
- * `status` poll, or any other hidden tool with no specific-label rule, or
- * nothing is currently running. Defensive: never throws — an unexpected
+ * (its own chip already shows progress), it's a hidden `delegate` call
+ * (no specific label — the event line carries that), it's ToolSearch, or
+ * any other hidden tool with no specific-label rule, or nothing is
+ * currently running. Defensive: never throws — an unexpected
  * message/part shape falls back to the generic pool via the null return,
  * exactly like "nothing found".
  */
@@ -1213,8 +1209,9 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // background-bash dispatch (default thread policy, toolVisibility.ts) must
   // not render an empty bubble with a bare Copy action bar (the D-fix UAT
   // defect resurfacing once the thread started hiding those by default). A
-  // `delegate` 'run' call is visible by default now (ADR-091 D7/AC-7), so it
-  // counts as real content here rather than triggering this guard.
+  // `delegate` call is hidden unless verbose chat is on (the event line is
+  // the normal-thread surface), so a message that is only a delegation does
+  // trigger this guard — the line renders beside the row, not inside it.
   // visibleToolCalls is also what's actually rendered below — hoisted here
   // so both the emptiness check and the render loop share one computation
   // instead of drifting into two different notions of "visible". Subagent
@@ -1544,6 +1541,9 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
   // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default,
   // verbose-only inline) — same store read as every other verbose-gated row.
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  const sessionId = useSessionStore((s) => s.activeSessionId)
+  const delegationEvents = useChatDelegationEvents(sessionId)
+  const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
   const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
   return (
     <div
@@ -1557,14 +1557,14 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
           // panel-only by default (ActivityPanel's judge row, fed live by
           // the judge_verdict WS frame — see chat.ts), inline in the thread
           // ONLY under verbose chat.
+          let row: React.ReactNode
           if (msg.type === 'judge_verdict') {
-            if (!shouldRenderJudgeVerdictInThread(verboseChatEnabled) || !msg.verdict) return null
-            return <JudgeVerdictThreadCard key={msg.id} verdict={msg.verdict} />
-          }
-          if (msg.role === 'user')
-            return (
+            row = shouldRenderJudgeVerdictInThread(verboseChatEnabled) && msg.verdict
+              ? <JudgeVerdictThreadCard verdict={msg.verdict} />
+              : null
+          } else if (msg.role === 'user') {
+            row = (
               <VirtualUserMessageRow
-                key={msg.id}
                 message={msg}
                 skills={skills}
                 commandLabels={commandLabels}
@@ -1572,9 +1572,19 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
                 latest={msg.id === latestUserMessageId}
               />
             )
-          if (msg.role === 'system') return <VirtualSystemMessageRow key={msg.id} message={msg} />
-          return <VirtualAssistantMessageRow key={msg.id} message={msg} liteMode={liteMode} />
+          } else if (msg.role === 'system') {
+            row = <VirtualSystemMessageRow message={msg} />
+          } else {
+            row = <VirtualAssistantMessageRow message={msg} liteMode={liteMode} />
+          }
+          return (
+            <React.Fragment key={msg.id}>
+              {row}
+              <DelegationEventLineList events={delegationEventsAfterMessage(delegationEvents, msg.id)} />
+            </React.Fragment>
+          )
         })}
+        <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />
       </div>
     </div>
   )
@@ -1672,6 +1682,9 @@ function VirtualizedMessageListInner({
   const { skills, commandLabels } = useSkillChipData()
   // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default, verbose-only inline).
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  const sessionId = useSessionStore((s) => s.activeSessionId)
+  const delegationEvents = useChatDelegationEvents(sessionId)
+  const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
   const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
 
   // Separate the live streaming message from completed history.
@@ -1758,6 +1771,7 @@ function VirtualizedMessageListInner({
                   ref={virtualizer.measureElement}
                 >
                   {rowForMessage(msg)}
+                  <DelegationEventLineList events={delegationEventsAfterMessage(delegationEvents, msg.id)} />
                 </div>
               )
             })}
@@ -1779,6 +1793,12 @@ function VirtualizedMessageListInner({
             </ThreadPrimitive.Messages>
           </div>
         )}
+        {hasStreamingMessage && messages[messages.length - 1] && (
+          <DelegationEventLineList
+            events={delegationEventsAfterMessage(delegationEvents, messages[messages.length - 1].id)}
+          />
+        )}
+        <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />
       </div>
     </ThreadPrimitive.Viewport>
   )
