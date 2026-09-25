@@ -1,6 +1,7 @@
 // ActivityBar — persistent activity strip tests.
 //
-// Covers: idle (0 running), 1 running, N running (span + bash), the count
+// Covers: idle (nothing ever ran), 1 running, N running (span + bash), a
+// background command alone (mounts, agent count excluded), the count
 // text, clicking the bar opens the ActivityPanel slide-out, and (Fix 1,
 // 2026-07-16) the revised mount matrix: an open panel survives running→0,
 // a retained failure keeps the pill mounted in its failed-state variant,
@@ -178,7 +179,12 @@ describe('ActivityBar — N running (agent children only, ADR-091 FR-E-005)', ()
     })
   })
 
-  it('does not mount for a background bash job alone — no agent children are running', () => {
+  // Founder decision 2026-09-25: a background command alone MUST bring the pill
+  // back. The pill is ActivityPanel's only entry point, and the panel is the only
+  // place background commands are listed, so gating the mount on agent children
+  // made them unreachable. The COUNT stays agent-only (FR-E-005) — this is about
+  // whether the pill exists at all. This test previously asserted the opposite.
+  it('mounts for a background bash job alone, and names it — the panel is otherwise unreachable', () => {
     act(() => {
       useChatStore.setState({
         toolCalls: {
@@ -194,7 +200,8 @@ describe('ActivityBar — N running (agent children only, ADR-091 FR-E-005)', ()
       })
     })
     renderBar()
-    expect(screen.queryByTestId('activity-bar')).not.toBeInTheDocument()
+    expect(screen.getByTestId('activity-bar')).toBeInTheDocument()
+    expect(screen.getByText('1 background command')).toBeInTheDocument()
   })
 })
 
