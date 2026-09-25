@@ -301,7 +301,13 @@ func defaultToolPoliciesGeneral() map[string]string {
 		"read_message":        "allow",
 		"send_email":          "allow",
 		"reply":               "allow",
-		"ToolSearch":          "allow",
+		// create_email_draft (email-mail-view-spec §2.7 point 1): the
+		// Drafts-only write path — it can never send — so the ceiling ships
+		// allow. The D19 configure-time fill (§2.7 point 2) writes the
+		// per-tool ask/allow values only where the agent has no explicit
+		// entry.
+		"create_email_draft": "allow",
+		"ToolSearch":         "allow",
 		// Skill (ADR-072 D1): the on-demand skill load/search tool —
 		// the same structural-floor reasoning as ToolSearch above
 		// applies one layer up for skills. Raising the ceiling grants

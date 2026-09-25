@@ -134,7 +134,16 @@ import (
 // left as the campaign wrote it and the post-merge delta is carried here.
 // ADR-090 adds get_agent and get_agent_tools management readback (107 -> 109)
 // and environment_setup (109 -> 110, ES-FR-01).
-const catalogSizeToday = 110
+//
+// Bumped 110 -> 111 adding "create_email_draft"
+// (email-mail-view-spec §2.7 point 4, FR-013): the Drafts-only compose tool —
+// it writes a Drafts copy and cannot send — registered alongside the five
+// existing email tools so the catalog↔ceiling parity test
+// (TestCatalog_MatchesGlobalCeilingEntryForEntry) stays one-for-one with the
+// new shipped defaults.go entry. POST-MERGE addition, same rule as grep and
+// the knowledge_list pair above. Policy wiring rides the ADR-090 inventory
+// grant (allow for every role) and the D19 configure-time fill.
+const catalogSizeToday = 111
 
 // currentKnowledgeToolNames is every knowledge_* tool presently in the
 // catalog: ADR-068 D15.3's original six (the replacement for ADR-067's

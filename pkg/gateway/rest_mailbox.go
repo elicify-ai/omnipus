@@ -393,19 +393,14 @@ func (sm *restAPISetAgentMailbox) persistConfig() bool {
 		byWorkspace[sm.workspaceID] = existing
 		mailboxes[sm.agentID] = byWorkspace
 
-		// Tool-policy grant: enabling a mailbox is the operator's explicit
+		// Tool-policy fill: enabling a mailbox is the operator's explicit
 		// opt-in to the email tools for this agent (the wire contract's
-		// `enabled` literally means "register the email tools"). Agents with a
-		// deny-by-default builtin allowlist that predates the mailbox (every
-		// agent except the Assistant seed) would otherwise get the tools
-		// registered but policy-hidden — a silently dead mailbox. Fill in any
-		// email tool that is missing or explicitly "deny" (the ubiquitous,
-		// non-deliberate baseline every such agent inherits from the seed
-		// under the mandatory-coverage model — CLAUDE.md hard constraint 6,
-		// there is no default_policy field to distinguish "unset" from "seed
-		// default" any more); an entry already "allow" or "ask" is left
-		// untouched (see grantEmailToolAllows's doc comment for why "ask" is
-		// the one value that can only reflect genuine operator intent).
+		// `enabled` literally means "register the email tools"). The D19
+		// fill (MC-26, §2.7 point 2) writes send_email/reply "ask" and the
+		// read tools + create_email_draft "allow" ONLY where the agent's
+		// map has no such key; an explicit allow, ask or deny — including
+		// the denies a deny-by-default custom-agent seed enumerates — is
+		// intent and is never rewritten.
 		//
 		// Gated on the ACTUAL disabled→enabled transition (req.Enabled &&
 		// !wasEnabled), not merely "the saved value is enabled": this handler
@@ -677,13 +672,32 @@ func (a *restAPI) listMailboxes(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, out)
 }
 
-// emailToolNames are the five M11 email tools gated by mailbox ownership.
-var emailToolNames = []string{"read_inbox", "search_email", "read_message", "send_email", "reply"}
+// emailToolNames are the six email tools gated by mailbox ownership: the
+// five M11 tools plus create_email_draft (email-mail-view-spec §2.7 point 6).
+var emailToolNames = []string{"read_inbox", "search_email", "read_message", "send_email", "reply", "create_email_draft"}
 
-// grantEmailToolAllows fills in "allow" for the email tools in the agent's
-// builtin tool policy when a mailbox is enabled, treating a missing entry or
-// an explicit "deny" as fill-eligible, but never touching a tool already
-// "allow" or "ask". ADR-054 D2/§11 checklist item 5: agents are per-entity
+// emailToolFillPolicies is the D19 fill (email-mail-view-spec §2.7 point 2,
+// MC-26): the policy a mailbox-enabled agent gets for each email tool whose
+// key is ABSENT from its map. Send tools ask (a human approves sending);
+// the read tools and the Drafts-only compose tool allow. An explicit
+// allow, ask or deny is never rewritten — an absent key is the only fill
+// target.
+var emailToolFillPolicies = map[string]config.ToolPolicy{
+	"send_email":         config.ToolPolicyAsk,
+	"reply":              config.ToolPolicyAsk,
+	"read_inbox":         config.ToolPolicyAllow,
+	"search_email":       config.ToolPolicyAllow,
+	"read_message":       config.ToolPolicyAllow,
+	"create_email_draft": config.ToolPolicyAllow,
+}
+
+// grantEmailToolAllows applies the D19 configure-time fill (MC-26,
+// email-mail-view-spec §2.7 point 2): for each email tool whose key is
+// ABSENT from the agent's builtin policy map, it writes the fill value
+// (send_email/reply ask, read tools and create_email_draft allow). An
+// explicit allow, ask or deny is operator or seed intent and is never
+// rewritten — including the deny an agent inherits from a deny-by-default
+// custom-agent seed. ADR-054 D2/§11 checklist item 5: agents are per-entity
 // records under entities/agents/<id>.json, not config.json's agents.list —
 // this grants via the agent store instead of splicing the raw config map
 // that setAgentMailbox's safeUpdateConfigJSON closure operates on (that
@@ -729,11 +743,12 @@ func grantEmailToolAllows(homePath, agentID string) {
 			ag.Tools.Builtin.Policies = map[string]config.ToolPolicy{}
 		}
 		for _, name := range emailToolNames {
-			current := ag.Tools.Builtin.Policies[name]
-			if current == config.ToolPolicyAsk || current == config.ToolPolicyAllow {
-				continue // already permits, or a deliberate operator choice — leave it
+			if _, exists := ag.Tools.Builtin.Policies[name]; exists {
+				// Any explicit value — allow, ask or deny — is operator or
+				// seed intent (MC-26). Never rewritten.
+				continue
 			}
-			ag.Tools.Builtin.Policies[name] = config.ToolPolicyAllow
+			ag.Tools.Builtin.Policies[name] = emailToolFillPolicies[name]
 			granted = append(granted, name)
 		}
 		return nil
