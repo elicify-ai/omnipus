@@ -29,8 +29,8 @@ releases; v0.1.1 carries near the full scope once labelled v0.3).
   are superseded pre-ADR background (retired Rooms/5-core vocabulary) — do not
   implement from them without checking the concept and the ADRs.
 - **No version label names a future release anymore.** Work the closed issues left
-  open stays on its tracked issues (see the re-homing table in
-  `coordination/logs/relabel-inventory.md`) until the founder rules where it lands.
+  open stays on its tracked issues (#884, #885, #886, #887, #888, #306, #42) until
+  the founder rules where it lands.
 - **Routing rule:** when new work comes up, size it first (small / standard /
   feature — see "Change sizes and the review gate"). There is no phase routing:
   anything the closed issues left open is re-homed, not re-labelled; anything else
