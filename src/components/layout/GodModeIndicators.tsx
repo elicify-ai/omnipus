@@ -63,6 +63,7 @@ export function GodModeSidebarPill() {
     <Link
       to="/settings"
       search={{ tab: 'gateway', focus: 'god-mode' }}
+      tabIndex={0}
       data-testid="sidebar-god-mode-pill"
       aria-label="God Mode is on — open settings to turn it off"
       // Same overlay-close discipline as every other nav affordance in the
@@ -121,6 +122,7 @@ export function GodModeCornerDot() {
         <Link
           to="/settings"
           search={{ tab: 'gateway', focus: 'god-mode' }}
+          tabIndex={0}
           data-testid="god-mode-corner-dot"
           aria-label="God Mode is on — open settings to turn it off"
           className="flex h-6 w-6 items-center justify-center rounded-full"

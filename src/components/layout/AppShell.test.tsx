@@ -743,82 +743,101 @@ describe('AppShell — god-mode banner removal (2026-09-25)', () => {
 
 // ── God Mode corner dot (founder decision 2026-09-25, revision 2) ────────────
 //
-// ONE indicator rendered from AppShell inside <main>, replacing the deleted
-// per-hamburger dots: a small red dot in the top-left corner of the screen
-// content, shown ONLY while god-mode is on AND the sidebar (and its pill) is
-// off screen. Red when on, invisible in every other state — off, unknown
-// (fetch error), loading, bypass; no amber variant exists anywhere. Because
-// it mounts from the shell (not from any screen's header), it covers routes
-// with no sidebar button too — Library, the live-browser view, admin chat.
-// In this file Outlet renders null, which is exactly that no-screen-chrome
-// shape: asserting the dot here IS the "present on a route without
-// ScreenHeader" case.
-describe('AppShell — God Mode corner dot (2026-09-25)', () => {
-  // Sidebar visibility mirrors Sidebar.tsx: pinned only counts at ≥1024px
-  // (a matchMedia stub), otherwise only the overlay's isOpen matters. jsdom
-  // ships no matchMedia at all, so pin-viewport tests stub it per-test.
-  const originalMatchMedia = window.matchMedia
+// ONE indicator rendered from AppShell at the shell root (never inside
+// <main>), replacing the deleted per-hamburger dots: a small red dot in the
+// top-left corner of the screen content, shown ONLY while god-mode is on AND
+// the sidebar (and its pill) is off screen. Red when on, invisible in every
+// other state — off, unknown (fetch error), loading, bypass; no amber variant
+// exists anywhere. Because it mounts from the shell (not from any screen's
+// header), it covers routes with no sidebar button too — Library, the
+// live-browser view, admin chat. In this file Outlet renders null, which is
+// exactly that no-screen-chrome shape: asserting the dot here IS the "present
+// on a route without ScreenHeader" case.
+//
+// The suite is split by concern — visibility / placement / navigation — so
+// each describe callback stays under the 240-line function budget; the shared
+// setup below is hoisted to module scope so all three run one copy.
 
-  function stubMatchMedia(pinQueryMatches: boolean) {
+// Sidebar visibility mirrors Sidebar.tsx: pinned only counts at ≥1024px
+// (a matchMedia stub), otherwise only the overlay's isOpen matters. jsdom
+// ships no matchMedia at all, so pin-viewport tests stub it per-test.
+const GOD_MODE_ORIGINAL_MATCH_MEDIA = window.matchMedia
+
+function stubSidebarPinMediaQuery(pinMatches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches: query === `(min-width: 1024px)` ? pinMatches : false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }),
+  })
+}
+
+// Phone-takeover shape: answer BOTH queries AppShell/GodModeIndicators ask
+// — the sidebar pin breakpoint (1024px, false → sidebar never pinned) and
+// AppShell's own <640px phone signal (true → panel takeover active).
+function stubPhoneTakeoverMediaQuery() {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches:
+        query === '(min-width: 1024px)'
+          ? false
+          : query === '(max-width: 639px)'
+            ? true
+            : false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }),
+  })
+}
+
+function restoreWindowMatchMedia() {
+  if (GOD_MODE_ORIGINAL_MATCH_MEDIA === undefined) {
+    delete (window as unknown as { matchMedia?: unknown }).matchMedia
+  } else {
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
       writable: true,
-      value: (query: string) => ({
-        matches: query === `(min-width: 1024px)` ? pinQueryMatches : false,
-        media: query,
-        onchange: null,
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        dispatchEvent: vi.fn(),
-      }),
+      value: GOD_MODE_ORIGINAL_MATCH_MEDIA,
     })
   }
+}
 
-  // Phone-takeover shape: answer BOTH queries AppShell/GodModeIndicators ask
-  // — the sidebar pin breakpoint (1024px, false → sidebar never pinned) and
-  // AppShell's own <640px phone signal (true → panel takeover active).
-  function stubMatchMediaPhone() {
-    Object.defineProperty(window, 'matchMedia', {
-      configurable: true,
-      writable: true,
-      value: (query: string) => ({
-        matches:
-          query === '(min-width: 1024px)'
-            ? false
-            : query === '(max-width: 639px)'
-              ? true
-              : false,
-        media: query,
-        onchange: null,
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        dispatchEvent: vi.fn(),
-      }),
-    })
+const PLATFORM_HOSTED_APP_STATE: AppState = {
+  onboarding_complete: true,
+  dev_mode_bypass: false,
+  identity: { mode: 'platform', edition: 'hosted', signed_in: true },
+}
+
+const GOD_MODE_ON = { enabled: true, available: true, supported: true, persisted: true }
+
+function mockShellFetches(opts: { godMode?: typeof GOD_MODE_ON | Error; appState?: AppState } = {}) {
+  vi.mocked(api.fetchAppState).mockResolvedValue(opts.appState ?? PLATFORM_HOSTED_APP_STATE)
+  vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+  if (opts.godMode instanceof Error) {
+    vi.mocked(api.fetchGodMode).mockRejectedValue(opts.godMode)
+  } else {
+    vi.mocked(api.fetchGodMode).mockResolvedValue(opts.godMode ?? GOD_MODE_ON)
   }
+}
 
-  const PLATFORM_APP_STATE: AppState = {
-    onboarding_complete: true,
-    dev_mode_bypass: false,
-    identity: { mode: 'platform', edition: 'hosted', signed_in: true },
-  }
-
-  const GOD_MODE_ON = { enabled: true, available: true, supported: true, persisted: true }
-
-  function mockAll(opts: { godMode?: typeof GOD_MODE_ON | Error; appState?: AppState } = {}) {
-    vi.mocked(api.fetchAppState).mockResolvedValue(opts.appState ?? PLATFORM_APP_STATE)
-    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
-    if (opts.godMode instanceof Error) {
-      vi.mocked(api.fetchGodMode).mockRejectedValue(opts.godMode)
-    } else {
-      vi.mocked(api.fetchGodMode).mockResolvedValue(opts.godMode ?? GOD_MODE_ON)
-    }
-  }
-
+// Shared hooks for the three corner-dot describes below (vitest collects
+// hooks registered here while each describe body runs).
+function registerCornerDotHooks() {
   // This file has no file-level clearAllMocks — without this, call counts
   // (and per-test mockResolvedValue overrides) leak between tests, which
   // matters for the "never calls fetchGodMode" assertion below.
@@ -829,19 +848,15 @@ describe('AppShell — God Mode corner dot (2026-09-25)', () => {
   afterEach(() => {
     useSidebarStore.setState({ isOpen: false, isPinned: false })
     useUiStore.setState({ browserPanel: null, libraryPanel: null })
-    if (originalMatchMedia === undefined) {
-      delete (window as unknown as { matchMedia?: unknown }).matchMedia
-    } else {
-      Object.defineProperty(window, 'matchMedia', {
-        configurable: true,
-        writable: true,
-        value: originalMatchMedia,
-      })
-    }
+    restoreWindowMatchMedia()
   })
+}
+
+describe('AppShell — God Mode corner dot visibility (2026-09-25)', () => {
+  registerCornerDotHooks()
 
   it('shows the corner dot when god-mode is on and the sidebar is hidden (no ScreenHeader — the Library/live-browser/admin-chat shape)', async () => {
-    mockAll()
+    mockShellFetches()
     // Default sidebar store state: closed overlay, unpinned → not visible.
     useSidebarStore.setState({ isOpen: false, isPinned: false })
 
@@ -857,6 +872,95 @@ describe('AppShell — God Mode corner dot (2026-09-25)', () => {
     expect(dot.closest('main')).toBeNull()
   })
 
+  it('renders no corner dot when god-mode is off', async () => {
+    mockShellFetches({ godMode: { enabled: false, available: true, supported: true, persisted: false } })
+
+    renderShell()
+
+    await waitFor(() => {
+      expect(api.fetchGodMode).toHaveBeenCalled()
+    })
+    expect(screen.queryByTestId('god-mode-corner-dot')).not.toBeInTheDocument()
+  })
+
+  // Founder ruling 2026-09-25 revision 2: invisible when the status is
+  // UNKNOWN (non-bypass fetch error) — this supersedes the deleted banner's
+  // "never silence an unknown status" property, which the first revision of
+  // the pill had carried as an amber variant.
+  it('renders no corner dot when the status is unknown (god-mode fetch error)', async () => {
+    mockShellFetches({ godMode: new Error('network error') })
+
+    renderShell()
+
+    await waitFor(() => {
+      expect(api.fetchGodMode).toHaveBeenCalled()
+    })
+    expect(screen.queryByTestId('god-mode-corner-dot')).not.toBeInTheDocument()
+  })
+
+  it('renders no corner dot while the sidebar overlay is open — the pill is on screen', async () => {
+    mockShellFetches()
+    useSidebarStore.setState({ isOpen: true, isPinned: false })
+
+    renderShell()
+
+    await waitFor(() => {
+      expect(api.fetchGodMode).toHaveBeenCalled()
+    })
+    expect(screen.queryByTestId('god-mode-corner-dot')).not.toBeInTheDocument()
+  })
+
+  it('renders no corner dot when the sidebar is pinned at a wide-enough viewport', async () => {
+    stubSidebarPinMediaQuery(true)
+    mockShellFetches()
+    useSidebarStore.setState({ isOpen: true, isPinned: true })
+
+    renderShell()
+
+    await waitFor(() => {
+      expect(api.fetchGodMode).toHaveBeenCalled()
+    })
+    expect(screen.queryByTestId('god-mode-corner-dot')).not.toBeInTheDocument()
+  })
+
+  // Ported from the deleted GodModeActiveBanner suite: under
+  // dev_mode_bypass, bypass_gate.go 503s GET /api/v1/gateway/god-mode BY
+  // DESIGN before the handler runs — that is not an outage and must not
+  // surface as an indicator. The dot renders nothing for that 503, exactly
+  // as the banner did.
+  it('renders no corner dot when the god-mode fetch fails with a bypass-gate 503', async () => {
+    mockShellFetches({ godMode: new ApiError(503, 'this action is disabled while dev_mode_bypass is active') })
+
+    renderShell()
+
+    await waitFor(() => {
+      expect(api.fetchGodMode).toHaveBeenCalled()
+    })
+    expect(screen.queryByTestId('god-mode-corner-dot')).not.toBeInTheDocument()
+  })
+
+  // Ported from the deleted banner suite (the 2026-09-24 fix it pinned):
+  // once AppState.dev_mode_bypass is known true, the god-mode query must
+  // never fire at all — firing it meant a real 503, retried 3× by the query
+  // client, on every page load of a dev-mode-bypass install.
+  it('never calls fetchGodMode when AppState.dev_mode_bypass is true, and renders no dot', async () => {
+    mockShellFetches({
+      appState: { onboarding_complete: true, dev_mode_bypass: true, identity: DEFAULT_IDENTITY },
+    })
+
+    renderShell()
+
+    await waitFor(() => {
+      expect(api.fetchAppState).toHaveBeenCalled()
+    })
+    expect(api.fetchGodMode).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('god-mode-corner-dot')).not.toBeInTheDocument()
+  })
+})
+
+describe('AppShell — God Mode corner dot placement (2026-09-25)', () => {
+  registerCornerDotHooks()
+
   // Review round 2, finding 3: below 640px the docked BrowserLivePanel /
   // LibraryPanel take over the full width, and AppShell collapses <main> to
   // zero width and inerts it. A dot living inside <main> is invisible and
@@ -864,8 +968,8 @@ describe('AppShell — God Mode corner dot (2026-09-25)', () => {
   // nothing. The dot must render at the shell root, above the panels,
   // outside the inert region.
   it('keeps the corner dot visible above a phone-width panel takeover, outside the inert <main> region', async () => {
-    stubMatchMediaPhone()
-    mockAll()
+    stubPhoneTakeoverMediaQuery()
+    mockShellFetches()
     useSidebarStore.setState({ isOpen: false, isPinned: false })
     useUiStore.setState({ browserPanel: { sessionId: 's1', agentId: 'a1' } })
 
@@ -895,7 +999,7 @@ describe('AppShell — God Mode corner dot (2026-09-25)', () => {
   // are disjoint BY CONSTRUCTION. Pixel geometry is e2e territory; this
   // pins the token contract both sides rely on.
   it('anchors the dot below the chrome-header band — never on top of the hamburger — at the pointer-minimum size', async () => {
-    mockAll()
+    mockShellFetches()
     useSidebarStore.setState({ isOpen: false, isPinned: false })
 
     renderShell()
@@ -911,60 +1015,13 @@ describe('AppShell — God Mode corner dot (2026-09-25)', () => {
     expect(dot.className).toContain('h-6')
     expect(dot.className).toContain('w-6')
   })
+})
 
-  it('renders no corner dot when god-mode is off', async () => {
-    mockAll({ godMode: { enabled: false, available: true, supported: true, persisted: false } })
-
-    renderShell()
-
-    await waitFor(() => {
-      expect(api.fetchGodMode).toHaveBeenCalled()
-    })
-    expect(screen.queryByTestId('god-mode-corner-dot')).not.toBeInTheDocument()
-  })
-
-  // Founder ruling 2026-09-25 revision 2: invisible when the status is
-  // UNKNOWN (non-bypass fetch error) — this supersedes the deleted banner's
-  // "never silence an unknown status" property, which the first revision of
-  // the pill had carried as an amber variant.
-  it('renders no corner dot when the status is unknown (god-mode fetch error)', async () => {
-    mockAll({ godMode: new Error('network error') })
-
-    renderShell()
-
-    await waitFor(() => {
-      expect(api.fetchGodMode).toHaveBeenCalled()
-    })
-    expect(screen.queryByTestId('god-mode-corner-dot')).not.toBeInTheDocument()
-  })
-
-  it('renders no corner dot while the sidebar overlay is open — the pill is on screen', async () => {
-    mockAll()
-    useSidebarStore.setState({ isOpen: true, isPinned: false })
-
-    renderShell()
-
-    await waitFor(() => {
-      expect(api.fetchGodMode).toHaveBeenCalled()
-    })
-    expect(screen.queryByTestId('god-mode-corner-dot')).not.toBeInTheDocument()
-  })
-
-  it('renders no corner dot when the sidebar is pinned at a wide-enough viewport', async () => {
-    stubMatchMedia(true)
-    mockAll()
-    useSidebarStore.setState({ isOpen: true, isPinned: true })
-
-    renderShell()
-
-    await waitFor(() => {
-      expect(api.fetchGodMode).toHaveBeenCalled()
-    })
-    expect(screen.queryByTestId('god-mode-corner-dot')).not.toBeInTheDocument()
-  })
+describe('AppShell — God Mode corner dot navigation (2026-09-25)', () => {
+  registerCornerDotHooks()
 
   it('clicking the dot targets Settings → Gateway at the God Mode control', async () => {
-    mockAll()
+    mockShellFetches()
 
     renderShell()
 
@@ -973,39 +1030,5 @@ describe('AppShell — God Mode corner dot (2026-09-25)', () => {
     // focus, asserted in GodModeControl.test.tsx); URLSearchParams keeps
     // insertion order, hence tab before focus.
     expect(dot).toHaveAttribute('href', '/settings?tab=gateway&focus=god-mode')
-  })
-
-  // Ported from the deleted GodModeActiveBanner suite: under
-  // dev_mode_bypass, bypass_gate.go 503s GET /api/v1/gateway/god-mode BY
-  // DESIGN before the handler runs — that is not an outage and must not
-  // surface as an indicator. The dot renders nothing for that 503, exactly
-  // as the banner did.
-  it('renders no corner dot when the god-mode fetch fails with a bypass-gate 503', async () => {
-    mockAll({ godMode: new ApiError(503, 'this action is disabled while dev_mode_bypass is active') })
-
-    renderShell()
-
-    await waitFor(() => {
-      expect(api.fetchGodMode).toHaveBeenCalled()
-    })
-    expect(screen.queryByTestId('god-mode-corner-dot')).not.toBeInTheDocument()
-  })
-
-  // Ported from the deleted banner suite (the 2026-09-24 fix it pinned):
-  // once AppState.dev_mode_bypass is known true, the god-mode query must
-  // never fire at all — firing it meant a real 503, retried 3× by the query
-  // client, on every page load of a dev-mode-bypass install.
-  it('never calls fetchGodMode when AppState.dev_mode_bypass is true, and renders no dot', async () => {
-    mockAll({
-      appState: { onboarding_complete: true, dev_mode_bypass: true, identity: DEFAULT_IDENTITY },
-    })
-
-    renderShell()
-
-    await waitFor(() => {
-      expect(api.fetchAppState).toHaveBeenCalled()
-    })
-    expect(api.fetchGodMode).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('god-mode-corner-dot')).not.toBeInTheDocument()
   })
 })
