@@ -43,6 +43,10 @@
 | D8 | Approval | `send_email` keeps its existing policy-based approval (unchanged). New: an agent can **create a draft** in the mailbox's Drafts folder using the normal provider mechanism (IMAP APPEND with `\Draft`) and post a **link in chat** that opens the draft in a **preview side panel** | Founder Q6 verbatim | Founder Q6 | 2026-09-25 |
 | D9 | Manual send | Humans can compose and send mail manually from the Mail tab (signature applied) | Founder Q3 ("possible also to send emails manually") | Founder Q3 | 2026-09-25 |
 | D10 | ADR | No new ADR — ADR-033 stays the canonical mailbox model; these decisions extend it. plan-spec escalates if it finds a genuinely open design decision | Team-lead judgement; flag if wrong | Team-lead | 2026-09-25 |
+| D11 | Mail surface (spec Q7) | Library-style: Mail tab entry opens a docked Mail panel beside chat plus a full-screen pop-out; reuses the Library panel machinery | Founder chose recommended option A | Founder S7 | 2026-09-25 |
+| D12 | Draft panel actions (spec Q1) | **View + Edit + Send + Discard** — the human can edit the agent's draft before sending; panel Send is the approval | Founder chose option C (not the recommendation) | Founder S1 | 2026-09-25 |
+| D13 | Incoming HTML (spec Q3) | "Like Outlook and Gmail are doing it — it must feel normal." Neither client runs scripts in mail, so: rendered HTML in a sandboxed frame without scripts. Remote-image default (Gmail loads via proxy; Outlook asks for unknown senders) still to confirm | Founder verbatim; image default re-asked in the next round | Founder S3 | 2026-09-25 |
+| D14 | Related issues | Spec must reconcile #42 (email send-gating + inbox UI + Gmail setup) and #631 (delete the mailbox drainer — it marks a human's unread mail \\Seen); both found in the 2026-09-25 issue triage | Avoid duplicate/contradicting work | Team-lead | 2026-09-25 |
 
 ## Open points — plan-spec must ask the founder, not guess
 
