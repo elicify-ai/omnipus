@@ -82,7 +82,7 @@ func TestGoalOutcomeFrame_LiveAndReplayCarryTheSameIDAndOutcome(t *testing.T) {
 	// Replay: the persisted entry streamed back.
 	sink := &sliceSink{}
 	entries := []session.TranscriptEntry{entry}
-	_, err := streamReplay(t.Context(), sessionID, entries, computeReplayStats(entries), sink.emit, nil, nil, nil)
+	_, err := streamReplay(t.Context(), sessionID, entries, computeReplayStats(entries), sink.emit, nil, nil, nil, nil)
 	require.NoError(t, err)
 	var replayRaw [][]byte
 	for _, f := range sink.frames {

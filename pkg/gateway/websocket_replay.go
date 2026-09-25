@@ -235,7 +235,16 @@ func (wh *wsHandlerHandleAttachSession) replayTranscript(entries []session.Trans
 	// askuserquestion-tool-spec v3 §0.6: the session's terminal
 	// AskUserQuestion record, so the collapsed card is reconstructed.
 	terminalAsk := loadTerminalAskRecord(wh.store, wh.attachID)
-	framesEmitted, err := streamReplay(wh.ctx, wh.attachID, entries, rs, emit, mediaStore, wh.h.toolStore, terminalAsk)
+	// A nil pointer stored in an interface is not a nil interface, and
+	// LifecycleStore.Load panics on a nil receiver. Leave the interface
+	// nil when there is no store.
+	var lifecycle lifecycleRecordLoader
+	if wh.h.agentLoop != nil {
+		if store := wh.h.agentLoop.GetSessionLifecycleStore(); store != nil {
+			lifecycle = store
+		}
+	}
+	framesEmitted, err := streamReplay(wh.ctx, wh.attachID, entries, rs, emit, mediaStore, wh.h.toolStore, terminalAsk, lifecycle)
 	durationMS := time.Since(started).Milliseconds()
 	if err != nil {
 		logsafeWarn("ws: replay_aborted",
