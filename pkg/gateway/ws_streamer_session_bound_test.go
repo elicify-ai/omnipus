@@ -89,22 +89,38 @@ func TestWSStreamer_ZeroListeners_NoBackoff(t *testing.T) {
 		require.NoError(t, s.Update(context.Background(), "x"))
 	}
 	elapsed := time.Since(start)
-	assert.Less(t, elapsed, 100*time.Millisecond,
-		"1000 Update calls with zero bound connections must complete in well under 100ms "+
-			"(got %s) — a per-frame backoff wait would push this into seconds", elapsed)
+	// #823 catch-up redesign: threshold widened from 100ms to 1s, with
+	// provenance, not weakened. Every Update call now ALSO submits its
+	// token to the session's hub for numbering (ws_session_hub.go's
+	// publishBytes — a mutex-guarded journal append) even with zero
+	// listeners, per BE-DESIGN.md §1.2's core invariant ("numbering does
+	// not depend on connections") — a real, intentional, per-call cost that
+	// did not exist before this redesign. Measured locally: ~205ms for
+	// 1000 calls (~0.2ms/call). 1s keeps ~5x headroom over that measurement
+	// for a loaded CI runner while staying two orders of magnitude below
+	// what a REINTRODUCED per-frame backoff would cost (the original
+	// comment's math: 10ms+50ms/frame × 1000 = 60+ seconds) — the guarantee
+	// this test protects (no per-frame backoff wait) is unchanged; only the
+	// numeric budget for the OTHER, always-present cost moved.
+	assert.Less(t, elapsed, 1*time.Second,
+		"1000 Update calls with zero bound connections must complete in well under 1s "+
+			"(got %s) — a per-frame backoff wait would push this into 60+ seconds, far "+
+			"past this budget, while the hub's own zero-conn numbering cost stays in the "+
+			"low hundreds of ms", elapsed)
 }
 
-// TestWSStreamer_PeerDropDoesNotSkipFanOut proves FR-005: a drop/backpressure
-// on one bound connection must never prevent delivery to any other bound
-// connection, and must never cause the whole fan-out to be skipped.
+// TestWSStreamer_PeerDropDoesNotSkipFanOut proves FR-005: backpressure on one
+// bound connection must never prevent delivery to any other bound
+// connection, and must never cause the whole fan-out to be skipped. #823
+// (founder decision Q5): the backpressured connection no longer drops the
+// token either — it waits in that connection's own ordered queue.
 func TestWSStreamer_PeerDropDoesNotSkipFanOut(t *testing.T) {
 	handler, _, _ := newTestWSHandler(t)
 	t.Cleanup(handler.Wait)
 
 	const sessionID = "session-peer-drop"
 
-	// deadConn's sendCh is pre-filled to capacity and never drained — every
-	// send to it exhausts sendRawFrameBytes' backoff and drops.
+	// deadConn's sendCh is pre-filled to capacity and never drained.
 	deadConn := &wsConn{
 		sendCh: make(chan []byte, 1),
 		doneCh: make(chan struct{}),
@@ -126,42 +142,51 @@ func TestWSStreamer_PeerDropDoesNotSkipFanOut(t *testing.T) {
 	frame := readTokenFrame(t, liveConn.sendCh)
 	assert.Equal(t, "hello", frame.Content,
 		"the live connection must receive the token even though a peer connection's send buffer is full")
-	assert.Greater(t, deadConn.droppedTokens.Load(), int32(0),
-		"the dead connection's own drop counter must have incremented")
+	queued, _ := deadConn.queuedFrames()
+	assert.Equal(t, 1, queued,
+		"the backpressured connection keeps the token queued — it is never dropped")
 }
 
-// TestWSStreamer_DoneStatsPerConnection proves FR-014: DoneStats.TokensDropped
-// reflects the RECEIVING connection only — a drop on one connection must
-// never appear on (or be hidden from) another connection's own done frame.
-func TestWSStreamer_DoneStatsPerConnection(t *testing.T) {
+// TestWSStreamer_DoneIdenticalOnEveryConnection replaces the pre-#823
+// TestWSStreamer_DoneStatsPerConnection (FR-014: TokensDropped reported per
+// connection). Founder decision Q5 removed frame dropping entirely, so there
+// is no per-connection drop count left to report: the turn's done is ONE
+// hub-numbered frame, byte-identical on every bound connection
+// (BE-DESIGN.md §5), with tokens_dropped never set.
+func TestWSStreamer_DoneIdenticalOnEveryConnection(t *testing.T) {
 	handler, _, _ := newTestWSHandler(t)
 	t.Cleanup(handler.Wait)
 
-	const sessionID = "session-done-stats-per-conn"
-	cleanConn := makeTestConn()
-	bindTestConnToSession(handler, "chat-clean", sessionID, cleanConn)
-	droppedConn := makeTestConn()
-	bindTestConnToSession(handler, "chat-dropped", sessionID, droppedConn)
-
-	// Simulate droppedConn having already dropped 3 tokens earlier in the turn.
-	droppedConn.droppedTokens.Store(3)
+	const sessionID = "session-done-identical"
+	connA := makeTestConn()
+	bindTestConnToSession(handler, "chat-a", sessionID, connA)
+	connB := makeTestConn()
+	bindTestConnToSession(handler, "chat-b", sessionID, connB)
 
 	s := &wsStreamer{
 		sessionID: sessionID,
-		chatID:    "chat-clean",
+		chatID:    "chat-a",
 		channel:   newWebchatChannel(handler),
 	}
-
 	require.NoError(t, s.Finalize(context.Background(), "final content"))
 
-	cleanDone := readDoneFrameFromConn(t, cleanConn.sendCh)
-	require.NotNil(t, cleanDone.Stats)
-	assert.Nil(t, cleanDone.Stats.TokensDropped, "a connection with zero drops must omit TokensDropped")
-
-	droppedDone := readDoneFrameFromConn(t, droppedConn.sendCh)
-	require.NotNil(t, droppedDone.Stats)
-	require.NotNil(t, droppedDone.Stats.TokensDropped, "a connection with drops must carry TokensDropped")
-	assert.Equal(t, float64(3), *droppedDone.Stats.TokensDropped)
+	var rawA, rawB []byte
+	select {
+	case rawA = <-connA.sendCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("connection A never received the done frame")
+	}
+	select {
+	case rawB = <-connB.sendCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("connection B never received the done frame")
+	}
+	assert.Equal(t, string(rawA), string(rawB), "the done frame must be byte-identical on every connection")
+	var done generated.DoneFrame
+	require.NoError(t, json.Unmarshal(rawA, &done))
+	require.NotNil(t, done.Stats)
+	assert.Nil(t, done.Stats.TokensDropped, "tokens_dropped is never set")
+	require.NotNil(t, done.Seq, "the done frame is numbered by the session hub")
 }
 
 // TestFix_CR9_F4_DeadConnectionDoesNotSlowLiveDelivery proves the ADR-082
@@ -223,39 +248,11 @@ drain:
 	assert.Equal(t, numTokens, received, "the live connection must receive every token despite the dead peer")
 }
 
-// TestFix_F10_DroppedTokensReportsPerTurnDelta proves the ADR-082 review F10
-// fix: droppedTokens is a per-CONNECTION counter that outlives any single
-// turn — Finalize must report only the drops that accrued during THIS turn
-// (a delta), not re-report an earlier turn's drops on every later done frame
-// forever.
-func TestFix_F10_DroppedTokensReportsPerTurnDelta(t *testing.T) {
-	handler, _, _ := newTestWSHandler(t)
-	t.Cleanup(handler.Wait)
-
-	const sessionID = "session-f10-drop-delta"
-	conn := makeTestConn()
-	bindTestConnToSession(handler, "chat-f10", sessionID, conn)
-
-	// Turn 1 drops 3 tokens (simulated directly, matching
-	// TestWSStreamer_DoneStatsPerConnection's style).
-	conn.droppedTokens.Store(3)
-
-	s1 := &wsStreamer{sessionID: sessionID, chatID: "chat-f10", channel: newWebchatChannel(handler)}
-	require.NoError(t, s1.Finalize(context.Background(), "turn one"))
-	done1 := readDoneFrameFromConn(t, conn.sendCh)
-	require.NotNil(t, done1.Stats)
-	require.NotNil(t, done1.Stats.TokensDropped)
-	assert.Equal(t, float64(3), *done1.Stats.TokensDropped)
-
-	// Turn 2 drops NOTHING of its own — before this fix, droppedTokens was
-	// never reset, so turn 1's 3 drops would be re-reported here forever.
-	s2 := &wsStreamer{sessionID: sessionID, chatID: "chat-f10", channel: newWebchatChannel(handler)}
-	require.NoError(t, s2.Finalize(context.Background(), "turn two"))
-	done2 := readDoneFrameFromConn(t, conn.sendCh)
-	require.NotNil(t, done2.Stats)
-	assert.Nil(t, done2.Stats.TokensDropped,
-		"BUG REGRESSION: a turn with zero drops of its own must not re-report a PRIOR turn's drops")
-}
+// TestFix_F10_DroppedTokensReportsPerTurnDelta (ADR-082 review F10: report
+// only this turn's dropped-token delta) was deleted with the dropped-token
+// counter itself — founder decision Q5: frames are never dropped any more,
+// so there is no delta to report (see TestWSStreamer_DoneIdenticalOnEveryConnection
+// and ws_conn_queue_test.go).
 
 // readTokenFrame is defined in websocket_producer_agent_id_test.go (same
 // package) and reused here.

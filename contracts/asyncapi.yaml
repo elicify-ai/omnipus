@@ -137,6 +137,12 @@ channels:
         $ref: '#/components/messages/GoalOutcomeFrame'
       LibraryChangedFrame:
         $ref: '#/components/messages/LibraryChangedFrame'
+      SessionSnapshotFrame:
+        $ref: '#/components/messages/SessionSnapshotFrame'
+      CatchUpCompleteFrame:
+        $ref: '#/components/messages/CatchUpCompleteFrame'
+      UserMessageFrame:
+        $ref: '#/components/messages/UserMessageFrame'
   browser:
     address: /api/v1/browser/ws
     description: 'Live interactive browser channel (ADR-038). A dedicated WebSocket, separate from the chat channel, carrying
@@ -301,6 +307,37 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/SessionStartedFrame'
+  receiveSessionSnapshot:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      #823 catch-up redesign. Answers attach_session when the requested since_seq cannot
+      be served incrementally. The client must wipe and rebuild this session's history —
+      see SessionSnapshotFrame.reason for why a snapshot was sent.
+    messages:
+    - $ref: '#/channels/chat/messages/SessionSnapshotFrame'
+  receiveCatchUpComplete:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      #823 catch-up redesign. Terminal frame of an attach_session response (both the
+      incremental and the snapshot path). Frames published live during the attach are
+      held and flushed only after this frame.
+    messages:
+    - $ref: '#/channels/chat/messages/CatchUpCompleteFrame'
+  receiveUserMessage:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      #823 catch-up redesign, founder decision Q1. Echoes a persisted user message to
+      every tab bound to the session (not only the sender's), and is how an
+      offline-queued message that was drained after reconnect lands at the end of
+      history instead of above it.
+    messages:
+    - $ref: '#/channels/chat/messages/UserMessageFrame'
   receiveMessageStatus:
     action: receive
     channel:
@@ -1443,6 +1480,27 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/LibraryChangedFrame'
+    SessionSnapshotFrame:
+      name: SessionSnapshotFrame
+      title: session_snapshot
+      summary: History wipe-and-rebuild answer to attach_session (server → client, #823 catch-up redesign).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SessionSnapshotFrame'
+    CatchUpCompleteFrame:
+      name: CatchUpCompleteFrame
+      title: catch_up_complete
+      summary: Terminal frame of an attach_session response, incremental or snapshot (server → client, #823 catch-up redesign).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/CatchUpCompleteFrame'
+    UserMessageFrame:
+      name: UserMessageFrame
+      title: user_message
+      summary: Persisted user message echoed to every bound tab (server → client, #823 catch-up redesign).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/UserMessageFrame'
   schemas:
     WsFrameType:
       title: WsFrameType
@@ -1518,6 +1576,9 @@ components:
       - browser_handover_notice
       - goal_outcome
       - library_changed
+      - session_snapshot
+      - catch_up_complete
+      - user_message
     AuthFrame:
       title: AuthFrame
       description: Client → server authentication frame.
@@ -1695,11 +1756,11 @@ components:
           const: pong
     AttachSessionFrame:
       title: AttachSessionFrame
-      description: 'Client → server request to attach to an existing session. When `since` is provided, the server skips replay
-        frames whose timestamp <= `since`, sending only frames the SPA has not yet seen. Omitting `since` requests a full
-        replay (legacy behaviour).
-
-        '
+      description: >-
+        Client → server request to attach to a session and catch it up to the present.
+        #823 catch-up redesign: since_seq/boot_id replace the retired timestamp cursor
+        (`since`, removed). Keep in sync by hand with
+        contracts/components/schemas/AttachSessionFrame.yaml.
       type: object
       required:
       - type
@@ -1713,14 +1774,20 @@ components:
           type: string
           minLength: 1
           maxLength: 128
-        since:
+        since_seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            #823 catch-up redesign. Highest per-session sequence number the SPA has
+            already applied for this session. Omit for a first load or an unknown
+            cursor — the server then answers with a snapshot.
+        boot_id:
           type: string
-          format: date-time
-          description: 'ISO 8601 timestamp of the most recent frame the SPA has already processed. Server replays only frames
-            with timestamp > this value. Used to keep reconnect replay traffic O(missed window) instead of O(full session
-            history).
-
-            '
+          description: >-
+            #823 review finding 7. The gateway boot ID the SPA last saw for this
+            session. A mismatch forces a snapshot (reason boot_mismatch) regardless of
+            since_seq.
     DevicePairingResponseFrame:
       title: DevicePairingResponseFrame
       description: Client → server device pairing decision.
@@ -1762,6 +1829,18 @@ components:
           minLength: 1
         agent_id:
           type: string
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            #823 catch-up redesign. The sequence number the newly minted session's hub
+            starts from. Keep in sync by hand with
+            contracts/components/schemas/SessionStartedFrame.yaml.
+        boot_id:
+          type: string
+          description: >-
+            #823 review finding 7. The gateway process that minted this session.
     MessageStatusFrame:
       title: MessageStatusFrame
       description: >
@@ -1794,6 +1873,14 @@ components:
           - received
           - working
           - failed
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/MessageStatusFrame.yaml.
     TokenFrame:
       title: TokenFrame
       description: >
@@ -1819,6 +1906,29 @@ components:
           maxLength: 65536
         agent_id:
           type: string
+        turn_id:
+          type: string
+          description: >-
+            #823 catch-up redesign. Correlates this token with the turn/bubble it belongs
+            to. Absent on the connection-scoped Send fallback.
+        message_id:
+          type: string
+          description: >-
+            #823 catch-up redesign. Identifies the specific assistant message (bubble)
+            this token belongs to, stable across reconnect/catch-up.
+        replace:
+          type: boolean
+          description: >-
+            Set only on a catch-up token: REPLACES the open bubble's content for this
+            session instead of appending, making catch-up idempotent.
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy (e.g. a projection token inside a snapshot).
+            Keep in sync by hand with contracts/components/schemas/TokenFrame.yaml.
     DoneStats:
       title: DoneStats
       description: 'Per-turn statistics in a done frame. additionalProperties are allowed for replay extras (frames_emitted,
@@ -1840,6 +1950,10 @@ components:
         tokens_dropped:
           type: number
           minimum: 0
+          deprecated: true
+          description: >-
+            Deprecated (#823 catch-up redesign, Q5): the gateway never drops frames under
+            backpressure now (WS close 4008 + reconnect instead). Never set.
         frames_emitted:
           type: number
           minimum: 0
@@ -1893,6 +2007,24 @@ components:
           minLength: 1
         stats:
           $ref: '#/components/schemas/DoneStats'
+        turn_id:
+          type: string
+          description: >-
+            #823 catch-up redesign. The turn this done frame closes. Idempotent — an
+            unknown turn_id is a no-op apart from clearing the streaming indicator.
+        message_id:
+          type: string
+          description: >-
+            #823 catch-up redesign. The id of the turn's last assistant message.
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign), published
+            only after the turn's transcript entry is durably persisted. Optional: absent
+            on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/DoneFrame.yaml.
     LLMError:
       title: LLMError
       description: Translated provider/LLM error safe for the live WebSocket boundary.
@@ -2255,6 +2387,15 @@ components:
           properties:
             llm_error:
               $ref: '#/components/schemas/LLMError'
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Only
+            meaningful when session_id is set — a global error has no session to
+            sequence. Optional: absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/ErrorFrame.yaml.
     ToolCallStartFrame:
       title: ToolCallStartFrame
       description: >
@@ -2293,6 +2434,14 @@ components:
           type: string
         agent_id:
           type: string
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/ToolCallStartFrame.yaml.
     TruncatedResult:
       title: TruncatedResult
       description: Sentinel for tool results exceeding 1 MiB (FR-I-011).
@@ -2780,6 +2929,14 @@ components:
           type: string
         agent_id:
           type: string
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/ToolCallResultFrame.yaml.
     SubagentStartFrame:
       title: SubagentStartFrame
       description: >
@@ -2825,6 +2982,14 @@ components:
             Optional session id of the opened child session. Present for
             steered sessions; absent for legacy/optional. Enables the open
             control on the side panel row (ADR-091 I-4).
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/SubagentStartFrame.yaml.
     SubagentEndFrame:
       title: SubagentEndFrame
       description: >
@@ -2880,6 +3045,14 @@ components:
           type: string
         message:
           type: string
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/SubagentEndFrame.yaml.
     SubagentMessageFrame:
       title: SubagentMessageFrame
       description: >
@@ -2950,7 +3123,14 @@ components:
         created_at:
           type: string
           format: date-time
-
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/SubagentMessageFrame.yaml.
     SubagentStateFrame:
       title: SubagentStateFrame
       description: >
@@ -3012,6 +3192,14 @@ components:
         created_at:
           type: string
           format: date-time
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/SubagentStateFrame.yaml.
     TaskStatusChangedFrame:
       title: TaskStatusChangedFrame
       description: >
@@ -3155,6 +3343,12 @@ components:
             cut the answer off before it finished). Absent on a truncated: true
             frame means "cancelled" — every entry written before this field
             existed predates it and was always a cancel.
+        client_message_id:
+          type: string
+          description: >-
+            #823 catch-up redesign §4.7. Present on a replayed user entry persisted with
+            a client-supplied id. Keep in sync by hand with
+            contracts/components/schemas/ReplayMessageFrame.yaml.
     ReplayErrorFrame:
       title: ReplayErrorFrame
       description: 'Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). Emitted by the replay path
@@ -3276,6 +3470,14 @@ components:
           type: string
           maxLength: 2048
           description: The recall mark left in the window (names the tool, the id and the recall_conversation call that restores it). Rendered only under Verbose chat.
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/ToolResultProjectionFrame.yaml.
     RateLimitFrame:
       title: RateLimitFrame
       description: >
@@ -3322,6 +3524,14 @@ components:
         tool:
           type: string
           maxLength: 128
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/RateLimitFrame.yaml.
     LibraryChangedFrame:
       title: LibraryChangedFrame
       description: >
@@ -3415,6 +3625,14 @@ components:
           maxItems: 32
           items:
             $ref: '#/components/schemas/MediaPart'
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/MediaFrame.yaml.
     AgentSwitchedFrame:
       title: AgentSwitchedFrame
       description: >
@@ -3443,6 +3661,14 @@ components:
           description: >
             ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
             (FR-089) — see this frame's description.
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/AgentSwitchedFrame.yaml.
     CommandSegmentInfo:
       title: CommandSegmentInfo
       description: >
@@ -3981,6 +4207,12 @@ components:
             ADR-082 D4 — present only when the attached session has a
             foreground turn in flight at emit time. Absent when idle. Keep in
             sync by hand with components/schemas/SessionStateFrame.yaml.
+        boot_id:
+          type: string
+          description: >-
+            #823 review finding 7. Stable identifier for this gateway process, minted
+            once at startup. Keep in sync by hand with
+            contracts/components/schemas/SessionStateFrame.yaml.
         emitted_at:
           type: string
           format: date-time
@@ -4107,6 +4339,14 @@ components:
             US-1/AS-9 specifies that case with no `partial` and no channel line.
             Read `skipped_newer_generation` itself to learn which sessions kept
             running — `partial: false` hides nothing.
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/CancelStageFrame.yaml.
     SessionCloseAckFrame:
       title: SessionCloseAckFrame
       description: >
@@ -5641,6 +5881,14 @@ components:
                   JUDGE-FR-006b. Keep in sync by hand with
                   components/schemas/AcceptanceCriterion.yaml.
 
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/GoalStatusFrame.yaml.
     LoopStatusFrame:
       title: LoopStatusFrame
       description: >
@@ -5691,6 +5939,14 @@ components:
             GoalStatusFrame.state) so naming it does not require a
             breaking change once Part B's implementation lands.
 
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/LoopStatusFrame.yaml.
     PlanStatusFrame:
       title: PlanStatusFrame
       description: >
@@ -5892,6 +6148,14 @@ components:
             card. Keep in sync by hand with
             components/schemas/JudgeVerdictFrame.yaml.
 
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/JudgeVerdictFrame.yaml.
     BrowserHandoverNoticeFrame:
       title: BrowserHandoverNoticeFrame
       description: >
@@ -6021,6 +6285,14 @@ components:
         outcome:
           $ref: '#/components/schemas/GoalOutcomeFrameOutcome'
 
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/GoalOutcomeFrame.yaml.
     KnowledgeIndexProgressFrame:
       title: KnowledgeIndexProgressFrame
       description: >
@@ -6317,3 +6589,157 @@ components:
           type: integer
           minimum: 1
           maximum: 9007199254740991
+
+    SessionSnapshotFrame:
+      title: SessionSnapshotFrame
+      description: >-
+        Server → client. #823 catch-up redesign. Answers attach_session when since_seq
+        can no longer be served incrementally. The client must replace its history for
+        this session: followed by session_state, a full unsequenced replay, then exactly
+        one catch_up_complete frame whose seq matches this frame's seq. Keep in sync by
+        hand with contracts/components/schemas/SessionSnapshotFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - seq
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: session_snapshot
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            The session's high-water sequence number at snapshot time. Mirrored on the
+            terminal catch_up_complete frame.
+        boot_id:
+          type: string
+          description: The gateway process that produced this snapshot.
+        reason:
+          type: string
+          enum:
+          - cursor_ahead
+          - retention_exceeded
+          - unknown_position
+          - boot_mismatch
+          description: >-
+            Why a snapshot was sent instead of an incremental catch-up. boot_mismatch is
+            checked first and always wins over the other three reasons.
+    CatchUpCompleteFrame:
+      title: CatchUpCompleteFrame
+      description: >-
+        Server → client. #823 catch-up redesign. Terminal frame of an attach_session
+        response, sent once, after every frame the catch-up needed (incremental journal
+        tail, or full snapshot replay plus projection) has been enqueued. Frames
+        published live during the attach are held and flushed only after this frame.
+        Keep in sync by hand with contracts/components/schemas/CatchUpCompleteFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - seq
+      - mode
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: catch_up_complete
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The session's high-water sequence number this attach was answered at.
+        boot_id:
+          type: string
+          description: The gateway process that answered this attach.
+        mode:
+          type: string
+          enum:
+          - incremental
+          - snapshot
+          description: Which catch-up path produced this response.
+    UserMessageFrame:
+      title: UserMessageFrame
+      description: >-
+        Server → client. #823 catch-up redesign, founder decision Q1 (YES). Echoes a
+        persisted user message to every tab bound to the session, not only the sender's.
+        Keep in sync by hand with contracts/components/schemas/UserMessageFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - id
+      - content
+      - timestamp
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: user_message
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        id:
+          type: string
+          minLength: 1
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        content:
+          type: string
+          maxLength: 5242880
+        attachments:
+          type: array
+          items:
+            type: object
+            required:
+            - type
+            - path
+            - size
+            - mime_type
+            additionalProperties: false
+            description: >-
+              Inline mirror of components.schemas.Attachment
+              (contracts/components/schemas/Attachment.yaml), kept inline for the same
+              reason as ErrorFrame.payload above (Zod eager-evaluation TDZ on forward
+              $ref). Keep in sync by hand.
+            properties:
+              type:
+                type: string
+                enum:
+                - image
+                - audio
+                - video
+                - file
+              path:
+                type: string
+              size:
+                type: integer
+                format: int64
+              mime_type:
+                type: string
+        timestamp:
+          type: string
+          format: date-time
+        agent_id:
+          type: string
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy.

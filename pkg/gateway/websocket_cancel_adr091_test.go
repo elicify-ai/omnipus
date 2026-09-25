@@ -10,7 +10,11 @@ import (
 )
 
 func TestCascade_PartialReported_FrameAndChannel(t *testing.T) {
-	wc := &wsConn{sendCh: make(chan []byte, 4)}
+	// #823 merge: both frames are published through the session hub (every
+	// bound tab sees them, numbered); the requester here is NOT bound to
+	// "root", so it gets the unsequenced §1.4 copy — the same bytes minus seq.
+	h := makeMinimalHandler()
+	wc, _ := makeForwarderTestConn(4)
 	report := steer.CancelReport{
 		Reached:                []string{"root", "a", "c"},
 		Unreachable:            []steer.UnreachableSession{{ID: "b", Reason: "unreadable"}, {ID: "d", Reason: "missing edge"}},
@@ -18,8 +22,21 @@ func TestCascade_PartialReported_FrameAndChannel(t *testing.T) {
 		SkippedTerminal:        []string{"done"},
 	}
 
-	sendCancelReportFrame(wc, "root", "detached", report)
-	sendCancelPartialNotice(wc, "root", report)
+	h.sendCancelReportFrame(wc, "root", "detached", report)
+	h.sendCancelPartialNotice(wc, "root", report)
+
+	// #823: numbered once in the session's journal, whether or not a tab is
+	// bound — a tab attaching later catches both up.
+	hub := h.hubs.lookup("root")
+	if hub == nil {
+		t.Fatal("the Stop report must be published through the session hub")
+	}
+	if got := len(journalFramesOfType(t, hub, "cancel_stage")); got != 1 {
+		t.Fatalf("journaled cancel_stage frames = %d, want 1", got)
+	}
+	if got := len(journalFramesOfType(t, hub, "error")); got != 1 {
+		t.Fatalf("journaled partial notices = %d, want 1", got)
+	}
 
 	if len(wc.sendCh) != 2 {
 		t.Fatalf("frames sent = %d, want report + exactly one channel line", len(wc.sendCh))
@@ -90,15 +107,16 @@ func TestCascade_PartialReported_FrameAndChannel(t *testing.T) {
 // the BDD scenario, the integration-boundary table) names the unreachable
 // branch and only that.
 func TestCascade_SkippedNewerGenerationAloneIsNotPartial(t *testing.T) {
-	wc := &wsConn{sendCh: make(chan []byte, 4)}
+	h := makeMinimalHandler()
+	wc, _ := makeForwarderTestConn(4)
 	report := steer.CancelReport{
 		Reached:                []string{"root", "a"},
 		SkippedNewerGeneration: []string{"revived"},
 		SkippedTerminal:        []string{"done"},
 	}
 
-	sendCancelReportFrame(wc, "root", "detached", report)
-	sendCancelPartialNotice(wc, "root", report)
+	h.sendCancelReportFrame(wc, "root", "detached", report)
+	h.sendCancelPartialNotice(wc, "root", report)
 
 	if len(wc.sendCh) != 1 {
 		t.Fatalf("frames sent = %d, want the report frame and NO partial notice", len(wc.sendCh))

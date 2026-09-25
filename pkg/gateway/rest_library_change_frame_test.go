@@ -24,7 +24,7 @@ import (
 
 func TestBroadcastLibraryChange_FanOutAndDropCounter(t *testing.T) {
 	wcOK := &wsConn{sendCh: make(chan []byte, 4)}
-	wcFull := &wsConn{sendCh: make(chan []byte)} // unbuffered, nobody reading → drop
+	wcFull := &wsConn{sendCh: make(chan []byte)} // unbuffered, nobody reading → queued (#823: never dropped)
 	h := &WSHandler{sessions: map[string]*wsConn{"ok": wcOK, "full": wcFull}}
 
 	path := "notes/a.txt"
@@ -46,9 +46,9 @@ func TestBroadcastLibraryChange_FanOutAndDropCounter(t *testing.T) {
 	default:
 		t.Fatal("connected client with buffer room never received the frame")
 	}
-	assert.Equal(t, int32(1), wcFull.droppedFrames.Load(),
-		"full-buffer client must count exactly one dropped frame")
-	assert.Equal(t, int32(0), wcOK.droppedFrames.Load())
+	queued, _ := wcFull.queuedFrames()
+	assert.Equal(t, 1, queued,
+		"#823: a full-window client keeps the frame in its ordered queue instead of losing it")
 }
 
 // libraryChangeRecorder captures every frame the handlers emit, in order.

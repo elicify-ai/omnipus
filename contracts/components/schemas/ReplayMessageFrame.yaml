@@ -40,6 +40,15 @@ properties:
       Server-assigned message ID for deduplication on WS reconnect. The SPA
       uses id-match dedup when present, falling back to content+role+timestamp
       tuple when absent.
+  client_message_id:
+    type: string
+    description: >-
+      #823 catch-up redesign, §4.7. Present on a replayed user entry that was persisted
+      with a client-supplied id (Message.client_message_id / MessageFrame.client_message_id).
+      Lets the SPA reconcile a still-pending bubble in its offline/pending-send tail
+      (matched by this id) against the persisted entry the snapshot just replayed, so a
+      message sent from this tab — or drained from the offline queue — is not duplicated
+      and is not placed above history.
   timestamp:
     type: string
     format: date-time

@@ -17778,6 +17778,9 @@ type Message struct {
 	// CanceledByUser Username of the actor who triggered the cancel — present only on type="turn_canceled" entries (FR-15).
 	CanceledByUser *string `json:"canceled_by_user,omitempty"`
 
+	// ClientMessageId #823 catch-up redesign. Present on a user entry that was persisted with a client-supplied correlation id (mirrors MessageFrame.client_message_id / ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent bubble against this REST-loaded entry by id instead of by content+timestamp matching. Absent on entries written before this field existed and on non-user entries.
+	ClientMessageId *string `json:"client_message_id,omitempty"`
+
 	// Content Raw markdown/text content of the message.
 	Content *string `json:"content,omitempty"`
 
@@ -17849,6 +17852,9 @@ type Message struct {
 		// Reason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
 		Reason *MessageSubagentEndReason `json:"reason,omitempty"`
 
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		Seq *int64 `json:"seq,omitempty"`
+
 		// SessionId Session in which this sub-turn ran.
 		SessionId string `json:"session_id"`
 
@@ -17884,6 +17890,9 @@ type Message struct {
 		// SenderIdentity Agent ID (or "human") that authored the underlying message.
 		SenderIdentity string `json:"sender_identity"`
 
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		Seq *int64 `json:"seq,omitempty"`
+
 		// SessionId Session in which the parent's span is running.
 		SessionId string `json:"session_id"`
 
@@ -17909,6 +17918,9 @@ type Message struct {
 		// ParentCallId The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
 		ParentCallId string `json:"parent_call_id"`
 
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		Seq *int64 `json:"seq,omitempty"`
+
 		// SessionId Session in which this sub-turn is running.
 		SessionId string `json:"session_id"`
 
@@ -17927,6 +17939,9 @@ type Message struct {
 
 		// CreatedAt RFC3339 timestamp this state ping was emitted.
 		CreatedAt time.Time `json:"created_at"`
+
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		Seq *int64 `json:"seq,omitempty"`
 
 		// SessionId Session in which the parent's span is running.
 		SessionId string `json:"session_id"`
@@ -21173,6 +21188,9 @@ type SessionDetail struct {
 		// CanceledByUser Username of the actor who triggered the cancel — present only on type="turn_canceled" entries (FR-15).
 		CanceledByUser *string `json:"canceled_by_user,omitempty"`
 
+		// ClientMessageId #823 catch-up redesign. Present on a user entry that was persisted with a client-supplied correlation id (mirrors MessageFrame.client_message_id / ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent bubble against this REST-loaded entry by id instead of by content+timestamp matching. Absent on entries written before this field existed and on non-user entries.
+		ClientMessageId *string `json:"client_message_id,omitempty"`
+
 		// Content Raw markdown/text content of the message.
 		Content *string `json:"content,omitempty"`
 
@@ -21244,6 +21262,9 @@ type SessionDetail struct {
 			// Reason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
 			Reason *SessionDetailMessagesSubagentEndReason `json:"reason,omitempty"`
 
+			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+			Seq *int64 `json:"seq,omitempty"`
+
 			// SessionId Session in which this sub-turn ran.
 			SessionId string `json:"session_id"`
 
@@ -21279,6 +21300,9 @@ type SessionDetail struct {
 			// SenderIdentity Agent ID (or "human") that authored the underlying message.
 			SenderIdentity string `json:"sender_identity"`
 
+			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+			Seq *int64 `json:"seq,omitempty"`
+
 			// SessionId Session in which the parent's span is running.
 			SessionId string `json:"session_id"`
 
@@ -21304,6 +21328,9 @@ type SessionDetail struct {
 			// ParentCallId The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
 			ParentCallId string `json:"parent_call_id"`
 
+			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+			Seq *int64 `json:"seq,omitempty"`
+
 			// SessionId Session in which this sub-turn is running.
 			SessionId string `json:"session_id"`
 
@@ -21322,6 +21349,9 @@ type SessionDetail struct {
 
 			// CreatedAt RFC3339 timestamp this state ping was emitted.
 			CreatedAt time.Time `json:"created_at"`
+
+			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+			Seq *int64 `json:"seq,omitempty"`
 
 			// SessionId Session in which the parent's span is running.
 			SessionId string `json:"session_id"`

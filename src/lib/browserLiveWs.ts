@@ -16,7 +16,11 @@
 // hand-written interface declarations for wire-format frames are FORBIDDEN
 // (CLAUDE.md hard-constraint #8).
 
-import { WsFrame as WsFrameSchema } from '@/lib/api/generated/schemas'
+// Runtime (value) schema from the self-contained ws-schemas.ts, not
+// schemas.ts — the latter also carries the REST Zodios `makeApi([...])`
+// call, which references every REST schema and defeats tree-shaking
+// (bundle-budget incident, PR #860).
+import { WsFrame as WsFrameSchema } from '@/lib/api/generated/ws-schemas'
 import type {
   BrowserAttachFrame,
   BrowserInputOfferFrame,

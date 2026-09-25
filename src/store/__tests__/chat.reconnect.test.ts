@@ -18,7 +18,7 @@
 // terminator ("turn finished during replay"). The two `done` frames must
 // never be confused, in ANY of these orders: chat.ts classifies a `done`
 // purely by its stats shape (frames_emitted-only vs tokens/cost present),
-// never by activeTurnId/activeTurnBubbleOpened/isReplaying state — see the
+// never by activeTurnId/isReplaying state — see the
 // 'done' case's own review-S1 comment. This file pins that behaviour across
 // all three orders. The 'chat.reconnect — fixed gateway contract order'
 // describe block below is the primary (in-order) contract; the two describe
@@ -163,12 +163,24 @@ describe('chat.reconnect — fixed gateway contract order (session_state FIRST, 
     expect(bucket()).toBeUndefined()
   })
 
-  it('the replay-terminating done (stats.frames_emitted) opens the empty streaming bubble AFTER history, and does NOT finalize anything', () => {
+  // PROVENANCE (#823 catch-up redesign pass 2, BE-DESIGN.md §4.1, founder
+  // decision Q3 — REPLACE, guarantee kept, test rewritten never weakened):
+  // this test used to assert that the replay-terminating `done` itself
+  // opens the empty streaming placeholder. Lane A's real gateway keeps
+  // emitting this frame (SQUAD-REPORT-BEA.md's "Opus pass", honest gap #5)
+  // but `catch_up_complete` is now the sole "catch-up is over" signal, and
+  // this frame carries no turn_id/seq to attribute a placeholder to — so it
+  // is now a TRUE no-op (slices/frames.ts's `isReplayTerminatorDone`
+  // branch). The guarantee that survives — no double bubble, streaming
+  // state stays "live" through this frame — is unaffected; only WHICH frame
+  // creates the placeholder changed (the next catch-up token, see the
+  // sibling test right below).
+  it('the replay-terminating done (stats.frames_emitted) is a true no-op — no bubble, no finalization', () => {
     act(() => {
       useChatStore.getState().handleFrame(sessionStateWithActiveTurn())
     })
     // Two history entries replay in arrival order. Both role 'user' (indices
-    // 0 and 2 are even) so `assistantMessages()` below counts ONLY the new
+    // 0 and 2 are even) so `assistantMessages()` below counts ONLY a new
     // placeholder, not an unrelated historical assistant bubble.
     act(() => {
       useChatStore.getState().handleFrame(replayMessage(0))
@@ -179,36 +191,34 @@ describe('chat.reconnect — fixed gateway contract order (session_state FIRST, 
       useChatStore.getState().handleFrame(replayTerminatorDone(2))
     })
 
-    const msgs = assistantMessages()
-    // Exactly one streaming placeholder opened — no double bubble.
-    expect(msgs).toHaveLength(1)
-    const placeholder = msgs[0]
-    expect(placeholder.content).toBe('')
-    expect(placeholder.isStreaming).toBe(true)
-    expect(placeholder.status).toBe('streaming')
-    expect(placeholder.agentId).toBe(AGENT_ID)
-    // Placeholder is positioned AFTER the replayed history (ordering intact).
+    // No placeholder — this frame no longer opens one.
+    expect(assistantMessages()).toHaveLength(0)
     const b = bucket()!
-    expect(b.messageOrder[b.messageOrder.length - 1]).toBe(placeholder.id)
-    expect(b.messageOrder.length).toBe(3) // 2 history entries + placeholder
+    expect(b.messageOrder.length).toBe(2) // only the 2 replayed history entries
     // Streaming/Stop state must still read "live" — this done did not finalize.
     expect(useChatStore.getState().isStreaming).toBe(true)
     expect(b.isStreaming).toBe(true)
   })
 
-  it('catch-up token appends into the placeholder (no new bubble); subsequent live tokens keep appending', () => {
+  // PROVENANCE: see the sibling test above — the FIRST catch-up token now
+  // creates the bubble itself (message_id-keyed resolution,
+  // resolveTokenBubbleByMessageId's legacy fallback for a message_id-less
+  // frame), rather than appending into a placeholder the replay-terminator
+  // done already opened. The end-to-end guarantee (exactly one bubble,
+  // correct accumulated content) is unchanged.
+  it('the first catch-up token creates the bubble; subsequent live tokens keep appending to the SAME one', () => {
     act(() => {
       useChatStore.getState().handleFrame(sessionStateWithActiveTurn())
       useChatStore.getState().handleFrame(replayTerminatorDone(0))
     })
-    expect(assistantMessages()).toHaveLength(1)
+    expect(assistantMessages()).toHaveLength(0)
 
     // Catch-up: everything generated so far, in one frame.
     act(() => {
       useChatStore.getState().handleFrame(catchUpOrLiveToken('Hello, this is the catch-up so far.'))
     })
     let msgs = assistantMessages()
-    expect(msgs).toHaveLength(1) // still exactly one bubble
+    expect(msgs).toHaveLength(1) // exactly one bubble
     expect(msgs[0].content).toBe('Hello, this is the catch-up so far.')
     expect(msgs[0].isStreaming).toBe(true)
 
@@ -273,7 +283,11 @@ describe('chat.reconnect — fixed gateway contract order (session_state FIRST, 
   })
 })
 
-// Review finding S1/CR1 (HIGH): an OLDER gateway sends session_state LAST —
+// HISTORICAL (the activeTurnBubbleOpened flag this paragraph describes is
+// deleted as of #823 catch-up redesign pass 2, Q3 — bubble existence is now
+// answered directly via message_id-keyed lookups, slices/frames.ts's
+// resolveTokenBubbleByMessageId; kept for the still-relevant done-vs-done
+// classification story). Review finding S1/CR1 (HIGH): an OLDER gateway sends session_state LAST —
 // after the replay terminator done, sometimes after tokens have already
 // started flowing. The pre-review code classified a `done` as "still
 // awaiting catch-up" purely from `activeTurnId && !activeTurnBubbleOpened`,
@@ -339,7 +353,11 @@ describe('chat.reconnect — OLD gateway contract order (session_state LAST, rev
       useChatStore.getState().handleFrame(catchUpOrLiveToken('first content'))
     })
     expect(assistantMessages()).toHaveLength(1)
-    expect(bucket()?.activeTurnBubbleOpened).toBe(true)
+    // PROVENANCE (#823 catch-up redesign pass 2, Q3 — REPLACE, guarantee
+    // kept, test rewritten never weakened): "a bubble is now open" used to
+    // be checked via the deleted `activeTurnBubbleOpened` proxy flag —
+    // checked directly against the real bubble's streaming state instead.
+    expect(assistantMessages()[0]?.isStreaming).toBe(true)
 
     // Late replay terminator — must be a no-op for bubble purposes now that
     // the bubble is already open.
@@ -407,23 +425,60 @@ describe('chat.reconnect — turn finished during replay (real done races ahead 
 // SPA first; replay's catch-up token arrives later with no second terminal
 // frame. The store must treat that late catch-up as the already-finished
 // answer, not reopen a permanently running bubble.
-describe('chat.reconnect — turn finishes before catch-up reaches the SPA (#822)', () => {
-  it('renders a late catch-up token as one finished assistant message after the real done already landed', () => {
+// PROVENANCE (#823 catch-up redesign pass 2, BE-DESIGN.md §4.1, founder
+// decision Q3 — REPLACE, guarantee kept, test rewritten never weakened):
+// this test used to model the original #822 defect with a bare, unwrapped
+// `token` frame arriving after the turn's own `done` had already landed —
+// a shape the OLD ad-hoc replay-divert mechanism could produce but Lane A's
+// real gateway hub cannot: a turn's tokens are numbered exactly once
+// (pkg/gateway/ws_session_hub.go) and a tab reconnecting after the turn
+// already finished gets the completed answer back as a REPLAYED history
+// entry (`replay_message`), wrapped in `session_snapshot`/
+// `catch_up_complete`, never as a standalone live `token`. This test now
+// models that REAL protocol shape instead. The underlying user-visible
+// guarantee — a turn that finished while the tab was disconnected is never
+// shown stuck mid-stream — is unchanged, and is also exercised end-to-end
+// by the real gateway-recorded F3/F4 catch-up fixtures
+// (src/store/__tests__/chat.catchup-fixtures.test.ts).
+describe('chat.reconnect — turn finishes before catch-up reaches the SPA (#822, re-expressed for #823)', () => {
+  it('a reconnect snapshot after the turn finished offline renders one finished assistant message, never stuck streaming', () => {
     beginAttach()
     act(() => {
-      useChatStore.getState().handleFrame(sessionStateWithActiveTurn())
-      useChatStore.getState().handleFrame(turnDone())
-      useChatStore.getState().handleFrame(replayMessage(0))
-      useChatStore.getState().handleFrame(replayTerminatorDone(1))
-      useChatStore.getState().handleFrame(catchUpOrLiveToken('final answer completed while offline'))
+      useChatStore.getState().handleFrame({
+        type: 'session_snapshot',
+        session_id: SID,
+        seq: 5,
+        boot_id: 'boot-822',
+        reason: 'unknown_position',
+      })
+      useChatStore.getState().handleFrame(sessionStateWithoutActiveTurn())
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        session_id: SID,
+        role: 'assistant',
+        content: 'final answer completed while offline',
+        turn_id: TURN_ID,
+        agent_id: AGENT_ID,
+        timestamp: '2026-09-08T09:05:00.000Z',
+      })
+      useChatStore.getState().handleFrame({
+        type: 'catch_up_complete',
+        session_id: SID,
+        seq: 5,
+        boot_id: 'boot-822',
+        mode: 'snapshot',
+      })
     })
 
     const msgs = assistantMessages()
     expect(msgs).toHaveLength(1)
     expect(msgs[0].content).toBe('final answer completed while offline')
     expect(msgs[0].status).toBe('done')
-    expect(msgs[0].isStreaming).toBe(false)
+    // replay_message bubbles never set isStreaming explicitly (they are
+    // created already-finalized) — falsy, not strictly `false`.
+    expect(msgs[0].isStreaming).toBeFalsy()
     expect(bucket()?.isStreaming).toBe(false)
+    expect(bucket()?.awaitingCatchUp).toBe(false)
     expect(useChatStore.getState().isStreaming).toBe(false)
   })
 })
@@ -451,7 +506,10 @@ describe('chat.reconnect — hard disconnect mid-replay clears isReplaying (revi
     expect(bucket()?.isStreaming).toBe(false)
     expect(bucket()?.activeTurnId).toBeNull()
     expect(bucket()?.activeTurnAgentId).toBeNull()
-    expect(bucket()?.activeTurnBubbleOpened).toBe(false)
+    // PROVENANCE: see the earlier test's note on the deleted
+    // `activeTurnBubbleOpened` proxy flag — this session never got a token,
+    // so the underlying guarantee ("no bubble exists") is checked directly.
+    expect(assistantMessages()).toHaveLength(0)
   })
 
   it('sweeps a BACKGROUNDED bucket too, not just the currently-active one — a session the user switched away from mid-replay must not stay wedged forever', () => {
@@ -487,7 +545,13 @@ describe('chat.reconnect — hard disconnect mid-replay clears isReplaying (revi
 // together, and cancelStream/markLastMessageInterrupted are among the
 // paths that end streaming.
 describe('chat.reconnect — explicit cancel clears active-turn state (review S7)', () => {
-  it('cancelStream() clears activeTurnId/activeTurnAgentId/activeTurnBubbleOpened alongside isStreaming', () => {
+  // PROVENANCE (#823 catch-up redesign pass 2, Q3 — REPLACE, guarantee kept,
+  // test renamed/rewritten never weakened): activeTurnBubbleOpened is
+  // deleted along with the rest of the #822 mechanism; the guarantee this
+  // test protects (cancel clears the active-turn announcement AND marks the
+  // open bubble interrupted, not just the flags) is checked directly
+  // against the real bubble below.
+  it('cancelStream() clears activeTurnId/activeTurnAgentId alongside isStreaming and marks the open bubble interrupted', () => {
     act(() => {
       useChatStore.getState().setReplaying(true)
       useChatStore.getState().handleFrame(sessionStateWithActiveTurn())
@@ -495,7 +559,7 @@ describe('chat.reconnect — explicit cancel clears active-turn state (review S7
       useChatStore.getState().handleFrame(catchUpOrLiveToken('partial answer'))
     })
     expect(bucket()?.activeTurnId).toBe(TURN_ID)
-    expect(bucket()?.activeTurnBubbleOpened).toBe(true)
+    expect(assistantMessages()[0]?.isStreaming).toBe(true)
 
     act(() => {
       useChatStore.getState().cancelStream()
@@ -503,7 +567,7 @@ describe('chat.reconnect — explicit cancel clears active-turn state (review S7
 
     expect(bucket()?.activeTurnId).toBeNull()
     expect(bucket()?.activeTurnAgentId).toBeNull()
-    expect(bucket()?.activeTurnBubbleOpened).toBe(false)
+    expect(assistantMessages()[0]?.status).toBe('interrupted')
     expect(useChatStore.getState().isStreaming).toBe(false)
   })
 })
