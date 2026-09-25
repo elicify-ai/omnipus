@@ -428,7 +428,7 @@ func (l *SteerLauncher) launchSteered(
 			// store invariant text); the tool layer maps it to D5's plain
 			// sentence telling the model a new message resumes the
 			// conversation.
-			if parentRec.Terminal() || (parentRec.Stop != nil && parentRec.Stop.Generation == parentRec.Generation) {
+			if parentRec.Terminal() || parentRec.Stopped() {
 				return nil, steer.ErrSteeringStopped
 			}
 			steererMeta, metaErr := sessions.GetMeta(req.SteeringSessionID)

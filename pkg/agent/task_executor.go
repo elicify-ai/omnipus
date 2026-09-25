@@ -1264,7 +1264,7 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 				// nil.
 				if lifecycle := te.agentLoop.GetSessionLifecycleStore(); lifecycle != nil {
 					if rec, lerr := lifecycle.Load(t.OriginSessionID); lerr == nil &&
-						(rec.Terminal() || (rec.Stop != nil && rec.Stop.Generation == rec.Generation)) {
+						(rec.Terminal() || rec.Stopped()) {
 						steeringSessionID = ""
 					}
 				}

@@ -45,14 +45,15 @@ func reviveInboundIsHumanTurn(msg bus.InboundMessage) bool {
 // a blank id is not revivable: nothing to revive, nothing to guess about.
 func (al *AgentLoop) inboundRevivable(sessionID string) bool {
 	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" || al.GetSessionLifecycleStore() == nil {
+	store := al.GetSessionLifecycleStore()
+	if sessionID == "" || store == nil {
 		return false
 	}
-	rec, err := al.GetSessionLifecycleStore().Load(sessionID)
+	rec, err := store.Load(sessionID)
 	if err != nil {
 		return false
 	}
-	return rec.Terminal() || (rec.Stop != nil && rec.Stop.Generation == rec.Generation)
+	return rec.Terminal() || rec.Stopped()
 }
 
 // reviveRecordForHumanTurn revives a terminal or durably-stopped record to a

@@ -263,50 +263,14 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 	// w.inTurn is still true, but a Stop's durable marker lands before its
 	// cooperative grace window elapses — a message arriving in that window
 	// would otherwise be enqueued into a steering queue whose consumer is
-	// about to disappear for good, exactly the false-success failure mode
-	// Finding 1 closes for the delegate tool's own steer/respond. Only a
-	// NEWER instruction revives a durably-stopped session, as a new
-	// generation — never the steering queue.
-	if sessionID := strings.TrimSpace(msg.SessionID); sessionID != "" {
-		if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
-			if rec, lerr := lifecycle.Load(sessionID); lerr == nil && (rec.Terminal() || (rec.Stop != nil && rec.Stop.Generation == rec.Generation)) {
-				// ADR-093 D4: classify before reviving - an ordinary root is
-				// revived Revive-only and the message is routed to the
-				// ordinary inbound-turn path (a fresh root turn on the new
-				// generation), never into the stopped generation's steering
-				// queue and never dispatched as a steered turn with the
-				// steered machinery's instruction write (MAJ-003). A steered
-				// child - and any other class (damaged, legacy, unreadable),
-				// which is not decidable root-vs-child - keeps the pre-ADR-093
-				// shape: revive-and-redispatch through ReviveStoppedSession,
-				// whose widened predicate also admits terminal records.
-				class, cerr := NewSteerRecordClassifier(lifecycle, al.ResolveSessionStore(sessionID)).Classify(context.Background(), sessionID)
-				if cerr != nil {
-					return fmt.Errorf("enqueueSteeringFromMessage: classify %q: %w", sessionID, cerr)
-				}
-				if class == steer.ClassOrdinaryRoot {
-					if rerr := al.reviveRecordForHumanTurn(context.Background(), sessionID,
-						steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}); rerr != nil {
-						return fmt.Errorf("enqueueSteeringFromMessage: revive ordinary root %q: %w", sessionID, rerr)
-					}
-					if _, _, perr := al.processMessage(context.Background(), msg); perr != nil {
-						return fmt.Errorf("enqueueSteeringFromMessage: ordinary turn on revived root %q: %w", sessionID, perr)
-					}
-					return nil
-				}
-				// Every class other than ordinary root keeps the pre-ADR-093
-				// shape: revive-and-redispatch through ReviveStoppedSession,
-				// falling back to the ordinary enqueue when the revive declines.
-				revived, rerr := al.ReviveStoppedSession(context.Background(), sessionID,
-					steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}, msg.Content)
-				if rerr != nil {
-					return fmt.Errorf("enqueueSteeringFromMessage: revive stopped session %q: %w", sessionID, rerr)
-				}
-				if revived {
-					return nil
-				}
-			}
-		}
+	// about to disappear for good, the false-success Finding 1 closes for the
+	// delegate tool's own steer/respond. Only a newer instruction revives it.
+	handled, herr := al.reviveInactiveInbound(msg)
+	if herr != nil {
+		return herr
+	}
+	if handled {
+		return nil
 	}
 	// The steering queue uses route.SessionKey ("agent:<id>:<sid>") — the same
 	// key that runTurn registered the active turn under in activeTurnStates.
@@ -319,6 +283,51 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 	return err
 }
 
+// reviveInactiveInbound applies ADR-093 D4 when msg's session is terminal or
+// stopped for its current generation. handled is true when the message was
+// taken onto a new generation and must not also be enqueued. A blank id, a
+// missing store, an unreadable record, or a live record is not handled: the
+// caller enqueues as before. When ReviveStoppedSession declines, handled is
+// false and the caller enqueues too.
+//
+// An ordinary root is revived and then run as a fresh inbound turn (MAJ-003:
+// never a steered redispatch, never the steered instruction write). Every
+// other class keeps the pre-ADR-093 revive-and-redispatch.
+func (al *AgentLoop) reviveInactiveInbound(msg bus.InboundMessage) (bool, error) {
+	sessionID := strings.TrimSpace(msg.SessionID)
+	if sessionID == "" {
+		return false, nil
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return false, nil
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil || !(rec.Terminal() || rec.Stopped()) {
+		return false, nil
+	}
+	classifier := NewSteerRecordClassifier(lifecycle, al.ResolveSessionStore(sessionID))
+	class, cerr := classifier.Classify(context.Background(), sessionID)
+	if cerr != nil {
+		return false, fmt.Errorf("enqueueSteeringFromMessage: classify %q: %w", sessionID, cerr)
+	}
+	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}
+	if class == steer.ClassOrdinaryRoot {
+		if rerr := al.reviveRecordForHumanTurn(context.Background(), sessionID, by); rerr != nil {
+			return false, fmt.Errorf("enqueueSteeringFromMessage: revive ordinary root %q: %w", sessionID, rerr)
+		}
+		if _, _, perr := al.processMessage(context.Background(), msg); perr != nil {
+			return false, fmt.Errorf("enqueueSteeringFromMessage: ordinary turn on revived root %q: %w", sessionID, perr)
+		}
+		return true, nil
+	}
+	revived, rerr := al.ReviveStoppedSession(context.Background(), sessionID, by, msg.Content)
+	if rerr != nil {
+		return false, fmt.Errorf("enqueueSteeringFromMessage: revive stopped session %q: %w", sessionID, rerr)
+	}
+	return revived, nil
+}
+
 // ReviveStoppedSession implements Finding 1's fix (ADR-091 fix lane 2 —
 // founder decision Q17/D8): "a Stop survives a restart; only a newer
 // instruction revives the session, as a new generation." Before this,
@@ -329,13 +338,10 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 // ever drain, silently orphaning the message.
 //
 // Returns (false, nil) when sessionID is neither terminal nor durably stopped
-// at its current generation (ADR-093 D4) - the caller's ordinary path applies
-// instead. instruction, when
-// generation — the caller's ordinary path applies instead. instruction, when
-// non-blank, is appended to the session's durable history BEFORE dispatch,
-// exactly like follow_up's own appendFollowUpInstruction
-// (pkg/tools/delegate_followup.go), so the reconstructed turn actually sees
-// it.
+// at its current generation (ADR-093 D4) — the caller's ordinary path applies
+// instead. instruction, when non-blank, is appended to the session's durable
+// history BEFORE dispatch, exactly like follow_up's own appendFollowUpInstruction
+// (pkg/tools/delegate_followup.go), so the reconstructed turn actually sees it.
 func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error) {
 	if al == nil {
 		return false, fmt.Errorf("steer: revive %q: no AgentLoop wired", sessionID)
@@ -348,13 +354,11 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 	if err != nil {
 		return false, err
 	}
-	if !rec.Terminal() && (rec.Stop == nil || rec.Stop.Generation != rec.Generation) {
-		// ADR-093 D4: the child path widens to terminal records too - a
-		// terminal child (completed, failed, interrupted) is resumable until
-		// housekeeping deletes it, via the same revive-and-redispatch shape
-		// a stopped child already had. SteerCanceller.Revive itself already
-		// handles terminal records; only this predicate (and executeSteer's
-		// routing predicate in pkg/tools/delegate_followup.go) blocked it.
+	// Not terminal and not stopped for this generation: nothing to revive.
+	// A terminal child stays on the revive path (ADR-093 D4) until housekeeping
+	// deletes it. SteerCanceller.Revive already accepts that record; this check
+	// used to reject it, and so did executeSteer's routing predicate.
+	if !rec.Terminal() && !rec.Stopped() {
 		return false, nil
 	}
 	// [Defect 4, ADR-091 fix lane RX-DELIVERY, HIGH] The instruction lands

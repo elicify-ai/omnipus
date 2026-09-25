@@ -624,6 +624,27 @@ func (pe *PlanEngine) runBootSweep(ctx context.Context) BootSweepResult {
 // resolved.
 const DefaultLifecycleRetentionDays = 90
 
+// standingRootExemptFromSweep reports whether rec is a root the boot sweep
+// must leave alone (ADR-093 D3). A root has no SteeredBy edge. Its origin is
+// absent, or one of the standing kinds (chat, channel, heartbeat, scheduled):
+// a conversation the human can re-open, so a restart must not mark it
+// failed(interrupted). A task root never matches — persistLocked rejects
+// origin kind task without a task id — and is swept exactly as before.
+func standingRootExemptFromSweep(rec session.LifecycleRecord) bool {
+	if rec.SteeredBy != nil {
+		return false
+	}
+	if rec.Origin == nil {
+		return true
+	}
+	switch rec.Origin.Kind {
+	case session.OriginKindChat, session.OriginKindChannel, session.OriginKindHeartbeat, session.OriginKindScheduled:
+		return true
+	default:
+		return false
+	}
+}
+
 // bootSweep is the testable core of the boot sweep. It is a method on
 // PlanEngine (not a free function) because exemption (b) requires resolving a
 // paused owner session's plan through the engine's own planStore, and recovery
@@ -650,19 +671,7 @@ func (pe *PlanEngine) bootSweep(ctx context.Context, ls *session.LifecycleStore,
 		}
 		rec := records[i]
 
-		// ADR-093 D3: standing roots are exempt from the sweep. A root
-		// session — no SteeredBy edge — whose origin is one of the standing
-		// kinds (chat, channel, heartbeat, scheduled) or absent entirely is a
-		// conversation the human can simply re-open: it is never swept to
-		// failed(interrupted), so a restart never makes a session unusable
-		// and its next message is always free to revive it. Task roots cannot
-		// ride the exemption: persistLocked rejects an origin kind task
-		// without a task id, so a task root never matches a standing kind and
-		// is enumerated and swept (or preserved by a later exemption) exactly
-		// as before.
-		if rec.SteeredBy == nil && (rec.Origin == nil || rec.Origin.Kind == session.OriginKindChat ||
-			rec.Origin.Kind == session.OriginKindChannel || rec.Origin.Kind == session.OriginKindHeartbeat ||
-			rec.Origin.Kind == session.OriginKindScheduled) {
+		if standingRootExemptFromSweep(rec) {
 			continue
 		}
 
