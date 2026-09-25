@@ -399,24 +399,33 @@ func (h *WSHandler) hubError(evt agent.Event) {
 	code := translated.Code
 	message := translated.Message
 	retryable := translated.Retryable
-	detail := translated.Detail
 	if p.Code != "" {
 		code = agent.LLMErrorCode(p.Code)
 		message = p.Message
 		retryable = agent.IsRetryableCode(code)
-		detail = agent.BuildDetail(p.ProviderError, message)
 	}
 	errF := generated.ErrorFrame{
 		Type:      string(generated.WsFrameTypeError),
 		SessionId: &errSID,
 		Message:   message,
 	}
+	// Issue #711: the error frame's `detail` is only sent when Verbose chat is
+	// on for that session, and Verbose chat is a browser setting that defaults
+	// to off (src/store/chatPreferences.ts) and is never sent to the server —
+	// so there is no session whose verbose state is on today. The frame
+	// therefore carries NO detail: neither the provider's raw body
+	// (ProviderError.Body, an unauthenticated third-party response that has
+	// included masked-but-unregistered key fragments) nor an unregistered
+	// key-shaped fragment of it may cross the wire. When a per-session verbose
+	// opt-in is ever specified, its gate belongs HERE — re-attach
+	// translated.Detail (or agent.BuildDetail for the curated branch) behind
+	// that session's flag. Until then this is fail-closed by construction, not
+	// by an assertion.
 	errF.Payload = &generated.ErrorPayload{
 		LlmError: generated.LLMError{
 			Code:      string(code),
 			Message:   message,
 			Retryable: retryable,
-			Detail:    &detail,
 		},
 	}
 	data, err := json.Marshal(errF)
