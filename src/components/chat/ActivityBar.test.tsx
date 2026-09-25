@@ -13,8 +13,10 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ActivityBar } from './ActivityBar'
+import { useRunningActivity } from '@/hooks/useRunningActivity'
 import { useChatStore } from '@/store/chat'
 import type { ChatMessage, SubagentSpan } from '@/store/chat'
+import { useJudgeActivityStore } from '@/store/judgeActivity'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -95,6 +97,7 @@ function finishedSpan(overrides: Partial<SubagentSpan> = {}): SubagentSpan {
 beforeEach(() => {
   act(() => {
     useChatStore.setState({ messages: [], toolCalls: {} })
+    useJudgeActivityStore.getState().reset()
   })
 })
 
@@ -563,7 +566,7 @@ describe('ActivityBar — two pills (D5, AC-2, AC-3)', () => {
 })
 
 describe('ActivityBar — queued section (AC-4)', () => {
-  it('lists queued children under Queued in launch order and adds no delegation chat line', () => {
+  it('lists queued children under Queued in launch order', () => {
     act(() => {
       useChatStore.setState({
         messages: [
@@ -585,7 +588,126 @@ describe('ActivityBar — queued section (AC-4)', () => {
     expect(queuedText.indexOf('zeta first')).toBeLessThan(queuedText.indexOf('alpha second'))
     expect(within(queued).queryByText('already going')).not.toBeInTheDocument()
     expect(screen.getByText('already going')).toBeInTheDocument()
-    expect(screen.queryByText(/Delegated to/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/started ·/)).not.toBeInTheDocument()
+  })
+
+  it('labels the Agents pill with the queue count when every child is still queued', () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [
+          makeAssistantMessage([
+            runningSpan({ spanId: 'q1', parentCallId: 'c1', lifecycleState: 'queued', taskLabel: 'first in line' }),
+            runningSpan({ spanId: 'q2', parentCallId: 'c2', lifecycleState: 'queued', taskLabel: 'second in line' }),
+          ]),
+        ],
+      })
+    })
+    renderBar()
+    const label = within(screen.getByTestId('activity-bar')).getByTestId('activity-bar-label')
+    expect(label).toHaveTextContent('2 queued')
+    expect(label).not.toHaveTextContent('Activity')
+    expect(label).not.toHaveTextContent('running')
+    expect(label).not.toHaveTextContent('failed')
+  })
+})
+
+/** Renders how many unmet judge verdicts the activity hook is holding, so an absence on the pill is not vacuous. */
+function FailedJudgeProbe() {
+  const { recentlyFinished } = useRunningActivity()
+  const failedJudges = recentlyFinished.filter((item) => item.kind === 'judge' && item.status === 'error')
+  return <div data-testid="failed-judge-count">{failedJudges.length}</div>
+}
+
+describe('ActivityBar — an unmet judge verdict is not an agent failure (M4)', () => {
+  function unmetGoalVerdict() {
+    useJudgeActivityStore.getState().apply({
+      type: 'judge_verdict',
+      id: 'verdict-goal-miss',
+      scope: 'goal',
+      round: 1,
+      met: false,
+      per_criterion: [{ criterion_id: 'criterion-1', met: false, reason: 'goal not met' }],
+      model: 'judge-model',
+      judged_at: '2026-09-25T12:00:00.000Z',
+      judge_agent_id: 'judge',
+    })
+  }
+
+  function renderBarWithProbe() {
+    return render(
+      <QueryClientProvider client={makeClient()}>
+        <FailedJudgeProbe />
+        <ActivityBar />
+      </QueryClientProvider>,
+    )
+  }
+
+  it('counts a real agent failure once, and unmounts once that failure is gone, while the unmet verdict is still held', async () => {
+    act(() => {
+      unmetGoalVerdict()
+      useChatStore.setState({
+        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'error', taskLabel: 'broken task' })])],
+      })
+    })
+    renderBarWithProbe()
+
+    // Non-vacuity: the hook really is holding one unmet verdict. If this is 0, the pill assertions below prove nothing.
+    expect(await screen.findByTestId('failed-judge-count')).toHaveTextContent('1')
+
+    const bar = screen.getByTestId('activity-bar')
+    // One agent failed. The unmet judge verdict must not make this "2 failed".
+    expect(within(bar).getByTestId('activity-bar-label')).toHaveTextContent(/^1 failed$/)
+    expect(bar.querySelector('.animate-spin')).toBeNull()
+
+    act(() => {
+      useChatStore.setState({ messages: [] })
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('activity-bar')).not.toBeInTheDocument()
+    })
+    // The verdict is still held, so the pill did not unmount because the judge feed went empty.
+    expect(screen.getByTestId('failed-judge-count')).toHaveTextContent('1')
+    expect(screen.queryByText('1 failed')).not.toBeInTheDocument()
+  })
+})
+
+describe('ActivityBar — a retained failed command is the Commands scroll target (L2)', () => {
+  it('scrolls the failed command into view when none are still running', async () => {
+    Element.prototype.scrollIntoView ??= () => {}
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {})
+    act(() => {
+      useChatStore.setState({
+        toolCalls: {
+          call_failed: {
+            id: 'call_failed',
+            call_id: 'call_failed',
+            tool: 'bash',
+            params: { command: 'npm test', run_in_background: true },
+            status: 'success',
+            result: JSON.stringify({ sessionId: 'call_failed', status: 'timeout' }),
+          },
+        },
+      })
+    })
+    renderBar()
+
+    const commands = screen.getByTestId('activity-pill-commands')
+    expect(within(commands).getByTestId('activity-pill-commands-label')).toHaveTextContent('1 failed')
+    expect(screen.queryByTestId('activity-bar')).not.toBeInTheDocument()
+
+    fireEvent.click(commands)
+
+    // Precondition of the bug: nothing is running, so the live commands section is absent.
+    expect(screen.queryByTestId('activity-section-commands')).not.toBeInTheDocument()
+    const command = await screen.findByText('npm test')
+    expect(screen.getByText('Recently finished')).toBeInTheDocument()
+
+    await waitFor(() => {
+      const scrolledToCommand = scrollIntoView.mock.instances.some(
+        (node) => node instanceof Element && node.contains(command),
+      )
+      expect(scrolledToCommand).toBe(true)
+    })
+    scrollIntoView.mockRestore()
   })
 })

@@ -30,12 +30,14 @@
 // not a permanent history browser" intent for the common case.
 //
 // Delegation chat surface (D5): two pills, one panel. Agents mounts for an
-// open agent child (queued included) or a retained non-shell failure; its
+// open agent child (queued included) or a retained agent failure; its
 // NUMBER is runningChildren (ADR-091 FR-E-005 — lifecycleState 'running'
-// only, so bash and queued children are not counted). Commands mounts for
-// background bash, or a retained bash failure. Each pill also stays while
-// the panel it opened is still open. Commands opens that same panel
-// scrolled to the background-commands section.
+// only, so bash and queued children are not counted). A judge verdict is
+// not an agent failure, even when the goal was missed (status 'error').
+// Commands mounts for background bash, or a retained bash failure. Each
+// pill also stays while the panel it opened is still open. Commands opens
+// that same panel scrolled to the background-commands section, or to the
+// retained failed command when none are still running.
 
 import { useState, type ReactNode } from 'react'
 import { ArrowsClockwise, CaretRight } from '@phosphor-icons/react'
@@ -57,6 +59,17 @@ const MAX_STACK_AVATARS = 4
  */
 function isFailedStatus(status: ActivityItem['status']): boolean {
   return status === 'error' || status === 'interrupted' || status === 'timeout'
+}
+
+/**
+ * Pill status text, shared by both pills. Something still working wins, then
+ * a retained failure, then whatever is left (a queue count, or "Activity"
+ * when the pill is only held open).
+ */
+function activityLabel(activeCount: number, activeText: string, failedCount: number, idleText: string): string {
+  if (activeCount > 0) return activeText
+  if (failedCount > 0) return `${failedCount} failed`
+  return idleText
 }
 
 const PILL_CLASS =
@@ -129,24 +142,29 @@ export function ActivityBar() {
   const [scrollRequest, setScrollRequest] = useState<{ section: 'commands'; nonce: number } | null>(null)
 
   const agentOpen = running.some((item) => item.kind === 'agent')
+  const queuedAgents = running.filter((item) => item.kind === 'agent' && item.lifecycleState === 'queued').length
   const bashRunning = running.filter((item) => item.kind === 'bash').length
-  const failedAgents = recentlyFinished.filter((item) => item.kind !== 'bash' && isFailedStatus(item.status))
+  // kind === 'agent' on purpose. An unmet judge verdict is also status 'error',
+  // and the old `kind !== 'bash'` filter counted it as an agent failure.
+  const failedAgents = recentlyFinished.filter((item) => item.kind === 'agent' && isFailedStatus(item.status))
   const failedCommands = recentlyFinished.filter((item) => item.kind === 'bash' && isFailedStatus(item.status))
 
   const showAgents = agentOpen || failedAgents.length > 0 || (panelOpen && heldByPanel === 'agents')
   const showCommands = bashRunning > 0 || failedCommands.length > 0 || (panelOpen && heldByPanel === 'commands')
   if (!showAgents && !showCommands) return null
 
-  const agentLabel = runningChildren > 0
-    ? `${runningChildren} running`
-    : failedAgents.length > 0
-      ? `${failedAgents.length} failed`
-      : 'Activity'
-  const commandLabel = bashRunning > 0
-    ? `${bashRunning} background ${bashRunning === 1 ? 'command' : 'commands'}`
-    : failedCommands.length > 0
-      ? `${failedCommands.length} failed`
-      : 'Activity'
+  const agentLabel = activityLabel(
+    runningChildren,
+    `${runningChildren} running`,
+    failedAgents.length,
+    queuedAgents > 0 ? `${queuedAgents} queued` : 'Activity',
+  )
+  const commandLabel = activityLabel(
+    bashRunning,
+    `${bashRunning} background ${bashRunning === 1 ? 'command' : 'commands'}`,
+    failedCommands.length,
+    'Activity',
+  )
 
   const stackItems = runningChildItems.slice(0, MAX_STACK_AVATARS)
 
