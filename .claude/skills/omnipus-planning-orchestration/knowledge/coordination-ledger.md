@@ -11,7 +11,10 @@ conflict on it. The exact path is founder-adjustable; always name it by absolute
 If the directory is missing, cross-session coordination is broken: report it and ask
 the founder before proceeding with cross-session work.
 
-Every line below is a strict, machine-parseable format — the pre-push hook parses them.
+Every line below is a strict, machine-parseable format — the pre-push hook and the
+capacity monitor parse them. This table is a summary; **the exact line formats are the
+next section, not this one** — write to the ledger from that section, never from memory
+of this prose.
 
 | File | Contents (one line per record) | Write rule |
 |---|---|---|
@@ -24,6 +27,70 @@ Every line below is a strict, machine-parseable format — the pre-push hook par
 
 Squad status vocabulary (exact): `planned` / `in-flight` / `gated` / `handed-back` /
 `waiting-for-founder` / `landed` / `blocked` / `released`.
+
+## Exact line formats (case-sensitive, pipe-delimited `key=value` — parsed literally)
+
+These strings are normative, copied from their own template header comments in
+`.claude/templates/coordination/`, and from `scripts/hooks/pre-push-ledger-check`'s own
+header comment (the hook's normative-parser copy, kept in sync with these by governance
+section 9). A field name, an `=`, a space, or a `|` out of place is not "close enough" —
+`scripts/dev-machine-capacity.sh` and the pre-push hook parse these by exact match; a
+malformed hold is silently ignored, a malformed lock blocks everything, and a malformed
+squad row undercounts the capacity monitor to zero (this broke exactly this way in test
+T5 — never write a ledger line as free-form prose with `·` separators; that is this
+table above, for humans to read, not what you write to disk).
+
+- **`squads/<squad-id>.md` row** (template: `squads/SQUAD-ID.md.template`) — the field
+  name `status` and its exact value `in-flight` are what the capacity monitor greps for:
+
+  ```
+  squad=<squad-id> | session=<session-id-or-in-session> | lead=<role> | worktree=<absolute-path> | branch=<branch-name> | claim=<trees-or-files> | status=<planned|in-flight|gated|handed-back|waiting-for-founder|landed|blocked|released> | last-updated=<ISO8601> by <who>
+  ```
+
+  A pending landing announcement is a second line below the row, removed once the
+  landing lock is released and the landing is posted to `LANDING-LOG.md`:
+
+  ```
+  LANDING-ANNOUNCEMENT squad=<squad-id> branch=<branch-name> announced-at=<ISO8601> by=<who>
+  ```
+
+- **`HOLDS.md` line** (template: `HOLDS.md.template`) — parsed by the pre-push hook:
+
+  ```
+  what=<branch-or-ALL> | held-by=<who> | why=<reason> | since=<ISO8601> | released-at=<empty-or-ISO8601>
+  ```
+
+- **`LANDING-LOCK`** (template: `LANDING-LOCK.template`) — the whole file is one line
+  when held, absent or empty when free; space-separated, not pipe-separated, and parsed
+  by the pre-push hook (branch= and squad= both, since A4 — the squad field proves who
+  holds the lock, not only which branch it covers):
+
+  ```
+  squad=<squad-id> branch=<branch-name> taken-at=<ISO8601>
+  ```
+
+- **`CHIEF.md`** (template: `CHIEF.md.template`) — one content line, overwritten, never
+  appended:
+
+  ```
+  chief=<session-id> named-by=<founder-or-session> named-at=<ISO8601>
+  ```
+  or, vacant:
+  ```
+  VACANT since <ISO8601>
+  ```
+
+- **`LANDING-LOG.md` line** (template: `LANDING-LOG.md.template`) — append-only:
+
+  ```
+  squad=<squad-id> | branch=<branch-name> | commit=<sha> | checks=<evidence-summary> | founder-yes=<note> | landed-at=<ISO8601>
+  ```
+
+- **`MESSAGES.md` line** (template: `MESSAGES.md.template`) — append-only:
+
+  ```
+  <ISO8601> from=<session-id> to=<session-id-or-ALL> :: <message text>
+  ```
 
 ## Read before acting
 
@@ -63,30 +130,53 @@ founder. The enforced state is exactly two things — **holds** and the **landin
 ## Holds — hold and release
 
 - A hold is the one mechanism that genuinely blocks: append a `HOLDS.md` line when a
-  branch or tree must not be touched by others (for example mid-landing).
+  branch or tree must not be touched by others — for example, the integration branch is
+  red and nobody may land onto it, or the founder requested a freeze.
+- **The landing lock, not a hold, covers your own landing** — never hold your own branch
+  to protect your own push; take the landing lock for that (below). A hold is for
+  blocking *other* sessions from a branch or tree you do not currently hold the landing
+  lock for.
 - Release by editing the line to fill `released-at`.
 - The pre-push hook (`scripts/hooks/pre-push-ledger-check`) mechanically fails a push to
   the integration branch that an active hold covers. The hook is a backstop, not the
   rule: bypassing it is a founder-only act, and a hook block is always visible, never
   silent.
 
-## The landing sequence — every landing, same order
+## The landing sequence — every landing, same order (Round 18)
 
-1. **Announce and take the lock.** Post the landing announcement in your squad file and
-   message the other sessions; create `LANDING-LOCK` atomically — first come, first
-   served; exactly one writer wins. The push happens under the lock; the lock is
-   released immediately after.
-2. **Merge the latest integration branch into the work branch**, then re-check **on
+**Ask before you lock.** The lock is taken at landing time, after the founder's yes —
+not held across CI or across the wait for the founder's reply. Finish your checks first.
+
+1. **Ask.** Once your branch is fully gated (spec through its size gate, CI green),
+   send the landing ask — batched into one event message with any other pending landing
+   asks (SKILL.md §5) — or immediately for urgent work. State the branch, the gate
+   evidence, and the integration branch you confirmed at engagement start.
+2. **On a yes: take the lock.** Post the landing announcement in your squad file and
+   message the other sessions; create `LANDING-LOCK` **atomically**, so the first
+   announcer wins even under a race:
+   ```sh
+   ( set -o noclobber; printf 'squad=%s branch=%s taken-at=%s\n' \
+       "$OMNIPUS_SQUAD_ID" "$BRANCH" "$(date -u +%FT%TZ)" > "$COORD_DIR/LANDING-LOCK" )
+   ```
+   A non-zero exit means the lock is already taken — someone else is landing; wait and
+   retry, do not overwrite. The lock is held for minutes, not for the founder's reply
+   time.
+3. **Merge the latest integration branch into your work branch**, then re-check **on
    that result**: CI for the affected areas (the CI tiers covering the trees the merge
    touched) plus a review of the conflict resolution (the merge's conflict hunks,
    escalating to architect only where a resolution changes a design decision). The full
    size gate is NOT re-run. This is where a parallel-merge-later overlap's conflict is
    resolved and re-checked.
-3. **Founder yes in chat** — in the landing session's own chat (separate-session
-   squad), or team-lead asks in the main session's chat for its direct work and
-   handed-back branches (pending asks batched — SKILL.md §5).
-4. **Push** the merge to the integration branch — the pre-push hook enforces the
-   ledger's holds and locks.
+4. **Push** the merge to the integration branch, setting both required variables in the
+   same command so neither is ever forgotten in an unrelated shell:
+   ```sh
+   OMNIPUS_INTEGRATION_BRANCH=<integration-branch> OMNIPUS_SQUAD_ID=<your-squad-id> \
+     git push origin <integration-branch>
+   ```
+   The pre-push hook enforces the ledger's holds and locks mechanically, but it only
+   enforces when both variables are set (A2) — **a WARNING about an unset integration
+   branch means the hook checked nothing at all: that push is not a landing, stop and
+   fix the command before retrying**, never treat the warning as a pass.
 5. **Release the lock**, post the landed commit to `LANDING-LOG.md` and to the other
    sessions, and close every resolved issue with a comment citing the commit. A landing
    is not done at "pushed" — the issue comments, the landing-log entry and the two-line
@@ -129,6 +219,12 @@ successor session, or marked with its exact state for re-assignment.
 ## Messages — urgent calls only
 
 Urgent calls ("hold pushes", "integration red") travel session-to-session over the
-harness's session-messaging facility; `MESSAGES.md` is the durable record and the
-fallback where a session cannot be messaged. Everything else is ledger — messages are
-for urgent calls only.
+`SendMessage` tool, addressed to the peer session named in its squad row's `session=`
+field (or, for the chief, the session named in `CHIEF.md`'s `chief=` field). **Until a
+dry run has actually proven `SendMessage` delivery between two live sessions in this
+setup, treat cross-session messaging as unproven and default to `MESSAGES.md`**: append
+the call there instead, and rely on the next ledger read (session start, before every
+landing, or after a compaction/resume) to surface it to the other sessions.
+`MESSAGES.md` is the durable record either way, and the fallback whenever a session
+cannot be reached directly. Everything else is ledger — messages are for urgent calls
+only.
