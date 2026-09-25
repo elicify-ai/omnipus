@@ -57,6 +57,7 @@ git -C "$WORK" branch -M release/integration-scratch
 
 export OMNIPUS_INTEGRATION_BRANCH="release/integration-scratch"
 export OMNIPUS_COORDINATION_DIR="$COORD"
+export OMNIPUS_SQUAD_ID="squad-a"
 
 # ---- case (a): active hold + valid lock -> BLOCKED (hold checked in isolation) ----
 note "case (a): push under an active hold"
@@ -96,6 +97,30 @@ git -C "$WORK" commit -q -m "second"
 ( unset OMNIPUS_INTEGRATION_BRANCH; git -C "$WORK" push origin release/integration-scratch ) >/tmp/omnipus-hook-selftest-d.log 2>&1
 record "unset integration branch never blocks" allow "$?"
 grep -q "WARNING" /tmp/omnipus-hook-selftest-d.log && echo "    (warning line present, as required)" || echo "    MISSING WARNING LINE"
+
+# ---- case (e): lock held by another squad -> BLOCKED (A4) ------------------
+note "case (e): landing lock is held by a different squad than the pusher"
+: > "$COORD/HOLDS.md"
+cat > "$COORD/LANDING-LOCK" <<'EOF'
+squad=squad-b branch=release/integration-scratch taken-at=2026-09-25T00:10:00Z
+EOF
+echo three > "$WORK/file.txt"
+git -C "$WORK" add file.txt
+git -C "$WORK" commit -q -m "third"
+git -C "$WORK" push origin release/integration-scratch >/tmp/omnipus-hook-selftest-e.log 2>&1
+record "lock held by a different squad blocks the push" block "$?"
+grep -q "different squad" /tmp/omnipus-hook-selftest-e.log \
+  && echo "    (reason names the squad mismatch, as required)" || echo "    MISSING squad-mismatch REASON"
+cat /tmp/omnipus-hook-selftest-e.log | sed 's/^/    /'
+
+# ---- case (f): OMNIPUS_SQUAD_ID unset -> BLOCKED (cannot verify ownership) --
+note "case (f): OMNIPUS_SQUAD_ID unset cannot prove lock ownership, so it blocks"
+cat > "$COORD/LANDING-LOCK" <<'EOF'
+squad=squad-a branch=release/integration-scratch taken-at=2026-09-25T00:15:00Z
+EOF
+( unset OMNIPUS_SQUAD_ID; git -C "$WORK" push origin release/integration-scratch ) >/tmp/omnipus-hook-selftest-f.log 2>&1
+record "unset OMNIPUS_SQUAD_ID blocks the push" block "$?"
+cat /tmp/omnipus-hook-selftest-f.log | sed 's/^/    /'
 
 echo
 echo "[selftest] $pass_count passed, $fail_count failed"

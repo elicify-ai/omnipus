@@ -6,7 +6,9 @@
 # they can be violated mechanically -- the push:
 #   - a HOLD in HOLDS.md covering the branch (or a global "ALL" hold), and
 #   - the LANDING-LOCK: a push to the integration branch must be made by
-#     whoever currently holds the lock for that branch.
+#     whoever currently holds the lock for that branch -- both its branch=
+#     (does the lock cover this branch) and its squad= (is the pusher the
+#     one who took it, via OMNIPUS_SQUAD_ID) are checked (A4).
 # Claims (squads/*.md) are information only (C2) and are never checked here.
 #
 # NOT INSTALLED BY THIS COMMIT (L10 task 2). This file is authored and
@@ -43,7 +45,11 @@
 #           for "ALL";
 #       (b) blocked if LANDING-LOCK is absent/empty, or its branch= field
 #           does not match this branch;
-#       (c) allowed otherwise.
+#       (c) blocked if OMNIPUS_SQUAD_ID is unset, or does not equal the
+#           lock's squad= field -- the lock's branch= alone does not prove
+#           the pusher is the one who holds it, so two squads could
+#           otherwise land at once (A4);
+#       (d) allowed otherwise.
 #     Every block prints a one-line reason to stderr and exits 1 for the
 #     whole push (git pre-push semantics: any non-zero exit stops the push).
 #   - A ref that does not match the integration branch is never checked --
@@ -58,12 +64,16 @@
 #
 # ENV
 #   OMNIPUS_INTEGRATION_BRANCH   required to activate any check (no default)
+#   OMNIPUS_SQUAD_ID             required to pass the lock-ownership check (c) once the
+#                                 integration branch is set; team-lead's own direct-work
+#                                 landings use OMNIPUS_SQUAD_ID=team-lead (its ledger identity)
 #   OMNIPUS_COORDINATION_DIR     default /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination
 
 set -u
 
 COORD_DIR="${OMNIPUS_COORDINATION_DIR:-/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination}"
 INTEGRATION_BRANCH="${OMNIPUS_INTEGRATION_BRANCH:-}"
+SQUAD_ID="${OMNIPUS_SQUAD_ID:-}"
 
 if [ -z "$INTEGRATION_BRANCH" ]; then
   echo "pre-push-ledger-check: WARNING OMNIPUS_INTEGRATION_BRANCH is unset -- ledger holds and the landing lock are NOT being checked for this push" >&2
@@ -101,8 +111,15 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     blocked=1
   else
     lock_branch="$(sed -n 's/.*branch=\([^ ]*\).*/\1/p' "$lock_file" | head -1)"
+    lock_squad="$(sed -n 's/^squad=\([^ ]*\).*/\1/p' "$lock_file" | head -1)"
     if [ "$lock_branch" != "$branch" ]; then
       echo "pre-push-ledger-check: BLOCKED push to '$branch' -- landing lock is held for a different branch ('${lock_branch:-none}'); see $lock_file" >&2
+      blocked=1
+    elif [ -z "$SQUAD_ID" ]; then
+      echo "pre-push-ledger-check: BLOCKED push to '$branch' -- OMNIPUS_SQUAD_ID is unset, so the hook cannot tell you are this landing lock's holder (lock squad=${lock_squad:-unknown}); export OMNIPUS_SQUAD_ID and retry" >&2
+      blocked=1
+    elif [ "$lock_squad" != "$SQUAD_ID" ]; then
+      echo "pre-push-ledger-check: BLOCKED push to '$branch' -- landing lock is held by a different squad (lock squad=${lock_squad:-unknown}, pusher OMNIPUS_SQUAD_ID=$SQUAD_ID); see $lock_file" >&2
       blocked=1
     fi
   fi

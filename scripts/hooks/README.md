@@ -10,40 +10,48 @@ pre-push hook (N4)"). Nothing here is installed by this commit — see
 
 | File | Purpose |
 |---|---|
-| `pre-push-ledger-check` | git `pre-push` hook. Blocks a push to the integration branch when the ledger shows an active hold covering it, or when the pusher holds no landing lock for it. Passes through every other branch untouched. Full behaviour and the exact ledger line formats it parses are documented in the script's own header comment. |
+| `pre-push-ledger-check` | git `pre-push` hook. Blocks a push to the integration branch when the ledger shows an active hold covering it, when the pusher holds no landing lock for it, or when the lock is held by a different squad (`OMNIPUS_SQUAD_ID` unset or mismatched — A4). Passes through every other branch untouched. Full behaviour and the exact ledger line formats it parses are documented in the script's own header comment. |
 
 ## Installing (NOT done by this commit)
 
 Worktrees of one checkout share hooks — that is exactly the reach wanted
-(one ledger, every worktree of this checkout). Two ways to wire it in, once
-the founder approves activation:
+(one ledger, every worktree of this checkout). **Recommended install — copy
+into the common hooks directory:**
 
-1. **Shared hooks directory (recommended — survives new worktrees and new
-   clones of the same remote configuration automatically once set per
-   checkout):**
-   ```sh
-   git config core.hooksPath scripts/hooks
-   ```
-   Git will then run `scripts/hooks/pre-push-ledger-check` directly on every
-   `git push` from this checkout (all its worktrees), no copy needed. The
-   file must stay executable (`chmod +x`, already set in this commit).
+```sh
+cp scripts/hooks/pre-push-ledger-check "$(git rev-parse --git-common-dir)/hooks/pre-push"
+chmod +x "$(git rev-parse --git-common-dir)/hooks/pre-push"
+```
 
-2. **Per-checkout copy (fallback if `core.hooksPath` is not wanted for some
-   other reason):**
-   ```sh
-   cp scripts/hooks/pre-push-ledger-check "$(git rev-parse --git-common-dir)/hooks/pre-push"
-   chmod +x "$(git rev-parse --git-common-dir)/hooks/pre-push"
-   ```
-   `--git-common-dir` (not `--git-dir`) is deliberate: in a worktree,
-   `--git-dir` points at the worktree's private administrative area, but
-   hooks live in the *common* `.git/hooks/`, shared by every worktree of the
-   checkout.
+`--git-common-dir` (not `--git-dir`) is deliberate: in a worktree,
+`--git-dir` points at the worktree's private administrative area, but
+hooks live in the *common* `.git/hooks/`, shared by every worktree of the
+checkout. This is the recommended path because it composes safely with
+whatever else already lives in `.git/hooks/` — including the existing
+mutation-guard `pre-commit` hook, which this install never touches.
+
+**Do NOT install via `git config core.hooksPath scripts/hooks`.** That
+setting makes git look in `scripts/hooks/` for a file named exactly
+`pre-push` — this file is named `pre-push-ledger-check`, so `core.hooksPath`
+alone would run nothing at all, silently. Setting `core.hooksPath` also
+replaces the *entire* hooks lookup, so it stops the existing `pre-commit`
+mutation-guard hook (currently installed in `.git/hooks/`) from running,
+unless that hook is copied into `scripts/hooks/pre-commit` too in the same
+change. If `core.hooksPath` is ever wanted for its other benefits (it
+survives new worktrees and clones automatically), a
+`scripts/hooks/pre-push` wrapper that execs `pre-push-ledger-check`, plus a
+copy of the mutation-guard hook alongside it, must land together — not this
+copy-based install, which needs neither.
 
 Either way, every session's shell must export
-`OMNIPUS_INTEGRATION_BRANCH=<current integration branch>` before pushing —
-the hook checks nothing at all when this is unset (see the script header for
-why: the integration branch name is never hard-coded anywhere in the repo,
-design 5.7).
+`OMNIPUS_INTEGRATION_BRANCH=<current integration branch>` **and**
+`OMNIPUS_SQUAD_ID=<your squad's id, or `team-lead` for team-lead's own
+direct-work landings>` before pushing — the hook checks nothing at all when
+the branch variable is unset (see the script header for why: the
+integration branch name is never hard-coded anywhere in the repo, design
+5.7), and it blocks the push outright when the squad variable is unset,
+because it otherwise cannot tell the pusher apart from any other squad
+holding a different lock (A4).
 
 ## Uninstalling / bypassing
 
