@@ -1,0 +1,18 @@
+# CHIEF.md template (design 5.9)
+#
+# The live file holds exactly one content line: the current chief, or a
+# vacancy. Overwritten (not appended) on handover or when a vacancy is
+# noticed (design: "Overwritten on handover or when a vacancy is noticed").
+#
+# Named chief:
+#   chief=<session-id> named-by=<founder-or-session> named-at=<ISO8601>
+#
+# Vacant (design C5 — "whoever notices first marks VACANT since <ts>"):
+#   VACANT since <ISO8601>
+#
+# Example (named):
+chief=team-lead-main named-by=founder named-at=2026-09-25T09:00:00Z
+
+# Example (vacant) — replace the whole file with this shape instead when
+# a chief's session ends without handover:
+# VACANT since 2026-09-25T09:00:00Z

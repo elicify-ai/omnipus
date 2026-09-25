@@ -1,0 +1,63 @@
+---
+name: omnipus-frontend-rules
+description: TypeScript/React-specific operational detail for frontend-lead only — the typecheck gate, the wire-type and design-system load rules, Vite build output, and component-budget exemption. Preloaded via the `skills:` frontmatter field on frontend-lead.md alongside `omnipus-shared-rules`. No other role loads this skill — it is not general Omnipus procedure, it is frontend-lead's own.
+---
+
+# Omnipus Frontend Rules
+
+Last reviewed: 2026-09-25
+
+Frontend-lead only. Read `omnipus-shared-rules` first — this skill adds
+TypeScript/React-specific detail on top of it, never repeats it. Root `CLAUDE.md` stays
+authoritative on the facts this restates.
+
+## Build and test
+
+- `npm run typecheck` (wired to `tsc -b --noEmit`) is the only TypeScript gate that
+  means anything. Never bare `tsc --noEmit` # agent-guard: allow — `tsconfig.json` is a project-references
+  root with no `include`/`files`, so a bare invocation is a silent no-op that always
+  exits 0 (`docs/internal/false-green-patterns.md` section 9).
+- Local test runs are capped by shared rule 2: one `npx vitest run <file>` or
+  `npx playwright test <x>.spec.ts` at a time; never bare `npm test`, `vitest` or
+  `playwright test`.
+- Vite builds to `dist/spa/`, copied to `pkg/gateway/spa/` and embedded via `go:embed` (`CLAUDE.md`, "Tech stack and platforms"). # agent-guard: allow
+  `pkg/gateway/spa/` is gitignored and absent until the first SPA build. # agent-guard: allow
+  A missing `pkg/gateway/spa/` in a fresh worktree is backend-lead's stub trap, not a frontend defect — do not "fix" it by editing frontend build config. # agent-guard: allow
+
+## Design system (load before touching any of these trees)
+
+- Before touching anything under `src/components/`, `src/styles/`, `design-system/`, or
+  `packages/ui/` — including adding a button, dialog, color, spacing value, type size,
+  shadow, or focus style, or publishing/editing a component manifest — the
+  `omnipus-design-system` skill is **preloaded** into your context already (`skills:`
+  frontmatter, founder decision Round 7); its rule catalog and the exact script or test
+  that enforces each rule live in `.claude/skills/omnipus-design-system/SKILL.md` — read
+  it before the first edit in those trees, not after a red build.
+- A recurring UI job (tooltip, inline error banner, copy-to-clipboard, …) uses a
+  catalogued component, preferring a ported shadcn/ui component over a new local one
+  (design-system skill rule 14) — never hand-build one.
+- The UX skills (`ux-heuristics-review`, `elicify-ui-ux-design`) load on demand, not
+  preloaded, when a task has a UI/UX judgement dimension.
+
+## Contracts and wire types
+
+- Every wire type consumed by the SPA comes only from `src/lib/api/generated/` — never
+  hand-written, never copied from a curl response, never a parallel struct/interface
+  next to the generated one.
+- A contract change lands backend-first (architect shapes it, backend-lead edits the
+  spec and regenerates) — frontend-lead consumes the regenerated
+  `src/lib/api/generated/` output, never edits `contracts/` directly (cross-stack order:
+  contract first, then backend and frontend in parallel).
+
+## Size budgets
+
+- File fails CI over 3,000 lines, function over 240 (shared rule 10) — but a React
+  component only **warns**, it never fails, at either threshold. Enforcers:
+  `scripts/check-file-budget.sh`, `scripts/check-function-budget.sh`
+  (`make lint-budgets`).
+
+## Platforms
+
+- Per-OS path expectations in tests are a shared-skill rule, not a frontend-specific
+  one — nothing in the frontend stack introduces its own platform branch; the SPA is
+  platform-agnostic by design.

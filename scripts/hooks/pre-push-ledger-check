@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# scripts/hooks/pre-push-ledger-check
+#
+# git pre-push hook (design 5.9 "The pre-push hook (N4)"). Mechanically
+# enforces the coordination ledger's two ENFORCED states at the only point
+# they can be violated mechanically -- the push:
+#   - a HOLD in HOLDS.md covering the branch (or a global "ALL" hold), and
+#   - the LANDING-LOCK: a push to the integration branch must be made by
+#     whoever currently holds the lock for that branch -- both its branch=
+#     (does the lock cover this branch) and its squad= (is the pusher the
+#     one who took it, via OMNIPUS_SQUAD_ID) are checked (A4).
+# Claims (squads/*.md) are information only (C2) and are never checked here.
+#
+# NOT INSTALLED BY THIS COMMIT (L10 task 2). This file is authored and
+# tested in a scratch repo only; wiring it into `git config core.hooksPath`
+# or copying it into `.git/hooks/pre-push` is a founder decision at rollout
+# (design 10.1 stage 1e: "installed via the repo's shared hook
+# configuration"). See scripts/hooks/README.md for the install steps this
+# hook expects once that decision is made.
+#
+# WHY IT CANNOT HARD-CODE THE INTEGRATION BRANCH
+#   The design is explicit that the integration branch name is never
+#   hard-coded anywhere (5.7): "team-lead confirms it at engagement start,
+#   repeats it in every dispatch brief that needs it". This hook reads it
+#   from OMNIPUS_INTEGRATION_BRANCH in the pushing shell's environment, not
+#   from a literal in this file or a ledger file (the ledger's file list in
+#   5.9 has no such file, and guard check 10 bans the literal from
+#   .claude/agents|skills -- this script lives under scripts/hooks/, but
+#   the same discipline applies by design intent).
+#   [INFERRED mechanism -- the design assigns this hook "the strict line
+#   formats above are what it parses" and calls its install path/matching
+#   rules a rollout detail; the env-var carrier for the branch name is this
+#   script's proposal, not quoted text from the design. Flagged for
+#   team-lead/architect confirmation.]
+#
+# BEHAVIOUR
+#   - OMNIPUS_INTEGRATION_BRANCH unset: the hook cannot tell which ref is
+#     the integration branch, so it cannot enforce anything; it prints one
+#     WARNING line per invocation to stderr (visible, never silent) and
+#     allows every ref through. This is deliberate: it must never block an
+#     ordinary work-branch push just because the caller forgot to export
+#     the variable in an unrelated shell.
+#   - A ref matching refs/heads/$OMNIPUS_INTEGRATION_BRANCH:
+#       (a) blocked if HOLDS.md has an unreleased line for this branch or
+#           for "ALL";
+#       (b) blocked if LANDING-LOCK is absent/empty, or its branch= field
+#           does not match this branch;
+#       (c) blocked if OMNIPUS_SQUAD_ID is unset, or does not equal the
+#           lock's squad= field -- the lock's branch= alone does not prove
+#           the pusher is the one who holds it, so two squads could
+#           otherwise land at once (A4);
+#       (d) allowed otherwise.
+#     Every block prints a one-line reason to stderr and exits 1 for the
+#     whole push (git pre-push semantics: any non-zero exit stops the push).
+#   - A ref that does not match the integration branch is never checked --
+#     ordinary work-branch and lane-branch pushes are always unaffected.
+#
+# LEDGER LINE FORMATS THIS HOOK PARSES (documented in full in
+# .claude/templates/coordination/README.md; this hook is the normative
+# parser: change a format there only in the same change as here):
+#   HOLDS.md line:      what=<branch-or-ALL> | held-by=<who> | why=<reason> | since=<ISO8601> | released-at=<empty-or-ISO8601>
+#   LANDING-LOCK (whole file, one line when held, absent/empty when free):
+#                        squad=<squad-id> branch=<branch-name> taken-at=<ISO8601>
+#
+# ENV
+#   OMNIPUS_INTEGRATION_BRANCH   required to activate any check (no default)
+#   OMNIPUS_SQUAD_ID             required to pass the lock-ownership check (c) once the
+#                                 integration branch is set; team-lead's own direct-work
+#                                 landings use OMNIPUS_SQUAD_ID=team-lead (its ledger identity)
+#   OMNIPUS_COORDINATION_DIR     default /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination
+
+set -u
+
+COORD_DIR="${OMNIPUS_COORDINATION_DIR:-/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination}"
+INTEGRATION_BRANCH="${OMNIPUS_INTEGRATION_BRANCH:-}"
+SQUAD_ID="${OMNIPUS_SQUAD_ID:-}"
+
+if [ -z "$INTEGRATION_BRANCH" ]; then
+  echo "pre-push-ledger-check: WARNING OMNIPUS_INTEGRATION_BRANCH is unset -- ledger holds and the landing lock are NOT being checked for this push" >&2
+  exit 0
+fi
+
+blocked=0
+
+# stdin lines: <local ref> <local sha1> <remote ref> <remote sha1>
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -n "${remote_ref:-}" ] || continue
+  branch="${remote_ref#refs/heads/}"
+  [ "$branch" = "$INTEGRATION_BRANCH" ] || continue
+
+  # (a) HOLDS.md -- any unreleased line for this branch or for ALL blocks.
+  holds_file="$COORD_DIR/HOLDS.md"
+  if [ -f "$holds_file" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      what="$(printf '%s' "$line" | sed -n 's/^what=\([^|]*\).*/\1/p' | sed 's/[[:space:]]*$//')"
+      released="$(printf '%s' "$line" | sed -n 's/.*released-at=\([^|]*\).*/\1/p' | sed 's/[[:space:]]*$//')"
+      if { [ "$what" = "$branch" ] || [ "$what" = "ALL" ]; } && [ -z "$released" ]; then
+        reason="$(printf '%s' "$line" | sed -n 's/.*why=\([^|]*\).*/\1/p' | sed 's/[[:space:]]*$//')"
+        held_by="$(printf '%s' "$line" | sed -n 's/.*held-by=\([^|]*\).*/\1/p' | sed 's/[[:space:]]*$//')"
+        echo "pre-push-ledger-check: BLOCKED push to '$branch' -- active hold (held-by=${held_by:-unknown}, why=${reason:-unstated}); see $holds_file" >&2
+        blocked=1
+      fi
+    done < "$holds_file"
+  fi
+
+  # (b) LANDING-LOCK -- must exist and its branch= must match the pushed branch.
+  lock_file="$COORD_DIR/LANDING-LOCK"
+  if [ ! -s "$lock_file" ]; then
+    echo "pre-push-ledger-check: BLOCKED push to '$branch' -- no landing lock held (no $lock_file); take the lock before pushing (design 5.9 step 1)" >&2
+    blocked=1
+  else
+    lock_branch="$(sed -n 's/.*branch=\([^ ]*\).*/\1/p' "$lock_file" | head -1)"
+    lock_squad="$(sed -n 's/^squad=\([^ ]*\).*/\1/p' "$lock_file" | head -1)"
+    if [ "$lock_branch" != "$branch" ]; then
+      echo "pre-push-ledger-check: BLOCKED push to '$branch' -- landing lock is held for a different branch ('${lock_branch:-none}'); see $lock_file" >&2
+      blocked=1
+    elif [ -z "$SQUAD_ID" ]; then
+      echo "pre-push-ledger-check: BLOCKED push to '$branch' -- OMNIPUS_SQUAD_ID is unset, so the hook cannot tell you are this landing lock's holder (lock squad=${lock_squad:-unknown}); export OMNIPUS_SQUAD_ID and retry" >&2
+      blocked=1
+    elif [ "$lock_squad" != "$SQUAD_ID" ]; then
+      echo "pre-push-ledger-check: BLOCKED push to '$branch' -- landing lock is held by a different squad (lock squad=${lock_squad:-unknown}, pusher OMNIPUS_SQUAD_ID=$SQUAD_ID); see $lock_file" >&2
+      blocked=1
+    fi
+  fi
+done
+
+exit "$blocked"
