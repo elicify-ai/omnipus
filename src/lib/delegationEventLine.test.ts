@@ -25,12 +25,12 @@ describe('delegationEventLineText', () => {
     [{ kind: 'steered', agentName: 'Mia' }, 'Sent Mia a new instruction'],
     [{ kind: 'answered', agentName: 'Mia' }, "Answered Mia's question"],
     [{ kind: 'cancelled', agentName: 'Mia' }, 'Stopped Mia'],
-    [{ kind: 'cancelled', agentName: 'Mia', cascadeCount: 2 }, 'Stopped Mia and 2 below it'],
     [{ kind: 'follow_up', agentName: 'Mia', title: 'Check the logs' }, 'Gave Mia follow-up work · Check the logs'],
     [{ kind: 'refused', reason: 'depth limit' }, 'Delegation refused · depth limit'],
     [{ kind: 'bash_launched', command: 'npm test' }, 'Running in background · npm test'],
     [{ kind: 'bash_finished', command: 'npm test' }, 'npm test finished'],
     [{ kind: 'bash_failed', command: 'npm test', exitCode: 2 }, 'npm test failed (exit 2)'],
+    [{ kind: 'bash_stopped', command: 'sleep 99' }, 'Stopped sleep 99'],
   ])('%j → %s', (overrides, expected) => {
     expect(delegationEventLineText(event(overrides))).toBe(expected)
   })
@@ -39,7 +39,6 @@ describe('delegationEventLineText', () => {
     expect(delegationEventLineText(event({ kind: 'stopped', agentName: 'Mia', title: 'SECRET-TITLE' }))).toBe(
       'Mia stopped without finishing',
     )
-    expect(delegationEventLineText(event({ kind: 'cancelled', agentName: 'Mia', cascadeCount: 0 }))).toBe('Stopped Mia')
   })
 })
 

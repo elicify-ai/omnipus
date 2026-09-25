@@ -21,6 +21,7 @@ function LineMark({ kind }: { kind: DelegationEventKind }) {
     case 'bash_failed':
       return <Warning {...common} />
     case 'cancelled':
+    case 'bash_stopped':
       return <Prohibit {...common} />
     default:
       return <ArrowRight {...common} />

@@ -43,10 +43,10 @@ export function delegationEventLineText(event: DelegationEvent): string {
       return `Sent ${agent} a new instruction`
     case 'answered':
       return `Answered ${agent}'s question`
-    case 'cancelled': {
-      const base = `Stopped ${agent}`
-      return event.cascadeCount && event.cascadeCount > 0 ? `${base} and ${event.cascadeCount} below it` : base
-    }
+    case 'cancelled':
+      // Founder decision 2026-09-25: no "and N below it" — the SPA never receives
+      // the cascade count, and the panel already lists every stopped child.
+      return `Stopped ${agent}`
     case 'follow_up':
       return withTitle(`Gave ${agent} follow-up work`, event.title)
     case 'refused':
@@ -59,6 +59,8 @@ export function delegationEventLineText(event: DelegationEvent): string {
       const command = named(event.command, 'command')
       return typeof event.exitCode === 'number' ? `${command} failed (exit ${event.exitCode})` : `${command} failed`
     }
+    case 'bash_stopped':
+      return `Stopped ${named(event.command, 'command')}`
     default: {
       const neverKind: never = event.kind
       return neverKind

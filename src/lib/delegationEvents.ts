@@ -232,7 +232,6 @@ function withDefined(event: DelegationEvent): DelegationEvent {
   if (event.agentName !== undefined) out.agentName = event.agentName
   if (event.title !== undefined) out.title = event.title
   if (event.childSessionId !== undefined) out.childSessionId = event.childSessionId
-  if (event.cascadeCount !== undefined) out.cascadeCount = event.cascadeCount
   if (event.reason !== undefined) out.reason = event.reason
   if (event.command !== undefined) out.command = event.command
   if (event.exitCode !== undefined) out.exitCode = event.exitCode

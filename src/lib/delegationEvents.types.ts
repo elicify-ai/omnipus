@@ -38,8 +38,10 @@ export type DelegationEventKind =
   | 'bash_launched'
   /** A background shell command finished successfully. */
   | 'bash_finished'
-  /** A background shell command failed. */
+  /** A background shell command failed (non-zero exit, error, or timeout). */
   | 'bash_failed'
+  /** A background shell command was stopped on purpose (killed / cancelled by the agent). */
+  | 'bash_stopped'
 
 export interface DelegationEvent {
   /**
@@ -64,8 +66,6 @@ export interface DelegationEvent {
   title?: string
   /** Child session id. Present ⇒ the line shows `[open]` (D4). Absent for refusals and bash. */
   childSessionId?: string
-  /** For `cancelled`: how many descendants the cancel cascaded to (`and N below it`). */
-  cascadeCount?: number
   /** For `refused`: the refusal reason shown to the user. */
   reason?: string
   /** For bash kinds: the command line as launched by the parent. */

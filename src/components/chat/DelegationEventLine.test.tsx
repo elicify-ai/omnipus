@@ -65,7 +65,6 @@ describe('DelegationEventLine', () => {
               agentName: 'Mia',
               title: 'Task',
               childSessionId: `child-${index}`,
-              cascadeCount: kind === 'cancelled' ? 3 : undefined,
             })}
           />
         ))}

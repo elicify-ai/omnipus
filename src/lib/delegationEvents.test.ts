@@ -294,7 +294,6 @@ describe('child lifecycle', () => {
     )
     expect(kinds(cancelled)).toEqual(['delegated', 'cancelled'])
     expect(cancelled[1]).toMatchObject({ id: 'cancelled:cancel-1', childSessionId: 'child-1', agentName: 'Ray' })
-    expect(cancelled[1].cascadeCount).toBeUndefined()
 
     const noop = deriveDelegationEvents(
       source({
