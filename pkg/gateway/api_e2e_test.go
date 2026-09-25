@@ -140,13 +140,15 @@ func TestRetentionRetroactiveSweep(t *testing.T) {
 //	Then GET session returns 200 with transcript data,
 //	And POST new message to the session returns an error response.
 //
-// Gap note: the "agent_removed" field and the strict 422 on POST for deleted-
-// agent sessions are not yet implemented as of v0.1. The transcript read path
+// Gap note: the strict 422 on POST for deleted-agent sessions is not yet
+// implemented (the agent_removed field itself HAS shipped — rest_sessions.go
+// surfaces it for the "Agent removed" banner, #103). The transcript read path
 // works because it's file-based and doesn't require the agent to exist in-memory.
 // The POST path currently reaches the agent lookup and returns a non-200 when
 // the agent is not found — we assert a non-200 status rather than 422 specifically.
 //
-// When v0.2 / #155 ships agent_removed + 422 semantics, tighten the assertion.
+// Tighten the assertion once the deleted-agent 422 semantics ship
+// (no release scheduled — the v0.2 label is retired).
 //
 // Traces to: temporal-puzzling-melody.md §4 Axis-3 test 7
 // Acceptance: Plan 3 §1 — "Session with deleted agent: read-only transcript + 'Agent removed' banner"
@@ -207,10 +209,11 @@ func TestDeletedAgentSessionReadOnly(t *testing.T) {
 	}()
 
 	// The POST must return a non-2xx status (agent not found / session read-only).
-	// We accept any 4xx or 5xx; v0.2 #155 will narrow this to exactly 422.
+	// We accept any 4xx or 5xx; tightening to exactly 422 awaits the deleted-agent
+	// 422 semantics (not yet implemented, no release scheduled).
 	//
 	// TODO: tighten to assert.Equal(t, http.StatusUnprocessableEntity, postW.Code)
-	//       when v0.2 #155 ships agent_removed semantics.
+	//       when the deleted-agent 422 semantics ship.
 	if postW.Code >= 200 && postW.Code < 300 {
 		t.Errorf("POST to deleted-agent session must not succeed (2xx=%d); "+
 			"expected 4xx/5xx — agent %q is not in the registry", postW.Code, agentID)

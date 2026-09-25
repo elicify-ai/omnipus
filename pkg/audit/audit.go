@@ -295,7 +295,7 @@ var validEventNames = map[EventName]struct{}{
 	"provider.sign_in_status_checked": {},
 	// pkg/tools/memory.go: long-term memory write events.
 	// "memory.remember" and "memory.retrospective" are the success-path
-	// events; "memory.rate_limited" is emitted by the v0.2 #155 item 6
+	// events; "memory.rate_limited" is emitted by the #155 item 6
 	// gate when a write is rejected (see RememberTool.logRateLimited
 	// and RetrospectiveTool.logRateLimited).
 	"memory.remember":      {},
@@ -442,7 +442,7 @@ type LoggerConfig struct {
 	// boot aborts on permission/disk hiccups.
 	AuditLogRequested bool
 
-	// HMACKey is the 32-byte tamper-evident chain key (v0.2 #155). Each
+	// HMACKey is the 32-byte tamper-evident chain key (#155). Each
 	// audit entry carries a `hmac` field computed over
 	//   HMAC-SHA256(HMACKey, prev_hmac || canonical_json_without_hmac)
 	// so truncation or surgical rewrite of the JSONL file is detectable
@@ -490,7 +490,7 @@ type Logger struct {
 	degraded    bool
 
 	// chainKey is the 32-byte HMAC-SHA256 key for the tamper-evident audit
-	// chain (v0.2 #155). Held only in process memory — never written to disk.
+	// chain (#155). Held only in process memory — never written to disk.
 	// See pkg/audit/hmac.go for the threat model.
 	chainKey []byte
 
@@ -725,7 +725,7 @@ func criticalEventNeedsSync(entry *Entry) bool {
 // the entry is guaranteed durable before this function returns. See
 // criticalEventNeedsSync for the gating policy.
 //
-// v0.2 #155: this function ALSO computes and embeds the HMAC chain link
+// #155: this function ALSO computes and embeds the HMAC chain link
 // (`hmac` field) before writing. The computation is done while holding l.mu
 // so the prevHMAC update is consistent with the on-disk byte sequence. If
 // embedHMAC fails (malformed pre-marshaled JSON), the row is written WITHOUT
@@ -754,7 +754,7 @@ func (l *Logger) writeLine(data []byte, fsyncRequired bool) error {
 		}
 	}
 
-	// v0.2 #155: embed the HMAC chain link before writing. embedHMAC parses
+	// #155: embed the HMAC chain link before writing. embedHMAC parses
 	// the pre-marshaled `data`, removes any pre-existing `hmac` field
 	// (defense against caller mistake), computes HMAC-SHA256 over
 	//   prev_hmac || canonical_json_without_hmac
@@ -893,7 +893,7 @@ func (l *Logger) openCurrentFile() error {
 	l.currentDate = time.Now().UTC().Format("2006-01-02")
 	l.degraded = false
 
-	// v0.2 #155: seed the HMAC chain from the last good entry of the
+	// #155: seed the HMAC chain from the last good entry of the
 	// existing file. If the file is empty (fresh install or just rotated),
 	// prevHMAC stays at the genesisSeed installed by NewLogger. If the last
 	// line carries an `hmac` field, parse it and resume the chain so the
@@ -920,7 +920,7 @@ func (l *Logger) openCurrentFile() error {
 // the OLD file because the file handle still pointed at the original inode.
 // Latching degraded forces the next write to refuse and surface the failure.
 //
-// v0.2 #155: rotation preserves the HMAC chain across files. l.prevHMAC is
+// #155: rotation preserves the HMAC chain across files. l.prevHMAC is
 // the last entry of the about-to-rotate file, and openCurrentFile will see
 // an empty audit.jsonl and skip the readChainSeedFromFile path — leaving
 // l.prevHMAC pointed at the correct seed for the new file's first entry.
@@ -952,7 +952,7 @@ func (l *Logger) rotate() error {
 		}
 	}
 
-	// v0.2 #155: capture the chain seed BEFORE we rename. l.prevHMAC is
+	// #155: capture the chain seed BEFORE we rename. l.prevHMAC is
 	// already correct (it tracks every successful write), but if we ever
 	// add a code path that resets it on rotate, this comment is the
 	// reminder that doing so breaks cross-file chain verification.

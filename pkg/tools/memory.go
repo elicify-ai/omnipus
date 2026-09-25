@@ -108,7 +108,7 @@ type RememberTool struct {
 	BaseTool
 	store       MemoryAccess
 	auditLogger *audit.Logger
-	// rateLimiter is the v0.2 #155 item 6 rate limiter. May be nil — when
+	// rateLimiter is the #155 item 6 rate limiter. May be nil — when
 	// nil the gate is bypassed and writes always proceed. The agent loop
 	// installs a real limiter via SetMemoryRateLimiter on the registry.
 	rateLimiter *MemoryRateLimiter
@@ -126,7 +126,7 @@ func (t *RememberTool) SetAuditLogger(logger *audit.Logger) {
 }
 
 // SetMemoryRateLimiter satisfies the memoryRateLimiterAware interface so the
-// registry can propagate the rate limiter after construction (v0.2 #155
+// registry can propagate the rate limiter after construction (#155
 // item 6 late-wire pattern). Passing nil clears the limiter and bypasses
 // the gate — used by tests and explicitly-disabled deployments.
 func (t *RememberTool) SetMemoryRateLimiter(limiter *MemoryRateLimiter) {
@@ -196,7 +196,7 @@ func (t *RememberTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("remember: content exceeds 4096 characters; shorten the entry and try again")
 	}
 
-	// v0.2 #155 item 6: rate-limit memory writes.
+	// #155 item 6: rate-limit memory writes.
 	if decision := t.checkRateLimit(ctx, agentID); !decision.Allowed {
 		t.logRateLimited(agentID, sessionID, callerIdentity(ctx), category, content, decision)
 		return rateLimitedResult("remember", decision)
@@ -262,7 +262,7 @@ func (t *RememberTool) checkRateLimit(ctx context.Context, agentID string) Memor
 
 // logRateLimited emits an audit entry for a rate-limit-rejected remember
 // call. The entry uses Decision="deny" and Event="memory.rate_limited"
-// (v0.2 #155 item 6) so SIEM rules can route on it independently from
+// (#155 item 6) so SIEM rules can route on it independently from
 // the success-path "memory.remember" event. Content is never logged raw —
 // only a SHA-256 hex digest is emitted.
 func (t *RememberTool) logRateLimited(
@@ -509,7 +509,7 @@ type RetrospectiveTool struct {
 	BaseTool
 	store       MemoryAccess
 	auditLogger *audit.Logger
-	// rateLimiter is the v0.2 #155 item 6 rate limiter. May be nil — when
+	// rateLimiter is the #155 item 6 rate limiter. May be nil — when
 	// nil the gate is bypassed.
 	rateLimiter *MemoryRateLimiter
 }
@@ -526,7 +526,7 @@ func (t *RetrospectiveTool) SetAuditLogger(logger *audit.Logger) {
 }
 
 // SetMemoryRateLimiter satisfies the memoryRateLimiterAware interface so the
-// registry can propagate the rate limiter after construction (v0.2 #155
+// registry can propagate the rate limiter after construction (#155
 // item 6 late-wire pattern).
 func (t *RetrospectiveTool) SetMemoryRateLimiter(limiter *MemoryRateLimiter) {
 	t.rateLimiter = limiter
@@ -601,7 +601,7 @@ func (t *RetrospectiveTool) Execute(ctx context.Context, args map[string]any) *T
 		NeedsImprovement: needsImprovement,
 	}
 
-	// v0.2 #155 item 6: rate-limit memory writes. Same gate as RememberTool.
+	// #155 item 6: rate-limit memory writes. Same gate as RememberTool.
 	// Counts against the SAME per-agent + per-caller buckets so a single
 	// agent can't trivially work around the limit by alternating remember
 	// and retrospective calls.
@@ -620,7 +620,7 @@ func (t *RetrospectiveTool) Execute(ctx context.Context, args map[string]any) *T
 }
 
 // logRateLimited emits a memory.rate_limited audit entry for retrospective
-// writes that were rejected by the rate-limit gate (v0.2 #155 item 6).
+// writes that were rejected by the rate-limit gate (#155 item 6).
 func (t *RetrospectiveTool) logRateLimited(
 	agentID, sessionID, caller string,
 	r MemoryRetro,
@@ -704,7 +704,7 @@ func resolveRoomScope(roomParam, workspaceID string) string {
 
 // callerIdentity derives a stable string identifying the originating
 // caller of a tool execution, suitable for the per-caller bucket of
-// MemoryRateLimiter (v0.2 #155 item 6).
+// MemoryRateLimiter (#155 item 6).
 //
 // Tool calls happen inside the agent loop, not in the request handler, so
 // there is no literal HTTP `r.RemoteAddr` to key on. The closest analog is

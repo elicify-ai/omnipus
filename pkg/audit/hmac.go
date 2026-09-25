@@ -4,7 +4,7 @@
 
 // Package audit — HMAC-chain primitives for tamper-evident audit logs.
 //
-// Threat model (closes C2-AUDIT from the v0.2 / #155 pentest backlog):
+// Threat model (closes C2-AUDIT from the #155 pentest backlog):
 //
 //   Each audit entry carries a `hmac` field computed over
 //      HMAC-SHA256(chainKey, prev_hmac || canonical_json_without_hmac)
@@ -45,7 +45,7 @@
 //     - Replay across rotation files: an attacker who renames/swaps a rotated
 //       file can confuse the cross-file chain verifier. The mitigation is to
 //       include the file's date suffix in the chain seed; however, the
-//       initial v0.2 implementation chains rotation by walking files in
+//       initial implementation chains rotation by walking files in
 //       lexicographic order and checking each file's first entry's prev_hmac
 //       against the previous file's last entry's hmac.
 
@@ -285,7 +285,7 @@ func canonicalMarshal(v any) ([]byte, error) {
 // record, given the previous chain link's HMAC (or GenesisSeed() for the
 // first record in a file) and the record's canonical JSON bytes (see
 // CanonicalJSONForChain). Exported so other packages that need the same
-// v0.2 #155 HMAC-chain mechanism (e.g. pkg/plan's intent log, sec-MINOR-3/
+// #155 HMAC-chain mechanism (e.g. pkg/plan's intent log, sec-MINOR-3/
 // #539) reuse this exact algorithm instead of inventing a parallel one —
 // this is a direct forward to computeEntryHMAC, the same function
 // embedHMAC and VerifyFile use for audit.jsonl itself, so callers of both
