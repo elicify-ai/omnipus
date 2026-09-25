@@ -354,6 +354,17 @@ export interface SessionChatState {
   isReplaying: boolean
   /** Set when a done frame arrives while isReplaying was true. */
   replayCompletedForSession: string | null
+  /**
+   * Turn ids that had a still-open (isStreaming/status 'streaming')
+   * assistant bubble at the moment a session_snapshot wipe erased it. A
+   * full history rebuild always reconstructs a bubble as `status: 'done'`
+   * via replay_message, even when the underlying turn was genuinely cut
+   * short (e.g. a gateway crash mid-stream) — losing the one signal that
+   * would otherwise mark it unfinished. Carried forward across the wipe
+   * so catch_up_complete's confirmedUnfinished sweep can still flag a
+   * turn matching one of these ids, and cleared once that sweep runs.
+   */
+  wipedOpenTurnIds?: string[]
   sessionTokens: number
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
@@ -683,6 +694,7 @@ export interface ChatStore {
   isStreaming: boolean
   isReplaying: boolean
   replayCompletedForSession: string | null
+  wipedOpenTurnIds?: string[]
   toolCalls: Record<string, ToolCall & { call_id: string }>
   toolCallOrder: string[]
   textAtToolCallStart: Record<string, string>

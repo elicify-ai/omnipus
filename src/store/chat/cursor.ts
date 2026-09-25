@@ -177,6 +177,14 @@ export function insertHistoryMessageId(
  * than left stale from before the wipe.
  */
 export function applySnapshotHistoryWipe(bucket: SessionChatState): SessionChatState {
+  // Capture, before the wipe below erases it, which turns had a still-open
+  // assistant bubble — the one signal that survives a full replay
+  // reconstruction (which always marks a rebuilt bubble 'done', even for a
+  // turn genuinely cut short by e.g. a gateway crash mid-stream).
+  const wipedOpenTurnIds = bucket.messageOrder
+    .map((id) => bucket.messagesById[id])
+    .filter((m): m is ChatMessage => !!m && m.role === 'assistant' && !!m.turnId && (m.isStreaming === true || m.status === 'streaming'))
+    .map((m) => m.turnId as string)
   const pendingTail = bucket.messageOrder
     .map((id) => bucket.messagesById[id])
     .filter((m): m is ChatMessage => !!m && isPendingTailMessage(m))
@@ -211,6 +219,7 @@ export function applySnapshotHistoryWipe(bucket: SessionChatState): SessionChatS
     // session_snapshot frame's own seq/boot_id (cursorFromTerminalFrame) —
     // carried through here only as a safe default if the caller doesn't.
     cursor: bucket.cursor,
+    wipedOpenTurnIds: wipedOpenTurnIds.length > 0 ? wipedOpenTurnIds : bucket.wipedOpenTurnIds,
     awaitingCatchUp: true,
     // Item 3 follow-up (orchestrator, Lane A confirmed the gateway side is
     // correct): the client sets isReplaying:true BEFORE session_snapshot

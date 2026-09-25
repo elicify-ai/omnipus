@@ -133,15 +133,30 @@ export function handleCatchUpFrame({ frame, targetSid, withBucket }: CatchUpFram
         // before any token streamed — has no message for this flag to
         // attach to at all; verified separately via activeTurnId/
         // assistantMessages, not this per-message flag.)
+        //
+        // One real gap remained: a turn genuinely cut short by a gateway
+        // crash (not a graceful disconnect, so BUG 1's "stop closing
+        // bubbles" fix never gets a chance to run) goes through a FULL
+        // session_snapshot rebuild on reconnect — and `applySnapshotHistoryWipe`
+        // necessarily erases the pre-crash bubble's own isStreaming:true
+        // before replay_message ever reconstructs it as 'done'. `wipedOpenTurnIds`
+        // (cursor.ts) captures exactly that lost signal before the wipe, so
+        // it's checked here as an explicit exception to the "done → skip"
+        // rule above — narrower than reverting to "even if done" outright,
+        // since it only ever matches a turn THIS bucket personally watched
+        // streaming immediately before the wipe.
+        const wasWipedOpen = new Set(draft.wipedOpenTurnIds ?? [])
         for (const id of draft.messageOrder) {
           const m = draft.messagesById[id]
           if (m?.role !== 'assistant') continue
           if (m.status === 'interrupted' || m.status === 'error') continue
-          if (m.status === 'done' && !m.isStreaming) continue
+          const wipedOpen = !!m.turnId && wasWipedOpen.has(m.turnId)
+          if (m.status === 'done' && !m.isStreaming && !wipedOpen) continue
           if (m.turnId && m.turnId !== draft.activeTurnId) {
             m.confirmedUnfinished = true
           }
         }
+        draft.wipedOpenTurnIds = undefined
       }))
       return true
     }

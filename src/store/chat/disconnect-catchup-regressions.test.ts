@@ -829,3 +829,60 @@ describe('BE-DESIGN.md §6.3, Opus review round 7 — a user message mid-turn en
     }
   })
 })
+
+// Round 8 investigation (orchestrator, post-ADR-091-merge CI regression):
+// scenario h (gateway restart mid-stream) — CI: "Generate again" button
+// never appears after the restart+reconnect. Reproduces the exact wire
+// shape: a turn with SOME real content already streamed (not F7's more
+// extreme "cut off before any token" case — this scenario explicitly
+// waits for non-empty bubble text before killing the gateway), then a
+// fresh-boot session_snapshot (a genuinely different boot_id — a real
+// process restart, not the SAME process reconnecting) whose session_state
+// carries NO active_turn (the in-flight turn was lost with the killed
+// process's memory, never persisted mid-stream), replaying only the
+// PARTIAL content that made it to disk before the kill, then
+// catch_up_complete. If confirmedUnfinished isn't set on that replayed
+// message here, "Generate again" (AssistantMessageConnectionStatus,
+// gated on message.confirmedUnfinished) can never render — this isolates
+// whether that's an SPA regression or something else.
+describe('Round 8 — gateway restart mid-stream, real content already streamed', () => {
+  it('the partially-streamed reply gets confirmedUnfinished after a fresh-boot snapshot rebuild with no active_turn', () => {
+    const SID = 'sess-regress-h'
+    useSessionStore.setState({ activeSessionId: SID })
+
+    // The tab was ALREADY watching this turn stream live, before the crash —
+    // exactly the real scenario (scenario h): the socket dies, but per BUG 1's
+    // fix clearStreamingState() does NOT close the bubble on a bare disconnect,
+    // so it's still isStreaming:true, with its real turn_id, right up until
+    // the reconnect's session_snapshot wipes it.
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, message_id: 'entry-asst-1', turn_id: 'turn-lost-in-crash', agent_id: 'mia', content: 'Partial answer before the crash', seq: 40,
+    } as WsReceiveFrame)
+
+    useChatStore.getState().handleFrame({
+      type: 'session_snapshot', session_id: SID, seq: 5, boot_id: 'boot-fresh-after-restart', reason: 'unknown_position',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-fresh-after-restart', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'replay_message', session_id: SID, role: 'user', id: 'entry-user-1', content: 'a very long prompt', timestamp: '2026-01-01T00:00:00Z',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'replay_message', session_id: SID, role: 'assistant', id: 'entry-asst-1', content: 'Partial answer before the crash', agent_id: 'mia', turn_id: 'turn-lost-in-crash', timestamp: '2026-01-01T00:00:05Z',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'done', session_id: SID, stats: { frames_emitted: 2, orphan_count: 0 },
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'catch_up_complete', session_id: SID, seq: 5, boot_id: 'boot-fresh-after-restart', mode: 'snapshot',
+    } as WsReceiveFrame)
+
+    const b = useChatStore.getState().sessionsById[SID]!
+    expect(b.awaitingCatchUp).toBe(false)
+    expect(b.activeTurnId).toBeNull()
+    const asst = b.messageOrder.map((id) => b.messagesById[id]).find((m) => m.role === 'assistant')
+    expect(asst).toBeDefined()
+    expect(asst!.confirmedUnfinished).toBe(true)
+  })
+})
