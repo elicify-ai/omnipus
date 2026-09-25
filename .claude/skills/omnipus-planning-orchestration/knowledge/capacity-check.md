@@ -28,10 +28,20 @@ squad). Team-lead and any squad lead widening its own fan-out both run it.
 | Memory | **hard** | Available RAM below ~4 GB, or swap-in activity rising | Parallel agents and build caches OOM the machine, not just one lane |
 | Disk | **hard** | Free space on the workspace volume below ~20 GB | Worktrees, node_modules and Go caches grow fast |
 | CPU load | advisory — feeds the verdict, never holds alone | Sustained 1-minute load above ~80% of logical cores over two samples ~30 s apart | One spike is noise; sustained load means lanes already compete |
-| Active dispatches | advisory — counted from the ledger's in-flight rows across all squad files | More than ~12 in-flight rows | The work-in-flight measure; the ledger knows what is actually running, the process table does not |
+| Active dispatches | advisory — feeds the verdict, never holds alone (Round 18) | More than ~12 in-flight rows | The work-in-flight measure; the ledger knows what is actually running, the process table does not |
+
+**Round 18 (founder ruling, 2026-09-25):** only memory and disk can hold new work by
+themselves. The squad (active-dispatch) count is advisory only, exactly like CPU load —
+it never triggers a HOLD alone; it is shown as information and folded into the reason
+text solely once memory or disk has already produced a HOLD.
 
 Thresholds are named constants at the top of the script, founder-adjustable — the
 numbers above are the shipped starting points, tuned through governance.
+
+**Exit code:** the script exits 0 for both `CAPACITY: OK` and `CAPACITY: HOLD` — parse
+the verdict line, do not trust the exit code alone. It exits 2 only when a hard signal
+(memory or disk) could not be measured at all on this platform; treat exit 2 the same as
+a HOLD — the verdict cannot be trusted without both hard signals.
 
 ## What HOLD means
 
