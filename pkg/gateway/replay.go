@@ -802,8 +802,10 @@ func (sr *streamReplayState) prepareReplay() {
 	sr.spanRealAgentIDs = buildSpanRealAgentIDs(sr.entries, sr.spawnIDsWithChildren)
 
 	// persistedSubagentStartSpans / persistedSubagentEndSpans: the set of
-	// span IDs ("span_" + the originating spawn/delegate ToolCall.ID, same
-	// convention as buildSubagentStart below) that already have a REAL
+	// span IDs from agent.SubagentSpanID. Generation 1 is "span_" + the
+	// originating call id. Generation N >= 2 appends "_g<N>", recovered
+	// from the entry id by canonicalReplaySpanID, because the call id
+	// alone is not enough. The indexes hold every id that already has a REAL
 	// persisted subagent_start / subagent_end system entry somewhere in
 	// this transcript (steer_frames.go's deliverSubagentStart/
 	// deliverSubagentEnd — ADR-091 D7/I-4). Two independent uses:

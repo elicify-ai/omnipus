@@ -45,9 +45,10 @@ import (
 
 // subagentStartEntry builds a persisted subagent_start system entry exactly
 // as steer_frames.go's deliverSubagentStart writes one into the PARENT's own
-// transcript (ADR-091 D7/I-4) — spanID must follow the "span_" + tool-call-id
-// convention (steer_frames.go's subagentSpanID / replay.go's classifyToolCall
-// spanID) for classifyToolCall's persisted-span indexes to key it correctly.
+// transcript (ADR-091 D7/I-4). This helper builds a generation-1 bracket,
+// so spanID must be agent.SubagentSpanID(parentCallID, 1): "span_" plus
+// the tool-call id, with no _g suffix. A later generation is a different
+// id. classifyToolCall's persisted-span indexes key on that rebuilt id.
 func subagentStartEntry(spanID, parentCallID, taskLabel string) session.TranscriptEntry {
 	return session.TranscriptEntry{
 		ID:            spanID + ":start",
