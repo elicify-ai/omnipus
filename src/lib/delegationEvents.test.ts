@@ -840,13 +840,17 @@ describe('queued children that never ran', () => {
   })
 
   it('a queued child that did run still gets started and its own ending', () => {
+    // The terminal state frame arrives before subagent_end (steer_audience.go).
+    // Final shape is failed, not a leftover `running`. hasRun is the sticky
+    // record that a runnable state was reduced earlier — the last state alone
+    // is the same shape as a child dropped before it ran.
     const ranThenFailed = deriveDelegationEvents(
       source({
         messages: [
           message({
             id: 'm1',
             toolCalls: [runCall('queued')],
-            spans: [span({ status: 'error', lifecycleState: 'running' })],
+            spans: [span({ status: 'error', lifecycleState: 'failed', hasRun: true })],
           }),
         ],
       }),
@@ -1061,6 +1065,7 @@ function eventsFromStore(sessionId: string) {
         childSessionId: itemSpan.childSessionId,
         status: itemSpan.status,
         lifecycleState: itemSpan.lifecycleState,
+        hasRun: itemSpan.hasRun,
         finalResult: itemSpan.status === 'running' ? undefined : itemSpan.finalResult,
         statusLine: itemSpan.statusLine,
         lastUpdateAt: itemSpan.lastUpdateAt,
@@ -1097,5 +1102,206 @@ describe('live and replay through the store', () => {
     expect(kinds(live)).toEqual(['delegated', 'finished'])
     expect(JSON.stringify(live)).not.toContain(CHILD_SENTINEL)
     expect(JSON.stringify(replayed)).not.toContain(CHILD_SENTINEL)
+  })
+})
+
+const RAN_SESSION = 'dcs-f6-ran'
+const DROP_SESSION = 'dcs-f6-drop'
+
+type QueuedChildState = 'queued' | 'running' | 'needs_input' | 'paused' | 'completed' | 'failed' | 'cancelled' | 'timed_out'
+
+/**
+ * Queued launch, then the lifecycle frames, then a terminal end.
+ * `statesBeforeStart` is the replay-gap order: state frames parked before
+ * subagent_start. Normal order matches the transcript (start, then states).
+ */
+function feedQueuedOutcome(
+  sessionId: string,
+  states: QueuedChildState[],
+  endStatus: 'error' | 'cancelled' | 'timeout',
+  finish: boolean,
+  statesBeforeStart = false,
+) {
+  const frame = (body: Record<string, unknown>) => {
+    act(() => {
+      useChatStore.getState().handleFrame({ session_id: sessionId, ...body } as never)
+    })
+  }
+  const stateFrames = () => {
+    for (const state of states) {
+      frame({
+        type: 'subagent_state',
+        span_id: 'span_run-1',
+        state,
+        created_at: '2026-09-25T12:00:02.000Z',
+      })
+    }
+  }
+  frame({ type: 'token', content: 'Delegating.', agent_id: 'ray' })
+  frame({
+    type: 'tool_call_start',
+    call_id: 'run-1',
+    tool: 'delegate',
+    params: { action: 'run', agent_id: 'ray', label: 'Audit the logs' },
+    agent_id: 'ray',
+  })
+  frame({
+    type: 'tool_call_result',
+    call_id: 'run-1',
+    tool: 'delegate',
+    status: 'success',
+    result: runResult('queued'),
+  })
+  if (statesBeforeStart) stateFrames()
+  frame({
+    type: 'subagent_start',
+    span_id: 'span_run-1',
+    parent_call_id: 'run-1',
+    task_label: 'Audit the logs',
+    agent_id: 'ray',
+    child_session_id: 'child-1',
+  })
+  if (!statesBeforeStart) stateFrames()
+  frame({
+    type: 'subagent_end',
+    span_id: 'span_run-1',
+    status: endStatus,
+    duration_ms: 180000,
+    final_result: CHILD_SENTINEL,
+  })
+  if (finish) frame({ type: 'done', stats: { tokens: 1, cost: 0, duration_ms: 10 } })
+}
+
+function linesForQueued(sessionId: string) {
+  const bucket = useChatStore.getState().sessionsById[sessionId]
+  expect(bucket, 'handleFrame must have created the session bucket').toBeDefined()
+  const messages = getMessages(bucket!)
+  const stored = messages.flatMap((item) => item.spans ?? []).find((item) => item.spanId === 'span_run-1')
+  expect(stored, 'the child span must be on the message, or an empty line list proves nothing').toBeDefined()
+  const calls = [
+    ...messages.flatMap((item) => item.tool_calls ?? []),
+    ...bucket!.toolCallOrder.map((id) => bucket!.toolCalls[id]),
+  ]
+  const run = calls.find((call) => call?.id === 'run-1')
+  expect(typeof run?.result === 'string' ? run.result : '', 'the queued launch must be present').toContain('Queued')
+  const events = deriveDelegationEvents({
+    sessionId,
+    messages: messages.map((item) => ({
+      id: item.id,
+      timestamp: item.timestamp,
+      spans: item.spans?.map((itemSpan) => ({
+        spanId: itemSpan.spanId,
+        parentCallId: itemSpan.parentCallId,
+        taskLabel: itemSpan.taskLabel,
+        agentId: itemSpan.agentId,
+        childSessionId: itemSpan.childSessionId,
+        status: itemSpan.status,
+        lifecycleState: itemSpan.lifecycleState,
+        hasRun: itemSpan.hasRun,
+        finalResult: itemSpan.status === 'running' ? undefined : itemSpan.finalResult,
+        statusLine: itemSpan.statusLine,
+        lastUpdateAt: itemSpan.lastUpdateAt,
+      })),
+      toolCalls: item.tool_calls as ToolCall[] | undefined,
+    })),
+    liveToolCalls: bucket!.toolCalls,
+    liveToolCallOrder: bucket!.toolCallOrder,
+    toolCallOwnerMessageId: bucket!.toolCallOwnerMessageId,
+    agentNames: NAMES,
+  })
+  return { stored: stored!, events }
+}
+
+describe('a queued child that ran is not the same as one that never left the queue', () => {
+  it('a: queued, then running, then failed, then an error end is started plus stopped', () => {
+    resetDelegationStore(RAN_SESSION)
+    feedQueuedOutcome(RAN_SESSION, ['running', 'failed'], 'error', false)
+    const { stored, events } = linesForQueued(RAN_SESSION)
+    expect(stored.status).toBe('error')
+    expect(stored.lifecycleState).toBe('failed')
+    expect(stored.hasRun).toBe(true)
+    expect(kinds(events)).toEqual(['started', 'stopped'])
+    expect(events.map((event) => event.id)).toEqual(['started:span_run-1', 'stopped:span_run-1'])
+    expect(JSON.stringify(events)).not.toContain(CHILD_SENTINEL)
+  })
+
+  it('needs_input, paused, and completed also stick after a later failure', () => {
+    for (const state of ['needs_input', 'paused', 'completed'] as const) {
+      resetDelegationStore(RAN_SESSION)
+      feedQueuedOutcome(RAN_SESSION, [state, 'failed'], 'error', false)
+      const { stored, events } = linesForQueued(RAN_SESSION)
+      expect(stored.hasRun, state).toBe(true)
+      expect(stored.lifecycleState, state).toBe('failed')
+      expect(kinds(events), state).toEqual(['started', 'stopped'])
+    }
+  })
+
+  it('a runnable state parked before subagent_start is not cleared by the later failure', () => {
+    resetDelegationStore(RAN_SESSION)
+    feedQueuedOutcome(RAN_SESSION, ['running', 'failed'], 'error', false, true)
+    const { stored, events } = linesForQueued(RAN_SESSION)
+    expect(stored.lifecycleState).toBe('failed')
+    expect(stored.hasRun).toBe(true)
+    expect(kinds(events)).toEqual(['started', 'stopped'])
+  })
+
+  it('b: queued then failed or cancelled, with no runnable state, is no line', () => {
+    resetDelegationStore(DROP_SESSION)
+    feedQueuedOutcome(DROP_SESSION, ['queued', 'failed'], 'error', false)
+    const failed = linesForQueued(DROP_SESSION)
+    expect(failed.stored.status).toBe('error')
+    expect(failed.stored.lifecycleState).toBe('failed')
+    expect(failed.stored.hasRun).not.toBe(true)
+    expect(failed.events).toEqual([])
+    // Same records, flag flipped: the empty list is because it never ran,
+    // not because the span or the queued launch was missing.
+    const couldHave = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: [runCall('queued')],
+            spans: [span({ status: 'error', lifecycleState: 'failed', hasRun: true })],
+          }),
+        ],
+      }),
+    )
+    expect(kinds(couldHave)).toEqual(['started', 'stopped'])
+
+    resetDelegationStore(DROP_SESSION)
+    feedQueuedOutcome(DROP_SESSION, ['cancelled'], 'cancelled', false)
+    const cancelled = linesForQueued(DROP_SESSION)
+    expect(cancelled.stored.status).toBe('cancelled')
+    expect(cancelled.stored.lifecycleState).toBe('cancelled')
+    expect(cancelled.stored.hasRun).not.toBe(true)
+    expect(cancelled.events).toEqual([])
+  })
+
+  it('c: replaying the same frames through the reducer keeps both outcomes', () => {
+    resetDelegationStore(RAN_SESSION)
+    feedQueuedOutcome(RAN_SESSION, ['running', 'failed'], 'error', false)
+    const liveRan = linesForQueued(RAN_SESSION)
+
+    resetDelegationStore(REPLAY_SESSION)
+    feedQueuedOutcome(REPLAY_SESSION, ['running', 'failed'], 'error', true)
+    const replayRan = linesForQueued(REPLAY_SESSION)
+    expect(replayRan.stored.hasRun).toBe(true)
+    expect(replayRan.stored.lifecycleState).toBe('failed')
+    expect(kinds(replayRan.events)).toEqual(['started', 'stopped'])
+    expect(comparableLine(replayRan.events)).toEqual(comparableLine(liveRan.events))
+    expect(JSON.stringify(replayRan.events)).not.toContain(CHILD_SENTINEL)
+
+    resetDelegationStore(DROP_SESSION)
+    feedQueuedOutcome(DROP_SESSION, ['failed'], 'error', false)
+    const liveDrop = linesForQueued(DROP_SESSION)
+    expect(liveDrop.stored.hasRun).not.toBe(true)
+    expect(liveDrop.events).toEqual([])
+
+    resetDelegationStore(REPLAY_SESSION)
+    feedQueuedOutcome(REPLAY_SESSION, ['failed'], 'error', true)
+    const replayDrop = linesForQueued(REPLAY_SESSION)
+    expect(replayDrop.stored.hasRun).not.toBe(true)
+    expect(replayDrop.stored.lifecycleState).toBe('failed')
+    expect(replayDrop.events).toEqual([])
   })
 })
