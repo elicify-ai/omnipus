@@ -75,12 +75,11 @@ func TestWebchatChannel_SendBroadcastsToSecondAttachedTab(t *testing.T) {
 		sessionID  = "session-shared"
 	)
 
-	handler.mu.Lock()
-	handler.sessions[originChat] = originConn
-	handler.sessions[secondChat] = attachedConn
-	handler.sessionIDs[originChat] = sessionID
-	handler.sessionIDs[secondChat] = sessionID
-	handler.mu.Unlock()
+	// #823: a connection receives a session's frames through the
+	// session hub it is bound to (what attach/message intake do in
+	// production), not through the two lookup maps alone.
+	bindTestConnToSession(handler, originChat, sessionID, originConn)
+	bindTestConnToSession(handler, secondChat, sessionID, attachedConn)
 
 	ch := newWebchatChannel(handler)
 	err := ch.Send(context.Background(), bus.OutboundMessage{
@@ -151,10 +150,10 @@ func TestWebchatSend_ResolvesBySessionIDFirst(t *testing.T) {
 	)
 	// Only the LIVE chat id is currently bound to the session — the stale
 	// chat id (what a keeper dispatch would carry) is not registered at all.
-	handler.mu.Lock()
-	handler.sessions[liveChatID] = liveConn
-	handler.sessionIDs[liveChatID] = sessionID
-	handler.mu.Unlock()
+	// #823: a connection receives a session's frames through the
+	// session hub it is bound to (what attach/message intake do in
+	// production), not through the two lookup maps alone.
+	bindTestConnToSession(handler, liveChatID, sessionID, liveConn)
 
 	ch := newWebchatChannel(handler)
 	err := ch.Send(context.Background(), bus.OutboundMessage{
@@ -208,10 +207,10 @@ func TestFix_CR7_SendMedia_ResolvesBySessionAfterReconnect(t *testing.T) {
 		liveChatID  = "chat-live-media-after-reconnect"
 		sessionID   = "session-media-moved-connections"
 	)
-	handler.mu.Lock()
-	handler.sessions[liveChatID] = liveConn
-	handler.sessionIDs[liveChatID] = sessionID
-	handler.mu.Unlock()
+	// #823: a connection receives a session's frames through the
+	// session hub it is bound to (what attach/message intake do in
+	// production), not through the two lookup maps alone.
+	bindTestConnToSession(handler, liveChatID, sessionID, liveConn)
 
 	ch := newWebchatChannel(handler)
 	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
@@ -243,12 +242,11 @@ func TestFix_CR7_SendMedia_BroadcastsToEverySessionBoundConnection(t *testing.T)
 		secondChat = "chat-media-second"
 		sessionID  = "session-media-shared"
 	)
-	handler.mu.Lock()
-	handler.sessions[originChat] = originConn
-	handler.sessions[secondChat] = secondConn
-	handler.sessionIDs[originChat] = sessionID
-	handler.sessionIDs[secondChat] = sessionID
-	handler.mu.Unlock()
+	// #823: a connection receives a session's frames through the
+	// session hub it is bound to (what attach/message intake do in
+	// production), not through the two lookup maps alone.
+	bindTestConnToSession(handler, originChat, sessionID, originConn)
+	bindTestConnToSession(handler, secondChat, sessionID, secondConn)
 
 	ch := newWebchatChannel(handler)
 	err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{

@@ -6,7 +6,9 @@
 // reattachActiveSession is the helper the onConnected path delegates to. These
 // tests drive it with a fake sender to lock both branches:
 //   - send() === false  → bucket preserved, isReplaying cleared, error surfaced
-//   - send() === true   → bucket reset (replay will repopulate it)
+//   - send() === true   → bucket ALSO preserved (#823 catch-up redesign,
+//     BE-DESIGN.md §6.1 — the numbered cursor carries the bucket across the
+//     reattach; only an explicit session_snapshot frame wipes now)
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { reattachActiveSession } from './OmnipusRuntimeProvider'
@@ -75,16 +77,31 @@ describe('reattachActiveSession — failed reattach preserves transcript', () =>
     expect(useChatStore.getState().sessionsById[SID]?.isReplaying ?? false).toBe(false)
   })
 
-  it('resets the bucket on a SUCCESSFUL reattach (replay repopulates it)', () => {
+  // PROVENANCE (#823 catch-up redesign, BE-DESIGN.md §6.1, founder decision
+  // Q3 — REPLACE, guarantee kept, test rewritten never weakened): this test
+  // used to assert the OPPOSITE — a successful reattach wiped the bucket so
+  // a full gateway replay could rebuild it from scratch. §6.1 replaces that
+  // mechanism with a numbered cursor carried across the reattach
+  // (`attach_session{since_seq, boot_id}`, see reattachActiveSession's own
+  // updated doc comment) so the gateway can answer with an INCREMENTAL
+  // catch-up instead — wiping the bucket on every reattach would defeat
+  // that. History is now wiped ONLY by an explicit `session_snapshot` frame
+  // (src/store/chat/slices/catchup-frames.ts). The user-visible guarantee —
+  // a reattach always ends with a correct, complete transcript on screen —
+  // is unchanged; only the mechanism moved.
+  it('does NOT reset the bucket on a SUCCESSFUL reattach — the cursor carries it across instead', () => {
     const sender: ReattachSender = { send: vi.fn().mockReturnValue(true) }
     const setConnectionError = vi.fn()
 
     const ok = reattachActiveSession(sender, setConnectionError)
 
     expect(ok).toBe(true)
-    // Success path wipes the bucket so the in-flight gateway replay rebuilds it
-    // from scratch (preventing duplicate bubbles). No error surfaced.
-    expect(bucketMessages(SID)).toHaveLength(0)
+    // The existing transcript survives — the incremental catch-up (or, if
+    // the cursor turns out not to be servable, an explicit session_snapshot)
+    // is what reconciles it, not a client-side wipe on every attach.
+    expect(bucketMessages(SID).map((m) => m.content)).toContain(
+      'previous turn the user must not lose',
+    )
     expect(setConnectionError).not.toHaveBeenCalled()
   })
 

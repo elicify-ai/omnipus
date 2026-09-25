@@ -22,6 +22,7 @@
         "tests/e2e/quiet-disconnect-banner.spec.ts",
         "tests/e2e/delegation-hidden.spec.ts",
         "tests/e2e/recap-continuity.spec.ts",
+        "tests/e2e/catchup-scenarios.spec.ts",
         "tests/e2e/steered-session-reachability.spec.ts"
       ]
     },

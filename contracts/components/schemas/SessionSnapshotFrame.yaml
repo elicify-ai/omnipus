@@ -1,0 +1,69 @@
+title: SessionSnapshotFrame
+description: >
+  Server → client. Answers attach_session when the position the client asked for
+  (since_seq) can no longer be served as individual events. The client MUST replace its
+  history for this session rather than merging: this frame is followed by session_state
+  (so the wipe can never erase pending-approval/active-turn/goal state — see
+  SessionStateFrame), then a full replay of the session (replay_message,
+  tool_call_start, tool_call_result, subagent_start, subagent_end, media, unsequenced),
+  then any still-open active-turn projection items the replay did not already cover, then
+  exactly one catch_up_complete frame whose seq is this frame's seq. #823 catch-up
+  redesign: sending a snapshot is always safe — it costs more bytes than an incremental
+  catch-up but never drops an event, which is why the gateway prefers it over guessing
+  whenever it cannot prove the requested range is intact. Sent for a first load as well
+  (no cursor at all), where it is the ordinary full-replay path.
+type: object
+required:
+  - type
+  - session_id
+  - seq
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: session_snapshot
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Session the client must rebuild state for.
+  seq:
+    type: integer
+    format: int64
+    minimum: 1
+    description: >
+      The session's current high-water sequence number at the moment the snapshot was
+      taken. Once the full-state replay that follows this frame has been applied, the
+      client's cursor for this session is exactly this value, and subsequent live frames
+      continue from seq + 1. Mirrored on the terminal catch_up_complete frame.
+  boot_id:
+    type: string
+    description: >
+      #823 review finding 7 — the gateway process that produced this snapshot. The
+      client stores it alongside the seeded seq cursor above (same role as
+      SessionStateFrame.boot_id / AttachSessionFrame.boot_id), so a later reconnect can
+      tell whether the gateway has restarted since.
+  reason:
+    type: string
+    enum:
+      - cursor_ahead
+      - retention_exceeded
+      - unknown_position
+      - boot_mismatch
+    description: >
+      Why a snapshot was sent instead of an incremental catch-up.
+      cursor_ahead — the client's since_seq is greater than any sequence number
+      the gateway has emitted for this session; the client's position cannot be trusted.
+      retention_exceeded — the gateway retains only the most recent sequence
+      numbers for this session, so the range just after since_seq is already
+      gone and serving it would leave a hole.
+      unknown_position — the client sent no since_seq at all (a first load, or a
+      session the client has no cursor for), so there is nothing to catch up from.
+      boot_mismatch (#823 review finding 7) — the client's attach_session
+      carried a boot_id that does not match the gateway's current one, so
+      since_seq is being read against the WRONG counter: a restart mints a new hub whose
+      first seq is guaranteed strictly greater than anything the session ever emitted
+      before (the counter itself never resets), but the client's old boot_id proves its
+      remembered position predates the restart and must not be trusted. A boot_id
+      mismatch is checked and answered BEFORE the ordinary since_seq
+      servability check, so it always wins over the other three reasons.

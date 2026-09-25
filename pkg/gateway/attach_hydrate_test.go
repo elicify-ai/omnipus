@@ -90,9 +90,8 @@ func TestAttach_TwiceArchiveByteIdentical(t *testing.T) {
 
 	attach := func(chatID string) {
 		wc := &wsConn{
-			sendCh:         make(chan []byte, 2048),
-			doneCh:         make(chan struct{}),
-			replayDivertCh: make(chan []byte, replayLiveBufferCap),
+			sendCh: make(chan []byte, 2048),
+			doneCh: make(chan struct{}),
 		}
 		handler.handleAttachSession(context.Background(), chatID, meta.ID, nil, wc)
 		close(wc.sendCh)

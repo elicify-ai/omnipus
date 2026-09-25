@@ -1282,9 +1282,11 @@ func TestLiveEventForwarder_ToolCallStart_CarriesAgentID(t *testing.T) {
 	eb := agent.NewEventBus()
 	t.Cleanup(eb.Close)
 
-	sub := eb.Subscribe(16)
-	eventDone := make(chan struct{})
-	go handler.eventForwarder(wc, chatID, sub, eventDone)
+	// #823: tool_call_start is produced once by the session hub through the
+	// EventBus sync tap, delivered to the connection bound to the session the
+	// event's chat id resolves to.
+	eb.SetSyncTap(handler.hubSyncTap)
+	bindTestConnToSession(handler, chatID, "session-agentid-parity", wc)
 
 	eb.Emit(agent.Event{
 		Kind: agent.EventKindToolExecStart,
@@ -1308,9 +1310,6 @@ func TestLiveEventForwarder_ToolCallStart_CarriesAgentID(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no frame received within 2s")
 	}
-
-	eb.Unsubscribe(sub.ID)
-	<-eventDone
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

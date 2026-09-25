@@ -482,3 +482,43 @@ func TestTranscriptEntry_LegacyTruncatedWithoutReason_RoundTrips(t *testing.T) {
 	assert.Contains(t, string(remarshaled), `"truncated":true`,
 		"truncated must still round-trip true")
 }
+
+// TestTranscriptEntry_ClientMessageID_RoundTrips pins the #823
+// catch-up-redesign contract for TranscriptEntry.ClientMessageID: present on
+// the wire (client_message_id) when set, omitted entirely (omitempty) when
+// not — so a legacy entry written before this field existed, or any
+// non-user entry that never carries one, does not grow a spurious empty key
+// on re-marshal.
+//
+// Traces to: pkg/session/daypartition.go TranscriptEntry.ClientMessageID
+// (#823 design §4.7/§9); consumed by pkg/gateway/replay.go's
+// ReplayMessageFrame.client_message_id (Lane A) to let a sending tab
+// reconcile its own optimistic pending bubble against the persisted entry.
+func TestTranscriptEntry_ClientMessageID_RoundTrips(t *testing.T) {
+	entry := TranscriptEntry{
+		ID:              "entry-1",
+		Role:            "user",
+		Content:         "hello",
+		ClientMessageID: "client-generated-abc123",
+	}
+
+	marshaled, err := json.Marshal(entry)
+	require.NoError(t, err)
+	assert.Contains(t, string(marshaled), `"client_message_id":"client-generated-abc123"`,
+		"a populated ClientMessageID must serialize onto the wire under client_message_id")
+
+	var roundTripped TranscriptEntry
+	require.NoError(t, json.Unmarshal(marshaled, &roundTripped))
+	assert.Equal(t, "client-generated-abc123", roundTripped.ClientMessageID,
+		"ClientMessageID must round-trip byte-identical through marshal/unmarshal")
+
+	// A legacy/no-client-id entry (every entry written before this field
+	// existed, and every non-user entry) must omit the key entirely, not
+	// serialize an empty string.
+	legacyEntry := TranscriptEntry{ID: "entry-2", Role: "assistant", Content: "hi"}
+	legacyMarshaled, err := json.Marshal(legacyEntry)
+	require.NoError(t, err)
+	assert.NotContains(t, string(legacyMarshaled), "client_message_id",
+		"an entry with no ClientMessageID must omit the key entirely (omitempty), "+
+			"matching every pre-#823 entry already on disk")
+}

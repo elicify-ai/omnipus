@@ -19,6 +19,22 @@
  * browser: the old technical banner is still on the error path" ("It is
  * immediate" / "It is technical" / "It uses the error channel").
  *
+ * Real-browser follow-up (orchestrator): a prior version of this spec
+ * expected the calm CHAT-wide line at QUIET_DROP_MS (15s) itself. That
+ * conflated two genuinely separate, deliberately staggered thresholds in
+ * src/components/chat/ConnectionStatus.tsx (both directly tested there,
+ * ConnectionStatus.test.tsx's "shows only the answer continuation state at
+ * 15 seconds" and "... at two minutes"): QUIET_DROP_MS (15s) governs only
+ * the PER-MESSAGE "this answer may not have finished" indicator, which
+ * requires an actual interrupted answer to exist at all. This spec never
+ * sends a message, so that indicator is never in play. The GLOBAL,
+ * chat-wide reachability line this spec actually exercises
+ * (`connection-status-line` rendered with no message context) is governed
+ * by the SEPARATE, INTENTIONALLY LONGER CHAT_NOTICE_MS (2 minutes) — "C.
+ * Chat-wide (LONG outage only)" names exactly this: a genuinely long
+ * outage, not just "longer than a blip". Fixed to wait for the real
+ * threshold instead of weakening what it proves.
+ *
  * Text assertions target visible page content directly (not `role="alert"`
  * element counts) because the e2e harness runs with `dev_mode_bypass: true`
  * (tests/e2e/global-setup.ts), which keeps its OWN unrelated
@@ -32,13 +48,12 @@ import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, waitForConnected } from './fixtures/selectors'
 
-// src/components/chat/ConnectionStatus.tsx's own exported QUIET_DROP_MS —
-// the spec's oracle constant, never re-derived here.
+// src/components/chat/ConnectionStatus.tsx's own exported constants — the
+// spec's oracle values, never re-derived here. QUIET_DROP_MS gates the
+// per-message answer indicator (not exercised by this spec, which never
+// sends a message); CHAT_NOTICE_MS gates the chat-wide line this spec
+// actually asserts on.
 const QUIET_DROP_MS = 15_000
-// ConnectionStatus.tsx's CHAT_NOTICE_MS: the chat-wide calm line ("C. Chat-wide
-// (long outage only)") appears only after this long offline. QUIET_DROP_MS
-// governs the per-answer "still working" note, which needs an interrupted
-// answer — this spec has none, so nothing at all may show before this mark.
 const CHAT_NOTICE_MS = 120_000
 
 const BANNED_TEXT = [/gateway/i, /disconnected from/i, /\b1006\b/]
@@ -51,8 +66,8 @@ async function assertNoBannedText(page: import('@playwright/test').Page): Promis
 }
 
 test.describe('quiet disconnect banner (#823)', () => {
-  test('a real network drop stays silent for 15s, shows only the calm line after, and clears cleanly on recovery', async ({ page, context }) => {
-    test.setTimeout(CHAT_NOTICE_MS + 90_000)
+  test('a real network drop stays silent for 15s, silent well past it, shows only the calm line at the real chat-wide threshold, and clears cleanly on recovery', async ({ page, context }) => {
+    test.setTimeout(CHAT_NOTICE_MS + 120_000)
 
     await page.goto('/')
     await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
@@ -77,15 +92,29 @@ test.describe('quiet disconnect banner (#823)', () => {
     await expect(page.getByTestId('connection-status-line')).toBeHidden()
     await assertNoBannedText(page)
 
-    // Past QUIET_DROP_MS and up to CHAT_NOTICE_MS there is still nothing:
-    // with no interrupted answer, the short-drop window has no visible state.
-    await page.waitForTimeout(4_000)
+    // Past QUIET_DROP_MS the page STAYS quiet — this spec never sends a
+    // message, so the per-message answer indicator (the only thing
+    // QUIET_DROP_MS actually gates) is never in play here at all. The
+    // chat-wide line this spec exercises has its own, deliberately longer
+    // threshold — asserting it's still hidden here is what actually proves
+    // "silent for 15s" isn't accidentally true for the wrong reason.
+    await page.waitForTimeout(5_000)
     await expect(page.getByTestId('connection-status-line')).toBeHidden()
     await assertNoBannedText(page)
 
-    // At CHAT_NOTICE_MS the calm chat-wide status line appears — never the old
-    // alarming banner, and still never the banned wording.
-    await expect(page.getByTestId('connection-status-line')).toBeVisible({ timeout: CHAT_NOTICE_MS })
+    // Merge of release #845 and the #823 redo (stricter of both): still
+    // hidden just BEFORE the real chat-wide threshold — so a line that
+    // appeared early (anywhere between 15s and 2 minutes) fails here
+    // instead of passing a single long "visible within 2 minutes" wait.
+    // Elapsed since the drop registered: (QUIET_DROP_MS - 2s) + 5s so far.
+    await page.waitForTimeout(CHAT_NOTICE_MS - QUIET_DROP_MS - 3_000 - 7_000)
+    await expect(page.getByTestId('connection-status-line')).toBeHidden()
+    await assertNoBannedText(page)
+
+    // At the real chat-wide threshold (CHAT_NOTICE_MS) the calm status
+    // line appears — never the old alarming banner, and still never the
+    // banned wording.
+    await expect(page.getByTestId('connection-status-line')).toBeVisible({ timeout: 25_000 })
     await assertNoBannedText(page)
 
     // Restore the network — recovery must clear cleanly (the ~2s "back"

@@ -1,0 +1,54 @@
+title: CatchUpCompleteFrame
+description: >
+  Server → client. #823 catch-up redesign. Terminal frame of an attach_session response,
+  sent exactly once, after every frame the catch-up needed to send (the incremental
+  journal tail, or the full snapshot replay plus projection) has already been enqueued to
+  this connection. Frames published live while the attach was in progress are held (never
+  dropped) and are flushed to the connection only after this frame, so they always arrive
+  strictly after catch-up in seq order. The client uses this frame to: set its cursor for
+  the session to seq; stop treating incoming frames as catch-up; and, when mode is
+  snapshot, resolve whether the interrupted answer (if any) should show "couldn't be
+  finished · Generate again" (see mode).
+type: object
+required:
+  - type
+  - session_id
+  - seq
+  - mode
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: catch_up_complete
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Session this catch-up response was for.
+  seq:
+    type: integer
+    format: int64
+    minimum: 1
+    description: >
+      The session's high-water sequence number at the moment this attach was answered
+      (the same value as the preceding session_snapshot frame's seq on the snapshot path,
+      or the hub's head at bind time on the incremental path). The client's cursor for
+      this session becomes exactly this value.
+  boot_id:
+    type: string
+    description: >
+      The gateway process that answered this attach — same role as
+      SessionStateFrame.boot_id / AttachSessionFrame.boot_id, stored alongside the seeded
+      seq cursor above.
+  mode:
+    type: string
+    enum:
+      - incremental
+      - snapshot
+    description: >
+      Which catch-up path produced this response: incremental (the client's since_seq was
+      servable — only the journal tail after it was sent) or snapshot (the client's
+      history for this session was wiped and fully rebuilt — see SessionSnapshotFrame's
+      reason for why). The client uses this to decide, together with whether a done frame
+      for the active turn has since been applied, whether an in-flight answer at catch-up
+      time is still genuinely in progress or must be shown as unfinished.

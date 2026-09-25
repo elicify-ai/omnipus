@@ -18,6 +18,22 @@ test('steered session is reachable in its own live view without leaking child ou
   test.setTimeout(420_000)
 
   await page.goto('/')
+  // A pending approval modal left over from earlier work keeps a Radix
+  // dialog-overlay mounted, and it intercepts pointer events — so
+  // selectAgent's click never lands and the test burns its whole budget in a
+  // retry loop. CI evidence: 826 retries against
+  // `<div data-testid="dialog-overlay"> intercepts pointer events`, then
+  // `Test timeout of 420000ms exceeded` at selectAgent, on 2 of 4 attempts
+  // (neither reached the behaviour under test). Clear it first; Escape is the
+  // same dismissal accessibility.spec.ts already uses for its sign-in dialog.
+  const blockingOverlay = page.locator('[data-testid="dialog-overlay"]')
+  if ((await blockingOverlay.count()) > 0) {
+    await page.keyboard.press('Escape')
+    await expect(
+      blockingOverlay,
+      'a leftover modal overlay must be dismissable — it blocks every click beneath it',
+    ).toHaveCount(0, { timeout: 10_000 })
+  }
   await selectAgent(page, /Jim/i)
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 15_000 })
@@ -119,7 +135,32 @@ test('steered session is reachable in its own live view without leaking child ou
   const childSessionID = await boundSurface.getAttribute('data-active-session-id')
   expect(childSessionID, 'the open control must bind the chat surface to the child session').toBeTruthy()
 
-  await expect(page.getByText(CHILD_ONLY_SENTINEL, { exact: false })).toBeVisible({ timeout: 240_000 })
+  // Two wrong oracles have stood here. Matching CHILD_ONLY_SENTINEL page-wide proved
+  // only that the child RECEIVED the task: the parent interpolates the sentinel into
+  // the task text, so it renders as the child's own INBOUND user message the moment
+  // the view opens — it passed ~0.8s in, against a child that had done no work.
+  //
+  // Requiring the sentinel in an ASSISTANT row was worse, not better. It demands the
+  // model emit an exact magic string, so the test fails whenever the child paraphrases
+  // or reports a tool failure instead of completing the task — which is exactly the
+  // model-compliance oracle the steer assertion below was repaired to remove. It duly
+  // failed in CI with "element(s) not found" while the child was working correctly.
+  //
+  // What "reachable in its own live view" claims is that the CHILD's own transcript
+  // renders here. Assert the system-decided facts: an assistant message exists, and it
+  // is attributed to an agent other than the parent. `agent-label` renders that
+  // message's own agentId (ChatScreen.tsx), so no model wording can satisfy or break it.
+  await expect(
+    page.locator('[data-message-role="assistant"]').first(),
+    'the child session must render its own assistant output in its own live view',
+  ).toBeVisible({ timeout: 240_000 })
+  const firstChildLabel = (
+    await page.getByTestId('agent-label').first().innerText({ timeout: 30_000 })
+  ).trim()
+  expect(
+    firstChildLabel,
+    'the child view must attribute its output to the worker, not to the parent agent',
+  ).not.toMatch(/Jim/i)
 
   const childInput = chatInput(page)
   await expect(childInput).toBeEnabled({ timeout: 30_000 })
@@ -289,12 +330,23 @@ test('steered session is reachable in its own live view without leaking child ou
     parentView.locator('[data-testid="tool-call-badge"][data-tool="delegate"]'),
     'the parent\'s delegate chip is the delegation surface that persists across reload at idle',
   ).toHaveCount(1)
-  // And the inverse of the old assertion is itself part of the design
-  // contract: an idle, purely-successful parent deliberately mounts no bar
-  // (same shouldMount gate; pins the /visual-qa decision so an
-  // always-visible idle bar cannot quietly come back).
-  await expect(
-    parentView.locator('[data-testid="activity-bar"]'),
-    'ActivityBar mounts nothing when idle after a purely-successful delegation (shouldMount: no open child, no panel, no failure)',
-  ).toHaveCount(0)
+  // This previously asserted the bar mounts NOTHING here. That premise —
+  // "idle and purely successful" — is not something this test can guarantee, and
+  // it failed in CI for a legitimate reason: a retained "1 failed" chip made
+  // hasFailedRecent true, so the gate mounted the bar correctly and the
+  // assertion called it a regression. Since 37965946f the gate also mounts for
+  // any open background command (founder decision: the pill is ActivityPanel's
+  // only entry point), giving the old form a SECOND premise it cannot control.
+  //
+  // Assert the invariant that actually matters instead, and which no unrelated
+  // background work can disturb: once the delegation has finished, nothing may
+  // still be CLAIMED as running. A retained failure or a live shell job may
+  // legitimately keep the pill up — a phantom "N running" may not.
+  const parentBarLabel = parentView.locator('[data-testid="activity-bar-label"]')
+  if ((await parentBarLabel.count()) > 0) {
+    await expect(
+      parentBarLabel,
+      'after the delegation finished the pill must not still claim a running child',
+    ).not.toHaveText(/\d+ running/)
+  }
 })

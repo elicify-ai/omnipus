@@ -26,16 +26,19 @@ import {
 } from '@/lib/llm-error'
 import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
-import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, pendingCancelAckSids, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
+import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
+import { gateFrameBySeq, cursorFromTerminalFrame, insertHistoryMessageId, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
 import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
 import { handleReplayAndStatusFrame } from './replay-and-status-frames'
+import { handleCatchUpFrame } from './catchup-frames'
 
 
 
 type FrameSlice = Pick<ChatStore, 'handleFrame'>
 type ToolCallResultFrame = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'tool_call_result' }>
 type MessageStatusFrame = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'message_status' }>
+type TokenFrameType = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'token' }>
 
 // Both helpers below are kept at module scope (not inlined in handleFrame)
 // so their bodies don't count against handleFrame's/createFrameSlice's
@@ -96,6 +99,124 @@ function advanceReceivedEventTime(
       lastReceivedEventTime: advanceEventTime(b.lastReceivedEventTime, frameTimestamp),
     }))
   }
+}
+
+// #823 catch-up redesign (BE-DESIGN.md §6.2): the SPA-side apply-rule gate,
+// run once per frame ahead of the whole per-type switch below (kept out of
+// handleFrame's own body — see the comment on advanceReceivedEventTime just
+// above for why: handleFrame is already at its grandfathered line-budget
+// ceiling, scripts/budgets/functions.txt).
+//
+// Returns 'apply' when the frame should proceed to the normal reducers
+// (either it carries no `seq` at all — the overwhelming majority of frames
+// today, since Lane A's gateway hub had not shipped `seq` on any real
+// connection as of this write — or it is exactly the next expected number).
+// Returns 'drop-or-gap' when the frame must NOT reach the switch: either it
+// is a duplicate/already-applied (`kind: 'drop'`) or it is a genuine gap
+// (`kind: 'gap'`), in which case this function ALSO fires the re-attach the
+// design requires (§6.2's gap row: "send attach_session{S, cursor}") using
+// whatever cursor the bucket already has — the server's own §3.3 rule
+// decides whether that cursor is still servable.
+function applySeqGate(
+  frame: unknown,
+  targetSid: string | null,
+  get: FrameContext['get'],
+  withBucket: FrameContext['withBucket'],
+): 'apply' | 'drop-or-gap' {
+  const f = frame as SeqFrameLike & { type?: string }
+  if (f.seq === undefined || f.seq === null || !targetSid) return 'apply'
+  if (f.type && CURSOR_MINTING_FRAME_TYPES.has(f.type)) {
+    // The cursor is about to be re-minted from this frame — any re-attach
+    // that was in flight for this session is now resolved (Opus review
+    // round 2 item 7).
+    inFlightReattachSids.delete(targetSid)
+    return 'apply'
+  }
+  const bucket = get().sessionsById[targetSid]
+  const decision = gateFrameBySeq(bucket?.cursor ?? null, f)
+  if (decision.kind === 'apply') {
+    withBucket(targetSid, () => ({ cursor: decision.cursor }))
+    inFlightReattachSids.delete(targetSid)
+    return 'apply'
+  }
+  if (decision.kind === 'gap') {
+    // #823 catch-up redesign, Opus review round 2 item 7 (LOW): without this
+    // guard, every gapped frame that arrives before the server responds to
+    // the FIRST attach_session — a burst of tokens, for instance — sent
+    // another one, once per frame. Only the first frame of a gap actually
+    // triggers a re-attach; the rest are silently dropped as before
+    // (still correct — they're still gapped — just without re-sending).
+    if (!inFlightReattachSids.has(targetSid)) {
+      inFlightReattachSids.add(targetSid)
+      console.warn('[chat] sequence gap — re-attaching', { sessionId: targetSid, have: decision.cursor.seq, got: f.seq })
+      logDiagnostic('chatSeqGapReattach', { sessionId: targetSid, have: decision.cursor.seq, got: f.seq })
+      useConnectionStore.getState().connection?.send({
+        type: 'attach_session',
+        session_id: targetSid,
+        since_seq: decision.cursor.seq,
+        boot_id: decision.cursor.bootId,
+      })
+    }
+  }
+  return 'drop-or-gap'
+}
+
+// ADR-091 D7/D10 + #823 Opus review round 2 item 1 ("update moved tools by
+// call_id"): applies a tool_call_result to this session's own flat tool
+// call. The live entry can be gone not because this result is genuinely
+// unmatched, but because §6.3's disconnect handling (clearStreamingState)
+// already BAKED it into its owning message's tool_calls array — a
+// disconnect no longer cancels a running tool call, so the real result can
+// still legitimately arrive afterward (catch-up, or a late live frame).
+// Before falling back to "unmatched" (which renders a scary standalone
+// error notice for a tool that's actually fine), check every message's own
+// baked tool_calls for this call_id and update it in place. Extracted from
+// handleFrame to keep it under its grandfathered line budget
+// (scripts/budgets/functions.txt) — no behaviour change.
+function applyToolCallResultFrame(
+  b: SessionChatState,
+  frame: ToolCallResultFrame,
+  clampedResult: ReturnType<typeof clampToolResult>,
+): Partial<SessionChatState> {
+  if (!b.toolCalls[frame.call_id]) {
+    for (const id of b.messageOrder) {
+      const msg = b.messagesById[id]
+      const idx = msg?.tool_calls?.findIndex((tc) => tc.id === frame.call_id) ?? -1
+      if (idx === -1) continue
+      return produce(b, (draft) => {
+        const tc = draft.messagesById[id].tool_calls![idx]
+        tc.result = clampedResult
+        tc.status = frame.status ?? 'success'
+        tc.duration_ms = frame.duration_ms
+        tc.error = frame.error
+      }) as Partial<SessionChatState>
+    }
+    return appendUnmatchedToolError(b, frame, clampedResult)
+  }
+  return produce(b, (draft) => {
+    const tc = draft.toolCalls[frame.call_id]
+    tc.result = clampedResult
+    tc.status = frame.status ?? 'success'
+    tc.duration_ms = frame.duration_ms
+    tc.error = frame.error
+  }) as Partial<SessionChatState>
+}
+
+// #823/ADR-091 merge review (Opus F4, low, plausible race): the Go side's
+// deliverSubagentStart persists the span to the session transcript BEFORE
+// emitting the live frame — not one atomic step. If a second tab's
+// attach_session binds in that exact window, its snapshot replay emits this
+// SAME span (reconstructed from the transcript, unsequenced) and the live
+// copy (sequenced, seq above whatever the bucket's cursor already had) also
+// arrives — one delegation, two subagent_start frames for the same span_id.
+// The subagent_start case ignores a frame whose span_id this reports as
+// already present: it never creates a second span and never touches the
+// existing one's state (a subagent_message/subagent_state may have updated
+// it since the first copy was applied).
+function bucketHasSpan(b: SessionChatState, spanId: string): boolean {
+  const entry = b.spanBySpanId?.[spanId]
+  const span = entry ? b.messagesById[entry.messageId]?.spans?.[entry.spanIdx] : undefined
+  return !!span && span.spanId === spanId
 }
 
 function appendUnmatchedToolError(
@@ -168,23 +289,321 @@ function recordPendingSpanUpdate(
   return next
 }
 
-// Issue #822: a real done can arrive at the reconnect bind boundary before
-// its catch-up token. That next token is the completed snapshot, not a new
-// live stream. New turns are already streaming before their first token.
-function isTerminalCatchUpToken(bucket: SessionChatState): boolean {
-  return bucket.terminalCatchUpPending === true && !bucket.isStreaming
+// #823 catch-up redesign, Opus review round 2 (BE-DESIGN.md §6.3, "Turn-keyed
+// bubbles — replaces 'append to the last assistant bubble'"): the #822
+// mechanism this block used to implement
+// (isTerminalCatchUpToken/applyTokenStreamingState/needsTerminalCatchUp,
+// keyed on terminalCatchUpPending/activeTurnBubbleOpened) is deleted.
+// catch_up_complete (slices/catchup-frames.ts) is now the sole "catch-up is
+// over" signal — see that file's own doc comment — so a token/done frame
+// never needs to guess whether it is closing a replay window.
+//
+// CORRECTION: an earlier pass of this function keyed bubbles by message_id
+// alone, producing a SEPARATE bubble per message_id — which made F1's own
+// two-round example (msg-1 "Let me check." + tool call, then msg-2
+// "All done.") render as two bubbles. That is wrong: §6.3 and §8.3 both
+// require EXACTLY ONE bubble per turn, and F1's fixture "assistant_messages"
+// are the turn's successive text SEGMENTS within that one bubble, not
+// separate bubbles ("one_bubble_per_message" in the fixture means "the whole
+// reply is one bubble," not "one bubble per message_id" — confirmed against
+// the design doc's literal §6.3 rule below). §6.3's real rule:
+//   1. If a bubble already holds this message_id (its own id, OR previously
+//      registered via the turn-merge in step 2 below) — append/replace/
+//      ignore-if-complete, exactly as before.
+//   2. Otherwise, if there is an OPEN (not closed by this turn_id's own
+//      `done`) bubble for the SAME turn_id + agent_id, register this
+//      message_id onto THAT bubble (mirrors the identical mechanism
+//      replay_message already uses for its own same-turn merge — see
+//      `ChatMessage.mergedReplayIds` / `SessionChatState.
+//      mergedReplayMessageIds`'s doc comments) and append/replace there.
+//   3. Otherwise create a new bubble, anchored on turn_id.
+function findBubbleIdForMessageId(draft: SessionChatState, messageId: string): string | null {
+  if (draft.messagesById[messageId]) return messageId
+  for (const id of draft.messageOrder) {
+    const m = draft.messagesById[id]
+    if (m?.role === 'assistant' && m.mergedReplayIds?.includes(messageId)) return id
+  }
+  return null
 }
 
-function applyTokenStreamingState(bucket: SessionChatState, message: ChatMessage): void {
-  const isStreaming = !isTerminalCatchUpToken(bucket)
-  message.isStreaming = isStreaming
-  message.status = isStreaming ? 'streaming' : 'done'
-  bucket.isStreaming = isStreaming
-  bucket.terminalCatchUpPending = false
+// Opus review round 3 item N4 (LOW-MEDIUM): a failed session rebuild — the
+// gateway sends `error` + `done{stats.replay_error:true}` and unbinds,
+// instead of ever reaching catch_up_complete. Re-attach WITHOUT
+// since_seq/boot_id (see replayErrorRetryAttempts' own doc comment in
+// runtime-state.ts for why a cursor is untrustworthy here), with
+// exponential backoff so a gateway that keeps failing this same rebuild
+// isn't hammered in a tight loop. Extracted purely to keep handleFrame
+// under its line budget (scripts/budgets/functions.txt) — no behavior
+// change from the inline version it replaces.
+function scheduleReplayErrorRetry(sid: string): void {
+  const attempt = (replayErrorRetryAttempts[sid] ?? 0) + 1
+  replayErrorRetryAttempts[sid] = attempt
+  if (replayErrorRetryTimers[sid]) clearTimeout(replayErrorRetryTimers[sid])
+  const delay = Math.min(REPLAY_ERROR_BASE_DELAY_MS * 2 ** (attempt - 1), REPLAY_ERROR_MAX_DELAY_MS)
+  replayErrorRetryTimers[sid] = setTimeout(() => {
+    delete replayErrorRetryTimers[sid]
+    useConnectionStore.getState().connection?.send({ type: 'attach_session', session_id: sid })
+  }, delay)
 }
 
-function needsTerminalCatchUp(bucket: SessionChatState, wasReplaying: boolean): boolean {
-  return wasReplaying && !!bucket.activeTurnId && !bucket.activeTurnBubbleOpened
+function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: TokenFrameType): void {
+  const m = draft.messagesById[bubbleId]
+  if (frame.replace) {
+    m.content = frame.content
+  } else {
+    // Opus review round 3 item N3 (MEDIUM-LOW): the #823 rewrite of the
+    // token case dropped the paragraph-break insertion `pendingTextBoundary`
+    // exists for (see ChatMessage.pendingTextBoundary's own doc comment,
+    // which still describes it: "the next token append ... gets a paragraph
+    // break instead of gluing on with no separator"). Without it, the text
+    // AFTER a tool call glues directly onto the text before it with no
+    // separator — "Let me check.All done." live, vs a real break after a
+    // reload replays the same content through applyMessageArray's own
+    // (unaffected) formatting. Insert the break, then consume the flag —
+    // mirrors the pre-#823 behavior exactly.
+    const boundary = m.pendingTextBoundary && m.content ? '\n\n' : ''
+    m.content = (m.content ?? '') + boundary + frame.content
+    m.pendingTextBoundary = false
+  }
+  if (frame.agent_id) m.agentId = frame.agent_id
+  if (frame.turn_id && !m.turnId) m.turnId = frame.turn_id
+  m.isStreaming = true
+  m.status = 'streaming'
+  draft.isStreaming = true
+}
+
+function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFrameType): void {
+  const messageId = frame.message_id!
+  const turnId = frame.turn_id
+
+  // Step 1: this message_id is already accounted for on some bubble
+  // (live-registered as that bubble's own id, or merged onto an earlier
+  // bubble of the same turn by step 2 on a previous token).
+  //
+  // Opus review round 6, R-J (HIGH, DO-NOT-SHIP, real-browser regression):
+  // a bare message_id match here is not enough — if the bubble it names
+  // belongs to a DIFFERENT, genuinely finished turn (message_id is not
+  // guaranteed turn-unique; confirmed by direct reproduction: turn B
+  // reusing turn A's message_id merged 120 tokens of two separate answers
+  // into ONE bubble), treating it as "the same answer continuing" is
+  // exactly wrong — a whole second turn's answer got appended into the
+  // first turn's already-finished bubble instead of opening its own. A
+  // message_id match only counts when BOTH frames carry no turn_id, or
+  // their turn_ids agree; otherwise this is a cross-turn id collision and
+  // falls through to steps 2/3 as if the message_id were unregistered.
+  const rawResolvedId = findBubbleIdForMessageId(draft, messageId)
+  const resolvedId =
+    rawResolvedId && turnId && draft.messagesById[rawResolvedId].turnId && draft.messagesById[rawResolvedId].turnId !== turnId
+      ? null
+      : rawResolvedId
+  if (resolvedId) {
+    const existing = draft.messagesById[resolvedId]
+    if (existing.status === 'interrupted' || existing.status === 'error') return
+    if (existing.status === 'done' && !existing.isStreaming) {
+      // Opus review round 3 item N2 (MEDIUM-HIGH, DO-NOT-SHIP,
+      // browser-confirmed: sending a message mid-answer dropped the rest of
+      // the CURRENT step — the agent doesn't reach a step boundary the
+      // instant a steer message is sent, so the SAME turn/message_id keeps
+      // streaming tokens for it afterward): a bubble closed only by
+      // `closedBySteer` (outbound-lifecycle.ts's sendMessage mid-turn
+      // branch, ADR-070 §2.1) for the SAME turn_id is not actually
+      // finished — it was closed early so the user's new message could sit
+      // after it in the thread, not because the step itself ended. Reopen
+      // it and keep appending instead of discarding these tokens.
+      if (existing.closedBySteer && existing.turnId === frame.turn_id) {
+        existing.closedBySteer = false
+      } else if (existing.turnId && existing.turnId === draft.activeTurnId) {
+        // Opus review round 3 item N5 (LOW-MEDIUM): a replay_message-
+        // reconstructed bubble is always created with status:'done' (it's
+        // reconstructing HISTORY — replay-and-status-frames.ts's own
+        // newMsg literal), even when it belongs to a turn session_state
+        // (which always precedes replay frames in a real attach, §4.1 A6)
+        // has just confirmed is STILL RUNNING. Design §6.3: "For the active
+        // turn from session_state.active_turn, the replayed bubble stays
+        // eligible to receive tokens." Without this, a full rebuild mid-way
+        // through a multi-step turn split the continuation into a second
+        // bubble. Distinct from F4's persisted-between-bind-and-read case
+        // (BE-DESIGN.md §4.2/§6.3, kept below): there session_state carries
+        // NO active_turn for the already-finished turn, so activeTurnId is
+        // null and this branch correctly does not apply.
+      } else {
+        // §4.2/§6.3 overlap rule: a bubble already finalized (status 'done',
+        // not streaming) ignores any further token for its message_id
+        // outright — this is what makes a snapshot's persisted-between-
+        // bind-and-read race safe (F4's own scenario): the replayed history
+        // already shows the full text, and live tokens with seq > W for
+        // the SAME message_id that arrive afterward must never re-open or
+        // duplicate it.
+        return
+      }
+    }
+    applyTokenContentTo(draft, resolvedId, frame)
+    return
+  }
+
+  // Step 2: no bubble holds this message_id yet. Look for an OPEN bubble
+  // (not finalized by this turn's own `done`) for the SAME turn_id and
+  // agent_id — this is F1's shape (msg-1's tool-call round, then msg-2's
+  // continuation): register the new message_id onto that SAME bubble
+  // instead of starting a second one.
+  if (turnId) {
+    // A user message (the sender's own steer, or its server echo) ends the
+    // current turn SEGMENT (ADR-070 round 2 fix): once one has been placed,
+    // an EARLIER assistant bubble of this same turn_id is round 1's, not a
+    // candidate for round 2's new message_id — round 2 gets its own bubble,
+    // placed after that user message. Only a candidate at or after the last
+    // user message may still be merged into.
+    let lastUserIdx = -1
+    for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+      if (draft.messagesById[draft.messageOrder[i]]?.role === 'user') {
+        lastUserIdx = i
+        break
+      }
+    }
+    let turnBubbleId: string | null = null
+    for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+      if (i < lastUserIdx) break // crossed the segment boundary — stop looking
+      const id = draft.messageOrder[i]
+      const m = draft.messagesById[id]
+      if (m?.role !== 'assistant') continue
+      // Opus review round 7 follow-up (real wire capture): a turn that
+      // opens with a tool call and NO preamble text. tool_call_start /
+      // tool_call_result carry neither turn_id nor message_id (the model
+      // hasn't named the turn yet), so the bubble they open has turnId
+      // undefined. The first token then arrives WITH turn_id/message_id —
+      // it must ADOPT that trailing, not-yet-turn-stamped bubble of the
+      // current segment (stamping it now that the turn is known) rather
+      // than opening a second one. An unstamped bubble can only belong to
+      // the CURRENT segment (Step 2's own lastUserIdx scan above already
+      // stopped looking past the last user message), so matching ANY
+      // unstamped bubble here is safe — there is at most one.
+      const unstamped = m.turnId === undefined
+      if (!unstamped && m.turnId !== turnId) continue
+      if (frame.agent_id && m.agentId && m.agentId !== frame.agent_id) continue
+      if (m.status === 'interrupted' || m.status === 'error') continue
+      // N2/N5 (see Step 1's identical fixes above for the full "why"): a
+      // bubble closed only by a mid-turn steer, OR a replay_message-
+      // reconstructed bubble belonging to the server-confirmed active
+      // turn, is not actually finished for its own turn — eligible to
+      // receive this turn's NEXT message_id too.
+      const stillEligible = unstamped || m.closedBySteer || (m.turnId === draft.activeTurnId && draft.activeTurnId != null)
+      if (m.status === 'done' && !m.isStreaming && !stillEligible) continue // closed by done(turn_id) — do not reopen
+      turnBubbleId = id
+      break
+    }
+    if (turnBubbleId) {
+      const m = draft.messagesById[turnBubbleId]
+      if (m.turnId === undefined) m.turnId = turnId // now that a token has named the turn
+      m.closedBySteer = false
+      m.mergedReplayIds = [...(m.mergedReplayIds ?? []), messageId]
+      draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
+      applyTokenContentTo(draft, turnBubbleId, frame)
+      return
+    }
+  }
+
+  // Step 3: no bubble for this turn_id either — a genuinely new turn's first
+  // message_id. There may already be an OPEN assistant bubble under a
+  // different, local id, from a DIFFERENT (now-superseded) turn:
+  //
+  //   (a) sendMessage's own send-time optimistic placeholder
+  //       (outbound-lifecycle.ts, a generateId()'d empty bubble minted the
+  //       instant the user hits send, purely so "the agent is about to
+  //       reply" renders with zero latency, before the server has assigned
+  //       — or this client has even learned — the real message_id/turn_id).
+  //       Real-browser regression (orchestrator report, 2026-09-24, BUG 2):
+  //       under the pre-#823 "last assistant message" heuristic the first
+  //       live token transparently reused this placeholder; message_id-keyed
+  //       resolution instead always minted a SECOND, brand-new bubble here,
+  //       leaving the placeholder orphaned — an empty "just the agent name"
+  //       bubble in front of every real answer. Fix: RE-KEY the placeholder
+  //       to the real message_id/turn_id instead of creating a second bubble.
+  //
+  //   (b) a genuinely different, already-content-bearing bubble — e.g. a
+  //       bubble a disconnect left open (BUG 1's fix, clearStreamingState no
+  //       longer closes it) that this new turn is superseding. That one is
+  //       FINALIZED, not reused — bake any tool calls it still owns first
+  //       (mirrors the pre-#823 abandoned-bubble bake: a tool call started
+  //       before this boundary must not be silently dropped from the
+  //       closing bubble's rendered tool_calls).
+  //
+  // Told apart by content: (a) has none yet (and owns no tool calls) — it is
+  // by construction the placeholder, since a real bubble that has already
+  // received a token would already have matched step 1 or 2 above for its
+  // OWN turn. (b) has already streamed something.
+  const prevOpenId = findOpenAssistantMessageId(draft.messageOrder, draft.messagesById)
+  if (prevOpenId && prevOpenId !== messageId) {
+    const prevMsg = draft.messagesById[prevOpenId]
+    const ownedIds = draft.toolCallOrder.filter(
+      (id) => draft.toolCalls[id] && draft.toolCallOwnerMessageId?.[id] === prevOpenId,
+    )
+    const isEmptyPlaceholder =
+      (prevMsg.isStreaming || prevMsg.status === 'streaming') &&
+      !prevMsg.content &&
+      ownedIds.length === 0 &&
+      !prevMsg.media?.length &&
+      !prevMsg.spans?.length
+    if (isEmptyPlaceholder) {
+      delete draft.messagesById[prevOpenId]
+      const idx = draft.messageOrder.indexOf(prevOpenId)
+      const bubble: ChatMessage = {
+        ...prevMsg,
+        id: messageId,
+        content: frame.content,
+        agentId: frame.agent_id ?? prevMsg.agentId,
+        turnId: turnId ?? prevMsg.turnId,
+      }
+      draft.messagesById[messageId] = bubble
+      if (idx !== -1) draft.messageOrder[idx] = messageId
+      else draft.messageOrder.push(messageId)
+      draft.isStreaming = true
+      return
+    }
+    if (prevMsg.isStreaming || prevMsg.status === 'streaming') {
+      if (ownedIds.length > 0) {
+        bakeToolCallsByOwner(draft.messagesById, ownedIds, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, prevOpenId, draft.textAtToolCallStart)
+      }
+      prevMsg.isStreaming = false
+      prevMsg.status = 'done'
+      prevMsg.pendingTextBoundary = false
+    }
+  }
+  // R-J's collision case (see the "cross-turn id collision" comment on
+  // resolvedId above): messageId can already belong to a DIFFERENT,
+  // unrelated bubble (Step 1 deliberately refused to reuse it). Minting the
+  // new bubble under that same id would silently overwrite/destroy the
+  // other turn's bubble in messagesById (same key). Mint a fresh local id
+  // instead in that case, and still register the server's message_id onto
+  // it (mergedReplayMessageIds) so a later token that legitimately repeats
+  // this message_id for THIS turn still resolves consistently.
+  const idCollision = !!draft.messagesById[messageId]
+  const bubbleId = idCollision ? generateId() : messageId
+  const bubble: ChatMessage = {
+    id: bubbleId,
+    role: 'assistant',
+    content: frame.content,
+    timestamp: new Date().toISOString(),
+    status: 'streaming',
+    isStreaming: true,
+    agentId: frame.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined,
+    turnId,
+    ...(idCollision ? { mergedReplayIds: [messageId] } : {}),
+  }
+  if (idCollision) {
+    draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
+  }
+  draft.messagesById[bubble.id] = bubble
+  // Opus review round 3 item N5 (LOW-MEDIUM): a brand new assistant bubble
+  // must land BEFORE the pending tail (unresolved queued/sending/failed
+  // sends), not blindly at the true end of messageOrder — same rule as
+  // replay_message's own history insertion (insertHistoryMessageId, item 2
+  // above), applied here too since a live token can mint a new bubble
+  // while a pending message is sitting at the tail (a full rebuild during
+  // a multi-step turn is the scenario that surfaced it: the turn's
+  // continuation must not render BELOW a pending message it was never
+  // actually sent after).
+  insertHistoryMessageId(draft.messageOrder, draft.messagesById, bubble.id)
+  draft.isStreaming = true
 }
 
 interface FrameContext {
@@ -285,7 +704,21 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       // handleFrame past its grandfathered line budget).
       advanceReceivedEventTime(frame, targetSid, withBucket)
 
+      // #823 catch-up redesign (BE-DESIGN.md §6.2): the apply rule, gating
+      // every SEQUENCED session-scoped frame ahead of the switch below — see
+      // applySeqGate's own doc comment for why this belongs here rather than
+      // per-case.
+      if (applySeqGate(frame, targetSid, get, withBucket) === 'drop-or-gap') {
+        syncForeground()
+        return
+      }
+
       if (handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, armRateLimitClear })) {
+        syncForeground()
+        return
+      }
+
+      if (handleCatchUpFrame({ frame, targetSid, get, withBucket })) {
         syncForeground()
         return
       }
@@ -417,14 +850,28 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               delete sessionsById['__pending']
               return { sessionsById }
             }
+            // #823 catch-up redesign pass 2 (BE-DESIGN.md §3.4/§6.1): mint
+            // the cursor from session_started's own seq/boot_id when
+            // present — this is the NEW session's very first cursor
+            // position, exempted from the ordinary seq gate
+            // (CURSOR_MINTING_FRAME_TYPES, cursor.ts) because
+            // session_started is special-routed (targetSid resolves to
+            // activeSid, never the newly-minted newSid — see this case's
+            // own targetSid comment above), so nothing else could ever
+            // write it.
+            const cursorPatch =
+              frame.seq !== undefined
+                ? { cursor: cursorFromTerminalFrame({ seq: frame.seq, boot_id: frame.boot_id }) }
+                : {}
             // Migrate pending bucket messages into the new bucket, or start fresh.
             const baseBucket: SessionChatState = pendingBucket
               ? {
                   ...pendingBucket,
                   isStreaming: true,
                   lastUserMessageAt: Date.now(),
+                  ...cursorPatch,
                 }
-              : { ...emptySessionState(), isStreaming: true }
+              : { ...emptySessionState(), isStreaming: true, ...cursorPatch }
             const sessionsById = { ...state.sessionsById, [newSid]: baseBucket }
             // Remove the temporary pending bucket.
             delete sessionsById['__pending']
@@ -466,6 +913,17 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           if (targetSid) {
             withBucket(targetSid, (b) => {
               return produce(b, (draft) => {
+                // #823 catch-up redesign pass 2 (§6.3, Q3): message_id-keyed
+                // resolution REPLACES the heuristic below for every frame
+                // that carries one — see resolveTokenBubbleByMessageId's own
+                // doc comment. The heuristic survives only as a fallback for
+                // a message_id-less frame (a hand-built test frame, or the
+                // webchatChannel.Send no-stream fallback, which still has
+                // none per Lane A's report).
+                if (frame.message_id) {
+                  resolveTokenBubbleByMessageId(draft, frame)
+                  return
+                }
                 let lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
                 // FR-21 / T21–T26: if the last assistant message was already
                 // interrupted (user clicked Stop / pressed Escape / used /cancel),
@@ -658,6 +1116,14 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 if (frame.agent_id) {
                   msg.agentId = frame.agent_id
                 }
+                // #823 catch-up redesign (BE-DESIGN.md §6.3): TokenFrame now
+                // carries turn_id (Step 0's contract change) — stamp it the
+                // same way agentId is stamped above, additive-only (never
+                // overwrites an already-known value with a different one,
+                // same permissive rule as the agentId boundary check).
+                if (frame.turn_id && !msg.turnId) {
+                  msg.turnId = frame.turn_id
+                }
                 // Consume the seam marker: a tool call started on this bubble
                 // since the last token was appended, so this frame begins a
                 // new logical unit — insert a paragraph break instead of
@@ -669,22 +1135,9 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   msg.pendingTextBoundary = false
                 }
                 msg.content = msg.content + frame.content
-                applyTokenStreamingState(draft, msg)
-                // ADR-082 review S1/CR1: a token proves the announced turn's
-                // bubble now exists, regardless of which frame order got us
-                // here (fixed-contract session_state-first, an older
-                // gateway's session_state-last, or anything racing in
-                // between). Without this, an out-of-order attach where a
-                // token arrives before the replay-terminating `done` ever
-                // gets a chance to open the placeholder (see the 'done' case
-                // below) would leave `activeTurnBubbleOpened` false while a
-                // real, content-bearing bubble is already streaming — and
-                // the turn's OWN done would then misclassify itself as
-                // "still awaiting catch-up" and open a second, empty
-                // placeholder instead of finalizing this one.
-                if (draft.activeTurnId) {
-                  draft.activeTurnBubbleOpened = true
-                }
+                msg.isStreaming = true
+                msg.status = 'streaming'
+                draft.isStreaming = true
               }) as Partial<SessionChatState>
             })
           }
@@ -773,62 +1226,39 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 }, MIN_REPLAY_DISPLAY_MS - elapsed)
               }
             }
-            // ADR-082 D3/D4 (FR-007/FR-009), review S1/CR1: a `done` frame
-            // arrives TWICE for a mid-turn attach — once marking the end of
-            // transcript replay (carries `stats.frames_emitted`, never
-            // `stats.tokens`/`stats.cost` — pkg/gateway/replay.go's
-            // terminator emit), and again later when the announced turn
-            // itself actually finishes (`stats.tokens`/`stats.cost` always
-            // stamped, even a zero-token turn — pkg/gateway/websocket.go's
-            // Finalize). Tell them apart PURELY by this stats shape — never
-            // by activeTurnId/activeTurnBubbleOpened/isReplaying state. The
-            // gateway contract fixes the wire order (session_state →
-            // replay_message* → replay-terminator done → catch-up token →
-            // live token* → the turn's own done), but this store must not
-            // assume any particular order arrived: an older gateway sent
-            // session_state LAST, and even under the fixed contract a fast
-            // concurrent turn can race its own done ahead of the replay
-            // terminator. Classifying by activeTurn* state alone (the
-            // pre-review version of this code) broke under both: with
-            // session_state arriving late, the turn's REAL done would find
-            // activeTurnId set && activeTurnBubbleOpened still false (no
-            // frame had ever flipped it — see the 'token' case's own fix)
-            // and wrongly treat itself as the replay terminator, opening a
-            // second empty placeholder and `break`ing without ever
-            // finalizing the real, content-bearing bubble — permanent Stop,
-            // locked composer.
+            // ADR-082 D3/D4 (FR-007/FR-009), review S1/CR1, updated for
+            // #823 pass 2: a `done` frame can still arrive TWICE for a
+            // mid-turn attach on Lane A's current gateway — once marking the
+            // end of transcript replay (carries `stats.frames_emitted`,
+            // never `stats.tokens`/`stats.cost` — pkg/gateway/replay.go's
+            // terminator emit, kept vestigially, see the honest-gap note
+            // just below), and again later when the announced turn itself
+            // actually finishes (`stats.tokens`/`stats.cost` always stamped,
+            // even a zero-token turn). Tell them apart PURELY by this stats
+            // shape.
             const doneStats = frame.stats
+            // N4 — see scheduleReplayErrorRetry's own doc comment.
+            if (doneStats?.replay_error === true) { scheduleReplayErrorRetry(sid); break }
             const isReplayTerminatorDone =
               doneStats?.frames_emitted !== undefined &&
               doneStats?.tokens === undefined &&
               doneStats?.cost === undefined
             if (isReplayTerminatorDone) {
-              // This done marks the end of transcript replay only — it is
-              // NEVER the signal to finalize a bubble. If session_state
-              // already announced a turn for this session and no bubble has
-              // opened for it yet (the ordinary, in-order case), open the
-              // empty streaming placeholder now: this IS the correct
-              // position for it, because every replay_message for this
-              // attach has already landed (pushed onto messageOrder in
-              // arrival order, strictly before this done — see case
-              // 'replay_message' above) — and let the catch-up token (case
-              // 'token' above) append into it exactly like the first token
-              // of any ordinary turn. If a bubble is already open (an
-              // out-of-order token beat this terminator here) or no turn
-              // was announced at all, there is nothing to open — just let
-              // the isReplaying clear/defer above stand.
-              // FX-E (ADR-082 D9): bake any tool calls still left over from
-              // replay reconstruction before this replay-terminator done —
-              // closes the remaining gap the 'replay_message' case's own
-              // fix (see its bake immediately before constructing a new
-              // NON-assistant-role message) doesn't cover: a tool call that
-              // is the LITERAL LAST transcript entry, with no further
-              // message of ANY role replayed after it. Without this, that
-              // call stays stranded in toolCallOrder forever whenever the
-              // session has no live turn to continue (the ordinary
-              // completed-session reload case) — never reaching
-              // message.tool_calls, so its dedicated renderer (e.g.
-              // SetGoalCardBlock) never sees it on reload.
+              // #823 catch-up redesign pass 2 (Lane A's SQUAD-REPORT-BEA.md
+              // "Opus pass", honest gap #5): this frame is VESTIGIAL for
+              // catch-up purposes — Lane A's gateway still emits it
+              // (removing it broke ~40 gateway-side replay tests) but it
+              // carries no turn_id and no seq, so nothing here can attribute
+              // a placeholder to it. catch_up_complete
+              // (slices/catchup-frames.ts) is now the SOLE "catch-up is
+              // over" signal — it clears isReplaying/awaitingCatchUp on its
+              // own. Not a full no-op, though: FX-E (ADR-082 D9) still
+              // applies — bake any tool calls stranded by replay
+              // reconstruction (a tool call that is the LITERAL LAST
+              // transcript entry, with no further message of any role
+              // replayed after it) onto their owning message. Nothing else
+              // in the new design re-flushes toolCallOrder for a session
+              // with no live turn to continue.
               if (priorBucket.toolCallOrder.length > 0) {
                 withBucket(sid, (b) => {
                   if (b.toolCallOrder.length === 0) return {}
@@ -841,32 +1271,6 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     draft.toolCallOwnerMessageId = {}
                   }) as Partial<SessionChatState>
                 })
-              }
-              const awaitingCatchUp =
-                !!priorBucket.activeTurnId && !priorBucket.activeTurnBubbleOpened
-              if (awaitingCatchUp) {
-                withBucket(sid, (b) => {
-                  return produce(b, (draft) => {
-                    const placeholder: ChatMessage = {
-                      id: generateId(),
-                      role: 'assistant',
-                      content: '',
-                      timestamp: new Date().toISOString(),
-                      status: 'streaming',
-                      isStreaming: true,
-                      agentId: draft.activeTurnAgentId ?? undefined,
-                    }
-                    draft.messagesById[placeholder.id] = placeholder
-                    draft.messageOrder.push(placeholder.id)
-                    draft.activeTurnBubbleOpened = true
-                    draft.replayCompletedForSession = draft.isReplaying ? sid : draft.replayCompletedForSession
-                    if (clearReplayingNow) {
-                      draft.isReplaying = false
-                    }
-                  }) as Partial<SessionChatState>
-                })
-              } else if (clearReplayingNow) {
-                withBucket(sid, () => ({ isReplaying: false }))
               }
               // Mirrors the normal finalization path's own drain call below —
               // harmless here too (maybeDrainNext no-ops while isStreaming).
@@ -886,7 +1290,35 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             )
             withBucket(sid, (b) => {
               return produce(b, (draft) => {
-                const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
+                // #823 catch-up redesign, Opus review round 2 (§6.3:
+                // "done(turn_id): close every bubble of that turn"): find the
+                // bubble by turn_id FIRST — this is the turn-keyed
+                // counterpart of the 'token' case's own
+                // resolveTokenBubbleByMessageId/findBubbleIdForMessageId. A
+                // turn can register more than one message_id onto the SAME
+                // bubble (F1's msg-1 + tool call + msg-2, merged via
+                // mergedReplayIds), so `frame.message_id` naming that bubble
+                // directly can no longer be assumed — turn_id is the
+                // reliable key now. Falls back to the pre-#823
+                // message_id/lastMsgId heuristic when the frame carries no
+                // turn_id, or names one with no matching bubble (the
+                // webchatChannel.Send no-stream fallback, which has neither).
+                const doneTurnId = frame.turn_id
+                const turnBubbleId = doneTurnId
+                  ? (() => {
+                      for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+                        const id = draft.messageOrder[i]
+                        const m = draft.messagesById[id]
+                        if (m?.role === 'assistant' && m.turnId === doneTurnId) return id
+                      }
+                      return null
+                    })()
+                  : null
+                const lastMsgId =
+                  turnBubbleId ??
+                  (frame.message_id && draft.messagesById[frame.message_id]
+                    ? frame.message_id
+                    : findLastAssistantMessageId(draft.messageOrder, draft.messagesById))
                 // Sweep the UNION of {the last assistant message} (unchanged
                 // — always normalized exactly as before, even when it isn't
                 // flagged "streaming" at all, e.g. a replay-reconstructed
@@ -1000,14 +1432,12 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 // re-announces this same turn_id later (S2) is recognized
                 // and ignored rather than re-opening streaming state with no
                 // second done ever coming to close it. Then clear
-                // activeTurnId/activeTurnAgentId/activeTurnBubbleOpened so a
-                // later, unrelated replay-terminating done for this session
-                // never mistakes a stale id for a still-open turn.
+                // activeTurnId/activeTurnAgentId so a later, unrelated
+                // replay-terminating done for this session never mistakes a
+                // stale id for a still-open turn.
                 markTurnFinished(sid, draft.activeTurnId)
                 draft.activeTurnId = null
                 draft.activeTurnAgentId = null
-                draft.activeTurnBubbleOpened = false
-                draft.terminalCatchUpPending = needsTerminalCatchUp(priorBucket, wasReplaying)
                 if (clearReplayingNow) {
                   draft.isReplaying = false
                 }
@@ -1217,7 +1647,6 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     markTurnFinished(targetSid, draft.activeTurnId)
                     draft.activeTurnId = null
                     draft.activeTurnAgentId = null
-                    draft.activeTurnBubbleOpened = false
                   }) as Partial<SessionChatState>
                 }
               }
@@ -1346,7 +1775,6 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   markTurnFinished(targetSid, draft.activeTurnId)
                   draft.activeTurnId = null
                   draft.activeTurnAgentId = null
-                  draft.activeTurnBubbleOpened = false
                 }) as Partial<SessionChatState>
               }
               // Same catalogue already on the last bubble (replay drew it,
@@ -1358,7 +1786,6 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   markTurnFinished(targetSid, draft.activeTurnId)
                   draft.activeTurnId = null
                   draft.activeTurnAgentId = null
-                  draft.activeTurnBubbleOpened = false
                 }) as Partial<SessionChatState>
               }
               // No this-turn assistant to coalesce into — last is a prior
@@ -1396,7 +1823,6 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 ...(clearReplayingNow ? { isReplaying: false } : {}),
                 activeTurnId: null,
                 activeTurnAgentId: null,
-                activeTurnBubbleOpened: false,
               }
             })
             // The failed turn may have been one we sent from the offline-queue
@@ -1567,18 +1993,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           const clampedResult = clampToolResult(frame.result)
           // ADR-091 D7/D10: see case 'tool_call_start' — every result here
           // is for this session's own flat tool call; no span-nesting path.
-          withBucket(targetSid, (b) => {
-            if (!b.toolCalls[frame.call_id]) {
-              return appendUnmatchedToolError(b, frame, clampedResult)
-            }
-            return produce(b, (draft) => {
-              const tc = draft.toolCalls[frame.call_id]
-              tc.result = clampedResult
-              tc.status = frame.status ?? 'success'
-              tc.duration_ms = frame.duration_ms
-              tc.error = frame.error
-            }) as Partial<SessionChatState>
-          })
+          withBucket(targetSid, (b) => applyToolCallResultFrame(b, frame, clampedResult))
           break
         }
 
@@ -1586,6 +2001,8 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           if (!targetSid) break
           const sf = frame as WsSubagentStartFrame
           withBucket(targetSid, (b) => {
+            // Opus F4 — see bucketHasSpan's own doc comment.
+            if (bucketHasSpan(b, sf.span_id)) return {}
             return produce(b, (draft) => {
               // ADR-070 §2.1/F2: a bare findLastAssistantMessageId scan here
               // would reattach this span to a closed, closedBySteer bubble

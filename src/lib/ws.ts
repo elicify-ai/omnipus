@@ -9,8 +9,13 @@ import { logError } from '@/lib/telemetry'
 // All wire-format frame types are sourced from the generated AsyncAPI types.
 // Hand-written interface declarations for wire-format frames are FORBIDDEN —
 // see CLAUDE.md hard-constraint #8.
-
-import { WsFrame as WsFrameSchema, WsFrameType as WsFrameTypeSchema } from '@/lib/api/generated/schemas'
+//
+// The runtime (value) Zod schemas come from the self-contained ws-schemas.ts,
+// not from schemas.ts — schemas.ts also carries the entire REST Zodios
+// `makeApi([...])` call, which references every REST schema and defeats
+// tree-shaking, so importing a WS value from there pulls the whole REST
+// schema set into this module's bundle (bundle-budget incident, PR #860).
+import { WsFrame as WsFrameSchema, WsFrameType as WsFrameTypeSchema } from '@/lib/api/generated/ws-schemas'
 import { ClientFrameTypes } from '@/lib/api/generated/asyncapi-types'
 
 import type {
@@ -834,6 +839,23 @@ export class WsConnection {
       // logout/redirect, not a banner.
       if (event.code === 1008) {
         forceLogout()
+        return
+      }
+      // #823 catch-up redesign (BE-DESIGN.md §6.7, founder decision Q5): the
+      // gateway closes with 4008 ("catch-up required") when this
+      // connection's per-connection queue overflowed (§2.1) — the journal
+      // still holds every frame; a fresh attach catches this connection
+      // back up from its cursor, so 4008 is never a real failure. Reconnect
+      // IMMEDIATELY: reset the backoff counters and open a new socket
+      // synchronously, bypassing `_scheduleReconnect` entirely so
+      // `onReconnectStateChange` never fires — that callback is exactly
+      // what the phase-1 quiet UI (ConnectionStatus.tsx) keys off to show
+      // "reconnecting…"/"unreachable", and this close must show nothing.
+      if (event.code === 4008) {
+        this.reconnectAttempts = 0
+        this.slowRetryAttempts = 0
+        this.inSlowPhase = false
+        this._createSocket()
         return
       }
       this._scheduleReconnect()

@@ -566,9 +566,34 @@ for (const manifest of manifests) {
         await page.setViewportSize({ width: 640, height: 720 })
         await page.evaluate(() => { document.documentElement.style.zoom = '2' })
         expect(await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).zoom))).toBe(2)
+        // Same measurement-order race as the reflow branch below: the zoom
+        // style change (like the resize) relayouts asynchronously, and
+        // portalled Radix floaters follow one frame later. See the reflow
+        // branch for the full mechanism and CI evidence.
+        await page.evaluate(() => new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        }))
         await assertNoOverflow(page, metadata.reflowExemptions)
       } else if (check.kind === 'reflow') {
         await page.setViewportSize({ width: 320, height: 720 })
+        // setViewportSize returns as soon as the browser process has applied the
+        // new size; the renderer processes the resize (fires the window resize
+        // event, re-lays out) a beat later. Portalled Radix floaters reposition
+        // from that resize event via floating-ui's autoUpdate, i.e. one frame
+        // after the resize lands — measured on Linux chromium (Playwright
+        // 1.61.1): the popper wrapper still sits at its 1280px-layout position
+        // (left 514) in the instant after the resize and only repositions to
+        // its 320px-layout spot (left 34) by the next frame (~21ms). Measuring
+        // overflow in that window raced the reposition and made this check
+        // flake red on loaded CI runners (3 red / 2 green on unchanged code)
+        // while the content itself always reflowed correctly. Wait for the
+        // resize-processing frame to finish (resize steps run before rAF
+        // callbacks in a frame) plus one more, so the measurement sees the
+        // settled layout. The assertion below is untouched: content that
+        // genuinely overflows at 320px still fails it.
+        await page.evaluate(() => new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        }))
         await assertNoOverflow(page, metadata.reflowExemptions)
       } else {
         expect(metadata.browserAssertions?.length, 'browser checks require parameters.designSystem.browserAssertions').toBeGreaterThan(0)
@@ -587,7 +612,7 @@ for (const manifest of manifests) {
           if (assertion.text) await expect(target).toContainText(assertion.text)
         }
         if (manifest.component === 'Button' && check.id === 'button-auxiliary-browser') {
-          const nativeMiddleClick = async (selector: string) => {
+          const nativeMiddleClick = async (selector: string, openTimeoutMs: number) => {
             const link = page.locator(selector)
             await expect(link).toBeVisible()
             await page.evaluate((targetSelector) => {
@@ -606,7 +631,7 @@ for (const manifest of manifests) {
             }, selector)
             const bounds = await link.boundingBox()
             expect(bounds, 'link must have a real mouse target').not.toBeNull()
-            const opened = page.context().waitForEvent('page', { timeout: 1_000 }).catch((error: unknown) => {
+            const opened = page.context().waitForEvent('page', { timeout: openTimeoutMs }).catch((error: unknown) => {
               if (error instanceof Error && error.name === 'TimeoutError') return null
               throw error
             })
@@ -616,13 +641,19 @@ for (const manifest of manifests) {
             const event = await page.evaluate(() => (window as Window & { __auxiliaryProof?: unknown }).__auxiliaryProof)
             return { newPage, event }
           }
-          const enabled = await nativeMiddleClick('[data-testid="enabled-link"]')
+          // The branch key is the RUNNER's OS (process.platform of the test process),
+          // not the browser's: the webkit CI job runs webkit-on-linux while a developer
+          // on this Mac runs webkit-on-darwin; each webkit job tests its own platform's
+          // engine build. macOS WebKit dispatches trusted auxclick but never opens a tab
+          // for an unmodified middle click, so its 1s window is plenty; engines that DO
+          // open a tab get a 10s capture window — harness plumbing, not a product
+          // threshold: Linux WebKit's new-page creation measured 45-288ms idle and once
+          // exceeded 1s on a loaded CI runner (one red run on code identical to a green
+          // run 41 minutes earlier). The assertions themselves are unchanged.
+          const expectsNativeTab = !(testInfo.project.use.browserName === 'webkit' && process.platform === 'darwin')
+          const enabled = await nativeMiddleClick('[data-testid="enabled-link"]', expectsNativeTab ? 10_000 : 1_000)
           expect(enabled.event).toEqual({ matches: true, trusted: true, button: 1, prevented: false })
-          if (testInfo.project.use.browserName === 'webkit' && process.platform === 'darwin') {
-            // Playwright's macOS WebKit dispatches trusted auxclick but does not open a
-            // tab for an unmodified middle click, including on plain anchors. Its Linux
-            // build (the CI runner) does open one, so Linux WebKit takes the branch below
-            // and must prove the tab opens at the link's own URL.
+          if (!expectsNativeTab) {
             expect(enabled.newPage).toBeNull()
           } else {
             expect(enabled.newPage, 'enabled middle click must open a tab in this engine').not.toBeNull()
@@ -630,7 +661,7 @@ for (const manifest of manifests) {
             await enabled.newPage!.close()
           }
           for (const state of ['disabled', 'pending']) {
-            const blocked = await nativeMiddleClick(`[data-testid="${state}-link"]`)
+            const blocked = await nativeMiddleClick(`[data-testid="${state}-link"]`, 1_000)
             if (blocked.newPage) await blocked.newPage.close()
             expect(blocked.event).toEqual({ matches: true, trusted: true, button: 1, prevented: true })
             expect(blocked.newPage, `${state} href-backed Button must suppress native middle-click navigation`).toBeNull()

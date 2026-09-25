@@ -4,8 +4,8 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -106,9 +106,13 @@ type wsHandlerHandleChatMessage struct {
 	admitted            bool
 }
 
+// pendingMessageStatus is one persisted user message still waiting for its
+// turn to open a streamer (the received→working tick). #823 (BE-DESIGN.md
+// §1.2, review finding 12): it no longer holds the sending *wsConn — the
+// "working" tick is published through the session hub to every bound tab,
+// so nothing here keeps a dead connection alive in memory.
 type pendingMessageStatus struct {
 	clientMessageID string
-	wc              *wsConn
 }
 
 // handleChatMessage mints a new session when frame.SessionID is empty, records
@@ -221,6 +225,7 @@ func (h *WSHandler) handleChatMessageWithClientID(
 	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, clientMessageID: clientMessageID, autoApprove: autoApprove, wc: wc}
 	defer func() {
 		if !hcm.admitted {
+			hcm.h.forgetAcceptedMessage(hcm.sessionID, hcm.clientMessageID)
 			hcm.sendMessageStatus("failed")
 		}
 	}()
@@ -234,6 +239,13 @@ func (h *WSHandler) handleChatMessageWithClientID(
 	}
 
 	if hcm.resolveSessionStore() {
+		return
+	}
+
+	// #823 review item 6: a re-sent message this session already accepted is
+	// answered, never turned into a second user message and a second turn.
+	if hcm.answerRetriedMessage() {
+		hcm.admitted = true
 		return
 	}
 
@@ -252,7 +264,7 @@ func (h *WSHandler) handleChatMessageWithClientID(
 	defer cancel()
 	if err := hcm.h.msgBus.PublishInbound(pubCtx, hcm.msg); err != nil {
 		hcm.removeQueuedWorkingStatus()
-		slog.Warn("ws: failed to publish message", "error", err)
+		logsafeWarn("ws: failed to publish message", "error", err)
 		// Same compensation as the earlier session-mint/SetMeta failures — a
 		// successful kickoff consume must not be silently lost just because
 		// the bus publish that was supposed to drive Ava's turn failed. Also
@@ -291,7 +303,7 @@ func (h *WSHandler) handleChatMessageWithClientID(
 					"workspace_id": hcm.workspaceID,
 				},
 			}); err != nil {
-				slog.Warn("ws: workspace setup kickoff: audit write failed",
+				logsafeWarn("ws: workspace setup kickoff: audit write failed",
 					"workspace_id", hcm.workspaceID, "session_id", hcm.sessionID, "error", err)
 			}
 		}
@@ -308,7 +320,7 @@ func (hcm *wsHandlerHandleChatMessage) queueWorkingStatus() {
 	}
 	hcm.h.pendingMessageStatuses[hcm.sessionID] = append(
 		hcm.h.pendingMessageStatuses[hcm.sessionID],
-		pendingMessageStatus{clientMessageID: hcm.clientMessageID, wc: hcm.wc},
+		pendingMessageStatus{clientMessageID: hcm.clientMessageID},
 	)
 	hcm.h.mu.Unlock()
 }
@@ -316,9 +328,15 @@ func (hcm *wsHandlerHandleChatMessage) queueWorkingStatus() {
 func (hcm *wsHandlerHandleChatMessage) removeQueuedWorkingStatus() bool {
 	hcm.h.mu.Lock()
 	defer hcm.h.mu.Unlock()
+	return hcm.removeQueuedWorkingStatusLocked()
+}
+
+// removeQueuedWorkingStatusLocked is removeQueuedWorkingStatus with h.mu
+// already held.
+func (hcm *wsHandlerHandleChatMessage) removeQueuedWorkingStatusLocked() bool {
 	queue := hcm.h.pendingMessageStatuses[hcm.sessionID]
 	for index, pending := range queue {
-		if pending.clientMessageID != hcm.clientMessageID || pending.wc != hcm.wc {
+		if pending.clientMessageID != hcm.clientMessageID {
 			continue
 		}
 		queue = append(queue[:index], queue[index+1:]...)
@@ -333,14 +351,41 @@ func (hcm *wsHandlerHandleChatMessage) removeQueuedWorkingStatus() bool {
 }
 
 func (hcm *wsHandlerHandleChatMessage) markWorkingIfTurnAlreadyActive() {
-	hcm.h.mu.Lock()
-	active := hcm.h.liveStreamers[hcm.sessionID] != nil
-	hcm.h.mu.Unlock()
-	if !active {
+	// A message steered into a turn that is already running gets no
+	// GetStreamer call of its own for its "working" tick, so mark it here.
+	if hcm.h.agentLoop == nil {
 		return
 	}
-	if hcm.removeQueuedWorkingStatus() {
-		hcm.sendMessageStatus("working")
+	if _, _, _, active := hcm.h.agentLoop.ActiveForegroundTurnInfo(hcm.sessionID); !active {
+		return
+	}
+	data, err := json.Marshal(generated.MessageStatusFrame{
+		Type:            string(generated.WsFrameTypeMessageStatus),
+		SessionId:       hcm.sessionID,
+		ClientMessageId: hcm.clientMessageID,
+		State:           "working",
+	})
+	if err != nil {
+		logsafeError("ws: marshal message_status failed", "session_id", hcm.sessionID, "error", err)
+		return
+	}
+	// Take the pending entry AND publish the tick under h.mu — the same lock
+	// GetStreamer takes the entry under — so the tick is always numbered
+	// before the turn's first token: either GetStreamer already sent it, or
+	// GetStreamer waits for this publish. Removing here and publishing after
+	// the unlock let a token overtake the tick (#823 fixture recorder found it).
+	h := hcm.h
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !hcm.removeQueuedWorkingStatusLocked() {
+		return
+	}
+	h.markAcceptedMessageWorkingLocked(hcm.sessionID, hcm.clientMessageID)
+	if h.hubs != nil && hcm.sessionID != "" {
+		h.hubs.getOrCreate(hcm.sessionID).publishBytes(data)
+	}
+	if hcm.wc != nil && (hcm.wc.boundHub == nil || hcm.wc.boundHub.id != hcm.sessionID) {
+		sendRawFrameBytes(hcm.wc, string(generated.WsFrameTypeMessageStatus), data)
 	}
 }
 
@@ -393,53 +438,80 @@ func (h *WSHandler) flushPendingMessageStatusesAsWorking(sessionID string) {
 	}
 }
 
-// sendPendingMessageWorking delivers the "working" status to EVERY connection
-// currently bound to sessionID — not just pending.wc (the connection that
-// originally sent the message). Review finding 12: on a kept-chat reconnect,
-// pending.wc is the ORIGINAL (often now-dead) connection; a tab that
-// reconnected under a NEW chatID is bound to the same session via
-// h.sessionIDs but would otherwise never see the tick flip past "Received".
-// h (not just the session id) is threaded through so this can resolve the
-// current connection set under h.mu, matching every other webchat delivery
-// path (see resolveSessionConnsLocked's doc comment).
+// sendPendingMessageWorking publishes the "working" status for pending
+// through sessionID's hub (#823 BE-DESIGN.md §1.2): every tab bound to the
+// session receives it with a sequence number — the original sender, a
+// reconnected tab under a new chat id, and a second tab alike (review
+// finding 12). h is nil only for a bare test fixture, which has no hub.
 func sendPendingMessageWorking(h *WSHandler, sessionID string, pending pendingMessageStatus) {
-	frame := generated.MessageStatusFrame{
+	if h == nil {
+		return
+	}
+	h.markAcceptedMessageWorking(sessionID, pending.clientMessageID)
+	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
 		Type:            string(generated.WsFrameTypeMessageStatus),
 		SessionId:       sessionID,
 		ClientMessageId: pending.clientMessageID,
 		State:           "working",
-	}
-	if h == nil {
-		// No handler to resolve the session's connection set — fall back to
-		// the originating connection only (defensive; not reached in
-		// production, where GetStreamer/sendDone always pass a real h).
-		sendConnGenFrame(pending.wc, string(generated.WsFrameTypeMessageStatus), frame)
-		return
-	}
-	h.mu.Lock()
-	targets := h.resolveSessionConnsLocked("", sessionID)
-	h.mu.Unlock()
-	if len(targets) == 0 && pending.wc != nil {
-		// No connection resolved via h.sessionIDs yet (e.g. a race right at
-		// mint time) — still deliver to the connection that sent the
-		// message rather than silently dropping the tick.
-		targets = []*wsConn{pending.wc}
-	}
-	for _, conn := range targets {
-		sendConnGenFrame(conn, string(generated.WsFrameTypeMessageStatus), frame)
-	}
+	}, nil)
 }
 
+// sendMessageStatus publishes a received/working/failed tick for this
+// message through the session hub, so every tab bound to the session sees
+// it (#823 BE-DESIGN.md §1.2). The sending connection additionally gets an
+// unsequenced copy when it is not bound to the session (e.g. a "failed"
+// tick for a message rejected before any bind) — it is the one tab whose
+// pending bubble is waiting on this exact tick.
 func (hcm *wsHandlerHandleChatMessage) sendMessageStatus(state string) {
 	if hcm.clientMessageID == "" || hcm.sessionID == "" {
 		return
 	}
-	sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
+	hcm.h.hubPublishFrame(hcm.sessionID, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
 		Type:            string(generated.WsFrameTypeMessageStatus),
 		SessionId:       hcm.sessionID,
 		ClientMessageId: hcm.clientMessageID,
 		State:           state,
-	})
+	}, hcm.wc)
+}
+
+// publishUserMessage echoes a just-persisted user message to every tab
+// bound to the session as a numbered user_message frame (#823 founder
+// decision Q1, BE-DESIGN.md §4.7). The sender's SPA moves its pending
+// bubble (matched by client_message_id) into history at this frame's
+// position; every other tab inserts it there. Published strictly AFTER the
+// transcript append succeeded, so a snapshot read taken after a later
+// attach can never miss a message whose frame it already consumed.
+func (hcm *wsHandlerHandleChatMessage) publishUserMessage(entry session.TranscriptEntry) {
+	frame := generated.UserMessageFrame{
+		Type:      string(generated.WsFrameTypeUserMessage),
+		SessionId: hcm.sessionID,
+		Id:        entry.ID,
+		Content:   entry.Content,
+		Timestamp: entry.Timestamp.UTC().Format(time.RFC3339Nano),
+	}
+	if entry.AgentID != "" {
+		aid := entry.AgentID
+		frame.AgentId = &aid
+	}
+	if entry.ClientMessageID != "" {
+		cid := entry.ClientMessageID
+		frame.ClientMessageId = &cid
+	}
+	for _, a := range entry.Attachments {
+		frame.Attachments = append(frame.Attachments, struct {
+			MimeType string `json:"mime_type"`
+			Path     string `json:"path"`
+			Size     int64  `json:"size"`
+			Type     string `json:"type"`
+		}{MimeType: a.MIMEType, Path: a.Path, Size: a.Size, Type: a.Type})
+	}
+	data, err := json.Marshal(frame)
+	if err != nil {
+		logsafeError("ws: marshal user_message failed", "session_id", hcm.sessionID, "error", err)
+		return
+	}
+	hcm.h.rememberAcceptedMessage(hcm.sessionID, entry.ClientMessageID, data)
+	hcm.h.hubPublishAndDeliverAlsoTo(hcm.sessionID, string(generated.WsFrameTypeUserMessage), data, hcm.wc)
 }
 
 // resolveTargetAgent resolves the target agent from the frame's agent_id (default-agent fallbacks included) and rejects worker agents and targets that resolve to nothing.
@@ -462,7 +534,7 @@ func (hcm *wsHandlerHandleChatMessage) resolveTargetAgent() bool {
 		// is a delegation-only labor tier, never a chat target. Refuse to mint a
 		// live chat session for it. Mirror the error-frame pattern used for an
 		// unknown/invalid session below.
-		slog.Warn("ws: rejecting chat frame addressed to a worker agent",
+		logsafeWarn("ws: rejecting chat frame addressed to a worker agent",
 			"agent_id", hcm.targetAgentID, "chat_id", hcm.chatID,
 			"reason", "worker is invoked via delegation, not as a chat target")
 		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
@@ -480,7 +552,7 @@ func (hcm *wsHandlerHandleChatMessage) resolveTargetAgent() bool {
 	// fall back to now — an empty owner on a persisted session is exactly the
 	// unpoliced-shadow-agent bug removing the sentinel was meant to close.
 	if hcm.targetAgentID == "" {
-		slog.Warn("ws: rejecting chat frame — no agent_id supplied and no default agent could be resolved",
+		logsafeWarn("ws: rejecting chat frame — no agent_id supplied and no default agent could be resolved",
 			"chat_id", hcm.chatID, "workspace_id", hcm.workspaceID)
 		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
@@ -503,7 +575,7 @@ func (hcm *wsHandlerHandleChatMessage) validateFrameIDs() bool {
 	// validation must complete before the consume step is ever reached.
 	if hcm.agentID != "" {
 		if err := validateEntityID(hcm.agentID); err != nil {
-			slog.Warn("ws: invalid agent_id in message frame; rejecting", "agent_id", hcm.agentID, "error", err)
+			logsafeWarn("ws: invalid agent_id in message frame; rejecting", "agent_id", hcm.agentID, "error", err)
 			var sidPtr *string
 			if hcm.frameSessionID != "" {
 				sidCopy := hcm.frameSessionID
@@ -527,7 +599,7 @@ func (hcm *wsHandlerHandleChatMessage) validateFrameIDs() bool {
 	// flag before being rejected.
 	if hcm.sessionID != "" {
 		if err := validation.EntityID(hcm.sessionID); err != nil {
-			slog.Warn("ws: invalid session_id in message frame", "session_id", hcm.sessionID, "error", err)
+			logsafeWarn("ws: invalid session_id in message frame", "session_id", hcm.sessionID, "error", err)
 			sidCopy := hcm.sessionID
 			sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 				Type:      string(generated.WsFrameTypeError),
@@ -548,7 +620,7 @@ func (hcm *wsHandlerHandleChatMessage) validateFrameIDs() bool {
 	// the (sessionID == "") mint branch below, which is the only path a
 	// kickoff can now take.
 	if hcm.setupKickoff && hcm.sessionID != "" {
-		slog.Warn("ws: workspace setup kickoff with a client-supplied session_id — rejecting",
+		logsafeWarn("ws: workspace setup kickoff with a client-supplied session_id — rejecting",
 			"chat_id", hcm.chatID, "session_id", hcm.sessionID)
 		sidCopy := hcm.sessionID
 		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
@@ -566,7 +638,7 @@ func (hcm *wsHandlerHandleChatMessage) validateFrameIDs() bool {
 	// (resolveWorkspaceID/ResolveDefaultID picks up the real default) rather
 	// than stamping the bogus id.
 	if hcm.workspaceID != "" && hcm.h.home != "" && !workspace.Exists(hcm.h.home, hcm.workspaceID) {
-		slog.Warn("ws: dropping unknown workspace_id binding — falling back to default",
+		logsafeWarn("ws: dropping unknown workspace_id binding — falling back to default",
 			"workspace_id", hcm.workspaceID, "chat_id", hcm.chatID)
 		hcm.workspaceID = ""
 	}
@@ -578,7 +650,7 @@ func (hcm *wsHandlerHandleChatMessage) validateFrameIDs() bool {
 	// fake user-authored transcript entry and session title) — no session is
 	// minted, nothing is published.
 	if hcm.setupKickoff && hcm.workspaceID == "" {
-		slog.Warn("ws: workspace setup kickoff with no resolved workspace_id — rejecting",
+		logsafeWarn("ws: workspace setup kickoff with no resolved workspace_id — rejecting",
 			"chat_id", hcm.chatID)
 		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
@@ -613,7 +685,7 @@ func (hcm *wsHandlerHandleChatMessage) resolveSessionStore() bool {
 			// Truly unknown session — surface it explicitly so the SPA can
 			// render the "session not found" toast/banner rather than silently
 			// publishing the message to the bus against a non-existent session.
-			slog.Warn(
+			logsafeWarn(
 				"ws: session not found (no store owns it)",
 				"session_id", hcm.sessionID,
 			)
@@ -638,7 +710,7 @@ func (hcm *wsHandlerHandleChatMessage) resolveSessionStore() bool {
 	// falling through to the no-store tail below, which would publish the
 	// raw kickoff instruction to the bus as an ordinary message.
 	if hcm.setupKickoff && hcm.store == nil {
-		slog.Warn("ws: workspace setup kickoff rejected — no session store available",
+		logsafeWarn("ws: workspace setup kickoff rejected — no session store available",
 			"workspace_id", hcm.workspaceID, "chat_id", hcm.chatID)
 		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
@@ -673,14 +745,14 @@ func (hcm *wsHandlerHandleChatMessage) collectAcceptedMedia() {
 	for i, ref := range hcm.mediaRefs {
 		if i >= maxInboundMediaRefs {
 			hcm.wc.inboundDropped.Add(1)
-			slog.Warn("ws: media array exceeds cap — dropping remaining refs",
+			logsafeWarn("ws: media array exceeds cap — dropping remaining refs",
 				"chat_id", hcm.chatID, "session_id", hcm.sessionID,
 				"dropped_from_index", i, "total_supplied", len(hcm.mediaRefs))
 			break
 		}
 		if len(ref) > maxInboundRefLen {
 			hcm.wc.inboundDropped.Add(1)
-			slog.Warn("ws: dropping oversized ref in message frame",
+			logsafeWarn("ws: dropping oversized ref in message frame",
 				"chat_id", hcm.chatID, "session_id", hcm.sessionID,
 				"ref_prefix", ref[:32])
 			continue
@@ -698,7 +770,7 @@ func (hcm *wsHandlerHandleChatMessage) collectAcceptedMedia() {
 			if len(truncated) > 64 {
 				truncated = truncated[:64] + "…"
 			}
-			slog.Warn("ws: dropping invalid media:// ref in message frame",
+			logsafeWarn("ws: dropping invalid media:// ref in message frame",
 				"chat_id", hcm.chatID, "session_id", hcm.sessionID,
 				"ref_prefix", truncated)
 		}
@@ -766,7 +838,7 @@ func (hcm *wsHandlerHandleChatMessage) recordSessionAndTranscript() bool {
 				// know about must never silently fall through as if it were
 				// kickoffConsumed — reject outright, same as every other
 				// kickoff-cannot-complete case.
-				slog.Warn("ws: workspace setup kickoff: unrecognized outcome — rejecting",
+				logsafeWarn("ws: workspace setup kickoff: unrecognized outcome — rejecting",
 					"workspace_id", hcm.workspaceID, "outcome", outcome)
 				sidCopy := hcm.sessionID
 				sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
@@ -778,187 +850,246 @@ func (hcm *wsHandlerHandleChatMessage) recordSessionAndTranscript() bool {
 			}
 		}
 		if hcm.sessionID == "" {
-			// No session_id in frame: mint a new session so all subsequent frames have one.
-			meta, err := hcm.store.NewSession(session.SessionTypeChat, "webchat", hcm.targetAgentID)
-			if err != nil {
-				slog.Error("ws: could not create session", "error", err)
-				// A successful kickoff consume just cleared SetupPending —
-				// if minting the session then fails, the one-time interview would
-				// otherwise be silently lost. Best-effort restore.
-				if hcm.setupKickoff {
-					hcm.h.restoreWorkspaceSetupPending(hcm.workspaceID)
-				}
-				sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-					Type:    string(generated.WsFrameTypeError),
-					Message: fmt.Sprintf("could not create session: %v", err),
-				})
+			if hcm.mintSession() {
 				return true
 			}
-			hcm.sessionID = meta.ID
-			hcm.h.mu.Lock()
-			hcm.h.sessionIDs[hcm.chatID] = meta.ID
-			hcm.h.mu.Unlock()
-			var title string
-			if hcm.setupKickoff {
-				// The kickoff instruction text must not leak into the sidebar
-				// as a session title — use a fixed, human-readable one instead.
-				title = "Workspace setup"
-			} else {
-				titleRunes := []rune(hcm.content)
-				if len(titleRunes) > 60 {
-					title = string(titleRunes[:57]) + "..."
-				} else {
-					title = hcm.content
-				}
-			}
-			// Stamp the session owner from the authenticated WebSocket user (SEC-2/#406).
-			// wc.userID is set at auth time (FR-073); empty on dev-mode bypass.
-			ownerCopy := hcm.wc.userID
-			metaPatch := session.MetaPatch{Title: &title, Owner: &ownerCopy}
-			// M4: bind the new session to the active workspace so created tasks
-			// land on this workspace's board (not the agent's default).
-			if hcm.workspaceID != "" {
-				wsCopy := hcm.workspaceID
-				metaPatch.WorkspaceID = &wsCopy
-			}
-			if err := hcm.store.SetMeta(meta.ID, metaPatch); err != nil {
-				if hcm.setupKickoff {
-					// A kickoff turn that fails to persist its title/owner/
-					// workspace stamp would run UNBOUND from the workspace
-					// that triggered it — worse than a plain warn-and-continue.
-					// Treat this as a hard failure: restore the flag, delete
-					// the just-minted orphan session, and reject before the
-					// session_started ack (below) is ever sent.
-					slog.Warn(
-						"ws: workspace setup kickoff: could not persist session title/owner/workspace — rejecting",
-						"session_id", meta.ID, "error", err)
-					hcm.h.rollbackKickoffSession(hcm.store, hcm.workspaceID, meta.ID, hcm.chatID)
-					sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-						Type:    string(generated.WsFrameTypeError),
-						Message: "workspace setup could not be started",
-					})
-					return true
-				}
-				slog.Warn("ws: could not set session title/owner", "session_id", meta.ID, "error", err)
-			}
-			hcm.applyMintTimeAutoApproveChoice(meta.ID)
-			// Ack the new session_id so the SPA can associate all subsequent frames.
-			startedFrame := generated.SessionStartedFrame{
-				Type:      string(generated.WsFrameTypeSessionStarted),
-				SessionId: meta.ID,
-			}
-			if hcm.targetAgentID != "" {
-				aid := hcm.targetAgentID
-				startedFrame.AgentId = &aid
-			}
-			sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeSessionStarted), startedFrame)
-		} else {
-			// This branch — an existing, client-supplied session_id — is
-			// reachable only by a NORMAL (non-kickoff) message: the mint-only
-			// guard near the top of this function already rejected any
-			// setupKickoff frame carrying a non-empty session_id, and format
-			// was already validated up front there too. No kickoff-restore
-			// compensation is needed here as a result.
-			//
-			// Validate that the session actually exists in the store.
-			existingMeta, err := hcm.store.GetMeta(hcm.sessionID)
-			if err != nil {
-				slog.Warn("ws: session not found", "session_id", hcm.sessionID, "error", err)
-				sidCopy := hcm.sessionID
-				sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-					Type:      string(generated.WsFrameTypeError),
-					Message:   "session not found",
-					SessionId: &sidCopy,
-				})
-				return true
-			}
-			// M4: track the ACTIVE workspace on every message, not just the first
-			// one. The SPA resends the CURRENTLY active workspace_id on every
-			// outbound frame (src/store/chat.ts sendMessage, read live from
-			// useWorkspacesStore) specifically so a task/delegation this turn
-			// creates lands on whatever workspace the operator is looking at
-			// right now — including an ongoing chat session that started in one
-			// workspace and is continuing in another. A stale "first binding
-			// wins" rule broke that: a delegation edge wired on a workspace's
-			// Team tab AFTER the session's first bind would never be consulted
-			// by resolveEffectiveWorkspaceID (pkg/agent/loop.go), which reads
-			// this same session meta fresh every turn — so the UI's "Saved just
-			// now" was genuine (see TestWorkspaceDelegation_EdgeWiredViaTeamTabPersistsForLiveSession)
-			// but the running session kept enforcing/advertising delegation against its
-			// ORIGINAL workspace until the operator started a brand new session.
-			// Only skip the rewrite when this message carries no workspace_id at
-			// all (workspaceID == "") — an absent value must never blank out an
-			// existing binding (e.g. a non-workspace-aware channel message
-			// resuming a workspace-bound session), it just leaves it as-is.
-			if hcm.workspaceID != "" && existingMeta != nil && existingMeta.WorkspaceID != hcm.workspaceID {
-				wsCopy := hcm.workspaceID
-				if err := hcm.store.SetMeta(hcm.sessionID, session.MetaPatch{WorkspaceID: &wsCopy}); err != nil {
-					slog.Warn("ws: could not bind workspace to session", "session_id", hcm.sessionID, "error", err)
-				}
-			}
-			// Track for streamer.
-			hcm.h.mu.Lock()
-			if hcm.h.sessionIDs[hcm.chatID] == "" {
-				hcm.h.sessionIDs[hcm.chatID] = hcm.sessionID
-			}
-			hcm.h.mu.Unlock()
+		} else if hcm.adoptExistingSession() {
+			return true
 		}
-
-		// ADR-066 D4 / FR-015: this handler persists the user message BEFORE
-		// the bus publish, but processMessage is the enforcement point for
-		// the user-message bound and refuses an over-bound message with NO
-		// transcript entry. So the one thing this intake does for the bound
-		// is skip that early write when processMessage is about to refuse —
-		// the refusal reply itself comes back through the ordinary outbound
-		// path (token + done frames, never an error frame). A kickoff turn
-		// discards the client content entirely, so it is never over-bound.
-		overUserBound := !hcm.setupKickoff &&
-			agent.UserMessageChars(hcm.content) > hcm.h.agentLoop.UserMessageBound()
-		if hcm.sessionID != "" && !overUserBound {
-			entry := session.TranscriptEntry{
-				ID:        uuid.New().String(),
-				Role:      "user",
-				AgentID:   hcm.targetAgentID,
-				Content:   hcm.content,
-				Timestamp: time.Now().UTC(),
-				// D2 (library-spec, 2026-07-29 UAT): persist which files this
-				// message attached. Previously this field was never set even
-				// though it has existed on TranscriptEntry all along — a later
-				// turn (or a DIFFERENT AGENT after a handoff, exactly what
-				// happened in the UAT: Mia -> Ray) had no durable record of
-				// what was uploaded, only the live in-flight message. Built
-				// from acceptedMedia (the validated ref set), not the raw
-				// client-supplied mediaRefs.
-				Attachments: buildTranscriptAttachments(hcm.h.agentLoop.GetMediaStore(), hcm.acceptedMedia, hcm.workspaceID),
-			}
-			if hcm.setupKickoff {
-				// Record the kickoff trigger as a system-role event, not a user
-				// chat bubble. AgentID stays targetAgentID (Ava) so replay/
-				// hydration attributes this entry to her on a fresh turn.
-				entry.Type = session.EntryTypeSystem
-				entry.Role = "system"
-				// The PERSISTED/REPLAYED entry carries neutral, fixed
-				// content — never the client-supplied kickoff instruction, and
-				// not even the SERVER-BUILT one either (session replay renders
-				// this as a system pill). The turn itself is instead driven by
-				// the SERVER-BUILT kickoffInstruction via msg.Content below —
-				// see turnContent — never by this entry or by `content`.
-				entry.Content = "Workspace setup started."
-			}
-			if err := hcm.store.AppendTranscript(hcm.sessionID, entry); err != nil {
-				slog.Warn("ws: could not record user message", "session_id", hcm.sessionID, "error", err)
-			} else {
-				hcm.transcriptPersisted = true
-			}
-			// The workspace.setup_consumed audit entry is emitted further
-			// below, AFTER a successful bus publish — not here. Emitting it
-			// at this point (the previous placement) ran before the publish
-			// that could still fail, producing a false "consumed" audit
-			// record even on a failure that had just restored the flag and
-			// rolled back this very session.
-		}
+		hcm.persistUserMessage()
 	}
 	return false
+}
+
+// mintSession creates the new session a message with no session_id starts,
+// binds the sending connection to it and acknowledges it with
+// session_started. Returns true when the message was rejected.
+func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
+	// No session_id in frame: mint a new session so all subsequent frames have one.
+	meta, err := hcm.store.NewSession(session.SessionTypeChat, "webchat", hcm.targetAgentID)
+	if err != nil {
+		logsafeError("ws: could not create session", "error", err)
+		// A successful kickoff consume just cleared SetupPending —
+		// if minting the session then fails, the one-time interview would
+		// otherwise be silently lost. Best-effort restore.
+		if hcm.setupKickoff {
+			hcm.h.restoreWorkspaceSetupPending(hcm.workspaceID)
+		}
+		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: fmt.Sprintf("could not create session: %v", err),
+		})
+		return true
+	}
+	hcm.sessionID = meta.ID
+	// #823: bind the sender to the new session's hub right away, so
+	// every frame of its first turn — starting with its own
+	// user_message echo — reaches it through the hub; the hub's head
+	// at this moment is the connection's starting cursor.
+	hcm.h.mu.Lock()
+	hcm.h.sessionIDs[hcm.chatID] = meta.ID
+	startHead := hcm.h.bindConnToSessionHubLocked(hcm.wc, meta.ID)
+	hcm.h.mu.Unlock()
+	var title string
+	if hcm.setupKickoff {
+		// The kickoff instruction text must not leak into the sidebar
+		// as a session title — use a fixed, human-readable one instead.
+		title = "Workspace setup"
+	} else {
+		titleRunes := []rune(hcm.content)
+		if len(titleRunes) > 60 {
+			title = string(titleRunes[:57]) + "..."
+		} else {
+			title = hcm.content
+		}
+	}
+	// Stamp the session owner from the authenticated WebSocket user (SEC-2/#406).
+	// wc.userID is set at auth time (FR-073); empty on dev-mode bypass.
+	ownerCopy := hcm.wc.userID
+	metaPatch := session.MetaPatch{Title: &title, Owner: &ownerCopy}
+	// M4: bind the new session to the active workspace so created tasks
+	// land on this workspace's board (not the agent's default).
+	if hcm.workspaceID != "" {
+		wsCopy := hcm.workspaceID
+		metaPatch.WorkspaceID = &wsCopy
+	}
+	if err := hcm.store.SetMeta(meta.ID, metaPatch); err != nil {
+		if hcm.setupKickoff {
+			// A kickoff turn that fails to persist its title/owner/
+			// workspace stamp would run UNBOUND from the workspace
+			// that triggered it — worse than a plain warn-and-continue.
+			// Treat this as a hard failure: restore the flag, delete
+			// the just-minted orphan session, and reject before the
+			// session_started ack (below) is ever sent.
+			logsafeWarn(
+				"ws: workspace setup kickoff: could not persist session title/owner/workspace — rejecting",
+				"session_id", meta.ID, "error", err)
+			hcm.h.rollbackKickoffSession(hcm.store, hcm.workspaceID, meta.ID, hcm.chatID)
+			sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:    string(generated.WsFrameTypeError),
+				Message: "workspace setup could not be started",
+			})
+			return true
+		}
+		logsafeWarn("ws: could not set session title/owner", "session_id", meta.ID, "error", err)
+	}
+	hcm.applyMintTimeAutoApproveChoice(meta.ID)
+	// Ack the new session_id so the SPA can associate all subsequent frames.
+	startedFrame := generated.SessionStartedFrame{
+		Type:      string(generated.WsFrameTypeSessionStarted),
+		SessionId: meta.ID,
+	}
+	// BE-DESIGN.md §3.4: seed the client's cursor for the new
+	// session, so a reconnect during its very first turn can already
+	// catch up incrementally.
+	if hcm.h.hubs != nil && startHead > 0 {
+		seq := int64(startHead)
+		bootID := hcm.h.hubs.bootID
+		startedFrame.Seq = &seq
+		startedFrame.BootId = &bootID
+	}
+	if hcm.targetAgentID != "" {
+		aid := hcm.targetAgentID
+		startedFrame.AgentId = &aid
+	}
+	sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeSessionStarted), startedFrame)
+	return false
+}
+
+// adoptExistingSession validates a client-supplied session_id, re-stamps the
+// active workspace, and binds the connection to the session for live
+// delivery. Returns true when the message was rejected.
+func (hcm *wsHandlerHandleChatMessage) adoptExistingSession() bool {
+	// This branch — an existing, client-supplied session_id — is
+	// reachable only by a NORMAL (non-kickoff) message: the mint-only
+	// guard near the top of this function already rejected any
+	// setupKickoff frame carrying a non-empty session_id, and format
+	// was already validated up front there too. No kickoff-restore
+	// compensation is needed here as a result.
+	//
+	// Validate that the session actually exists in the store.
+	existingMeta, err := hcm.store.GetMeta(hcm.sessionID)
+	if err != nil {
+		logsafeWarn("ws: session not found", "session_id", hcm.sessionID, "error", err)
+		sidCopy := hcm.sessionID
+		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:      string(generated.WsFrameTypeError),
+			Message:   "session not found",
+			SessionId: &sidCopy,
+		})
+		return true
+	}
+	// M4: track the ACTIVE workspace on every message, not just the first
+	// one. The SPA resends the CURRENTLY active workspace_id on every
+	// outbound frame (src/store/chat.ts sendMessage, read live from
+	// useWorkspacesStore) specifically so a task/delegation this turn
+	// creates lands on whatever workspace the operator is looking at
+	// right now — including an ongoing chat session that started in one
+	// workspace and is continuing in another. A stale "first binding
+	// wins" rule broke that: a delegation edge wired on a workspace's
+	// Team tab AFTER the session's first bind would never be consulted
+	// by resolveEffectiveWorkspaceID (pkg/agent/loop.go), which reads
+	// this same session meta fresh every turn — so the UI's "Saved just
+	// now" was genuine (see TestWorkspaceDelegation_EdgeWiredViaTeamTabPersistsForLiveSession)
+	// but the running session kept enforcing/advertising delegation against its
+	// ORIGINAL workspace until the operator started a brand new session.
+	// Only skip the rewrite when this message carries no workspace_id at
+	// all (workspaceID == "") — an absent value must never blank out an
+	// existing binding (e.g. a non-workspace-aware channel message
+	// resuming a workspace-bound session), it just leaves it as-is.
+	if hcm.workspaceID != "" && existingMeta != nil && existingMeta.WorkspaceID != hcm.workspaceID {
+		wsCopy := hcm.workspaceID
+		if err := hcm.store.SetMeta(hcm.sessionID, session.MetaPatch{WorkspaceID: &wsCopy}); err != nil {
+			logsafeWarn("ws: could not bind workspace to session", "session_id", hcm.sessionID, "error", err)
+		}
+	}
+	// Track for streamer, and (#823) bind this connection to the
+	// session's hub for live delivery if it is not bound to any
+	// session yet — a client that messages an existing session
+	// without attaching first must still see its own turn. A
+	// connection already attached elsewhere keeps its binding: the
+	// sender still gets its own ticks/echo as unsequenced copies.
+	hcm.h.mu.Lock()
+	if hcm.h.sessionIDs[hcm.chatID] == "" {
+		hcm.h.sessionIDs[hcm.chatID] = hcm.sessionID
+	}
+	if hcm.wc != nil && hcm.wc.boundHub == nil {
+		hcm.h.bindConnToSessionHubLocked(hcm.wc, hcm.sessionID)
+	}
+	hcm.h.mu.Unlock()
+	return false
+}
+
+// persistUserMessage records the user's message in the transcript (when the
+// session exists and the message is within the user-message bound) and, once
+// persisted, echoes it to every tab as a user_message frame.
+func (hcm *wsHandlerHandleChatMessage) persistUserMessage() {
+	// ADR-066 D4 / FR-015: this handler persists the user message BEFORE
+	// the bus publish, but processMessage is the enforcement point for
+	// the user-message bound and refuses an over-bound message with NO
+	// transcript entry. So the one thing this intake does for the bound
+	// is skip that early write when processMessage is about to refuse —
+	// the refusal reply itself comes back through the ordinary outbound
+	// path (token + done frames, never an error frame). A kickoff turn
+	// discards the client content entirely, so it is never over-bound.
+	overUserBound := !hcm.setupKickoff &&
+		agent.UserMessageChars(hcm.content) > hcm.h.agentLoop.UserMessageBound()
+	if hcm.sessionID != "" && !overUserBound {
+		entry := session.TranscriptEntry{
+			ID:        uuid.New().String(),
+			Role:      "user",
+			AgentID:   hcm.targetAgentID,
+			Content:   hcm.content,
+			Timestamp: time.Now().UTC(),
+			// D2 (library-spec, 2026-07-29 UAT): persist which files this
+			// message attached. Previously this field was never set even
+			// though it has existed on TranscriptEntry all along — a later
+			// turn (or a DIFFERENT AGENT after a handoff, exactly what
+			// happened in the UAT: Mia -> Ray) had no durable record of
+			// what was uploaded, only the live in-flight message. Built
+			// from acceptedMedia (the validated ref set), not the raw
+			// client-supplied mediaRefs.
+			Attachments: buildTranscriptAttachments(hcm.h.agentLoop.GetMediaStore(), hcm.acceptedMedia, hcm.workspaceID),
+		}
+		if hcm.setupKickoff {
+			// Record the kickoff trigger as a system-role event, not a user
+			// chat bubble. AgentID stays targetAgentID (Ava) so replay/
+			// hydration attributes this entry to her on a fresh turn.
+			entry.Type = session.EntryTypeSystem
+			entry.Role = "system"
+			// The PERSISTED/REPLAYED entry carries neutral, fixed
+			// content — never the client-supplied kickoff instruction, and
+			// not even the SERVER-BUILT one either (session replay renders
+			// this as a system pill). The turn itself is instead driven by
+			// the SERVER-BUILT kickoffInstruction via msg.Content below —
+			// see turnContent — never by this entry or by `content`.
+			entry.Content = "Workspace setup started."
+		}
+		if !hcm.setupKickoff {
+			// #823 BE-DESIGN.md §4.7: the persisted user entry carries the
+			// client's own message id, so replay (replay_message.
+			// client_message_id) and the live user_message echo can both
+			// reconcile the sender's pending bubble — no duplicate, and
+			// never a bubble stranded above history.
+			entry.ClientMessageID = hcm.clientMessageID
+		}
+		if err := hcm.store.AppendTranscript(hcm.sessionID, entry); err != nil {
+			logsafeWarn("ws: could not record user message", "session_id", hcm.sessionID, "error", err)
+		} else {
+			hcm.transcriptPersisted = true
+			// A kickoff trigger is a system-role pill, not a user
+			// message — it is never echoed as one.
+			if !hcm.setupKickoff {
+				hcm.publishUserMessage(entry)
+			}
+		}
+		// The workspace.setup_consumed audit entry is emitted further
+		// below, AFTER a successful bus publish — not here. Emitting it
+		// at this point (the previous placement) ran before the publish
+		// that could still fail, producing a false "consumed" audit
+		// record even on a failure that had just restored the flag and
+		// rolled back this very session.
+	}
 }
 
 // buildInboundMessage assembles the bus.InboundMessage from the turn content (client content, or the server-built kickoff instruction), agent/model metadata, and the accepted media.
@@ -1054,19 +1185,19 @@ func (h *WSHandler) consumeWorkspaceSetupKickoff(
 
 	w, err := readWorkspaceFile(h.home, workspaceID)
 	if err != nil {
-		slog.Warn("ws: workspace setup kickoff: could not read workspace file — rejecting",
+		logsafeWarn("ws: workspace setup kickoff: could not read workspace file — rejecting",
 			"workspace_id", workspaceID, "error", err)
 		return kickoffFailed, "", ""
 	}
 	if !w.SetupPending {
-		slog.Warn("ws: workspace setup kickoff: setup already ran — rejecting duplicate",
+		logsafeWarn("ws: workspace setup kickoff: setup already ran — rejecting duplicate",
 			"workspace_id", workspaceID)
 		return kickoffDuplicate, "", ""
 	}
 	w.SetupPending = false
 	w.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := writeWorkspaceFile(h.home, w); err != nil {
-		slog.Warn("ws: workspace setup kickoff: could not persist cleared setup_pending — rejecting",
+		logsafeWarn("ws: workspace setup kickoff: could not persist cleared setup_pending — rejecting",
 			"workspace_id", workspaceID, "error", err)
 		return kickoffFailed, "", ""
 	}
@@ -1100,7 +1231,7 @@ func buildTranscriptAttachments(store media.MediaStore, refs []string, callerWor
 	for _, ref := range refs {
 		localPath, meta, err := store.ResolveWithMetaOpts(ref, opts)
 		if err != nil {
-			slog.Warn("ws: could not resolve media ref for transcript attachment",
+			logsafeWarn("ws: could not resolve media ref for transcript attachment",
 				"ref", ref, "error", err)
 			continue
 		}
@@ -1108,7 +1239,7 @@ func buildTranscriptAttachments(store media.MediaStore, refs []string, callerWor
 		if info, statErr := os.Stat(localPath); statErr == nil {
 			size = info.Size()
 		} else {
-			slog.Warn("ws: could not stat media file for transcript attachment size",
+			logsafeWarn("ws: could not stat media file for transcript attachment size",
 				"ref", ref, "error", statErr)
 		}
 		path := ref
@@ -1171,13 +1302,18 @@ func (h *WSHandler) rollbackKickoffSession(store *session.UnifiedStore, workspac
 	h.restoreWorkspaceSetupPending(workspaceID)
 	if store != nil && sessionID != "" {
 		if err := store.DeleteSession(sessionID); err != nil {
-			slog.Warn("ws: workspace setup kickoff: rollback session delete failed",
+			logsafeWarn("ws: workspace setup kickoff: rollback session delete failed",
 				"session_id", sessionID, "error", err)
 		}
 	}
 	h.mu.Lock()
 	if h.sessionIDs[chatID] == sessionID {
 		delete(h.sessionIDs, chatID)
+	}
+	// #823: the connection was bound to the rolled-back session's hub at
+	// mint; release it so it does not stay bound to a deleted session.
+	if wc := h.sessions[chatID]; wc != nil && wc.boundHub != nil && wc.boundHub.id == sessionID {
+		h.unbindConnHubLocked(wc)
 	}
 	h.mu.Unlock()
 }
@@ -1202,14 +1338,14 @@ func (h *WSHandler) restoreWorkspaceSetupPending(workspaceID string) {
 
 	w, err := readWorkspaceFile(h.home, workspaceID)
 	if err != nil {
-		slog.Warn("ws: workspace setup kickoff: could not read workspace file to restore setup_pending",
+		logsafeWarn("ws: workspace setup kickoff: could not read workspace file to restore setup_pending",
 			"workspace_id", workspaceID, "error", err)
 		return
 	}
 	w.SetupPending = true
 	w.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := writeWorkspaceFile(h.home, w); err != nil {
-		slog.Warn("ws: workspace setup kickoff: could not restore setup_pending after downstream failure",
+		logsafeWarn("ws: workspace setup kickoff: could not restore setup_pending after downstream failure",
 			"workspace_id", workspaceID, "error", err)
 	}
 }

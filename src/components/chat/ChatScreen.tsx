@@ -76,6 +76,7 @@ import { useFileUpload } from '@/hooks/useFileUpload'
 import { useCancelState } from '@/hooks/useCancelState'
 import {
   AssistantMessageConnectionStatus,
+  UnansweredUserMessageStatus,
   ChatConnectionNotice,
   UserMessageDeliveryStatus,
 } from './ConnectionStatus'
@@ -236,6 +237,7 @@ export function UserMessage() {
             onRetry={() => useChatStore.getState().resendMessage(storeMessage.id)}
           />
         )}
+        <UnansweredUserMessageStatus messageId={message.id} agentName={agentName} />
       </div>
     </MessagePrimitive.Root>
   )
@@ -1049,6 +1051,7 @@ export function VirtualUserMessageRow({
             onRetry={() => useChatStore.getState().resendMessage(message.id)}
           />
         )}
+        <UnansweredUserMessageStatus messageId={message.id} agentName={agentName} />
       </div>
     </div>
   )

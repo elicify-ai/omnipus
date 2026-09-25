@@ -4,7 +4,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -56,35 +55,27 @@ func gatewaySteerCanceller(al *agent.AgentLoop) steer.Canceller {
 	return c
 }
 
-// sendCancelStageFrame marshals a generated.CancelStageFrame and delivers it via wc.sendCh.
-// Mirrors sendConnGenFrame's non-critical send path (immediate try, then 10ms/50ms
-// backoffs) but is non-critical so it does not use sendConnGenFrame's critical-frame
-// timeout path. Best-effort: marshal/send errors are logged at debug level and do not
-// block the cancel state machine.
-func sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
-	if wc == nil {
-		return
-	}
-	data, err := json.Marshal(generated.CancelStageFrame{
+// sendCancelStageFrame publishes a cancel_stage frame for sessionID through
+// the session hub (#823 BE-DESIGN.md §1.2): every tab bound to the session
+// sees the Stop's progress, with a sequence number, not only the tab that
+// pressed Stop. The requesting connection wc (nil for a connection-less
+// cancel) additionally gets an unsequenced copy when it is not bound to
+// sessionID itself (§1.4 alsoUnsequencedTo=conn) — e.g. a Stop issued for a
+// delegated child session the requesting tab is not attached to.
+// Best-effort: never blocks the cancel state machine.
+func (h *WSHandler) sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
+	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeCancelStage), generated.CancelStageFrame{
 		Type:      string(generated.WsFrameTypeCancelStage),
 		SessionId: sessionID,
 		Stage:     stage,
-	})
-	if err != nil {
-		slog.Debug("ws: marshal cancel_stage frame failed", "stage", stage, "error", err)
-		return
-	}
-	// Route through sendRawFrameBytes to respect replay-divert logic and the
-	// replayMu serialization that prevents the TOCTOU race (code-reviewer Finding #2).
-	sendRawFrameBytes(wc, string(generated.WsFrameTypeCancelStage), data)
-	// sendRawFrameBytes logs at Warn on drop; suppress the duplicate debug log that
-	// existed in the old inline implementation.
+	}, wc)
 }
 
-func sendCancelReportFrame(wc *wsConn, sessionID, stage string, report steer.CancelReport) {
-	if wc == nil {
-		return
-	}
+// sendCancelReportFrame is sendCancelStageFrame for ADR-091 I-6's detached
+// stage, carrying the cascade's report. Like every cancel_stage it is
+// published once through the session hub (#823: numbered, journaled, seen by
+// every bound tab), with an unsequenced copy for an unbound requester.
+func (h *WSHandler) sendCancelReportFrame(wc *wsConn, sessionID, stage string, report steer.CancelReport) {
 	// `partial` means one thing only: the cascade could NOT reach part of the
 	// subtree. WP-D FR-D-001 — "MUST report unreachable ones as partial — in
 	// the report, on the Stop response frame, and as one line on the
@@ -120,12 +111,7 @@ func sendCancelReportFrame(wc *wsConn, sessionID, stage string, report steer.Can
 			Reason string `json:"reason"`
 		}{Id: unreachable.ID, Reason: unreachable.Reason})
 	}
-	data, err := json.Marshal(frame)
-	if err != nil {
-		slog.Debug("ws: marshal cancel report frame failed", "stage", stage, "error", err)
-		return
-	}
-	sendRawFrameBytes(wc, string(generated.WsFrameTypeCancelStage), data)
+	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeCancelStage), frame, wc)
 }
 
 // cancelPartialSummary renders the one-line PARTIAL-STOP notice — the line
@@ -173,17 +159,22 @@ func cancelIncompleteSubtreeSummary(report steer.CancelReport) string {
 	return summary + "; " + stillRunning
 }
 
-func sendCancelPartialNotice(wc *wsConn, sessionID string, report steer.CancelReport) {
+// sendCancelPartialNotice publishes the one-line PARTIAL-STOP notice as a
+// session error frame through the session hub (#823: every bound tab sees
+// it, numbered and journaled), with an unsequenced copy for an unbound
+// requester — the same delivery rule as the cancel_stage frame it
+// accompanies.
+func (h *WSHandler) sendCancelPartialNotice(wc *wsConn, sessionID string, report steer.CancelReport) {
 	message := cancelPartialSummary(report)
-	if wc == nil || message == "" {
+	if message == "" {
 		return
 	}
 	sid := sessionID
-	sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeError), generated.ErrorFrame{
 		Type:      string(generated.WsFrameTypeError),
 		SessionId: &sid,
 		Message:   message,
-	})
+	}, wc)
 }
 
 func (h *WSHandler) sendExternalCancelPartialNotice(ctx context.Context, sessionID string, report steer.CancelReport) {
@@ -307,8 +298,8 @@ func u11CollectDescendantSessionIDs(ls *session.LifecycleStore, rootID string) [
 // cancel_stage frames — nil when there is no live connection to notify.
 //
 // A nil wc is a legitimate call shape whenever a cancel is triggered with no
-// live connection to acknowledge to. sendCancelStageFrame already no-ops
-// safely on a nil wc, so the SAME hook set handleCancel builds for a real
+// live connection to acknowledge to. sendCancelStageFrame still publishes to
+// the session hub on a nil wc (every bound tab sees the stage), so the SAME hook set handleCancel builds for a real
 // Stop-click also works, unmodified, for any connection-less caller — there
 // is only one place in this file that knows how to build a web-cancel's side
 // effects.
@@ -320,10 +311,10 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 	return agent.CancelHooks{
 		SendStageFrame: func(sid, stage string) {
 			if stage == "detached" && report != nil {
-				sendCancelReportFrame(wc, sid, stage, *report)
+				h.sendCancelReportFrame(wc, sid, stage, *report)
 				return
 			}
-			sendCancelStageFrame(wc, sid, stage)
+			h.sendCancelStageFrame(wc, sid, stage)
 		},
 		CancelPendingApprovals: func(sid, reason string) {
 			if h.approvalRegV2 == nil {
@@ -456,7 +447,7 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 		ID:   wc.userID,
 	})
 	if cascaded {
-		sendCancelPartialNotice(wc, sessionID, report)
+		h.sendCancelPartialNotice(wc, sessionID, report)
 		h.sendExternalCancelPartialNotice(context.Background(), sessionID, report)
 	}
 
@@ -537,9 +528,9 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 			)
 		}
 		if cascaded {
-			sendCancelReportFrame(wc, sessionID, "detached", report)
+			h.sendCancelReportFrame(wc, sessionID, "detached", report)
 		} else if outcome.BackgroundSessionsKilled > 0 || outcome.Armed {
-			sendCancelStageFrame(wc, sessionID, "graceful")
+			h.sendCancelStageFrame(wc, sessionID, "graceful")
 		}
 	}
 }
