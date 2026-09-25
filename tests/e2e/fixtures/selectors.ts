@@ -214,8 +214,19 @@ export const dismissStaleDialogOverlay = async (page: Page): Promise<void> => {
   await expect
     .poll(
       async () => {
+        // Re-read immediately before pressing. `count() > 0` then press is
+        // check-then-act: if the overlay closes in that window the Escape lands
+        // on the page instead, and a bare Escape with no dialog CANCELS A
+        // STREAMING TURN (the behaviour cancel-cross-channel.spec.ts T23 pins).
+        // Pressing on the overlay locator itself cannot hit the page: if the
+        // element is gone the press throws and the poll simply re-reads 0.
         if ((await overlay.count()) > 0) {
-          await page.keyboard.press('Escape');
+          try {
+            await overlay.first().press('Escape', { timeout: 1_000 });
+          } catch {
+            // Overlay vanished between the count and the press — nothing to
+            // dismiss, and crucially no stray Escape reached the page.
+          }
         }
         return overlay.count();
       },
@@ -241,12 +252,13 @@ export const dismissStaleDialogOverlay = async (page: Page): Promise<void> => {
  * Reuses the established picker pattern from chat.spec.ts (open menu →
  * click menuitem → assert the picker label updated).
  *
- * Clears any stale dialog-overlay FIRST: a rehydrated tool-approval dialog
- * (see dismissStaleDialogOverlay) intercepts the picker click — this exact
- * failure blocked subagent.spec.ts (a) in CI run 36123574726.
+ * Does NOT clear dialog overlays. Calling dismissStaleDialogOverlay from here
+ * put an Escape keypress in the path of all 11 specs that select an agent, and
+ * turned E2E — ui-browser flaky on release 585b70b1b (green at d81bcb1ec) — a
+ * shard whose specs open legitimate dialogs. A spec that needs the overlay
+ * cleared calls dismissStaleDialogOverlay itself, before selecting.
  */
 export const selectAgent = async (page: Page, name: string | RegExp = /Jim/i) => {
-  await dismissStaleDialogOverlay(page);
   const picker = agentPicker(page);
   await picker.waitFor({ state: 'visible', timeout: 15_000 });
   await picker.click();
