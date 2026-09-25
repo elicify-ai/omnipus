@@ -241,7 +241,7 @@ describe('ChatScreen — synchronous delegate GenericToolCall row thread visibil
     act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
   }
 
-  it('an explicit synchronous (async:false) delegate run renders a tool-call badge by default — the parent chat\'s ONLY delegation surface (ADR-091 D7/AC-7)', async () => {
+  it('an explicit synchronous delegate run renders no badge when verbose is off', async () => {
     seedSyncDelegateCall({ status: 'success' })
 
     let container!: HTMLElement
@@ -250,10 +250,10 @@ describe('ChatScreen — synchronous delegate GenericToolCall row thread visibil
       container = result.container
     })
 
-    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).toBeNull()
   })
 
-  it('a FAILED synchronous delegate run is ALSO visible by default — no isError exception either way', async () => {
+  it('a FAILED synchronous delegate run also renders no badge when verbose is off', async () => {
     seedSyncDelegateCall({ status: 'error', error: 'delegation_denied' })
 
     let container!: HTMLElement
@@ -262,7 +262,7 @@ describe('ChatScreen — synchronous delegate GenericToolCall row thread visibil
       container = result.container
     })
 
-    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).toBeNull()
   })
 
   it('a FAILED synchronous delegate run stays visible once verbose chat is enabled too', async () => {
