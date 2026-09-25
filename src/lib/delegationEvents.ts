@@ -415,10 +415,16 @@ function birthEvent(
   })
 }
 
-function terminalKind(span: DelegationSpanView, cancelled: Set<string>): 'finished' | 'stopped' | null {
+function terminalKind(
+  span: DelegationSpanView,
+  cancelled: Set<string>,
+  childSessionId: string | undefined,
+): 'finished' | 'stopped' | null {
   if (span.status === 'running' || span.status === 'parked') return null
   if (span.status === 'success') return 'finished'
-  if (span.childSessionId && cancelled.has(span.childSessionId)) return null
+  // Same session the rest of the derivation uses: the span's own id, or the
+  // run call's result `session_id` when a pre-ADR-091 transcript omitted it.
+  if (childSessionId && cancelled.has(childSessionId)) return null
   return 'stopped'
 }
 
@@ -432,6 +438,7 @@ function spanEventsForMessage(
   const events: DelegationEvent[] = []
   for (const placed of spans) {
     const runCall = callsById.get(placed.span.parentCallId)?.call
+    const childSessionId = childSessionOf(placed.span, runCall)
     if (!birthEmitted.has(placed.span.spanId)) {
       const kind = birthKind(placed.span, runLaunchState(runCall))
       if (kind) {
@@ -439,7 +446,7 @@ function spanEventsForMessage(
         events.push(birthEvent(source, kind, placed, runCall, placed))
       }
     }
-    const terminal = terminalKind(placed.span, cancelled)
+    const terminal = terminalKind(placed.span, cancelled, childSessionId)
     if (!terminal) continue
     const title = terminal === 'finished' ? placed.span.taskLabel.trim() || undefined : undefined
     events.push(
@@ -447,7 +454,7 @@ function spanEventsForMessage(
         ...baseEvent(source, placed, lifecycleId(terminal, placed.span), terminal),
         agentName: displayName(agentIdFor(placed.span, runCall), source.agentNames),
         title,
-        childSessionId: childSessionOf(placed.span, runCall),
+        childSessionId,
       }),
     )
   }

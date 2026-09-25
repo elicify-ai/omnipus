@@ -318,6 +318,41 @@ describe('child lifecycle', () => {
     expect(kinds(noop)).toEqual(['delegated', 'finished'])
   })
 
+  it('a landed cancel suppresses stopped when the span has no childSessionId and the run result carries the session', () => {
+    const legacy = span({ status: 'cancelled', lifecycleState: 'cancelled', childSessionId: undefined })
+    expect(legacy.childSessionId).toBeUndefined()
+    const run = runCall('running', 'child-legacy')
+    expect(run.result).toContain('child-legacy')
+
+    const withoutCancel = deriveDelegationEvents(
+      source({ messages: [message({ id: 'm1', toolCalls: [run], spans: [legacy] })] }),
+    )
+    expect(kinds(withoutCancel)).toEqual(['delegated', 'stopped'])
+
+    const withCancel = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: [
+              run,
+              tool({
+                id: 'cancel-legacy',
+                tool: 'delegate',
+                params: { action: 'cancel', session_id: 'child-legacy' },
+                result: 'Session child-legacy hard-cancelled immediately.',
+              }),
+            ],
+            spans: [legacy],
+          }),
+        ],
+      }),
+    )
+    expect(kinds(withCancel)).toEqual(['delegated', 'cancelled'])
+    expect(withCancel.some((event) => event.kind === 'stopped')).toBe(false)
+    expect(withCancel[1]).toMatchObject({ id: 'cancelled:cancel-legacy', childSessionId: 'child-legacy' })
+  })
+
 })
 
 describe('parent actions', () => {
