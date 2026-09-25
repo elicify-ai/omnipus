@@ -2,7 +2,7 @@
 
 **Created**: 2026-09-25
 **Status:** Approved
-**Revision**: founder-directed correction, 2026-09-26 — applies founder decisions D35–D38: D35 adds the UI-prototype gate before the frontend build (§17), D36 replaces the "E2E has no mail server" stance with the built-in fake IMAP/SMTP server (§7), D37 moves UAT to a separate instance against GreenMail in Docker plus a post-landing live smoke (T44, §17), D38 adds the "read by agent" tag via the `$OmnipusAgentRead` IMAP keyword (US-6, FR-039/MC-36, B-53..B-55, T68..T71); prior revision: founder-directed correction, 2026-09-26 — applies D31–D34 (attachments ride exactly the send policy — D33; nothing about mail is automatic — D31; drainer-test outcome recorded — D32; work-branch move — D34); prior revision: fix round 2, 2026-09-25 — folds grill round-2 findings (40) and founder decisions D27–D30; D27 supersedes D20's agent-turn switch (removed — the switch never ships)
+**Revision**: security sign-off absorption, 2026-09-26 — absorbs security-lead's PRE-IMPLEMENTATION SIGN-OFF WITH CONDITIONS (F1–F11 = C1–C11, dated 2026-09-26, source `coordination/logs/email-security-signoff.md`): **C1** resolves the §2.3 ↔ MC-10(1) route-prefix contradiction to the non-API `/mail-preview/…` prefix everywhere — the two serve routes + the image proxy move to §2.3a (token-only, outside `/api/v1`), the mint stays session-authenticated under `/api/v1` and gains 429 (C10); **C2** pins the D33/FR-038 attachment wording to what `pkg/tools/resolvepath.go::ResolvePath` actually enforces (open-read rule — unconditional secret carve-outs refused at resolve **and** re-verified at I/O time; **no outside-workspace gate**, matching D33's "no extra guard rails"); **C3–C11** land as binding constraints **MC-37–MC-45** with tests **T72–T80**, and the sign-off's normative header set + iframe attributes are copied verbatim as the MC-10 subsection in §5.3; prior revision: founder-directed correction, 2026-09-26 — applies founder decisions D35–D38: D35 adds the UI-prototype gate before the frontend build (§17), D36 replaces the "E2E has no mail server" stance with the built-in fake IMAP/SMTP server (§7), D37 moves UAT to a separate instance against GreenMail in Docker plus a post-landing live smoke (T44, §17), D38 adds the "read by agent" tag via the `$OmnipusAgentRead` IMAP keyword (US-6, FR-039/MC-36, B-53..B-55, T68..T71); prior revision: founder-directed correction, 2026-09-26 — applies D31–D34 (attachments ride exactly the send policy — D33; nothing about mail is automatic — D31; drainer-test outcome recorded — D32; work-branch move — D34); prior revision: fix round 2, 2026-09-25 — folds grill round-2 findings (40) and founder decisions D27–D30; D27 supersedes D20's agent-turn switch (removed — the switch never ships)
 **Input**: `docs/internal/specs/spec-email-mail-view.md` (interview-me output, Decisions Log D1–D38; later IDs override earlier ones)
 **Round-1 review**: `docs/internal/specs/email-mail-view-spec-review.md` (BLOCK, 32 findings — every finding is dispositioned in §20)
 **Round-2 review**: `docs/internal/specs/email-mail-view-spec-review-round2.md` (BLOCK, 40 findings — every finding is dispositioned in §21)
@@ -68,7 +68,8 @@ In scope (all on the existing ADR-033 pair model):
 - Incoming HTML renders in a **sandboxed frame without scripts**, remote images **blocked by default** with a
   per-message "Load images" action (D13, D17) — the frame reuses the **Library-preview isolation posture**
   (path-confined prefix, no `'self'`, CSP `sandbox` directive, `base-uri 'none'`; D29/round-2 CRIT-001 —
-  FR-019/MC-10).
+  FR-019/MC-10). **Security-lead sign-off delivered 2026-09-26 — SIGN-OFF WITH CONDITIONS; C1–C11 absorbed in
+  this revision (MC-10 normative block, MC-37–MC-45).**
 - **Connection failures are never silent**: every mail-backed surface shows them in the panel, and they are
   logged with a clear message (D22) — with **bounded name-resolution retry, context-aware dials and
   per-mailbox backoff with jitter** (FR-037) so the dominant real failure mode cannot take the panel down
@@ -151,7 +152,7 @@ it, so no Omnipus state is added and D6 is untouched. When the server rejects cu
 reports `false`: no tag renders, and nothing errors (MC-36). Since `MailMessage` carries all summary fields,
 the full-message path inherits the same field.
 
-### 2.3 New REST endpoints (all session-authenticated, versioned under `/api/v1`)
+### 2.3 New REST endpoints (all session-authenticated, versioned under `/api/v1` — except the HTML-preview serve routes, which are token-only on the non-API `/mail-preview/` prefix, §2.3a)
 
 Path convention follows the existing workspace-scoped pattern (`/workspaces/{id}/media`,
 `contracts/openapi.yaml`): `{id}` = workspace, `{agentId}` = the mailbox-owning agent — the ADR-033 pair
@@ -174,14 +175,12 @@ addressed folder-scoped** (round-1 MAJ-005, adopted as D21):
 | `GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages?limit=&before_uid=` | Envelope page. The round-1 `unseen_only` query param is **dropped** (round-2 OBS-001: no UI or tool ever called it; the watcher's `unseen_total` is the only unread surface). `unread_count` is Inbox-only (§2.2) | 200 / 401 / 400 (unknown folder slug, limit out of range) / 404 / 502 / 500 |
 | `GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}` | Full message by folder-scoped ref. **Never writes flags** — fetch is `BODY.PEEK` (see notes) | 200 / 401 / 400 (malformed ref / Message-ID validation) / 404 (not found, includes "pair has no mailbox") / 502 / 500 |
 | `POST /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/seen` | Mark `\Seen` — the panel calls it **once on open** (FR-020). Round-2 MAJ-003: a GET never writes flags, so the flag write is its own endpoint. Idempotent: already-seen is a no-op 204 | 204 / 401 / 400 (malformed ref) / 404 / 502 / 500 |
-| `GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}` | Download one attachment part (D28): served with `Content-Disposition: attachment` and the **sanitized** filename (§2.2 `MailAttachment.filename` — no path separators, never trusted raw from the MIME part) | 200 (the part's bytes, its `content_type`) / 400 / 401 / 404 (message or part absent) / 502 / 500 |
+| `GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}` | Download one attachment part (D28): served with `Content-Disposition: attachment` and the **sanitized** filename (§2.2 `MailAttachment.filename` — no path separators, never trusted raw from the MIME part); header discipline per **MC-42** (always `attachment`, nosniff, extension-typed, RFC 6266 filename — never inline HTML on this origin) | 200 (the part's bytes, extension-derived `content_type` — MC-42) / 400 / 401 / 404 (message or part absent) / 502 / 500 |
 | `POST /workspaces/{id}/mail/{agentId}/messages` | Human manual send (D9): renders Markdown → multipart/alternative, signature, SMTP, Sent APPEND. **Audit event + rate limit** (FR-025/FR-026) | 200 (`MailSendResponse`) / 400 (validation) / 401 / 404 / **429** (rate limited — MC-20, dedicated limiter per round-2 MIN-004) / 502 (SMTP/IMAP upstream, error class) / 500 |
 | `PUT /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}` | Panel edit (D12/D23): APPEND updated draft (same Message-ID), `\Deleted` the old copy (FR-032). The body carries the viewed draft's `uidvalidity`/`uid`; when the path ref is a `uid:` ref, body and path must agree — mismatch is 400, not silently accepted (round-2 MAJ-008.1/.6). **Audit event + rate limit** | 200 (`MailMessage`) / 400 / 401 / 404 (draft gone) / **409** (stale precondition — body code `stale_draft`; round-2 MAJ-008.1) / **429** / 502 / 500 |
 | `POST /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}/send` | Panel send = the approval (D12): transmits the request's content (never re-reads the draft as truth — MAJ-002), APPENDs to Sent (D18), `\Deleted` the draft (FR-032). **Idempotent** (round-2 MAJ-009): keyed on the draft's Message-ID, a repeat submit after a completed send returns the recorded first outcome — never a second transmission (FR-021). **Audit event + rate limit** | 200 (`MailSendResponse`) / 400 / 401 / 404 (draft gone) / **409** (stale precondition — body code `stale_draft`; or an already-sent repeat whose recorded outcome is unavailable) / **429** / 502 / 500 |
 | `DELETE /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}` | Discard a draft (D12): `\Deleted` + `UID EXPUNGE` when the server supports UIDPLUS, else `\Deleted` only (deferred expunge — FR-032). **Audit event + rate limit** | 204 / 401 / 404 / **429** / 502 / 500 |
-| `POST /mail/html-preview-token` | Mint HTML-body preview token (D13/D17). **The one live-IMAP fetch of the preview flow**: the message is fetched once, sanitized, and its body plus inline (`cid:`) parts are held in the in-memory token store for the TTL — the two serve routes below never dial IMAP (round-2 MAJ-008.3, MAJ-003) | 200 / 400 / 401 / 404 / **502** (upstream mail failure, error class in body) |
-| `GET /mail/html-preview/{token}` | Serve the sanitized, sandboxed HTML body with the MC-10 header set — from the token store only, no IMAP (see mint row) | 200 / 404 (expired/unknown token) |
-| `GET /mail/html-preview/{token}/part/{index}` | Serve one inline (`cid:`) image part within the same token scope (so inline images render without any remote host) — from the token store only, no IMAP | 200 / 404 |
+| `POST /api/v1/mail/html-preview-token` | Mint HTML-body preview token (D13/D17) — **session-authenticated, stays in the API namespace** (security sign-off C1: the serve routes moved to §2.3a). **The one live-IMAP fetch of the preview flow**: the message is fetched once, sanitized, and its body plus inline (`cid:`) parts and the `load_remote` remote-image URL list are held in the in-memory token store for the TTL — the serve routes in §2.3a never dial IMAP (round-2 MAJ-008.3, MAJ-003). **Rate-limited** (MC-44) | 200 / 400 / 401 / 404 / **429** (rate limited — MC-44) / **502** (upstream mail failure, error class in body) |
 | `GET /workspaces/{id}/mail/summary` | Watcher-driven badge summary (`MailSummaryList`) for the workspace's mailboxes | 200 / 401 / 404 |
 
 Notes binding the whole table:
@@ -207,22 +206,52 @@ Notes binding the whole table:
   automatic panel refreshes **do not dial at all** while that mailbox's watcher is in backoff — they return
   the last error class + `next_attempt_at` immediately; only the human Retry dials (D29/R2-9, round-2 MAJ-018).
 
+### 2.3a HTML-preview serve routes — token-only, on the non-API `/mail-preview/` prefix (outside `/api/v1`)
+
+**Why token-only, why this prefix (C11/F11 + C1/F1 — security sign-off, 2026-09-26).** These routes are
+**token-only by design**: browser engines differ on cookies for sandboxed-frame requests — WebKit *attaches*
+the session cookie (the measured Library Defect-2 exposure: `'self'` spans the whole gateway incl.
+`/api/v1/*`), while Chromium/Firefox **withhold** cookies there, so cookie auth would either reintroduce the
+Defect-2 exposure or break rendering. The token is the only credential. Expired/unknown/revoked are
+deliberately indistinguishable — **404 only** (no 401 ever, no distinguishable bodies; MC-43/MC-45). No
+`frame-ancestors` directive and no `X-Frame-Options` header (the token in the URL is the capability; both
+would fight the SPA embedding). The no-redirect tripwire covers the whole prefix: nothing under
+`/mail-preview/` may redirect, and the `/api/` sentinel never matches under it (MC-10(1), T62).
+
+| Endpoint | Purpose | Status codes |
+|---|---|---|
+| `GET /mail-preview/html/{token}` | Serve the sanitized, sandboxed HTML body with the MC-10 header set — from the token store only, no IMAP (the mint in §2.3 is the only fetch) | 200 / 404 (expired/unknown/revoked — deliberately indistinguishable, MC-43/MC-45) |
+| `GET /mail-preview/part/{token}/{index}` | Serve one inline (`cid:`) image part within the same token scope (so inline images render without any remote host) — from the token store only, no IMAP | 200 / 404 |
+| `GET /mail-preview/img/{token}/{index}` | "Load images" proxy (D17/MC-10(6)): fetches **only** a remote URL **recorded in the token store at mint** (token bound with `load_remote=true`), streams it back under the **MC-41 SSRF pins** — never a fetch of caller-supplied URLs | 200 (`image/*`, `nosniff`, `Cache-Control: no-store`) / 404 (unknown token/index, upstream fetch failed, bounds or image-check failure — indistinguishable, MC-45's 404-only discipline) |
+
+Notes binding this table:
+
+- **Sanitize → store → serve ordering**: the sanitizer runs at mint; the serve routes serve stored bytes
+  only — no IMAP at serve time (MC-10(5), the sign-off's negative test list).
+- The `/mail-preview/` prefix is **never redirected from**: the tripwire mirrors
+  `pkg/gateway/library_preview_no_redirect_test.go::TestLibraryPreview_NothingUnderThePrefixRedirects`
+  (including its stdlib-mux positive control) over `/mail-preview/` with the `/api/` sentinel (MC-10(1), T62).
+
 ### 2.4 Tool-surface changes (registered via `pkg/agent/email_tools.go::registerEmailToolsForAgent`)
 
 | Tool | Change |
 |---|---|
 | `send_email` | `body` becomes **Markdown** (D3). `to` becomes a **recipient list** (minItems 1) plus optional `cc`/`bcc` lists (D26). **Recipient cap on every send path** (round-2 MAJ-015, D29/R2-6): ≤ **50 recipients total across To/Cc/Bcc** after de-duplication; each address parsed with `net/mail.ParseAddress` (display names kept, RFC 2047-encoded per MC-4); 51st recipient = tool error before any SMTP connection. **Attachments** (D33): optional `attachments`
 parameter — a list of **workspace-file references** (relative paths in the agent's workspace), resolved
-server-side by the same workspace-path resolution the generic file tools use
-(`pkg/tools/resolvepath.go::ResolvePath`); a reference that resolves outside the workspace, or to a
-nonexistent file, is **invalid input** (tool error before any SMTP connection), not a policy question.
+server-side through the same workspace-path resolution the generic file tools use
+(`pkg/tools/resolvepath.go::ResolvePath`) **under its open-read rule** — the unconditional secret carve-outs
+are refused **at resolve time and re-verified when the file is read** (`recheckUnrestrictedCarveOut`), so
+secrets are never attachable, and **every other readable file is attachable, including files outside the
+workspace root** (D33 "no extra guard rails" — the send_file precedent rejected a path gate as bypassable;
+security sign-off C2/F5). A nonexistent file fails when read at compose time — a tool error before any SMTP
+connection.
 Governed by **exactly the same tool policy as the send itself** — one call, one policy resolution, **no
 separate ask gate**; only the general message limits already in this spec apply (≤ 10 files / ≤ 25 MiB
 total, MC-32; 1 MiB body, MC-22; 50 recipients, MC-27), all enforced before dialing. **Description text**
 must document the parameter and state that attaching files carries no separate approval — the tool's own
 policy governs the whole call. Description updated; rendering, signature and Sent APPEND happen server-side |
-| `reply` | **Defined** (round-2 MAJ-014): the primary recipient stays **derived** from the original's Reply-To/From (never a required `to` — existing reply prompts keep working); optional `cc`/`bcc` lists are **added**; optional `reply_all: bool` adds the original's To/Cc **minus the mailbox's own address**; body becomes Markdown (D3). The ≤ 50 cap applies to the merged recipient set. **Attachments** (D33): the same optional workspace-file `attachments` parameter as `send_email` — same policy rule (the tool's own policy governs the whole call, no separate gate), same general caps pre-dial (MC-32/MC-22/MC-27), same invalid-input rule for references outside the workspace. Rendering, signature, attachment MIME assembly and Sent APPEND as `send_email` (D26) |
-| `create_email_draft` | **New.** Params: `to` (list, minItems 1), `cc`/`bcc` (optional lists), `subject`, `body` (Markdown), optional `in_reply_to`. APPENDs to the mailbox's Drafts folder with `\Draft` (D8). Never sends. Generates the Message-ID itself: `<random-128-bit@domain-of-the-mailbox's-From-address>` (fallback `omnipus.invalid` when no domain is derivable); the same ID is kept through panel edits and the final send (round-1 MIN-004). Marks itself with an `X-Omnipus-Draft` header (FR-029). Returns `{"created":true,"message_id":"...","uid":123,"uidvalidity":456,"chat_link":"…" or null,"chat_link_reason":string|null}`; `chat_link` is built from `gateway.public_url` exactly like `serve_web` derives its origin — **http allowed**; when no origin is derivable (unset `public_url`, wildcard bind) the tool still succeeds and returns `chat_link: null` with the stated reason (round-1 MAJ-013; `pkg/tools/web_serve.go` precedent, `TestServeWebPublicURL`). **Recipient cap** ≤ 50 across To/Cc/Bcc after de-dup, same parsing as `send_email` (round-2 MAJ-015). **Attachments** (D33): optional workspace-file `attachments` parameter, same rules as `send_email` — the tool's own policy governs the whole call (no separate gate), general caps enforced pre-APPEND (MC-32/MC-22/MC-27), references outside the workspace or nonexistent are invalid input. Attached files are APPENDed as MIME parts of the draft, so the human approval panel lists exactly what would be sent (`MailMessage.attachments`) and the panel send carries them unchanged (FR-034/FR-035 machinery). Result values are the `CreateEmailDraftResult` schema (§2.2 — round-2 MIN-013: the SPA's "Open draft" action consumes the generated type, not a hand-written shape) |
+| `reply` | **Defined** (round-2 MAJ-014): the primary recipient stays **derived** from the original's Reply-To/From (never a required `to` — existing reply prompts keep working); optional `cc`/`bcc` lists are **added**; optional `reply_all: bool` adds the original's To/Cc **minus the mailbox's own address**; body becomes Markdown (D3). The ≤ 50 cap applies to the merged recipient set. **Attachments** (D33): the same optional workspace-file `attachments` parameter as `send_email` — same policy rule (the tool's own policy governs the whole call, no separate gate), same general caps pre-dial (MC-32/MC-22/MC-27), same resolution semantics (`ResolvePath` open-read rule; carve-outs refused at resolve + I/O time; no outside-workspace gate — sign-off C2). Rendering, signature, attachment MIME assembly and Sent APPEND as `send_email` (D26) |
+| `create_email_draft` | **New.** Params: `to` (list, minItems 1), `cc`/`bcc` (optional lists), `subject`, `body` (Markdown), optional `in_reply_to`. APPENDs to the mailbox's Drafts folder with `\Draft` (D8). Never sends. Generates the Message-ID itself: `<random-128-bit@domain-of-the-mailbox's-From-address>` (fallback `omnipus.invalid` when no domain is derivable); the same ID is kept through panel edits and the final send (round-1 MIN-004). Marks itself with an `X-Omnipus-Draft` header (FR-029). Returns `{"created":true,"message_id":"...","uid":123,"uidvalidity":456,"chat_link":"…" or null,"chat_link_reason":string|null}`; `chat_link` is built from `gateway.public_url` exactly like `serve_web` derives its origin — **http allowed**; when no origin is derivable (unset `public_url`, wildcard bind) the tool still succeeds and returns `chat_link: null` with the stated reason (round-1 MAJ-013; `pkg/tools/web_serve.go` precedent, `TestServeWebPublicURL`). **Recipient cap** ≤ 50 across To/Cc/Bcc after de-dup, same parsing as `send_email` (round-2 MAJ-015). **Attachments** (D33): optional workspace-file `attachments` parameter, same rules as `send_email` — the tool's own policy governs the whole call (no separate gate), general caps enforced pre-APPEND (MC-32/MC-22/MC-27), same resolution semantics (carve-outs refused at resolve + read; no outside-workspace gate — sign-off C2); a nonexistent file fails when read, pre-APPEND. Attached files are APPENDed as MIME parts of the draft, so the human approval panel lists exactly what would be sent (`MailMessage.attachments`) and the panel send carries them unchanged (FR-034/FR-035 machinery). Result values are the `CreateEmailDraftResult` schema (§2.2 — round-2 MIN-013: the SPA's "Open draft" action consumes the generated type, not a hand-written shape) |
 
 ### 2.5 Config keys
 
@@ -660,9 +689,9 @@ it); edit a foreign draft carrying an attachment and send — the attachment arr
 5. **Given** an agent with an enabled mailbox and a file in its workspace, **When** the agent sends or drafts
    with that file attached (D33), **Then** the message/draft carries it as a MIME part (the approval panel
    lists it before send), the call resolves under **exactly the tool's own policy** — one approval for the
-   whole call, no separate attachment gate (T65) — the general caps reject the 11th file / > 25 MiB /
-   outside-workspace reference before any dial (T67), and the audit/transcript records carry the attachment
-   names and sizes (MC-19).
+   whole call, no separate attachment gate (T65) — the general caps reject the 11th file / > 25 MiB before
+   any dial, a secret-carve-out reference is refused at resolve and re-verified at read time (T67), and the
+   audit/transcript records carry the attachment names and sizes (MC-19).
 
 ---
 
@@ -723,10 +752,14 @@ it); edit a foreign draft carrying an attachment and send — the attachment arr
 - The system must not add a separate approval gate, policy entry or special cap for the agent tools'
   attachment parameter (D33) — attaching workspace files rides exactly the tool's own policy resolution and
   the general message limits (MC-32/MC-22/MC-27); a per-attachment ask prompt, a separate ceiling/fill entry
-  or attachment-only caps would contradict the founder decision. The human attach/download paths (D28) are
+  or attachment-only caps would contradict the founder decision. The only path property is `ResolvePath`'s
+  own open-read rule: unconditional secret carve-outs refused at resolve and re-verified at I/O time —
+  **no outside-workspace gate** (MC-35, security sign-off C2). The human attach/download paths (D28) are
   unchanged.
 - The system must not serve the mail HTML frame from the API prefix or put `'self'` in its CSP — the
   Library-preview defects (CRIT-001) are measured repo history, not theory (`pkg/gateway/library_isolation_policy.go`).
+  The mail CSP is its **own named builder**, never the Library's (MC-37); the no-origin case **omits** host
+  sources with a loud WARN — never a `'self'` fallback (MC-38).
 - The system must not change the send tools' policy resolution beyond D19's configure-time no-overwrite fill
   (D15 keeps the ceiling as shipped; built-in roles keep `ask`); silently widening approvals is out.
 - The system must not let a chat-posted draft link expose another pair's mail: links are pair- and
@@ -755,7 +788,7 @@ it); edit a foreign draft carrying an attachment and send — the attachment arr
 | MC-7 | Ref not found in the addressed folder (unknown `uid:` or no `mid:` hit) → HTTP 404 `ErrorResponse`; multiple `mid:` hits → **highest UID among non-`\Deleted` messages** (round-2 MIN-005 — never INTERNALDATE, which APPEND may set from the message's own Date header) | handler + transport tests |
 | MC-8 | Mail server dial/command failure on **any** mail endpoint (IMAP and SMTP) → HTTP 502 with a sanitized error class from the closed enum `timeout\|dns\|connect_refused\|auth_failed\|tls\|folder_missing\|server_error` in `ErrorResponse.code` (round-2 MIN-014) and a generic message; raw upstream text appears only in the server log; SMTP **and IMAP** return within the bounded timeouts of FR-027/FR-037 (never hangs) | handler tests with black-hole/failing transports; DNS-injected resolver tests (MC-33) |
 | MC-9 | SMTP success + Sent APPEND failure → `MailSendResponse.sent_saved=false` + `save_warning` non-empty (tool result carries the same warning) | unit test on the send path |
-| MC-10 | The mail HTML preview **reuses the Library-preview isolation posture** (`pkg/gateway/library_isolation_policy.go` — round-2 CRIT-001, D29): (1) served under a dedicated non-API prefix (`/mail-preview/…`), **outside** `/api/v1`, with a no-redirect test mirroring `library_preview_no_redirect_test.go`; (2) the CSP **contains no `'self'`** — every source is path-confined to the mail-preview prefix (frame + `cid:` part URLs), plus `data:` for inline images; (3) CSP `sandbox` (no tokens) sent **as a directive as well as the iframe attribute** — WebKit drops `'self'` matching once the attribute is layered on (Library Defect 1) and `'self'` spans the whole gateway incl. `/api/v1/*` with the SameSite=Strict cookie attached (Library Defect 2), so `'self'` would re-admit authenticated API GETs from untrusted HTML on Safari; (4) `base-uri 'none'; connect-src 'none'; object-src 'none'`; (5) the **inbound sanitizer is named**: strips `<meta http-equiv>`, `<base>`, forms, scripts, event handlers; rewrites `cid:` to the part URLs; (6) "Load images" (D17) routes remote images **through a gateway proxy** — https-only, private/loopback/link-local refused, bounded size, `image/*` only — so the CSP never gains `https:` (which would re-admit the gateway origin) and the frame never talks to the remote host directly; (7) served HTML bounded by the existing 256 KB inbound body cap (`::capBody`); token bound to (pair, folder, ref, load_remote) with the Library token TTL; `Referrer-Policy: no-referrer` (the token rides the URL path); `X-Content-Type-Options: nosniff`; iframe sandbox attribute **without** `allow-scripts`/`allow-same-origin`/`allow-forms`/`allow-top-navigation`, **with** `allow-popups allow-popups-to-escape-sandbox` (D13 "feels normal" via link clicks, not scripts) | gateway handler tests, one per directive, plus a WebKit-cookie case (untrusted `<img src="/api/v1/…">` loads nothing) and the mail no-redirect test; **security-lead sign-off required before implementation** (FR-019, D29) |
+| MC-10 | The mail HTML preview **reuses the Library-preview isolation posture** (`pkg/gateway/library_isolation_policy.go` — round-2 CRIT-001, D29): (1) served under a dedicated non-API prefix (`/mail-preview/…`), **outside** `/api/v1` — **the §2.3a routes carry this** (mint stays `POST /api/v1/mail/html-preview-token`, session-authenticated) — with a no-redirect tripwire mirroring `library_preview_no_redirect_test.go` (including its stdlib-mux positive control) over `/mail-preview/` with the `/api/` sentinel; (2) the CSP **contains no `'self'`** — every source is path-confined to the mail-preview prefix (frame + `cid:` part + proxy URLs), plus `data:` for inline images; (3) CSP `sandbox` **mirrors the iframe attribute token-for-token**: `sandbox allow-popups allow-popups-to-escape-sandbox` — nothing more (a bare `sandbox` directive would intersect to *no popups* and kill D13's link UX; loosening the *attribute* toward scripts/same-origin is the wrong direction — security sign-off C5/F3), sent **as a directive as well as the iframe attribute**; the effective sandbox is the **intersection** of the two layers — WebKit drops `'self'` matching once the attribute is layered on (Library Defect 1) and `'self'` spans the whole gateway incl. `/api/v1/*` with the SameSite=Strict cookie attached (Library Defect 2), so `'self'` would re-admit authenticated API GETs from untrusted HTML on Safari; (4) `base-uri 'none'; connect-src 'none'; object-src 'none'`; (5) the **inbound sanitizer is named**: strips `<meta http-equiv>`, `<base>`, forms, scripts, event handlers; rewrites `cid:` to the part URLs; hardens every surviving anchor per **MC-40**; (6) "Load images" (D17) routes remote images **through a gateway proxy** — https-only, private/loopback/link-local refused, bounded size, `image/*` only — so the CSP never gains `https:` (which would re-admit the gateway origin) and the frame never talks to the remote host directly; the proxy's properties are pinned mechanically by **MC-41**; (7) served HTML bounded by the existing 256 KB inbound body cap (`::capBody`); token bound to (pair, folder, ref, load_remote) with the Library token-hygiene set (**MC-43**: 256-bit entropy, named TTL, per-session cap, indistinguishable 404s, logout revocation); `Referrer-Policy: no-referrer` (the token rides the URL path); `X-Content-Type-Options: nosniff`; `Cache-Control: no-store` on every served response; iframe sandbox attribute **without** `allow-scripts`/`allow-same-origin`/`allow-forms`/`allow-top-navigation`, **with** `allow-popups allow-popups-to-escape-sandbox` (D13 "feels normal" via link clicks, not scripts) | gateway handler tests, one per directive, plus a WebKit-cookie case (untrusted `<img src="/api/v1/…">` loads nothing) and the mail no-redirect test (T62); plus the sign-off constraint rows **T72–T80**; **security-lead sign-off delivered 2026-09-26 — SIGN-OFF WITH CONDITIONS; C1–C11 absorbed in this revision (normative block below + MC-37–MC-45)** |
 | MC-11 | `create_email_draft` result JSON parses with `created=true`, a non-empty `message_id` matching the APPENDed message's Message-ID header, `uid`/`uidvalidity`, and `chat_link` either null-with-reason or an absolute http(s) URL derived per FR-015 | unit test with fake transport |
 | MC-12 | After exercising all Mail panel endpoints against a temp data dir, a sweep of the data dir shows no file containing message body text (watcher state files excepted — they contain UIDs/counts only); transcripts excluded per D21 | integration test assertion |
 | MC-13 | A draft deep link for an agent/workspace that does not exist, or a pair with no mailbox → HTTP 404 with no body or folder leakage (single-user model — `GatewayConfig.Users` holds at most one entry; there is no second session to test) | handler test |
@@ -779,11 +812,70 @@ it); edit a foreign draft carrying an attachment and send — the attachment arr
 | MC-31 | Watcher UID state (round-2 MAJ-001): state file carries `uidvalidity`; on UIDVALIDITY change or first run (no state), the watcher **baselines to `UIDNEXT-1`** without flagging the backlog as new, and logs once; state file keyed by `(agent, workspace)` and deleted with the mailbox | watcher unit/integration tests (`startMemIMAP`) |
 | MC-31a | The deep link's redirect stub copies `mailbox`/`folder`/`message` query params into `openMailPanel({agentId, folder, ref})` before navigating back to Chat (round-2 MIN-012) — the parameters survive the stub | E2E: link with params → panel opens on the draft |
 | MC-31b | Watcher failure logging follows the FR-036 rate rule (round-2 MIN-015/007): first failure + every state change at WARN, ≤ 1 summary line per mailbox per backoff step, one INFO on recovery; request-path failures log once per request. State file deleted with the mailbox | unit test with a scripted failure sequence |
-| MC-32 | Attachment caps on **every** attach path (compose, draft edit, panel send, **and the agent tools' `attachments` parameter — D33/MC-35**; round-2 MAJ-015/D28): ≤ 10 files, ≤ 25 MiB total decoded; filename sanitized on serve **and** on attach; `data_base64` (human paths) and workspace-file references (agent path) validated before any SMTP connection | unit + handler tests (11th file, > 25 MiB, path-y filename) |
+| MC-32 | Attachment caps on **every** attach path (compose, draft edit, panel send, **and the agent tools' `attachments` parameter — D33/MC-35**; round-2 MAJ-015/D28): ≤ 10 files, ≤ 25 MiB total decoded; filename sanitized on serve **and** on attach; `data_base64` (human paths) and workspace-file references (agent path) capped + carve-out-checked before any SMTP connection (resolution semantics per MC-35 — sign-off C2) | unit + handler tests (11th file, > 25 MiB, path-y filename) |
 | MC-33 | Connection resilience (D29/R2-8, R2-9; round-2 MAJ-016..018): context-aware dial (FR-037) retries **only** name-resolution failures, bounded (3 attempts, 250 ms → 1 s) inside the overall dial bound; never retries auth/TLS; per-mailbox backoff 60 s → 2 → 4 … cap 15 min with ±20% jitter, first cycles randomly offset 0–60 s so same-host mailboxes never align; `auth_failed` backs off to the cap; manual Retry bypasses backoff for that one request; identical concurrent refreshes coalesce (N tabs = 1 login); no automatic dial while backing off | injected-resolver unit tests (fails twice → succeeds once; always-fails → `dns` class within the bound); fake-clock backoff/jitter tests; `startMemIMAP` LOGIN-count test with 3 tabs |
 | MC-34 | FR-036 logging-rate rule holds (round-2 MIN-015): a 13-mailbox failure window produces bounded log volume (first failure + state changes, not per cycle) | unit test with a scripted multi-mailbox failure window |
-| MC-35 | Agent tool attachment parameter (D33): an attachment-bearing call resolves under **exactly the same effective policy** as the same call without it — no separate ask gate, no separate ceiling/fill/inventory/auto-approve entry (send tools stay `AutoAsks`, so auto-approve never silently runs them, Hard Constraint #6); references resolve through the tools' workspace-path resolution (`pkg/tools/resolvepath.go::ResolvePath`) — a reference resolving **outside the workspace or to a nonexistent file is invalid input**, rejected before any SMTP connection or APPEND, naming the offending reference; only the general message limits apply (MC-32 caps, MC-22 body bound, MC-27 recipient cap); audit/transcript records carry attachment filenames and sizes | unit tests (T64/T65/T67): policy identical with/without the parameter; caps and invalid references rejected pre-dial; audit/transcript carries names + sizes |
+| MC-35 | Agent tool attachment parameter (D33): an attachment-bearing call resolves under **exactly the same effective policy** as the same call without it — no separate ask gate, no separate ceiling/fill/inventory/auto-approve entry (send tools stay `AutoAsks`, so auto-approve never silently runs them, Hard Constraint #6); references resolve through the tools' workspace-path resolution (`pkg/tools/resolvepath.go::ResolvePath`) **under its open-read rule**: the unconditional secret carve-outs are refused **at resolve time and re-verified at I/O time** (`recheckUnrestrictedCarveOut`) — secrets are never attachable — and **every other readable file is attachable, including files outside the workspace root** (D33 "no extra guard rails"; the send_file precedent rejected a path gate as bypassable; security sign-off C2/F5 — the earlier "outside the workspace = invalid input" claim was **not** what `ResolvePath` enforces and is deleted); a nonexistent file fails when read at compose time — a tool error before any SMTP connection or APPEND, naming the offending reference; only the general message limits apply (MC-32 caps, MC-22 body bound, MC-27 recipient cap); audit/transcript records carry attachment filenames and sizes | unit tests (T64/T65/T67): policy identical with/without the parameter; caps pre-dial; **carve-out refused at resolve AND re-verified at I/O time**; the outside-workspace **attachable** verdict pinned so the gap cannot false-green; nonexistent read failure pre-dial; audit/transcript carries names + sizes |
 | MC-36 | **Agent read marker (D38).** `read_message` fetches with `BODY.PEEK` (never the implicit-`\Seen` non-peek `BODY[]` — verified `pkg/email/transport.go::Client.ReadMessage` fetches `BODY[]` without peek today) and issues **one** STORE adding `\Seen` **and** `$OmnipusAgentRead`; when the server rejects the keyword, the fallback STORE sets `\Seen` only — the read result is unaffected, no error surfaces on any surface, the tag is absent, and the keyword is not re-attempted until the process restarts (one WARN per process per mailbox); `read_by_agent` is derived from the fetched flag list — no Omnipus-persisted state (D6 untouched); a server that rejects even `\Seen` makes the read fail visibly (the same failure class as the panel's seen endpoint on that server, FR-018) — a read-only agent mailbox is not a supported configuration; keyword comparisons in tests are case-insensitive (the in-tree `imapmemserver` lowercases keywords — go-imap v2 `imapmemserver/message.go::canonicalFlag`; real servers preserve case per RFC 3501) | `startMemIMAP` command-capture integration test (one STORE, both flags; fallback forced by a keyword-rejecting transport wrapper); envelope-derivation unit test |
+| MC-37 | **The mail CSP is its own named builder** (security sign-off C3/F10, MEDIUM structural): built in its own file (e.g. `pkg/gateway/mail_isolation_policy.go`) — the Library policy/builder (`libraryIsolationPolicy` and its template, which carries `sandbox allow-scripts`, script-src host sources and `'unsafe-inline'` in script-src) is **never** called, imported or copied for mail; the shipped Library-string tripwire still guards the Library file itself. Mail-builder tripwires assert on the built policy string: **no `'self'`**, **no `allow-scripts`**, no script-src host sources, **no `'unsafe-inline'` in script-src**, **no `https:` source in `img-src`**, and every host source path-confined to `/mail-preview/` | gateway unit tests on the builder output (one negative assertion per clause), plus a source-level check that the mail builder does not reference the Library builder |
+| MC-38 | **No-origin degradation omits, never falls back** (security sign-off C4/F2, MEDIUM conditional): when no canonical gateway origin is derivable (unset `gateway.public_url`, wildcard bind), the mail CSP **omits the host sources** — inline/`data:` images and origin-referencing subresources simply fail to load, the safe direction — and logs a **loud WARN**; a `'self'` or bare `https:` source is **never** emitted as a fallback (the Library's `'self'` fallback, `libraryIsolationUnconfinedSource`, is exactly the Defect-2 shape for mail: WebKit attaches the session cookie to framed subresource requests) | unit test: no-origin build → no host sources in the policy string + the WARN recorded; property assertion: the policy never contains `'self'`/`https:` in any configuration state |
+| MC-39 | **CSP `sandbox` mirrors the iframe attribute token-for-token** (security sign-off C5/F3, MEDIUM): the directive is exactly `sandbox allow-popups allow-popups-to-escape-sandbox` — nothing more; the effective sandbox is the **intersection** of the two layers (a capability exists only if BOTH grant it), so a bare `sandbox` directive silently kills D13's link UX, and the tempting fix — loosening the attribute toward scripts/same-origin — is the wrong direction. Negative tests in **both** layers: no `allow-scripts`, `allow-same-origin`, `allow-forms`, `allow-top-navigation`, `allow-downloads`, `allow-modals`, `allow-pointer-lock` | gateway header test + SPA-side frame test asserting both layers token-exact (the seven banned tokens absent in each) |
+| MC-40 | **Anchor hardening in the inbound sanitizer** (security sign-off C6/F4, MEDIUM): every `<a href>` surviving sanitization is rewritten to carry `rel="noopener noreferrer"` and `target="_blank"` **before** the HTML is stored in the token store (escaped popups carry `window.opener` — reverse tabnabbing of the operator's authenticated SPA; the sanitizer is the only place the opener link can be cut, since the sandbox escape token is what D13 needs) | sanitizer unit test: `<a href="https://evil/">x</a>` renders with `rel="noopener noreferrer"` + `target="_blank"`; the rewritten HTML is what the token store holds |
+| MC-41 | **Image-proxy SSRF pins, dial-time** (security sign-off C7/F6, MEDIUM): https-only; private/loopback/link-local/metadata IPs refused **at dial time** — the resolved IP is pinned into the dial context so validate and dial cannot disagree (no DNS-rebinding gap); **zero redirects followed**; response ≤ 5 MiB and ≤ 10 s; only `image/*` re-emitted, with `X-Content-Type-Options: nosniff` and `Cache-Control: no-store`; only URLs recorded in the token store at mint (addressed by index) are ever fetched — never caller-supplied URLs; the endpoint lives under `/mail-preview/` (so the CSP `img-src` confinement covers it) and requires the preview token bound with `load_remote=true` | proxy unit/integration tests: rebinding attempt (validator pass + dial-time refusal), zero redirects followed, oversize/overtime cut, non-`image/*` refused, no-token/`load_remote=false` refused, non-store URL refused |
+| MC-42 | **Attachment download header discipline** (security sign-off C8/F7): every download from the §2.3 attachment endpoint carries **always** `Content-Disposition: attachment` (an `.html` attachment is never inline — this endpoint is session-authenticated on the gateway origin; inline HTML here would be Library-Defect-2-shaped), `X-Content-Type-Options: nosniff`, a content type from the **extension-derived** map (extension decides — never the bytes, never the host registry, never the MIME part's self-declared type when it disagrees with a dangerous extension; the `applyLibraryByteHeaders` discipline), and the filename RFC 6266 dual-encoded (ASCII fallback + `filename*`, the `contentDispositionAttachment` discipline) from the MC-32-sanitized name; no CSP on attachment responses (the Library MV-13 second half) | handler tests: `.html` part → always-`attachment` + extension-typed + nosniff; hostile/unicode filenames round-trip through the RFC 6266 dual encoding |
+| MC-43 | **Preview-token hygiene = the Library precedent, mail-bound** (security sign-off C9/F8): 256-bit `crypto/rand` tokens, fail-closed on entropy error or short read; a **named** TTL constant (Library: `PreviewTokenTTL` = 15 min); a per-session live-token cap that **refuses, never evicts** (Library: 8); expired/unknown/revoked **deliberately indistinguishable — 404 only**; in-memory store keyed by a session digest (never the raw credential); revocation wired into logout; token bound to (pair, folder, ref, load_remote); `Cache-Control: no-store` on every served response | token-store unit tests: entropy failure fails closed; TTL constant asserted; the over-cap mint refused (never evicting); expired == unknown == revoked → byte-identical 404s; logout revokes; served responses carry `no-store` |
+| MC-44 | **The mint route is rate-limited** (security sign-off C10/F9): `POST /api/v1/mail/html-preview-token` is wrapped in a **dedicated per-IP limiter instance** (own instance — never the shared API limiter; the `mailMutationLimiter` precedent, round-2 MIN-004; 10 requests/minute, 429 with `Retry-After`) — the mint does the one live-IMAP fetch + sanitize + store insert per call, so over-budget calls never reach IMAP. The constant is reviewer-challengeable with A10's standing. (The Library mint path has its own limiter — `pkg/gateway/preview_token_ratelimit_test.go`.) | handler test: the over-budget mint → 429 + `Retry-After`, zero IMAP dials for the refused call |
+| MC-45 | **Serve routes are token-only, 404-only — the reason documented** (security sign-off C11/F11): the §2.3a routes accept **only** the preview token — no cookie/session auth (browser engines differ on cookies for sandboxed-frame requests: WebKit attaches them — the measured Defect-2 exposure; Chromium/Firefox withhold them — cookie auth would break rendering there); expired/unknown/revoked are 404 only (no 401, no distinguishable bodies); **no** `frame-ancestors` directive and **no** `X-Frame-Options` header (the URL token is the capability; both would fight the SPA embedding); the reason is documented in the handler comment and §2.3a | header/negative handler tests: a valid session cookie without token → 404 (never 200/401); expired/unknown/revoked byte-identical 404s; no `frame-ancestors`/`X-Frame-Options` ever emitted |
+
+#### MC-10 normative header set and iframe attributes (verbatim — security-lead sign-off, 2026-09-26)
+
+Source (dated 2026-09-26): `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/logs/email-security-signoff.md`,
+section "Required header set and iframe attributes (normative for implementation)". Copied verbatim; normative
+for implementation.
+
+**HTML body response** (`GET /mail-preview/html/{token}`; same posture for the §16 signature
+mini-frame):
+
+```
+Content-Type: text/html; charset=utf-8
+Content-Security-Policy: sandbox allow-popups allow-popups-to-escape-sandbox; default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src <origin>/mail-preview/ data:; font-src data:; media-src data:; connect-src 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'
+Referrer-Policy: no-referrer
+X-Content-Type-Options: nosniff
+Cache-Control: no-store
+```
+
+**Rules:**
+
+- `<origin>` = each canonical browser-facing gateway origin, path-confined to `/mail-preview/`;
+  **never** `'self'`, never a bare `https:` source (MC-10(2), Library Defect 2).
+- No-origin degradation: **omit** host sources + loud WARN (C4) — never a `'self'` fallback.
+- `style-src 'unsafe-inline'` is the one `unsafe-inline` allowed and it is required — real
+  email is style-heavy; scripts stay `'none'`.
+- `style-src` keeping `unsafe-inline` with `default-src 'none'` is fine; if the team wants
+  belt-and-braces, scope it `style-src 'unsafe-inline'` only (no host sources for styles —
+  remote stylesheets are not needed for rendering and are blocked by `default-src 'none'` with
+  no style-src host sources. Keep host sources only on `img-src`.
+- No `frame-ancestors` (see F11); no `X-Frame-Options` (subsumed; and it would fight the SPA
+  embedding — do not add it).
+
+**iframe attributes** (SPA side, mirroring `LibraryHtmlFrame` minus scripts):
+
+```
+<iframe src="{token URL}"            -- never srcdoc (Library rule: srcdoc resolves relative
+                                             URLs against the EMBEDDER, no response of its
+                                             own to carry the isolation policy)
+        sandbox="allow-popups allow-popups-to-escape-sandbox"
+        referrerPolicy="no-referrer"
+        allow="" />
+```
+
+**Negative test list (qa-lead's pack):** in BOTH the CSP directive and the attribute: no
+`allow-scripts`, `allow-same-origin`, `allow-forms`, `allow-top-navigation`, `allow-downloads`,
+`allow-modals`, `allow-pointer-lock`. And: no `'self'` anywhere in the policy string; no
+`https:` source in `img-src`; every host source path-confined to `/mail-preview/`; sanitize →
+store → serve ordering (sanitizer runs at mint, serve route serves stored bytes only, no IMAP
+at serve time); 256 KB cap enforced at mint (`::capBody`); error classes enum-only (no upstream
+text in bodies).
 
 ### 5.4 Integration boundaries
 
@@ -948,7 +1040,7 @@ documented as accepted (FR-006).
 - **When** the human opens it
 - **Then** the HTML renders in a frame whose CSP/sandbox matches MC-10 (no scripts, no forms, no same-origin)
 - **And** the remote image loads zero third-party requests until "Load images" is clicked (D17), which re-mints the token with `load_remote=true`
-- **And** the inline `cid:` image renders through `/mail/html-preview/{token}/part/{index}` without any remote host
+- **And** the inline `cid:` image renders through `/mail-preview/part/{token}/{index}` without any remote host
 
 #### Scenario B-18: Watcher badge summary reflects mailboxes
 **Traces to**: US-3, AS-1, AS-8 · **Category**: Happy Path
@@ -1199,10 +1291,12 @@ documented as accepted (FR-006).
 #### Scenario B-52: Caps and invalid references reject pre-dial
 **Traces to**: US-8, AS-5 · **Category**: Error Path
 - **Given** attachment lists at the MC-32 boundaries (10 files pass, 11th fails; ≤ 25 MiB total passes, over
-  fails) and a reference that resolves outside the workspace or to a nonexistent file
+  fails), a reference to an unconditional secret carve-out (rejected at resolve, re-verified at read),
+  and a reference to a nonexistent file
 - **When** the agent calls any of the three tools with such a list
 - **Then** the invalid list fails as a tool error **before any SMTP connection or APPEND** — nothing is
-  transmitted, nothing drafted (B-41's pre-dial discipline, MC-32/MC-35)
+  transmitted, nothing drafted (B-41's pre-dial discipline, MC-32/MC-35); **a reference that merely
+  resolves outside the workspace does NOT fail** — it attaches, per the MC-35 open-read rule
 - **And** the failure names the offending reference
 
 #### Scenario B-53: Agent read marks read and tags "read by agent"
@@ -1316,8 +1410,8 @@ post-landing live smoke (D37).
 | 59 | `TestDial_DNSErrorBoundedRetry` | Unit (injected resolver) | B-14, B-42 | Fails-twice-then-succeeds → one success; always-fails → `dns` class within the bound; auth/TLS never retried (MC-8, MC-33, round-2 MAJ-016) |
 | 60 | `TestWatcherLog_RateRule` | Unit (scripted failure window) | (MC-34) | A 13-mailbox failure window yields bounded log volume — first failure + state changes, never per cycle (FR-036, round-2 MIN-015) |
 | 61 | `TestMailSummary_NeverLies` | Integration | B-18 | New summary fields present; `last_success_at` null until a cycle succeeds; `next_attempt_at` set in backoff (MC-23, round-2 MAJ-019) |
-| 62 | `TestMailPreview_NoRedirectAndWebKitCookie` | Integration | B-17 | The mail-preview prefix never redirects; an untrusted `<img src="/api/v1/…">` loads nothing (MC-10, round-2 CRIT-001) |
-| 63 | `TestHtmlPreview_MintOnceNoIMAP` | Integration | B-17 | The serve/part routes never dial IMAP after mint — one fetch per preview (round-2 MAJ-003, MAJ-008) |
+| 62 | `TestMailPreview_NoRedirectAndWebKitCookie` | Integration | B-17 | Nothing under `/mail-preview/` ever redirects — mirroring `library_preview_no_redirect_test.go` incl. its stdlib-mux positive control, `/api/` sentinel (MC-10(1), sign-off C1); an untrusted `<img src="/api/v1/…">` loads nothing (round-2 CRIT-001) |
+| 63 | `TestHtmlPreview_MintOnceNoIMAP` | Integration | B-17 | The `/mail-preview/` serve/part/proxy routes never dial IMAP after mint — one fetch per preview (round-2 MAJ-003, MAJ-008) |
 | 64 | `TestSendEmailTool_WorkspaceAttachment` | Unit (fake) | B-49 | Attachment resolves through the tools' workspace-path resolution and rides the MIME structure on the transmitted and Sent copies; MC-32 caps enforced pre-dial (MC-35) |
 | 65 | `TestAgentAttachment_SamePolicyResolution` | Unit | B-51 | Effective policy identical with/without the `attachments` parameter; no separate gate, ceiling/fill/inventory entry or auto-approve classification (MC-35, D33) |
 | 66 | `TestCreateEmailDraftTool_AttachmentsToPanel` | Unit (fake) + Integration | B-50 | Draft carries attachments as MIME parts; `MailMessage.attachments` lists them in the panel; panel send re-attaches unchanged (FR-034/FR-035) |
@@ -1326,6 +1420,15 @@ post-landing live smoke (D37).
 | 69 | `TestAgentRead_KeywordRejectedFallback` | Unit (scripted IMAP server that answers NO to the keyword STORE) | B-54 | Keyword STORE rejected → exactly one `\Seen`-only STORE follows, the read still succeeds with the full message, no error surfaces, the keyword is not re-attempted for the rest of the process (one WARN per process per mailbox), `read_by_agent` stays false (MC-36) |
 | 70 | `TestEnvelope_ReadByAgentDerived` | Unit | B-53, B-55 | `read_by_agent` on the envelope/summary is derived from the fetched flag list only — keyword present (any case variant) → true; `\Seen` alone → false; no persisted Omnipus state involved (MC-36, FR-039) |
 | 71 | `mail-panel.spec.ts` — fake IMAP/SMTP server (D36) | E2E | B-1, B-7, B-12, B-27, B-30, B-31, B-39, B-53 | Every main mail flow in a real browser per CI run against the built-in fake IMAP/SMTP server: read (B-12), open marks read (B-27), panel edit of an agent draft (B-30) and panel send (B-31), compose send with attachment (B-39) — the fake SMTP sink records the transmission carrying the signature HTML (B-1) and the fake IMAP holds the Sent APPEND (B-7) — plus the read-by-agent tag (B-53). Seeded via APPEND/STORE on the fake server, never live agent turns; new spec file assigned to exactly one shard in `tests/e2e/shards.json` (`scripts/e2e-shards.sh check` fails CI on a missing or double assignment) (MC-36) |
+| 72 | `TestMailIsolationPolicy_OwnBuilderTripwires` | Unit (builder output) | (MC-37) | Mail CSP built by its own named builder in its own file; negative assertions per clause: no `'self'`, no `allow-scripts`, no script-src host sources, no `'unsafe-inline'` in script-src, no `https:` in `img-src`, every host source path-confined to `/mail-preview/`; the Library builder is not referenced from the mail path (sign-off C3) |
+| 73 | `TestMailIsolationPolicy_NoOriginOmitWarn` | Unit | (MC-38) | No derivable origin → host sources omitted + loud WARN; the policy never contains `'self'`/`https:` in any configuration state (sign-off C4) |
+| 74 | `TestMailPreview_SandboxTokenExactBothLayers` | Integration + Component | (MC-39) | CSP directive and iframe attribute each exactly `allow-popups allow-popups-to-escape-sandbox`; the seven banned tokens absent in BOTH layers (sign-off C5) |
+| 75 | `TestInboundSanitizer_AnchorNoopenerForced` | Unit | (MC-40) | `<a href="https://evil/">x</a>` renders with `rel="noopener noreferrer"` + `target="_blank"` before token-store insertion; `window.opener` cut after the cross-origin click (sign-off C6) |
+| 76 | `TestMailImageProxy_SSRFPinsDialTime` | Integration | (MC-41) | Rebinding: validator-passing hostname resolving private at dial → refused at dial; zero redirects followed; > 5 MiB / > 10 s cut; non-`image/*` refused; `nosniff` + `no-store` re-emitted; no token or `load_remote=false` → refused; non-store URL refused (sign-off C7) |
+| 77 | `TestAttachmentDownload_HeaderDiscipline` | Integration | B-39 | Always `attachment` disposition (incl. an `.html` part), `X-Content-Type-Options: nosniff`, extension-derived content type (dangerous-extension disagreement wins), RFC 6266 dual-encoded sanitized filename, no CSP header (MC-42, sign-off C8) |
+| 78 | `TestMailPreviewToken_HygieneLibraryPrecedent` | Unit | (MC-43) | 256-bit fail-closed entropy; named TTL; per-session cap refuses (never evicts); expired/unknown/revoked byte-identical 404s; digest-keyed store; logout revocation; `Cache-Control: no-store` on served responses (sign-off C9) |
+| 79 | `TestMailPreviewMint_RateLimited` | Integration | (MC-44) | Dedicated per-IP limiter: the over-budget mint → 429 + `Retry-After`, zero IMAP dials for the refused call (sign-off C10) |
+| 80 | `TestMailServeRoutes_TokenOnly404Only` | Integration | B-17 | Serve routes accept only the token: session cookie without token → 404 (never 401); expired/unknown/revoked byte-identical 404s; no `frame-ancestors`/`X-Frame-Options` emitted (MC-45, sign-off C11) |
 
 ### 7.1 Test datasets
 
@@ -1339,7 +1442,7 @@ post-landing live smoke (D37).
 | DS-6 Draft lifecycle | create ok, create with missing to (reject), draft deleted before link click, draft in nonexistent pair (404), **foreign (owner-authored) draft**, **stale-precondition send (409)**, **edit: APPEND ok + delete-flag fail (warning)**, **discard under non-UIDPLUS server**, **foreign draft with attachments (carry-over listed before send — round-2 MAJ-010)**, **stale `X-Omnipus-Render-Hash` (foreign path + loss statement)** | B-19, B-21, B-23, B-24, B-30..B-40 |
 | DS-7 Mailbox roster | 0 mailboxes (empty state), 1 mailbox (no picker), 2 mailboxes (picker), mailbox enabled but password unresolvable (skip + explicit state) | B-11, B-13, B-14 |
 | DS-8 Watcher cycles | no new mail (expected: state unchanged), new mail (expected: `last_seen_uid`/`unseen_total` advance), 30+ new messages in one cycle (**expected: state advances once, badge shows one count — no per-message work**), mailbox in error (expected: class stored, backoff starts per D29/R2-8), **UIDVALIDITY reset (expected: silent re-baseline, log once — round-2 MAJ-001)**, **mail read by another client (expected: UID state still advances — UID-keyed, round-2 MAJ-019)**, **backoff schedule with fake clock (expected: 60s→2→4…15min ±20% jitter, auth_failed at cap)**, **3-tab coalescing (expected: ≤1 LOGIN/tick, zero auto-dials in backoff)** | B-18, B-28, B-29, B-43..B-45, B-48 |
-| DS-9 Agent attachment inputs | 1 workspace file (happy), 10 files at the cap (pass), 11th (reject), 25 MiB total boundary (pass / over rejects), reference resolving **outside the workspace** (reject), nonexistent file (reject), unicode filename, filename with path separators (sanitized per MC-32) | B-49, B-50, B-52 |
+| DS-9 Agent attachment inputs | 1 workspace file (happy), 10 files at the cap (pass), 11th (reject), 25 MiB total boundary (pass / over rejects), reference to a **secret carve-out** (rejected at resolve, re-verified at read), reference to a file **outside the workspace** (attaches — open-read rule, MC-35; the attachable verdict is pinned), nonexistent file (read-time failure pre-dial), unicode filename, filename with path separators (sanitized per MC-32) | B-49, B-50, B-52 |
 | DS-10 Agent read flag states | keyword supported (STORE succeeds → `\Seen` + keyword in one store → tag), keyword rejected (fallback `\Seen`-only STORE, in-process suppression until restart, one WARN per process per mailbox), `\Seen` also rejected (visible failure — a read-only agent mailbox is unsupported per MC-36), case-variant keyword (`$omnipusagentread` on the server vs `$OmnipusAgentRead` compared → still derived true), the three reader states (agent-read = both flags; human-opened = `\Seen` only, no keyword → no tag; untouched = neither flag) | B-53, B-54, B-55 |
 
 ### 7.2 Regression impact
@@ -1368,8 +1471,10 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
   kinds; the greenfield ruling means no migration of previously allow-filled entries.
 - Mailbox config round-trip including the strict legacy/nested shape rule
   (`pkg/config` mailbox migration tests) must keep passing with the new fields present.
-- The SPA embed/CSP surface is untouched except the new `mail/html-preview` routes, which carry their own
-  headers and no new `script-src` relaxation — `pkg/gateway/embed.go` policy untouched.
+- The SPA embed/CSP surface is untouched except the new `/mail-preview/` routes (§2.3a), which carry their own
+  headers and no new `script-src` relaxation — `pkg/gateway/embed.go` policy untouched. **The Library
+  isolation policy and its tests are untouched** — the mail CSP is built by its own named builder in its own
+  file (MC-37, sign-off C3), and the shipped Library-string tripwire keeps guarding the Library file.
 - `smtp.Dial`/`tls.Dial` replacement by context-dialers is behavior-preserving on the happy path — existing
   `pkg/email` send tests stay green unmodified (MC-21 adds the bounded-failure tests).
 - **The `startMemIMAP` migration is additive**: rows moved onto the real-protocol harness (T5, T9, T11, T12,
@@ -1391,7 +1496,9 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
   `style`, tables, `img` over https/data; strips script, event handlers, `javascript:`, forms, iframes); the
   stored value is the sanitized one and the PUT returns what was stored. Agents MUST NOT author the signature
   or raw HTML; signature application happens server-side at compose time (MC-2). [D3; round-1 MAJ-008;
-  **security-lead review of both sanitizer policies is a pre-implementation gate**]
+  **security-lead review of both sanitizer policies is a pre-implementation gate — the 2026-09-26
+  sign-off-with-conditions is that review's delivery to date; its inbound-sanitizer conditions are absorbed
+  as MC-40/T75, and any residual signature-policy condition would come back through the same gate**]
 - **FR-004**: The system MUST render agent message bodies (`send_email`, `reply`, `create_email_draft`) from
   Markdown into sanitized `text/html` plus derived `text/plain` (multipart/alternative, MC-3) — the plain
   part derived from the same goldmark AST as the HTML with hard wraps, so single newlines survive (MC-30).
@@ -1454,8 +1561,10 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
   same-origin; remote content MUST be blocked by default with a per-message "Load images" action that re-mints
   the token with `load_remote=true` (D17); the response MUST carry the full MC-10 header set (incl.
   `Referrer-Policy: no-referrer`, `form-action 'none'`, token binding/TTL); inline `cid:` images render via
-  the token-scoped part route. **security-lead review of the exact header set is a pre-implementation gate.**
-  [D13, D17; round-1 MAJ-007]
+  the token-scoped part route. **The security-lead pre-implementation review of the exact header set was
+  delivered 2026-09-26 as a SIGN-OFF WITH CONDITIONS; its eleven conditions C1–C11 are absorbed in this
+  revision as binding constraints (MC-10 normative block, MC-37–MC-45) with tests T72–T80.**
+  [D13, D17; round-1 MAJ-007; security sign-off 2026-09-26]
 - **FR-020**: Read state is IMAP `\Seen`, and the writers are exactly two, both explicit: the panel's
   mark-read endpoint (§2.3 `POST …/messages/{ref}/seen` — once per panel open per message, idempotent,
   MC-24) and agent `read_message` (existing behavior unchanged). The panel's list never marks read; every
@@ -1560,16 +1669,21 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
   [D29; D30; round-2 MAJ-016, MAJ-017, MAJ-018, OBS-004]
 
 - **FR-038** (D33): The agent mail tools (`send_email`, `reply`, `create_email_draft`) MUST accept an optional
-  `attachments` parameter of **workspace-file references**, resolved server-side by the same workspace-path
-  resolution the generic file tools use (`pkg/tools/resolvepath.go::ResolvePath`) — a reference resolving
-  **outside the workspace or to a nonexistent file is invalid input** (tool error, pre-dial), not a policy
-  decision. The parameter MUST be governed by **exactly the tool's own policy resolution**: no separate
-  approval gate, no separate ceiling/fill/inventory entry, no attachment-only cap — only the general message
-  limits already in this spec apply (MC-32 caps, MC-22 body bound, MC-27 recipient cap), all enforced before
-  dialing. Attachments MUST ride the message as MIME parts — a draft included, so the approval panel lists
-  exactly what would be sent — and audit/transcript records MUST carry attachment filenames and sizes like
-  any send (MC-19, MC-35). **D31 context**: these tools are used when the agent is asked, or inside an
-  operator-configured heartbeat/scheduled task — mail is never the trigger. [D33, D31]
+  `attachments` parameter of **file references**, resolved server-side by the same path resolution the generic
+  file tools use (`pkg/tools/resolvepath.go::ResolvePath`) **under its open-read rule**: the unconditional
+  secret carve-outs are refused **at resolve time and re-verified at I/O time**
+  (`recheckUnrestrictedCarveOut`) — secrets are never attachable — and **every other readable file is
+  attachable, including files outside the workspace root** (D33 "no extra guard rails"; no outside-workspace
+  gate — the send_file precedent rejected a path gate as bypassable; security sign-off C2/F5). A reference to
+  a nonexistent file fails when read at compose time — a tool error before any SMTP connection or APPEND,
+  naming the reference. The parameter MUST be governed by **exactly the tool's own policy resolution**: no
+  separate approval gate, no separate ceiling/fill/inventory entry, no attachment-only cap — only the general
+  message limits already in this spec apply (MC-32 caps, MC-22 body bound, MC-27 recipient cap), all enforced
+  before dialing. Attachments MUST ride the message as MIME parts — a draft included, so the approval panel
+  lists exactly what would be sent — and audit/transcript records MUST carry attachment filenames and sizes
+  like any send (MC-19, MC-35). **D31 context**: these tools are used when the agent is asked, or inside an
+  operator-configured heartbeat/scheduled task — mail is never the trigger. [D33, D31; security sign-off
+  C2, 2026-09-26]
 - **FR-039** (D38): Agent `read_message` MUST mark the message read by fetching with `BODY.PEEK` and issuing
   exactly **one** flag STORE that adds `\Seen` **and** the `$OmnipusAgentRead` keyword. If the server rejects
   the keyword, the fallback MUST be exactly one `\Seen`-only STORE with the read still succeeding — no error
@@ -1617,7 +1731,8 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
 
 - **SC-010** (D33): Agent attachment capability works end to end: an agent can attach a workspace file on
   `send_email`/`reply`/`create_email_draft` (B-49/B-50); the approval panel lists an agent-attached draft's
-  files before send; the 11th file / > 25 MiB / outside-workspace reference fails **pre-dial** (T67); the
+  files before send; the 11th file / > 25 MiB / secret-carve-out reference fails **pre-dial** (T67); a
+  reference outside the workspace **attaches** (open-read rule pinned, MC-35); the
   effective policy of an attachment-bearing call is identical to the attachment-less call (T65); audit and
   transcript records carry attachment names and sizes (T32/T64).
 
@@ -1649,7 +1764,7 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
 | FR-016 | US-4 | B-23, B-29, B-46 | existing send approval suites (green) + T34, T47 |
 | FR-017 | US-5 | B-26, B-25 | T20, T39 |
 | FR-018 | US-3, US-5, US-7 | B-14, B-14a, B-14b, B-32 | T19, T22, T37, T60 |
-| FR-019 | US-3 | B-17 | T41, plus the MC-10 handler tests — security-lead gated |
+| FR-019 | US-3 | B-17 | T41, plus the MC-10 handler tests + **T62, T63, T72–T80 (sign-off C1/C3–C11)** — sign-off delivered 2026-09-26, conditions absorbed |
 | FR-020 | US-6 | B-27, B-28, B-29 | T29, T30, T45, T46 |
 | FR-021 | US-7 | B-30, B-31, B-32, B-33, B-34, B-35, B-38, B-24 | T23, T24, T25, T26, T27, T28, T49 |
 | FR-022 | US-2, US-5 | B-9, B-26 | T7, T20 |
@@ -1664,7 +1779,7 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
 | FR-031 | US-2, US-5 | B-10 | T3, T8 |
 | FR-032 | US-7 | B-30, B-33, B-34 | T23, T26, T27 |
 | FR-033 | US-6, US-3 | B-15, B-18, B-45 | T30, T36, T52, T61 |
-| FR-034 | US-8 | B-39 | T56 |
+| FR-034 | US-8 | B-39 | T56, T77 (attachment download header discipline — MC-42) |
 | FR-035 | US-8, US-7 | B-40 | T57 |
 | FR-036 | US-6, US-3 | B-43 | T60 |
 | FR-037 | US-3, US-6 | B-14a, B-14b, B-42, B-43, B-44 | T53, T54, T59 |
@@ -1759,7 +1874,7 @@ to keep the matrix honest.
 | 19 | Watcher state exists but UIDVALIDITY changed | Silent re-baseline to `UIDNEXT-1`, logged once, nothing flagged new, nothing started (B-45, MC-31) |
 | 20 | 51st recipient on any send path | Pre-SMTP 400/tool error naming the offending address; nothing transmitted (B-41, MC-27) |
 | 21 | Attachment filename path traversal / hostile name (`../../`, control chars) | Sanitized on **serve** and on **attach**; only the sanitized name is ever offered to disk or header (US-8 AS-2, MC-32, T56) |
-| 22 | Agent attachment reference resolving outside the workspace, or to a nonexistent file | Invalid input: tool error **before any SMTP connection or APPEND**, naming the offending reference; nothing transmitted, nothing drafted (D33, MC-35, T67 — validity, not a policy gate) |
+| 22 | Agent attachment reference to a **secret carve-out**, or to a nonexistent file | Secret carve-out: refused **at resolve and re-verified at read time** — never attachable; nonexistent: tool error **before any SMTP connection or APPEND**, naming the offending reference; nothing transmitted, nothing drafted (D33, MC-35, T67 — the open-read rule; a reference outside the workspace **attaches**) |
 | 23 | IMAP server that rejects custom keywords (STORE `$OmnipusAgentRead` answered NO) | Agent read still succeeds: exactly one `\Seen`-only STORE follows the rejected combined STORE, no error to the agent, no "read by agent" tag in the panel, the keyword is not re-attempted until process restart (one WARN per process per mailbox) (B-54, FR-039, T69) |
 
 ## 13. Holdout evaluation scenarios (post-implementation, NOT in the traceability matrix)
@@ -1831,6 +1946,11 @@ Specified as FR-038/MC-35 with US-8 AS-5, B-49..B-52, T64–T67, DS-9, SC-010 an
 The exfiltration-surface trade-off recorded under this question (a compromised agent could mail workspace
 files out) was weighed and **accepted by the founder as part of the decision** — it is governed by the same
 policy, caps and audit as any send. The human attach/download paths (D28) are unchanged.
+**Security sign-off C2 (2026-09-26) pinned the resolution semantics to what
+`pkg/tools/resolvepath.go::ResolvePath` actually enforces** — open-read rule, no outside-workspace gate —
+which is D33's own posture ("no extra guard rails", send_file precedent); the earlier "outside the workspace
+= invalid input" wording was this spec's wording, not the founder's, and its deletion raises **no new
+founder question**.
 
 ---
 
@@ -1849,20 +1969,23 @@ policy, caps and audit as any send. The human attach/download paths (D28) are un
   context-threaded per FR-027.
 - **Folder resolution** (A1) lives in `pkg/email`; per-mailbox overrides ride `MailboxConfig`.
 - **Agent attachments (D33)**: the compose unit takes attachment inputs from both sources — the human paths'
-  `data_base64` parts (REST) and the agent path's workspace-file references, resolved through
-  `pkg/tools/resolvepath.go::ResolvePath` and read at compose time — into one shared MIME builder (the
-  FR-029 `multipart/mixed` wrapper already exists; attachments join it). Caps (MC-32) and reference
-  validity (MC-35) run before any dial or APPEND; outside-workspace or nonexistent references are invalid
-  input, not policy. No new policy surface anywhere (§2.7 note).
+  `data_base64` parts (REST) and the agent path's file references, resolved through
+  `pkg/tools/resolvepath.go::ResolvePath` **under its open-read rule** and read at compose time — into one
+  shared MIME builder (the FR-029 `multipart/mixed` wrapper already exists; attachments join it). Caps (MC-32)
+  and the open-read-rule checks (MC-35: carve-outs refused at resolve **and** re-verified at I/O time; a
+  nonexistent file fails when read) run before any dial or APPEND; there is **no outside-workspace gate**
+  (sign-off C2). No new policy surface anywhere (§2.7 note).
 - **Signature plumbing**: `EmailMailboxPanel` PUT carries `signature_html` through the existing raw-map write
   path — which must keep preserving unknown fields (ADR-033 §5 negative note). Sanitization happens
   server-side on save (FR-003).
 - **`create_email_draft`** joins `tools.EmailToolset` (`pkg/tools/email.go`) and the six §2.7 touch points.
 - **D19 fill**: the replacement for `grantEmailToolAllows` writes `ask`/`allow` only into absent keys of the
   agent's own policy map (`rest_mailbox.go`); the fill set is `emailToolNames` + `create_email_draft`.
-- **HTML preview token** endpoints mirror the Library pair (`/library/preview-token`) including token expiry,
-  bound to (pair, folder, ref, load_remote); the handler sets the MC-10 headers; `cid:` parts serve under the
-  same token scope. The served HTML is bounded by the existing 256 KB inbound cap.
+- **HTML preview token** flow mirrors the Library pair (`/library/preview-token`) including token expiry,
+  bound to (pair, folder, ref, load_remote): the **mint** stays session-authenticated under `/api/v1`
+  (`POST /api/v1/mail/html-preview-token`, §2.3); the **serve routes** are token-only on the non-API
+  `/mail-preview/` prefix (§2.3a — sign-off C1), each handler setting the MC-10 headers; `cid:` parts serve
+  under the same token scope. The served HTML is bounded by the existing 256 KB inbound cap.
 - **Audit + rate limit**: the four mutating routes wrap `withRateLimit` around a **dedicated
   `mailMutationLimiter`** (never the shared `rest_auth.go::apiRateLimiter` instance — MIN-004) and
   emit via `pkg/audit` (hash via `argshash.go`), following `rest_preview_audit.go`.
@@ -1936,9 +2059,9 @@ renders them; the approval panel already lists what will be sent.
 |---|---|
 | User stories | 8 (US-1 … US-8) |
 | BDD scenarios | 57 — Happy Path 26 · Alternate Path 8 · Error Path 12 · Edge Case 11 (B-1..B-55 plus B-14a/B-14b) |
-| Machine-verifiable constraints | 38 (MC-1 … MC-36 plus MC-31a/MC-31b) |
+| Machine-verifiable constraints | 47 (MC-1 … MC-45 plus MC-31a/MC-31b; MC-37–MC-45 added by the 2026-09-26 security sign-off absorption) |
 | Test datasets | 10 (DS-1 … DS-10) |
-| TDD plan rows | 71 (orders 1–71; T-number = order) |
+| TDD plan rows | 80 (orders 1–80; T-number = order; T72–T80 added by the 2026-09-26 security sign-off absorption) |
 | Functional requirements | 39 (FR-001 … FR-039) |
 | Success criteria | 11 (SC-001 … SC-011) |
 | Founder questions open | 0 (FQ-1 resolved by D33 — §14) |
@@ -1984,7 +2107,7 @@ rationale), **deferred-with-issue** (tracked in §19's #42 remainder).
 | MAJ-004 — Sent APPEND duplicates on Gmail/Outlook.com | **rejected-with-reason** | Founder decision D18: generic IMAP only, no provider detection ("we use IMAP only"). The duplication is documented as the accepted consequence in FR-006 and §5.4; the UAT check asserts "appears", not "exactly once" (T44) |
 | MAJ-005 — Message-ID addressing inconsistent/unsound | **fixed** | FR-028: folder-scoped `uid:`/`mid:` refs; resolution order newest-INTERNALDATE; `<…@…>` ≤ 998 bytes no-CRLF validation; §2.3 endpoints re-keyed; DS-4 rows; adopted by D21 |
 | MAJ-006 — raw-Markdown drafts break the "normal provider" promise | **fixed** | FR-029 (option 1): drafts APPENDed rendered + `X-Omnipus-Markdown` source header; foreign drafts per D24 in FR-030; B-24; A7 retired |
-| MAJ-007 — HTML-preview headers under-specified | **fixed** | MC-10 carries the full directive set, sandbox flags, Referrer-Policy, token binding/TTL, `cid:` part route; security-lead pre-implementation gate in FR-019; T41 + per-directive handler tests |
+| MAJ-007 — HTML-preview headers under-specified | **fixed** | MC-10 carries the full directive set, sandbox flags, Referrer-Policy, token binding/TTL, `cid:` part route; security-lead pre-implementation gate in FR-019 — **delivered 2026-09-26 (sign-off with conditions, C1–C11 absorbed)**; T41 + per-directive handler tests |
 | MAJ-008 — signature sanitization/ordering undefined | **fixed** | FR-003: sanitized on save with a named signature policy; stored value is sanitized; MC-2 composes hostile body **and** hostile signature; DS-1 adds the real-world signature row |
 | MAJ-009 — MC-3 contradicts FR-004 | **fixed** | MC-3 rewritten: every outbound message multipart/alternative with exactly one plain + one HTML part; plain-part derivation rule defined |
 | MAJ-010 — issue #42 not reconciled | **fixed** | §19 Related issues maps delivered/superseded/deferred per item; closes #629/#631 per D21 |
@@ -2022,7 +2145,7 @@ exist in the spec.
 
 | Finding | Verdict | Where addressed |
 |---|---|---|
-| CRIT-001 — MC-10's CSP reintroduces both documented Library-preview defects | **fixed** | MC-10 rewritten to the Library posture: non-API `/mail-preview/` prefix + no-redirect test (T62), no `'self'`, CSP `sandbox` directive + iframe attribute, `base-uri`/`connect-src`/`object-src 'none'`, named inbound sanitizer (strips `<meta http-equiv>`, `<base>`, forms, scripts; rewrites `cid:`), gateway-proxy remote images (https-only, private-refused, bounded, image-only), 256 KB cap, WebKit cookie test case; `library_isolation_policy.go` both defects cited (§3.1); security-lead sign-off gate (D29); FR-019 carries the gate |
+| CRIT-001 — MC-10's CSP reintroduces both documented Library-preview defects | **fixed** | MC-10 rewritten to the Library posture: non-API `/mail-preview/` prefix + no-redirect test (T62), no `'self'`, CSP `sandbox` directive + iframe attribute, `base-uri`/`connect-src`/`object-src 'none'`, named inbound sanitizer (strips `<meta http-equiv>`, `<base>`, forms, scripts; rewrites `cid:`), gateway-proxy remote images (https-only, private-refused, bounded, image-only), 256 KB cap, WebKit cookie test case; `library_isolation_policy.go` both defects cited (§3.1); security-lead sign-off gate (D29); FR-019 carries the gate — **delivered 2026-09-26 (sign-off with conditions, C1–C11 absorbed)** |
 | CRIT-002 — "Let the agent handle new mail" is a zero-click prompt-injection path | **fixed by removal** | D27: an email never starts an agent turn. FR-024 replaced (no enqueue path exists); switch + `MailboxConfigureRequest` wiring removed outright (greenfield, no deprecated field); §2.5, §2.7, US-6, §5.2 non-behaviors, B-28/B-29, MC-18, T30, H-8, §17 all state the removal |
 | MAJ-001 — watcher state has no UIDVALIDITY, no first-run baseline, no turn-count rule | **fixed** | MC-31 + FR-023: state carries `uidvalidity`; first run and UIDVALIDITY change baseline to `UIDNEXT-1`, log once; B-45, T52, DS-8, edge 19 |
 | MAJ-002 — watcher agent-turn mechanism and "peek" scope undefined | **fixed by removal** | Superseded by D27: the turn mechanism no longer exists (FR-024); peek is fetch-path-wide (FR-020/MC-25) |
