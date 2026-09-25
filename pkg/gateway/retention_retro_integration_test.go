@@ -325,5 +325,5 @@ func TestIntegration_DefaultRetroRetentionIs180(t *testing.T) {
 // significantly improve testability and operator ergonomics (one-shot purge
 // without waiting for the nightly tick).  The session-sweep endpoint at
 // pkg/gateway/rest.go::HandleRetentionSweep is the template.  Tracking issue
-// should be opened against v0.2/v0.3 — this is a testability gap flagged by
-// the reviewers.
+// should be opened for this testability gap flagged by the reviewers
+// (v0.2/v0.3 release labels retired 2026-09-25 — no target release).
