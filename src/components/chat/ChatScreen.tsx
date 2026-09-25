@@ -65,7 +65,7 @@ import {
   splitAnchoredDelegationEvents,
   type DelegationPlacementMessage,
 } from '@/lib/delegationEventPlacement'
-import { DelegationEventLineList, DelegationInlineProvider, DelegationToolGroup, delegationSlotted } from './DelegationEventLine'
+import { DelegationEventLineList, DelegationInlineProvider, DelegationLiveTail, DelegationToolGroup, delegationSlotted, useClaimedCallIds } from './DelegationEventLine'
 import { useChatDelegationEvents } from './useChatDelegationEvents'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
@@ -1859,10 +1859,13 @@ function StreamingDelegation({
     placementOf(message),
     liveSnapshotIds(message.id, snapshots, owners),
   )
+  // The tool group reports which call ids it drew. Anything still unclaimed
+  // (a snapshot whose part never arrived) renders after the bubble, not nowhere.
+  const { claimed, reportMatched } = useClaimedCallIds()
   return (
-    <DelegationInlineProvider byCall={split.byCall}>
+    <DelegationInlineProvider byCall={split.byCall} reportMatched={reportMatched}>
       {children}
-      <DelegationEventLineList events={split.trailing} />
+      <DelegationLiveTail byCall={split.byCall} trailing={split.trailing} claimed={claimed} />
     </DelegationInlineProvider>
   )
 }

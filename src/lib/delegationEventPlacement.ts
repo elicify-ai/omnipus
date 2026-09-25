@@ -142,3 +142,22 @@ export function splitAnchoredDelegationEvents(
   }
   return { byCall, trailing }
 }
+
+/**
+ * A call can count as placed (a live snapshot) and still never be drawn,
+ * because the streaming bubble has no tool-call part for it. Those lines
+ * go back after the bubble instead of disappearing. `claimed` is the set
+ * of call ids a tool group actually rendered.
+ */
+export function appendUnclaimedCalls(
+  trailing: readonly DelegationEvent[],
+  byCall: ReadonlyMap<string, readonly DelegationEvent[]>,
+  claimed: ReadonlySet<string>,
+): DelegationEvent[] {
+  const extra: DelegationEvent[] = []
+  for (const [callId, events] of byCall) {
+    if (!claimed.has(callId)) extra.push(...events)
+  }
+  if (extra.length === 0) return [...trailing]
+  return [...trailing, ...extra].sort(byTime)
+}

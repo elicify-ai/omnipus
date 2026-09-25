@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DelegationEvent } from './delegationEvents.types'
-import { delegationEventsAfterMessage, delegationEventsAtEnd, splitAnchoredDelegationEvents } from './delegationEventPlacement'
+import { delegationEventsAfterMessage, delegationEventsAtEnd, liveSnapshotIds, splitAnchoredDelegationEvents } from './delegationEventPlacement'
 
 function event(overrides: Partial<DelegationEvent> & Pick<DelegationEvent, 'id' | 'at'>): DelegationEvent {
   return {
@@ -63,6 +63,17 @@ describe('delegation event placement', () => {
     )
     expect(split.byCall.size).toBe(0)
     expect(split.trailing.map((item) => item.id)).toEqual(['delegated:span-wire'])
+  })
+
+  it('positions a live snapshot unless another message owns that call', () => {
+    const snapshots = { free: 'before', mine: 'mid', theirs: 'other' }
+    const ids = liveSnapshotIds('msg-1', snapshots, { mine: 'msg-1', theirs: 'msg-2' })
+    // No owner recorded: the call still counts as placed on this message.
+    expect(ids.has('free')).toBe(true)
+    // This message owns it: placed.
+    expect(ids.has('mine')).toBe(true)
+    // A different message owns it: not placed here.
+    expect(ids.has('theirs')).toBe(false)
   })
 
   it('keeps a background command finish on the launch call, not the later poll', () => {
