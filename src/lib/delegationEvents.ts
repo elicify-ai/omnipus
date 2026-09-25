@@ -41,6 +41,12 @@ export interface DelegationSpanView {
   childSessionId?: string
   status: 'running' | 'success' | 'error' | 'cancelled' | 'interrupted' | 'timeout' | 'parked'
   lifecycleState?: DelegationLifecycleState
+  /**
+   * Sticky record from the store: a runnable lifecycle state was reduced onto
+   * this span at least once. The last state is not enough — a child that ran
+   * and then failed ends on `failed`, same as one that never left the queue (D10).
+   */
+  hasRun?: boolean
   /** Child-authored. Present on the view; never copied onto an event. */
   finalResult?: string
   /** Child-authored (or the literal 'steered'). Present on the view; never copied onto an event. */
@@ -207,13 +213,15 @@ function generationNumber(spanId: string): number {
 }
 
 /**
- * A queued launch whose record never shows that it ran. The final state is
- * all the SPA keeps, so `failed` / `cancelled` / `timed_out` with no earlier
- * running state counts as "ended in the queue" (D10) — no line at all.
- * A success, or a state that is only reachable after starting, did run.
+ * A queued launch that never left the queue (D10) — no line at all.
+ * `hasRun` is the sticky record. The last state is not enough: `failed` /
+ * `cancelled` / `timed_out` is also how a child that did run then ended.
+ * A success, or a state that is itself only reachable after starting, did run
+ * even when an older snapshot never carried the flag.
  */
 function queuedNeverRan(span: DelegationSpanView, launch: 'queued' | 'immediate' | 'unknown'): boolean {
   if (launch !== 'queued') return false
+  if (span.hasRun) return false
   if (span.status === 'success') return false
   if (span.lifecycleState != null && RAN_LIFECYCLE.has(span.lifecycleState)) return false
   return true

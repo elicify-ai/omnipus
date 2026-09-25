@@ -67,6 +67,7 @@ function spanView(span: SubagentSpan): DelegationSpanView {
     childSessionId: span.childSessionId,
     status: span.status,
     lifecycleState: span.lifecycleState,
+    hasRun: span.hasRun,
     finalResult: span.status === 'running' ? undefined : span.finalResult,
     statusLine: span.statusLine,
     lastUpdateAt: span.lastUpdateAt,
