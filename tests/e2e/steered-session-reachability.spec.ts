@@ -151,15 +151,20 @@ test('steered session is reachable in its own live view without leaking child ou
   // what this test means by "reachable", it is decided by the server rather
   // than by a language model, and it cannot pass while the steer went to
   // the wrong session or to no live turn at all.
+  //
+  // The badge's accessible name lives on the IconButton INSIDE the testid
+  // wrapper (ConnectionStatus.tsx::StatusTooltip renders
+  // `<IconButton aria-label={label}>`), not on the wrapper itself — the
+  // wrapper holds only role="status" and the icon, so reading its text or
+  // aria-label yields "" forever. CI run on 2aca3f4fe failed exactly that
+  // way: 'Received string: ""'. Match the button by its accessible name so
+  // the assertion reads the node that actually carries the state.
   const steerDelivery = page.getByTestId('user-message-delivery-status').last()
   await expect(steerDelivery).toBeVisible({ timeout: 30_000 })
-  await expect
-    .poll(async () => (await steerDelivery.getAttribute('aria-label')) ?? (await steerDelivery.innerText()), {
-      timeout: 120_000,
-      message:
-        'the steer never reached a live turn on the child session — the delivery badge never advanced to "working"',
-    })
-    .toMatch(/working on it/i)
+  await expect(
+    steerDelivery.getByRole('button', { name: /working on it/i }),
+    'the steer never reached a live turn on the child session — the delivery badge never advanced to "working"',
+  ).toBeVisible({ timeout: 120_000 })
 
   const parentView = await context.newPage()
   await parentView.goto(parentURL)
