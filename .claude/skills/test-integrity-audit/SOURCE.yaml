@@ -1,0 +1,17 @@
+# Provenance record for the vendored `test-integrity-audit` skill.
+# See design section 6.4, R12, and guard check 9 (8.1) for the schema this
+# file implements. The watched upstream is the upstream *skill* on this
+# branch — not the auditor agent file (R12, review-2 R2-2).
+
+source_repo: https://github.com/elicify-ai/elicify-Skills
+source_branch: feat/test-integrity-audit-skill
+source_commit: d87fdcf6c8ba4cfdc22c0735793d7258bd9dc3f9
+upstream_subpath: skills/test-integrity-audit
+date_vendored: 2026-09-25
+derived: false
+
+# The branch can be rebased or change before merging, and the reference
+# below goes stale the moment it lands on `main`. When elicify-Skills PR
+# #1 and the `feat/test-integrity-audit-skill` branch merge, update
+# `source_branch` to `main`, set `source_commit` to the merge commit, and
+# retarget guard check 9's drift watch at the merged skill on `main`.

@@ -1,0 +1,14 @@
+# Provenance record for the vendored `elicify-test-writing` skill.
+# See design section 6.4 and guard check 9 (8.1) for the schema this file implements.
+
+source_repo: https://github.com/elicify-ai/elicify-Skills
+source_branch: feat/elicify-document-skills
+source_commit: 687242a67612744c88aa1c6b4ac0a56a5537cde3
+upstream_subpath: skills/elicify-test-writing
+date_vendored: 2026-09-25
+derived: false
+
+# When the source moves to `main` (once elicify-Skills PR #1 and the
+# `feat/test-integrity-audit-skill` branch merge), update `source_branch`
+# and `source_commit` here and retarget guard check 9's drift watch at the
+# merged skill on `main`.
