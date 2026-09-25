@@ -37,8 +37,8 @@ export interface BehaviorFieldsProps {
    * The picker itself (`VoiceProviderSub`, rendered below) is live today — it
    * queries the configured voice provider and lets the operator select or type
    * a voice value, which is persisted on the agent. Only downstream TTS
-   * *playback* (the agent actually speaking with this voice) is deferred to
-   * v0.2.0. Optional in both tiers — empty string means "no voice configured"
+   * *playback* (the agent actually speaking with this voice) is deferred
+   * (tracked #306). Optional in both tiers — empty string means "no voice configured"
    * (the wire field is omitted).
    * W6-B4 / G1: this field has been on the wire for a while but had no UI.
    */
@@ -230,7 +230,7 @@ export function BehaviorFields({
             </div>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               Per-agent persona voice identifier (e.g. <span className="font-mono text-[length:var(--type-caption-size)]">alloy</span>).
-              Saved now, but voice playback is inactive in this release (planned for v0.2.0).
+              Saved now, but voice playback is not yet active (tracked #306).
               Leave empty for the engine default.
             </p>
             <VoiceProviderSub
