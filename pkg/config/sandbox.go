@@ -271,7 +271,7 @@ type OmnipusSandboxConfig struct {
 
 	// EgressAllowCIDRs is the operator-supplied list of CIDR ranges that are
 	// explicitly permitted for outbound connections from sandboxed children
-	// (v0.2 #155 item 4). The default-deny set covers RFC1918 (10/8,
+	// (#155 item 4). The default-deny set covers RFC1918 (10/8,
 	// 172.16/12, 192.168/16), link-local (169.254/16 — including the cloud
 	// metadata endpoint), loopback (127/8, ::1/128), and IPv6 unique-local
 	// + link-local (fc00::/7, fe80::/10). Operators with a legitimate

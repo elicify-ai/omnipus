@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 560" role="img" aria-labelledby="omnipus-roadmap-title omnipus-roadmap-desc">
   <title id="omnipus-roadmap-title">Omnipus roadmap</title>
-  <desc id="omnipus-roadmap-desc">Four-phase timeline: v0.1 stabilize (complete), v0.2 pentest hardening (complete), v0.3/1.0 Rooms redesign (design complete, implementation pending), and post-1.0 variants (Desktop and Cloud/SaaS, planned). Each phase lists its key deliverables.</desc>
+  <desc id="omnipus-roadmap-desc">Timeline: v0.1 stabilize (complete), the #155 security hardening shipped on the v0.1 line, v0.1.1 active — the single release line carrying the workspaces redesign and the tracked open items — and post-1.0 variants (Desktop and Cloud/SaaS, planned). Each phase lists its key deliverables.</desc>
 
   <!-- Palette: brand dark + accents -->
   <defs>
@@ -44,24 +44,24 @@
   <text x="170" y="76" font-family="'Inter', sans-serif" font-size="10"
         fill="#4a5568" text-anchor="middle">complete</text>
 
-  <!-- Node 2: v0.2 — complete -->
+  <!-- Node 2: #155 — shipped on the v0.1 line -->
   <circle cx="375" cy="121" r="14" fill="#10B981" stroke="#0A0A0B" stroke-width="3"/>
   <text x="375" y="126" font-family="'Outfit', sans-serif" font-size="14" font-weight="700"
         fill="#0A0A0B" text-anchor="middle">✓</text>
   <text x="375" y="92" font-family="'Outfit', sans-serif" font-size="14" font-weight="700"
-        fill="#10B981" text-anchor="middle">v0.2</text>
+        fill="#10B981" text-anchor="middle">#155</text>
   <text x="375" y="76" font-family="'Inter', sans-serif" font-size="10"
-        fill="#4a5568" text-anchor="middle">complete · 2026-05-04</text>
+        fill="#4a5568" text-anchor="middle">hardening · shipped on the v0.1 line</text>
 
-  <!-- Node 3: v0.3 / 1.0 — active -->
+  <!-- Node 3: v0.1.1 — active -->
   <circle cx="610" cy="121" r="14" fill="#D4AF37" stroke="#0A0A0B" stroke-width="3"/>
   <circle cx="610" cy="121" r="20" fill="none" stroke="#D4AF37" stroke-width="1" stroke-opacity="0.5"/>
   <text x="610" y="125" font-family="'Outfit', sans-serif" font-size="13" font-weight="700"
         fill="#0A0A0B" text-anchor="middle">●</text>
   <text x="610" y="92" font-family="'Outfit', sans-serif" font-size="14" font-weight="700"
-        fill="#D4AF37" text-anchor="middle">v0.3 / 1.0</text>
+        fill="#D4AF37" text-anchor="middle">v0.1.1</text>
   <text x="610" y="76" font-family="'Inter', sans-serif" font-size="10"
-        fill="#4a5568" text-anchor="middle">active</text>
+        fill="#4a5568" text-anchor="middle">active · single release line</text>
 
   <!-- Node 4: post-1.0 — planned -->
   <circle cx="850" cy="121" r="14" fill="#0A0A0B" stroke="#4a5568" stroke-width="2"/>
@@ -102,7 +102,7 @@
     </text>
   </g>
 
-  <!-- Card 2: v0.2 -->
+  <!-- Card 2: #155 hardening -->
   <g font-family="'Inter', sans-serif" fill="#E2E8F0">
     <rect x="280" y="160" width="200" height="320" rx="8" fill="#111113" stroke="#10B981" stroke-width="1.2"/>
     <text x="380" y="185" font-family="'Outfit', sans-serif" font-size="14" font-weight="700"
@@ -126,41 +126,40 @@
     </g>
 
     <text x="380" y="472" font-size="9" fill="#10B981" text-anchor="middle" font-style="italic">
-      structural items → v0.3
+      open structural items tracked (#887)
     </text>
   </g>
 
-  <!-- Card 3: v0.3 / 1.0 — ACTIVE -->
+  <!-- Card 3: workspaces redesign — landed + tracked -->
   <g font-family="'Inter', sans-serif" fill="#E2E8F0">
     <rect x="500" y="160" width="200" height="320" rx="8" fill="#111113" stroke="#D4AF37" stroke-width="1.5"/>
     <text x="600" y="185" font-family="'Outfit', sans-serif" font-size="14" font-weight="700"
-          fill="#D4AF37" text-anchor="middle">"Rooms" redesign</text>
+          fill="#D4AF37" text-anchor="middle">Workspaces redesign</text>
     <text x="600" y="200" font-family="'Inter', sans-serif" font-size="10"
-          fill="#4a5568" text-anchor="middle">#156 — design ✓, impl pending</text>
+          fill="#4a5568" text-anchor="middle">#156 — closed 2026-06-27</text>
 
     <line x1="520" y1="215" x2="680" y2="215" stroke="#2d3748" stroke-width="1"/>
 
     <g font-size="11" fill="#E2E8F0">
-      <text x="516" y="234">○  Two-room sandbox topology</text>
-      <text x="516" y="254">○  4-tier memory model</text>
-      <text x="516" y="274">○  Dreamcatcher consolidation</text>
-      <text x="516" y="294">○  bleve + JSONL + MinHash</text>
-      <text x="516" y="314">○  Tasks scoped per-room</text>
-      <text x="516" y="334">○  Cascade-delete + audit</text>
-      <text x="516" y="354">○  Projects UI (3 surfaces)</text>
-      <text x="516" y="374">○  Memory settings + retention</text>
-      <text x="516" y="394">○  Structural process isolation</text>
-      <text x="516" y="414">○  Capability-based RBAC</text>
+      <text x="516" y="234">●  Memory rooms + MinHash</text>
+      <text x="516" y="254">●  Workspace model (ADR-019)</text>
+      <text x="516" y="274">●  Tasks scoped to workspaces</text>
+      <text x="516" y="294">●  Fresh-build, no back-compat</text>
+      <text x="516" y="314">○  DefaultChildPolicy wiring</text>
+      <text x="516" y="334">○  Sandbox gaps — tracked #885</text>
+      <text x="516" y="354">○  LAST_SESSION ruling — #886</text>
+      <text x="516" y="374">○  Process isolation — #887</text>
+      <text x="516" y="394">○  Capability-based RBAC — #887</text>
     </g>
 
     <text x="600" y="448" font-size="10" fill="#D4AF37" text-anchor="middle" font-weight="600">
-      Cut version: 1.0
+      Single release line: v0.1.1
     </text>
     <text x="600" y="464" font-size="9" fill="#4a5568" text-anchor="middle" font-style="italic">
-      no backward compat
+      open items tracked · no release scheduled
     </text>
     <text x="600" y="476" font-size="9" fill="#4a5568" text-anchor="middle" font-style="italic">
-      5 locked design docs in docs/design/
+      rooms-era drafts archived (superseded)
     </text>
   </g>
 
@@ -213,7 +212,7 @@
     <circle cx="270" cy="514" r="6" fill="#0A0A0B" stroke="#4a5568" stroke-width="1.5"/>
     <text x="282" y="518">Planned</text>
 
-    <text x="900" y="518" text-anchor="end">●  shipped · ○  not yet</text>
+    <text x="900" y="518" text-anchor="end">●  landed · ○  tracked open items</text>
   </g>
 
   <!-- Footer -->

@@ -222,8 +222,8 @@ properties:
     description: >
       Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID).
       Distinct from the global VoiceConfig engine settings (which hold the TTS/STT
-      provider and API key). This field is schema-pinned but NOT used until v0.2.0
-      TTS feature delivery. Absent when not configured. Main only.
+      provider and API key). This field is schema-pinned but NOT yet active (TTS delivery, tracked #306 —
+      no release scheduled). Absent when not configured. Main only.
     example: "alloy"
   executor:
     $ref: './ExecutorConfig.yaml'

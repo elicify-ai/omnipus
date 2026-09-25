@@ -1,5 +1,7 @@
 # Adversarial Review — ADR-027 (Workspace-scoped heartbeat + global memory UI)
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Reviewed file:** `docs/internal/architecture/ADR-027-workspace-scoped-heartbeat-and-global-memory-ui.md`
 - **Mode:** generic-markdown (ADR; no FR/SC IDs or traceability matrix)
 - **Reviewer:** grill-spec (read-only, adversarial)

@@ -303,7 +303,7 @@ func (s *Store) UnlockWithPassphrase(passphrase string) error {
 // HKDF-SHA256 with the supplied info string as the domain-separation tag.
 //
 // The master key itself is NEVER returned — every subsystem that needs key
-// material (e.g. the audit-chain HMAC for v0.2 #155) must request a derived
+// material (e.g. the audit-chain HMAC from #155) must request a derived
 // subkey with its own info string. This way:
 //
 //   - An attacker with read access to a derived subkey cannot reverse it back

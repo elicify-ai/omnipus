@@ -553,7 +553,7 @@ func (rc *runContextWithOptions) loadConfigAndProvider() (error, bool) {
 		return rc.err, true
 	}
 
-	// v0.2 #155: derive the audit-chain HMAC key from the master key and
+	// #155: derive the audit-chain HMAC key from the master key and
 	// install it process-wide BEFORE constructing the agent loop. The
 	// agent loop's audit.NewLogger picks this up via the package-level
 	// fallback when LoggerConfig.HMACKey is nil. The master key never

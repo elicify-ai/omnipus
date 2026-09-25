@@ -45,7 +45,7 @@ shell-spawned process can technically bind anywhere. Plan to upgrade to kernel
 
 ---
 
-## Kernel-enforced outbound port allow-list (raw TCP egress, v0.2 #155)
+## Kernel-enforced outbound port allow-list (raw TCP egress, #155)
 
 On Linux kernels with Landlock ABI v4 (kernel 6.8 and later for the gateway's tested baseline; see `pkg/sandbox/sandbox_linux.go:67`), `connect(2)` from the gateway and every forked child is restricted to the union of:
 

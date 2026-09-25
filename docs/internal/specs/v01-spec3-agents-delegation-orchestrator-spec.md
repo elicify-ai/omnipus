@@ -40,7 +40,7 @@ Re-cast the 5 seeded core agents into the **4-base roster** (Mia·Assistant ⭐ 
 
 **US-1 — 4-base roster, Max retired (P0).** **Independent test:** fresh seed yields 4 base agents (Mia·Assistant ⭐ default · Jim·Orchestrator · Ray·Scout · Ava·Builder); Max is not a seeded base chat agent. **Completeness:** the test suite + a grep for `IDMax`/"Max —"/role refs to `max` in live roster code is 0 — Max breakage is mostly **string-literal test assertions** (`wave5b_spec_test.go`, `core_test.go`, `boot_sequence_test.go`), invisible to `go build`, so the suite + grep is the gate, not the compiler (M-1). 1. **Given** fresh install, **When** seeded, **Then** `coreagent.All()` returns the 4 base agents with the re-cast Names/roles, Mia default, all `Locked`. 2. **Given** the re-cast, **When** I read built-in identity, **Then** it is write-protected and prompts are not surfaced (Spec-1 carried; preserved).
 
-**US-2 — voice on base personas (P0, NFR-7).** 1. **Given** the 4 base personas, **When** I read the schema, **Then** each has a nullable `voice` field (full schema pinned, unused until TTS v0.2.0).
+**US-2 — voice on base personas (P0, NFR-7).** 1. **Given** the 4 base personas, **When** I read the schema, **Then** each has a nullable `voice` field (full schema pinned, unused until TTS (tracked [#306]; the v0.2.0 label was retired 2026-09-25)).
 
 **US-3 — Full delegation-policy schema, `to`+`modes` enforced (P0).** 1. **Given** the policy contract, **When** `make verify-contracts` runs, **Then** it carries `to · accept_from · modes · depth · budget` and exits 0. 2. **Given** v0.1.0 enforcement, **When** an agent delegates, **Then** `to` (target allowed) + `modes` (await/background/task) are enforced; `accept_from`/`budget` are present-but-not-enforced (no UI surface). 3. **Given** the trust-graph screen, **When** I view it, **Then** it shows the `to` edges + modes (not `accept_from`).
 
@@ -145,7 +145,7 @@ Scenario: Policy contract regenerates clean
 ## 7. Functional Requirements & Success Criteria
 
 - **FR-3.1 (M-2):** MUST re-cast the 4 base agents in `coreagent` — Mia→Assistant ⭐(default)/Jim→Orchestrator/Ray→Scout/Ava→Builder — including **rewriting the compiled persona prompts** (`core.go:~287-654`, today "Jim — General Purpose"/"Max — Automator"/etc.) **and every routing reference to `max`** (e.g. "create a task for Max"); **remove Max from `All()`/the seeded base** (→4); keep `Locked`+`AgentTypeCore`+Mia=default; built-in prompts not surfaced.
-- **FR-3.2 (C-4):** MUST add a **NEW nullable `voice` field to `AgentConfig`** (per-agent persona-voice ref) — distinct from the existing **GLOBAL** `config.VoiceConfig` STT/TTS engine (`config.go:1052`); `AgentConfig` has none today (fields: id/default/name/description/workspace/model/skills/subagents/can_delegate_to). Additive contract change, fully pinned (NFR-7), unused until v0.2.0 TTS.
+- **FR-3.2 (C-4):** MUST add a **NEW nullable `voice` field to `AgentConfig`** (per-agent persona-voice ref) — distinct from the existing **GLOBAL** `config.VoiceConfig` STT/TTS engine (`config.go:1052`); `AgentConfig` has none today (fields: id/default/name/description/workspace/model/skills/subagents/can_delegate_to). Additive contract change, fully pinned (NFR-7), unused until TTS lands (tracked [#306]).
 - **FR-6.1 (C-2):** MUST add the full delegation-policy contract (`to·accept_from·modes·depth·budget`) and **explicitly UNIFY the three existing allowlists** — `AgentConfig.CanDelegateTo` (config.go:451), `AgentDefaults.CanDelegateTo` (663), `SubagentsConfig.AllowAgents` (585) — into the canonical `to` (precedence: agent `to` > defaults `to`; the subagent allowlist merges in). The migration MUST preserve existing allow semantics (**no silent authz change**); `verify-contracts` exits 0.
 - **FR-6.2:** MUST enforce `to`+`modes`(+`depth` as a safety cap) in v0.1.0; `accept_from`+`budget` present-but-not-enforced and **not surfaced in the trust-graph UI** (NFR-7). `accept_from` being inert MUST NOT be presented as an active authz boundary (M-6).
 - **FR-6.3 (C-1):** the only TRULY ungated path is the **sync `subagent` tool** (`loop.go:~1487`, registered with no checker) — MUST gate it via the unified `to`. `spawn` (`CanSpawnSubagent`, loop.go:1481) and `task_create` (`buildDelegateChecker`, loop.go:1502/1594) are **already gated** — they MUST be repointed to read the unified `to`. **Handover stays open.**
@@ -190,7 +190,7 @@ Scenario: Policy contract regenerates clean
 
 ## 11. Assumptions
 - Greenfield seed; Mia auto-provisioned (Spec-1/onboarding). `[ADR]`
-- `VoiceConfig` exists; voice is pinned on base personas (NFR-7), unused until v0.2.0. `[FACT: config.go:127]`
+- `VoiceConfig` exists; voice is pinned on base personas (NFR-7), unused until TTS (tracked [#306]). `[FACT: config.go:127]`
 - `AdmissionController` is the existing concurrency gate Max-parallel wires to. `[FACT: admission.go:12]`
 - `blocked_by` fields are Spec-5; this spec consumes them + the existing `task_status_changed` event. `[FACT: asyncapi]`
 - The agent-reference `to` shares Spec-2's `identity{kind,id}` shape (Phase-3.5). `[cross-spec]`

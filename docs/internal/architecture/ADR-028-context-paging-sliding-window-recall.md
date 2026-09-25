@@ -1,5 +1,7 @@
 # ADR-028: Context paging — sliding-window + recall replaces reactive compaction
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** Proposed (rev. 3 — post re-grill)
 - **Date:** 2026-07-01
 - **Deciders:** Daniel (operator) + Albert (architecture)

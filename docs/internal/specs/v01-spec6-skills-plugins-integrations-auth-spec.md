@@ -12,7 +12,7 @@
 **Skills + self-improvement:** wire the existing **stub** skill tools (`system.skill.{install,remove,search,list}`) to the real `pkg/skills` engine; **add `system.skill.create` + `system.skill.edit`** (the authoring/self-improvement verb — procedural memory); **`go:embed` + first-boot-seed** the default set (`summarize · skill-authoring · plan · daily-briefing`); per-agent **allowlist + progressive disclosure**; skill writes **consent-gated + versioned**. **Plugin/marketplace SHAPE (no installer):** the component-level-hybrid **bundle manifest shape**; the **marketplace-provider LIST** (`RegistryConfig` single ClawHub → list; ClawHub+GitHub first-class). **Protocols (hooks):** MCP is present; ACP/A2A hooks live in Specs 3/4 (cross-ref). **Integrations + auth:** the **Integrations provider-picker UI** (surface the existing `SearchProvider`/`Transcriber`) + a composer **mic**; **single-user/one-password**, sensitive settings = password re-type (a **NEW** consent primitive — `RequireNotBypass` is a 503 dev-bypass guard, unrelated; FR-12); **Profile vs Settings**; **3-step onboarding** → auto-provision Mia·Assistant.
 
 **In scope:** wiring the 4 stub skill tools to `pkg/skills`; `system.skill.create`/`edit`; `go:embed` default-set + first-boot seed; per-agent skill allowlist; consent-gated+versioned skill writes; the bundle-manifest **shape** + the marketplace-provider **list** (`RegistryConfig` single→list); the Integrations provider-picker UI + composer mic; single-user/one-password + Profile/Settings split + onboarding.
-**Out of scope:** the plugin **installer** + Marketplaces UI (later); the ACP/A2A **protocol drivers** (Spec-4/later); TTS/image-gen (v0.2.0); the Dreamcatcher proposing skill edits (v0.2.0 behaviour — Spec-5's logs feed it).
+**Out of scope:** the plugin **installer** + Marketplaces UI (later); the ACP/A2A **protocol drivers** (Spec-4/later); TTS (tracked [#306]) / image-gen (deferred; the v0.2.0 label was retired 2026-09-25); the Dreamcatcher proposing skill edits (deferred behaviour — Spec-5's logs feed it).
 
 ## 2. Existing Codebase Context (grounded)
 
@@ -196,4 +196,4 @@ Scenario: Onboarding auto-provisions Mia
 - `SearchProvider`/`Transcriber` exist; Integrations surfaces them. `[FACT: web.go:91, voice/transcriber.go]`
 - Consent is **NEW** (does not exist today): tool-layer skill writes ride the existing **`ws_approval`**; HTTP-layer sensitive settings ride a **new re-auth check**. `RequireNotBypass` is a 503 dev-bypass guard, unrelated. `[C-1, ADR FR-12]`
 - ACP/A2A protocol drivers are Spec-4/later; this spec only confirms MCP + the marketplace list. `[ADR FR-11]`
-- The Dreamcatcher proposing skill edits is v0.2.0 behaviour over Spec-5's logs. `[ADR NFR-6]`
+- The Dreamcatcher proposing skill edits is deferred behaviour (no release scheduled) over Spec-5's logs. `[ADR NFR-6]`

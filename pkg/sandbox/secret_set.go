@@ -40,7 +40,7 @@ import "github.com/elicify-ai/omnipus/pkg/fspolicy"
 var SecretEntriesRelative = fspolicy.SecretEntriesRelative
 
 // SecretFilesRelative is the historical name for the same set, retained from
-// v0.2 #155 item 8 (pentest items C1/C2) so older references keep compiling.
+// #155 item 8 (pentest items C1/C2) so older references keep compiling.
 var SecretFilesRelative = fspolicy.SecretEntriesRelative
 
 // SecretEntriesAlwaysRelative is the context-free half — the entries excluded
@@ -61,7 +61,7 @@ var SecretFilesRelative = fspolicy.SecretEntriesRelative
 // Not exploitable when it was found (DefaultChildPolicy has no production
 // caller yet; see its own "production wiring is NOT yet active" note), which
 // is precisely why it is fixed now rather than left to be discovered by the
-// v0.3 change that wires it up.
+// production-wiring change that wires it up (#884).
 //
 // The distinction fspolicy draws between its two context-free lists is about
 // which CONSUMERS read them — pkg/tools/shell.go's literal-text guard and the

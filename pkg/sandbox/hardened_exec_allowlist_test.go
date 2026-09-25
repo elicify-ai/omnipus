@@ -1,4 +1,4 @@
-// Allowlist tests for filterChildEnv (v0.2 #155 item 3).
+// Allowlist tests for filterChildEnv (#155 item 3).
 //
 // Verifies the explicit-allowlist semantics introduced when sensitiveEnvKeys
 // (3-key denylist) was replaced with allowedChildEnvKeys (closed set + prefix

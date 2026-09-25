@@ -1,4 +1,4 @@
-// Tests for DefaultChildPolicy (v0.2 #155 item 8 — secrets-subtree carve-out).
+// Tests for DefaultChildPolicy (#155 item 8 — secrets-subtree carve-out).
 //
 // DefaultChildPolicy returns a SandboxPolicy that:
 //   - omits the broad $OMNIPUS_HOME RWX rule that DefaultPolicy installs

@@ -18,7 +18,7 @@ contact_links:
 
   - name: 🗺️ Roadmap
     url: https://github.com/elicify-ai/omnipus/blob/main/ROADMAP.md
-    about: Current release plan (v0.1, v0.2, v0.3 / 1.0, post-1.0).
+    about: Current release line (v0.1.1) and the tracked open items beyond it.
 
   - name: 🤝 Contributing
     url: https://github.com/elicify-ai/omnipus/blob/main/CONTRIBUTING.md

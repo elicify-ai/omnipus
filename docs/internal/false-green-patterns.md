@@ -114,7 +114,7 @@ The vitest job sharded across a fixed list of paths. Anything outside it was ski
 silently while the job reported green:
 
 - **116 of 422 test files (27%) never ran** — all 57 under `src/components/workspaces/`
-  (the v0.3 flagship), all 11 under `src/components/browser/`.
+  (the Workspaces-redesign flagship — the v0.3 label was retired 2026-09-25), all 11 under `src/components/browser/`.
 - Two patterns pointed at directories **deleted long ago**, so the matrix looked broader
   than it was.
 - All 116 passed once run. They were never broken — just never executed.

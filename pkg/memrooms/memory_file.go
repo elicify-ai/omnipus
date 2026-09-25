@@ -20,8 +20,8 @@
 //
 //	Body text with [[wikilink]] narrative edges.
 //
-// Every field is present even when empty/zero (NFR-7) so v0.2 can enrich
-// without file migration.
+// Every field is present even when empty/zero (NFR-7) so later enrichment
+// needs no file migration.
 //
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -66,7 +66,7 @@ const (
 
 // MemoryFrontmatter is the complete, pinned frontmatter schema for a memory file (FR-7.2).
 //
-// Every field is present even when empty — NFR-7 guarantees no file migration in v0.2.
+// Every field is present even when empty — NFR-7 guarantees no file migration between schema versions.
 // The `confidence` field is a denormalized cache; counters.jsonl is authoritative.
 // The `born_in` field records session provenance (not a log; it IS frontmatter per FR-7.5).
 // The body carries [[id]] wikilink narrative edges.
@@ -410,14 +410,14 @@ type CounterOp string
 const (
 	// CounterOpAccess is appended when a memory is returned by recall_memory.
 	CounterOpAccess CounterOp = "access"
-	// CounterOpDrift is appended by v0.2 confidence-drift engine (not written in v0.1.0).
+	// CounterOpDrift is reserved for a future confidence-drift engine (no writer yet; no release scheduled).
 	CounterOpDrift CounterOp = "drift"
 	// CounterOpCited is appended when an agent explicitly references a memory by ID/title.
 	CounterOpCited CounterOp = "cited"
 )
 
 // CounterRecord is the frozen v0.1.0 schema for counters.jsonl (FR-7.5).
-// One JSON line per event. Fields must never be removed; v0.2 ranking reads them.
+// One JSON line per event. Fields must never be removed; future ranking reads them.
 type CounterRecord struct {
 	// TS is the UTC RFC3339 timestamp of the event.
 	TS time.Time `json:"ts"`
@@ -427,7 +427,7 @@ type CounterRecord struct {
 	Op CounterOp `json:"op"`
 	// By is the agent ID that triggered this event.
 	By string `json:"by"`
-	// Amount is optional; used by the v0.2 drift engine. Omitted on access/cited.
+	// Amount is optional; used by the future drift engine. Omitted on access/cited.
 	Amount *float64 `json:"amount,omitempty"`
 }
 
