@@ -101,7 +101,7 @@ func (d *throughBusResumeDispatcher) DispatchResume(set *askuser.PendingSet, res
 	if set.AgentID != "" {
 		msg.Metadata = map[string]string{"agent_id": set.AgentID}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), busWaitBudget)
 	defer cancel()
 	return d.msgBus.PublishInbound(ctx, msg)
 }
@@ -221,6 +221,22 @@ func newChatTargetAskUserLoop(
 // with AskUserQuestion as a tool call), and (b) the resume turn ran
 // (provider called at least twice, with the §0.2 correlated user-role
 // message in the second call's prompt).
+// busWaitBudget is the deadline every wait in this file uses.
+//
+// These are poll loops: they return the instant the condition holds, so a
+// generous budget costs a healthy run nothing — it only changes how long a
+// GENUINE failure takes to report. It was 5s, and 5s is not survivable under
+// `go test -race`: the race detector adds a 5-20x slowdown, and CI runs this
+// package with -race and -p 2 on a shared 8-core worker. Observed on CI run
+// 36134148972 (branch feat/agent-refresh at d81bcb1ec, which changes ZERO Go
+// files, so the failure is release's own):
+//
+//	--- FAIL: TestAskUserResume_ThroughBus_ChatTargetAgent (5.05s)
+//
+// A 5.05s duration against a 5s budget is the budget expiring, not the
+// behaviour breaking — the turn had not finished its LLM round-trip yet.
+const busWaitBudget = 30 * time.Second
+
 func waitForLLMCallCount(t *testing.T, p *scriptChatProvider, want int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -331,7 +347,7 @@ func TestAskUserResume_ThroughBus_ChatTargetAgent(t *testing.T) {
 	// explicit agent_id metadata so resolveMessageRoute's fast-path
 	// (loop_inbound.go:323-374) targets "mia" without consulting the
 	// routing default. The SPA's first message carries the same shape.
-	pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	pubCtx, pubCancel := context.WithTimeout(context.Background(), busWaitBudget)
 	defer pubCancel()
 	require.NoError(t, msgBus.PublishInbound(pubCtx, bus.InboundMessage{
 		Channel:       "webchat",
@@ -347,8 +363,8 @@ func TestAskUserResume_ThroughBus_ChatTargetAgent(t *testing.T) {
 	// the AskUserQuestion tool call, the tool ran CreatePending, the
 	// registry now has a pending card for sid. This is the
 	// pre-condition for any submission test.
-	waitForLLMCallCount(t, provider, 1, 5*time.Second)
-	pending := waitForPendingCard(t, reg, sid, 5*time.Second)
+	waitForLLMCallCount(t, provider, 1, busWaitBudget)
+	pending := waitForPendingCard(t, reg, sid, busWaitBudget)
 	require.NotEmpty(t, pending.CardID, "the parked turn must have a card id the SPA can answer")
 	require.NotEmpty(t, pending.TranscriptSessionID, "the parked set must carry the transcript session id so the resume targets the same session")
 
@@ -370,7 +386,7 @@ func TestAskUserResume_ThroughBus_ChatTargetAgent(t *testing.T) {
 	// breaks — the running turn's waiter never resolves, the parked
 	// turn dies, and the answer only surfaces on the NEXT user
 	// prompt. If the second call never arrives, #760 is reproduced.
-	waitForLLMCallCount(t, provider, 2, 5*time.Second)
+	waitForLLMCallCount(t, provider, 2, busWaitBudget)
 
 	// And the second call's prompt MUST carry the §0.2 correlated
 	// user-role resume message — that is the live-resolve content,
