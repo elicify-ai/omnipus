@@ -1,0 +1,17 @@
+# MESSAGES.md template (design 5.9, N4)
+#
+# Append-only durable record of urgent cross-session calls (design: "Urgent
+# calls only ... the durable record of the message channel"). The live
+# messaging happens over the harness's own session-to-session messaging
+# facility; this file is the fallback where a session cannot be messaged,
+# and the record either way. Not a chat log — only urgent calls ("hold
+# pushes", "integration red") belong here (design Round 9: "Everything else
+# is ledger — messages are for urgent calls only").
+#
+# Format:
+#
+#   <ISO8601> from=<session-id> to=<session-id-or-ALL> :: <message text>
+#
+# Example lines (illustration only):
+# 2026-09-25T09:10:00Z from=squad-security to=ALL :: hold pushes -- integration branch red on the go tier, fix in flight
+# 2026-09-25T09:18:00Z from=squad-security to=ALL :: integration branch green again, hold released

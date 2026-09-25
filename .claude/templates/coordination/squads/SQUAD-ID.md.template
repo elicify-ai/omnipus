@@ -1,0 +1,31 @@
+# squads/<squad-id>.md template (design 5.9)
+#
+# One file per squad, named after the squad's id (for example
+# squads/security-hardening.md). Updated on every status change by the
+# squad's own session/lead — "The squad's own file; updated on every status
+# change". Claims here are information only (C2): they tell other sessions
+# what is in flight, they never block anyone; only HOLDS.md and
+# LANDING-LOCK are mechanically enforced (by the pre-push hook).
+#
+# Row format (one line — the design calls this "one squad's row"):
+#
+#   squad=<squad-id> | session=<session-id-or-in-session> | lead=<role> | worktree=<absolute-path> | branch=<branch-name> | claim=<trees-or-files> | status=<planned|in-flight|gated|handed-back|waiting-for-founder|landed|blocked|released> | last-updated=<ISO8601> by <who>
+#
+# scripts/dev-machine-capacity.sh counts active dispatches by grepping this
+# directory for "status=in-flight" — keep the field name and value exactly
+# as shown (case-sensitive, no extra spaces around "=") or the capacity
+# monitor will undercount.
+#
+# A pending landing announcement is appended below the row as a second line
+# (design: "The row also carries the squad's landing announcements when one
+# is pending") and removed once the landing lock is released and the
+# landing is posted to LANDING-LOG.md:
+#
+#   LANDING-ANNOUNCEMENT squad=<squad-id> branch=<branch-name> announced-at=<ISO8601> by=<who>
+#
+# A row untouched for 2 hours with no live session behind it is "stale"
+# (G3) — the chief asks the founder before releasing or re-assigning it.
+#
+# Example (illustration only — replace <squad-id> in the filename and every
+# field below):
+# squad=security-hardening | session=separate-session-2 | lead=security-lead | worktree=/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-security-hardening | branch=feature/security-hardening | claim=pkg/auth/, pkg/fspolicy/ | status=in-flight | last-updated=2026-09-25T09:05:00Z by security-lead
