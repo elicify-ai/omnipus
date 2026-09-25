@@ -517,6 +517,7 @@ func TestAutoApprove_T7_BashPathGrantDoesNotWiden(t *testing.T) {
 func TestAutoApprove_T10_SendFile(t *testing.T) {
 	f := newAutoFixture(t)
 	store := media.NewFileMediaStore()
+	t.Cleanup(store.Stop)
 	tool := NewSendFileTool(f.work, true, 0, store)
 	ctx := WithToolContext(f.ctx, "telegram", "chat-1")
 	mustWrite(t, filepath.Join(f.work, "report.pdf"), "%PDF-1.4 report")

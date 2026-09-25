@@ -14,6 +14,7 @@ import (
 
 func TestSendFileTool_MissingPath(t *testing.T) {
 	store := media.NewFileMediaStore()
+	t.Cleanup(store.Stop)
 	tool := NewSendFileTool("/tmp", false, 0, store)
 	tool.SetContext("feishu", "chat123")
 
@@ -25,6 +26,7 @@ func TestSendFileTool_MissingPath(t *testing.T) {
 
 func TestSendFileTool_NoContext(t *testing.T) {
 	store := media.NewFileMediaStore()
+	t.Cleanup(store.Stop)
 	tool := NewSendFileTool("/tmp", false, 0, store)
 	// no SetContext call
 
@@ -46,6 +48,7 @@ func TestSendFileTool_NoMediaStore(t *testing.T) {
 
 func TestSendFileTool_Directory(t *testing.T) {
 	store := media.NewFileMediaStore()
+	t.Cleanup(store.Stop)
 	tool := NewSendFileTool("/tmp", false, 0, store)
 	tool.SetContext("feishu", "chat123")
 
@@ -64,6 +67,7 @@ func TestSendFileTool_FileTooLarge(t *testing.T) {
 	}
 
 	store := media.NewFileMediaStore()
+	t.Cleanup(store.Stop)
 	tool := NewSendFileTool(dir, false, 512, store) // 512 byte limit
 	tool.SetContext("feishu", "chat123")
 
@@ -91,6 +95,7 @@ func TestSendFileTool_Success(t *testing.T) {
 	}
 
 	store := media.NewFileMediaStore()
+	t.Cleanup(store.Stop)
 	tool := NewSendFileTool(dir, false, 0, store)
 	tool.SetContext("feishu", "chat123")
 
@@ -121,6 +126,7 @@ func TestSendFileTool_CustomFilename(t *testing.T) {
 	}
 
 	store := media.NewFileMediaStore()
+	t.Cleanup(store.Stop)
 	tool := NewSendFileTool(dir, false, 0, store)
 	tool.SetContext("telegram", "chat456")
 
@@ -162,6 +168,7 @@ func TestSendFileTool_AllowsWhitelistedMediaTempPath(t *testing.T) {
 	)
 
 	store := media.NewFileMediaStore()
+	t.Cleanup(store.Stop)
 	tool := NewSendFileTool(workspace, true, 0, store, []*regexp.Regexp{pattern})
 	tool.SetContext("feishu", "chat123")
 
