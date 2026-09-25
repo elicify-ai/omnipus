@@ -51,6 +51,7 @@ import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useChatStore } from '@/store/chat'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
+import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
@@ -58,8 +59,13 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
-import { delegationEventsAfterMessage, delegationEventsAtEnd } from '@/lib/delegationEventPlacement'
-import { DelegationEventLineList } from './DelegationEventLine'
+import {
+  delegationEventsAtEnd,
+  liveSnapshotIds,
+  splitAnchoredDelegationEvents,
+  type DelegationPlacementMessage,
+} from '@/lib/delegationEventPlacement'
+import { DelegationEventLineList, DelegationInlineProvider, DelegationToolGroup, delegationSlotted } from './DelegationEventLine'
 import { useChatDelegationEvents } from './useChatDelegationEvents'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
@@ -83,6 +89,13 @@ import {
   ChatConnectionNotice,
   UserMessageDeliveryStatus,
 } from './ConnectionStatus'
+
+function placementOf(message: ChatMessage): DelegationPlacementMessage {
+  return {
+    spans: message.spans,
+    toolCalls: message.tool_calls as DelegationPlacementMessage['toolCalls'],
+  }
+}
 
 // ── Skill-aware message content renderer (R2/F1/F7/F9) ───────────────────────
 
@@ -1142,7 +1155,15 @@ function StaticCopyButton({ text }: { text: string }) {
  * chat.ts's `produce`/`withBucket`/`applyMessageArray`/`getMessages`, not
  * assumed.
  */
-const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessage; liteMode: boolean }) {
+const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRow({
+  message,
+  liteMode,
+  delegationEvents,
+}: {
+  message: ChatMessage
+  liteMode: boolean
+  delegationEvents: readonly DelegationEvent[]
+}) {
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
@@ -1197,6 +1218,10 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
     // above — see comment.
     [message.content, message.tool_calls],
   )
+  const inlineByCall = splitAnchoredDelegationEvents(delegationEvents, message.id, {
+    spans: message.spans,
+    toolCalls: positionedToolCalls,
+  }).byCall
 
   // D-fix: this row is also used by PlainMessageList (the ResizeObserver-
   // unavailable fallback), which — unlike VirtualizedMessageListInner — does
@@ -1353,7 +1378,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             // here too, so replayed sessions render the preview link (or the malformed
             // result block) instead of a collapsed generic badge.
             if (tc.tool === 'serve_workspace' || tc.tool === 'run_in_workspace' || tc.tool === 'web_serve') {
-              return (
+              return delegationSlotted(callId, inlineByCall.get(callId), (
                 <WebServeBlock
                   key={callId}
                   args={(tc.params ?? {}) as { path?: string; command?: string; port?: number; duration_seconds?: number }}
@@ -1371,7 +1396,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   isCancelled={tc.status === 'cancelled'}
                   toolName={tc.tool}
                 />
-              )
+              ))
             }
             // B-fix: the six browser.*/browser_* tools also have a registered
             // live UI (BrowserToolBlock, dispatched via makeAssistantToolUI in
@@ -1395,7 +1420,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             // the real status object so both BrowserToolReplayBlock's and
             // GenericToolCall's own isCancelledStatus checks see it.
             if (isReplayBrowserToolName(tc.tool)) {
-              return (
+              return delegationSlotted(callId, inlineByCall.get(callId), (
                 <BrowserToolReplayBlock
                   key={callId}
                   toolName={tc.tool}
@@ -1404,7 +1429,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   status={replayPartStatus(tc.status)}
                   isError={tc.status === 'error'}
                 />
-              )
+              ))
             }
             // ADR-082 D9: set_goal renders its dedicated record card
             // (SetGoalCardBlock) at the call's own interleaved position,
@@ -1419,7 +1444,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
               // which SetGoalCardBlock's parser unwraps itself. The store's
               // resolved outcome (`status`/`error`) is passed explicitly so
               // a failed registration renders its quiet trace (review S4).
-              return (
+              return delegationSlotted(callId, inlineByCall.get(callId), (
                 <SetGoalCardBlock
                   key={callId}
                   args={tc.params}
@@ -1431,7 +1456,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   durationMs={tc.duration_ms}
                   sessionId={activeSessionId ?? ''}
                 />
-              )
+              ))
             }
             // Operator-reported UX fix, 2026-09-08: same narrow override as
             // the live path's FallbackToolUI — see GoalSetupFailureLine.tsx's
@@ -1446,11 +1471,13 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
               goalRecordEmpty &&
               shouldRenderToolCall(tc.tool, tc.params as Record<string, unknown> | undefined, false, true)
             ) {
-              return (
-                <GoalSetupFailureLine key={callId} toolName={tc.tool} result={tc.result} error={tc.error} />
+              return delegationSlotted(
+                callId,
+                inlineByCall.get(callId),
+                <GoalSetupFailureLine key={callId} toolName={tc.tool} result={tc.result} error={tc.error} />,
               )
             }
-            return (
+            return delegationSlotted(callId, inlineByCall.get(callId), (
               <GenericToolCall
                 key={callId}
                 toolName={tc.tool}
@@ -1468,7 +1495,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                 defaultCollapsed={liteMode}
                 sessionId={activeSessionId ?? ''}
               />
-            )
+            ))
           })}
         </div>
 
@@ -1577,12 +1604,13 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
           } else if (msg.role === 'system') {
             row = <VirtualSystemMessageRow message={msg} />
           } else {
-            row = <VirtualAssistantMessageRow message={msg} liteMode={liteMode} />
+            row = <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} />
           }
+          const trailing = splitAnchoredDelegationEvents(delegationEvents, msg.id, placementOf(msg)).trailing
           return (
             <React.Fragment key={msg.id}>
               {row}
-              <DelegationEventLineList events={delegationEventsAfterMessage(delegationEvents, msg.id)} />
+              <DelegationEventLineList events={trailing} />
             </React.Fragment>
           )
         })}
@@ -1686,6 +1714,8 @@ function VirtualizedMessageListInner({
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   const sessionId = useSessionStore((s) => s.activeSessionId)
   const delegationEvents = useChatDelegationEvents(sessionId)
+  const textAtToolCallStart = useChatStore((s) => s.textAtToolCallStart)
+  const toolCallOwners = useChatStore((s) => (sessionId ? s.sessionsById[sessionId]?.toolCallOwnerMessageId : undefined))
   const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
   const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
 
@@ -1712,7 +1742,7 @@ function VirtualizedMessageListInner({
     if (msg.role === 'user')
       return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} agentName={agentName} latest={msg.id === latestUserMessageId} />
     if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
-    return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} />
+    return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} />
   }
 
   // Stick-to-bottom is delegated to assistant-ui's Viewport engine
@@ -1773,7 +1803,9 @@ function VirtualizedMessageListInner({
                   ref={virtualizer.measureElement}
                 >
                   {rowForMessage(msg)}
-                  <DelegationEventLineList events={delegationEventsAfterMessage(delegationEvents, msg.id)} />
+                  <DelegationEventLineList
+                    events={splitAnchoredDelegationEvents(delegationEvents, msg.id, placementOf(msg)).trailing}
+                  />
                 </div>
               )
             })}
@@ -1782,27 +1814,56 @@ function VirtualizedMessageListInner({
 
         {/* Live streaming message — kept in ThreadPrimitive.Messages for full
             AssistantUI context (streaming primitives, registered tool UIs). */}
-        {hasStreamingMessage && (
-          <div data-testid="streaming-message-anchor">
-            <ThreadPrimitive.Messages>
-              {({ message }) => {
-                const isLast = message.id === messages[messages.length - 1]?.id
-                if (!isLast) return null
-                if (message.role === 'user') return <UserMessage />
-                if (message.role === 'system') return <SystemMessage />
-                return <AssistantMessage />
-              }}
-            </ThreadPrimitive.Messages>
-          </div>
-        )}
         {hasStreamingMessage && messages[messages.length - 1] && (
-          <DelegationEventLineList
-            events={delegationEventsAfterMessage(delegationEvents, messages[messages.length - 1].id)}
-          />
+          <StreamingDelegation
+            message={messages[messages.length - 1]}
+            events={delegationEvents}
+            snapshots={textAtToolCallStart}
+            owners={toolCallOwners}
+          >
+            <div data-testid="streaming-message-anchor">
+              <ThreadPrimitive.Messages>
+                {({ message }) => {
+                  const isLast = message.id === messages[messages.length - 1]?.id
+                  if (!isLast) return null
+                  if (message.role === 'user') return <UserMessage />
+                  if (message.role === 'system') return <SystemMessage />
+                  return <AssistantMessage />
+                }}
+              </ThreadPrimitive.Messages>
+            </div>
+          </StreamingDelegation>
         )}
         <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />
       </div>
     </ThreadPrimitive.Viewport>
+  )
+}
+
+function StreamingDelegation({
+  message,
+  events,
+  snapshots,
+  owners,
+  children,
+}: {
+  message: ChatMessage
+  events: readonly DelegationEvent[]
+  snapshots: Readonly<Record<string, string>> | undefined
+  owners: Readonly<Record<string, string>> | undefined
+  children: React.ReactNode
+}) {
+  const split = splitAnchoredDelegationEvents(
+    events,
+    message.id,
+    placementOf(message),
+    liveSnapshotIds(message.id, snapshots, owners),
+  )
+  return (
+    <DelegationInlineProvider byCall={split.byCall}>
+      {children}
+      <DelegationEventLineList events={split.trailing} />
+    </DelegationInlineProvider>
   )
 }
 
@@ -1930,6 +1991,7 @@ function AssistantMessage() {
               <MessagePrimitive.Parts
                 components={{
                   Text: AssistantTextPart,
+                  ToolGroup: DelegationToolGroup,
                   tools: {
                     Fallback: FallbackToolUI as unknown as import('@assistant-ui/react').ToolCallMessagePartComponent,
                   },

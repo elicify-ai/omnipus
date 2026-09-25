@@ -316,4 +316,61 @@ describe('ChatScreen delegation event lines', () => {
     expect(document.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).toBeNull()
     expect(screen.queryByTestId('delegation-event-line')).toBeNull()
   })
+
+  it('places the delegated line between the text before the call and the text after it, with finished directly after', async () => {
+    const before = "I'll hand this to the worker."
+    const after = 'The worker has finished. All done.'
+    const call = {
+      id: 'call-wire',
+      tool: 'delegate',
+      params: { action: 'run', label: 'Wire the gate' },
+      status: 'success' as const,
+      result: { ok: true },
+      textOffset: before.length,
+    }
+    const msg = message('m-inline', before + after, [call] as NonNullable<ChatMessage['tool_calls']>)
+    msg.spans = [
+      {
+        spanId: 'span-wire',
+        parentCallId: 'call-wire',
+        taskLabel: 'Wire the gate',
+        status: 'success',
+        durationMs: 10,
+        childSessionId: 'child-gp',
+      },
+    ]
+    seed([msg])
+    eventBox.current = [
+      {
+        id: 'finished:span-wire',
+        kind: 'finished',
+        sessionId: SID,
+        at: 2,
+        anchorMessageId: 'm-inline',
+        agentName: 'General Purpose',
+        title: 'Wire the gate',
+        childSessionId: 'child-gp',
+      },
+      {
+        id: 'delegated:span-wire',
+        kind: 'delegated',
+        sessionId: SID,
+        at: 1,
+        anchorMessageId: 'm-inline',
+        agentName: 'General Purpose',
+        title: 'Wire the gate',
+        childSessionId: 'child-gp',
+      },
+    ]
+    await renderScreen()
+
+    const beforeEl = screen.getByText(before)
+    const delegated = screen.getByText('Delegated to General Purpose · Wire the gate')
+    const finished = screen.getByText('General Purpose finished · Wire the gate')
+    const afterEl = screen.getByText(after)
+    const following = Node.DOCUMENT_POSITION_FOLLOWING
+    expect(beforeEl.compareDocumentPosition(delegated) & following).toBeTruthy()
+    expect(delegated.compareDocumentPosition(finished) & following).toBeTruthy()
+    expect(finished.compareDocumentPosition(afterEl) & following).toBeTruthy()
+  })
 })
