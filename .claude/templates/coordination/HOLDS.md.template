@@ -1,0 +1,27 @@
+# HOLDS.md template (design 5.9)
+#
+# One line per active hold. Append a new line when a hold is taken; do not
+# delete a line on release — edit that same line's released-at field
+# in place (design: "Append on hold; edit the line on release").
+#
+# Format (this exact shape is what scripts/hooks/pre-push-ledger-check
+# parses — a format change here must land together with a matching change
+# to that script, per governance section 9):
+#
+#   what=<branch-name-or-ALL> | held-by=<who> | why=<reason> | since=<ISO8601> | released-at=<empty-or-ISO8601>
+#
+# "what" is either the exact branch name the hold covers, or the literal
+# ALL for a hold that blocks every push to the integration branch (for
+# example: "integration branch is red, nobody lands until it is green
+# again", design 5.7/5.9). A tree-scoped hold (a file tree rather than a
+# whole branch) is recorded the same way with what=<tree-path> — the
+# pre-push hook only ever matches on the branch name, so a tree-scoped hold
+# is informative there and enforced by the reviewer/landing-actor reading
+# this file, not mechanically at push time.
+#
+# released-at empty means the hold is still active. Start the live file
+# empty (no lines) — an empty HOLDS.md means nothing is held.
+#
+# Example lines (do not copy into the live file — illustration only):
+# what=release/v0.1.1 | held-by=squad-security | why=integration branch red on the go tier | since=2026-09-25T09:10:00Z | released-at=
+# what=ALL | held-by=team-lead-main | why=founder requested a freeze during a rollout | since=2026-09-25T10:00:00Z | released-at=2026-09-25T10:20:00Z
