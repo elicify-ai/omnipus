@@ -26,6 +26,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/mail"
 	"net/smtp"
 	"sort"
 	"strings"
@@ -176,8 +178,14 @@ type SendRequest struct {
 	Subject string
 	Body    string
 	// InReplyTo, when non-empty, is set as the In-Reply-To and References
-	// headers so replies thread correctly in the recipient's client.
+	// headers on the composed message (legacy single-recipient path).
 	InReplyTo string
+	// Raw, when non-empty, is transmitted verbatim as the complete RFC 5322
+	// message (headers + body) — the composed multipart path the tools use
+	// after email.Compose. Envelope recipients are parsed from To (comma-
+	// joined). The 1 MiB body bound applies to Body only; Raw's size is
+	// governed by the attachment caps enforced by the tool layer.
+	Raw []byte
 }
 
 // Transport is the test seam the email tools depend on. The production
@@ -849,106 +857,139 @@ func (c *Client) MarkSeen(ctx context.Context, uid uint32) error {
 
 // Send delivers an outbound message via SMTP (STARTTLS on 587/custom, implicit
 // TLS on 465).
-func (c *Client) Send(_ context.Context, req SendRequest) error {
+func (c *Client) Send(ctx context.Context, req SendRequest) error {
+	// MC-21 / #629: an expired or canceled context must abort before any I/O.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	to := strings.TrimSpace(req.To)
 	if to == "" {
-		return fmt.Errorf("email transport: recipient (to) is empty")
+		return fmt.Errorf("email transport: recipient (to) is the empty")
 	}
-	if strings.TrimSpace(req.Body) == "" {
+	rcpts, bad := parseRecipientList([]string{to})
+	if len(bad) > 0 {
+		return fmt.Errorf("email transport: recipient %q is not a valid address", bad[0])
+	}
+	// MC-27 / MAJ-015: 50 recipients after de-duplication — a transport-side
+	// bound mirroring the tool-layer cap (defense in depth).
+	if len(rcpts) > maxOutboundRecipients {
+		return fmt.Errorf("email transport: more than %d recipients after de-duplication (got %d)", maxOutboundRecipients, len(rcpts))
+	}
+	if req.Raw == nil && strings.TrimSpace(req.Body) == "" {
 		return fmt.Errorf("email transport: body is empty")
 	}
-	subject := req.Subject
-	if subject == "" {
-		subject = "(no subject)"
+	// MC-22 / FR-031: the body is bounded at 1 MiB, rejected before any SMTP
+	// connection is opened. Raw (pre-composed) messages are governed by the
+	// attachment caps at the tool layer instead.
+	if req.Raw == nil && len(req.Body) > maxOutboundBodyBytes {
+		return fmt.Errorf("email transport: outbound body is %d bytes; the bound is 1 MiB (1048576 bytes)", len(req.Body))
+	}
+
+	var body string
+	if req.Raw != nil {
+		// Composed multipart path: transmitted verbatim.
+		body = string(req.Raw)
+	} else {
+		subject := req.Subject
+		if subject == "" {
+			subject = "(no subject)"
+		}
+		body = buildEmailBody(c.acct.Username, to, subject, req.Body, req.InReplyTo)
 	}
 
 	smtpAddr := fmt.Sprintf("%s:%d", c.acct.SMTPHost, c.acct.SMTPPort)
-	body := buildEmailBody(c.acct.Username, to, subject, req.Body, req.InReplyTo)
-
+	tlsCfg := &tls.Config{ServerName: c.acct.SMTPHost, MinVersion: tls.VersionTLS12}
 	if c.acct.SMTPPort == 465 {
-		tlsCfg := &tls.Config{ServerName: c.acct.SMTPHost, MinVersion: tls.VersionTLS12}
-		if err := sendSMTPS(smtpAddr, c.acct.Username, to, body, c.acct.Username, c.acct.Password, tlsCfg); err != nil {
+		if err := sendSMTPS(ctx, smtpAddr, c.acct.Username, c.acct.Password, c.acct.Username, envelopeRecipients(rcpts), body, tlsCfg); err != nil {
 			return fmt.Errorf("email transport: SMTPS send: %w", err)
 		}
 		return nil
 	}
 	auth := smtp.PlainAuth("", c.acct.Username, c.acct.Password, c.acct.SMTPHost)
-	tlsCfg := &tls.Config{ServerName: c.acct.SMTPHost, MinVersion: tls.VersionTLS12}
-	if err := sendSMTPWithSTARTTLS(smtpAddr, auth, c.acct.Username, to, body, tlsCfg); err != nil {
+	if err := sendSMTPWithSTARTTLS(ctx, smtpAddr, auth, c.acct.Username, envelopeRecipients(rcpts), body, tlsCfg); err != nil {
 		return fmt.Errorf("email transport: STARTTLS send: %w", err)
 	}
 	return nil
 }
 
-// sendSMTPWithSTARTTLS sends an email via SMTP+STARTTLS using net/smtp.
-func sendSMTPWithSTARTTLS(addr string, auth smtp.Auth, from, to, body string, tlsCfg *tls.Config) error {
-	cl, err := smtp.Dial(addr)
-	if err != nil {
-		return fmt.Errorf("dial: %w", err)
-	}
-	defer cl.Close()
+// maxOutboundRecipients is MC-27 / round-2 MAJ-015: recipients across
+// To+Cc+Bcc after de-duplication, capped at 50.
+const maxOutboundRecipients = 50
 
-	if err = cl.StartTLS(tlsCfg); err != nil {
-		return fmt.Errorf("STARTTLS: %w", err)
+// smtpStep re-reports a failed SMTP step as the context error when the
+// caller's context expired (MC-21: the deadline, not a socket timeout, is the
+// truthful cause), and wraps it with the step label otherwise.
+func smtpStep(ctx context.Context, err error, label string) error {
+	if err == nil {
+		return nil
 	}
-	if err = cl.Auth(auth); err != nil {
-		return fmt.Errorf("auth: %w", err)
+	if cerr := ctx.Err(); cerr != nil {
+		return cerr
 	}
-	if err = cl.Mail(from); err != nil {
-		return fmt.Errorf("MAIL FROM: %w", err)
-	}
-	if err = cl.Rcpt(to); err != nil {
-		return fmt.Errorf("RCPT TO: %w", err)
-	}
-	w, err := cl.Data()
-	if err != nil {
-		return fmt.Errorf("DATA: %w", err)
-	}
-	if _, err := io.WriteString(w, body); err != nil {
-		return fmt.Errorf("write body: %w", err)
-	}
-	return w.Close()
+	return fmt.Errorf("%s: %w", label, err)
 }
 
-// sendSMTPS sends an email via implicit TLS (port 465 / SMTPS).
-func sendSMTPS(addr, from, to, body, username, password string, tlsCfg *tls.Config) error {
-	conn, err := tls.Dial("tcp", addr, tlsCfg)
-	if err != nil {
-		return fmt.Errorf("TLS dial: %w", err)
+// ctxOrCommandDeadline bounds the raw connection when the caller gave no
+// deadline.
+func ctxOrCommandDeadline(ctx context.Context) time.Time {
+	if dl, ok := ctx.Deadline(); ok {
+		return dl
 	}
-	cl, err := smtp.NewClient(conn, tlsCfg.ServerName)
-	if err != nil {
-		return fmt.Errorf("SMTP client: %w", err)
-	}
-	defer cl.Close()
-
-	auth := smtp.PlainAuth("", username, password, tlsCfg.ServerName)
-	if err = cl.Auth(auth); err != nil {
-		return fmt.Errorf("auth: %w", err)
-	}
-	if err = cl.Mail(from); err != nil {
-		return fmt.Errorf("MAIL FROM: %w", err)
-	}
-	if err = cl.Rcpt(to); err != nil {
-		return fmt.Errorf("RCPT TO: %w", err)
-	}
-	w, err := cl.Data()
-	if err != nil {
-		return fmt.Errorf("DATA: %w", err)
-	}
-	if _, err := io.WriteString(w, body); err != nil {
-		return fmt.Errorf("write body: %w", err)
-	}
-	return w.Close()
+	return time.Now().Add(commandTimeout)
 }
 
-// buildEmailBody constructs a minimal RFC 5322-compliant message. When inReplyTo
-// is set, the In-Reply-To and References headers are added so the message threads.
+// dialSMTPRaw opens the TCP connection respecting ctx and dialTimeout.
+func dialSMTPRaw(ctx context.Context, addr string) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	conn, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		if cerr := ctx.Err(); cerr != nil {
+			return nil, cerr
+		}
+		return nil, fmt.Errorf("dial: %w", err)
+	}
+	if err := conn.SetDeadline(ctxOrCommandDeadline(ctx)); err != nil {
+		return nil, fmt.Errorf("set deadline: %w", err)
+	}
+	return conn, nil
+}
+
+// buildEmailBody constructs an RFC 5322-compliant message. A body that parses
+// to a single plain-text paragraph keeps the historical single-part text/plain
+// shape; anything with Markdown structure becomes multipart/alternative via
+// Compose (MC-3). When inReplyTo is set, the In-Reply-To and References headers
+// are added so the message threads. The helper never fails: unparseable
+// recipients are dropped (the CRLF-injection guard) and a Compose error falls
+// back to the plain shape.
 func buildEmailBody(from, to, subject, text, inReplyTo string) string {
+	fromHdr := formatFromHeader(from)
+	toList, _ := parseRecipientList([]string{to})
+	toStr := formatAddressList(toList)
+	if toStr == "" {
+		toStr = sanitizeHeader(to)
+	}
+	if !isPlainOnlyText(text) {
+		addresses := make([]string, 0, len(toList))
+		for i := range toList {
+			addresses = append(addresses, toList[i].Address)
+		}
+		out, err := Compose(ComposeInput{
+			From:      fromHeaderAddress(from),
+			To:        addresses,
+			Subject:   subject,
+			Markdown:  text,
+			InReplyTo: inReplyTo,
+		})
+		if err == nil {
+			return string(out.Transmitted)
+		}
+	}
 	var sb strings.Builder
-	sb.WriteString("From: " + from + "\r\n")
-	sb.WriteString("To: " + to + "\r\n")
-	sb.WriteString("Subject: " + sanitizeHeader(subject) + "\r\n")
+	sb.WriteString("From: " + fromHdr + "\r\n")
+	sb.WriteString("To: " + toStr + "\r\n")
+	sb.WriteString("Subject: " + encodeHeaderValue(sanitizeHeader(subject)) + "\r\n")
 	if inReplyTo != "" {
 		sb.WriteString("In-Reply-To: " + sanitizeHeader(inReplyTo) + "\r\n")
 		sb.WriteString("References: " + sanitizeHeader(inReplyTo) + "\r\n")
@@ -958,6 +999,24 @@ func buildEmailBody(from, to, subject, text, inReplyTo string) string {
 	sb.WriteString("\r\n")
 	sb.WriteString(text)
 	return sb.String()
+}
+
+// formatFromHeader renders the From header, RFC 2047 encoding a non-ASCII
+// display name (MC-4). An unparsable value is sanitized raw.
+func formatFromHeader(from string) string {
+	a := strings.TrimSpace(from)
+	if parsed, err := mail.ParseAddress(a); err == nil {
+		return formatAddress(parsed)
+	}
+	return sanitizeHeader(a)
+}
+
+// fromHeaderAddress extracts the bare address of a From value for Compose.
+func fromHeaderAddress(from string) string {
+	if parsed, err := mail.ParseAddress(strings.TrimSpace(from)); err == nil {
+		return parsed.Address
+	}
+	return sanitizeHeader(from)
 }
 
 // sanitizeHeader strips CR/LF from a header value to prevent header injection.
