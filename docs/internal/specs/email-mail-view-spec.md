@@ -1,7 +1,8 @@
 # Feature Specification: Email — HTML signatures, workspace Mail panel, agent draft approval
 
 **Created**: 2026-09-25
-**Status**: Draft (fix round 1, 2026-09-25 — folds grill round-1 findings and founder decisions D11–D26)
+**Status:** Draft
+**Revision**: fix round 1, 2026-09-25 — folds grill round-1 findings and founder decisions D11–D26
 **Input**: `docs/internal/specs/spec-email-mail-view.md` (interview-me output, Decisions Log D1–D26)
 **Round-1 review**: `docs/internal/specs/email-mail-view-spec-review.md` (BLOCK, 32 findings — every finding is dispositioned in §20)
 **Work branch**: `feat/email-mail-view` · Integration branch: `release/v0.1.1` (D1 — ships in v0.1.1)
