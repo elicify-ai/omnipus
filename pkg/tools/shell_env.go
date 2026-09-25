@@ -205,7 +205,7 @@ func documentRuntimeBrokenNotice(reason string) string {
 // A nil base with nothing to compose returns nil unchanged — byte-identical
 // to the pre-ADR-090 behavior for a tool with no runtime and no workspace
 // environment. When a nil base DOES compose, the materialized baseline is
-// sandbox.ScrubGatewayEnv() — the v0.2 #155 child-env allowlist — never the
+// sandbox.ScrubGatewayEnv() — the #155 child-env allowlist — never the
 // raw host environ: sandbox.Run's mergeEnv appends the caller env AFTER its
 // scrubbed gateway env and later duplicate entries win on exec, so raw host
 // entries would land in the child and override the scrub (runtime-final-review

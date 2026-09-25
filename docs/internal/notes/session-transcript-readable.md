@@ -1,4 +1,6 @@
 # Grok session transcript (readable)
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 _Auto-extracted from chat_history for reading outside the TUI._
 
 ---

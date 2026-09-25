@@ -119,8 +119,8 @@ runs no matter how many blocking findings round 2 turns up.
 Do not ask the user questions in this phase — read.
 
 1. Read the spec or ADR completely.
-2. Read root `CLAUDE.md` for hard constraints and the phase-routing rule
-   (v0.1/v0.2/v0.3).
+2. Read root `CLAUDE.md` for hard constraints and the routing rule
+   (change sizes and release strategy).
 3. Spec mode: if the spec links an ADR, read it (`Status:` must not be
    `Superseded` without the spec explaining why it still cites it).
 4. Read `docs/internal/architecture/AS-IS-architecture.md` for the parts the

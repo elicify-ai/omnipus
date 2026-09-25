@@ -1,7 +1,7 @@
 title: AuditLogResponse
 description: >
   Response from GET /api/v1/audit-log. Wraps the recent audit entries with the
-  result of verifying the HMAC tamper-evident chain (v0.2 #155). The chain is
+  result of verifying the HMAC tamper-evident chain (the #155 security wave). The chain is
   recomputed server-side over the on-disk audit files; chain_status reports
   whether it is intact, broken (tampered/reordered/truncated), or could not be
   checked (e.g. audit logging disabled or no chain key).

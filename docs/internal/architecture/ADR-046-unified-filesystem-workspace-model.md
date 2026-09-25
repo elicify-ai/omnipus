@@ -1,5 +1,7 @@
 # ADR-046: Unified filesystem & workspace model — single working directory, `filesystem_scope` policy, per-exec-child sandbox
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** Proposed (operator decisions locked; `/grill-spec` completed 2026-07-16 — claims verified, ADR revised per §10; ready for `/plan-spec`)
 - **Date:** 2026-07-16
 - **Deciders:** Daniel Piatkowski (operator)
@@ -61,7 +63,7 @@ A second, deeper defect: the agent needs to be able to work **outside** any Omni
 ### Constraints
 - Single Go binary, pure Go, no new runtime deps. `[FACT]`
 - Constraint #6: every policy decision is explicit, seeded data — no code default/fallback for `filesystem_scope`. `[FACT]`
-- v0.3 scope: fresh-build, **no back-compat** — the rename and the removal of the boot fence are clean breaks. `[FACT]` (Release Strategy)
+- Fresh-build, **no back-compat** — the rename and the removal of the boot fence are clean breaks. `[FACT]` (Release Strategy then in force; the v0.2/v0.3 release labels were retired 2026-09-25)
 
 ## 3. Gaps, ambiguities, and their resolutions
 
@@ -117,7 +119,7 @@ A second, deeper defect: the agent needs to be able to work **outside** any Omni
 
 Adopt the unified model:
 
-1. **Terminology.** "workspace" = the shared space (`workspaces/<wsid>/`). Rename `AgentInstance.Workspace`/`AgentConfig.Workspace`/`resolveAgentWorkspace`/`datamodel.AgentWorkspacePath` and all ~110 references to **agent home** (`Home` / `AgentHomePath`, `agents/<id>/`) — identity + sessions + private memory only. Clean v0.3 break.
+1. **Terminology.** "workspace" = the shared space (`workspaces/<wsid>/`). Rename `AgentInstance.Workspace`/`AgentConfig.Workspace`/`resolveAgentWorkspace`/`datamodel.AgentWorkspacePath` and all ~110 references to **agent home** (`Home` / `AgentHomePath`, `agents/<id>/`) — identity + sessions + private memory only. Clean break (the v0.3 release label was retired 2026-09-25).
 
 2. **Working directory.** Every turn resolves to one workspace (its bound workspace, else the agent's default workspace). The working directory is that workspace's **effective work dir** = its `working_dir` override if set, else `workspaces/<wsid>/work/`. No turn ever works out of the agent home. **Working-dir resolution is decoupled from CoreTeam membership** (the old ADR-032 mechanism, which left custom agents unrooted — §10 F2): the resolver MUST resolve every agent/turn to a workspace, auto-ensuring a default one when none exists.
 
@@ -147,7 +149,7 @@ Adopt the unified model:
 ### Negative
 - The main gateway process is no longer kernel-fenced for in-process file ops; the `ResolvePath` resolver becomes security-critical (single point of enforcement for file tools). Mitigated by the chokepoint discipline + always-deny carve-outs, and to be pinned down in grill-spec (residual minimal main-process protection).
 - Per-exec-child sandbox setup adds cost to every `bash`/exec (a fresh Landlock/seccomp apply per child) and complexity to the exec path.
-- Large rename (~110 refs) and a v0.3 breaking change to the sandbox boot behavior.
+- Large rename (~110 refs) and a breaking change to the sandbox boot behavior (the v0.3 release label was retired 2026-09-25).
 - `ask`-as-default means interactive turns prompt; unattended turns silently confine (fail-closed) — operators must opt specific unattended agents up to `allow`.
 
 ### Neutral / out of scope (separate axes, untouched)

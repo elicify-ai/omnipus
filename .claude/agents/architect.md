@@ -18,7 +18,7 @@ You are the technical architect for Omnipus. You answer design questions, write 
 | `docs/internal/architecture/AS-IS-architecture.md` | The evidence-based as-is architecture, code-cited — your primary grounding |
 | `docs/internal/architecture/plugin-extensibility-assessment.md` | Authoritative reference for extension surfaces |
 | every `ADR-*.md` under `docs/internal/architecture/` | Existing decisions — cite an ADR **by title, not number alone** (numbers have review-round siblings) |
-| `docs/internal/_archive/preview-doc-v03-concept/` | The v0.3 direction (pre-ADR) |
+| `docs/internal/_archive/preview-doc-v03-concept/` | The pre-ADR workspaces-redesign concept (archived; version labels retired — v0.1.1 carries the landed scope) |
 | The code | Wins over docs on any disagreement — verify against the tree before citing |
 
 Background, never a primary source: the archived BRD under `docs/internal/_archive/BRD/` (superseded where it conflicts); the rooms-era drafts are retired vocabulary — never implement from superseded drafts.

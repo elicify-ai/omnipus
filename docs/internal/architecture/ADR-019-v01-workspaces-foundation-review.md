@@ -1,5 +1,7 @@
 # Grill Review — ADR-019: v0.1.0 "Foundation" — Workspaces Redesign Structural Shapes
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Reviewed file:** `docs/internal/architecture/ADR-019-v01-workspaces-foundation.md`
 - **Review mode:** generic-markdown / ADR-review (ratifying ADR, first phase of an `/sdd` run)
 - **Reviewer stance:** adversarial, read-only. The author is not trusted; the question is "how does this ADR, ratified as-is, force a re-cut or a 3 AM incident later?"

@@ -4081,7 +4081,7 @@ export interface components {
             provider?: string;
             stats: components["schemas"]["SessionStats"];
             /**
-             * @description Associated workspace ID (optional, future v0.3 feature).
+             * @description Associated workspace ID when the session is bound to a workspace. Absent when the session has none.
              * @example ws-123
              */
             workspace_id?: string;
@@ -8028,7 +8028,7 @@ export interface components {
              */
             updated_at?: string;
             /**
-             * @description Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured. Main only.
+             * @description Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT yet active (TTS delivery, tracked #306 — no release scheduled). Absent when not configured. Main only.
              * @example alloy
              */
             voice?: string | null;
@@ -8298,7 +8298,7 @@ export interface components {
              */
             soul: string;
             /**
-             * @description Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
+             * @description Per-agent persona voice identifier (Main only). Schema-pinned; not yet active (TTS, tracked #306).
              * @example alloy
              */
             voice?: string | null;
@@ -8573,7 +8573,7 @@ export interface components {
              */
             skills?: string[];
             /**
-             * @description Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear. Main only.
+             * @description Per-agent persona voice identifier. Schema-pinned; not yet active (TTS, tracked #306). Send null to clear. Main only.
              * @example alloy
              */
             voice?: string | null;
@@ -9268,7 +9268,7 @@ export interface components {
         };
         /**
          * AuditLogResponse
-         * @description Response from GET /api/v1/audit-log. Wraps the recent audit entries with the result of verifying the HMAC tamper-evident chain (v0.2 #155). The chain is recomputed server-side over the on-disk audit files; chain_status reports whether it is intact, broken (tampered/reordered/truncated), or could not be checked (e.g. audit logging disabled or no chain key).
+         * @description Response from GET /api/v1/audit-log. Wraps the recent audit entries with the result of verifying the HMAC tamper-evident chain (the #155 security wave). The chain is recomputed server-side over the on-disk audit files; chain_status reports whether it is intact, broken (tampered/reordered/truncated), or could not be checked (e.g. audit logging disabled or no chain key).
          */
         AuditLogResponse: {
             /** @description Recent audit entries, reverse-chronological, max 100. */
@@ -10635,7 +10635,7 @@ export interface components {
              */
             prompt?: string;
             /**
-             * @description What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for v0.3 action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
+             * @description What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for future action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
              * @example llm
              * @enum {string}
              */
@@ -12054,7 +12054,7 @@ export interface components {
              */
             description?: string;
             /**
-             * @description Task action type. Tier 2 accepts `llm` only; the enum grows additively in v0.3.
+             * @description Task action type. Tier 2 accepts `llm` only; the enum grows additively (future growth path — design intent, do not build in this release).
              * @example llm
              * @enum {string}
              */
@@ -12296,7 +12296,7 @@ export interface components {
         };
         /**
          * TaskTrigger
-         * @description When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+         * @description When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the future multi-trigger / boolean-composition growth path can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
          *     ## Tier 2 (now) `type` is one of:
          *       - `manual`    — no automatic trigger. The task starts when a human drags its
          *                       card into `in_progress`, or via Run / Create & Run. For an
@@ -12314,16 +12314,16 @@ export interface components {
          *                       Each fire spawns a FRESH run.
          *
          *     `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
-         *     ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
+         *     ## Future growth path (design intent — DO NOT build in this release) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
          */
         TaskTrigger: {
             /**
-             * @description The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+             * @description The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
              * @example recurring
              * @enum {string}
              */
             type: "manual" | "once" | "every" | "recurring";
-            /** @description Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape. */
+            /** @description Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape. */
             config: {
                 /**
                  * Format: int64
@@ -12787,7 +12787,7 @@ export interface components {
          * @description Request body for PUT /api/v1/channels/{id}/configure. Merges the supplied fields into the channel's config section. The "enabled" field is reserved and silently removed — use the separate enable/disable endpoints instead. Field names and value types are channel-specific; unknown fields are stored as-is and passed through to the channel implementation.
          */
         ChannelConfigureRequest: {
-            /** @description Optional: the instance map key to configure. In v0.1 (cap-1/type) this equals the channel type and can be omitted. Reserved for v0.3 multi-instance support — the backend ignores this field today (the URL {id} is the key). */
+            /** @description Optional. The backend ignores this field: the URL {id} is the instance key, including when more than one instance of a channel type exists. It is not persisted. */
             instance_id?: string;
             /** @description Optional routing identity override for this channel instance. Persisted per instance; wired into ResolveRoute for inbound messages on this channel. */
             identity?: components["schemas"]["ChannelIdentity"];

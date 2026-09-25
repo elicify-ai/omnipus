@@ -45,7 +45,7 @@ After `/grill-spec`, every load-bearing claim was re-verified against the runnin
 **Problem:** every *configuration* surface exposes the developer's mental model and jargon directly — no plain-language layer, no progressive disclosure, no "where do I get this", and (in Security) no safe-default-with-warning. Four Security settings can silently weaken protection. The result: the app is functionally complete but **not operable by its target user**.
 
 **In scope:** Schedules form + Command Center entry (A); Settings/Security IA + the 4 risky controls + tool-policy presets (B); Channel Configure panels + WhatsApp QR states (C); Agent config consistency + the shared preset model + 2 bugs (D).
-**Out of scope:** backend behavior of channels/agents/scheduler beyond the 2 named bugs (B-1, B-2) and any field-label text the backend emits in errors (D10 maps them client-side); the Rooms/v0.3 redesign; new channels; chat UX.
+**Out of scope:** backend behavior of channels/agents/scheduler beyond the 2 named bugs (B-1, B-2) and any field-label text the backend emits in errors (D10 maps them client-side); the Workspaces redesign (the Rooms/v0.3 release labels are retired); new channels; chat UX.
 
 ---
 

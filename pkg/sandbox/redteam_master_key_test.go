@@ -14,17 +14,17 @@
 // DefaultChildPolicy's structure (subdirectory enumeration with secret-file
 // carve-out) blocks reads at the kernel layer when applied. They do NOT
 // prove that the production sandbox-apply path uses DefaultChildPolicy —
-// it does not, as of v0.2. See the doc comment on DefaultChildPolicy in
+// it does not today (production wiring is tracked #884). See the doc comment on DefaultChildPolicy in
 // pkg/sandbox/sandbox.go for the production threat model (regex backstop +
 // HardenGatewaySelf + kernel sandbox baseline).
 //
 // Production wiring (Landlock per-thread re-restriction in hardened-exec)
-// is tracked as a v0.3 follow-up. Until it lands, these tests serve as:
+// is tracked as #884. Until it lands, these tests serve as:
 //
 //	(a) policy-correctness tests for DefaultChildPolicy — the carve-out
 //	    structure works at the kernel level when applied
 //	(b) regression tests to prevent the carve-out from being broken when
-//	    the v0.3 wiring eventually lands
+//	    the #884 wiring eventually lands
 
 package sandbox_test
 
@@ -125,15 +125,16 @@ func runSecretReadChild(target string) {
 // TestRedteam_MasterKey_Exfil_Blocked documents C1 from the insider-pentest
 // report. It builds an OMNIPUS_HOME containing a master.key file with mode
 // 0600, then re-execs the test binary as a sandboxed child and asks it to
-// read master.key. Production policy (DefaultPolicy) grants RWX on
-// $OMNIPUS_HOME, so the read is expected to succeed today — the test FAILS
-// by design until v0.2 (#155) lands the secrets-subtree carve-out.
+// read master.key. This test applies DefaultChildPolicy instead of the
+// production DefaultPolicy — its secrets-subtree carve-out (built by #155,
+// item 8) blocks the read at the kernel layer; wiring it into production is
+// tracked #884.
 //
 // Reference: docs/internal/architecture/AS-IS-architecture.md (sandbox carve-out for
 // $OMNIPUS_HOME), pkg/sandbox/sandbox.go::DefaultPolicy.
 func TestRedteam_MasterKey_Exfil_Blocked(t *testing.T) {
 	t.Logf(
-		"documents C1 (master.key exfil) from insider-pentest report; closes when v0.2 #155 secrets-subtree carve-out lands",
+		"documents C1 (master.key exfil) from insider-pentest report; closes when the #155 secrets-subtree carve-out is wired into production (#884)",
 	)
 
 	if os.Getenv("OMNIPUS_REDTEAM_MASTER_KEY_CHILD") == "1" {
@@ -184,7 +185,7 @@ func TestRedteam_MasterKey_Exfil_Blocked(t *testing.T) {
 
 	switch exitCode {
 	case 42:
-		// Kernel blocked the read — the v0.2 fix has landed.
+		// Kernel blocked the read — the carve-out (built by #155) held.
 		t.Logf("C1 closed: kernel blocked master.key read inside sandboxed child")
 	case 77:
 		t.Skipf("Landlock unavailable in child (exit 77):\n%s", out)
@@ -209,7 +210,7 @@ func TestRedteam_MasterKey_Exfil_Blocked(t *testing.T) {
 // must still be denied.
 func TestRedteam_Credentials_Exfil_Blocked(t *testing.T) {
 	t.Logf(
-		"documents C2 (credentials.json exfil) from insider-pentest report; closes when v0.2 #155 secrets-subtree carve-out lands",
+		"documents C2 (credentials.json exfil) from insider-pentest report; closes when the #155 secrets-subtree carve-out is wired into production (#884)",
 	)
 
 	if os.Getenv("OMNIPUS_REDTEAM_CREDS_CHILD") == "1" {

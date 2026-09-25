@@ -1,5 +1,7 @@
 # ADR-027 — Workspace-scoped heartbeat config + global memory settings UI
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** Proposed · ADR-grill (C-1…C-4) + **spec-grill (F-01/02/03/04/07/10) addressed** — see **Amendment A1**
 - **Reviews:** `ADR-027-…-review.md` (ADR grill) · `../specs/workspace-heartbeat-memory-config-spec-review.md` (spec grill, verdict BLOCK)
 - **Date:** 2026-06-30

@@ -81,7 +81,7 @@ func (a *restAPI) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
 		entries = []json.RawMessage{}
 	}
 
-	// G4: verify the HMAC tamper-evident chain (v0.2 #155) so the UI can surface
+	// G4: verify the HMAC tamper-evident chain (#155) so the UI can surface
 	// integrity. chain_status is "unknown" when there is no logger/chain key to
 	// verify with (e.g. audit logging disabled).
 	chainStatus := "unknown"

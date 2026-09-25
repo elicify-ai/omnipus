@@ -152,7 +152,7 @@ properties:
     type: string
     nullable: true
     description: >
-      Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.
+      Per-agent persona voice identifier. Schema-pinned; not yet active (TTS, tracked #306).
       Send null to clear. Main only.
     example: "alloy"
   executor:

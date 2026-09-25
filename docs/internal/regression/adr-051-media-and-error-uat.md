@@ -1,4 +1,6 @@
 # ADR-051 Human UAT Plan: Media Handling and Provider-Error Translation
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 
 **Target:** ADR-051 Revision 3 and `docs/internal/specs/media-handling-error-translation-spec.md` Revision 3  
 **Implementation under test:** `dfa5c980beae6619b6ceab8895f38a9abf67c250` on `sendfile-fix`  

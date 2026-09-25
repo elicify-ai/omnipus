@@ -351,9 +351,9 @@ Pre-1.0 and moving fast:
 
 | Release | Status | Scope |
 |---|---|---|
-| **v0.1** | ✅ Complete | Stabilized gateway, iframe preview, sandbox hardening |
-| **v0.2** | ✅ Complete | Security hardening |
-| **v0.3 / 1.0** | 🚧 In design | The "Rooms" redesign of memory, projects, and tasks |
+| **v0.1** | ✅ Shipped | Stabilized gateway, iframe preview, sandbox hardening |
+| **#155 security hardening** | ✅ Shipped on the v0.1 line ([#157](https://github.com/elicify-ai/omnipus/issues/157)) | Pentest quick wins (closed 2026-05-04) |
+| **v0.1.1** | 🚧 Current — the single release line | Founder decision 2026-09-25: no separate v0.2/v0.3 releases; v0.1.1 carries the landed workspaces redesign work and everything else on tracked issues |
 
 A single Go binary with the web app embedded *is* the product — MIT-licensed, community-focused, no telemetry. See the [roadmap](ROADMAP.md).
 

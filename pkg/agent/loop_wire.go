@@ -274,7 +274,7 @@ func (al *AgentLoop) wireMemoryAuditLoggerOn(registry *AgentRegistry, auditLogge
 	}
 }
 
-// wireMemoryRateLimiterOn propagates the shared MemoryRateLimiter (v0.2 #155
+// wireMemoryRateLimiterOn propagates the shared MemoryRateLimiter (#155
 // item 6) onto every agent's tool registry in registry. Factored out of
 // NewAgentLoop's boot-time wiring so ReloadProviderAndConfig can re-apply the
 // SAME limiter instance against a freshly-built registry on hot reload —

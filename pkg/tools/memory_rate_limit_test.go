@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 //
-// Tests for the v0.2 #155 item 6 memory-write rate limiter. Covers:
+// Tests for the #155 item 6 memory-write rate limiter. Covers:
 //
 //   - Within-budget calls succeed.
 //   - Just-over-budget call is rejected with the rate_limited error

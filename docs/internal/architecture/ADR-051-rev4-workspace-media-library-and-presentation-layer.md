@@ -1,9 +1,11 @@
 # ADR-051 (Revision 4): Workspace Media Library + Capability-Aware Presentation Layer
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Status:** Accepted (Revision 4 — supersedes ADR-051 Rev 3 §RD1, §RD2, §RD3; retains Rev 3 §RD4–§RD7 error-translation unchanged). **Grill round 1 (2026-07-22) findings C1/C2/M1–M6/m1–m3/O1 resolved into this revision; accepted per operator.**
 **Date:** 2026-07-22
 **Deciders:** operator Daniel Piatkowski (directive: full scope, `release/v0.1.1`); architect to draft.
-**Target release:** `release/v0.1.1` — **full scope, no split to v0.3.**
+**Target release:** `release/v0.1.1` — **full scope** (the v0.3-split option was retired with the v0.3 release label, 2026-09-25).
 **Supersedes:** ADR-051 Rev 3 reliability design (RD1 normalize / RD2 reactive strip-retry / RD3 model-capability probe). RD4–RD7 (error translation, two choke points, Verbose-Chat `detail`) are **unchanged and still mandatory**; Rev 4 reduces how often they fire.
 **Evidence base:** live UAT 2026-07-22 (SVG defects, observed Gemini `Unsupported MIME type` + z.ai `code 1210` dead turns); `docs/internal/research/provider-media-format-support.md` (9-provider matrix — **to be critically re-validated against fresh 2026 provider data before seed freeze**); competitor audit (opencode `anomalyco/opencode`, OpenClaw `openclaw/openclaw` — researched from source 2026-07-22); grill review `ADR-051-rev4-…-review.md`.
 
@@ -108,7 +110,7 @@ A **global compiled seed** keyed by `input_modalities` (`text`, `image`, `pdf`, 
 
 **Positive**
 - "Any file, any model → useful turn" guarantee — strictly more robust than either rival.
-- Persistent reusable media library for user uploads (UX win; aligns with v0.3 Workspaces without blocking on it).
+- Persistent reusable media library for user uploads (UX win; aligns with the Workspaces model without blocking on it).
 - Classifier (RD4–RD7) demoted from sole control-flow trigger to outcome-labeller + UX copy — its fragility stops mattering for turn survival, while the classifier-primary path keeps precision where it works.
 
 **Negative / risks (the decider accepts these; grill made the cost visible)**
@@ -148,7 +150,7 @@ A **global compiled seed** keyed by `input_modalities` (`text`, `image`, `pdf`, 
 ---
 
 ## Non-goals (v0.1.1)
-- **Per-provider modality live-pull** (per-provider APIs) — replaced by in-repo catalog; the per-provider resolver sub-spec is v0.3.
+- **Per-provider modality live-pull** (per-provider APIs) — replaced by in-repo catalog; the per-provider resolver sub-spec is deferred (no release scheduled).
 - **Model failover** (switch to a vision candidate on rejection) — OpenClaw has it; deferred (no candidate-pool wiring).
 - **Video/audio understanding pipeline** (transcription, native video blocks) — separate modality, separate ADR.
 - **Cross-workspace media sharing** — workspace-scoped only.
