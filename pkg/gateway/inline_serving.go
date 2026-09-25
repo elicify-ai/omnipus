@@ -10,10 +10,10 @@ package gateway
 // WHY THIS FILE EXISTS, and it is not the preview feature. Round 4 of the spec
 // review found a LIVE exposure that predates ADR-067 entirely:
 //
-//	/api/v1/media/workspace/{workspace}/{id} is registered withOptionalAuth,
-//	resolves a workspace-library entry, and served it with
+//	/api/v1/media/workspace/{workspace}/{id} was registered withOptionalAuth,
+//	resolved a workspace-library entry, and served it with
 //	"Content-Disposition: inline" through http.ServeFile carrying NO policy at
-//	all. pkg/library/entries.go maps .html -> text/html and .svg ->
+//	all. (The route has required login since issue #716.) pkg/library/entries.go maps .html -> text/html and .svg ->
 //	image/svg+xml. So an HTML file in a workspace media library was served
 //	inline, as a real document, ON THE GATEWAY ORIGIN — same-origin with the
 //	session cookie and the whole authenticated API.
