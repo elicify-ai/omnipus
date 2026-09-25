@@ -650,6 +650,22 @@ func (pe *PlanEngine) bootSweep(ctx context.Context, ls *session.LifecycleStore,
 		}
 		rec := records[i]
 
+		// ADR-093 D3: standing roots are exempt from the sweep. A root
+		// session — no SteeredBy edge — whose origin is one of the standing
+		// kinds (chat, channel, heartbeat, scheduled) or absent entirely is a
+		// conversation the human can simply re-open: it is never swept to
+		// failed(interrupted), so a restart never makes a session unusable
+		// and its next message is always free to revive it. Task roots cannot
+		// ride the exemption: persistLocked rejects an origin kind task
+		// without a task id, so a task root never matches a standing kind and
+		// is enumerated and swept (or preserved by a later exemption) exactly
+		// as before.
+		if rec.SteeredBy == nil && (rec.Origin == nil || rec.Origin.Kind == session.OriginKindChat ||
+			rec.Origin.Kind == session.OriginKindChannel || rec.Origin.Kind == session.OriginKindHeartbeat ||
+			rec.Origin.Kind == session.OriginKindScheduled) {
+			continue
+		}
+
 		// Exemption (a): a parked needs_input session that is still
 		// reconstructable at boot is preserved as resumable (FR-119/R§8.6).
 		// The stored needs_input.reconstructable hint is NEVER the authority
