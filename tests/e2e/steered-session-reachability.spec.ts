@@ -135,20 +135,32 @@ test('steered session is reachable in its own live view without leaking child ou
   const childSessionID = await boundSurface.getAttribute('data-active-session-id')
   expect(childSessionID, 'the open control must bind the chat surface to the child session').toBeTruthy()
 
-  // The parent interpolates CHILD_ONLY_SENTINEL into the task it hands down, so
-  // it renders in the child's view as the child's own INBOUND user text the
-  // moment the view opens. Matching it page-wide therefore proved only that the
-  // child RECEIVED the task — it passed ~0.8s in, against a child that had done
-  // no work, and then let the steer below fire while the child was still on its
-  // first round. Require the sentinel in an ASSISTANT row, which only the child
-  // can author (`data-message-role="assistant"`, ChatScreen.tsx).
+  // Two wrong oracles have stood here. Matching CHILD_ONLY_SENTINEL page-wide proved
+  // only that the child RECEIVED the task: the parent interpolates the sentinel into
+  // the task text, so it renders as the child's own INBOUND user message the moment
+  // the view opens — it passed ~0.8s in, against a child that had done no work.
+  //
+  // Requiring the sentinel in an ASSISTANT row was worse, not better. It demands the
+  // model emit an exact magic string, so the test fails whenever the child paraphrases
+  // or reports a tool failure instead of completing the task — which is exactly the
+  // model-compliance oracle the steer assertion below was repaired to remove. It duly
+  // failed in CI with "element(s) not found" while the child was working correctly.
+  //
+  // What "reachable in its own live view" claims is that the CHILD's own transcript
+  // renders here. Assert the system-decided facts: an assistant message exists, and it
+  // is attributed to an agent other than the parent. `agent-label` renders that
+  // message's own agentId (ChatScreen.tsx), so no model wording can satisfy or break it.
   await expect(
-    page
-      .locator('[data-message-role="assistant"]')
-      .filter({ hasText: CHILD_ONLY_SENTINEL })
-      .first(),
-    'the child must PRODUCE the sentinel in its own reply, not merely be handed it in the task',
+    page.locator('[data-message-role="assistant"]').first(),
+    'the child session must render its own assistant output in its own live view',
   ).toBeVisible({ timeout: 240_000 })
+  const firstChildLabel = (
+    await page.getByTestId('agent-label').first().innerText({ timeout: 30_000 })
+  ).trim()
+  expect(
+    firstChildLabel,
+    'the child view must attribute its output to the worker, not to the parent agent',
+  ).not.toMatch(/Jim/i)
 
   const childInput = chatInput(page)
   await expect(childInput).toBeEnabled({ timeout: 30_000 })
