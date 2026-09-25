@@ -6,6 +6,7 @@
 import type { DelegationEvent } from './delegationEvents.types'
 
 function byTime(a: DelegationEvent, b: DelegationEvent): number {
+  // `at` is anchor-message time plus sequence, not wall-clock event time — order only, never render it.
   if (a.at !== b.at) return a.at - b.at
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
 }
