@@ -650,7 +650,7 @@ safely-parallel waves -> feature-size units assigned to squads
 (5.9); capacity check before dispatching (5.6)
       |
       v
-spec step (plan-spec / grill-spec / taskify where a spec is warranted)
+spec step (plan-spec / grill-spec where a spec is warranted; taskify retired 2026-09-25)
       |
       v
 RED — DEFAULT (lead default S2): ONE qa-lead worktree on the feature's

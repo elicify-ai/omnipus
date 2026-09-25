@@ -26,8 +26,8 @@ this skill is the procedure for using them to keep a spec honest.
 - Specs: `docs/internal/specs/<name>-spec.md`.
 - Reviews: `docs/internal/specs/<name>-spec-review.md`,
   `docs/internal/specs/<name>-spec-review-round2.md`.
-- ADRs: `docs/internal/architecture/ADR-NNN-<title>.md`.
-- **Never** `docs/plan/`, `docs/specs/`, or `docs/internal/plan/` — those are not
+- ADRs: `docs/internal/architecture/ADR-NNN-<title>.md`. # agent-guard: allow
+- **Never** `docs/plan/`, `docs/specs/`, or `docs/internal/plan/` — those are not # agent-guard: allow
   real locations in this repo; a search that lands there is searching the wrong
   place, not finding an empty result.
 
@@ -62,7 +62,7 @@ recognise the variants actually on disk (`-spec-review-2.md`, `-review-pass2.md`
 4. At most one narrowly-scoped, tagged local test if a claim genuinely needs one
    (`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/<one>/`);
    CI is still the authority for a suite result. `npm run typecheck`, never bare
-   `tsc`. Never a whole-repo build or test, never `go test ./...`.
+   `tsc`. Never a whole-repo build or test, never `go test ./...`. # agent-guard: allow
 
 ## Step 3 — compare, and the code wins
 
@@ -122,7 +122,7 @@ End every run with:
 
 ## What this skill never does
 
-- Never searches `docs/plan/`, `docs/specs/`, or `docs/internal/plan/`.
+- Never searches `docs/plan/`, `docs/specs/`, or `docs/internal/plan/`. # agent-guard: allow
 - Never invents its own versioning scheme for the spec file.
 - Never rewrites an ADR's decision — an ADR that looks superseded by the code is
   a finding for team-lead/architect, not an edit spec-sync makes itself.

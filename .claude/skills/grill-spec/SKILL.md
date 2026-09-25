@@ -94,7 +94,7 @@ runs no matter how many blocking findings round 2 turns up.
 ## Mode and round detection
 
 1. **Mode.**
-   - Path under `docs/internal/architecture/ADR-*.md` (or the input is
+   - Path under `docs/internal/architecture/ADR-*.md` (or the input is # agent-guard: allow
      plainly an ADR — `## Context` / `## Decision` / `## Consequences`
      structure, `Status:`/`Date:`/`Deciders:` header) -> **ADR mode**.
    - Path under `docs/internal/specs/*-spec.md`, or content with a
@@ -126,7 +126,7 @@ Do not ask the user questions in this phase — read.
 4. Read `docs/internal/architecture/AS-IS-architecture.md` for the parts the
    document touches — this is the code-verified as-is; code wins over docs
    on any disagreement.
-5. Skim relevant `docs/internal/architecture/ADR-*.md` titles for decisions
+5. Skim relevant `docs/internal/architecture/ADR-*.md` titles for decisions # agent-guard: allow
    the document might contradict or duplicate.
 6. If the document changes wire types: read `contracts/openapi.yaml`,
    `contracts/asyncapi.yaml`, `contracts/components/schemas/` for the
@@ -226,8 +226,8 @@ Internal contradictions (two requirements or two scenarios that disagree),
 plus **external** contradiction against `docs/internal/architecture/AS-IS-architecture.md`
 and any `ADR-*.md` the document should have checked against — including a
 document that quietly reintroduces a retired surface (root `CLAUDE.md`,
-"Retired surfaces — do NOT reintroduce": Command Center, raw cron UI, JPEG
-screencast fallback, goal confirm-gate, fail-closed tool-policy backfill,
+"Retired surfaces — do NOT reintroduce": Command Center, raw cron UI, JPEG # agent-guard: allow
+screencast fallback, goal confirm-gate, fail-closed tool-policy backfill, # agent-guard: allow
 goal-ending-on-lost-UI watchdog). Verify code claims with GitNexus/Grep
 before accepting them (do not assume the document is right that some
 function "already does X").
@@ -294,7 +294,7 @@ For every screen or component the document adds or changes:
   not just a component inventory?
 - Touch and narrow-screen behaviour addressed where the surface is
   reachable outside desktop?
-- Does a journey step silently assume a retired surface (Command Center,
+- Does a journey step silently assume a retired surface (Command Center, # agent-guard: allow
   raw cron display) or a screen that does not exist?
 
 ### Lens 9 — Accessibility and keyboard
@@ -415,10 +415,10 @@ triggers another grill round — the founder decides the disposition.
 
 1. Write the report next to the input document, in `docs/internal/specs/`
    for a spec or `docs/internal/architecture/` for an ADR — **never**
-   `docs/plan/`, `docs/specs/`, or `docs/internal/plan/`:
+   `docs/plan/`, `docs/specs/`, or `docs/internal/plan/`: # agent-guard: allow
    - Spec mode round 1: `docs/internal/specs/<name>-spec-review.md`
    - Spec mode round 2: `docs/internal/specs/<name>-spec-review-round2.md`
-   - ADR mode: `docs/internal/architecture/ADR-NNN-<title>-review.md`
+   - ADR mode: `docs/internal/architecture/ADR-NNN-<title>-review.md` # agent-guard: allow
 2. Present the executive summary and verdict.
 3. List every CRITICAL and MAJOR finding with ID and one-line description.
 4. State the concrete next action, using real paths, never placeholders:
@@ -454,7 +454,7 @@ triggers another grill round — the founder decides the disposition.
    ```
    Verdict: <BLOCK|REVISE|PASS>
 
-   Review written to: docs/internal/architecture/ADR-NNN-<title>-review.md
+   Review written to: docs/internal/architecture/ADR-NNN-<title>-review.md # agent-guard: allow
 
    This is the ADR's one fixed grill round. Next: team-lead interviews the
    founder on "Questions for the founder", then architect makes the one

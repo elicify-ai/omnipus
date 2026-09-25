@@ -98,7 +98,7 @@ skim, do not rely on file summaries or commit messages.
 
 **0d. Get the test result from CI, not from a local full run.** This repo's rule
 (`omnipus-shared-rules` rule 2, root `CLAUDE.md` "Build, test, and quality gates"): never run
-an untagged or whole-repo Go build or test locally -- `go test ./...` OOM-kills this
+an untagged or whole-repo Go build or test locally -- `go test ./...` OOM-kills this # agent-guard: allow
 environment, and the build tags (`goolm,stdjson`) are mandatory or `pkg/channels/matrix`
 fails to even compile. Read the CI run for the branch (`gh run view --log-failed`, or the
 cluster log parsed for `RESULT:`/`GATE FAILURE(S)` lines per `deploy/ci-worker/CLAUDE.md`)
