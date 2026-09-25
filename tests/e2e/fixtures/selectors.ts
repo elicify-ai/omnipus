@@ -171,6 +171,66 @@ export const tokenCounter = (page: Page) =>
   page.locator('[data-testid="session-token-counter"]');
 
 /**
+ * Dismiss any modal dialog-overlay left over from earlier state, and keep
+ * dismissing until none remains. No-op (and instantly so) when no dialog is
+ * open — the poll's first probe already reads 0.
+ *
+ * Why this exists (CI run 36123574726, job "E2E — llm-agents"): a delegated
+ * child's `bash` call can raise an ADR-092 Auto filesystem/network pre-flight
+ * escalation ask (pkg/tools/shell_permission_mode.go::requestPreflightApproval).
+ * Unattended CI never answers it, so it sits pending for the full
+ * defaultToolApprovalTimeout — 600s (pkg/gateway/gateway.go:88). While it is
+ * pending, ToolApprovalModal rehydrates it on EVERY fresh page load —
+ * reconcileWithSessionState (src/store/toolApproval.ts) rebuilds the queue
+ * entry from the session_state snapshot (as a reconnect stub when the ask
+ * predates the page) — and that Radix dialog-overlay intercepts every pointer
+ * event on the page. Observed cost: 579 blocked click retries across a full
+ * 300s budget, then `Test timeout of 300000ms exceeded` at selectAgent
+ * (subagent.spec.ts test (a), attempt 1 of the same run).
+ *
+ * Escape is the dismissal that STICKS: while an approval is live the modal
+ * maps Escape to Deny (the safe default — ToolApprovalModal.tsx
+ * ::handleDismissRequest), which resolves the approval server-side so the
+ * next session_state snapshot cannot put the card back. Tab-local dismissal
+ * (dequeue) does not have that property — the next snapshot resurrects the
+ * card as a stub.
+ *
+ * The check is poll-shaped, not one-shot, for two reasons:
+ *   1. The rehydrating session_state frame can land after goto('/') returns;
+ *      a single count() check races it and misses. CI run 36123574726
+ *      attempt 3 shows a pending ask expiring at 11:27:30 with NO deny ever
+ *      recorded — no page ever dismissed it, despite the steered-session
+ *      spec's one-shot guard having run at that attempt's start.
+ *   2. Approvals QUEUE behind the visible card ("+N more"). One Escape may
+ *      reveal the next card; the loop presses again until the overlay is
+ *      gone, bounded by the timeout.
+ *
+ * Escape is pressed ONLY while an overlay is actually present: a bare Escape
+ * with no dialog open cancels a streaming chat turn (the behaviour
+ * cancel-cross-channel.spec.ts T23 pins), which must never happen here.
+ */
+export const dismissStaleDialogOverlay = async (page: Page): Promise<void> => {
+  const overlay = page.locator('[data-testid="dialog-overlay"]');
+  await expect
+    .poll(
+      async () => {
+        if ((await overlay.count()) > 0) {
+          await page.keyboard.press('Escape');
+        }
+        return overlay.count();
+      },
+      // Generous enough to drain a short queue of stacked approvals; far
+      // below any test budget, and free (instant) when there is nothing to
+      // clear.
+      { timeout: 15_000, intervals: [250, 500, 1_000, 2_000, 4_000] },
+    )
+    // A leftover modal overlay must be dismissable — it blocks every click
+    // beneath it, so leaving one up converts every later click assertion
+    // into a slow timeout instead of a clear failure.
+    .toBe(0);
+};
+
+/**
  * Switch the active chat agent via the composer's agent picker.
  *
  * Delegate-dependent E2E specs must run against a general-purpose task agent
@@ -180,8 +240,13 @@ export const tokenCounter = (page: Page) =>
  *
  * Reuses the established picker pattern from chat.spec.ts (open menu →
  * click menuitem → assert the picker label updated).
+ *
+ * Clears any stale dialog-overlay FIRST: a rehydrated tool-approval dialog
+ * (see dismissStaleDialogOverlay) intercepts the picker click — this exact
+ * failure blocked subagent.spec.ts (a) in CI run 36123574726.
  */
 export const selectAgent = async (page: Page, name: string | RegExp = /Jim/i) => {
+  await dismissStaleDialogOverlay(page);
   const picker = agentPicker(page);
   await picker.waitFor({ state: 'visible', timeout: 15_000 });
   await picker.click();
