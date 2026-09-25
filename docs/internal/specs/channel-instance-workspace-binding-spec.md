@@ -2,7 +2,7 @@
 
 - **Source ADR:** [ADR-029](../architecture/ADR-029-channel-instance-workspace-binding.md) (Proposed, grill-spec rounds 1–3, 0 CRITICAL)
 - **Date:** 2026-07-02
-- **Release phase:** v0.3
+- **Release phase:** was v0.3 (the binding shipped on the v0.1.1 line; the v0.3 release label was retired 2026-09-25)
 - **Scope decision (operator-confirmed):** **Full feature** — routing/binding/UX slice **and** multi-instance (N-per-type). Binding model: **1 instance → 1 workspace → 1 mandatory member agent** (a workspace may own many instances; unbound instances retain today's default routing). Drift policy: **drop + alert** (never global default).
 - **Status:** Revised after grill-spec round 1 (review: `…-spec-review.md`; 0 CRITICAL, 8 MAJOR + minors folded in, all re-verified against source). Ready for `/taskify`.
 - **Locked decisions (were deferred; grill-spec required locking now):**
@@ -42,7 +42,7 @@ Bind each channel **instance** to exactly one **workspace**, route its inbound t
 - Constraining handoff/delegation targets to the instance's workspace (delegation graph unchanged).
 - Grouped session UI / memory-room propagation of `workspace_id` (only the attach is in scope).
 - Queue-and-retry drift (drop+alert chosen for v1).
-- Back-compat migration (v0.3 fresh-build).
+- Back-compat migration (fresh-build; the v0.3 label was retired 2026-09-25).
 
 ### Constraints
 - Single Go binary, pure Go, no new runtime deps.
@@ -659,7 +659,7 @@ New regression tests: `TestResolveMessageRoute_Unbound_DefaultUnchanged` (#11), 
 | A-3 | UI for the drift operator alert (toast? channels-screen badge? audit only?) | Audit log + a channels-screen warning badge; no blocking modal | Accepted assumption; refine in frontend task. |
 | A-4 | Whether `default_agent_id` without `workspace_id` remains legal (unbound legacy) | Yes — unbound path preserved (default routing) | Accepted (US-5 non-behavior). |
 | A-5 | Rename semantics surfaced in UI (or delete+create only) | Delete+create only; no in-place rename control in v1 | Accepted assumption (US-10/AC-3). |
-| A-6 | Session-key change impact on existing transcripts (migration) | v0.3 fresh-build → no migration; new key format forward-only | Accepted (v0.3 constraint). |
+| A-6 | Session-key change impact on existing transcripts (migration) | fresh-build → no migration; new key format forward-only | Accepted (fresh-build constraint). |
 
 These are flagged for the user/`/grill-spec`; A-1 and A-2 are Gate-0 decisions that block implementation start but not spec approval.
 

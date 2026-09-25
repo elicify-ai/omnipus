@@ -1,5 +1,7 @@
 # Spec: Context paging — sliding-window + recall (replaces reactive compaction)
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Source ADR:** `docs/internal/architecture/ADR-028-context-paging-sliding-window-recall.md` (rev. 3, post re-grill)
 - **Status:** Draft for `/grill-spec` → `/taskify` → implement
 - **Priority:** P0 (hottest path — every agent turn)

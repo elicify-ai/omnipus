@@ -1,4 +1,6 @@
 # Spec review — ADR-067 knowledge base and render-first preview (adversarial grill, pass #4)
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 
 - **Reviewed:** `docs/internal/specs/adr-067-knowledge-base-and-preview-spec.md` (Draft, 1,998 lines, 112 requirements)
 - **Prior passes:** [round 1](adr-067-knowledge-base-and-preview-spec-review.md) (BLOCK — 5C/21M) · [round 2](adr-067-knowledge-base-and-preview-spec-review-round2.md) (BLOCK — 5C/18M) · [round 3](adr-067-knowledge-base-and-preview-spec-review-round3.md) (BLOCK — 4C/21M/13m/6O)

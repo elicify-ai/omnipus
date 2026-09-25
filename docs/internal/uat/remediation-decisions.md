@@ -1,4 +1,6 @@
 # Post-UAT Remediation — Decision Log
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 
 **Started:** 2026-06-20 · **Owner:** Daniel Piatkowski · **Source:** `uat-report-agent-features-2026-06-20.md`
 **Status:** living document — we are walking every decision before any implementation.

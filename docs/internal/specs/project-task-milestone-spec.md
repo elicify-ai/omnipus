@@ -39,12 +39,12 @@ This spec extends the Level 1 foundation with:
 
 ### Explicitly out of scope
 
-- **Subtasks / dependency graph** — deferred to v0.3. `TaskDetailPanel` MUST NOT render a sub-tasks section for GTD tasks. The `subtasks` query in the existing `TaskDetailPanel.tsx` is wired to workflow tasks and MUST NOT be ported.
-- **Room topology (v0.3 sandbox redesign)** — no filesystem directories per project, no per-room `TaskStore`. Level 1 flat storage is preserved.
+- **Subtasks / dependency graph** — deferred (no release scheduled). `TaskDetailPanel` MUST NOT render a sub-tasks section for GTD tasks. The `subtasks` query in the existing `TaskDetailPanel.tsx` is wired to workflow tasks and MUST NOT be ported.
+- **Room topology (the sandbox redesign; the v0.3 label is retired)** — no filesystem directories per project, no per-room `TaskStore`. Level 1 flat storage is preserved.
 - **Cross-project tasks** — a task belongs to exactly one project (or none).
-- **Memory scoping to projects** — v0.3 only.
-- **Multi-user / tenant RBAC per project** — v0.3 only.
-- **Subtask drag-and-drop reassignment** — v0.3 only.
+- **Memory scoping to projects** — deferred (no release scheduled).
+- **Multi-user / tenant RBAC per project** — deferred (no release scheduled).
+- **Subtask drag-and-drop reassignment** — deferred (no release scheduled).
 
 ---
 
@@ -604,7 +604,7 @@ The project detail page shows a header with project name, description, core team
 
 - The system MUST NOT allow humans to set `status: "active"` via the REST API without an agent-context header.
 - The system MUST NOT delete tasks when a milestone is deleted — only clear the `milestone_id` FK.
-- The system MUST NOT implement subtasks, parent_task_id, or task dependency graphs — these are v0.3. The task detail panel MUST NOT show a sub-tasks section for GTD tasks.
+- The system MUST NOT implement subtasks, parent_task_id, or task dependency graphs — these are deferred (no release scheduled). The task detail panel MUST NOT show a sub-tasks section for GTD tasks.
 - The system MUST NOT create filesystem directories per project (no room topology). Milestones are JSON files in `~/.omnipus/milestones/`, not per-project subdirectories.
 - The system MUST NOT allow cross-project milestone assignments (`milestone.project_id != task.project_id` is rejected).
 - The system MUST NOT expose `session_id` as a settable field in the `BoardTaskUpdateRequest` schema (it is set exclusively through the agent-context path).
@@ -1307,7 +1307,7 @@ All items below are either resolved or acknowledged. Implementers MUST NOT make 
 | # | Item | Resolution |
 |---|---|---|
 | AW-1 | How does the gateway obtain the Inbox project ID to use in the `/tasks` redirect? | The SPA reads `GET /api/v1/projects` (already loaded), filters for `is_default: true`, and uses that project's `id`. The TanStack Router redirect component performs this lookup. |
-| AW-2 | Should `active` status be settable by humans who provide the agent-context header manually? | The header is accepted only alongside a valid bearer token. Any authenticated user can provide the header. MVP does not distinguish "user" from "agent" at the token level. Implementers should document this and flag for a follow-up: agent tokens vs human tokens is a v0.3 concern. |
+| AW-2 | Should `active` status be settable by humans who provide the agent-context header manually? | The header is accepted only alongside a valid bearer token. Any authenticated user can provide the header. MVP does not distinguish "user" from "agent" at the token level. Implementers should document this and flag for a follow-up: agent tokens vs human tokens is a deferred concern (no release scheduled). |
 | AW-3 | Does `PUT /api/v1/board/tasks/{id}` with `{session_id: "x"}` from a human (no agent-context) fail, succeed, or silently ignore? | The `session_id` field is NOT included in `BoardTaskUpdateRequest` schema. The OpenAPI schema excludes it. The handler has no path to set it from a human request. It can only be set via the agent-context path. |
 | AW-4 | Where are milestones stored — per-project directory or flat global directory? | Flat global directory: `~/.omnipus/milestones/{id}.json`. The `project_id` field on the milestone is the FK. This matches the flat storage model of Level 1. No per-project subdirectories. |
 | AW-5 | What happens to a task's `milestone_id` when the task is moved to a different project? | The `milestone_id` must be cleared (set to empty string) if the new project differs from the milestone's `project_id`. The handler enforces this: if `project_id` and `milestone_id` are both present in the PUT request, FK validation runs. If project changes but milestone is not cleared in the request, the server checks and returns 400 if the old milestone does not belong to the new project. |
@@ -1319,12 +1319,12 @@ All items below are either resolved or acknowledged. Implementers MUST NOT make 
 
 The following items are explicitly deferred and MUST NOT be implemented in this feature:
 
-- **Subtasks and dependency graphs**: Deferred to v0.3. `TaskDetailPanel` for GTD tasks MUST NOT include any subtask UI. The `fetchSubtasks` query from the original `TaskDetailPanel.tsx` MUST NOT be ported.
-- **Room topology and per-project filesystem roots**: This is the v0.3 redesign described in `docs/internal/design/tasks-redesign-2026-05.md` and `docs/internal/design/sandbox-redesign-2026-05.md`. All milestone and task storage is flat (`~/.omnipus/milestones/`, `~/.omnipus/tasks/`).
-- **Cross-project task dependencies**: A task belongs to exactly one project. Cross-project promotion is a v0.3 concept.
-- **Memory scoping to projects**: The v0.3 memory redesign.
-- **Git-aware project directories**: v0.3 only.
-- **Multi-user RBAC per project**: v0.3 only.
+- **Subtasks and dependency graphs**: Deferred (no release scheduled). `TaskDetailPanel` for GTD tasks MUST NOT include any subtask UI. The `fetchSubtasks` query from the original `TaskDetailPanel.tsx` MUST NOT be ported.
+- **Room topology and per-project filesystem roots**: This is the Workspaces/sandbox redesign described in `docs/internal/design/tasks-redesign-2026-05.md` and `docs/internal/design/sandbox-redesign-2026-05.md`. All milestone and task storage is flat (`~/.omnipus/milestones/`, `~/.omnipus/tasks/`).
+- **Cross-project task dependencies**: A task belongs to exactly one project. Cross-project promotion is a deferred concept (no release scheduled).
+- **Memory scoping to projects**: The Workspaces memory redesign.
+- **Git-aware project directories**: deferred (no release scheduled).
+- **Multi-user RBAC per project**: deferred (no release scheduled).
 - **Drag-and-drop Kanban reassignment**: Not specified. If implemented, it is a bonus — not a requirement of this spec.
 - **Session deletion cleanup of project_session_links.jsonl**: Sessions are never deleted in this feature. If session deletion is added later, it must clean up link entries at that time (see UQ-3 in Level 1 spec).
 - **Gantt chart or timeline view**: Not in scope.
@@ -1387,7 +1387,7 @@ The following items are explicitly deferred and MUST NOT be implemented in this 
 
 ## Assumptions
 
-- `X-Omnipus-Agent-Context: true` header is the sole mechanism for distinguishing agent-originated status transitions in this feature. Agent-specific tokens are a v0.3 concern.
+- `X-Omnipus-Agent-Context: true` header is the sole mechanism for distinguishing agent-originated status transitions in this feature. Agent-specific tokens are a deferred concern (no release scheduled).
 - Milestone storage is flat (`~/.omnipus/milestones/*.json`), consistent with the Level 1 flat-storage model. No per-project subdirectory.
 - `priority: 0` in a stored legacy task file (without the field) is normalized to `3` at read time without a file rewrite. The file is only rewritten if the task is explicitly updated.
 - The Inbox auto-creation check happens in `gateway.Start()`, before the HTTP listener opens. It is synchronous and blocking — if it fails, a WARN is logged but the gateway continues.
