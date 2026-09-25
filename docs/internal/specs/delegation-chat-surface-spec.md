@@ -1,5 +1,7 @@
 # Delegation chat surface — two pills, and delegation as sentences
 
+**Status:** Implemented
+
 ## Summary
 
 Delegation is currently legible only as tool-call badges. A parent that launches two
