@@ -34,7 +34,7 @@
 #     3. OMNIPUS_INTEGRATION_BRANCH   — the coordination-ledger convention
 #                                        scripts/hooks/pre-push-ledger-check
 #                                        already reads the same way
-#     4. main                         — last-resort fallback; this repo's
+#     4. push event: github.event.before; otherwise WARNING + pass (no main fallback) —
 #                                        actual default branch today (see
 #                                        git status), not a policy literal
 #
@@ -129,8 +129,21 @@ fi
 if [ -z "$BASE_REF" ] && [ -n "${OMNIPUS_INTEGRATION_BRANCH:-}" ]; then
   BASE_REF="$OMNIPUS_INTEGRATION_BRANCH"
 fi
+# Push events (e.g. a push to the integration branch) have no PR base: check
+# only the specs that push changed, by comparing against the commit the branch
+# pointed at before the push (github.event.before). Never fall back to `main`:
+# on a release branch that would count every spec of the release as "new".
+if [ -z "$BASE_REF" ] && [ "${GITHUB_EVENT_NAME:-}" = "push" ] && [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "${GITHUB_EVENT_PATH}" ]; then
+  PUSH_BEFORE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("before",""))' "$GITHUB_EVENT_PATH" 2>/dev/null || true)"
+  case "$PUSH_BEFORE" in
+    ""|0000000000000000000000000000000000000000) ;;
+    *) BASE_REF="$PUSH_BEFORE" ;;
+  esac
+fi
 if [ -z "$BASE_REF" ]; then
-  BASE_REF="main"
+  echo "check-spec-status: WARNING — no comparison base (not a pull request, not a push with a previous commit, and neither CHECK_SPEC_STATUS_BASE_REF nor OMNIPUS_INTEGRATION_BRANCH is set) — nothing is checked this run. This never widens to scanning every existing spec." >&2
+  echo "check-spec-status: OK — 0 findings (no base, fail-open by design)"
+  exit 0
 fi
 
 # ─── Resolve the base ref to a commit, fetching shallowly if needed ────────

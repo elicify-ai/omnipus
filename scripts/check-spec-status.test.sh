@@ -269,6 +269,31 @@ assert_exit_code "not-a-repo-exit" 2 "$EXIT_CODE"
 
 # --- Summary -----------------------------------------------------------------
 
+# ── Self-contained cases for base resolution without a PR base ──
+BR=$(mktemp -d)
+git -C "$BR" init --quiet --initial-branch=main
+git -C "$BR" config user.email t@example.invalid; git -C "$BR" config user.name t
+mkdir -p "$BR/docs/internal/specs"; echo "x" > "$BR/README.md"
+git -C "$BR" add -A; git -C "$BR" commit --quiet -m base
+BEFORE_SHA=$(git -C "$BR" rev-parse HEAD)
+printf '# New spec without a status line\n' > "$BR/docs/internal/specs/new-thing-spec.md"
+git -C "$BR" add -A; git -C "$BR" commit --quiet -m "add spec"
+
+# no base at all -> WARNING + pass (never a main fallback)
+OUT=$(cd "$BR" && env -u GITHUB_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH -u CHECK_SPEC_STATUS_BASE_REF -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH REPO_ROOT="$BR" bash "$LINT_SCRIPT" 2>&1); RC=$?
+if [ $RC -eq 0 ] && printf '%s' "$OUT" | grep -q "no base, fail-open"; then echo "PASS [no-base-fail-open]"; PASS=$((PASS+1)); else echo "FAIL [no-base-fail-open]"; FAIL=$((FAIL+1)); ERRORS+=("no-base-fail-open: rc=$RC $OUT"); fi
+
+# push event -> compares against github.event.before, so the spec added by the push is checked and fails
+EVT=$(mktemp); printf '{"before":"%s"}' "$BEFORE_SHA" > "$EVT"
+OUT=$(cd "$BR" && env -u GITHUB_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH -u CHECK_SPEC_STATUS_BASE_REF REPO_ROOT="$BR" GITHUB_EVENT_NAME=push GITHUB_EVENT_PATH="$EVT" bash "$LINT_SCRIPT" 2>&1); RC=$?
+if [ $RC -ne 0 ] && printf '%s' "$OUT" | grep -q "new-thing-spec.md"; then echo "PASS [push-before-base-catches-new-spec]"; PASS=$((PASS+1)); else echo "FAIL [push-before-base-catches-new-spec]"; FAIL=$((FAIL+1)); ERRORS+=("push-before-base: rc=$RC $OUT"); fi
+
+# push event creating the branch (before = all zeros) -> WARNING + pass
+printf '{"before":"0000000000000000000000000000000000000000"}' > "$EVT"
+OUT=$(cd "$BR" && env -u GITHUB_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH -u CHECK_SPEC_STATUS_BASE_REF REPO_ROOT="$BR" GITHUB_EVENT_NAME=push GITHUB_EVENT_PATH="$EVT" bash "$LINT_SCRIPT" 2>&1); RC=$?
+if [ $RC -eq 0 ] && printf '%s' "$OUT" | grep -q "no base, fail-open"; then echo "PASS [push-new-branch-fail-open]"; PASS=$((PASS+1)); else echo "FAIL [push-new-branch-fail-open]"; FAIL=$((FAIL+1)); ERRORS+=("push-new-branch: rc=$RC $OUT"); fi
+rm -rf "$BR" "$EVT"
+
 echo ""
 echo "─────────────────────────────────────────"
 echo "Results: ${PASS} passed, ${FAIL} failed"
