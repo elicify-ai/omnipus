@@ -24,11 +24,14 @@ func TestReplay_StatusPollsDoNotSynthesizeSpawnSpans(t *testing.T) {
 		"task":     "draft the note",
 		"agent_id": "general-purpose",
 	}, map[string]any{"text": `{"session_id":"session_child","state":"running","generation":1}`})
-	entries := []session.TranscriptEntry{
+	// Capacity 4: the three entries below plus the single polling entry appended
+	// after the loop. prealloc flags the literal form here.
+	entries := make([]session.TranscriptEntry, 0, 4)
+	entries = append(entries,
 		assistantEntry("delegating", "jim", run),
 		followUpStartEntry(callID+":start", "span_"+callID, callID),
 		followUpEndEntry(callID+":end", "span_"+callID, callID, "success"),
-	}
+	)
 	pollsOnTranscript := 0
 	pollCalls := make([]session.ToolCall, 0, polls)
 	for i := 1; i <= polls; i++ {
