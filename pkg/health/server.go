@@ -20,7 +20,16 @@ type Server struct {
 	checks     map[string]Check
 	startTime  time.Time
 	reloadFunc func() error
-	degradedFn func() (bool, string) // optional; returns (isDegraded, reason)
+	// reloadAuthorizer, when non-nil, is consulted by reloadHandler before
+	// reloadFunc runs: a request it rejects gets 401 and never reaches the
+	// reload callback. Nil means "no authorization wired" — the pre-#276
+	// legacy behaviour, kept so the health package's own handler unit tests
+	// (which drive reloadHandler directly with no authorizer) and any
+	// non-gateway embedder are unaffected. The gateway's production mount
+	// (channels.Manager.SetupHTTPServer) ALWAYS wires it; that is the only
+	// place /reload is served in the shipped binary.
+	reloadAuthorizer func(*http.Request) bool
+	degradedFn       func() (bool, string) // optional; returns (isDegraded, reason)
 	// sandboxInfoFn, when non-nil, returns the structured sandbox state
 	// the /health handler embeds in the response under the "sandbox" key.
 	// Sprint-J FR-J-008 / FR-J-016 require the status endpoint to report
@@ -149,6 +158,19 @@ func (s *Server) SetReloadFunc(fn func() error) {
 	s.reloadFunc = fn
 }
 
+// SetReloadAuthorizer wires the POST /reload authorization gate (issue #276).
+// The function receives the inbound request and returns true only for a
+// caller allowed to trigger a config reload; a false return makes
+// reloadHandler answer 401 WITHOUT invoking the reload callback. Nil (the
+// zero value) preserves the legacy, unauthenticated behaviour for direct
+// embedders; the gateway's production mount always sets this — see
+// channels.Manager.SetupHTTPServer.
+func (s *Server) SetReloadAuthorizer(fn func(*http.Request) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reloadAuthorizer = fn
+}
+
 // SetDegradedFunc sets a function that the /health handler calls to determine
 // whether the service is in a degraded state (e.g., after a failed config
 // reload). When the function returns (true, reason), /health responds with
@@ -212,6 +234,24 @@ func (s *Server) reloadHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed, use POST"})
+		return
+	}
+
+	// Issue #276: when an authorizer is wired (the gateway's production
+	// mount always wires one), a rejected request gets 401 and the reload
+	// callback NEVER runs. Nil authorizer preserves the legacy open
+	// behaviour for direct embedders — the health package's own handler
+	// tests drive this handler with no authorizer and must keep passing.
+	// Deliberately BEFORE the reloadFunc==nil check: an unauthorized caller
+	// learns nothing about whether a reload is configured. Read under the
+	// lock — the setter writes it under the same lock (go-race gate).
+	s.mu.RLock()
+	authorizer := s.reloadAuthorizer
+	s.mu.RUnlock()
+	if authorizer != nil && !authorizer(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
 		return
 	}
 
