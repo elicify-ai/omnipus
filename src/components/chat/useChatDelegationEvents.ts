@@ -6,8 +6,6 @@
  * itself is not reimplemented here.
  */
 import { useDelegationEvents } from '@/hooks/useDelegationEvents'
-import type { DelegationEvent } from '@/lib/delegationEvents.types'
+import type { UseDelegationEvents } from '@/lib/delegationEvents.types'
 
-export function useChatDelegationEvents(sessionId: string | null | undefined): DelegationEvent[] {
-  return useDelegationEvents(sessionId)
-}
+export const useChatDelegationEvents: UseDelegationEvents = (sessionId) => useDelegationEvents(sessionId)
