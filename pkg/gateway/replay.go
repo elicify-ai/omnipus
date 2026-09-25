@@ -500,6 +500,11 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 	if entry.Type == session.EntryTypeCompaction {
 		return streamReplayStateContinue, nil
 	}
+	// The steering wake bookmark stays in the transcript for the wake
+	// path. Replay must not turn it into a chat line.
+	if isSteeringConsumedMarker(entry) {
+		return streamReplayStateContinue, nil
+	}
 
 	// A canceled turn replays as role:"turn_canceled". The frame build
 	// lives in dispatchTurnCancelled so this function stays under the
@@ -1020,35 +1025,11 @@ func (sr *streamReplayState) classifyToolCall(ei int, entry session.TranscriptEn
 		sr.effectiveAgentID = sr.lastSeenAgentID
 	}
 
-	// isDelegateSpawnCall identifies a spawn/delegate/create_task tool call
-	// (the two legacy names checked mirror buildSpawnIDsWithChildren's own
-	// ADR-036 rename note; create_task added by ADR-091 D7/I-4 — "learns
-	// create_task alongside delegate", both fronts sharing one bracketing
-	// rule since both are steered sessions now). Used below both to
-	// resolve span-level agent-id and to gate the still-active liveness
-	// check — a terminal snapshot is only ever withheld for THIS call
-	// kind, never for an ordinary tool call.
-	isDelegateSpawnCall := tc.Tool == "spawn" || tc.Tool == "delegate" || tc.Tool == "create_task"
-
-	// Finding C (A-I4 round 4): every spawn/delegate call gets a
-	// subagent_start/subagent_end bracket on replay, matching live
-	// unconditionally — pkg/agent/subturn.go's spawnSubTurn always
-	// fires EventKindSubTurnSpawn/EventKindSubTurnEnd for a delegate
-	// call regardless of how many tool calls the CHILD itself made,
-	// so pkg/gateway/websocket.go's eventForwarder always emits a
-	// live subagent_start/subagent_end pair too. This used to be
-	// gated on spawnIDsWithChildren (spans requiring at least one
-	// recorded nested child tool call), which was wrong as the gate for
-	// whether to bracket at all: a delegate whose child
-	// replies directly with zero tool calls (a common case — many
-	// delegated tasks are simple, no-tool Q&A, and it's also exactly
-	// what a child interrupted before its first tool call looks
-	// like) got NO span bracket whatsoever on reload, silently
-	// dropping the nested "label, 0 steps, status, duration"
-	// progress row live always shows, even though the outer call's
-	// own Status/DurationMS are fully known and persisted either
-	// way. isDelegateSpawnCall (above) is the correct test because it
-	// does not require any child tool calls to exist.
+	// delegateCallOpensSpawnSpan is the bracket gate. A real launch still
+	// brackets when the child made no tool calls. A poll does not, and
+	// neither does a run refused before any child existed. stillActive is
+	// withheld only for a call this gate accepts.
+	isDelegateSpawnCall := sr.delegateCallOpensSpawnSpan(tc)
 	sr.isSpawnParent = isDelegateSpawnCall
 
 	// spanID is generation 1 of the shared rule (agent.SubagentSpanID).

@@ -65,6 +65,101 @@ func (sr *streamReplayState) spanReplayTerminal(callID string, generation int) s
 	return spanReplaySilent
 }
 
+// delegateCallOpensSpawnSpan reports whether replaying this tool call should
+// bracket a child span. A poll does not. A launch that was refused or failed
+// before any child existed does not. spawn and create_task are launch tools.
+// On delegate, only action "run" launches; an omitted action is run, which is
+// the tool's own default. follow_up is not one of these: the tool names that
+// action "follow_up", and its chat line is the persisted later generation on
+// the original run's call, not a second span built from the follow_up call.
+func (sr *streamReplayState) delegateCallOpensSpawnSpan(tc session.ToolCall) bool {
+	switch tc.Tool {
+	case "spawn", "create_task":
+		return !sr.launchRefusedWithoutChild(tc)
+	case "delegate":
+		if !delegateActionLaunchesChild(tc) {
+			return false
+		}
+		return !sr.launchRefusedWithoutChild(tc)
+	default:
+		return false
+	}
+}
+
+// delegateActionLaunchesChild is true for a delegate call whose action starts
+// a child. The tool's execute treats a missing or blank action as "run".
+func delegateActionLaunchesChild(tc session.ToolCall) bool {
+	if tc.Parameters == nil {
+		return true
+	}
+	raw, present := tc.Parameters["action"]
+	if !present || raw == nil {
+		return true
+	}
+	action, ok := raw.(string)
+	if !ok {
+		return false
+	}
+	switch strings.TrimSpace(action) {
+	case "", "run":
+		return true
+	default:
+		return false
+	}
+}
+
+// launchRefusedWithoutChild is an error or denial that never created a child.
+// A persisted start, a nested child tool call, or a session id in the result
+// means a child existed, so a legacy launch that failed after starting still
+// brackets. Success, interrupted, and parked are not refusals: a legacy
+// launch with no persisted start has only the tool call as its record.
+func (sr *streamReplayState) launchRefusedWithoutChild(tc session.ToolCall) bool {
+	switch tc.Status {
+	case "error", "denied":
+	default:
+		return false
+	}
+	callID := string(tc.ID)
+	if callID != "" && sr.persistedSubagentStartSpans[agent.SubagentSpanID(callID, 1)] {
+		return false
+	}
+	if callID != "" && sr.spawnIDsWithChildren[callID] {
+		return false
+	}
+	return !toolCallNamesChildSession(tc)
+}
+
+// toolCallNamesChildSession is the child id a successful delegate run stores.
+// Production puts it in the result text as JSON; a top-level session_id key
+// is accepted too.
+func toolCallNamesChildSession(tc session.ToolCall) bool {
+	if tc.Result == nil {
+		return false
+	}
+	if sid, ok := tc.Result["session_id"].(string); ok && strings.TrimSpace(sid) != "" {
+		return true
+	}
+	text, _ := tc.Result["text"].(string)
+	return strings.Contains(text, `"session_id"`)
+}
+
+// isSteeringConsumedMarker is the wake bookmark processSteeredSystemWake and
+// writeSteeringConsumedMarker append once a woken turn is certain to run.
+// The text is "consumed" plus one message id. Other code reads that line from
+// the transcript, so replay leaves the entry in place and simply does not
+// emit it. A system line with more than one word after "consumed" is not this
+// bookmark.
+func isSteeringConsumedMarker(entry session.TranscriptEntry) bool {
+	if entry.Type != session.EntryTypeSystem && entry.Role != "system" {
+		return false
+	}
+	rest, ok := strings.CutPrefix(entry.Content, "consumed ")
+	if !ok || rest == "" || strings.ContainsAny(rest, " \t\n\r") {
+		return false
+	}
+	return true
+}
+
 // delegateCallStillActive reports that the latest generation with a saved
 // start is still open. A finished earlier generation does not clear it.
 func (sr *streamReplayState) delegateCallStillActive(callID string) bool {
