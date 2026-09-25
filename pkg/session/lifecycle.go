@@ -687,8 +687,16 @@ func (s *LifecycleStore) PublishChildUnderParentLock(
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("session: lifecycle: stat parent %q before child publication: %w", parentID, statErr)
 	}
-	if err := s.persistLocked(parentRec); err != nil {
-		return err
+	// ADR-093 D1: the parent line is appended ONLY in the mint case
+	// (existed == false — the steering session's first delegation). An
+	// existing parent is not rewritten: the unchanged duplicate this store
+	// used to append on every publication was the write issue #890 surfaced,
+	// and a callback that needs to change an existing parent is out of
+	// contract for this primitive (it must go through Mutate).
+	if !found {
+		if err := s.persistLocked(parentRec); err != nil {
+			return err
+		}
 	}
 	if childRec == nil {
 		return nil
@@ -704,20 +712,24 @@ func (s *LifecycleStore) PublishChildUnderParentLock(
 		_ = os.Remove(s.path(childRec.SessionID))
 		s.parentIndex.remove(childRec.SteeringSessionID(), childRec.SessionID)
 
+		// ADR-093 D1: the truncate-branch runs only in the mint case, where
+		// it removes a parent file this publication created — with no parent
+		// append (an existing parent) there is nothing on the parent to undo,
+		// and the parent's file stays byte-for-byte unchanged.
 		var rollbackErr error
-		if parentExistedOnDisk {
-			rollbackErr = os.Truncate(parentPath, parentSize)
-		} else {
-			rollbackErr = os.Remove(parentPath)
-			if errors.Is(rollbackErr, os.ErrNotExist) {
-				rollbackErr = nil
-			}
-		}
 		if !found {
+			if parentExistedOnDisk {
+				rollbackErr = os.Truncate(parentPath, parentSize)
+			} else {
+				rollbackErr = os.Remove(parentPath)
+				if errors.Is(rollbackErr, os.ErrNotExist) {
+					rollbackErr = nil
+				}
+			}
+			if rollbackErr != nil {
+				return errors.Join(err, fmt.Errorf("session: lifecycle: rollback parent %q: %w", parentID, rollbackErr))
+			}
 			s.parentIndex.remove(parentRec.SteeringSessionID(), parentRec.SessionID)
-		}
-		if rollbackErr != nil {
-			return errors.Join(err, fmt.Errorf("session: lifecycle: rollback parent %q: %w", parentID, rollbackErr))
 		}
 		return err
 	}
