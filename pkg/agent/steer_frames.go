@@ -37,6 +37,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -67,11 +68,34 @@ func (al *AgentLoop) persistSubagentEntry(parentSessionID, id, subtype string, p
 	return store.AppendTranscriptStrict(parentSessionID, entry)
 }
 
-// subagentSpanID mirrors pkg/gateway/replay.go::buildSubagentStart's own
-// span-id convention ("span_" + the originating tool-call id) so a live
-// push, a replay and a cold load all key the same span the same way.
-func subagentSpanID(originCallID string) string {
+// SubagentSpanID is the one span-id rule for a steered child's generation.
+// The live push (this file) and replay (pkg/gateway/replay.go) both call it,
+// so a follow-up watched live and the same session cold-loaded name the span
+// the same way.
+//
+// Generation 1, and anything below 2, returns the bare "span_<originCallID>".
+// Spans already persisted before a follow-up had its own identity use that
+// form; suffixing generation 1 would orphan them. Generation N >= 2 returns
+// "span_<originCallID>_g<N>". The wire frame has no generation field — the
+// id is an opaque string — so this suffix is the whole contract.
+func SubagentSpanID(originCallID string, generation int) string {
+	if generation >= 2 {
+		return "span_" + originCallID + "_g" + strconv.Itoa(generation)
+	}
 	return "span_" + originCallID
+}
+
+// subagentBracketEntryID is the parent-transcript id of one generation's
+// subagent_start or subagent_end. Generation 1 keeps "<callID>:start" and
+// "<callID>:end", the ids already on disk. A later generation uses
+// "<callID>:g<N>:start|end", so its bracket is a new entry (it does not
+// collide with generation 1) and replay can recover N from the entry id
+// without a new wire field.
+func subagentBracketEntryID(callID, bracket string, generation int) string {
+	if generation >= 2 {
+		return fmt.Sprintf("%s:g%d:%s", callID, generation, bracket)
+	}
+	return callID + ":" + bracket
 }
 
 func (al *AgentLoop) deliverSubagentStart(parentSessionID string, childRec *session.LifecycleRecord, title string) {
@@ -79,13 +103,15 @@ func (al *AgentLoop) deliverSubagentStart(parentSessionID string, childRec *sess
 		return
 	}
 	callID := childRec.Origin.CallID
-	id := callID + ":start"
+	generation := childRec.Generation
+	id := subagentBracketEntryID(callID, "start", generation)
+	spanID := SubagentSpanID(callID, generation)
 	childID := childRec.SessionID
 	frame := generated.SubagentStartFrame{
 		Type:           string(generated.WsFrameTypeSubagentStart),
 		SessionId:      parentSessionID,
 		ChildSessionId: &childID,
-		SpanId:         subagentSpanID(callID),
+		SpanId:         spanID,
 		ParentCallId:   callID,
 		TaskLabel:      title,
 	}
@@ -105,7 +131,7 @@ func (al *AgentLoop) deliverSubagentStart(parentSessionID string, childRec *sess
 		SubTurnSpawnPayload{
 			AgentID:           childRec.AgentID,
 			Label:             childRec.SessionID,
-			SpanID:            subagentSpanID(callID),
+			SpanID:            spanID,
 			ParentSpawnCallID: session.ToolCallID(callID),
 			TaskLabel:         title,
 			SessionID:         parentSessionID,
@@ -128,11 +154,13 @@ func (al *AgentLoop) deliverSubagentEnd(parentSessionID string, childRec *sessio
 		status = SubTurnStatusParked
 	}
 	callID := childRec.Origin.CallID
-	id := callID + ":end"
+	generation := childRec.Generation
+	id := subagentBracketEntryID(callID, "end", generation)
+	spanID := SubagentSpanID(callID, generation)
 	frame := generated.SubagentEndFrame{
 		Type:      string(generated.WsFrameTypeSubagentEnd),
 		SessionId: parentSessionID,
-		SpanId:    subagentSpanID(callID),
+		SpanId:    spanID,
 		Status:    string(status),
 	}
 	parentCallID := callID
@@ -153,7 +181,7 @@ func (al *AgentLoop) deliverSubagentEnd(parentSessionID string, childRec *sessio
 		SubTurnEndPayload{
 			AgentID:           childRec.AgentID,
 			Status:            status,
-			SpanID:            subagentSpanID(callID),
+			SpanID:            spanID,
 			ParentSpawnCallID: session.ToolCallID(callID),
 			SessionID:         parentSessionID,
 		})
@@ -188,7 +216,7 @@ func (al *AgentLoop) deliverSubagentMessage(parentSessionID string, childRec *se
 		// side panel never saw it and the pill's running count stayed 0.
 		SessionId:       parentSessionID,
 		ChildSessionId:  &childID,
-		SpanId:          subagentSpanID(originCallID),
+		SpanId:          SubagentSpanID(originCallID, childRec.Generation),
 		Kind:            kind,
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 		SenderIdentity:  childRec.AgentID,
@@ -261,6 +289,15 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 		return
 	}
 	originCallID := childRec.Origin.CallID
+	// A follow-up generation (N >= 2) has its own span. The running ping is
+	// the first frame Dispatch emits for that generation, and it is the
+	// moment the generation actually starts — a queued follow-up that never
+	// runs gets no span (D10). Revival writes running and then dispatches,
+	// which writes running again; the entry-id check makes the second call
+	// a no-op so the parent transcript does not grow a duplicate start.
+	if receipt == nil && childRec.Generation >= 2 && state == string(session.LifecycleRunning) {
+		al.ensureFollowUpSpanStart(parentSessionID, childRec)
+	}
 	id := fmt.Sprintf("%s:%d:state:%s", originCallID, childRec.Generation, state)
 	if receipt != nil {
 		// A single injected round can carry more than one applied steer
@@ -281,7 +318,7 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 		// deliverSubagentStart already does.
 		SessionId:      parentSessionID,
 		ChildSessionId: &childID,
-		SpanId:         subagentSpanID(originCallID),
+		SpanId:         SubagentSpanID(originCallID, childRec.Generation),
 		State:          state,
 		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}
@@ -313,6 +350,46 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 		EventMeta{TracePath: "subagent.state", SessionKey: parentSessionID},
 		SubagentStatePayload{SessionID: parentSessionID, MessageID: id, Frame: frame},
 	)
+}
+
+// ensureFollowUpSpanStart persists and emits the subagent_start for a
+// generation N >= 2 the first time that generation is reported running.
+// Generation 1's start is publishSteeredLaunch's job; calling this for it
+// would duplicate that bracket.
+func (al *AgentLoop) ensureFollowUpSpanStart(parentSessionID string, childRec *session.LifecycleRecord) {
+	if al == nil || childRec == nil || childRec.Origin == nil || childRec.Generation < 2 {
+		return
+	}
+	entryID := subagentBracketEntryID(childRec.Origin.CallID, "start", childRec.Generation)
+	if al.parentTranscriptHasEntry(parentSessionID, entryID) {
+		return
+	}
+	title := subagentSpanTaskLabel("", childRec.Title)
+	if title == "" {
+		title = "follow-up"
+	}
+	al.deliverSubagentStart(parentSessionID, childRec, title)
+}
+
+// parentTranscriptHasEntry reports whether the parent's transcript already
+// holds entryID. A read failure answers false so the caller still tries to
+// persist — a duplicate id is noisier than a lost start, and the persist
+// error is already logged by deliverSubagentStart.
+func (al *AgentLoop) parentTranscriptHasEntry(parentSessionID, entryID string) bool {
+	store := al.GetSessionStore()
+	if store == nil || entryID == "" {
+		return false
+	}
+	entries, err := store.ReadTranscript(parentSessionID)
+	if err != nil {
+		return false
+	}
+	for i := range entries {
+		if entries[i].ID == entryID {
+			return true
+		}
+	}
+	return false
 }
 
 // deliverSteeringReceiptsForInjection is loop_run_turn.go's sole hook into

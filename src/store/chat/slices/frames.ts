@@ -289,6 +289,40 @@ function recordPendingSpanUpdate(
   return next
 }
 
+/**
+ * Lifecycle values that mean the child left the queue. `queued` does not.
+ * Names are SubagentStateFrame.state (running / needs_input / paused / completed).
+ * Kept at module scope so handleFrame's grandfathered line budget does not grow.
+ */
+const RAN_LIFECYCLE_STATES: ReadonlySet<string> = new Set(['running', 'needs_input', 'paused', 'completed'])
+
+/** Once true, stays true. A later failed / cancelled / timed_out must not clear it. */
+function stickyHasRun(previous: boolean | undefined, state: string): true | undefined {
+  if (previous === true || RAN_LIFECYCLE_STATES.has(state)) return true
+  return undefined
+}
+
+function spanWithLifecycle(
+  span: SubagentSpan,
+  state: NonNullable<SubagentSpan['lifecycleState']>,
+  createdAt: string,
+): SubagentSpan {
+  const hasRun = stickyHasRun(span.hasRun, state)
+  if (hasRun) return { ...span, lifecycleState: state, lastUpdateAt: createdAt, hasRun }
+  return { ...span, lifecycleState: state, lastUpdateAt: createdAt }
+}
+
+/** Omit hasRun when unset so a merge cannot clobber a sticky true with undefined. */
+function pendingLifecyclePatch(
+  previous: PendingSpanUpdate | undefined,
+  state: NonNullable<SubagentSpan['lifecycleState']>,
+  createdAt: string,
+): PendingSpanUpdate {
+  const hasRun = stickyHasRun(previous?.hasRun, state)
+  if (hasRun) return { lifecycleState: state, lastUpdateAt: createdAt, hasRun }
+  return { lifecycleState: state, lastUpdateAt: createdAt }
+}
+
 // #823 catch-up redesign, Opus review round 2 (BE-DESIGN.md §6.3, "Turn-keyed
 // bubbles — replaces 'append to the last assistant bubble'"): the #822
 // mechanism this block used to implement
@@ -2051,7 +2085,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 agentId: sf.agent_id,
                 childSessionId: sf.child_session_id,
                 statusLine: pendingUpdate?.statusLine,
-                lifecycleState: pendingUpdate?.lifecycleState,
+                lifecycleState: pendingUpdate?.lifecycleState, hasRun: pendingUpdate?.hasRun,
                 // Seeds the status line's "last update N s ago" fallback
                 // (D7 table) from the moment the span itself appears — a
                 // real subagent_message/subagent_state, each carrying its
@@ -2101,7 +2135,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   // subagent_start already stamped.
                   childSessionId: existingSpan.childSessionId,
                   statusLine: existingSpan.statusLine,
-                  lifecycleState: existingSpan.lifecycleState,
+                  lifecycleState: existingSpan.lifecycleState, hasRun: existingSpan.hasRun,
                   lastUpdateAt: new Date().toISOString(),
                   status: ef.status,
                   durationMs: ef.duration_ms ?? 0,
@@ -2227,7 +2261,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           withBucket(targetSid, (b) => {
             return produce(b, (draft) => {
               function applyToSpan(span: SubagentSpan): SubagentSpan {
-                return { ...span, lifecycleState: sf2.state, lastUpdateAt: sf2.created_at }
+                return spanWithLifecycle(span, sf2.state, sf2.created_at)
               }
 
               const indexEntry = draft.spanBySpanId?.[sf2.span_id]
@@ -2256,7 +2290,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               draft.pendingSpanUpdatesBySpanId = recordPendingSpanUpdate(
                 draft.pendingSpanUpdatesBySpanId,
                 sf2.span_id,
-                { lifecycleState: sf2.state, lastUpdateAt: sf2.created_at },
+                pendingLifecyclePatch(draft.pendingSpanUpdatesBySpanId?.[sf2.span_id], sf2.state, sf2.created_at),
               )
             }) as Partial<SessionChatState>
           })

@@ -534,7 +534,9 @@ type SubTurnSpawnPayload struct {
 	AgentID      string
 	Label        string
 	ParentTurnID string
-	// SpanID is "span_" + ParentSpawnCallID (deterministic, derivable from persisted data).
+	// SpanID is SubagentSpanID(ParentSpawnCallID, generation). Generation 1
+	// is "span_" + the call id. Generation N >= 2 appends "_g<N>". The id
+	// is not derivable from the call id alone; the generation is required.
 	SpanID string
 	// ParentSpawnCallID is the ToolCall.ID of the spawn tool call that triggered this sub-turn.
 	// This is the correlation anchor for the subagent span.
@@ -567,7 +569,8 @@ type SubTurnSpawnPayload struct {
 type SubTurnEndPayload struct {
 	AgentID string
 	Status  SubTurnStatus
-	// SpanID is "span_" + ParentSpawnCallID, matching the corresponding SubTurnSpawnPayload.
+	// SpanID matches the corresponding SubTurnSpawnPayload: SubagentSpanID
+	// of ParentSpawnCallID and the generation, not the call id alone.
 	SpanID string
 	// ParentSpawnCallID is the ToolCall.ID of the spawn tool call that triggered this sub-turn.
 	ParentSpawnCallID session.ToolCallID

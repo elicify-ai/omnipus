@@ -421,15 +421,35 @@ func TestDelegateTool_Cancel_SoftThenHardBackstop(t *testing.T) {
 
 	// The session never reaches terminal on its own in this test, so the
 	// hard backstop MUST fire after the grace window.
+	//
+	// Wait for the PERSISTED cancelled state, not for the hook flag. The flag
+	// flips inside cancelHard, but that is not the backstop goroutine's last
+	// act -- pkg/tools/delegate_run.go's backstop calls transitionLifecycle
+	// AFTER cancelHard returns, and that WRITES to the lifecycle store rooted
+	// at t.TempDir(). Returning on the flag let the test body finish with that
+	// write still in flight, and Go's TempDir cleanup then raced it:
+	//
+	//	TempDir RemoveAll cleanup: unlinkat /tmp/TestDelegateTool_Cancel_SoftThenHardBackstop.../001: directory not empty
+	//
+	// Observed on CI run 36137133540, job "Tests", release/v0.1.1 @ d81bcb1ec.
+	// Waiting on the persisted state is race-free because it IS the goroutine's
+	// final act, and it is a strictly stronger oracle: it asserts the backstop's
+	// EFFECT on the record rather than merely that a hook was entered.
 	deadline := time.Now().Add(2 * time.Second)
+	var sawHook bool
 	for time.Now().Before(deadline) {
 		mu.Lock()
-		hc := hardCalled
+		sawHook = hardCalled
 		mu.Unlock()
-		if hc {
-			return
+		if sawHook {
+			if rec, err := lc.Load("child-cancel"); err == nil && rec.State == session.LifecycleCancelled {
+				return
+			}
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	if sawHook {
+		t.Fatal("the hard-cancel backstop hook fired but the session was never persisted as cancelled")
 	}
 	t.Fatal("expected the hard-cancel backstop to fire after the grace window elapsed")
 }

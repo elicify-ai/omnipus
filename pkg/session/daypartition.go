@@ -496,7 +496,10 @@ type ToolCall struct {
 	// ParentToolCallID is set on tool calls that execute inside a sub-turn.
 	// It equals the parent spawn tool call's ID, which is the correlation anchor
 	// for the subagent span (FR-H-001). Empty for top-level tool calls.
-	// span_id = "span_" + ParentToolCallID (derivable, not stored separately).
+	// The span id is agent.SubagentSpanID(ParentToolCallID, generation), not
+	// "span_" + ParentToolCallID alone. Generation N >= 2 appends "_g<N>".
+	// The generation is not stored on this call; it lives on the lifecycle
+	// record and, for a persisted bracket, in the transcript entry id.
 	ParentToolCallID ToolCallID `json:"parent_tool_call_id,omitempty"`
 	// Error is a human-readable failure reason, set when Status is "error" and
 	// no richer Result was already attached (media descriptors or a sync

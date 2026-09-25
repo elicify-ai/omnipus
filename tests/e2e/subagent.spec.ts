@@ -41,7 +41,13 @@
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
-import { chatInput, assistantMessages, selectAgent, waitForConnected } from './fixtures/selectors';
+import {
+  chatInput,
+  assistantMessages,
+  dismissStaleDialogOverlay,
+  selectAgent,
+  waitForConnected,
+} from './fixtures/selectors';
 import type { DelegationFrame } from './fixtures/delegation-completion';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
@@ -67,6 +73,12 @@ function requireApiKey(): void {
 // is to explain… not to delegate to subagents"), captured in CI artifacts. Switch to Jim
 // (the general-purpose task agent) so the delegate-dependent assertions are exercised.
 async function startFreshChat(page: import('@playwright/test').Page): Promise<void> {
+  // A stale tool-approval dialog rehydrates on every fresh page load while its
+  // ask pends (reconcileWithSessionState, src/store/toolApproval.ts) and its
+  // dialog-overlay intercepts the New Chat click — CI run 36123574726 attempt 1
+  // burned the entire 300s budget in 579 blocked-click retries right here.
+  // Escape maps to Deny while an approval is live, so the dismissal sticks.
+  await dismissStaleDialogOverlay(page);
   const newChat = page.getByRole('banner').getByRole('button', { name: 'New Chat' });
   if (await newChat.isVisible({ timeout: 5_000 })) {
     await newChat.click();

@@ -51,6 +51,7 @@ import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useChatStore } from '@/store/chat'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
+import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
@@ -58,6 +59,14 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
+import {
+  delegationEventsAtEnd,
+  liveSnapshotIds,
+  splitAnchoredDelegationEvents,
+  type DelegationPlacementMessage,
+} from '@/lib/delegationEventPlacement'
+import { DelegationEventLineList, DelegationInlineProvider, DelegationLiveTail, DelegationToolGroup, delegationSlotted, useClaimedCallIds } from './DelegationEventLine'
+import { useChatDelegationEvents } from './useChatDelegationEvents'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
 import { getMessageStatusSuffix, INTERRUPTED_SUFFIX_TEXT, CUT_OFF_SUFFIX_TEXT } from '@/lib/truncation'
@@ -80,6 +89,13 @@ import {
   ChatConnectionNotice,
   UserMessageDeliveryStatus,
 } from './ConnectionStatus'
+
+function placementOf(message: ChatMessage): DelegationPlacementMessage {
+  return {
+    spans: message.spans,
+    toolCalls: message.tool_calls as DelegationPlacementMessage['toolCalls'],
+  }
+}
 
 // ── Skill-aware message content renderer (R2/F1/F7/F9) ───────────────────────
 
@@ -386,15 +402,9 @@ function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): str
   return 'Working in the background…'
 }
 
-// ADR-091 D7/AC-7: `deriveDelegateThinkingLabel` ("Delegating to <name>…" /
-// "Delegating…" for a hidden `delegate` 'run' call) is deleted — a `run`
-// call is visible unconditionally now (toolVisibility.ts's
-// shouldRenderToolCall), so `deriveHiddenRunningToolLabel` below always
-// returns null for it before ever reaching a delegate-specific branch (its
-// own `shouldRenderToolCall` check short-circuits first). The one delegate
-// sub-case that still hides, `status` (polling), has no specific-label rule
-// and falls through to the generic rotating pool, same as any other hidden
-// tool with no rule.
+// `deriveDelegateThinkingLabel` stays deleted. A hidden `delegate` call
+// (every action, unless verbose chat is on) has no specific thinking label
+// and falls through to the generic rotating pool, same as a status poll.
 
 /**
  * Finds the LAST tool-call part in a live message's `content` whose live
@@ -404,11 +414,10 @@ function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): str
  * shouldRenderToolCall — derives a specific, stable label for it.
  *
  * Returns null (generic rotating pool applies) when: the tool is visible
- * (its own chip already shows progress — a `delegate` 'run' call included,
- * ADR-091 D7/AC-7: it is visible unconditionally now, so it never reaches
- * this function's tool-name branches below), it's ToolSearch, a delegate
- * `status` poll, or any other hidden tool with no specific-label rule, or
- * nothing is currently running. Defensive: never throws — an unexpected
+ * (its own chip already shows progress), it's a hidden `delegate` call
+ * (no specific label — the event line carries that), it's ToolSearch, or
+ * any other hidden tool with no specific-label rule, or nothing is
+ * currently running. Defensive: never throws — an unexpected
  * message/part shape falls back to the generic pool via the null return,
  * exactly like "nothing found".
  */
@@ -439,7 +448,7 @@ function deriveHiddenRunningToolLabel(
       if (toolName === 'bash') {
         return deriveBashThinkingLabel(args)
       }
-      return null // ToolSearch, a delegate status poll, or any other hidden tool with no rule — generic pool.
+      return null // ToolSearch, any delegate action, or any other hidden tool with no rule — generic pool.
     }
     return null
   } catch {
@@ -554,13 +563,14 @@ function AssistantTextPart() {
 // Uses useMessage() for reactive state (not getState() which is a snapshot).
 //
 // Context-aware: when the current in-progress step is a HIDDEN tool call
-// (ToolSearch, background bash, a delegate status poll — see
-// toolVisibility.ts) whose tool-call part is present in message.content but
-// rendered invisible, this shows a specific, stable label for it (e.g.
-// "Running the test suite…") instead of the generic rotating pool — see
-// deriveHiddenRunningToolLabel above. ADR-091 D7/AC-7 removed the
-// `agents`-dependent "Delegating to <name>…" case: a `delegate` 'run' call
-// is visible unconditionally now, so it no longer reaches this label at all.
+// (ToolSearch, background bash, any delegate action — see toolVisibility.ts)
+// whose tool-call part is present in message.content but rendered invisible,
+// this shows a specific, stable label for it (e.g. "Running the test suite…")
+// instead of the generic rotating pool — see deriveHiddenRunningToolLabel
+// above. Every delegate action is hidden in the non-verbose thread (spec D2);
+// the grey event line is that surface, and a running delegate call has no
+// specific label of its own here. Verbose chat shows every delegate badge,
+// so the call is already visible and this label is not used.
 function InlineThinkingIndicator() {
   const message = useMessage()
   const isRunning = message.status?.type === 'running'
@@ -784,10 +794,11 @@ function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled')
  * ToolCallBadge each apply at render time (Fix 3, 2026-07-16). Used ONLY to
  * decide whether a message has any VISIBLE content, so the ghost-bubble
  * empty-placeholder / bare-Copy-bar logic below doesn't unmask a bubble
- * whose only content is a hidden delegate status poll or background-bash
- * dispatch (the D-fix UAT defect resurfacing once the thread started hiding
- * those by default — toolVisibility.ts; a `delegate` 'run' call no longer
- * hides at all, ADR-091 D7/AC-7, so it no longer exercises this path).
+ * whose only content is a hidden delegate call or background-bash dispatch
+ * (the D-fix UAT defect). Every delegate action is hidden in the non-verbose
+ * thread (spec D2); the grey event line is the surface, so a message that is
+ * only a delegation still exercises this path. Verbose chat shows every
+ * delegate badge, and those calls then count as visible content.
  * Reuses the same sentinel-detection semantics and the shouldRenderToolCall
  * classifier those components call directly.
  *
@@ -1144,7 +1155,15 @@ function StaticCopyButton({ text }: { text: string }) {
  * chat.ts's `produce`/`withBucket`/`applyMessageArray`/`getMessages`, not
  * assumed.
  */
-const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessage; liteMode: boolean }) {
+const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRow({
+  message,
+  liteMode,
+  delegationEvents,
+}: {
+  message: ChatMessage
+  liteMode: boolean
+  delegationEvents: readonly DelegationEvent[]
+}) {
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
@@ -1199,6 +1218,10 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
     // above — see comment.
     [message.content, message.tool_calls],
   )
+  const inlineByCall = splitAnchoredDelegationEvents(delegationEvents, message.id, {
+    spans: message.spans,
+    toolCalls: positionedToolCalls,
+  }).byCall
 
   // D-fix: this row is also used by PlainMessageList (the ResizeObserver-
   // unavailable fallback), which — unlike VirtualizedMessageListInner — does
@@ -1213,8 +1236,9 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // background-bash dispatch (default thread policy, toolVisibility.ts) must
   // not render an empty bubble with a bare Copy action bar (the D-fix UAT
   // defect resurfacing once the thread started hiding those by default). A
-  // `delegate` 'run' call is visible by default now (ADR-091 D7/AC-7), so it
-  // counts as real content here rather than triggering this guard.
+  // `delegate` call is hidden unless verbose chat is on (the event line is
+  // the normal-thread surface), so a message that is only a delegation does
+  // trigger this guard — the line renders beside the row, not inside it.
   // visibleToolCalls is also what's actually rendered below — hoisted here
   // so both the emptiness check and the render loop share one computation
   // instead of drifting into two different notions of "visible". Subagent
@@ -1354,7 +1378,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             // here too, so replayed sessions render the preview link (or the malformed
             // result block) instead of a collapsed generic badge.
             if (tc.tool === 'serve_workspace' || tc.tool === 'run_in_workspace' || tc.tool === 'web_serve') {
-              return (
+              return delegationSlotted(callId, inlineByCall.get(callId), (
                 <WebServeBlock
                   key={callId}
                   args={(tc.params ?? {}) as { path?: string; command?: string; port?: number; duration_seconds?: number }}
@@ -1372,7 +1396,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   isCancelled={tc.status === 'cancelled'}
                   toolName={tc.tool}
                 />
-              )
+              ))
             }
             // B-fix: the six browser.*/browser_* tools also have a registered
             // live UI (BrowserToolBlock, dispatched via makeAssistantToolUI in
@@ -1396,7 +1420,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             // the real status object so both BrowserToolReplayBlock's and
             // GenericToolCall's own isCancelledStatus checks see it.
             if (isReplayBrowserToolName(tc.tool)) {
-              return (
+              return delegationSlotted(callId, inlineByCall.get(callId), (
                 <BrowserToolReplayBlock
                   key={callId}
                   toolName={tc.tool}
@@ -1405,7 +1429,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   status={replayPartStatus(tc.status)}
                   isError={tc.status === 'error'}
                 />
-              )
+              ))
             }
             // ADR-082 D9: set_goal renders its dedicated record card
             // (SetGoalCardBlock) at the call's own interleaved position,
@@ -1420,7 +1444,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
               // which SetGoalCardBlock's parser unwraps itself. The store's
               // resolved outcome (`status`/`error`) is passed explicitly so
               // a failed registration renders its quiet trace (review S4).
-              return (
+              return delegationSlotted(callId, inlineByCall.get(callId), (
                 <SetGoalCardBlock
                   key={callId}
                   args={tc.params}
@@ -1432,7 +1456,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   durationMs={tc.duration_ms}
                   sessionId={activeSessionId ?? ''}
                 />
-              )
+              ))
             }
             // Operator-reported UX fix, 2026-09-08: same narrow override as
             // the live path's FallbackToolUI — see GoalSetupFailureLine.tsx's
@@ -1447,11 +1471,13 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
               goalRecordEmpty &&
               shouldRenderToolCall(tc.tool, tc.params as Record<string, unknown> | undefined, false, true)
             ) {
-              return (
-                <GoalSetupFailureLine key={callId} toolName={tc.tool} result={tc.result} error={tc.error} />
+              return delegationSlotted(
+                callId,
+                inlineByCall.get(callId),
+                <GoalSetupFailureLine key={callId} toolName={tc.tool} result={tc.result} error={tc.error} />,
               )
             }
-            return (
+            return delegationSlotted(callId, inlineByCall.get(callId), (
               <GenericToolCall
                 key={callId}
                 toolName={tc.tool}
@@ -1469,7 +1495,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                 defaultCollapsed={liteMode}
                 sessionId={activeSessionId ?? ''}
               />
-            )
+            ))
           })}
         </div>
 
@@ -1544,6 +1570,9 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
   // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default,
   // verbose-only inline) — same store read as every other verbose-gated row.
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  const sessionId = useSessionStore((s) => s.activeSessionId)
+  const delegationEvents = useChatDelegationEvents(sessionId)
+  const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
   const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
   return (
     <div
@@ -1557,14 +1586,14 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
           // panel-only by default (ActivityPanel's judge row, fed live by
           // the judge_verdict WS frame — see chat.ts), inline in the thread
           // ONLY under verbose chat.
+          let row: React.ReactNode
           if (msg.type === 'judge_verdict') {
-            if (!shouldRenderJudgeVerdictInThread(verboseChatEnabled) || !msg.verdict) return null
-            return <JudgeVerdictThreadCard key={msg.id} verdict={msg.verdict} />
-          }
-          if (msg.role === 'user')
-            return (
+            row = shouldRenderJudgeVerdictInThread(verboseChatEnabled) && msg.verdict
+              ? <JudgeVerdictThreadCard verdict={msg.verdict} />
+              : null
+          } else if (msg.role === 'user') {
+            row = (
               <VirtualUserMessageRow
-                key={msg.id}
                 message={msg}
                 skills={skills}
                 commandLabels={commandLabels}
@@ -1572,9 +1601,20 @@ function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMes
                 latest={msg.id === latestUserMessageId}
               />
             )
-          if (msg.role === 'system') return <VirtualSystemMessageRow key={msg.id} message={msg} />
-          return <VirtualAssistantMessageRow key={msg.id} message={msg} liteMode={liteMode} />
+          } else if (msg.role === 'system') {
+            row = <VirtualSystemMessageRow message={msg} />
+          } else {
+            row = <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} />
+          }
+          const trailing = splitAnchoredDelegationEvents(delegationEvents, msg.id, placementOf(msg)).trailing
+          return (
+            <React.Fragment key={msg.id}>
+              {row}
+              <DelegationEventLineList events={trailing} />
+            </React.Fragment>
+          )
         })}
+        <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />
       </div>
     </div>
   )
@@ -1672,6 +1712,11 @@ function VirtualizedMessageListInner({
   const { skills, commandLabels } = useSkillChipData()
   // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default, verbose-only inline).
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  const sessionId = useSessionStore((s) => s.activeSessionId)
+  const delegationEvents = useChatDelegationEvents(sessionId)
+  const textAtToolCallStart = useChatStore((s) => s.textAtToolCallStart)
+  const toolCallOwners = useChatStore((s) => (sessionId ? s.sessionsById[sessionId]?.toolCallOwnerMessageId : undefined))
+  const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
   const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
 
   // Separate the live streaming message from completed history.
@@ -1697,7 +1742,7 @@ function VirtualizedMessageListInner({
     if (msg.role === 'user')
       return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} agentName={agentName} latest={msg.id === latestUserMessageId} />
     if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
-    return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} />
+    return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} />
   }
 
   // Stick-to-bottom is delegated to assistant-ui's Viewport engine
@@ -1758,6 +1803,9 @@ function VirtualizedMessageListInner({
                   ref={virtualizer.measureElement}
                 >
                   {rowForMessage(msg)}
+                  <DelegationEventLineList
+                    events={splitAnchoredDelegationEvents(delegationEvents, msg.id, placementOf(msg)).trailing}
+                  />
                 </div>
               )
             })}
@@ -1766,21 +1814,59 @@ function VirtualizedMessageListInner({
 
         {/* Live streaming message — kept in ThreadPrimitive.Messages for full
             AssistantUI context (streaming primitives, registered tool UIs). */}
-        {hasStreamingMessage && (
-          <div data-testid="streaming-message-anchor">
-            <ThreadPrimitive.Messages>
-              {({ message }) => {
-                const isLast = message.id === messages[messages.length - 1]?.id
-                if (!isLast) return null
-                if (message.role === 'user') return <UserMessage />
-                if (message.role === 'system') return <SystemMessage />
-                return <AssistantMessage />
-              }}
-            </ThreadPrimitive.Messages>
-          </div>
+        {hasStreamingMessage && messages[messages.length - 1] && (
+          <StreamingDelegation
+            message={messages[messages.length - 1]}
+            events={delegationEvents}
+            snapshots={textAtToolCallStart}
+            owners={toolCallOwners}
+          >
+            <div data-testid="streaming-message-anchor">
+              <ThreadPrimitive.Messages>
+                {({ message }) => {
+                  const isLast = message.id === messages[messages.length - 1]?.id
+                  if (!isLast) return null
+                  if (message.role === 'user') return <UserMessage />
+                  if (message.role === 'system') return <SystemMessage />
+                  return <AssistantMessage />
+                }}
+              </ThreadPrimitive.Messages>
+            </div>
+          </StreamingDelegation>
         )}
+        <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />
       </div>
     </ThreadPrimitive.Viewport>
+  )
+}
+
+function StreamingDelegation({
+  message,
+  events,
+  snapshots,
+  owners,
+  children,
+}: {
+  message: ChatMessage
+  events: readonly DelegationEvent[]
+  snapshots: Readonly<Record<string, string>> | undefined
+  owners: Readonly<Record<string, string>> | undefined
+  children: React.ReactNode
+}) {
+  const split = splitAnchoredDelegationEvents(
+    events,
+    message.id,
+    placementOf(message),
+    liveSnapshotIds(message.id, snapshots, owners),
+  )
+  // The tool group reports which call ids it drew. Anything still unclaimed
+  // (a snapshot whose part never arrived) renders after the bubble, not nowhere.
+  const { claimed, reportMatched } = useClaimedCallIds()
+  return (
+    <DelegationInlineProvider byCall={split.byCall} reportMatched={reportMatched}>
+      {children}
+      <DelegationLiveTail byCall={split.byCall} trailing={split.trailing} claimed={claimed} />
+    </DelegationInlineProvider>
   )
 }
 
@@ -1831,11 +1917,13 @@ function AssistantMessage() {
   )
   // Fix 3 (2026-07-16): VISIBLE tool calls only — mirrors the historical
   // path's wouldToolCallBeVisible check (same function, same rationale: a
-  // hidden delegate status poll or background-bash dispatch must not count
-  // as "content" for the ghost-bubble guard below — a `delegate` 'run' call
-  // IS content, ADR-091 D7/AC-7). part.isError is the closest available
-  // proxy for this surface's outcome signal — see wouldToolCallBeVisible's
-  // own doc comment for why.
+  // hidden delegate call or background-bash dispatch must not count as
+  // "content" for the ghost-bubble guard below). Every delegate action is
+  // hidden in the non-verbose thread (spec D2); the grey event line is the
+  // surface. Verbose chat shows every delegate badge, and those calls then
+  // count as content. part.isError is the closest available proxy for this
+  // surface's outcome signal — see wouldToolCallBeVisible's own doc comment
+  // for why.
   const hasVisibleToolCall = message.content?.some(
     (part) =>
       part.type === 'tool-call' &&
@@ -1906,6 +1994,7 @@ function AssistantMessage() {
               <MessagePrimitive.Parts
                 components={{
                   Text: AssistantTextPart,
+                  ToolGroup: DelegationToolGroup,
                   tools: {
                     Fallback: FallbackToolUI as unknown as import('@assistant-ui/react').ToolCallMessagePartComponent,
                   },

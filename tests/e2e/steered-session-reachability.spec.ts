@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, selectAgent, waitForConnected } from './fixtures/selectors'
+import { chatInput, dismissStaleDialogOverlay, selectAgent, waitForConnected } from './fixtures/selectors'
 
 const LABEL_A = 'ADR-091 child A'
 const LABEL_B = 'ADR-091 child B'
@@ -18,22 +18,20 @@ test('steered session is reachable in its own live view without leaking child ou
   test.setTimeout(420_000)
 
   await page.goto('/')
-  // A pending approval modal left over from earlier work keeps a Radix
-  // dialog-overlay mounted, and it intercepts pointer events — so
-  // selectAgent's click never lands and the test burns its whole budget in a
-  // retry loop. CI evidence: 826 retries against
-  // `<div data-testid="dialog-overlay"> intercepts pointer events`, then
-  // `Test timeout of 420000ms exceeded` at selectAgent, on 2 of 4 attempts
-  // (neither reached the behaviour under test). Clear it first; Escape is the
-  // same dismissal accessibility.spec.ts already uses for its sign-in dialog.
-  const blockingOverlay = page.locator('[data-testid="dialog-overlay"]')
-  if ((await blockingOverlay.count()) > 0) {
-    await page.keyboard.press('Escape')
-    await expect(
-      blockingOverlay,
-      'a leftover modal overlay must be dismissable — it blocks every click beneath it',
-    ).toHaveCount(0, { timeout: 10_000 })
-  }
+  // A pending approval modal left over from earlier state rehydrates on every
+  // fresh page load while its ask pends (reconcileWithSessionState,
+  // src/store/toolApproval.ts) and its Radix dialog-overlay intercepts pointer
+  // events — so selectAgent's click never lands and the test burns its whole
+  // budget in a retry loop. CI evidence: run 35997069836 saw 826 retries
+  // against `<div data-testid="dialog-overlay"> intercepts pointer events`;
+  // run 36123574726 attempt 3 shows a pending ask expiring at 11:27:30 with
+  // NO deny ever recorded — no page ever dismissed it, because this spec's
+  // previous ONE-SHOT guard raced the rehydrating session_state frame: the
+  // frame can land after goto('/') returns, after the single count() check.
+  // dismissStaleDialogOverlay is poll-shaped for exactly that reason, and
+  // Escape maps to Deny while an approval is live, so the dismissal sticks
+  // (the next snapshot cannot rehydrate a resolved approval).
+  await dismissStaleDialogOverlay(page)
   await selectAgent(page, /Jim/i)
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 15_000 })
