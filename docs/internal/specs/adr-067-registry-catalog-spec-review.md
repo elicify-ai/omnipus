@@ -1,4 +1,6 @@
 # Spec Review — ADR-067 registry-fed catalog and provider identity
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 
 - **Spec under review:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-context-budget/docs/internal/specs/adr-067-registry-catalog-spec.md`
 - **Brief:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-context-budget/docs/internal/architecture/ADR-067-registry-fed-catalog-and-provider-identity.md`

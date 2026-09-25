@@ -1026,7 +1026,19 @@ jobs:
           CI: "true"
 
       - name: Run design-system audit
-        run: npm run audit:design-system
+        # The npm script writes its full report to
+        # test-results/design-system-audit.json and prints only the error count;
+        # on failure, print the report (folded) so the errors are readable
+        # straight from this log. The audit's own exit code is captured and
+        # re-exited verbatim — the gate stays hard-blocking.
+        run: |
+          npm run audit:design-system || status=$?
+          if [ "${status:-0}" -ne 0 ] && [ -f test-results/design-system-audit.json ]; then
+            echo "::group::design-system-locks audit report (test-results/design-system-audit.json)"
+            cat test-results/design-system-audit.json
+            echo "::endgroup::"
+          fi
+          exit "${status:-0}"
         env:
           CI: "true"
 

@@ -1,5 +1,7 @@
 # ADR-022 — Re-auth Consent Gate: Credential-Vault Scope Expansion to v0.1.0
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Status:** Accepted
 **Date:** 2026-06-20
 **Deciders:** backend-lead, architect, operator
@@ -36,11 +38,13 @@ traffic billed to the operator) or revoke a live provider/channel key mid-sessio
 with no password re-confirmation. That is a materially worse posture than the
 already-gated provider-key PUT, which the vault underpins.
 
-Channel-secret configuration and user-management remain v0.2 per ADR-021:
+Channel-secret configuration and user-management remain deferred per ADR-021 (the
+v0.2 label was retired 2026-09-25 — no release scheduled):
 channel-secret writes are mediated by `configureChannel`'s field-routing (already
 SEC-23-enforced, no plaintext fallback) and a narrower surface than the raw vault;
 user-management mutations are lower-blast-radius in a single-user deployment and
-involve additional UX (password-reset flow) best tackled as a v0.2 batch.
+involve additional UX (password-reset flow) best tackled as a single batch
+(unscheduled — the v0.2 label was retired 2026-09-25).
 
 ## Decision
 
@@ -66,7 +70,7 @@ Both handlers now:
 handler can read the `X-Reauth-Token` header and the authenticated user; its single
 call site in `HandleCredentials` was updated accordingly.
 
-### What stays v0.2 (unchanged from ADR-021)
+### What stays deferred (was "v0.2"; label retired 2026-09-25 — unchanged from ADR-021)
 
 - **Channel-secret configuration** — `configureChannel`. NOT gated in v0.1.0.
 - **User-management mutations** — user create / delete / role change / password
@@ -125,14 +129,16 @@ handler flips them red in CI.
   `POST /api/v1/auth/reauth` and replay the token; until then, vault writes/deletes
   from the UI will receive 403. This is intentional fail-closed behavior, not a bug.
 - Channel-secret configuration and user-management mutations remain ungated in
-  v0.1.0 — accepted per ADR-021, tracked for v0.2.
+  v0.1.0 — accepted per ADR-021; still deferred (the v0.2 label was retired
+  2026-09-25 — no release scheduled).
 
 ## Follow-up
 
 - **W3 wave (frontend):** wire `ReAuthDialog` into the Credential Vault UI so
   `setCredential` / `deleteCredential` calls carry the `X-Reauth-Token` header.
-- **v0.2 hardening:** extend `requireReAuth` to `configureChannel` secret writes
+- **Deferred hardening (was "v0.2"; label retired 2026-09-25):** extend `requireReAuth` to `configureChannel` secret writes
   and user-management mutations, each with positive + negative tests mirroring
   this pattern. Update ADR-021's exclusion table and this ADR when those land.
 - Revisit the single-use, in-memory token model if multi-user deployments become a
-  v0.2+ target (per ADR-021 follow-up).
+  target (per ADR-021 follow-up; the v0.2+ framing was retired 2026-09-25 — revisit
+  unscheduled).

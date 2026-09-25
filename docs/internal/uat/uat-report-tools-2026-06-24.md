@@ -1,6 +1,8 @@
 > **HISTORICAL RECORD** — tool names in this report predate the §7 rename; old names (`system.*`, `task_create`, `web_search`, `list_dir`, `message`, `browser.X`, etc.) do not match the current tool surface. See the updated plan for current names.
 
 # Tool-System UAT Report — v0.1.0
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 
 **Date:** 2026-06-24 · **Plan:** `docs/internal/uat/uat-plan-tools-2026-06.md`
 **Gateway:** fresh boot, OpenRouter/z-ai/glm-5.2, sandbox=enforce, DuckDuckGo search,

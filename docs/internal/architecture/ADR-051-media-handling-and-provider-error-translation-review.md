@@ -1,5 +1,7 @@
 # Adversarial Review: ADR-051 (Provider-Capability-Aware Media Handling and User-Facing Error Translation)
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 **Spec reviewed**: `docs/internal/architecture/ADR-051-media-handling-and-provider-error-translation.md` (Revision 2)
 **Review date**: 2026-07-21
 **Verdict**: BLOCK

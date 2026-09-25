@@ -267,7 +267,7 @@ func (nal *newAgentLoop) initializeSecurity() {
 	// honored uniformly. When disabled the checker is nil and callers fall back
 	// to their default (proxy-aware) HTTP clients.
 	//
-	// v0.2 (#155 item 4): cfg.Sandbox.EgressAllowCIDRs is the operator escape
+	// #155 (item 4): cfg.Sandbox.EgressAllowCIDRs is the operator escape
 	// hatch for the default-deny outbound posture. Entries here are merged
 	// into the SSRFChecker's allow-list alongside the SSRF.AllowInternal list
 	// so a single field per concern keeps semantics clear: SSRF allow-list =
@@ -357,7 +357,7 @@ func (nal *newAgentLoop) initializeRuntime() (*AgentLoop, error) {
 	// extracted from the asyncCallback closure below. Always non-nil.
 	nal.al.asyncNotifier = newAsyncNotifier(nal.al)
 
-	// v0.2 #155 item 6: build the shared memory-write rate limiter and
+	// #155 item 6: build the shared memory-write rate limiter and
 	// propagate it to every agent's tool registry. One limiter is shared
 	// across all agents so the per-caller bucket is genuinely global —
 	// otherwise a malicious caller could route writes through different

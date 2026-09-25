@@ -1,5 +1,7 @@
 # ADR-054: Entity / config separation — per-entity files for agents
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** **Accepted (v3)** — after two adversarial reviews (v1: REVISE/4
   CRITICAL; v2: REVISE/3 CRITICAL). The three residual questions are decided in
   §0 below; all three are reversible and scoped conservatively.
@@ -171,7 +173,7 @@ the narrowed `DefaultChildPolicy` is documented "**NOT yet active**"
 install) the FS-policy protection above is **not** the last line of defence. This
 is not a regression versus v1 — it was equally true there — but D2 must not be
 read as closing the escalation hole at every layer. Routes to the
-`DefaultChildPolicy` wiring work (v0.3 #156).
+`DefaultChildPolicy` wiring work (tracked [#884]; the v0.3 label was retired 2026-09-25).
 
 **Listing: `os.ReadDir` + explicit `sort.Slice`.** The `pkg/task` precedent sorts
 (`store.go:262`) and never trusts directory order `[FACT]`. Order matters here:
@@ -501,7 +503,7 @@ risked ratifying a Medium-confidence security decision unexamined.
 
 **Two follow-ups filed out of this ADR:**
 1. The truncation / whole-file-deletion blind spot is a real audit gap → its own
-   v0.2 security issue.
+   tracked security issue (the v0.2 release label was retired 2026-09-25).
 2. If throughput ever proves to be the ceiling: per-entry sequence numbers + a
    periodically persisted signed **tip** anchor (extending `checkpoint.go`, which
    is already a start-seed anchor). Split chains then record each scope's tip as
@@ -738,7 +740,7 @@ before acceptance rather than taken on trust.
 | Finding | Outcome |
 |---|---|
 | C-1 — `entities/` is NOT in `buildCarveOuts`; under `FSScopeUnrestricted` v2 was WORSE than v1 (whole-roster vs self admin) | **Accepted.** Independently verified `carveout.go:16-23` returns only 4 roots. D2 now mandates adding `entities` |
-| C-2 — `bash`/`DefaultChildPolicy` bypasses the FS layer entirely; "NOT yet active" | **Accepted.** Residual stated explicitly in D2; routed to v0.3 #156 |
+| C-2 — `bash`/`DefaultChildPolicy` bypasses the FS layer entirely; "NOT yet active" | **Accepted.** Residual stated explicitly in D2; routed to tracked [#884] (the v0.3 label was retired 2026-09-25) |
 | C-3 — checklist items 6/7/8 scoped to `agents`, breaking `agents.defaults` and contradicting D1 | **Accepted.** All three re-scoped to `agents.list` |
 | M-1 — `sort_index` re-serializes the create path and is an unowned global invariant | **Accepted.** Withdrawn; sort by `(created_at, id)`; `CreatedAt` field must be added |
 | M-2 — `LOCK_EX`-per-read × per-message routing scan would make the ADR net-negative | **Accepted — design-shaping.** Reads now go through the existing `AgentRegistry` cache; disk+lock is the WRITE path. Invalidation is part of this decision, not deferred |

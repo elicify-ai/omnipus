@@ -30,7 +30,7 @@ N/A — no `docs/reference/` library in this repo. In-repo precedents the implem
 | `isCrossAgentPath` (`pkg/tools/filesystem.go:98`), `sandboxFs`/`os.OpenRoot` (`filesystem.go:1073`) | **replace / adopt** | `isCrossAgentPath` derives `agentsRoot = filepath.Dir(absWorkspace)` (`:107`) — correct only when workspace is `agents/<id>/`; under a re-rooted turn it silently allows cross-agent reads (**BLOCK #5**). `sandboxFs` shows the correct `os.Root` I/O-through-handle model to adopt. |
 | `WebServeTool` (`web_serve.go:336,531`), `SendFileTool` (`send_file.go:111`), `ScreenshotTool` (`browser/tools.go:472`), `InstallSkillTool` (`skills_install.go:97`) | **modify (defect fix)** | The 4 defects — route through `ResolvePath` / global skills dir. |
 | `ExecTool` (`shell.go:502-510`), `SpawnBackgroundChild` (`spawn_bg.go:81`), `hardened_exec.go` (doc `:28`: **"Landlock + seccomp are NOT applied by this package's per-child hardening"**) | **modify (P3)** | `bash`/exec child spawn → per-child Landlock from scope. The per-child FS/syscall confinement is **100% unbuilt today**. |
-| `sandbox.DefaultPolicy` (`sandbox.go:305-423`) — bundles `FilesystemRules` **AND** `BindPortRules` **AND** `ConnectPortRules` (v0.2 #155 egress/bind protections); `LinuxBackend.ApplyWithMode` (`sandbox_linux.go:231-249`, no-ops once `processLandlockApplied`); `RestrictCurrentThread` (`:610-689`, hardcodes boot `savedPolicy`); `seccomp_linux.go Install()` (same latch) | **modify (CRITICAL/P3)** | Boot fence removal must **preserve the network-only rules** (BLOCK/HIGH). The apply path is a **process-latched singleton** — per-child scoped rulesets need a new non-latched API (**BLOCK #3**). |
+| `sandbox.DefaultPolicy` (`sandbox.go:305-423`) — bundles `FilesystemRules` **AND** `BindPortRules` **AND** `ConnectPortRules` (#155 (shipped) egress/bind protections); `LinuxBackend.ApplyWithMode` (`sandbox_linux.go:231-249`, no-ops once `processLandlockApplied`); `RestrictCurrentThread` (`:610-689`, hardcodes boot `savedPolicy`); `seccomp_linux.go Install()` (same latch) | **modify (CRITICAL/P3)** | Boot fence removal must **preserve the network-only rules** (BLOCK/HIGH). The apply path is a **process-latched singleton** — per-child scoped rulesets need a new non-latched API (**BLOCK #3**). |
 | `ToolPolicy` (`config.go:859`), `AgentBuiltinToolsCfg.Policies` (`:876`), `OmnipusSandboxConfig.ToolPolicies` (`sandbox.go:290`), `GlobalToolPolicies.yaml` | **extend (sibling)** | New scalar `tools.filesystem_scope` + `sandbox.filesystem_scope`. |
 | `ValidateToolPolicyCoverage` (`validate.go:491`), `RepairIncompleteToolPolicyCoverage` (`:568`) | **new sibling validator** | `filesystem_scope` is a **scalar**, not a policies-map entry — needs its own dedicated coverage validator (cannot reuse the `knownTools × agents` iteration). |
 | `AgentDefaults.RestrictToWorkspace` + `AllowReadOutsideWorkspace` (`config.go:1177-1178`, `json:"-"`, **still live via env var**, `defaults.go` seeds `RestrictToWorkspace` true) | **remove/supersede** | The pair `filesystem_scope` replaces; env-var path must be rejected on upgrade (ADR-035/037 precedent). |
@@ -47,7 +47,7 @@ N/A — no `docs/reference/` library in this repo. In-repo precedents the implem
 
 | Symbol Modified | Risk Level | d=1 Dependents | d=2 Dependents |
 |----------------|------------|----------------|----------------|
-| `sandbox.DefaultPolicy` + boot Landlock change (FR-022, FR-024a) | **CRITICAL** | `gateway/sandbox_apply.go:390`, `LinuxBackend.Apply`, every exec child | v0.2 #155 egress/bind-port enforcement (must be preserved); every deployment's kernel isolation posture; `redteam_master_key_test.go`, `redteam_egress_test.go` |
+| `sandbox.DefaultPolicy` + boot Landlock change (FR-022, FR-024a) | **CRITICAL** | `gateway/sandbox_apply.go:390`, `LinuxBackend.Apply`, every exec child | #155 (shipped) egress/bind-port enforcement (must be preserved); every deployment's kernel isolation posture; `redteam_master_key_test.go`, `redteam_egress_test.go` |
 | Per-child Landlock apply rearchitecture (FR-023) | **CRITICAL** | `RestrictCurrentThread`, `seccomp Install`, every spawn site (`shell.go`, `web_serve.go`, `spawn_bg.go`, MCP stdio) | thread-lifecycle correctness (M:N scheduler reuse); perf (Constraint #3); graceful degradation |
 | Carve-out matcher re-anchor (FR-017) | **HIGH** | `isCrossAgentPath` callers, `EffectiveFSPolicy` | the master-key/cross-tenant guarantee for the new default topology (silently broken today) |
 | `ResolvePath` insertion via `os.Root` (FR-003/006) | **HIGH** | all 10 FS-touching tools, `rerootable`, `ExecTool` | TOCTOU-hardness (must not regress `sandboxFs`'s existing guarantee); session transcripts; audit |
@@ -171,7 +171,7 @@ The **platform** must enforce `filesystem_scope` for `bash`/exec at the **kernel
 **Independent Test** *(split by phase)*: **(P2, app-layer)** a `deny` agent's file tools are confined to `work/`; **(P3, kernel)** a `deny` agent's `bash` cannot `cat` a non-allowlisted file outside `work/` (kernel-refused); an `allow` agent's `bash` reaches the user filesystem; interleaved `deny`/`allow` spawns never cross-contaminate rulesets.
 
 **Acceptance Scenarios**:
-1. **Given** the boot sequence, **When** the gateway starts, **Then** no process-wide **filesystem** Landlock ratchet is applied — **but** a network-only ruleset (`handledAccessFS=0`, `handledAccessNet=Bind|Connect`) preserving the v0.2 #155 egress/bind-port enforcement **is** applied.
+1. **Given** the boot sequence, **When** the gateway starts, **Then** no process-wide **filesystem** Landlock ratchet is applied — **but** a network-only ruleset (`handledAccessFS=0`, `handledAccessNet=Bind|Connect`) preserving the #155 (shipped) egress/bind-port enforcement **is** applied.
 2. **Given** a `deny` agent, **When** its `bash` child spawns, **Then** the child's Landlock grants only the effective working dir (+ system libs, `/tmp`) via a **fresh per-call ruleset** (not the latched boot policy), and a read outside it is kernel-refused even via a raw shell.
 3. **Given** an `allow` agent, **When** its `bash` child spawns, **Then** it reaches the user's filesystem; carve-out enforcement for `allow`+`bash` follows the spike decision (see Ambiguity #4 — kernel-except-`$OMNIPUS_HOME` is only clean for an **external** `working_dir`; for the internal `work/` the carve-outs are app-layer/wrapper-enforced with a documented reduced guarantee).
 4. **Given** interleaved `deny`-agent and `allow`-agent spawns reusing OS threads (M:N scheduler), **When** they run, **Then** no child inherits a stale/wrong ruleset — enforced by the `LockOSThread → apply-fresh → fork → runtime.Goexit()` protocol. *(edge / concurrency)*
@@ -258,7 +258,7 @@ Boundary conditions:
 - The system must NOT inherit `filesystem_scope`, working dir, or path grants from a delegating parent into a target sub-turn beyond what the target's own effective scope permits (ADR-032; grant-leak guard).
 - The system must NOT perform a textual rename of `.Workspace` (~79+ refs are the unrelated concept).
 - The system must NOT change memory-room routing (`WorkspaceID`), media/uploads, session storage (sessions stay in agent home, never re-rooted), or the task store.
-- The system must NOT remove the boot-time **network** (bind/egress) Landlock when removing the boot **filesystem** fence (would regress v0.2 #155).
+- The system must NOT remove the boot-time **network** (bind/egress) Landlock when removing the boot **filesystem** fence (would regress #155 (shipped)).
 - The system must NOT keep a boot-time process-wide `$OMNIPUS_HOME` **filesystem** Landlock fence once per-exec-child enforcement lands (would make `allow` impossible).
 - The system must NOT reinstall a per-child seccomp filter expecting it to do path gating (seccomp filters syscalls, not paths; it stays one fixed, scope-independent filter installed once).
 
@@ -457,7 +457,7 @@ Boundary conditions:
 - **Given** the gateway boot sequence
 - **When** it completes
 - **Then** no `$OMNIPUS_HOME`-wide **filesystem** Landlock is applied to the main process
-- **And** a network-only Landlock (bind/egress, v0.2 #155) **is** applied.
+- **And** a network-only Landlock (bind/egress, #155 (shipped)) **is** applied.
 
 #### Scenario: deny bash is kernel-refused outside work/ (fresh per-call ruleset)
 **Traces to**: US-7, AS-2 — **Category**: Error Path
@@ -540,7 +540,7 @@ Boundary conditions:
 | 13 | `TestWorkingDirOverride_ValidationRejectsProtected` | Unit | invalid working_dir rejected | dynamic containment set |
 | 14 | `TestChildLandlock_DenyGrantsOnlyWorkDir_FreshPerCall` | Unit | deny bash kernel-refused | non-latched builder |
 | 15 | `TestChildLandlock_AllowExternalWorkingDir_CarveOutsClean` | Unit | allow reaches fs; external clean | ruleset builder |
-| 16 | `TestBootLandlock_NetworkRetained_FSRemoved` | Unit | network fence retained | preserve v0.2 #155 |
+| 16 | `TestBootLandlock_NetworkRetained_FSRemoved` | Unit | network fence retained | preserve #155 (shipped) |
 | 17 | `TestTools_RouteThroughResolvePath` (all 10) | Integration | The four defects fixed | every tool uses ResolvePath |
 | 18 | `TestRunTurn_MemberGetsWorkspaceWorkDir` | Integration | member gets work/ | explicit turn workspace |
 | 19 | `TestRunTurn_WorkspacelessAgentRefused` | Integration | workspace-less agent cannot execute | precondition refusal |
@@ -619,7 +619,7 @@ Boundary conditions:
 | `work/` keeps AGENT.md / `.omnipus` room unreachable | `TestRunTurn_CoreTeamMember_CannotEscapeWorkToWorkspaceRoot` | Keep + extend to external working_dir | confinement invariant |
 | `os.Root` per-component confinement (`sandboxFs`) | existing `sandboxFs` tests | Assert `ResolvePath` preserves I/O-through-root (no regression) | **BLOCK #1** guard |
 | Delegated sub-turn adopts target identity | `pkg/agent/subturn_target_identity_test.go` (tool policy/workspace/model/provider/pool) | Extend to assert `filesystem_scope` + working dir + grant-scope are **target**-sourced | **ADR-032** (FR-033) |
-| Boot Landlock egress/bind enforcement (v0.2 #155) | `pkg/sandbox/redteam_egress_test.go`, `sandbox_netrules_test.go` | Assert network rules survive FS-fence removal | **HIGH** — must not regress |
+| Boot Landlock egress/bind enforcement (#155 (shipped)) | `pkg/sandbox/redteam_egress_test.go`, `sandbox_netrules_test.go` | Assert network rules survive FS-fence removal | **HIGH** — must not regress |
 | Master-key kernel protection | `pkg/sandbox/redteam_master_key_test.go` | Re-validate/adapt: state whether preserved (network+carve-out) or moved to per-child/app-layer | **CRITICAL** — most security-sensitive |
 | Landlock apply ABI | `pkg/sandbox/landlock_abi_test.go`, `landlock_abi_hardfail_test.go`, `backend_linux_test.go`, `backend_linux_subprocess_test.go`, `workspace_reroot_subprocess_test.go` | Adapt to the non-latched per-call apply | P3 rearchitecture |
 | Tool-policy coverage aborts boot on gap | `ValidateToolPolicyCoverage` tests | Add dedicated `filesystem_scope` coverage tests (parallel validator, not reuse) | Constraint #6 |
@@ -656,7 +656,7 @@ Boundary conditions:
 - **FR-023**: Each `bash`/exec MUST spawn a child with a **fresh, per-call** Landlock ruleset computed from `EffectiveFSPolicy` (deny→working dir + libs + `/tmp`; ask→+approved; allow→per the spike carve-out decision), applied via a **non-latched** apply path and a `LockOSThread → apply-fresh → fork → runtime.Goexit()` thread-lifecycle protocol; seccomp remains one fixed, scope-independent filter installed once.
 - **FR-023a**: The `pkg/sandbox` Landlock/seccomp apply path MUST be refactored from a process-latched singleton to a per-call-capable API; the boot path becomes one caller among many.
 - **FR-024**: The sandbox RAM overhead MUST stay under Constraint #3 (<10MB beyond baseline).
-- **FR-024a**: Boot MUST still apply a filesystem-rule-free, network-only Landlock ruleset (`handledAccessFS=0`, `handledAccessNet=Bind|Connect`) preserving the v0.2 #155 egress/bind-port enforcement for the main process.
+- **FR-024a**: Boot MUST still apply a filesystem-rule-free, network-only Landlock ruleset (`handledAccessFS=0`, `handledAccessNet=Bind|Connect`) preserving the #155 (shipped) egress/bind-port enforcement for the main process.
 - **FR-025**: A workspace MUST support an optional `working_dir` override (contract-first on `Workspace.yaml`; fix the "no filesystem directories" doc comment), defaulting to the internal `work/`.
 - **FR-026**: `working_dir` MUST be validated on set: a real or creatable directory (parent writable), with a defined creation-timing + permission-failure contract, and MUST be rejected when its realpath is, contains, or is contained by `$OMNIPUS_HOME` internals or any other workspace's currently-configured effective working dir (re-checked per set — dynamic set).
 - **FR-027**: A `deny` agent in a workspace with an external `working_dir` MUST be confined to that external directory (realpath-anchored, kernel-enforced for `bash` on Landlock hosts — and for an external dir the kernel carve-outs are clean since `$OMNIPUS_HOME` is simply never granted).
@@ -684,7 +684,7 @@ Boundary conditions:
 - **SC-008**: `grep -w Workspace` over agent-config code yields only `pkg/workspace.Workspace`; `make test` + `make verify-contracts` + lint + gofmt all green.
 - **SC-009**: Setting a workspace `working_dir` to an external directory confines a `deny` agent to it and lets an `allow` agent work there — proven by E2E.
 - **SC-010**: Per-spawn ruleset build+apply adds < a P3-spike-set p95 threshold over the pre-P3 spawn baseline, across ≥50 sequential `bash` calls in one session (with a specific case for repeated `allow`-scope spawns).
-- **SC-011**: The boot-time network (bind/egress) Landlock enforcement survives FS-fence removal — the v0.2 #155 red-team egress/bind tests still pass — proven by test.
+- **SC-011**: The boot-time network (bind/egress) Landlock enforcement survives FS-fence removal — the #155 (shipped) red-team egress/bind tests still pass — proven by test.
 - **SC-012**: A delegated `deny` sub-turn of an `allow` parent is confined to the target's scope + working dir, and no parent path grant leaks past the child's scope — proven by test.
 
 ## Traceability Matrix
@@ -782,7 +782,7 @@ Boundary conditions:
 - Target enforcement platform is Linux 5.13+ (Landlock); other platforms use the documented app-level fallback (US-9).
 - `bash`/exec already spawns hardened children (`hardened_exec`/`SpawnBackgroundChild`), but per-child **Landlock/seccomp is not applied today** (`hardened_exec.go:28`); P3 builds it, gated behind the spike.
 - The interactive approval WS flow is the reuse base for `ask`.
-- v0.3 fresh-build: no back-compat for the rename, the removed `restrict` pair, or the boot-fence change — but upgrade behaviour (key rejection, team seeding) is explicit, not silent.
+- Fresh-build: no back-compat for the rename, the removed `restrict` pair, or the boot-fence change — but upgrade behaviour (key rejection, team seeding) is explicit, not silent (the v0.3 label was retired 2026-09-25).
 - Chat is always workspace-scoped in the SPA (route `workspaces.$workspaceId.chat.tsx`) and threaded to the turn (`meta.WorkspaceID` → `opts.WorkspaceID`) — **validated in code 2026-07-17**.
 - Agents are metadata; execution requires workspace membership.
 - Memory rooms, media/uploads, sessions (agent-home-resident), and the task store are out of scope and must be asserted unchanged.
@@ -802,7 +802,7 @@ Boundary conditions:
 - **Resolver contract**: `ResolvePath` must do I/O through an `os.Root` handle (no TOCTOU-regressing bare-string return); confirmed the existing `validatePathWithAllowPaths` has the CWE-367 bug and `sandboxFs` is the correct model.
 - **Carve-out anchor**: matcher must anchor on `$OMNIPUS_HOME`, not the derived working-dir parent (confirmed `isCrossAgentPath` is broken for the new default topology).
 - **Delegation (ADR-032)**: `filesystem_scope` + working dir + grants are target-sourced in a sub-turn.
-- **Boot network Landlock** (v0.2 #155) must be preserved when the FS fence is removed.
+- **Boot network Landlock** (#155 (shipped)) must be preserved when the FS fence is removed.
 - **P3 gated** behind a mandatory de-risking spike (latched-singleton refactor + Landlock-no-deny).
 - **Grant key** locked to `(session, agent, tool, path-prefix)`, session-scoped (Ambiguity #3) — approving one tool on a path does not grant another; a `read_file` approval does not grant `bash`.
 - **`allow` principal** locked to the gateway process UID; no separate configurable principal in v1 (Ambiguity #5).
@@ -820,7 +820,7 @@ Six parallel adversarial grillers (code-grounding, security red-team, feasibilit
 | feas-1 / sec-3 | BLOCK | `pkg/sandbox` apply is a process-latched singleton; `hardened_exec` applies no per-child Landlock today; thread-reuse contamination | **Fixed (spec)**: FR-023/023a (non-latched, thread-lifecycle); US-7 spike gate; Ambiguity #1 |
 | feas-2 / sec-2 | BLOCK | Landlock has no deny primitive; "allow minus carve-outs" not one ruleset; internal `work/` under `$OMNIPUS_HOME` defeats except-`$OMNIPUS_HOME` (operator-confirmed) | **Fixed (posture)**: Ambiguity #4; US-7 AS-3; external-only clean carve-outs; app-layer for internal — spike to finalize |
 | cons-1 / g4-12 / sec-7 / impl | BLOCK (4-griller convergent) | Delegation/ADR-032 silence; `Inherit()` leaks parent grants to a restricted child | **Fixed**: FR-033; SC-012; delegation BDD; regression extends `subturn_target_identity_test.go` |
-| feas-3 | HIGH | Boot fence removal also drops v0.2 #155 egress/bind Landlock | **Fixed**: FR-024a; SC-011; test 16 |
+| feas-3 | HIGH | Boot fence removal also drops #155 (shipped) egress/bind Landlock | **Fixed**: FR-024a; SC-011; test 16 |
 | impl-8 | HIGH | No single "effective allowed roots" function → app/kernel drift | **Fixed**: FR-036 `EffectiveFSPolicy`; test 1 |
 | impl-4 | HIGH | No turn-origin signal to compute "approver reachable"; `spawnSubTurn` threads none | **Fixed**: FR-020 `TurnOrigin` enum + propagation |
 | impl-7 | HIGH | Removed keys still live via env var; `ensureDefaultWorkspace` no-ops on existing default | **Fixed**: FR-015 (reject env var too); FR-008 + upgrade BDD/test 21 (no auto-add) |

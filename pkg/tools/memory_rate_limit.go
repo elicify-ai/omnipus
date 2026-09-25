@@ -3,7 +3,7 @@
 //
 // Copyright (c) 2026 Omnipus contributors
 
-// Package tools — memory-write rate limiter (v0.2 #155 item 6).
+// Package tools — memory-write rate limiter (#155 item 6).
 //
 // Threat model:
 //

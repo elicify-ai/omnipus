@@ -8,17 +8,33 @@ Guidance for Claude Code when working in this repository. This root file holds o
 
 Omnipus is an agentic core: a single Go binary with the SPA embedded via `go:embed`, kernel-level sandboxing (Landlock + seccomp on Linux 5.13+), audit logging, encrypted credential management, and compiled-in Go channels. Community-facing, MIT-licensed, no telemetry. **Domain:** omnipus.ai
 
-**Code wins over docs on any disagreement.** Authoritative references: `docs/internal/architecture/AS-IS-architecture.md` (evidence-based as-is, code-cited), `plugin-extensibility-assessment.md`, `ADR-*.md` (cite by title, not number alone), `docs/internal/_archive/BRD/` (original intent, superseded where it conflicts), and `docs/internal/_archive/preview-doc-v03-concept/` — the current v0.3 direction (pre-ADR).
+**Code wins over docs on any disagreement.** Authoritative references: `docs/internal/architecture/AS-IS-architecture.md` (evidence-based as-is, code-cited), `plugin-extensibility-assessment.md`, `ADR-*.md` (cite by title, not number alone), `docs/internal/_archive/BRD/` (original intent, superseded where it conflicts), and `docs/internal/_archive/preview-doc-v03-concept/` — the pre-ADR
+workspaces-redesign concept (superseded by ADRs).
 
 **Brand & UI:** "The Sovereign Deep", dark-first, chat-first — `docs/internal/brand/brand-guidelines.md`. No emoji in stored data or UI chrome.
 
-## Release Strategy (v0.1 → v0.2 → v0.3)
+## Release Strategy
 
-- **v0.1 — Stabilize `feature/iframe-preview-tier13`.** Ship `web_serve` unification, kernel-enforced bind-port allow-list, sandbox-aware `exec`, iframe preview as one PR. No memory/projects creep.
-- **v0.2 — Security hardening (pentest quick wins).** Issue [#155](https://github.com/elicify-ai/omnipus/issues/155). Quick fixes only (env var allowlist, `master.key` 0600 check, shell-guard hardening, internal-CIDR egress blocking, audit HMAC chain, auth-endpoint rate limiting); structural fixes → v0.3.
-- **v0.3 / 1.0 — Workspaces redesign.** Issue [#156](https://github.com/elicify-ai/omnipus/issues/156). Fresh-build, no back-compat. Direction: `docs/internal/_archive/preview-doc-v03-concept/` (pre-ADR). The five rooms-era drafts in `docs/internal/_archive/design-2026-05-rooms-era/` are superseded pre-ADR background (retired Rooms/5-core vocabulary) — do **not** implement from them without checking the concept and the forthcoming ADR.
+Single release line: **v0.1.1** (founder decision 2026-09-25 — no separate v0.2/v0.3
+releases; v0.1.1 carries near the full scope once labelled v0.3).
 
-**Routing rule:** when new work comes up, ask which phase it belongs to first. Pentest findings → v0.2 unless structural (→ v0.3). Memory / tasks / agents / workspaces / plugins / marketplaces / room-topology → v0.3. Anything else not completing v0.1 → flag the scope question.
+- **v0.1.1** carries everything: the stabilization scope (web_serve unification,
+  kernel-enforced bind-port allow-list, sandbox-aware exec, iframe preview), the
+  #155 security hardening (closed 2026-05-04 — env-var allowlist, master.key 0600
+  check, shell-guard hardening, internal-CIDR egress blocking, audit HMAC chain,
+  auth-endpoint rate limiting), and the bulk of the #156 workspaces redesign
+  (closed 2026-06-27; direction doc archived at
+  `docs/internal/_archive/preview-doc-v03-concept/`, superseded by ADRs).
+  The five rooms-era drafts in `docs/internal/_archive/design-2026-05-rooms-era/`
+  are superseded pre-ADR background (retired Rooms/5-core vocabulary) — do not
+  implement from them without checking the concept and the ADRs.
+- **No version label names a future release anymore.** Work the closed issues left
+  open stays on its tracked issues (#884, #885, #886, #887, #888, #306, #42) until
+  the founder rules where it lands.
+- **Routing rule:** when new work comes up, size it first (small / standard /
+  feature — see "Change sizes and the review gate"). There is no phase routing:
+  anything the closed issues left open is re-homed, not re-labelled; anything else
+  that would not complete v0.1.1 → flag the scope question.
 
 ## Merging to main (MANDATORY)
 

@@ -359,7 +359,7 @@ type AgentLoop struct {
 	// system tools are not registered (graceful degradation in tests without a store).
 	sysagentDeps *systools.Deps
 
-	// memoryRateLimiter is the shared MemoryRateLimiter (v0.2 #155 item 6),
+	// memoryRateLimiter is the shared MemoryRateLimiter (#155 item 6),
 	// built once in NewAgentLoop and applied to every agent's remember/
 	// run_retrospective tools via wireMemoryRateLimiterOn. Stored here (rather
 	// than left a bare local, as it originally was) so ReloadProviderAndConfig

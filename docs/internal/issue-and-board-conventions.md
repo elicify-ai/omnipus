@@ -1,5 +1,7 @@
 # Issue & Project Board Conventions
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 How issues are classified and tracked in this repo. **Read this before filing or triaging an issue** — humans and agents alike. The conventions below are enforced partly by automation and partly by discipline; following them keeps the board honest.
 
 Repo: `elicify-ai/omnipus` · Project board: **#3 "Omnipus Development"** (`https://github.com/orgs/elicify-ai/projects/3`).

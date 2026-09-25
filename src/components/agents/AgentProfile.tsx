@@ -357,7 +357,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // is NOT stripped from the locked-agent payload below like soul/name/etc.
   const [memoryEnabled, setMemoryEnabled] = useState(true)
   // W6-B4 / G1: per-agent persona voice identifier (TTS voice name or model ID).
-  // Schema-pinned on Agent.voice; not active until v0.2.0 TTS. Empty string
+  // Schema-pinned on Agent.voice; TTS playback not yet active (tracked #306). Empty string
   // means "not configured" — the wire payload omits the field entirely.
   const [voice, setVoice] = useState('')
   const [maxToolIterations, setMaxToolIterations] = useState(200)
@@ -705,7 +705,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // untouched field. We send `undefined` (omitted) for the empty case.
       // W6-B-fix: trim on the wire so whitespace-only inputs collapse to
       // "no voice configured" rather than persisting a literal "   " that
-      // breaks TTS lookup at v0.2.0 release.
+      // breaks TTS lookup once TTS playback lands (tracked #306).
       //
       // Trim-vs-raw isCurrent gap (item 2, WorkspaceSettingsTab fix):
       // `voice` (and `provider` above) are trimmed HERE, inside the object
@@ -1980,8 +1980,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Runtime</p>
               {/* CLI — read-only badge. The kind+cli tuple is the agent's
                   defining property; the operator can change which CLI is
-                  used by recreating the agent (post v0.3 the wizard will
-                  surface this, per the spec matrix). */}
+                  used by recreating the agent (a wizard path to surface this
+                  is not yet scheduled, per the spec matrix). */}
               <div
                 data-testid="profile-cli-locked"
                 className="flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"

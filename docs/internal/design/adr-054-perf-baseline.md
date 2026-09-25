@@ -1,4 +1,6 @@
 # ADR-054 Wave 4 — Performance gate: baseline measurements
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 
 **Status:** Measured 2026-07-25 against `feature/plan-swimlane-board` while
 Waves 1-3 were concurrently in flight (`pkg/entity`, `pkg/agentstore`,

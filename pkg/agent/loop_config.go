@@ -111,7 +111,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		tools.SetSkillsWriteAuditLogger(al.auditLogger)
 	}
 
-	// Re-wire the shared memory-write rate limiter (v0.2 #155 item 6) onto
+	// Re-wire the shared memory-write rate limiter (#155 item 6) onto
 	// the new registry, re-applying the SAME instance built once in
 	// NewAgentLoop — never a freshly constructed one, so per-agent/per-caller
 	// sliding-window buckets survive config reloads. al.memoryRateLimiter is

@@ -41,8 +41,8 @@ properties:
     enum:
       - llm
     description: >
-      Task action type. Tier 2 accepts `llm` only; the enum grows additively in
-      v0.3.
+      Task action type. Tier 2 accepts `llm` only; the enum grows additively
+      (future growth path — design intent, do not build in this release).
     example: "llm"
   agent_id:
     type: string

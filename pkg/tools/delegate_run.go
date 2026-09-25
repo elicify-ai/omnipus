@@ -186,7 +186,7 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 	// agent — but removing the legacy fallback (which was itself deny-by-
 	// default: config.IsDelegationAllowed/CanSpawnSubagent both returned false
 	// on an unset policy) must not also remove the safety net for the NEXT
-	// wiring bug: a new agent-construction path, a v0.3 plugin-system entry
+	// wiring bug: a new agent-construction path, a future plugin-system entry
 	// point, or a refactor slip that forgets to call the setter. Do NOT
 	// "simplify" this back to fail-open — CLAUDE.md Hard Constraint #6 exists
 	// precisely to forbid a silent runtime default here.
