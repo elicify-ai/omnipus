@@ -126,28 +126,52 @@ test('steered session is reachable in its own live view without leaking child ou
   await waitForConnected(page, { timeout: 15_000 })
   await childInput.fill('Steering update: acknowledge with "steer received" in this child session only.')
   await childInput.press('Enter')
-  // CI run 36026415761 evidence (all 4 attempts): the old bare
-  // page.getByText('steer received') was a strict-mode failure waiting to
-  // happen — it resolved to TWO elements the moment the message was sent:
-  // the sent message's own <p> in [data-testid="virtualized-message-list"]
-  // (the user echo CONTAINS the phrase "steer received" verbatim) and the
-  // chat-input textarea, which still held the typed text. toBeVisible on a
-  // multi-match locator is an instant strict-mode violation, so the
-  // assertion never even waited for the child's ack. Scope to the message
-  // list (excludes the composer textarea) and exclude the user's own echo
-  // (it is the only matching element that also carries "Steering update")
-  // so the only thing this can now match is the CHILD's ack message.
-  const steerAck = page
-    .getByTestId('virtualized-message-list')
-    .getByText('steer received', { exact: false })
-    .filter({ hasNotText: 'Steering update' })
-  await expect(steerAck).toBeVisible({ timeout: 120_000 })
+  // CI runs 36026415761 and 36066315713 (all 4 attempts each): asking the
+  // model to echo a phrase is not an oracle. The original bare
+  // page.getByText('steer received') matched TWO elements the instant the
+  // message was sent (the user's own echo, plus the composer's value), an
+  // instant strict-mode violation. Scoping it to the message list and
+  // filtering out the echo fixed the strict-mode fault but left a worse
+  // one: it then matched ZERO elements, because the child received the
+  // steer, kept working, and simply never repeated the phrase. Verified
+  // from that job's ARIA snapshot — the child's transcript continues past
+  // the steering bubble with two further Delegate chips, and the only
+  // occurrence of "steer received" on the whole page is the user's echo.
+  // The feature is NOT broken: steering delivery into a delegated child's
+  // next round is pinned in Go by
+  // pkg/agent/steer_delegated_injection_test.go (mutation-verified), so the
+  // defect was this spec's oracle, not the product.
+  //
+  // Assert the SERVER's own acknowledgement instead. The delivery badge on
+  // the sent message reaches 'working' only via
+  // pkg/gateway/websocket_chat.go::markWorkingIfTurnAlreadyActive, which
+  // returns early unless liveStreamers[sessionID] != nil — so the badge
+  // proves BOTH that the gateway accepted this steer AND that a live turn
+  // existed on THIS session (the child's) to accept it. That is exactly
+  // what this test means by "reachable", it is decided by the server rather
+  // than by a language model, and it cannot pass while the steer went to
+  // the wrong session or to no live turn at all.
+  const steerDelivery = page.getByTestId('user-message-delivery-status').last()
+  await expect(steerDelivery).toBeVisible({ timeout: 30_000 })
+  await expect
+    .poll(async () => (await steerDelivery.getAttribute('aria-label')) ?? (await steerDelivery.innerText()), {
+      timeout: 120_000,
+      message:
+        'the steer never reached a live turn on the child session — the delivery badge never advanced to "working"',
+    })
+    .toMatch(/working on it/i)
 
   const parentView = await context.newPage()
   await parentView.goto(parentURL)
   await expect(parentView.locator('[data-testid="chat-input"]').first()).toBeVisible({ timeout: 15_000 })
   await expect(parentView.getByText(CHILD_ONLY_SENTINEL, { exact: false })).toHaveCount(0)
-  await expect(parentView.getByText('steer received', { exact: false })).toHaveCount(0)
+  // Containment, restated so it cannot pass vacuously: the STEER ITSELF was
+  // addressed to the child's session, so the parent's chat must not render
+  // it. 'Steering update' is text we sent, so it provably exists somewhere
+  // in the run — a zero-count here is a real absence, not the absence of a
+  // phrase no one ever produced (which is what asserting on the model's
+  // unproduced ack would have been).
+  await expect(parentView.getByText('Steering update', { exact: false })).toHaveCount(0)
   await expect(parentView.locator('[data-testid="tool-call-badge"][data-tool="delegate"]')).toHaveCount(1)
 
   await parentView.reload()
