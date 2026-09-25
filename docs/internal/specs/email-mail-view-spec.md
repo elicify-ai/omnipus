@@ -1,12 +1,12 @@
 # Feature Specification: Email — HTML signatures, workspace Mail panel, agent draft approval
 
 **Created**: 2026-09-25
-**Status:** Draft
-**Revision**: fix round 2, 2026-09-25 — folds grill round-2 findings (40) and founder decisions D27–D30; D27 supersedes D20's agent-turn switch (removed — the switch never ships)
-**Input**: `docs/internal/specs/spec-email-mail-view.md` (interview-me output, Decisions Log D1–D30; later IDs override earlier ones)
+**Status:** Approved
+**Revision**: founder-directed correction, 2026-09-26 — applies founder decisions D31–D34 (founder approved building on 2026-09-25 after corrections): D33 resolves FQ-1 (agent tools gain workspace-file attachments on exactly the send policy — no separate gate), D31 states agents handle mail only when asked or via an operator-configured heartbeat/scheduled task, D32 records the drainer-test outcome (the old drainer works; the watcher's "last checked" state closes its success-logging gap), D34 moves the work branch; prior revision: fix round 2, 2026-09-25 — folds grill round-2 findings (40) and founder decisions D27–D30; D27 supersedes D20's agent-turn switch (removed — the switch never ships)
+**Input**: `docs/internal/specs/spec-email-mail-view.md` (interview-me output, Decisions Log D1–D34; later IDs override earlier ones)
 **Round-1 review**: `docs/internal/specs/email-mail-view-spec-review.md` (BLOCK, 32 findings — every finding is dispositioned in §20)
 **Round-2 review**: `docs/internal/specs/email-mail-view-spec-review-round2.md` (BLOCK, 40 findings — every finding is dispositioned in §21)
-**Work branch**: `feat/email-mail-view` · Integration branch: `release/v0.1.1` (D1 — ships in v0.1.1)
+**Work branch**: `feature/email-mail` (D34 — cut from `release/v0.1.1` @ b6a6f8c87, carrying the spec history of `feat/email-mail-view`) · Integration branch: `release/v0.1.1` (D1 — ships in v0.1.1)
 **Canonical mailbox model**: ADR-033 — *Per-(Agent, Workspace) Email Mailboxes* — **amended inbound clause** (D29/R2-7): the architect writes the dated amendment in this branch; content specified in §19
 **Related issues**: see §19 — closes #629, closes #631; delivers part of #42 (D21)
 
@@ -44,13 +44,17 @@ In scope (all on the existing ADR-033 pair model):
 - The **mailbox drainer is deleted and replaced by a new-mail watcher** (D20, closes #631): the watcher never
   changes flags, never creates Board tasks, and — **D27 — never starts an agent turn**. **An email never
   starts an agent turn**: the mail tools are used actively by the agent inside turns started by humans, tasks
-  or heartbeats; mail is not a trigger. D20's per-mailbox switch "Let the agent handle new mail" is
-  **removed** — it never ships. The watcher only advances its UID state and feeds the unread badge and the
-  "last checked" state, refreshed every 60 s from the saved watcher state with no IMAP login (D29/R2-5).
-- **Attachments for humans** (D28): download attachments from any message; attach files when composing and
-  when editing drafts — including drafts started in other mail programs, whose attachments are carried over
-  unchanged. Whether agent tools may attach files is an **open founder question** (§14 FQ-1) — no agent tool
-  gains an attachment parameter in this spec.
+  or heartbeats; mail is not a trigger. **D31: agents handle mail only when asked, or through a heartbeat /
+  scheduled task the operator configures ("check your inbox") — nothing about mail is automatic.** D20's
+  per-mailbox switch "Let the agent handle new mail" is **removed** — it never ships. The watcher only
+  advances its UID state and feeds the unread badge and the "last checked" state, refreshed every 60 s from
+  the saved watcher state with no IMAP login (D29/R2-5).
+- **Attachments** (D28 for humans, **D33 for agents**): download attachments from any message; attach files
+  when composing and when editing drafts — including drafts started in other mail programs, whose
+  attachments are carried over unchanged, listed explicitly in the panel before send. **D33**: the agent
+  tools (`send_email`, `reply`, `create_email_draft`) gain an optional `attachments` parameter of
+  **workspace files**, governed by **exactly the same tool policy as the send itself** — no separate ask
+  gate, no special caps beyond the general message limits already in this spec (§5.3 MC-32/MC-22/MC-27).
 - Humans can **compose and send mail manually** from the Mail panel (D9), with To/CC/BCC and a Reply action
   (round-2 MIN-009) that pre-fills from the open message.
 - The Mail panel refreshes every **30 seconds while the panel is open**, never in the background from the
@@ -69,8 +73,6 @@ In scope (all on the existing ADR-033 pair model):
 Out of scope for this spec:
 
 - Any mailbox-model change (ADR-033 stands; cap, pairing, credentials, move semantics all unchanged).
-- Agent-tool attachment parameters — an open founder question (§14 FQ-1); explicitly not built here (D28
-  leaves it open, and this spec does not assume the answer).
 - Server-side search UI in the Mail panel (the agent's `search_email` tool is unchanged).
 - WebSocket push of new mail to the SPA — the panel polls per D25; the watcher drives the badge via its
   summary endpoint (A2).
@@ -125,6 +127,16 @@ bodies — D6-permitted; see FR-033).
 
 Not built: no `MailDraftCreateRequest` REST schema — humans do not create drafts in v1 (compose offers Send;
 "save as draft" for humans is out of scope). Agent draft creation is a **tool**, not a REST endpoint (§2.4).
+
+**Agent attachments (D33) — contract story.** The agent path needs **no new `contracts/` schema**: tool
+parameters are not gateway/SPA wire bytes (§2.4 precedent — `send_email`/`reply` parameters carry no schema
+either), and every SPA-consumed shape already exists. The parameter is defined in the tools' JSON schemas
+(§2.4): an optional list of **workspace-file references** (strings), which the backend resolves server-side
+through the same workspace-path resolution the generic file tools use
+(`pkg/tools/resolvepath.go::ResolvePath`) into the same internal attachment inputs the human paths already
+carry (`MailAttachmentInput` over the REST routes; `MailAttachment` descriptors already render on
+`MailMessage.attachments`, so an agent-attached draft is listed in the approval panel with no UI change).
+`CreateEmailDraftResult` is unchanged.
 
 ### 2.3 New REST endpoints (all session-authenticated, versioned under `/api/v1`)
 
@@ -186,9 +198,18 @@ Notes binding the whole table:
 
 | Tool | Change |
 |---|---|
-| `send_email` | `body` becomes **Markdown** (D3). `to` becomes a **recipient list** (minItems 1) plus optional `cc`/`bcc` lists (D26). **Recipient cap on every send path** (round-2 MAJ-015, D29/R2-6): ≤ **50 recipients total across To/Cc/Bcc** after de-duplication; each address parsed with `net/mail.ParseAddress` (display names kept, RFC 2047-encoded per MC-4); 51st recipient = tool error before any SMTP connection. **No attachment parameters** — D28 leaves agent-tool attachments as an open founder question (§14 FQ-1); this spec does not assume the answer. Description updated; rendering, signature and Sent APPEND happen server-side |
-| `reply` | **Defined** (round-2 MAJ-014): the primary recipient stays **derived** from the original's Reply-To/From (never a required `to` — existing reply prompts keep working); optional `cc`/`bcc` lists are **added**; optional `reply_all: bool` adds the original's To/Cc **minus the mailbox's own address**; body becomes Markdown (D3). The ≤ 50 cap applies to the merged recipient set. Rendering, signature and Sent APPEND as `send_email` (D26) |
-| `create_email_draft` | **New.** Params: `to` (list, minItems 1), `cc`/`bcc` (optional lists), `subject`, `body` (Markdown), optional `in_reply_to`. APPENDs to the mailbox's Drafts folder with `\Draft` (D8). Never sends. Generates the Message-ID itself: `<random-128-bit@domain-of-the-mailbox's-From-address>` (fallback `omnipus.invalid` when no domain is derivable); the same ID is kept through panel edits and the final send (round-1 MIN-004). Marks itself with an `X-Omnipus-Draft` header (FR-029). Returns `{"created":true,"message_id":"...","uid":123,"uidvalidity":456,"chat_link":"…" or null,"chat_link_reason":string|null}`; `chat_link` is built from `gateway.public_url` exactly like `serve_web` derives its origin — **http allowed**; when no origin is derivable (unset `public_url`, wildcard bind) the tool still succeeds and returns `chat_link: null` with the stated reason (round-1 MAJ-013; `pkg/tools/web_serve.go` precedent, `TestServeWebPublicURL`). **Recipient cap** ≤ 50 across To/Cc/Bcc after de-dup, same parsing as `send_email` (round-2 MAJ-015). **No attachment parameters** — open founder question §14 FQ-1 (D28), not assumed either way. Result values are the `CreateEmailDraftResult` schema (§2.2 — round-2 MIN-013: the SPA's "Open draft" action consumes the generated type, not a hand-written shape) |
+| `send_email` | `body` becomes **Markdown** (D3). `to` becomes a **recipient list** (minItems 1) plus optional `cc`/`bcc` lists (D26). **Recipient cap on every send path** (round-2 MAJ-015, D29/R2-6): ≤ **50 recipients total across To/Cc/Bcc** after de-duplication; each address parsed with `net/mail.ParseAddress` (display names kept, RFC 2047-encoded per MC-4); 51st recipient = tool error before any SMTP connection. **Attachments** (D33): optional `attachments`
+parameter — a list of **workspace-file references** (relative paths in the agent's workspace), resolved
+server-side by the same workspace-path resolution the generic file tools use
+(`pkg/tools/resolvepath.go::ResolvePath`); a reference that resolves outside the workspace, or to a
+nonexistent file, is **invalid input** (tool error before any SMTP connection), not a policy question.
+Governed by **exactly the same tool policy as the send itself** — one call, one policy resolution, **no
+separate ask gate**; only the general message limits already in this spec apply (≤ 10 files / ≤ 25 MiB
+total, MC-32; 1 MiB body, MC-22; 50 recipients, MC-27), all enforced before dialing. **Description text**
+must document the parameter and state that attaching files carries no separate approval — the tool's own
+policy governs the whole call. Description updated; rendering, signature and Sent APPEND happen server-side |
+| `reply` | **Defined** (round-2 MAJ-014): the primary recipient stays **derived** from the original's Reply-To/From (never a required `to` — existing reply prompts keep working); optional `cc`/`bcc` lists are **added**; optional `reply_all: bool` adds the original's To/Cc **minus the mailbox's own address**; body becomes Markdown (D3). The ≤ 50 cap applies to the merged recipient set. **Attachments** (D33): the same optional workspace-file `attachments` parameter as `send_email` — same policy rule (the tool's own policy governs the whole call, no separate gate), same general caps pre-dial (MC-32/MC-22/MC-27), same invalid-input rule for references outside the workspace. Rendering, signature, attachment MIME assembly and Sent APPEND as `send_email` (D26) |
+| `create_email_draft` | **New.** Params: `to` (list, minItems 1), `cc`/`bcc` (optional lists), `subject`, `body` (Markdown), optional `in_reply_to`. APPENDs to the mailbox's Drafts folder with `\Draft` (D8). Never sends. Generates the Message-ID itself: `<random-128-bit@domain-of-the-mailbox's-From-address>` (fallback `omnipus.invalid` when no domain is derivable); the same ID is kept through panel edits and the final send (round-1 MIN-004). Marks itself with an `X-Omnipus-Draft` header (FR-029). Returns `{"created":true,"message_id":"...","uid":123,"uidvalidity":456,"chat_link":"…" or null,"chat_link_reason":string|null}`; `chat_link` is built from `gateway.public_url` exactly like `serve_web` derives its origin — **http allowed**; when no origin is derivable (unset `public_url`, wildcard bind) the tool still succeeds and returns `chat_link: null` with the stated reason (round-1 MAJ-013; `pkg/tools/web_serve.go` precedent, `TestServeWebPublicURL`). **Recipient cap** ≤ 50 across To/Cc/Bcc after de-dup, same parsing as `send_email` (round-2 MAJ-015). **Attachments** (D33): optional workspace-file `attachments` parameter, same rules as `send_email` — the tool's own policy governs the whole call (no separate gate), general caps enforced pre-APPEND (MC-32/MC-22/MC-27), references outside the workspace or nonexistent are invalid input. Attached files are APPENDed as MIME parts of the draft, so the human approval panel lists exactly what would be sent (`MailMessage.attachments`) and the panel send carries them unchanged (FR-034/FR-035 machinery). Result values are the `CreateEmailDraftResult` schema (§2.2 — round-2 MIN-013: the SPA's "Open draft" action consumes the generated type, not a hand-written shape) |
 
 ### 2.5 Config keys
 
@@ -235,6 +256,13 @@ real agents:
 Reachability is asserted **behaviorally**, not by grep: for a seeded core agent and an operator-created
 agent, both with an enabled mailbox, the effective policy of `create_email_draft` resolves to `allow` and the
 tool is present in the agent's registry (§9 SC-007).
+
+**D33 adds no touch point.** The attachment parameter is governed by exactly the same policy entries as the
+tool itself: no new ceiling entry (point 1), no new D19-fill entry (point 2), no new inventory/seed literal
+(points 3–4), no new auto-approve classification (point 5 — the whole call, attachments included, carries the
+tool's own classification; the send tools stay `AutoAsks`, so auto-approve never silently runs them, Hard
+Constraint #6). A per-attachment gate, policy entry or cap would contradict the founder decision (D33).
+MC-15's schema-change scope covers the new parameter (§5.3).
 
 ---
 
@@ -510,7 +538,8 @@ anything read; **opening** a message in the panel marks it `\Seen` via the dedic
 round-2 MAJ-003). Agent `read_message` keeps its existing `\Seen` behavior (unchanged). **D27: an email
 never starts an agent turn.** The watcher never mutates flags, never creates Board tasks, and never starts
 an agent turn — it feeds only the unread badge and the "last checked" state; the email tools are used
-actively by the agent inside turns that humans, tasks or heartbeats started. D20's per-mailbox switch
+actively by the agent inside turns that humans, tasks or heartbeats started (D31: agents handle mail only
+when asked, or through an operator-configured heartbeat / scheduled task — nothing automatic). D20's per-mailbox switch
 "Let the agent handle new mail" is **removed** and never ships — no code, no UI, no config key (it never
 existed in code; the round-2 CRIT-002 attack path is closed by removal, and the R2-1 tool-restriction
 question dies with it). (This story replaces the round-1 draft's "handled by agent" badge, which was built
@@ -573,8 +602,10 @@ replaced elsewhere in between) returns 409 and sends nothing.
 
 Humans can download attachments from any message in the Mail panel and attach files to messages they send —
 from compose, and when editing drafts, including drafts started in other mail programs (their attachments are
-carried over unchanged, listed explicitly in the panel before send). Whether agent tools may attach files is
-an open founder question (§14 FQ-1); this story covers human paths only and does not assume the answer.
+carried over unchanged, listed explicitly in the panel before send). **D33 resolves the open point**: agent
+tools gain the same capability for **workspace files** — `send_email`, `reply` and `create_email_draft` take
+an optional `attachments` parameter governed by exactly the same tool policy as the send itself (no separate
+gate; general message limits only).
 
 **Why this priority**: D28's explicit ask; it extends the send/approve flows rather than blocking them, which
 is why it sits at P1.
@@ -597,6 +628,12 @@ it); edit a foreign draft carrying an attachment and send — the attachment arr
    the attachments are carried over **server-side by part reference** (FR-035), the panel lists exactly what
    will be carried before send, and removal is an explicit action — the round-2 MAJ-010 data-loss path
    (silent attachment drop) is closed, not merely warned about.
+5. **Given** an agent with an enabled mailbox and a file in its workspace, **When** the agent sends or drafts
+   with that file attached (D33), **Then** the message/draft carries it as a MIME part (the approval panel
+   lists it before send), the call resolves under **exactly the tool's own policy** — one approval for the
+   whole call, no separate attachment gate (T65) — the general caps reject the 11th file / > 25 MiB /
+   outside-workspace reference before any dial (T67), and the audit/transcript records carry the attachment
+   names and sizes (MC-19).
 
 ---
 
@@ -626,6 +663,11 @@ it); edit a foreign draft carrying an attachment and send — the attachment arr
 - When any message in the panel has attachments, the human can download each one under its sanitized
   filename; when compose or draft editing adds files (≤ 10, ≤ 25 MiB), the sent and Sent copies carry them,
   and a foreign draft's attachments carry over by part reference (D28, FR-034/FR-035).
+- When an agent calls `send_email`, `reply` or `create_email_draft` with workspace-file attachments, the call
+  resolves under exactly the tool's own policy — no separate attachment gate (D33, MC-35) — the attachments
+  ride the message as MIME parts (a draft included, so the approval panel lists exactly what would be sent),
+  within the general message limits (MC-32), with the attachment names and sizes recorded in the audit and
+  transcript like any send (MC-19).
 
 ### 5.2 Explicit non-behaviors
 
@@ -641,9 +683,14 @@ it); edit a foreign draft carrying an attachment and send — the attachment arr
   client.
 - The system must never start an agent turn from an email — no switch, no trigger, no config key (D27; the
   round-2 CRIT-002 path is removed, not hardened), because unattended attacker-triggered turns are the exact
-  prompt-injection shape CRIT-002 described.
-- The system must not give agent tools attachment parameters in this wave — D28 leaves tool attachments as
-  an open founder question (§14 FQ-1), and this spec builds the human attach/download paths only.
+  prompt-injection shape CRIT-002 described. **D31**: agents handle mail only when asked (inside a
+  human/task-started turn) or through a heartbeat / scheduled task the operator configures — nothing about
+  mail is automatic; user docs state the same.
+- The system must not add a separate approval gate, policy entry or special cap for the agent tools'
+  attachment parameter (D33) — attaching workspace files rides exactly the tool's own policy resolution and
+  the general message limits (MC-32/MC-22/MC-27); a per-attachment ask prompt, a separate ceiling/fill entry
+  or attachment-only caps would contradict the founder decision. The human attach/download paths (D28) are
+  unchanged.
 - The system must not serve the mail HTML frame from the API prefix or put `'self'` in its CSP — the
   Library-preview defects (CRIT-001) are measured repo history, not theory (`pkg/gateway/library_isolation_policy.go`).
 - The system must not change the send tools' policy resolution beyond D19's configure-time no-overwrite fill
@@ -679,11 +726,11 @@ it); edit a foreign draft carrying an attachment and send — the attachment arr
 | MC-12 | After exercising all Mail panel endpoints against a temp data dir, a sweep of the data dir shows no file containing message body text (watcher state files excepted — they contain UIDs/counts only); transcripts excluded per D21 | integration test assertion |
 | MC-13 | A draft deep link for an agent/workspace that does not exist, or a pair with no mailbox → HTTP 404 with no body or folder leakage (single-user model — `GatewayConfig.Users` holds at most one entry; there is no second session to test) | handler test |
 | MC-14 | Drafts listed with `is_draft=true` and `is_omnipus_draft` reflecting `X-Omnipus-Draft`; APPEND to Drafts always sets the `\Draft` flag; listings exclude `\Deleted` messages | transport fake assertion |
-| MC-15 | The five existing email tools' schemas change only per D26 (recipient lists) and D3 (body = Markdown description text); no other parameter changes | contract review check |
+| MC-15 | The five existing email tools' schemas change only per D26 (recipient lists), D3 (body = Markdown description text) and D33 (the optional workspace-file `attachments` parameter); no other parameter changes | contract review check |
 | MC-16 | Panel send with a stale precondition (draft at `uidvalidity:uid` no longer matches) → HTTP 409, nothing transmitted, no flag or folder mutated | handler test |
 | MC-17 | Discard/edit old-copy deletion: with UIDPLUS, `UID EXPUNGE` removes exactly the target UID; without UIDPLUS, only `\Deleted` is stored and listings (ours) exclude it — a non-UID `EXPUNGE` is never issued by Omnipus | transport fake tests (both server shapes) |
 | MC-18 | A full watcher cycle over a mailbox with new mail: no `\Seen`/flag STORE issued, no Board task created, **no agent turn started** (D27 — nothing exists to start one), state file gains only `last_seen_uid`/`unseen_total`/`uidvalidity`/error fields (D20 as amended by D27) — asserted against the **`startMemIMAP` real-protocol harness** (round-2 MAJ-004), not a hand-written fake, because a fake cannot observe the absence of a flag STORE from a non-peek fetch | `startMemIMAP` integration test + state-file assertion |
-| MC-19 | Human send, panel send, panel edit and panel discard each emit an audit event carrying pair, folder, Message-ID, recipient addresses (incl. Bcc — MAJ-005's audit-trail requirement, D29/R2-3), origin (`human`\|`agent-draft`\|`owner-draft` — round-2 MIN-006: a panel send of a foreign draft), argument hash and outcome; agent tool sends remain covered by existing transcript/policy records | gateway audit tests (`pkg/gateway/rest_preview_audit.go` precedent, `pkg/audit::argshash`) |
+| MC-19 | Human send, panel send, panel edit and panel discard each emit an audit event carrying pair, folder, Message-ID, recipient addresses (incl. Bcc — MAJ-005's audit-trail requirement, D29/R2-3), origin (`human`\|`agent-draft`\|`owner-draft` — round-2 MIN-006: a panel send of a foreign draft), argument hash, outcome — **and, when the message carries attachments, their filenames and sizes (D33: names/sizes recorded like any send)**; agent tool sends remain covered by existing transcript/policy records (the full tool arguments — attachment references included — land in the transcript, §3.3) | gateway audit tests (`pkg/gateway/rest_preview_audit.go` precedent, `pkg/audit::argshash`) |
 | MC-20 | The mutating mail routes (manual send, panel send/edit/discard) are wrapped in `withRateLimit` with a **dedicated `mailMutationLimiter` instance** (round-2 MIN-004 — never a shared limiter, which would couple the budgets) at **10 requests/minute** per IP; the 11th within the window → HTTP 429 | handler test |
 | MC-21 | SMTP dial black-hole returns within the dial bound; a stall after connect returns within the command bound; caller-context cancellation aborts the send — all three via the FR-027 mechanisms (#629) | unit tests on `Client.Send` |
 | MC-22 | Outbound body beyond **1 MiB** → HTTP 400 on the REST send routes and a tool error on the agent path (nothing transmitted) | unit + handler tests |
@@ -698,9 +745,10 @@ it); edit a foreign draft carrying an attachment and send — the attachment arr
 | MC-31 | Watcher UID state (round-2 MAJ-001): state file carries `uidvalidity`; on UIDVALIDITY change or first run (no state), the watcher **baselines to `UIDNEXT-1`** without flagging the backlog as new, and logs once; state file keyed by `(agent, workspace)` and deleted with the mailbox | watcher unit/integration tests (`startMemIMAP`) |
 | MC-31a | The deep link's redirect stub copies `mailbox`/`folder`/`message` query params into `openMailPanel({agentId, folder, ref})` before navigating back to Chat (round-2 MIN-012) — the parameters survive the stub | E2E: link with params → panel opens on the draft |
 | MC-31b | Watcher failure logging follows the FR-036 rate rule (round-2 MIN-015/007): first failure + every state change at WARN, ≤ 1 summary line per mailbox per backoff step, one INFO on recovery; request-path failures log once per request. State file deleted with the mailbox | unit test with a scripted failure sequence |
-| MC-32 | Attachment caps on **every** attach path (compose, draft edit, panel send; round-2 MAJ-015/D28): ≤ 10 files, ≤ 25 MiB total decoded; filename sanitized on serve **and** on attach; `data_base64` validated before any SMTP connection | unit + handler tests (11th file, > 25 MiB, path-y filename) |
+| MC-32 | Attachment caps on **every** attach path (compose, draft edit, panel send, **and the agent tools' `attachments` parameter — D33/MC-35**; round-2 MAJ-015/D28): ≤ 10 files, ≤ 25 MiB total decoded; filename sanitized on serve **and** on attach; `data_base64` (human paths) and workspace-file references (agent path) validated before any SMTP connection | unit + handler tests (11th file, > 25 MiB, path-y filename) |
 | MC-33 | Connection resilience (D29/R2-8, R2-9; round-2 MAJ-016..018): context-aware dial (FR-037) retries **only** name-resolution failures, bounded (3 attempts, 250 ms → 1 s) inside the overall dial bound; never retries auth/TLS; per-mailbox backoff 60 s → 2 → 4 … cap 15 min with ±20% jitter, first cycles randomly offset 0–60 s so same-host mailboxes never align; `auth_failed` backs off to the cap; manual Retry bypasses backoff for that one request; identical concurrent refreshes coalesce (N tabs = 1 login); no automatic dial while backing off | injected-resolver unit tests (fails twice → succeeds once; always-fails → `dns` class within the bound); fake-clock backoff/jitter tests; `startMemIMAP` LOGIN-count test with 3 tabs |
 | MC-34 | FR-036 logging-rate rule holds (round-2 MIN-015): a 13-mailbox failure window produces bounded log volume (first failure + state changes, not per cycle) | unit test with a scripted multi-mailbox failure window |
+| MC-35 | Agent tool attachment parameter (D33): an attachment-bearing call resolves under **exactly the same effective policy** as the same call without it — no separate ask gate, no separate ceiling/fill/inventory/auto-approve entry (send tools stay `AutoAsks`, so auto-approve never silently runs them, Hard Constraint #6); references resolve through the tools' workspace-path resolution (`pkg/tools/resolvepath.go::ResolvePath`) — a reference resolving **outside the workspace or to a nonexistent file is invalid input**, rejected before any SMTP connection or APPEND, naming the offending reference; only the general message limits apply (MC-32 caps, MC-22 body bound, MC-27 recipient cap); audit/transcript records carry attachment filenames and sizes | unit tests (T64/T65/T67): policy identical with/without the parameter; caps and invalid references rejected pre-dial; audit/transcript carries names + sizes |
 
 ### 5.4 Integration boundaries
 
@@ -1083,6 +1131,40 @@ accepted (FR-006).
 - **Then** the watcher still advances `last_seen_uid` and the badge reflects the state — the watcher keys on
   **UID, not UNSEEN** (round-2 MAJ-019, MC-18)
 
+#### Scenario B-49: Agent send with a workspace-file attachment
+**Traces to**: US-8, AS-5 · **Category**: Happy Path
+- **Given** an agent whose effective `send_email` policy allows it, and a file in the agent's workspace
+- **When** the agent calls `send_email` with that file attached
+- **Then** the transmitted message carries the file as a MIME attachment (name and bytes match the workspace
+  file) and the Sent copy carries it too (MC-32)
+- **And** the call's policy resolution is identical to the same call without the parameter (D33, MC-35, T65)
+
+#### Scenario B-50: Agent draft carries attachments into the approval panel
+**Traces to**: US-8, AS-5 · **Category**: Happy Path
+- **Given** an agent with a workspace file, allowed `create_email_draft`
+- **When** it calls `create_email_draft` with the file attached
+- **Then** the draft is APPENDed with the file as a MIME part, and the approval panel lists it via
+  `MailMessage.attachments` before the human sends
+- **And** the panel send transmits the attachment unchanged (FR-034/FR-035 machinery)
+
+#### Scenario B-51: No separate gate for the attachment parameter
+**Traces to**: US-8, AS-5 · **Category**: Alternate Path
+- **Given** a mailbox whose configure-time fill set `send_email` to `ask` (D19), auto-approve off
+- **When** the agent calls `send_email` with an attachment
+- **Then** exactly one approval covers message **and** attachments — the tool's own ask; no second
+  attachment prompt, no separate policy entry exists (D33, MC-35)
+- **And** with the policy resolved to `allow`, the same call (attachments included) runs with no new prompt —
+  attaching changes nothing about resolution (MC-35)
+
+#### Scenario B-52: Caps and invalid references reject pre-dial
+**Traces to**: US-8, AS-5 · **Category**: Error Path
+- **Given** attachment lists at the MC-32 boundaries (10 files pass, 11th fails; ≤ 25 MiB total passes, over
+  fails) and a reference that resolves outside the workspace or to a nonexistent file
+- **When** the agent calls any of the three tools with such a list
+- **Then** the invalid list fails as a tool error **before any SMTP connection or APPEND** — nothing is
+  transmitted, nothing drafted (B-41's pre-dial discipline, MC-32/MC-35)
+- **And** the failure names the offending reference
+
 ---
 
 ## 7. TDD plan (tests designed before implementation)
@@ -1129,7 +1211,7 @@ unreachable mailbox, refresh cadence with fake timers).
 | 29 | `TestPanelOpenMarksSeen` | `startMemIMAP` | B-27 | Panel open → exactly one seen-endpoint call → `\Seen` server-side; repeat open is a no-op (idempotent); list/read paths never write flags (round-2 MAJ-003, MC-24) |
 | 30 | `TestWatcher_NeverMutatesFlags` + `TestWatcher_KeyedOnUIDNotUnseen` | `startMemIMAP` | B-28, B-48, B-15 | Watcher cycle: no flag STORE, no Board task, **no agent turn** (D27), state file UIDs/counts only (MC-18); a message marked `\Seen` by another client still advances the UID state (MAJ-019's named check) — real-protocol harness (round-2 MAJ-004) |
 | 31 | `TestMailSummaryEndpoint` | Integration | B-18 | Badge summary matches watcher state; error-state mailbox reports class (MC-23) |
-| 32 | `TestMailAuditEvents` | Integration | (MC-19) | Four human actions emit audit events with pair/folder/Message-ID/recipients/origin/hash |
+| 32 | `TestMailAuditEvents` | Integration | (MC-19) | Four human actions emit audit events with pair/folder/Message-ID/recipients/origin/hash; **sends carrying attachments record their filenames and sizes in the audit event (D33, MC-19)** |
 | 33 | `TestMailRateLimit` | Integration | (MC-20) | 11th mutating mail request in the window → 429 |
 | 34 | `TestEffectiveDraftToolPolicy_BothAgentKinds` | Unit | (FR-013) | Seeded core agent **and** operator-created agent, both with enabled mailbox: `create_email_draft` effective policy = `allow` and present in the registry (replaces the round-1 SC-007 grep) |
 | 35 | `TestDeepLink_CrossPairDenied` | Integration | B-21 | Unknown agent/workspace or pair without mailbox → 404, no leakage (MC-13) |
@@ -1141,7 +1223,7 @@ unreachable mailbox, refresh cadence with fake timers).
 | 41 | `MailHtmlFrame.spec.ts` | Component | B-17 | Sandboxed frame posture; "Load images" re-mint; `cid:` part route used |
 | 42 | `DraftDeepLink.spec.ts` | E2E (stubbed route state) | B-20, B-21, B-22 | Link → panel navigation; not-found state; "Sent on" state |
 | 43 | `MailDraftMarkdownRender.test.tsx` | Component | (MIN-009) | Raw HTML in draft Markdown stays inert (`skipHtml`; hostile `<img onerror>` renders nothing) |
-| 44 | UAT lane — live mailbox | UAT | B-1..B-48 (sample) | Real IMAP/SMTP: signature on received mail, Sent APPEND visible in the owner's client (duplicates accepted per D18 on auto-filing providers — the check is "appears", not "appears exactly once"), draft link → panel, edit, send, discard, watcher badge moves on real mail (B-47), **real test email to the live gateway (D30's live check)** |
+| 44 | UAT lane — live mailbox | UAT | B-1..B-52 (sample) | Real IMAP/SMTP: signature on received mail, Sent APPEND visible in the owner's client (duplicates accepted per D18 on auto-filing providers — the check is "appears", not "appears exactly once"), draft link → panel, edit, send, discard, watcher badge moves on real mail (B-47), **real test email to the live gateway (D30's live check; outcome recorded as D32 — the old drainer worked, creating the Board task 38 s after the send; its verified gap is success-logging, which the watcher's `last_success_at`/"last checked" state closes, MC-23)**, **agent send/draft with a workspace-file attachment arrives with the attachment (D33, B-49/B-50)** |
 | 45 | `TestSeenEndpoint_IdempotentNoop204` | `startMemIMAP` | B-27 | Repeat seen call → 204 no-op, no second flag STORE (MC-24) |
 | 46 | `TestFetchCommands_PeekOnly` | `startMemIMAP` (command capture) | B-12, B-17 | Captured FETCH commands on list/read/preview: **no non-peek `BODY[]` fetch** (MC-25; round-2 MAJ-003) |
 | 47 | `TestMailboxConfigurePolicyFill` | Unit | B-46 | The MC-26 table: absent → ask/allow per tool; explicit `allow`/`ask`/`deny` unchanged; a seeded Admin's `deny` stays (round-2 MAJ-013, D19) |
@@ -1161,6 +1243,10 @@ unreachable mailbox, refresh cadence with fake timers).
 | 61 | `TestMailSummary_NeverLies` | Integration | B-18 | New summary fields present; `last_success_at` null until a cycle succeeds; `next_attempt_at` set in backoff (MC-23, round-2 MAJ-019) |
 | 62 | `TestMailPreview_NoRedirectAndWebKitCookie` | Integration | B-17 | The mail-preview prefix never redirects; an untrusted `<img src="/api/v1/…">` loads nothing (MC-10, round-2 CRIT-001) |
 | 63 | `TestHtmlPreview_MintOnceNoIMAP` | Integration | B-17 | The serve/part routes never dial IMAP after mint — one fetch per preview (round-2 MAJ-003, MAJ-008) |
+| 64 | `TestSendEmailTool_WorkspaceAttachment` | Unit (fake) | B-49 | Attachment resolves through the tools' workspace-path resolution and rides the MIME structure on the transmitted and Sent copies; MC-32 caps enforced pre-dial (MC-35) |
+| 65 | `TestAgentAttachment_SamePolicyResolution` | Unit | B-51 | Effective policy identical with/without the `attachments` parameter; no separate gate, ceiling/fill/inventory entry or auto-approve classification (MC-35, D33) |
+| 66 | `TestCreateEmailDraftTool_AttachmentsToPanel` | Unit (fake) + Integration | B-50 | Draft carries attachments as MIME parts; `MailMessage.attachments` lists them in the panel; panel send re-attaches unchanged (FR-034/FR-035) |
+| 67 | `TestAgentAttachment_CapsAndInvalidRefPreDial` | Unit | B-52 | 11th file / > 25 MiB / outside-workspace or nonexistent reference → tool error pre-dial, nothing transmitted; the failure names the reference (MC-32, MC-35) |
 
 ### 7.1 Test datasets
 
@@ -1174,6 +1260,7 @@ unreachable mailbox, refresh cadence with fake timers).
 | DS-6 Draft lifecycle | create ok, create with missing to (reject), draft deleted before link click, draft in nonexistent pair (404), **foreign (owner-authored) draft**, **stale-precondition send (409)**, **edit: APPEND ok + delete-flag fail (warning)**, **discard under non-UIDPLUS server**, **foreign draft with attachments (carry-over listed before send — round-2 MAJ-010)**, **stale `X-Omnipus-Render-Hash` (foreign path + loss statement)** | B-19, B-21, B-23, B-24, B-30..B-40 |
 | DS-7 Mailbox roster | 0 mailboxes (empty state), 1 mailbox (no picker), 2 mailboxes (picker), mailbox enabled but password unresolvable (skip + explicit state) | B-11, B-13, B-14 |
 | DS-8 Watcher cycles | no new mail (expected: state unchanged), new mail (expected: `last_seen_uid`/`unseen_total` advance), 30+ new messages in one cycle (**expected: state advances once, badge shows one count — no per-message work**), mailbox in error (expected: class stored, backoff starts per D29/R2-8), **UIDVALIDITY reset (expected: silent re-baseline, log once — round-2 MAJ-001)**, **mail read by another client (expected: UID state still advances — UID-keyed, round-2 MAJ-019)**, **backoff schedule with fake clock (expected: 60s→2→4…15min ±20% jitter, auth_failed at cap)**, **3-tab coalescing (expected: ≤1 LOGIN/tick, zero auto-dials in backoff)** | B-18, B-28, B-29, B-43..B-45, B-48 |
+| DS-9 Agent attachment inputs | 1 workspace file (happy), 10 files at the cap (pass), 11th (reject), 25 MiB total boundary (pass / over rejects), reference resolving **outside the workspace** (reject), nonexistent file (reject), unicode filename, filename with path separators (sanitized per MC-32) | B-49, B-50, B-52 |
 
 ### 7.2 Regression impact
 
@@ -1182,10 +1269,15 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
 - **The drainer is deleted, not protected** (#631, D20): `pkg/email/drainer.go`, `pkg/heartbeat/mailbox_drain.go`
   and both wiring sites (`gateway_boot.go`, `gateway_reload.go`) go, together with their suites — after this
   spec lands, no code or test references `Drainer`. The drainer's *task-creation* behavior class is retired
-  by decision (D20), and the replacement watcher is covered by MC-18/DS-8.
+  by decision (D20), and the replacement watcher is covered by MC-18/DS-8. **D32 (2026-09-25 live test): the
+  old drainer works** — Dmitri's test mail (17:05:02Z) became Board task "Email: Omnipus mail test
+  20260925T170502Z" at 17:05:40Z, and the agent handled it to done — the agent mailboxes had simply received
+  no mail before. Its verified defect is observability: it logs nothing on success. The watcher's per-mailbox
+  "last checked" state (`last_success_at`, MC-23/T61, B-47) closes exactly that gap; the deletion is by
+  decision (#631/D20/D27 — no task path, no turn path), never by failure.
 - `read_inbox` / `search_email` / `read_message` semantics unchanged (folder=INBOX only, \Seen on
   `read_message`, envelope-only lists, pagination cursors) — `pkg/tools` email suites stay green; only
-  recipient-list (D26) and description-text (D3) assertions change (MC-15).
+  recipient-list (D26), description-text (D3) and attachment-parameter (D33) assertions change (MC-15).
 - Send-policy resolution is **unchanged** (D15): the ceiling ships as it ships today; built-in roles keep
   `ask` via the ADR-090 inventory; the only behavior change is D19's configure-time fill (replacing
   `grantEmailToolAllows`), which writes **only** where the agent has no explicit entry. T34 asserts both agent
@@ -1307,9 +1399,11 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
 - **FR-024**: (Superseded by D27.) No path from an email to an agent turn exists: the watcher MUST NOT
   dispatch, queue, or enqueue work into any agent session, task system or heartbeat, and an email MUST NOT
   appear as a trigger source anywhere (MC-18, B-28, B-29). The agent uses the email tools actively inside
-  turns started by humans/tasks/heartbeats — mail is not a trigger. The D20 switch "Let the agent handle new
+  turns started by humans/tasks/heartbeats — mail is not a trigger, and **agents handle mail only when
+  asked, or through a heartbeat / scheduled task the operator configures — nothing about mail is automatic
+  (D31)**. The D20 switch "Let the agent handle new
   mail" and its `MailboxConfigureRequest` wiring are removed outright (greenfield — no deprecated field
-  survives; D27). [D27; round-2 CRIT-002 closed by removal]
+  survives; D27). [D27, D31; round-2 CRIT-002 closed by removal]
 - **FR-025**: Human send, panel send, panel edit and panel discard MUST each emit an audit event carrying
   pair, folder, Message-ID, recipient addresses (incl. Bcc), origin (`human`\|`agent-draft`\|`owner-draft` —
   round-2 MIN-006: a panel send of a foreign draft), argument hash and outcome.
@@ -1357,8 +1451,8 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
   `GET …/messages/{ref}/attachments/{partIndex}` (§2.3; 200 part bytes / 404 unknown part / 502 upstream,
   `Content-Disposition` filename sanitized); **attach on compose and draft edit** (incl. externally started
   drafts — carry-over per FR-035); caps per MC-32: ≤ 10 files and ≤ 25 MiB total decoded, enforced
-  pre-dial. **Whether agent tools may attach files is founder question FQ-1** — no tool attachment parameter
-  is specified this wave. [D28; round-2 MAJ-010, MAJ-015]
+  pre-dial. Agent-tool attachments are resolved by **D33 → FR-038** (no longer open).
+  [D28; round-2 MAJ-010, MAJ-015]
 
 - **FR-035**: A foreign draft's attachments MUST carry over by **part reference** (`partIndex` into the
   fetched structure), listed in the panel before send; sending re-attaches the referenced parts byte-for-byte
@@ -1380,6 +1474,18 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
   concurrent refreshes **coalesce** (N tabs = 1 login); no automatic dial while a mailbox is backing off.
   No cause is asserted for D22's DNS windows (D30) — the schedule is specified independent of cause.
   [D29; D30; round-2 MAJ-016, MAJ-017, MAJ-018, OBS-004]
+
+- **FR-038** (D33): The agent mail tools (`send_email`, `reply`, `create_email_draft`) MUST accept an optional
+  `attachments` parameter of **workspace-file references**, resolved server-side by the same workspace-path
+  resolution the generic file tools use (`pkg/tools/resolvepath.go::ResolvePath`) — a reference resolving
+  **outside the workspace or to a nonexistent file is invalid input** (tool error, pre-dial), not a policy
+  decision. The parameter MUST be governed by **exactly the tool's own policy resolution**: no separate
+  approval gate, no separate ceiling/fill/inventory entry, no attachment-only cap — only the general message
+  limits already in this spec apply (MC-32 caps, MC-22 body bound, MC-27 recipient cap), all enforced before
+  dialing. Attachments MUST ride the message as MIME parts — a draft included, so the approval panel lists
+  exactly what would be sent — and audit/transcript records MUST carry attachment filenames and sizes like
+  any send (MC-19, MC-35). **D31 context**: these tools are used when the agent is asked, or inside an
+  operator-configured heartbeat/scheduled task — mail is never the trigger. [D33, D31]
 
 ## 9. Success criteria
 
@@ -1416,6 +1522,12 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
   panel recovers within the bounded retry window (T59); with the server down for 20 minutes, the watcher
   backs off 60 s → 2 → 4 … 15 min cap with ±20% jitter, the badge shows `next_attempt_at`, log volume stays
   bounded (T60), and a manual Retry succeeds the moment the server answers (T53); `ok` never lies (T61).
+
+- **SC-010** (D33): Agent attachment capability works end to end: an agent can attach a workspace file on
+  `send_email`/`reply`/`create_email_draft` (B-49/B-50); the approval panel lists an agent-attached draft's
+  files before send; the 11th file / > 25 MiB / outside-workspace reference fails **pre-dial** (T67); the
+  effective policy of an attachment-bearing call is identical to the attachment-less call (T65); audit and
+  transcript records carry attachment names and sizes (T32/T64).
 
 ## 10. Traceability matrix
 
@@ -1458,14 +1570,15 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
 | FR-035 | US-8, US-7 | B-40 | T57 |
 | FR-036 | US-6, US-3 | B-43 | T60 |
 | FR-037 | US-3, US-6 | B-14a, B-14b, B-42, B-43, B-44 | T53, T54, T59 |
+| FR-038 | US-8 | B-49, B-50, B-51, B-52 | T64, T65, T66, T67 |
 
-Every FR-001..FR-037 appears above; every scenario B-1..B-48 plus B-14a/B-14b appears at least once; every
+Every FR-001..FR-038 appears above; every scenario B-1..B-52 plus B-14a/B-14b appears at least once; every
 scenario traces to a US+AS pair in §6, and every US AS maps to ≥ 1 scenario (US-1: B-1..B-5, B-46;
 US-2: B-6..B-10, B-41; US-3: B-11..B-18, B-14a/b, B-42..B-44, B-47; US-4: B-19..B-24, B-36; US-5: B-25,
-B-26; US-6: B-27..B-29, B-45, B-48; US-7: B-30..B-35, B-38; US-8: B-39, B-40). FR-013, FR-026 and FR-036
-have no user-visible BDD scenario (policy resolution, route throttling and log rate are not observable in
-the UI) — their assertion is behavioral at the test level (T34/T47, T33, T60), recorded here to keep the
-matrix honest.
+B-26; US-6: B-27..B-29, B-45, B-48; US-7: B-30..B-35, B-38; US-8: B-39, B-40, B-49..B-52). FR-013, FR-026
+and FR-036 have no user-visible BDD scenario (policy resolution, route throttling and log rate are not
+observable in the UI) — their assertion is behavioral at the test level (T34/T47, T33, T60), recorded here
+to keep the matrix honest.
 
 ---
 
@@ -1518,7 +1631,8 @@ matrix honest.
 
 - **A13 — D30's cause stays out of the spec**: the resilience requirements (FR-037, MC-33) are written
   cause-independent — bounded DNS retry, backoff with jitter, coalescing, visible `dns` class — because
-  D30/OBS-004 leave the DNS-window cause unknown. The D30 live test (B-47/T44) validates behavior, not
+  D30/OBS-004 leave the DNS-window cause unknown. The D30 live test (B-47/T44; outcome recorded as **D32** —
+  the old drainer works, its verified gap was success-logging) validates behavior, not
   cause; the D22 failure-triage dispatch owns the diagnosis and may revise the A8 constants after it.
 
 ## 12. Edge cases (consolidated)
@@ -1546,6 +1660,7 @@ matrix honest.
 | 19 | Watcher state exists but UIDVALIDITY changed | Silent re-baseline to `UIDNEXT-1`, logged once, nothing flagged new, nothing started (B-45, MC-31) |
 | 20 | 51st recipient on any send path | Pre-SMTP 400/tool error naming the offending address; nothing transmitted (B-41, MC-27) |
 | 21 | Attachment filename path traversal / hostile name (`../../`, control chars) | Sanitized on **serve** and on **attach**; only the sanitized name is ever offered to disk or header (US-8 AS-2, MC-32, T56) |
+| 22 | Agent attachment reference resolving outside the workspace, or to a nonexistent file | Invalid input: tool error **before any SMTP connection or APPEND**, naming the offending reference; nothing transmitted, nothing drafted (D33, MC-35, T67 — validity, not a policy gate) |
 
 ## 13. Holdout evaluation scenarios (post-implementation, NOT in the traceability matrix)
 
@@ -1581,14 +1696,13 @@ Evaluated by the founder or an external evaluator against a real mailbox after d
 
 ## 14. Founder questions
 
-**All seven round-1 questions are resolved; the round-2 open points were resolved by decisions D27–D30; one
-genuinely new open point surfaced in this fix round and is raised below as FQ-1.** Mapping: Q1 → D12
+**All questions are resolved; no founder question is open.** Mapping: Q1 → D12
 (+ D23, D24 for edit scope and foreign drafts); Q2 → D21 (transcripts keep email text; docs state it); Q3 →
 D13 + D17 (sandboxed no-scripts frame; images blocked with "Load images"); Q4 → D26 (CC/BCC for humans and
 agents); Q5 → D20 (the drainer question dissolved — unread is plain `\Seen`; the watcher never touches
 flags); Q6 → D21 (folder-scoped `uid:`/`mid:` addressing per MAJ-005); Q7 → D11 (Library-style docked panel
 + pop-out). Round-2: R2-1/R2-2 → D27; R2-3/R2-5/R2-6/R2-7/R2-8/R2-9 and CRIT-001 → D29; R2-4 → D28;
-R2-10 → D30.
+R2-10 → D30. The fix-round open point **FQ-1 is resolved by D33** (agent tool attachments — below).
 
 Points that could have become questions are recorded as reviewer-challengeable assumptions instead, because
 each is an obvious default carried from today's behavior or explicitly delegated by a decision:
@@ -1602,28 +1716,17 @@ each is an obvious default carried from today's behavior or explicitly delegated
   behavior and the failure-triage dispatch owns the cause.
 - Outbound size bound (FR-031) and rate-limit constant (A10): 1 MiB and 10/min — stated, tunable.
 
-### FQ-1 — May agent tools attach files to outgoing mail? (open; does not block the human paths)
+### FQ-1 — May agent tools attach files to outgoing mail? (RESOLVED 2026-09-25 by D33)
 
-**Context and impact.** D28 gives humans download + compose-attach + draft-attach (incl. foreign drafts).
-It left one point open deliberately: whether **agent tools** (`send_email`/`reply`/`create_email_draft`)
-may attach files — e.g. a workspace file the agent just produced. Impact: this decides whether the agent
-can complete "produce and mail the report" end-to-end without a human clicking attach, and the size of the
-exfiltration surface (a compromised agent could mail workspace files out).
-
-**Options.**
-- **A — No this wave (D28 as scoped).** No tool attachment parameters; humans only. Zero new exfiltration
-  surface; agent must hand the file to the human to send.
-- **B — Yes, ask-gated, workspace-file param.** Add an `attachments` parameter (workspace-file refs, MC-32
-  caps, `ask` default policy at configure time, audit origin). Agent completes the flow; exfiltration is
-  bounded by the same caps + the `ask` prompt naming the exact files.
-- **C — Later wave.** Ship D28 human paths now; agent attachments return as their own spec with its own
-  security review.
-
-**Recommendation: B**, with the `ask`-gated, audit-named-files shape — the founder's standing rule is that
-agent gaps are not acceptable when a human equivalent exists, and this keeps the exfiltration surface
-explicit, prompted and capped. But it is a genuine security/product trade-off: **A is the safe default and
-the current spec state; nothing in §1–§13 depends on FQ-1's answer** — an answer only *adds* the tool
-parameter (and its policy fill row, contract change and tests).
+**Resolution (D33).** Founder verbatim: *"yes agents need full email capability no extra guard rails, same
+as send email"* (against the written recommendation). Agents get full email capability, including
+**workspace-file attachments**, on `send_email`/`reply`/`create_email_draft`: the attachment parameter is
+governed by **exactly the same tool policy as sending** — no separate ask gate; no special caps beyond the
+general message limits already in this spec (MC-32 caps, MC-22 body bound, MC-27 recipient cap).
+Specified as FR-038/MC-35 with US-8 AS-5, B-49..B-52, T64–T67, DS-9, SC-010 and the §15 compose/MIME note.
+The exfiltration-surface trade-off recorded under this question (a compromised agent could mail workspace
+files out) was weighed and **accepted by the founder as part of the decision** — it is governed by the same
+policy, caps and audit as any send. The human attach/download paths (D28) are unchanged.
 
 ---
 
@@ -1641,6 +1744,12 @@ parameter (and its policy fill row, contract change and tests).
   it. The connectionless dial-per-operation pattern (`Client.dialIMAP`) is preserved for IMAP; SMTP is
   context-threaded per FR-027.
 - **Folder resolution** (A1) lives in `pkg/email`; per-mailbox overrides ride `MailboxConfig`.
+- **Agent attachments (D33)**: the compose unit takes attachment inputs from both sources — the human paths'
+  `data_base64` parts (REST) and the agent path's workspace-file references, resolved through
+  `pkg/tools/resolvepath.go::ResolvePath` and read at compose time — into one shared MIME builder (the
+  FR-029 `multipart/mixed` wrapper already exists; attachments join it). Caps (MC-32) and reference
+  validity (MC-35) run before any dial or APPEND; outside-workspace or nonexistent references are invalid
+  input, not policy. No new policy surface anywhere (§2.7 note).
 - **Signature plumbing**: `EmailMailboxPanel` PUT carries `signature_html` through the existing raw-map write
   path — which must keep preserving unknown fields (ADR-033 §5 negative note). Sanitization happens
   server-side on save (FR-003).
@@ -1683,6 +1792,10 @@ Design-system skill (`omnipus-design-system`) is mandatory before any file under
 | Data fetching | TanStack Query over generated types (`src/lib/api/generated/`) | Generated types only (shared rule 4); `refetchInterval: 30000` while the panel is mounted, `refetchIntervalInBackground: false` (D25, B-16) |
 | Picker | `GET /api/v1/mailboxes` | Filtered client-side to the current workspace, `enabled && configured`; selection in `sessionStorage` per workspace (FR-010) |
 
+Agent attachments (D33) add **no new UI component**: agent-attached files are ordinary MIME parts, so the
+existing attachment listing and carry-over UI (the compose/edit rows above, `MailMessage.attachments`)
+renders them; the approval panel already lists what will be sent.
+
 ## 17. Reachability (Definition of Done)
 
 - **Operator**: Connectors screen → mailbox panel shows the Signature section and the folder-override advanced
@@ -1693,9 +1806,15 @@ Design-system skill (`omnipus-design-system`) is mandatory before any file under
 - **Agent**: `create_email_draft` is registered for every agent via
   `pkg/agent/email_tools.go::registerEmailToolsForAgent` (so it appears on the per-agent permissions screen),
   wired at all **seven** §2.7 touch points, and behaviorally asserted for both agent kinds (T34 / SC-007).
+  All three agent mail tools accept the D33 `attachments` parameter (workspace files) on the tools' own
+  policy — no separate policy surface; the UAT lane exercises an agent send/draft with a workspace-file
+  attachment on a real mailbox (T44, SC-010).
 - **Endpoints the UI depends on are all in the contract** (§2.3): the folder/message/summary reads, the seen
   endpoint, the attachment download endpoint, and the mail HTML preview served under the **non-API
   `/mail-preview/` prefix** (never the API prefix — MC-10/CRIT-001 posture).
+- **User docs** (D31, D21) state plainly: agents handle mail only when asked — inside a human/task-started
+  turn — or through a heartbeat / scheduled task the operator configures ("check your inbox"); nothing about
+  mail is automatic. No mail surface ships that implies otherwise.
 - **Mail panel reachable from two surfaces**: the workspace tab strip entry (docked panel, D11) and chat
   links ("Open draft" / `chat_link`) — both exercised by T37/T42 and the UAT lane.
 - **Delivery statement (two lines, never merged)**: *code correct and tested* — unit + gateway-integration
@@ -1708,13 +1827,13 @@ Design-system skill (`omnipus-design-system`) is mandatory before any file under
 | Measure | Count |
 |---|---|
 | User stories | 8 (US-1 … US-8) |
-| BDD scenarios | 50 — Happy Path 23 · Alternate Path 7 · Error Path 10 · Edge Case 10 (B-1..B-48 plus B-14a/B-14b) |
-| Machine-verifiable constraints | 36 (MC-1 … MC-34 plus MC-31a/MC-31b) |
-| Test datasets | 8 (DS-1 … DS-8) |
-| TDD plan rows | 63 (orders 1–63; T-number = order) |
-| Functional requirements | 37 (FR-001 … FR-037) |
-| Success criteria | 9 (SC-001 … SC-009) |
-| Founder questions open | 1 (FQ-1 — agent tool attachments; does not block the human paths; §14) |
+| BDD scenarios | 54 — Happy Path 25 · Alternate Path 8 · Error Path 11 · Edge Case 10 (B-1..B-52 plus B-14a/B-14b) |
+| Machine-verifiable constraints | 37 (MC-1 … MC-35 plus MC-31a/MC-31b) |
+| Test datasets | 9 (DS-1 … DS-9) |
+| TDD plan rows | 67 (orders 1–67; T-number = order) |
+| Functional requirements | 38 (FR-001 … FR-038) |
+| Success criteria | 10 (SC-001 … SC-010) |
+| Founder questions open | 0 (FQ-1 resolved by D33 — §14) |
 | Round-1 findings dispositioned | 32 of 32 (§20) |
 | Round-2 findings dispositioned | 40 of 40 (§21) — 0 CRITICAL still open |
 
@@ -1726,7 +1845,9 @@ ADR-033 (*Per-(Agent, Workspace) Email Mailboxes*) stays canonical (D10). This s
 amendment** to it — not a new ADR — replacing its inbound-handling consequence (drainer → Board tasks) with:
 
 1. **Inbound mail never starts an agent turn** (D27): the email tools are used actively inside turns started
-   by humans/tasks/heartbeats; the drainer is deleted (#631); no Board-task path from mail exists.
+   by humans/tasks/heartbeats — **agents handle mail only when asked, or through a heartbeat / scheduled
+   task the operator configures; nothing about mail is automatic (D31)**; the drainer is deleted (#631); no
+   Board-task path from mail exists.
 2. The replacement watcher only advances per-pair watch state (UIDs/counts/error class — FR-033) and feeds
    the workspace badge; it never mutates flags and has no enqueue path.
 3. Mail content is never stored locally; the panel reads live (D6); preview isolation follows the
