@@ -318,6 +318,9 @@ describe('child lifecycle', () => {
     expect(kinds(noop)).toEqual(['delegated', 'finished'])
   })
 
+})
+
+describe('landed cancel without a stored child session id', () => {
   it('a landed cancel suppresses stopped when the span has no childSessionId and the run result carries the session', () => {
     const legacy = span({ status: 'cancelled', lifecycleState: 'cancelled', childSessionId: undefined })
     expect(legacy.childSessionId).toBeUndefined()
