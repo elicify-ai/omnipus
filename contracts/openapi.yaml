@@ -1712,6 +1712,22 @@ components:
       $ref: ./components/schemas/MailboxNewMailSummary.yaml
     MailSummaryList:
       $ref: ./components/schemas/MailSummaryList.yaml
+    MailAttachmentInput:
+      $ref: ./components/schemas/MailAttachmentInput.yaml
+    MailSendRequest:
+      $ref: ./components/schemas/MailSendRequest.yaml
+    MailSendResponse:
+      $ref: ./components/schemas/MailSendResponse.yaml
+    MailDraftUpdateRequest:
+      $ref: ./components/schemas/MailDraftUpdateRequest.yaml
+    MailDraftSendRequest:
+      $ref: ./components/schemas/MailDraftSendRequest.yaml
+    MailHtmlPreviewTokenRequest:
+      $ref: ./components/schemas/MailHtmlPreviewTokenRequest.yaml
+    MailHtmlPreviewTokenResponse:
+      $ref: ./components/schemas/MailHtmlPreviewTokenResponse.yaml
+    CreateEmailDraftResult:
+      $ref: ./components/schemas/CreateEmailDraftResult.yaml
     BackupCreateResponse:
       $ref: ./components/schemas/BackupCreateResponse.yaml
     OnboardingStatusResponse:
@@ -10409,6 +10425,390 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           description: Workspace not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /workspaces/{id}/mail/{agentId}/messages:
+    post:
+      operationId: sendMailMessage
+      summary: Send mail manually from the Mail panel compose (D9)
+      description: >
+        Human manual send (email-mail-view-spec §2.3): renders Markdown to
+        sanitized multipart/alternative, appends the mailbox signature, sends
+        via SMTP and APPENDs the Sent copy (D7/D18). Audit event + dedicated
+        mailMutationLimiter rate limit (MC-20). Recipient cap 50 across
+        To/Cc/Bcc after de-dup (MC-27); body bound 1 MiB (MC-22);
+        attachments ≤ 10 files / ≤ 25 MiB total, checked pre-dial (MC-32).
+        429 with Retry-After when rate-limited.
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Workspace ID.
+        schema:
+          type: string
+        example: ws_my_workspace
+      - name: agentId
+        in: path
+        required: true
+        description: ID of the mailbox-owning agent.
+        schema:
+          type: string
+        example: mia
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MailSendRequest'
+      responses:
+        '200':
+          description: Sent. The Sent APPEND result is reported in the body (sent_saved / save_warning — MC-9).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailSendResponse'
+        '400':
+          description: Validation failure — recipients, body bound, attachment caps, header injection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Workspace, agent, or mailbox pair not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '502':
+          description: >
+            SMTP/IMAP upstream failure — sanitized error class in the body's
+            code field (MC-8); nothing transmitted on IMAP-side failure
+            without a send.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}:
+    put:
+      operationId: updateMailDraft
+      summary: Edit a draft from the approval panel (D12/D23)
+      description: >
+        Panel edit (email-mail-view-spec §2.3): APPENDs the updated draft
+        with the same Message-ID (round-1 MIN-004) and \Deleted-flags the old
+        copy (FR-032). The body carries the viewed draft's uidvalidity/uid;
+        when the path ref is a uid: ref, body and path must agree — mismatch
+        is 400, never silently accepted (round-2 MAJ-008.1/.6). Stale
+        precondition (draft moved/renumbered) is 409 with body code
+        stale_draft (MC-16). Attachment carry-over is by part reference
+        (FR-035); keep_attachment_parts is required full-replace (D28).
+        Audit event + rate limit (MC-20).
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Workspace ID.
+        schema:
+          type: string
+        example: ws_my_workspace
+      - name: agentId
+        in: path
+        required: true
+        description: ID of the mailbox-owning agent.
+        schema:
+          type: string
+        example: mia
+      - name: ref
+        in: path
+        required: true
+        description: >
+          Folder-scoped reference of the draft in drafts (MC-13 — draft
+          actions resolve only inside drafts): `uid:<uidvalidity>:<uid>` or
+          `mid:<Message-ID>`.
+        schema:
+          type: string
+          minLength: 5
+        example: "uid:456:124"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MailDraftUpdateRequest'
+      responses:
+        '200':
+          description: The updated draft (MailMessage).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailMessage'
+        '400':
+          description: >
+            Validation failure, or body uidvalidity/uid disagree with a
+            uid-form path ref (round-2 MAJ-008.1/.6).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >
+            Stale precondition — the viewed draft no longer matches
+            uidvalidity:uid; body code stale_draft; nothing mutated (MC-16).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Draft gone (deleted elsewhere) or pair has no mailbox.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '502':
+          description: Mail server failure — sanitized error class in the body's code field (MC-8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    delete:
+      operationId: discardMailDraft
+      summary: Discard a draft from the approval panel (D12)
+      description: >
+        Panel discard: \Deleted-flags the draft; with UIDPLUS a UID EXPUNGE
+        removes exactly the target UID, without UIDPLUS only \Deleted is
+        stored (deferred expunge — FR-032, MC-17). A non-UID EXPUNGE is never
+        issued by Omnipus. Audit event + rate limit (MC-20). Idempotency is
+        not promised: an already-discarded draft is 404.
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Workspace ID.
+        schema:
+          type: string
+        example: ws_my_workspace
+      - name: agentId
+        in: path
+        required: true
+        description: ID of the mailbox-owning agent.
+        schema:
+          type: string
+        example: mia
+      - name: ref
+        in: path
+        required: true
+        description: >
+          Folder-scoped reference of the draft in drafts (MC-13):
+          `uid:<uidvalidity>:<uid>` or `mid:<Message-ID>`.
+        schema:
+          type: string
+          minLength: 5
+        example: "uid:456:124"
+      responses:
+        '204':
+          description: The draft is discarded (or expunged under UIDPLUS). No response body.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Draft gone or pair has no mailbox.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '502':
+          description: Mail server failure — sanitized error class in the body's code field (MC-8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}/send:
+    post:
+      operationId: sendMailDraft
+      summary: Panel send — the approval (D12)
+      description: >
+        Panel send IS the approval (email-mail-view-spec §2.3): transmits the
+        request's content (never re-reads the draft as truth — round-1
+        MAJ-002), APPENDs to Sent (D18) and \Deleted-flags the draft
+        (FR-032). Idempotent per draft Message-ID (round-2 MAJ-009, FR-021,
+        MC-28): a repeat submit after a completed send returns the recorded
+        first outcome — never a second transmission. Stale precondition is
+        409 stale_draft; an already-sent repeat whose recorded outcome is
+        unavailable is also 409. Audit event + rate limit (MC-20).
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Workspace ID.
+        schema:
+          type: string
+        example: ws_my_workspace
+      - name: agentId
+        in: path
+        required: true
+        description: ID of the mailbox-owning agent.
+        schema:
+          type: string
+        example: mia
+      - name: ref
+        in: path
+        required: true
+        description: >
+          Folder-scoped reference of the draft in drafts (MC-13):
+          `uid:<uidvalidity>:<uid>` or `mid:<Message-ID>`.
+        schema:
+          type: string
+          minLength: 5
+        example: "uid:456:124"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MailDraftSendRequest'
+      responses:
+        '200':
+          description: >
+            Transmitted (first send or recorded idempotent outcome). Sent
+            APPEND result and draft-cleanup warnings in the body (MC-9/MC-28).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailSendResponse'
+        '400':
+          description: Validation failure — recipients, body bound, attachment caps, header injection, precondition disagreement.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Draft gone or pair has no mailbox.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >
+            Stale precondition (stale_draft, MC-16), or an already-sent
+            repeat whose recorded outcome is unavailable (round-2 MAJ-009).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '502':
+          description: Mail server failure — sanitized error class in the body's code field (MC-8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /mail/html-preview-token:
+    post:
+      operationId: mintMailHtmlPreviewToken
+      summary: Mint a short-lived token for one message's HTML body (D13/D17)
+      description: >
+        Mints the mail HTML-preview credential (email-mail-view-spec §2.3,
+        security sign-off C1) — session-authenticated and STAYS in the API
+        namespace; the serve routes moved to the token-only non-API
+        /mail-preview/ prefix (§2.3a) and are deliberately NOT in this
+        document (Library serving-prefix precedent): /mail-preview/html/{token}
+        serves the sanitized sandboxed HTML body with the MC-10 normative
+        header set; /mail-preview/part/{token}/{index} serves one inline
+        cid: image part within the same token scope; /mail-preview/img/{token}/{index}
+        is the "Load images" proxy (D17/MC-10(6)) — https-only, private/
+        loopback refused at dial time, zero redirects, ≤ 5 MiB, image/* only,
+        store-recorded URLs only (MC-41). Serve routes answer 404 only —
+        expired/unknown/revoked deliberately indistinguishable, no
+        frame-ancestors, no X-Frame-Options (MC-43/MC-45); the no-redirect
+        tripwire covers the whole prefix (MC-10(1), T62).
+
+
+        This mint is the ONE live-IMAP fetch of the preview flow: the message
+        is fetched once (BODY.PEEK), sanitized, and its body plus inline
+        parts and the load_remote remote-image URL list are held in the
+        in-memory token store for the TTL — the serve routes never dial IMAP
+        (round-2 MAJ-008.3). Sanitize → store → serve ordering (MC-10(5)).
+        256 KB served-body cap (MC-10(7)). Rate-limited by a dedicated
+        per-IP limiter (MC-44) — 10 req/min, 429 with Retry-After, zero IMAP
+        dials for the refused call.
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MailHtmlPreviewTokenRequest'
+      responses:
+        '200':
+          description: Token minted; the SPA points the sandboxed iframe at /mail-preview/html/{token}.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailHtmlPreviewTokenResponse'
+        '400':
+          description: Validation failure — unknown folder slug or malformed message_ref.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Workspace, agent, mailbox pair, or message not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '502':
+          description: >
+            Upstream mail failure during the mint's one IMAP fetch —
+            sanitized error class in the body's code field (MC-8).
           content:
             application/json:
               schema:

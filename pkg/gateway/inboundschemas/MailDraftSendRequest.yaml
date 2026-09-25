@@ -1,0 +1,61 @@
+title: MailDraftSendRequest
+description: >
+  Panel send (D12, POST
+  /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}/send): the
+  panel IS the approval. Transmits exactly the request's content — never
+  re-reads the draft as truth (round-1 MAJ-002) — APPENDs the Sent copy
+  (D18) and \Deleted-flags the draft (FR-032). Idempotent per draft
+  Message-ID (round-2 MAJ-009): a repeat submit after a completed send
+  returns the recorded first outcome, never a second transmission (FR-021).
+  keep_attachment_parts is optional here and defaults to carrying ALL of
+  the current copy's attachments (spec §2.2; the UI lists exactly what will
+  be carried, D28). Audit event + rate limit.
+type: object
+additionalProperties: false
+required:
+  - to
+  - subject
+  - body_markdown
+  - uidvalidity
+  - uid
+properties:
+  to:
+    type: array
+    description: The displayed/edited To recipients, transmitted as-is (round-1 MAJ-002).
+    items:
+      type: string
+    minItems: 1
+    maxItems: 50
+  cc:
+    type: array
+    description: The displayed/edited Cc recipients. Absent or empty means none.
+    items:
+      type: string
+    maxItems: 50
+  bcc:
+    type: array
+    description: The displayed/edited Bcc recipients. Absent or empty means none.
+    items:
+      type: string
+    maxItems: 50
+  subject:
+    type: string
+    description: The displayed/edited subject, transmitted as-is.
+  body_markdown:
+    type: string
+    description: The displayed/edited Markdown body, rendered at send time (MC-3).
+  uidvalidity:
+    type: integer
+    description: uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16).
+  uid:
+    type: integer
+    description: uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16).
+  keep_attachment_parts:
+    type: array
+    description: >
+      Part indices from the current copy's MailMessage.attachments to carry
+      onto the sent message. Optional — absent or empty-list semantics:
+      absent carries ALL of the current copy's attachments (spec §2.2
+      default carry all); an explicit list carries exactly those parts.
+    items:
+      type: integer

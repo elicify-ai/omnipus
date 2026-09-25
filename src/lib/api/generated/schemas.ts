@@ -1951,6 +1951,31 @@ type MailboxNewMailSummary = {
   last_seen_uid: number | null;
   next_attempt_at: string | null;
 };
+type MailSendRequest = {
+  to: Array<string>;
+  cc?: Array<string> | undefined;
+  bcc?: Array<string> | undefined;
+  subject: string;
+  body_markdown: string;
+  in_reply_to?: (string | null) | undefined;
+  attachments?: Array<MailAttachmentInput> | undefined;
+};
+type MailAttachmentInput = {
+  filename: string;
+  content_type: string;
+  data_base64: string;
+};
+type MailDraftUpdateRequest = {
+  to: Array<string>;
+  cc?: Array<string> | undefined;
+  bcc?: Array<string> | undefined;
+  subject: string;
+  body_markdown: string;
+  uidvalidity: number;
+  uid: number;
+  attachments?: Array<MailAttachmentInput> | undefined;
+  keep_attachment_parts: Array<number>;
+};
 type OperationResult = {
   success: boolean;
   error?: string | undefined;
@@ -5875,6 +5900,59 @@ export const MailboxNewMailSummary: z.ZodType<MailboxNewMailSummary> = z.object(
 export const MailSummaryList: z.ZodType<MailSummaryList> = z.object({
   items: z.array(MailboxNewMailSummary),
 });
+export const MailAttachmentInput: z.ZodType<MailAttachmentInput> = z.object({
+  filename: z.string(),
+  content_type: z.string(),
+  data_base64: z.string(),
+});
+export const MailSendRequest: z.ZodType<MailSendRequest> = z.object({
+  to: z.array(z.string()).min(1).max(50),
+  cc: z.array(z.string()).max(50).optional(),
+  bcc: z.array(z.string()).max(50).optional(),
+  subject: z.string(),
+  body_markdown: z.string(),
+  in_reply_to: z.string().nullish(),
+  attachments: z.array(MailAttachmentInput).max(10).optional(),
+});
+export const MailSendResponse = z.object({
+  message_id: z.string(),
+  sent_saved: z.boolean(),
+  save_warning: z.string().nullable(),
+  draft_cleanup_warning: z.string().nullable(),
+});
+export const MailDraftUpdateRequest: z.ZodType<MailDraftUpdateRequest> =
+  z.object({
+    to: z.array(z.string()).min(1).max(50),
+    cc: z.array(z.string()).max(50).optional(),
+    bcc: z.array(z.string()).max(50).optional(),
+    subject: z.string(),
+    body_markdown: z.string(),
+    uidvalidity: z.number().int(),
+    uid: z.number().int(),
+    attachments: z.array(MailAttachmentInput).max(10).optional(),
+    keep_attachment_parts: z.array(z.number().int()),
+  });
+export const MailDraftSendRequest = z.object({
+  to: z.array(z.string()).min(1).max(50),
+  cc: z.array(z.string()).max(50).optional(),
+  bcc: z.array(z.string()).max(50).optional(),
+  subject: z.string(),
+  body_markdown: z.string(),
+  uidvalidity: z.number().int(),
+  uid: z.number().int(),
+  keep_attachment_parts: z.array(z.number().int()).optional(),
+});
+export const MailHtmlPreviewTokenRequest = z.object({
+  workspace_id: z.string(),
+  agent_id: z.string(),
+  folder: z.enum(["inbox", "sent", "drafts"]),
+  message_ref: z.string().min(5),
+  load_remote: z.boolean().optional().default(false),
+});
+export const MailHtmlPreviewTokenResponse = z.object({
+  token: z.string().min(43).max(43),
+  expires_in_seconds: z.number().int().gte(1),
+});
 export const WorkspaceDelegation: z.ZodType<WorkspaceDelegation> = z.object({
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   persistence_status: ConfigurationPersistenceStatus.optional(),
@@ -6404,6 +6482,14 @@ export const BackupEntry = z.object({
   filename: z.string(),
   size_bytes: z.number().int().gte(0),
   created_at: z.string().datetime({ offset: true }),
+});
+export const CreateEmailDraftResult = z.object({
+  created: z.boolean(),
+  message_id: z.string(),
+  uid: z.number().int(),
+  uidvalidity: z.number().int(),
+  chat_link: z.string().nullable(),
+  chat_link_reason: z.string().nullable(),
 });
 export const OnboardingStatusResponse = z
   .object({ onboarding_complete: z.boolean() })
@@ -10164,6 +10250,52 @@ Idempotent and deliberately uninformative: 204 whether the token was live, alrea
       {
         status: 500,
         description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/mail/html-preview-token",
+    alias: "mintMailHtmlPreviewToken",
+    description: `Mints the mail HTML-preview credential (email-mail-view-spec §2.3, security sign-off C1) — session-authenticated and STAYS in the API namespace; the serve routes moved to the token-only non-API /mail-preview/ prefix (§2.3a) and are deliberately NOT in this document (Library serving-prefix precedent): /mail-preview/html/{token} serves the sanitized sandboxed HTML body with the MC-10 normative header set; /mail-preview/part/{token}/{index} serves one inline cid: image part within the same token scope; /mail-preview/img/{token}/{index} is the &quot;Load images&quot; proxy (D17/MC-10(6)) — https-only, private/ loopback refused at dial time, zero redirects, ≤ 5 MiB, image/* only, store-recorded URLs only (MC-41). Serve routes answer 404 only — expired/unknown/revoked deliberately indistinguishable, no frame-ancestors, no X-Frame-Options (MC-43/MC-45); the no-redirect tripwire covers the whole prefix (MC-10(1), T62).
+
+This mint is the ONE live-IMAP fetch of the preview flow: the message is fetched once (BODY.PEEK), sanitized, and its body plus inline parts and the load_remote remote-image URL list are held in the in-memory token store for the TTL — the serve routes never dial IMAP (round-2 MAJ-008.3). Sanitize → store → serve ordering (MC-10(5)). 256 KB served-body cap (MC-10(7)). Rate-limited by a dedicated per-IP limiter (MC-44) — 10 req/min, 429 with Retry-After, zero IMAP dials for the refused call.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailHtmlPreviewTokenRequest,
+      },
+    ],
+    response: MailHtmlPreviewTokenResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure — unknown folder slug or malformed message_ref.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace, agent, mailbox pair, or message not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Upstream mail failure during the mint&#x27;s one IMAP fetch — sanitized error class in the body&#x27;s code field (MC-8).
+`,
         schema: ErrorResponse,
       },
     ],
@@ -14427,6 +14559,257 @@ Returns HTTP 201 on success.
       {
         status: 502,
         description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/workspaces/:id/mail/:agentId/folders/drafts/messages/:ref",
+    alias: "updateMailDraft",
+    description: `Panel edit (email-mail-view-spec §2.3): APPENDs the updated draft with the same Message-ID (round-1 MIN-004) and \Deleted-flags the old copy (FR-032). The body carries the viewed draft&#x27;s uidvalidity/uid; when the path ref is a uid: ref, body and path must agree — mismatch is 400, never silently accepted (round-2 MAJ-008.1/.6). Stale precondition (draft moved/renumbered) is 409 with body code stale_draft (MC-16). Attachment carry-over is by part reference (FR-035); keep_attachment_parts is required full-replace (D28). Audit event + rate limit (MC-20).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailDraftUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+    ],
+    response: MailMessage,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure, or body uidvalidity/uid disagree with a uid-form path ref (round-2 MAJ-008.1/.6).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Draft gone (deleted elsewhere) or pair has no mailbox.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale precondition — the viewed draft no longer matches uidvalidity:uid; body code stale_draft; nothing mutated (MC-16).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/workspaces/:id/mail/:agentId/folders/drafts/messages/:ref",
+    alias: "discardMailDraft",
+    description: `Panel discard: \Deleted-flags the draft; with UIDPLUS a UID EXPUNGE removes exactly the target UID, without UIDPLUS only \Deleted is stored (deferred expunge — FR-032, MC-17). A non-UID EXPUNGE is never issued by Omnipus. Audit event + rate limit (MC-20). Idempotency is not promised: an already-discarded draft is 404.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Draft gone or pair has no mailbox.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/mail/:agentId/folders/drafts/messages/:ref/send",
+    alias: "sendMailDraft",
+    description: `Panel send IS the approval (email-mail-view-spec §2.3): transmits the request&#x27;s content (never re-reads the draft as truth — round-1 MAJ-002), APPENDs to Sent (D18) and \Deleted-flags the draft (FR-032). Idempotent per draft Message-ID (round-2 MAJ-009, FR-021, MC-28): a repeat submit after a completed send returns the recorded first outcome — never a second transmission. Stale precondition is 409 stale_draft; an already-sent repeat whose recorded outcome is unavailable is also 409. Audit event + rate limit (MC-20).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailDraftSendRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+    ],
+    response: MailSendResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure — recipients, body bound, attachment caps, header injection, precondition disagreement.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Draft gone or pair has no mailbox.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale precondition (stale_draft, MC-16), or an already-sent repeat whose recorded outcome is unavailable (round-2 MAJ-009).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/mail/:agentId/messages",
+    alias: "sendMailMessage",
+    description: `Human manual send (email-mail-view-spec §2.3): renders Markdown to sanitized multipart/alternative, appends the mailbox signature, sends via SMTP and APPENDs the Sent copy (D7/D18). Audit event + dedicated mailMutationLimiter rate limit (MC-20). Recipient cap 50 across To/Cc/Bcc after de-dup (MC-27); body bound 1 MiB (MC-22); attachments ≤ 10 files / ≤ 25 MiB total, checked pre-dial (MC-32). 429 with Retry-After when rate-limited.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailSendRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: MailSendResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure — recipients, body bound, attachment caps, header injection.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace, agent, or mailbox pair not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `SMTP/IMAP upstream failure — sanitized error class in the body&#x27;s code field (MC-8); nothing transmitted on IMAP-side failure without a send.
 `,
         schema: ErrorResponse,
       },

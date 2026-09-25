@@ -3397,6 +3397,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{id}/mail/{agentId}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send mail manually from the Mail panel compose (D9)
+         * @description Human manual send (email-mail-view-spec §2.3): renders Markdown to sanitized multipart/alternative, appends the mailbox signature, sends via SMTP and APPENDs the Sent copy (D7/D18). Audit event + dedicated mailMutationLimiter rate limit (MC-20). Recipient cap 50 across To/Cc/Bcc after de-dup (MC-27); body bound 1 MiB (MC-22); attachments ≤ 10 files / ≤ 25 MiB total, checked pre-dial (MC-32). 429 with Retry-After when rate-limited.
+         */
+        post: operations["sendMailMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Edit a draft from the approval panel (D12/D23)
+         * @description Panel edit (email-mail-view-spec §2.3): APPENDs the updated draft with the same Message-ID (round-1 MIN-004) and \Deleted-flags the old copy (FR-032). The body carries the viewed draft's uidvalidity/uid; when the path ref is a uid: ref, body and path must agree — mismatch is 400, never silently accepted (round-2 MAJ-008.1/.6). Stale precondition (draft moved/renumbered) is 409 with body code stale_draft (MC-16). Attachment carry-over is by part reference (FR-035); keep_attachment_parts is required full-replace (D28). Audit event + rate limit (MC-20).
+         */
+        put: operations["updateMailDraft"];
+        post?: never;
+        /**
+         * Discard a draft from the approval panel (D12)
+         * @description Panel discard: \Deleted-flags the draft; with UIDPLUS a UID EXPUNGE removes exactly the target UID, without UIDPLUS only \Deleted is stored (deferred expunge — FR-032, MC-17). A non-UID EXPUNGE is never issued by Omnipus. Audit event + rate limit (MC-20). Idempotency is not promised: an already-discarded draft is 404.
+         */
+        delete: operations["discardMailDraft"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}/send": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Panel send — the approval (D12)
+         * @description Panel send IS the approval (email-mail-view-spec §2.3): transmits the request's content (never re-reads the draft as truth — round-1 MAJ-002), APPENDs to Sent (D18) and \Deleted-flags the draft (FR-032). Idempotent per draft Message-ID (round-2 MAJ-009, FR-021, MC-28): a repeat submit after a completed send returns the recorded first outcome — never a second transmission. Stale precondition is 409 stale_draft; an already-sent repeat whose recorded outcome is unavailable is also 409. Audit event + rate limit (MC-20).
+         */
+        post: operations["sendMailDraft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mail/html-preview-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a short-lived token for one message's HTML body (D13/D17)
+         * @description Mints the mail HTML-preview credential (email-mail-view-spec §2.3, security sign-off C1) — session-authenticated and STAYS in the API namespace; the serve routes moved to the token-only non-API /mail-preview/ prefix (§2.3a) and are deliberately NOT in this document (Library serving-prefix precedent): /mail-preview/html/{token} serves the sanitized sandboxed HTML body with the MC-10 normative header set; /mail-preview/part/{token}/{index} serves one inline cid: image part within the same token scope; /mail-preview/img/{token}/{index} is the "Load images" proxy (D17/MC-10(6)) — https-only, private/ loopback refused at dial time, zero redirects, ≤ 5 MiB, image/* only, store-recorded URLs only (MC-41). Serve routes answer 404 only — expired/unknown/revoked deliberately indistinguishable, no frame-ancestors, no X-Frame-Options (MC-43/MC-45); the no-redirect tripwire covers the whole prefix (MC-10(1), T62).
+         *
+         *     This mint is the ONE live-IMAP fetch of the preview flow: the message is fetched once (BODY.PEEK), sanitized, and its body plus inline parts and the load_remote remote-image URL list are held in the in-memory token store for the TTL — the serve routes never dial IMAP (round-2 MAJ-008.3). Sanitize → store → serve ordering (MC-10(5)). 256 KB served-body cap (MC-10(7)). Rate-limited by a dedicated per-IP limiter (MC-44) — 10 req/min, 429 with Retry-After, zero IMAP dials for the refused call.
+         */
+        post: operations["mintMailHtmlPreviewToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{id}/delegation": {
         parameters: {
             query?: never;
@@ -12235,6 +12321,191 @@ export interface components {
         MailSummaryList: {
             /** @description One entry per mailbox in the workspace. */
             items: components["schemas"]["MailboxNewMailSummary"][];
+        };
+        /**
+         * MailAttachmentInput
+         * @description One attachment supplied for an outbound message (D28) — on the human paths (MailSendRequest.attachments, MailDraftUpdateRequest.attachments). The agent path carries no wire schema: agent tool attachments are workspace-file references resolved server-side through pkg/tools/resolvepath.go::ResolvePath under its open-read rule (D33, security sign-off C2; no separate policy or gate — MC-35).
+         */
+        MailAttachmentInput: {
+            /**
+             * @description Attachment filename. Sanitized on serve and on attach (MC-32) — no path separators are ever stored or served.
+             * @example report-q3.pdf
+             */
+            filename: string;
+            /**
+             * @description The attachment's content type as supplied by the composer.
+             * @example application/pdf
+             */
+            content_type: string;
+            /**
+             * Format: byte
+             * @description The attachment bytes, base64-encoded. Across all attachments of one message the decoded total is capped at 25 MiB with at most 10 files (MC-32) — enforced before any SMTP connection or draft APPEND.
+             */
+            data_base64: string;
+        };
+        /**
+         * MailSendRequest
+         * @description Human manual send from the Mail panel compose (D9, POST /workspaces/{id}/mail/{agentId}/messages). Body is Markdown; the backend renders sanitized HTML + plain text (multipart/alternative, MC-3), appends the mailbox signature, sends over SMTP and APPENDs the Sent copy (D7, D18 — always, no provider detection). Audit event + dedicated mailMutationLimiter rate limit (MC-20). The ≤ 50-recipient total cap (D29/R2-6, MC-27) and the attachment caps (≤ 10 files, ≤ 25 MiB total — MC-32) are enforced before any SMTP connection.
+         */
+        MailSendRequest: {
+            /** @description To recipients (de-duplicated, RFC 2047 display names preserved). */
+            to: string[];
+            /** @description Cc recipients. Absent or empty means none. */
+            cc?: string[];
+            /** @description Bcc recipients. Absent or empty means none. */
+            bcc?: string[];
+            /** @description Subject line; CRLF/LF injection is sanitized (MC-4). */
+            subject: string;
+            /** @description Markdown body — rendered server-side to sanitized HTML plus plain text (multipart/alternative, MC-3), signature appended. Bounded at 1 MiB (MC-22). */
+            body_markdown: string;
+            /** @description Message-ID of the message being replied to — set by the panel Reply action (round-2 MIN-009); In-Reply-To/References are carried through to the sent message. Absent or null = standalone compose. */
+            in_reply_to?: string | null;
+            /** @description Files to attach (D28). Decoded total across all files ≤ 25 MiB, at most 10 files (MC-32) — checked pre-dial. */
+            attachments?: components["schemas"]["MailAttachmentInput"][];
+        };
+        /**
+         * MailSendResponse
+         * @description Send outcome for the manual send (POST /workspaces/{id}/mail/{agentId}/messages) and the panel send (POST .../folders/drafts/messages/{ref}/send). The `sent` field was dropped (round-2 MIN-006 — it was always true on a 200). Save failures are never silent (D7): a Sent-APPEND failure after a successful SMTP send sets sent_saved=false plus save_warning. A draft that could not be removed after a successful panel send sets draft_cleanup_warning (MAJ-009/MC-28).
+         */
+        MailSendResponse: {
+            /**
+             * @description The sent message's Message-ID (stable across panel edits).
+             * @example <b7d4@example.com>
+             */
+            message_id: string;
+            /** @description Whether the Sent-folder APPEND (D7) succeeded; false plus a non-empty save_warning when the APPEND failed after a successful SMTP send (MC-9, never silent). */
+            sent_saved: boolean;
+            /** @description Set when the Sent APPEND failed after a successful SMTP send — never silent (D7, MC-9); the tool result carries the same warning. Null when the save succeeded. */
+            save_warning: string | null;
+            /** @description Set when the draft could not be removed after a successful panel send (MAJ-009/MC-28 — the panel warns of a possible duplicate). Null when cleanup succeeded or there was no draft. */
+            draft_cleanup_warning: string | null;
+        };
+        /**
+         * MailDraftUpdateRequest
+         * @description Panel edit of a draft (D12/D23, PUT /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}): the full displayed content plus the staleness precondition (round-2 MAJ-008). The APPEND keeps the draft's Message-ID and \Deleted-flag the old copy (FR-032). Attachment carry-over is by part reference (FR-035): keep_attachment_parts lists the part indices from the current copy's MailMessage.attachments to carry over, and attachments carries new files. Full-replace semantics: keep_attachment_parts is required — the panel lists exactly what will be carried (D28). Audit event + rate limit.
+         */
+        MailDraftUpdateRequest: {
+            /** @description To recipients, replacing the draft's current list (D23 — recipients editable). */
+            to: string[];
+            /** @description Cc recipients replacing the draft's current list. Absent or empty means none. */
+            cc?: string[];
+            /** @description Bcc recipients replacing the draft's current list. Absent or empty means none. */
+            bcc?: string[];
+            /** @description New subject (D23). */
+            subject: string;
+            /** @description New editable Markdown source (D23). For an Omnipus draft it replaces the stored text/markdown part and re-stamps X-Omnipus-Render-Hash (MC-29); for a foreign draft it replaces the derived source, with the formatting-loss statement shown in the panel (D24). */
+            body_markdown: string;
+            /** @description uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008). */
+            uidvalidity: number;
+            /** @description uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008). */
+            uid: number;
+            /** @description New files added in the panel (D28). */
+            attachments?: components["schemas"]["MailAttachmentInput"][];
+            /** @description Part indices from the current copy's MailMessage.attachments to carry over (FR-035, server-side carry-over by part reference). Required — the panel lists exactly what will be carried (D28). */
+            keep_attachment_parts: number[];
+        };
+        /**
+         * MailDraftSendRequest
+         * @description Panel send (D12, POST /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}/send): the panel IS the approval. Transmits exactly the request's content — never re-reads the draft as truth (round-1 MAJ-002) — APPENDs the Sent copy (D18) and \Deleted-flags the draft (FR-032). Idempotent per draft Message-ID (round-2 MAJ-009): a repeat submit after a completed send returns the recorded first outcome, never a second transmission (FR-021). keep_attachment_parts is optional here and defaults to carrying ALL of the current copy's attachments (spec §2.2; the UI lists exactly what will be carried, D28). Audit event + rate limit.
+         */
+        MailDraftSendRequest: {
+            /** @description The displayed/edited To recipients, transmitted as-is (round-1 MAJ-002). */
+            to: string[];
+            /** @description The displayed/edited Cc recipients. Absent or empty means none. */
+            cc?: string[];
+            /** @description The displayed/edited Bcc recipients. Absent or empty means none. */
+            bcc?: string[];
+            /** @description The displayed/edited subject, transmitted as-is. */
+            subject: string;
+            /** @description The displayed/edited Markdown body, rendered at send time (MC-3). */
+            body_markdown: string;
+            /** @description uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16). */
+            uidvalidity: number;
+            /** @description uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16). */
+            uid: number;
+            /** @description Part indices from the current copy's MailMessage.attachments to carry onto the sent message. Optional — absent or empty-list semantics: absent carries ALL of the current copy's attachments (spec §2.2 default carry all); an explicit list carries exactly those parts. */
+            keep_attachment_parts?: number[];
+        };
+        /**
+         * MailHtmlPreviewTokenRequest
+         * @description Request to mint a short-lived token for one message's HTML body (D13/D17, POST /mail/html-preview-token — session-authenticated, stays in the API namespace, security sign-off C1). This mint is the ONE live-IMAP fetch of the preview flow: the message is fetched once, sanitized, and its body plus inline cid: parts and the load_remote remote-image URL list are held in the in-memory token store for the TTL — the /mail-preview/ serve routes (§2.3a) never dial IMAP. load_remote defaults to false (D17 — remote images blocked by default; "Load images" re-mints with true). Rate-limited by a dedicated per-IP limiter (MC-44).
+         */
+        MailHtmlPreviewTokenRequest: {
+            /**
+             * @description Workspace of the mailbox pair.
+             * @example ws_my_workspace
+             */
+            workspace_id: string;
+            /**
+             * @description ID of the mailbox-owning agent.
+             * @example mia
+             */
+            agent_id: string;
+            /**
+             * @description Folder slug — exactly inbox, sent or drafts (MC-5).
+             * @example inbox
+             * @enum {string}
+             */
+            folder: "inbox" | "sent" | "drafts";
+            /**
+             * @description Folder-scoped message reference: `uid:<uidvalidity>:<uid>` or `mid:<Message-ID>` — the same ref grammar as the read endpoint (§2.3).
+             * @example uid:456:123
+             */
+            message_ref: string;
+            /**
+             * @description Whether the preview may load remote images through the gateway's bounded proxy (D17). Default false — blocked by default; the "Load images" action re-mints with true.
+             * @default false
+             */
+            load_remote: boolean;
+        };
+        /**
+         * MailHtmlPreviewTokenResponse
+         * @description Minted preview token for one message's HTML body (D13/D17). Mirrors the Library token hygiene (MC-43): 256-bit crypto/rand token, fail-closed on entropy failure, named TTL, per-session live-token cap that refuses never evicts, indistinguishable 404s on the serve routes, logout revocation, bound to (pair, folder, ref, load_remote). The SPA constructs the /mail-preview/html/{token} and /mail-preview/part/{token}/{index} URLs from the token; expiry comes from expires_in_seconds.
+         */
+        MailHtmlPreviewTokenResponse: {
+            /**
+             * @description The credential: 32 bytes from a cryptographic random source, encoded base64url without padding — 43 characters (Library token hygiene, MC-43). This string is the entire security of the unauthenticated /mail-preview/ serve routes, so it MUST NOT be logged, put in an audit record, or sent in a Referer header (Referrer-Policy: no-referrer on the served responses).
+             * @example kZ8vQ2mR7xT1yB4nW6cA9pL0sD3fG5hJ8kM2nP4qR6t
+             */
+            token: string;
+            /**
+             * @description Seconds from the moment this response was produced until the token stops working (Library precedent: 900 for the 15-minute PreviewTokenTTL).
+             * @example 900
+             */
+            expires_in_seconds: number;
+        };
+        /**
+         * CreateEmailDraftResult
+         * @description Result of the create_email_draft agent tool (spec §2.4 — the tool returns exactly this shape). Crosses the gateway→SPA boundary: the chat tool-result renderer consumes the generated type (round-2 MIN-013). Property names are exactly as the tool emits them.
+         */
+        CreateEmailDraftResult: {
+            /**
+             * @description Whether the draft was APPENDed (MC-11 asserts created=true).
+             * @example true
+             */
+            created: boolean;
+            /**
+             * @description The draft's Message-ID, generated by the tool itself (<random-128-bit@domain-of-the-mailbox's-From-address>, fallback omnipus.invalid) and kept through panel edits and the final send (round-1 MIN-004).
+             * @example <9f3c...@example.com>
+             */
+            message_id: string;
+            /**
+             * @description IMAP UID of the APPENDed draft in the Drafts folder.
+             * @example 124
+             */
+            uid: number;
+            /**
+             * @description UIDVALIDITY of the Drafts folder.
+             * @example 456
+             */
+            uidvalidity: number;
+            /**
+             * @description Absolute http(s) chat link built from gateway.public_url exactly like serve_web derives its origin — http allowed (round-1 MAJ-013; pkg/tools/web_serve.go precedent). Null when no origin is derivable (unset public_url, wildcard bind) — the tool still succeeds and chat_link_reason carries the stated reason.
+             * @example http://localhost:5000/#/workspaces/ws_my_workspace/mail?mailbox=mia&folder=drafts&message=mid%3A%3C9f3c...%40example.com%3E
+             */
+            chat_link: string | null;
+            /** @description The stated reason when chat_link is null; null otherwise. */
+            chat_link_reason: string | null;
         };
         /**
          * BackupCreateResponse
@@ -23738,6 +24009,337 @@ export interface operations {
             };
         };
     };
+    sendMailMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailSendRequest"];
+            };
+        };
+        responses: {
+            /** @description Sent. The Sent APPEND result is reported in the body (sent_saved / save_warning — MC-9). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailSendResponse"];
+                };
+            };
+            /** @description Validation failure — recipients, body bound, attachment caps, header injection. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Workspace, agent, or mailbox pair not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+            /** @description SMTP/IMAP upstream failure — sanitized error class in the body's code field (MC-8); nothing transmitted on IMAP-side failure without a send. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updateMailDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+                /**
+                 * @description Folder-scoped reference of the draft in drafts (MC-13 — draft actions resolve only inside drafts): `uid:<uidvalidity>:<uid>` or `mid:<Message-ID>`.
+                 * @example uid:456:124
+                 */
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailDraftUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated draft (MailMessage). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailMessage"];
+                };
+            };
+            /** @description Validation failure, or body uidvalidity/uid disagree with a uid-form path ref (round-2 MAJ-008.1/.6). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Draft gone (deleted elsewhere) or pair has no mailbox. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale precondition — the viewed draft no longer matches uidvalidity:uid; body code stale_draft; nothing mutated (MC-16). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+            /** @description Mail server failure — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    discardMailDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+                /**
+                 * @description Folder-scoped reference of the draft in drafts (MC-13): `uid:<uidvalidity>:<uid>` or `mid:<Message-ID>`.
+                 * @example uid:456:124
+                 */
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The draft is discarded (or expunged under UIDPLUS). No response body. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Draft gone or pair has no mailbox. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+            /** @description Mail server failure — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    sendMailDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+                /**
+                 * @description Folder-scoped reference of the draft in drafts (MC-13): `uid:<uidvalidity>:<uid>` or `mid:<Message-ID>`.
+                 * @example uid:456:124
+                 */
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailDraftSendRequest"];
+            };
+        };
+        responses: {
+            /** @description Transmitted (first send or recorded idempotent outcome). Sent APPEND result and draft-cleanup warnings in the body (MC-9/MC-28). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailSendResponse"];
+                };
+            };
+            /** @description Validation failure — recipients, body bound, attachment caps, header injection, precondition disagreement. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Draft gone or pair has no mailbox. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale precondition (stale_draft, MC-16), or an already-sent repeat whose recorded outcome is unavailable (round-2 MAJ-009). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+            /** @description Mail server failure — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    mintMailHtmlPreviewToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailHtmlPreviewTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Token minted; the SPA points the sandboxed iframe at /mail-preview/html/{token}. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailHtmlPreviewTokenResponse"];
+                };
+            };
+            /** @description Validation failure — unknown folder slug or malformed message_ref. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Workspace, agent, mailbox pair, or message not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            /** @description Upstream mail failure during the mint's one IMAP fetch — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     getWorkspaceDelegation: {
         parameters: {
             query?: never;
@@ -24571,6 +25173,14 @@ export type MailMessage = components["schemas"]["MailMessage"];
 export type MailAttachment = components["schemas"]["MailAttachment"];
 export type MailboxNewMailSummary = components["schemas"]["MailboxNewMailSummary"];
 export type MailSummaryList = components["schemas"]["MailSummaryList"];
+export type MailAttachmentInput = components["schemas"]["MailAttachmentInput"];
+export type MailSendRequest = components["schemas"]["MailSendRequest"];
+export type MailSendResponse = components["schemas"]["MailSendResponse"];
+export type MailDraftUpdateRequest = components["schemas"]["MailDraftUpdateRequest"];
+export type MailDraftSendRequest = components["schemas"]["MailDraftSendRequest"];
+export type MailHtmlPreviewTokenRequest = components["schemas"]["MailHtmlPreviewTokenRequest"];
+export type MailHtmlPreviewTokenResponse = components["schemas"]["MailHtmlPreviewTokenResponse"];
+export type CreateEmailDraftResult = components["schemas"]["CreateEmailDraftResult"];
 export type BackupCreateResponse = components["schemas"]["BackupCreateResponse"];
 export type OnboardingStatusResponse = components["schemas"]["OnboardingStatusResponse"];
 export type OperationResult = components["schemas"]["OperationResult"];

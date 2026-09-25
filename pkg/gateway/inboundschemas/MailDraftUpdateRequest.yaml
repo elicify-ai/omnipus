@@ -1,0 +1,70 @@
+title: MailDraftUpdateRequest
+description: >
+  Panel edit of a draft (D12/D23, PUT
+  /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}): the full
+  displayed content plus the staleness precondition (round-2 MAJ-008). The
+  APPEND keeps the draft's Message-ID and \Deleted-flag the old copy
+  (FR-032). Attachment carry-over is by part reference (FR-035):
+  keep_attachment_parts lists the part indices from the current copy's
+  MailMessage.attachments to carry over, and attachments carries new files.
+  Full-replace semantics: keep_attachment_parts is required — the panel
+  lists exactly what will be carried (D28). Audit event + rate limit.
+type: object
+additionalProperties: false
+required:
+  - to
+  - subject
+  - body_markdown
+  - uidvalidity
+  - uid
+  - keep_attachment_parts
+properties:
+  to:
+    type: array
+    description: To recipients, replacing the draft's current list (D23 — recipients editable).
+    items:
+      type: string
+    minItems: 1
+    maxItems: 50
+  cc:
+    type: array
+    description: Cc recipients replacing the draft's current list. Absent or empty means none.
+    items:
+      type: string
+    maxItems: 50
+  bcc:
+    type: array
+    description: Bcc recipients replacing the draft's current list. Absent or empty means none.
+    items:
+      type: string
+    maxItems: 50
+  subject:
+    type: string
+    description: New subject (D23).
+  body_markdown:
+    type: string
+    description: >
+      New editable Markdown source (D23). For an Omnipus draft it replaces
+      the stored text/markdown part and re-stamps X-Omnipus-Render-Hash
+      (MC-29); for a foreign draft it replaces the derived source, with the
+      formatting-loss statement shown in the panel (D24).
+  uidvalidity:
+    type: integer
+    description: uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008).
+  uid:
+    type: integer
+    description: uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008).
+  attachments:
+    type: array
+    description: New files added in the panel (D28).
+    items:
+      $ref: ./MailAttachmentInput.yaml
+    maxItems: 10
+  keep_attachment_parts:
+    type: array
+    description: >
+      Part indices from the current copy's MailMessage.attachments to carry
+      over (FR-035, server-side carry-over by part reference). Required —
+      the panel lists exactly what will be carried (D28).
+    items:
+      type: integer

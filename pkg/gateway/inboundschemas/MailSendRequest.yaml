@@ -1,0 +1,60 @@
+title: MailSendRequest
+description: >
+  Human manual send from the Mail panel compose (D9, POST
+  /workspaces/{id}/mail/{agentId}/messages). Body is Markdown; the backend
+  renders sanitized HTML + plain text (multipart/alternative, MC-3), appends
+  the mailbox signature, sends over SMTP and APPENDs the Sent copy (D7, D18
+  — always, no provider detection). Audit event + dedicated
+  mailMutationLimiter rate limit (MC-20). The ≤ 50-recipient total cap
+  (D29/R2-6, MC-27) and the attachment caps (≤ 10 files, ≤ 25 MiB total —
+  MC-32) are enforced before any SMTP connection.
+type: object
+additionalProperties: false
+required:
+  - to
+  - subject
+  - body_markdown
+properties:
+  to:
+    type: array
+    description: To recipients (de-duplicated, RFC 2047 display names preserved).
+    items:
+      type: string
+    minItems: 1
+    maxItems: 50
+  cc:
+    type: array
+    description: Cc recipients. Absent or empty means none.
+    items:
+      type: string
+    maxItems: 50
+  bcc:
+    type: array
+    description: Bcc recipients. Absent or empty means none.
+    items:
+      type: string
+    maxItems: 50
+  subject:
+    type: string
+    description: Subject line; CRLF/LF injection is sanitized (MC-4).
+  body_markdown:
+    type: string
+    description: >
+      Markdown body — rendered server-side to sanitized HTML plus plain text
+      (multipart/alternative, MC-3), signature appended. Bounded at 1 MiB
+      (MC-22).
+  in_reply_to:
+    type: string
+    nullable: true
+    description: >
+      Message-ID of the message being replied to — set by the panel Reply
+      action (round-2 MIN-009); In-Reply-To/References are carried through
+      to the sent message. Absent or null = standalone compose.
+  attachments:
+    type: array
+    description: >
+      Files to attach (D28). Decoded total across all files ≤ 25 MiB, at
+      most 10 files (MC-32) — checked pre-dial.
+    items:
+      $ref: ./MailAttachmentInput.yaml
+    maxItems: 10
