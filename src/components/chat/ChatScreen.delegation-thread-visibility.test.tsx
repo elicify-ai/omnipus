@@ -125,6 +125,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
 vi.mock('@tanstack/react-router', () => ({
   useRouter: () => ({ navigate: vi.fn() }),
   useSearch: () => ({}),
+  useNavigate: () => vi.fn(),
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
