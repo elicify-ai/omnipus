@@ -30,7 +30,7 @@ func TestReplay_StatusPollsDoNotSynthesizeSpawnSpans(t *testing.T) {
 		followUpEndEntry(callID+":end", "span_"+callID, callID, "success"),
 	}
 	pollsOnTranscript := 0
-	var pollCalls []session.ToolCall
+	pollCalls := make([]session.ToolCall, 0, polls)
 	for i := 1; i <= polls; i++ {
 		action := "status"
 		if i == polls {
