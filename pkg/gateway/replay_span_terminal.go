@@ -143,6 +143,23 @@ func toolCallNamesChildSession(tc session.ToolCall) bool {
 	return strings.Contains(text, `"session_id"`)
 }
 
+// isSteeringConsumedMarker is the wake bookmark processSteeredSystemWake and
+// writeSteeringConsumedMarker append once a woken turn is certain to run.
+// The text is "consumed" plus one message id. Other code reads that line from
+// the transcript, so replay leaves the entry in place and simply does not
+// emit it. A system line with more than one word after "consumed" is not this
+// bookmark.
+func isSteeringConsumedMarker(entry session.TranscriptEntry) bool {
+	if entry.Type != session.EntryTypeSystem && entry.Role != "system" {
+		return false
+	}
+	rest, ok := strings.CutPrefix(entry.Content, "consumed ")
+	if !ok || rest == "" || strings.ContainsAny(rest, " \t\n\r") {
+		return false
+	}
+	return true
+}
+
 // delegateCallStillActive reports that the latest generation with a saved
 // start is still open. A finished earlier generation does not clear it.
 func (sr *streamReplayState) delegateCallStillActive(callID string) bool {

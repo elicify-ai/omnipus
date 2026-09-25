@@ -136,3 +136,59 @@ func TestReplay_LegacyLaunchWithoutPersistedStartKeepsToolCallSpan(t *testing.T)
 		t.Fatalf("legacy end status=%q duration=%d, want success and 42", ends[0].Status, ends[0].DurationMs)
 	}
 }
+
+// TestReplay_ConsumedWakeMarkerIsNotAVisibleFrame is the wake bookmark
+// ("consumed <message id>"). It stays in the transcript for the wake path.
+// Replay must not send it as a chat line. A neighbouring system line is
+// emitted, so the filter is not "drop every system entry".
+func TestReplay_ConsumedWakeMarkerIsNotAVisibleFrame(t *testing.T) {
+	const marker = "consumed session_01M3ABCDEF:1:final"
+	const visible = "agent switched"
+	entries := []session.TranscriptEntry{
+		{
+			ID:      "sys-visible",
+			Type:    session.EntryTypeSystem,
+			Role:    "system",
+			Content: visible,
+		},
+		{
+			ID:      "consumed-session_01M3ABCDEF:1:final",
+			Type:    session.EntryTypeSystem,
+			Role:    "system",
+			Content: marker,
+			AgentID: "jim",
+		},
+	}
+	markerInTranscript := false
+	for _, entry := range entries {
+		if entry.Content == marker {
+			markerInTranscript = true
+		}
+	}
+	if !markerInTranscript {
+		t.Fatal("fixture has no consumed marker — an empty replay would pass for the wrong reason")
+	}
+
+	frames, _ := runReplay(t, entries)
+
+	sawVisible := false
+	for _, f := range frames {
+		if f.Type == "replay_message" && f.Content == visible {
+			sawVisible = true
+		}
+		if frameCarriesConsumedMarker(f, marker) {
+			t.Fatalf("replay emitted the consumed marker on a %s frame", f.Type)
+		}
+	}
+	if !sawVisible {
+		t.Fatal("ordinary system line was not replayed — the marker check cannot tell a filter from a dropped stream")
+	}
+}
+
+func frameCarriesConsumedMarker(f replayFrameDecoder, marker string) bool {
+	if strings.Contains(f.Content, marker) || strings.Contains(f.Message, marker) || strings.Contains(f.Error, marker) {
+		return true
+	}
+	text, ok := f.Result.(string)
+	return ok && strings.Contains(text, marker)
+}

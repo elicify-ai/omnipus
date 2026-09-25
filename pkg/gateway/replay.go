@@ -500,6 +500,12 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 	if entry.Type == session.EntryTypeCompaction {
 		return streamReplayStateContinue, nil
 	}
+	// The steering wake bookmark stays in the transcript for the wake
+	// path. Replay must not turn it into a chat line.
+	if isSteeringConsumedMarker(entry) {
+		return streamReplayStateContinue, nil
+	}
+
 	// A canceled turn replays as role:"turn_canceled". The frame build
 	// lives in dispatchTurnCancelled so this function stays under the
 	// size budget. Same frame, same position, as before the extraction.
