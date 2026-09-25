@@ -4081,7 +4081,7 @@ export interface components {
             provider?: string;
             stats: components["schemas"]["SessionStats"];
             /**
-             * @description Associated workspace ID (optional, future v0.3 feature).
+             * @description Associated workspace ID when the session is bound to a workspace. Absent when the session has none.
              * @example ws-123
              */
             workspace_id?: string;
@@ -9268,7 +9268,7 @@ export interface components {
         };
         /**
          * AuditLogResponse
-         * @description Response from GET /api/v1/audit-log. Wraps the recent audit entries with the result of verifying the HMAC tamper-evident chain (v0.2 #155). The chain is recomputed server-side over the on-disk audit files; chain_status reports whether it is intact, broken (tampered/reordered/truncated), or could not be checked (e.g. audit logging disabled or no chain key).
+         * @description Response from GET /api/v1/audit-log. Wraps the recent audit entries with the result of verifying the HMAC tamper-evident chain (the #155 security wave). The chain is recomputed server-side over the on-disk audit files; chain_status reports whether it is intact, broken (tampered/reordered/truncated), or could not be checked (e.g. audit logging disabled or no chain key).
          */
         AuditLogResponse: {
             /** @description Recent audit entries, reverse-chronological, max 100. */
@@ -12787,7 +12787,7 @@ export interface components {
          * @description Request body for PUT /api/v1/channels/{id}/configure. Merges the supplied fields into the channel's config section. The "enabled" field is reserved and silently removed — use the separate enable/disable endpoints instead. Field names and value types are channel-specific; unknown fields are stored as-is and passed through to the channel implementation.
          */
         ChannelConfigureRequest: {
-            /** @description Optional: the instance map key to configure. In v0.1 (cap-1/type) this equals the channel type and can be omitted. Reserved for v0.3 multi-instance support — the backend ignores this field today (the URL {id} is the key). */
+            /** @description Optional. The backend ignores this field: the URL {id} is the instance key, including when more than one instance of a channel type exists. It is not persisted. */
             instance_id?: string;
             /** @description Optional routing identity override for this channel instance. Persisted per instance; wired into ResolveRoute for inbound messages on this channel. */
             identity?: components["schemas"]["ChannelIdentity"];
