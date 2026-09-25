@@ -266,7 +266,7 @@ function withDefined(event: DelegationEvent): DelegationEvent {
   for (const [key, value] of Object.entries(event)) {
     if (value !== undefined) out[key] = value
   }
-  return out as DelegationEvent
+  return out as unknown as DelegationEvent
 }
 
 function baseEvent(

@@ -1046,7 +1046,8 @@ function eventsFromStore(sessionId: string) {
   expect(bucket, 'handleFrame must have created the session bucket').toBeDefined()
   const messages = getMessages(bucket!)
   const stored = messages.flatMap((item) => item.spans ?? []).find((item) => item.spanId === 'span_run-1')
-  expect(stored?.finalResult, 'the child result must actually be on the span the store kept').toContain(CHILD_SENTINEL)
+  const storedResult = stored && stored.status !== 'running' ? stored.finalResult : undefined
+  expect(storedResult, 'the child result must actually be on the span the store kept').toContain(CHILD_SENTINEL)
   return deriveDelegationEvents({
     sessionId,
     messages: messages.map((item) => ({
@@ -1060,7 +1061,7 @@ function eventsFromStore(sessionId: string) {
         childSessionId: itemSpan.childSessionId,
         status: itemSpan.status,
         lifecycleState: itemSpan.lifecycleState,
-        finalResult: itemSpan.finalResult,
+        finalResult: itemSpan.status === 'running' ? undefined : itemSpan.finalResult,
         statusLine: itemSpan.statusLine,
         lastUpdateAt: itemSpan.lastUpdateAt,
       })),
