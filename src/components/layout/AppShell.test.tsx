@@ -79,12 +79,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     // the coexistence test needs it to actually mount) resolves workspace
     // names via this call.
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
-    // Since the GodModeActiveBanner was removed from AppShell (founder
-    // decision 2026-09-25), nothing in this tree queries god-mode anymore —
-    // the sidebar pill owns that now, and Sidebar is stubbed to null here.
-    // The mock stays so the "old banner testids are gone" describe below can
-    // answer the endpoint with "on"/"error" and prove AppShell renders
-    // neither the active nor the unknown banner for it.
+    // The corner dot (GodModeIndicators.tsx, mounted by AppShell since the
+    // banner removal) queries god-mode via useGodModeOn; the banner-removal
+    // describe below also answers the endpoint with "on"/"error" to prove
+    // AppShell renders none of the banner's old surfaces for it.
     fetchGodMode: vi.fn().mockResolvedValue({ enabled: false, available: false, supported: true, persisted: false }),
   }
 })
@@ -693,12 +691,14 @@ describe('AppShell — cross-workspace approval banner coexists with other banne
 // ── God-mode banner is gone (founder decision 2026-09-25) ────────────────────
 //
 // The app-wide GodModeActiveBanner that ADR-092 FR-034 originally relocated
-// into AppShell is deleted: its replacement is the sidebar God Mode pill +
-// hamburger dot (src/components/layout/GodModeIndicators.tsx, covered in
-// Sidebar.test.tsx and ScreenHeader.test.tsx). These tests pin the deletion
-// itself — even with the endpoint answering "on" (or failing), AppShell must
-// render none of the banner's old surfaces. Sidebar is mocked to null in
-// this file, so the pill cannot mask the assertion.
+// into AppShell is deleted: its replacement is the sidebar God Mode pill plus
+// ONE app-shell corner dot (src/components/layout/GodModeIndicators.tsx; the
+// pill is covered in Sidebar.test.tsx, the dot in the describe below — the
+// per-hamburger dots of the first revision are gone, and ScreenHeader.test.tsx
+// pins their absence). These tests pin the deletion itself — even with the
+// endpoint answering "on" (or failing), AppShell must render none of the
+// banner's old surfaces. Sidebar is mocked to null in this file, so the pill
+// cannot mask the assertion.
 describe('AppShell — god-mode banner removal (2026-09-25)', () => {
   const PLATFORM_APP_STATE: AppState = {
     onboarding_complete: true,
@@ -776,6 +776,31 @@ describe('AppShell — God Mode corner dot (2026-09-25)', () => {
     })
   }
 
+  // Phone-takeover shape: answer BOTH queries AppShell/GodModeIndicators ask
+  // — the sidebar pin breakpoint (1024px, false → sidebar never pinned) and
+  // AppShell's own <640px phone signal (true → panel takeover active).
+  function stubMatchMediaPhone() {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches:
+          query === '(min-width: 1024px)'
+            ? false
+            : query === '(max-width: 639px)'
+              ? true
+              : false,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }),
+    })
+  }
+
   const PLATFORM_APP_STATE: AppState = {
     onboarding_complete: true,
     dev_mode_bypass: false,
@@ -803,6 +828,7 @@ describe('AppShell — God Mode corner dot (2026-09-25)', () => {
 
   afterEach(() => {
     useSidebarStore.setState({ isOpen: false, isPinned: false })
+    useUiStore.setState({ browserPanel: null, libraryPanel: null })
     if (originalMatchMedia === undefined) {
       delete (window as unknown as { matchMedia?: unknown }).matchMedia
     } else {
@@ -823,10 +849,67 @@ describe('AppShell — God Mode corner dot (2026-09-25)', () => {
 
     const dot = await screen.findByTestId('god-mode-corner-dot')
     expect(dot).toHaveAttribute('aria-label', 'God Mode is on — open settings to turn it off')
-    // The dot sits inside the screen-content region (<main>), the surface
-    // the founder named — not in the sidebar (mocked to null here) or a
-    // screen header (Outlet renders none).
-    expect(dot.closest('main')).toBe(screen.getByRole('main'))
+    // The dot mounts at the SHELL ROOT (review round 2: a dot inside <main>
+    // is clipped and inerted by phone-width takeover panels) — in the shell,
+    // but never inside the screen-content region, the sidebar (mocked to
+    // null here) or a screen header (Outlet renders none).
+    expect(dot.closest('[data-app-shell]')).not.toBeNull()
+    expect(dot.closest('main')).toBeNull()
+  })
+
+  // Review round 2, finding 3: below 640px the docked BrowserLivePanel /
+  // LibraryPanel take over the full width, and AppShell collapses <main> to
+  // zero width and inerts it. A dot living inside <main> is invisible and
+  // unclickable exactly while God Mode is on — the highest-risk state shows
+  // nothing. The dot must render at the shell root, above the panels,
+  // outside the inert region.
+  it('keeps the corner dot visible above a phone-width panel takeover, outside the inert <main> region', async () => {
+    stubMatchMediaPhone()
+    mockAll()
+    useSidebarStore.setState({ isOpen: false, isPinned: false })
+    useUiStore.setState({ browserPanel: { sessionId: 's1', agentId: 'a1' } })
+
+    renderShell()
+
+    const dot = await screen.findByTestId('god-mode-corner-dot')
+    // The takeover really is active (same shape the inert tests pin)…
+    const main = screen.getByTestId('app-main-content')
+    expect(main.hasAttribute('inert')).toBe(true)
+    // …and the dot is NOT inside the collapsed/inert region…
+    expect(main.contains(dot)).toBe(false)
+    // …but still in the shell, stacked above the static docked panels
+    // (absolute + z-40 beats the plain <aside> flex siblings).
+    expect(dot.closest('[data-app-shell]')).not.toBeNull()
+    const anchor = screen.getByTestId('god-mode-corner-dot-anchor')
+    expect(anchor.className).toContain('z-40')
+  })
+
+  // Review round 2, finding 4: the dot's hit area must never overlap the
+  // sidebar-open hamburger's. Every hamburger-bearing screen fills the
+  // top-left 44px band with the hamburger (the workspace one flush at x=0,
+  // 44×44; ScreenHeader's spans x=8..48 at the same height) — no corner-
+  // anchored hit area of ANY size can avoid eating part of it. The anchor
+  // therefore starts BELOW the band, on the very token the hamburger rows
+  // take their height from: --spacing-chrome-header backs h-chrome-header
+  // (= 44px), so dot hit area y∈[44,68] and every hamburger ending at y=44
+  // are disjoint BY CONSTRUCTION. Pixel geometry is e2e territory; this
+  // pins the token contract both sides rely on.
+  it('anchors the dot below the chrome-header band — never on top of the hamburger — at the pointer-minimum size', async () => {
+    mockAll()
+    useSidebarStore.setState({ isOpen: false, isPinned: false })
+
+    renderShell()
+
+    await screen.findByTestId('god-mode-corner-dot')
+    const anchor = screen.getByTestId('god-mode-corner-dot-anchor')
+    expect(anchor.className).toContain('left-0')
+    expect(anchor.className).toContain('top-[var(--spacing-chrome-header)]')
+    expect(anchor.className).not.toContain('top-0')
+    // Accessible target size stays at the pointer minimum (WCAG 2.5.8):
+    // the Link keeps its 24px square (--target-pointer-minimum).
+    const dot = screen.getByTestId('god-mode-corner-dot')
+    expect(dot.className).toContain('h-6')
+    expect(dot.className).toContain('w-6')
   })
 
   it('renders no corner dot when god-mode is off', async () => {

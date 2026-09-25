@@ -25,8 +25,9 @@ export function isBypassUnavailable(err: unknown): boolean {
  * suggestion): the God Mode indicators are RED when god-mode is on and
  * INVISIBLE in every other state — off, still loading, fetch error, and
  * dev-mode bypass. There is no amber or "unknown" variant anywhere; a fetch
- * failure must NOT surface as an indicator (the gateway-state fetch-error
- * banner in AppShell still covers "the app cannot reach the gateway").
+ * failure must NOT surface as an indicator — it shows nothing anywhere.
+ * (Only an APP-STATE fetch failure has its own surface, the gateway-state
+ * fetch-error banner in AppShell; a god-mode-only failure shows nothing.)
  *
  * Shares AppShell's own ['app-state'] cache entry (via
  * useDevModeBypassKnown) and the ['god-mode'] entry GodModeControl already
@@ -39,7 +40,7 @@ export function isBypassUnavailable(err: unknown): boolean {
 export function useGodModeOn(): boolean {
   const { known: devModeBypassKnown, resolved: appStateResolved } = useDevModeBypassKnown()
 
-  const { data: godMode, isError, error } = useQuery({
+  const { data: godMode, isError } = useQuery({
     queryKey: ['god-mode'],
     queryFn: fetchGodMode,
     // Only fire once app-state has resolved AND confirmed bypass is off.
@@ -48,11 +49,13 @@ export function useGodModeOn(): boolean {
     enabled: appStateResolved && !devModeBypassKnown,
   })
 
-  // Known from appState (the common case — no doomed request was even made)
-  // OR a genuine 503 the query itself hit (defense in depth, e.g. a late
-  // toggle of dev_mode_bypass mid-session before appState refetches). Must
-  // be checked BEFORE isError: under bypass the endpoint 503s by design.
-  const bypassUnavailable = devModeBypassKnown || isBypassUnavailable(error)
-
-  return !bypassUnavailable && !isError && godMode?.enabled === true
+  // devModeBypassKnown is the one bypass term this boolean needs: once
+  // bypass is known on, the query above is disabled, but a stale cached
+  // `enabled: true` from before a mid-session bypass toggle can still sit
+  // in `data` — this term is what suppresses it. A bypass-gate 503 the
+  // query itself hit needs no separate term here: any query error (503
+  // included) already forces false through !isError below. GodModeControl
+  // DOES need the distinction (its "unavailable while bypass" note is not
+  // an error state) — that is what isBypassUnavailable stays exported for.
+  return !devModeBypassKnown && !isError && godMode?.enabled === true
 }

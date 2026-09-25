@@ -364,8 +364,10 @@ export function Sidebar() {
       <div className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0">
         <Wordmark className="text-base" />
         {/* God Mode pill (founder decision 2026-09-25) — replaces the old
-            app-wide banner; renders nothing unless god-mode is live (or its
-            status is unknown). See GodModeIndicators.tsx. */}
+            app-wide banner; renders nothing unless god-mode is live. Off,
+            loading, unknown, fetch error and bypass all render nothing
+            (revision 2 ruling: no unknown variant exists). See
+            GodModeIndicators.tsx. */}
         <GodModeSidebarPill />
         {/* Search icon — opens the cross-workspace session search modal */}
         <IconButton

@@ -44,6 +44,7 @@
  */
 
 import { useState, useEffect } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Warning, ShieldCheck, SpinnerGap } from '@phosphor-icons/react'
 import { fetchGodMode, setGodMode, getErrorMessage } from '@/lib/api'
@@ -59,6 +60,7 @@ export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolea
   const { addToast } = useUiStore()
   const stepUp = useStepUp()
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   // GET /api/v1/gateway/god-mode always 503s under dev_mode_bypass, so skip
   // the doomed request once dev_mode_bypass (shared ['app-state'] cache
@@ -206,11 +208,22 @@ export function GodModeControl({ focusOnMount = false }: { focusOnMount?: boolea
   // lands the operator ON this control. Gated on !isLoading: the switch is
   // disabled while its own query is in flight (disabled buttons are not
   // focusable), so focusing before it settles would silently no-op.
+  // The param is ONE-SHOT intent, so it is consumed here: after focusing,
+  // it is stripped from the URL with a replace navigation. Radix
+  // TabsContent unmounts inactive tabs, so a lingering ?focus would re-run
+  // this effect on every away-and-back to the Gateway tab and steal focus
+  // again (review round 2, finding 1). Only `focus` is dropped — the
+  // ?tab=gateway the indicators pair with it stays.
   useEffect(() => {
     if (!focusOnMount || isLoading) return
     document.getElementById('god-mode-control')?.scrollIntoView({ block: 'center' })
     document.getElementById('god-mode-toggle')?.focus()
-  }, [focusOnMount, isLoading])
+    void navigate({
+      to: '/settings',
+      search: (prev) => ({ ...prev, focus: undefined }),
+      replace: true,
+    })
+  }, [focusOnMount, isLoading, navigate])
 
   return (
     <div className="space-y-[var(--space-2-5)]">

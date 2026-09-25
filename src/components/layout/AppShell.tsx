@@ -253,14 +253,6 @@ export function AppShell() {
             <ErrorBoundary>
               <Outlet />
             </ErrorBoundary>
-            {/* God Mode corner dot (founder decision 2026-09-25) — rendered
-                ONCE here, outside the ErrorBoundary, so every route is
-                covered (including Library, the live-browser view and admin
-                chat, which have no sidebar button), and a crashed screen
-                does not take the indicator down with it. Shows only while
-                god-mode is on AND the sidebar is hidden; see
-                GodModeIndicators.tsx. */}
-            <GodModeCornerDot />
           </main>
         </OmnipusRuntimeProvider>
       </div>
@@ -301,6 +293,20 @@ export function AppShell() {
           why popping THIS one out does not close the docked copy (no
           exclusive control lock to hand over, unlike the live browser). */}
       <LibraryPanel />
+
+      {/* God Mode corner dot (founder decision 2026-09-25) — rendered ONCE
+          here at the SHELL ROOT, outside the ErrorBoundary, and — review
+          round 2, finding 3 — deliberately NOT inside <main>: on a
+          phone-width takeover the docked panels above collapse <main> to
+          zero width and inert it, which would make a dot in there invisible
+          and unclickable exactly while God Mode is on. At the root,
+          absolute + z-40 keeps it above the static panels and outside the
+          inert region, and a crashed screen cannot take the indicator down
+          with it. Shows only while god-mode is on AND the sidebar is
+          hidden; anchored just below the 44px chrome-header band so its
+          hit area never overlaps the sidebar-open hamburger — see
+          GodModeIndicators.tsx for the full geometry. */}
+      <GodModeCornerDot />
     </div>
   )
 }

@@ -180,7 +180,7 @@ function WorkspaceTabContainerView({
             aria-label="Toggle navigation sidebar"
             data-testid="workspace-hamburger"
             variant="ghost"
-            className="relative h-chrome-header min-h-chrome-header w-11 rounded-none text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
+            className="h-chrome-header min-h-chrome-header w-11 rounded-none text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
           >
             <List size={20} />
           </IconButton>

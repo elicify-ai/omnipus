@@ -175,3 +175,40 @@ describe('SettingsScreen — ?focus=god-mode forwarding', () => {
     )
   })
 })
+
+// Review round 2, finding 2: clicking the God Mode pill / corner dot while
+// ALREADY on /settings (on another tab) must switch to the Gateway tab.
+// TanStack Router re-renders — does NOT remount — the route component on a
+// search-only change, so this simulates exactly that shape: the same
+// SettingsScreen instance receiving changed initialTab/focusGodMode props.
+// Radix Tabs applies defaultValue only on mount, so without a remount key
+// the visible tab would silently stay on Providers.
+describe('SettingsScreen — tab switch on route search change', () => {
+  it('switches to the Gateway tab when initialTab changes on a search-only re-render', async () => {
+    vi.mocked(api.fetchAboutInfo).mockResolvedValue(ABOUT_INFO_OK)
+    const client = makeClient()
+
+    const { rerender } = render(
+      <QueryClientProvider client={client}>
+        <SettingsScreen initialTab="providers" />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { selected: true })).toHaveTextContent('Providers')
+    })
+    // Gateway content is not mounted while Providers is the active tab.
+    expect(screen.queryByTestId('gateway-section-stub')).not.toBeInTheDocument()
+
+    rerender(
+      <QueryClientProvider client={client}>
+        <SettingsScreen initialTab="gateway" focusGodMode />
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { selected: true })).toHaveTextContent('Gateway')
+    })
+    expect(screen.getByTestId('gateway-section-stub')).toHaveTextContent('focus-god-mode')
+  })
+})

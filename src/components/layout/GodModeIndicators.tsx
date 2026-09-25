@@ -15,8 +15,9 @@ import { useGodModeOn } from '@/hooks/useGodModeLiveStatus'
  *   RED when god-mode is on, INVISIBLE in every other state — off, still
  *   loading, fetch error, dev-mode bypass. There is no amber or "unknown"
  *   variant anywhere (founder ruling 2026-09-25, overriding the earlier
- *   amber suggestion); a god-mode fetch failure surfaces through the
- *   gateway-state fetch-error banner in AppShell, not through these.
+ *   amber suggestion). A god-mode fetch failure shows NOTHING anywhere —
+ *   that is the accepted trade of the ruling, not an oversight; only an
+ *   app-state fetch failure has its own banner in AppShell.
  *
  *   GodModeSidebarPill — a small red pill in the sidebar brand row, next to
  *     the omnipus.ai wordmark, while god-mode is live. Clicking it navigates
@@ -24,11 +25,14 @@ import { useGodModeOn } from '@/hooks/useGodModeLiveStatus'
  *     toggles anything — flipping god-mode keeps its step-up gate in
  *     GodModeControl).
  *
- *   GodModeCornerDot — rendered ONCE from AppShell (inside <main>), so every
- *     route is covered — including Library, the live-browser view and admin
- *     chat, which have no sidebar-open button to carry a dot. It shows only
- *     while god-mode is on AND the sidebar (and its pill) is off screen: a
- *     small red dot in the top-left corner of the screen content. It is
+ *   GodModeCornerDot — rendered ONCE from the AppShell SHELL ROOT (not
+ *     inside <main>), so every route is covered — including Library, the
+ *     live-browser view and admin chat, which have no sidebar-open button
+ *     to carry a dot — and phone-width takeover panels cannot clip or inert
+ *     it. It shows only while god-mode is on AND the sidebar (and its pill)
+ *     is off screen: a small red dot at the left edge of the screen, just
+ *     below the 44px chrome-header band (clear of the sidebar-open
+ *     hamburger's hit area — see the geometry note in the component). It is
  *     keyboard-focusable, and hovering or focusing it explains itself via
  *     the catalogued Tooltip; clicking it navigates to the God Mode control
  *     like the pill does.
@@ -82,26 +86,38 @@ export function GodModeCornerDot() {
   const { visible } = useSidebarLayout()
   if (!on || visible) return null
   return (
-    // Positioned wrapper (the Tooltip's own root span is inline-flex and
-    // cannot carry the corner placement): pinned to the top-left corner of
-    // <main> — the screen content — which is the screen's left edge exactly
-    // when the sidebar is hidden.
-    <span className="absolute left-0 top-0 z-40">
+    // Anchored wrapper (the Tooltip's own root span is inline-flex and
+    // cannot carry the placement), mounted by AppShell at the SHELL ROOT —
+    // see the call site in AppShell.tsx for why not inside <main>. Two
+    // geometry decisions live here (review round 2, findings 3–4):
+    //
+    //  • BELOW the chrome-header band, not in the top-left corner. Every
+    //    screen that has a sidebar-open hamburger fills the top-left 44px
+    //    band with it (the workspace hamburger is flush at x=0, 44×44;
+    //    ScreenHeader's spans x=8..48 at the same height) — no corner-
+    //    anchored hit area of ANY size can avoid eating part of it, and the
+    //    later sibling wins an overlap (touch-target rule, design-system
+    //    skill §12). Anchoring one token below the band — the very token
+    //    the hamburger rows take their height from (--spacing-chrome-header
+    //    backs h-chrome-header) — makes the disjointness structural: the
+    //    dot's hit area starts at y=44 where every hamburger ends.
+    //  • z-40, above the docked takeover panels (static flex siblings), so
+    //    the dot stays visible and clickable through phone-width takeovers.
+    <span
+      data-testid="god-mode-corner-dot-anchor"
+      className="absolute left-0 top-[var(--spacing-chrome-header)] z-40"
+    >
       <Tooltip
         interactive
         side="bottom"
         content="God Mode is on — open settings to turn it off"
       >
         {/* The Link is the sole tab stop (Tooltip interactive mode): a 24px
-            hit area (= --target-pointer-minimum) with the 8px visual dot
-            centered in it. Deliberately under the 44px touch minimum: this
-            corner is occupied by the sidebar-open hamburger on every screen
-            that has one, the dot renders later in the DOM, and — per the
-            touch-target overlap rule (see SegmentedControlItem's comment) —
-            the later sibling wins an overlap. A full-size region here would
-            swallow taps meant for the hamburger, the primary control in
-            this corner; a 24px region keeps the hamburger's bulk and icon
-            center reachable. */}
+            hit area (= --target-pointer-minimum, WCAG 2.5.8) with the 8px
+            visual dot centered in it. Below the chrome-header band nothing
+            else owns this corner, so the full pointer minimum is safe —
+            unlike the old top-left seat, where the same 24px stole the
+            workspace hamburger's icon centre. */}
         <Link
           to="/settings"
           search={{ tab: 'gateway', focus: 'god-mode' }}

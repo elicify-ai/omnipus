@@ -50,6 +50,14 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
+// GodModeControl consumes ?focus=god-mode once and strips the param with a
+// replace navigation after focusing (review round 2, finding 1). useNavigate
+// is the only router API it uses, so a minimal double suffices.
+const mockNavigate = vi.hoisted(() => vi.fn())
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => mockNavigate,
+}))
+
 import * as api from '@/lib/api'
 import { ApiError } from '@/lib/api-error'
 import { GodModeControl } from './GodModeControl'
@@ -386,5 +394,35 @@ describe('GodModeControl — focusOnMount (?focus=god-mode)', () => {
     await waitFor(() => expect(toggle).toBeEnabled())
     expect(toggle).not.toHaveFocus()
     expect(scrollIntoView).not.toHaveBeenCalled()
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  // Review round 2, finding 1: ?focus=god-mode is ONE-SHOT intent. Radix
+  // TabsContent unmounts inactive tabs, so a lingering ?focus re-runs the
+  // focus effect on every away-and-back to the Gateway tab and yanks focus
+  // to the switch unbidden. After the first focus lands, the param must be
+  // consumed — stripped from the URL with a REPLACE navigation (no history
+  // entry) while every other search key survives.
+  it('consumes ?focus=god-mode once: after focusing, strips the param via a replace navigation', async () => {
+    vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_ON)
+
+    renderControlFocused()
+
+    const toggle = await screen.findByTestId('god-mode-toggle')
+    await waitFor(() => {
+      expect(toggle).toHaveFocus()
+    })
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledTimes(1)
+    })
+    const call = mockNavigate.mock.calls[0][0]
+    expect(call.to).toBe('/settings')
+    expect(call.replace).toBe(true)
+    // The search updater drops `focus` and keeps every other key — the
+    // tab the pill selected must stay in the URL.
+    expect(
+      call.search({ tab: 'gateway', focus: 'god-mode', provider: 'x', model: 'y' }),
+    ).toEqual({ tab: 'gateway', focus: undefined, provider: 'x', model: 'y' })
   })
 })
