@@ -111,6 +111,8 @@ Whoever starts a headless run can opt out explicitly: `--agent ""`, `--settings 
 
 This file describes the repo's team and nothing else — it says nothing about how any human starts sessions for personal convenience. A personal delegation layer may exist outside this repository; it carries exactly one requirement from this design: every worker it starts must be given an explicit agent override so it never silently inherits `team-lead`.
 
+**Every delegation names the right role agent.** Whether you dispatch through the Agent tool or start a headless worker, name the specialist role that owns the work — `backend-lead`, `frontend-lead`, `security-lead`, `qa-lead`, `architect`, `docs-verifier`, `uat-tester`, `uat-validator`, `prometheus-prompt-engineer` or `squad-lead` (Agent tool: that `subagent_type`; headless: `--agent <role>`). A worker with no role (a plain general-purpose subagent, or `--agent ""`) carries none of the role's rules, skills or discipline, so it is never used for repo work. `--agent ""` is only a human's own escape from the team-lead default, never a delegation choice. If no role fits the task, stop and ask rather than dispatch an unnamed worker.
+
 ## 6. Cross-session peers
 
 Several Claude sessions may work on this repo at once. Where several run, the founder names one **chief** (section 8), and the coordination ledger is the shared state that aligns them (section 8). Regardless of who is chief:
