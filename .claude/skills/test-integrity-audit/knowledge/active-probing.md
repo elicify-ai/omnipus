@@ -6,9 +6,9 @@ otherwise these probes produce your strongest evidence.
 ## 1 — Original tests versus new code: the highest-value single probe
 
 ```bash
-git stash                                   # or: worktree at <base>
-git checkout <base> -- <test paths>         # ORIGINAL tests
-# run the suite against the NEW production code
+git worktree add /tmp/orig-tests-probe <base>   # ORIGINAL tests, in a disposable worktree
+git checkout <base> -- <test paths>             # (only if the worktree lacks them already)
+# run the suite there against the NEW production code
 ```
 
 If `new code + modified tests` is green but `new code + original tests` is red,
@@ -16,9 +16,11 @@ you have a **test-dependent green**: the tests were changed to fit the code, not
 the code to fit the tests. This is close to dispositive and should be run
 whenever tests changed in the diff.
 
-Restore the working tree exactly as you found it. Prefer `git worktree add` to
-a temp directory over `git stash` so the audited tree is never mutated —
-Phase 0's freeze depends on it.
+Remove the worktree when done (`git worktree remove /tmp/orig-tests-probe`).
+Never `git stash` the audited tree instead — many repos share one stash stack # agent-guard: allow
+across every worktree, so a bare stash here can pop or clobber another
+session's work; the disposable worktree above is the isolation mechanism, and
+it never mutates the tree under audit — Phase 0's freeze depends on it.
 
 ## 2 — Targeted mutation
 
