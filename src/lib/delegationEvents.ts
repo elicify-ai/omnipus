@@ -103,6 +103,8 @@ interface BashStory {
   terminalCallId?: string
   terminalStatus?: string
   exitCode?: number
+  /** A poll or kill (or a preview that literally contained exitCode) reported it. A read never does. */
+  exitKnown?: boolean
 }
 
 /** JSON object at the start of a tool result. Delegate `run` appends a prose line after the JSON. */
@@ -186,19 +188,46 @@ function runSessionId(call: ToolCall | undefined): string | undefined {
   return jsonString(parseLeadingJson(call.result), 'session_id')
 }
 
+/** Lifecycle states that prove the child actually left the queue and ran (D10). */
+const RAN_LIFECYCLE = new Set(['running', 'needs_input', 'paused', 'completed'])
+
 /**
- * Still in the queue, or queued and ended before it ever ran: no "started"
- * line (D3 — a queued worker does not announce itself). A successful finish
- * means it did run, even if a lifecycle frame was missed.
+ * Follow-up generation N ≥ 2. The gateway's span id is
+ * `span_<originalRunCallId>_g<N>` (F5). Generation 1 keeps `span_<callId>`
+ * and must still announce. A follow-up span must not.
+ */
+function isFollowUpGeneration(spanId: string): boolean {
+  const match = /_g(\d+)$/.exec(spanId)
+  return match != null && Number(match[1]) >= 2
+}
+
+function generationNumber(spanId: string): number {
+  const match = /_g(\d+)$/.exec(spanId)
+  return match ? Number(match[1]) : 1
+}
+
+/**
+ * A queued launch whose record never shows that it ran. The final state is
+ * all the SPA keeps, so `failed` / `cancelled` / `timed_out` with no earlier
+ * running state counts as "ended in the queue" (D10) — no line at all.
+ * A success, or a state that is only reachable after starting, did run.
+ */
+function queuedNeverRan(span: DelegationSpanView, launch: 'queued' | 'immediate' | 'unknown'): boolean {
+  if (launch !== 'queued') return false
+  if (span.status === 'success') return false
+  if (span.lifecycleState != null && RAN_LIFECYCLE.has(span.lifecycleState)) return false
+  return true
+}
+
+/**
+ * Still in the queue: no line (D3). Queued and ended before it ran: no line
+ * (D10). A follow-up generation does not announce a second "Delegated" (D9).
  */
 function birthKind(span: DelegationSpanView, launch: 'queued' | 'immediate' | 'unknown'): 'delegated' | 'started' | null {
+  if (isFollowUpGeneration(span.spanId)) return null
+  if (queuedNeverRan(span, launch)) return null
   if (span.status === 'running' && span.lifecycleState === 'queued') return null
   if (span.status === 'running' && span.lifecycleState == null && launch === 'queued') return null
-  const neverRan =
-    launch === 'queued' &&
-    (span.lifecycleState === 'queued' || span.lifecycleState == null) &&
-    span.status !== 'success'
-  if (neverRan) return null
   return launch === 'queued' ? 'started' : 'delegated'
 }
 
@@ -215,27 +244,29 @@ function agentIdFor(span: DelegationSpanView | undefined, runCall: ToolCall | un
   return span?.agentId
 }
 
+function callError(call: ToolCall): string | undefined {
+  return typeof call.error === 'string' && call.error.trim() !== '' ? call.error.trim() : undefined
+}
+
 function refusalReason(call: ToolCall): string | undefined {
   const json = parseLeadingJson(call.result)
   const code = json?.error
   if (code === 'delegation_denied' || code === 'skill_not_found') {
-    return jsonString(json, 'reason') ?? jsonString(json, 'message')
+    // A denial payload with neither reason nor message still has the frame's
+    // error string (pkg/gateway/websocket_forward_hub.go::hubToolExecEnd).
+    return jsonString(json, 'reason') ?? jsonString(json, 'message') ?? callError(call)
   }
   if (typeof call.result === 'string' && call.result.trim() !== '') return call.result.trim()
-  if (typeof call.error === 'string' && call.error.trim() !== '') return call.error.trim()
-  return undefined
+  return callError(call)
 }
 
+/** Drop keys whose value is undefined so a live event and a replayed one compare equal. */
 function withDefined(event: DelegationEvent): DelegationEvent {
-  const out: DelegationEvent = { id: event.id, kind: event.kind, sessionId: event.sessionId, at: event.at }
-  if (event.anchorMessageId !== undefined) out.anchorMessageId = event.anchorMessageId
-  if (event.agentName !== undefined) out.agentName = event.agentName
-  if (event.title !== undefined) out.title = event.title
-  if (event.childSessionId !== undefined) out.childSessionId = event.childSessionId
-  if (event.reason !== undefined) out.reason = event.reason
-  if (event.command !== undefined) out.command = event.command
-  if (event.exitCode !== undefined) out.exitCode = event.exitCode
-  return out
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(event)) {
+    if (value !== undefined) out[key] = value
+  }
+  return out as unknown as DelegationEvent
 }
 
 function baseEvent(
@@ -313,18 +344,35 @@ function indexById(groups: PlacedCall[][]): Map<string, PlacedCall> {
   return byId
 }
 
-function landedCancelTargets(groups: PlacedCall[][]): Set<string> {
-  const targets = new Set<string>()
+/**
+ * Each landed cancel suppresses the stopped line of one generation: the
+ * earliest not-yet-covered non-success span of that child. A later
+ * generation that fails on its own still gets its stopped line.
+ */
+function suppressedSpanIds(spans: PlacedSpan[], groups: PlacedCall[][], callsById: Map<string, PlacedCall>): Set<string> {
+  const remaining = new Map<string, number>()
   for (const group of groups) {
     for (const placed of group) {
       if (delegateAction(placed.call) !== 'cancel') continue
       if (placed.call.status !== 'success') continue
       if (!cancelLanded(placed.call.result)) continue
       const sessionId = stringParam(placed.call, 'session_id')
-      if (sessionId) targets.add(sessionId)
+      if (!sessionId) continue
+      remaining.set(sessionId, (remaining.get(sessionId) ?? 0) + 1)
     }
   }
-  return targets
+  const suppressed = new Set<string>()
+  for (const placed of spans) {
+    const runCall = callsById.get(placed.span.parentCallId)?.call
+    const childSessionId = childSessionOf(placed.span, runCall)
+    if (!childSessionId) continue
+    if (placed.span.status === 'running' || placed.span.status === 'parked' || placed.span.status === 'success') continue
+    const left = remaining.get(childSessionId) ?? 0
+    if (left <= 0) continue
+    suppressed.add(placed.span.spanId)
+    remaining.set(childSessionId, left - 1)
+  }
+  return suppressed
 }
 
 function isBackgroundBash(call: ToolCall): boolean {
@@ -334,17 +382,49 @@ function isBackgroundBash(call: ToolCall): boolean {
   return action === 'poll' || action === 'read' || action === 'kill'
 }
 
+function finiteExit(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/** Truncation sentinels keep sessionId and status at the front of `preview`. */
+function bashPreview(result: unknown): string | null {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null
+  const record = result as Record<string, unknown>
+  const sentinel = record._truncated === true || record._truncated_client === true || record._ref === true
+  return sentinel && typeof record.preview === 'string' ? record.preview : null
+}
+
+function bashFromText(text: string): { sessionId: string; status: string; exitCode?: number } | null {
+  const sessionId = /"sessionId"\s*:\s*"([^"\\]+)"/.exec(text)?.[1]
+  const status = /"status"\s*:\s*"([^"\\]+)"/.exec(text)?.[1]
+  if (!sessionId || !status) return null
+  const exitMatch = /"exitCode"\s*:\s*(-?\d+)/.exec(text)
+  const exitCode = exitMatch ? Number(exitMatch[1]) : undefined
+  return { sessionId, status, exitCode: finiteExit(exitCode) }
+}
+
 function parseBash(result: unknown): { sessionId: string; status: string; exitCode?: number } | null {
   const json = parseLeadingJson(result)
   const sessionId = jsonString(json, 'sessionId')
   const status = jsonString(json, 'status')
-  if (!sessionId || !status) return null
-  const exitCode = json?.exitCode
-  return {
-    sessionId,
-    status,
-    exitCode: typeof exitCode === 'number' && Number.isFinite(exitCode) ? exitCode : undefined,
+  if (sessionId && status) {
+    return { sessionId, status, exitCode: finiteExit(json?.exitCode) }
   }
+  const preview = bashPreview(result)
+  if (preview) return bashFromText(preview)
+  if (typeof result === 'string') return bashFromText(result)
+  return null
+}
+
+/** poll and kill always marshal exitCode (0 is omitted). read never does. */
+function reportsExit(call: ToolCall): boolean {
+  const action = call.params.action
+  return action === 'poll' || action === 'kill'
+}
+
+function statusSpecificity(status: string): number {
+  if (status === 'killed' || status === 'canceled' || status === 'cancelled' || status === 'timeout') return 2
+  return 1
 }
 
 function bashStories(groups: PlacedCall[][]): Map<string, BashStory> {
@@ -361,10 +441,23 @@ function bashStories(groups: PlacedCall[][]): Map<string, BashStory> {
         const command = stringParam(placed.call, 'command')
         if (command) story.command = command
       }
-      if (parsed.status !== 'running' && !story.terminalCallId) {
-        story.terminalCallId = placed.call.id
-        story.terminalStatus = parsed.status
-        story.exitCode = parsed.exitCode
+      if (parsed.status !== 'running') {
+        if (!story.terminalCallId) {
+          story.terminalCallId = placed.call.id
+          story.terminalStatus = parsed.status
+        } else if (story.terminalStatus && statusSpecificity(parsed.status) > statusSpecificity(story.terminalStatus)) {
+          story.terminalStatus = parsed.status
+        }
+        // A read of a finished command has no exit code. Do not treat that
+        // absence as success — take the code from whichever later poll or
+        // kill reports it (pkg/tools/shell_bg.go::executeRead vs executePoll).
+        if (reportsExit(placed.call)) {
+          story.exitCode = parsed.exitCode ?? 0
+          story.exitKnown = true
+        } else if (parsed.exitCode !== undefined) {
+          story.exitCode = parsed.exitCode
+          story.exitKnown = true
+        }
       }
       stories.set(parsed.sessionId, story)
     }
@@ -375,10 +468,17 @@ function bashStories(groups: PlacedCall[][]): Map<string, BashStory> {
   return stories
 }
 
-function bashKind(story: BashStory): 'bash_finished' | 'bash_failed' | null {
-  if (!story.terminalStatus) return null
-  const clean = story.terminalStatus === 'done' && (story.exitCode === undefined || story.exitCode === 0)
-  return clean ? 'bash_finished' : 'bash_failed'
+function bashKind(story: BashStory): 'bash_finished' | 'bash_failed' | 'bash_stopped' | null {
+  const status = story.terminalStatus
+  if (!status) return null
+  // pkg/tools/session.go: StatusKilled and StatusCanceled are on purpose.
+  // StatusTimeout stays a failure. "canceled" is the Go spelling.
+  if (status === 'killed' || status === 'canceled' || status === 'cancelled') return 'bash_stopped'
+  if (status === 'done' || status === 'exited') {
+    if (!story.exitKnown) return null
+    return story.exitCode === 0 ? 'bash_finished' : 'bash_failed'
+  }
+  return 'bash_failed'
 }
 
 function pushDraft(drafts: Draft[], event: DelegationEvent, messageIndex: number, seq: number): void {
@@ -414,50 +514,97 @@ function birthEvent(
   })
 }
 
-function terminalKind(
-  span: DelegationSpanView,
-  cancelled: Set<string>,
-  childSessionId: string | undefined,
-): 'finished' | 'stopped' | null {
+function terminalKind(span: DelegationSpanView, suppressed: Set<string>): 'finished' | 'stopped' | null {
   if (span.status === 'running' || span.status === 'parked') return null
   if (span.status === 'success') return 'finished'
-  // Same session the rest of the derivation uses: the span's own id, or the
-  // run call's result `session_id` when a pre-ADR-091 transcript omitted it.
-  if (childSessionId && cancelled.has(childSessionId)) return null
+  // A landed cancel covers the generation it hit. Later generations still
+  // get their own stopped line (gap 2).
+  if (suppressed.has(span.spanId)) return null
   return 'stopped'
+}
+
+function maybeEmitBirth(
+  source: DelegationEventSource,
+  placed: PlacedSpan,
+  runCall: ToolCall | undefined,
+  anchor: { anchorMessageId?: string },
+  birthEmitted: Set<string>,
+): DelegationEvent | null {
+  if (birthEmitted.has(placed.span.spanId)) return null
+  const kind = birthKind(placed.span, runLaunchState(runCall))
+  if (!kind) return null
+  birthEmitted.add(placed.span.spanId)
+  return birthEvent(source, kind, placed, runCall, anchor)
+}
+
+function spanTerminalEvent(
+  source: DelegationEventSource,
+  placed: PlacedSpan,
+  callsById: Map<string, PlacedCall>,
+  suppressed: Set<string>,
+): DelegationEvent | null {
+  const runCall = callsById.get(placed.span.parentCallId)?.call
+  if (queuedNeverRan(placed.span, runLaunchState(runCall))) return null
+  const childSessionId = childSessionOf(placed.span, runCall)
+  const terminal = terminalKind(placed.span, suppressed)
+  if (!terminal) return null
+  const title = terminal === 'finished' ? placed.span.taskLabel.trim() || undefined : undefined
+  return withDefined({
+    ...baseEvent(source, placed, lifecycleId(terminal, placed.span), terminal),
+    agentName: displayName(agentIdFor(placed.span, runCall), source.agentNames),
+    title,
+    childSessionId,
+  })
 }
 
 function spanEventsForMessage(
   source: DelegationEventSource,
   spans: PlacedSpan[],
   callsById: Map<string, PlacedCall>,
-  cancelled: Set<string>,
+  suppressed: Set<string>,
   birthEmitted: Set<string>,
+  terminalEmitted: Set<string>,
 ): DelegationEvent[] {
   const events: DelegationEvent[] = []
   for (const placed of spans) {
     const runCall = callsById.get(placed.span.parentCallId)?.call
-    const childSessionId = childSessionOf(placed.span, runCall)
-    if (!birthEmitted.has(placed.span.spanId)) {
-      const kind = birthKind(placed.span, runLaunchState(runCall))
-      if (kind) {
-        birthEmitted.add(placed.span.spanId)
-        events.push(birthEvent(source, kind, placed, runCall, placed))
-      }
-    }
-    const terminal = terminalKind(placed.span, cancelled, childSessionId)
-    if (!terminal) continue
-    const title = terminal === 'finished' ? placed.span.taskLabel.trim() || undefined : undefined
-    events.push(
-      withDefined({
-        ...baseEvent(source, placed, lifecycleId(terminal, placed.span), terminal),
-        agentName: displayName(agentIdFor(placed.span, runCall), source.agentNames),
-        title,
-        childSessionId,
-      }),
-    )
+    const birth = maybeEmitBirth(source, placed, runCall, placed, birthEmitted)
+    if (birth) events.push(birth)
+    if (terminalEmitted.has(placed.span.spanId)) continue
+    const terminal = spanTerminalEvent(source, placed, callsById, suppressed)
+    if (terminal) events.push(terminal)
   }
   return events
+}
+
+/**
+ * follow_up's result is prose, not JSON
+ * (pkg/tools/delegate_followup.go::spawnCorrectiveFollowUp). A 3P corrective
+ * session mints a new id that is only in that sentence.
+ */
+function followUpSessionId(result: unknown): string | undefined {
+  const match = /dispatched for session (\S+) at generation \d+/.exec(resultText(result))
+  if (!match?.[1]) return undefined
+  return match[1].replace(/[),.:;]+$/, '')
+}
+
+/** Same 60-rune cap pkg/gateway/replay.go::resolveTaskLabel uses for a task-text title. An explicit label is kept whole. */
+const TASK_LABEL_RUNES = 60
+
+function truncateRunes(value: string, max: number): string {
+  const runes = Array.from(value)
+  return runes.length <= max ? value : runes.slice(0, max).join('')
+}
+
+function followUpTitle(call: ToolCall): string | undefined {
+  const label = stringParam(call, 'label')
+  if (label) return label
+  // "text" is the documented field; "task" is the deprecated alias (delegate.go::Parameters).
+  const text = stringParam(call, 'text')
+  if (text) return truncateRunes(text, TASK_LABEL_RUNES)
+  const task = stringParam(call, 'task')
+  if (task) return truncateRunes(task, TASK_LABEL_RUNES)
+  return undefined
 }
 
 function parentAction(
@@ -468,12 +615,13 @@ function parentAction(
   callsById: Map<string, PlacedCall>,
 ): DelegationEvent {
   const namedSession = stringParam(placed.call, 'session_id')
-  const childSessionId = (kind === 'follow_up' ? runSessionId(placed.call) : undefined) ?? namedSession
+  const fromProse = kind === 'follow_up' ? followUpSessionId(placed.call.result) : undefined
+  const childSessionId = fromProse ?? (kind === 'follow_up' ? runSessionId(placed.call) : undefined) ?? namedSession
   const span =
     (childSessionId ? spansByChild.get(childSessionId) : undefined) ??
     (namedSession ? spansByChild.get(namedSession) : undefined)
   const runCall = span ? callsById.get(span.span.parentCallId)?.call : undefined
-  const title = kind === 'follow_up' ? stringParam(placed.call, 'label') ?? stringParam(placed.call, 'task') : undefined
+  const title = kind === 'follow_up' ? followUpTitle(placed.call) : undefined
   return withDefined({
     ...baseEvent(source, placed, `${kind}:${placed.call.id}`, kind),
     agentName: displayName(agentIdFor(span?.span, runCall), source.agentNames),
@@ -562,11 +710,9 @@ function runEvents(
 ): DelegationEvent[] {
   const span = spansByParent.get(placed.call.id)
   if (placed.call.status === 'error' && !span) return [refusedEvent(source, placed)]
-  if (!span || birthEmitted.has(span.span.spanId)) return []
-  const kind = birthKind(span.span, runLaunchState(placed.call))
-  if (!kind) return []
-  birthEmitted.add(span.span.spanId)
-  return [birthEvent(source, kind, span, placed.call, placed)]
+  if (!span) return []
+  const birth = maybeEmitBirth(source, span, placed.call, placed, birthEmitted)
+  return birth ? [birth] : []
 }
 
 function bashIndex(stories: Map<string, BashStory>): Map<string, BashStory[]> {
@@ -606,23 +752,55 @@ function stampAndDedupe(drafts: Draft[], messages: DelegationMessageView[]): Del
  * message, so two snapshots with the same records share timestamps even when
  * the store's own "last update" clock differs between a live reduce and a replay.
  */
+function primarySpans(spans: PlacedSpan[]): Map<string, PlacedSpan> {
+  const byParent = new Map<string, PlacedSpan>()
+  for (const placed of spans) {
+    if (isFollowUpGeneration(placed.span.spanId)) continue
+    if (!byParent.has(placed.span.parentCallId)) byParent.set(placed.span.parentCallId, placed)
+  }
+  return byParent
+}
+
+function spansByMessageIndex(spans: PlacedSpan[]): Map<number, PlacedSpan[]> {
+  const byMessage = new Map<number, PlacedSpan[]>()
+  for (const placed of spans) {
+    const list = byMessage.get(placed.messageIndex)
+    if (list) list.push(placed)
+    else byMessage.set(placed.messageIndex, [placed])
+  }
+  return byMessage
+}
+
+function messageInterleavesFollowUp(group: PlacedCall[], onMessage: PlacedSpan[]): boolean {
+  if (onMessage.some((placed) => isFollowUpGeneration(placed.span.spanId))) return true
+  return group.some((placed) => delegateAction(placed.call) === 'follow_up' && placed.call.status === 'success')
+}
+
 export function deriveDelegationEvents(source: DelegationEventSource): DelegationEvent[] {
   if (!source.sessionId) return []
   const groups = placeCalls(source)
   const spans = placeSpans(source)
   const callsById = indexById(groups)
-  const cancelled = landedCancelTargets(groups)
+  const suppressed = suppressedSpanIds(spans, groups, callsById)
   const bashByCall = bashIndex(bashStories(groups))
-  const spansByParent = new Map(spans.map((span) => [span.span.parentCallId, span]))
+  const spansByParent = primarySpans(spans)
   const spansByChild = new Map<string, PlacedSpan>()
   for (const span of spans) {
     if (span.span.childSessionId) spansByChild.set(span.span.childSessionId, span)
   }
+  const byMessage = spansByMessageIndex(spans)
   const birthEmitted = new Set<string>()
+  const terminalEmitted = new Set<string>()
   const drafts: Draft[] = []
 
   groups.forEach((group, messageIndex) => {
     let seq = 0
+    const onMessage = byMessage.get(messageIndex) ?? []
+    const interleave = messageInterleavesFollowUp(group, onMessage)
+    const push = (event: DelegationEvent) => {
+      pushDraft(drafts, event, messageIndex, seq)
+      seq += 1
+    }
     for (const placed of group) {
       for (const event of eventsFromCall(
         source,
@@ -633,16 +811,38 @@ export function deriveDelegationEvents(source: DelegationEventSource): Delegatio
         birthEmitted,
         bashByCall,
       )) {
-        pushDraft(drafts, event, messageIndex, seq)
-        seq += 1
+        push(event)
       }
+      if (!interleave) continue
+      const action = delegateAction(placed.call)
+      const terminalSpan = terminalSpanForCall(action, placed, onMessage, terminalEmitted)
+      if (!terminalSpan) continue
+      const terminal = spanTerminalEvent(source, terminalSpan, callsById, suppressed)
+      if (!terminal) continue
+      terminalEmitted.add(terminalSpan.span.spanId)
+      push(terminal)
     }
-    const onMessage = spans.filter((span) => span.messageIndex === messageIndex)
-    for (const event of spanEventsForMessage(source, onMessage, callsById, cancelled, birthEmitted)) {
-      pushDraft(drafts, event, messageIndex, seq)
-      seq += 1
+    for (const event of spanEventsForMessage(source, onMessage, callsById, suppressed, birthEmitted, terminalEmitted)) {
+      push(event)
     }
   })
 
   return stampAndDedupe(drafts, source.messages)
+}
+
+function terminalSpanForCall(
+  action: string | null,
+  placed: PlacedCall,
+  onMessage: PlacedSpan[],
+  terminalEmitted: Set<string>,
+): PlacedSpan | undefined {
+  if (action === 'run') {
+    return onMessage.find(
+      (span) => span.span.parentCallId === placed.call.id && !isFollowUpGeneration(span.span.spanId),
+    )
+  }
+  if (action !== 'follow_up' || placed.call.status !== 'success') return undefined
+  return onMessage
+    .filter((span) => isFollowUpGeneration(span.span.spanId) && !terminalEmitted.has(span.span.spanId))
+    .sort((a, b) => generationNumber(a.span.spanId) - generationNumber(b.span.spanId))[0]
 }
