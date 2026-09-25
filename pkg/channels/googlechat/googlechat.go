@@ -544,6 +544,27 @@ func (c *GoogleChatChannel) refreshJWKS() error {
 	return nil
 }
 
+// truncatePreview returns the first max runes of s for a log-preview field.
+// #648: the previous bare [:50] byte slice panicked on any message shorter
+// than 50 bytes — and processEvent runs as a bare goroutine, so that panic
+// crashed the whole gateway. Range-over-string yields rune start offsets, so
+// the cut always lands on a rune boundary and multi-byte content is never
+// split; invalid UTF-8 bytes count as one rune each and are passed through
+// untouched.
+func truncatePreview(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	n := 0
+	for i := range s {
+		if n == max {
+			return s[:i]
+		}
+		n++
+	}
+	return s
+}
+
 // processEvent processes an inbound Google Chat event.
 func (c *GoogleChatChannel) processEvent(event googleChatEvent) {
 	if event.Type != "MESSAGE" {
@@ -620,7 +641,7 @@ func (c *GoogleChatChannel) processEvent(event googleChatEvent) {
 	logger.DebugCF("google-chat", "Received message", map[string]any{
 		"sender_id": senderID,
 		"chat_id":   chatID,
-		"preview":   strings.TrimSpace(strings.ReplaceAll(content, "\n", " "))[:50],
+		"preview":   truncatePreview(strings.TrimSpace(strings.ReplaceAll(content, "\n", " ")), 50),
 	})
 
 	c.HandleMessage(c.ctx, peer, msg.Name, senderID, chatID, content, nil, metadata, sender)
