@@ -270,12 +270,22 @@ async function switchToSessionByTitle(page: Page, title: string) {
 // string to assert against up front). `before` is kept as a secondary,
 // cheap sanity check (the reload's answer must still contain the same
 // opening, catching a wholesale content swap early with a clearer failure).
-async function assertNoDuplicateOrGapText(page: Page, before: string, after: string) {
+async function assertNoDuplicateOrGapText(page: Page, before: string, after: string, title?: string) {
   const norm = (s: string) => s.replace(/\s+/g, ' ').trim()
   expect(norm(after).startsWith(norm(before).slice(0, 60))).toBeTruthy()
   await page.reload()
   await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
   await waitForConnected(page)
+  // Real-browser follow-up (CI run 36059392570, scenario b): a reload always
+  // lands on the welcome/empty chat, not the previous session — confirmed
+  // release behaviour, not a product bug. Every OTHER reload in this file
+  // reopens the chat via the sidebar afterward; this one, being the shared
+  // final-verification helper, didn't — so once a test's own mid-test reload
+  // already moved off session A's own deep link, this bare reload had
+  // nothing to restore it. Reopen the same way when a title is given.
+  if (title !== undefined && (await assistantMessages(page).count()) === 0) {
+    await switchToSessionByTitle(page, title)
+  }
   await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
   const reloaded = (await bubbleText(assistantMessages(page).first())).trim()
   expect(norm(reloaded)).toBe(norm(after))
@@ -327,7 +337,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await waitTurnDoneAfterReload(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     const after = (await bubbleText(assistantMessages(page).first())).trim()
-    await assertNoDuplicateOrGapText(page, before, after)
+    await assertNoDuplicateOrGapText(page, before, after, titleA)
   })
 
   test('c: tab switched to another chat while the turn finishes — incremental on return', async ({ page }) => {
@@ -355,7 +365,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await waitTurnDone(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     const after = (await bubbleText(assistantMessages(page).first())).trim()
-    await assertNoDuplicateOrGapText(page, before, after)
+    await assertNoDuplicateOrGapText(page, before, after, titleA)
   })
 
   test('d: no tab at all while the turn finishes (laptop sleep) — reopen shows the complete answer', async ({ page, context }) => {
