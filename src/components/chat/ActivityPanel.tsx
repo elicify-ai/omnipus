@@ -43,7 +43,7 @@
 // wire mechanism first. ADR-091 D7 replaces it for real: the status line and
 // open control above are the wired-up version of the same idea.
 
-import { useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
 import { Check, X, ArrowSquareOut } from '@phosphor-icons/react'
 import { useNavigate } from '@tanstack/react-router'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -51,7 +51,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { ActivityAvatar } from './ActivityAvatar'
-import type { ActivityItem } from '@/hooks/useRunningActivity'
+import type { ActivityItem, AgentActivityItem } from '@/hooks/useRunningActivity'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { cn } from '@/lib/utils'
 import { formatDuration } from '@/lib/formatDuration'
@@ -63,6 +63,50 @@ export interface ActivityPanelProps {
   onOpenChange: (open: boolean) => void
   running: ActivityItem[]
   recentlyFinished: ActivityItem[]
+  /**
+   * Set by the Commands pill. `nonce` changes on every click so an already-open
+   * panel scrolls again. Absent or null leaves the scroll position alone
+   * (the Agents pill opens the same panel without jumping).
+   */
+  scrollRequest?: { section: 'commands'; nonce: number } | null
+}
+
+/** Split `running` in arrival order. Queued agents leave "Running now" so the position list is the queue, not a second copy. */
+function partitionRunning(running: ActivityItem[]): {
+  queued: AgentActivityItem[]
+  active: ActivityItem[]
+  commands: ActivityItem[]
+} {
+  const queued: AgentActivityItem[] = []
+  const active: ActivityItem[] = []
+  const commands: ActivityItem[] = []
+  for (const item of running) {
+    if (item.kind === 'bash') commands.push(item)
+    else if (item.kind === 'agent' && item.lifecycleState === 'queued') queued.push(item)
+    else active.push(item)
+  }
+  return { queued, active, commands }
+}
+
+function ActivitySection({
+  title,
+  testId,
+  sectionRef,
+  children,
+}: {
+  title: string
+  testId: string
+  sectionRef?: Ref<HTMLDivElement>
+  children: ReactNode
+}) {
+  return (
+    <div ref={sectionRef} data-testid={testId} className="space-y-[var(--space-2)]">
+      <h3 className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-[var(--space-1)]">
+        {title}
+      </h3>
+      <div className="space-y-[var(--space-1)]">{children}</div>
+    </div>
+  )
 }
 
 function ActivityRow({
@@ -266,8 +310,18 @@ export function ActivityPanel({
   onOpenChange,
   running,
   recentlyFinished,
+  scrollRequest,
 }: ActivityPanelProps) {
+  const commandsRef = useRef<HTMLDivElement>(null)
+  const { queued, active, commands } = partitionRunning(running)
   const isEmpty = running.length === 0 && recentlyFinished.length === 0
+
+  // Commands pill: scroll the shared panel to the shell section. Agents leaves
+  // scrollRequest null, so opening from that pill does not jump.
+  useEffect(() => {
+    if (!open || scrollRequest?.section !== 'commands') return
+    commandsRef.current?.scrollIntoView({ block: 'start' })
+  }, [open, scrollRequest])
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -282,17 +336,38 @@ export function ActivityPanel({
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] text-center py-[var(--space-4)]">No background activity yet.</p>
           )}
 
-          {running.length > 0 && (
-            <div className="space-y-[var(--space-2)]">
-              <h3 className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-[var(--space-1)]">
-                Running now
-              </h3>
-              <div className="space-y-[var(--space-1)]">
-                {running.map((item) => (
-                  <ActivityRow key={item.key} item={item} />
-                ))}
-              </div>
-            </div>
+          {queued.length > 0 && (
+            <ActivitySection title="Queued" testId="activity-section-queued">
+              {queued.map((item, index) => (
+                <div key={item.key} className="flex items-start gap-[var(--space-2)]">
+                  <span
+                    data-testid="activity-queue-position"
+                    className="shrink-0 pt-[var(--space-1)] text-[length:var(--type-caption-size)] tabular-nums text-[var(--color-muted)]"
+                  >
+                    {index + 1}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <ActivityRow item={item} />
+                  </div>
+                </div>
+              ))}
+            </ActivitySection>
+          )}
+
+          {active.length > 0 && (
+            <ActivitySection title="Running now" testId="activity-section-running">
+              {active.map((item) => (
+                <ActivityRow key={item.key} item={item} />
+              ))}
+            </ActivitySection>
+          )}
+
+          {commands.length > 0 && (
+            <ActivitySection title="Background commands" testId="activity-section-commands" sectionRef={commandsRef}>
+              {commands.map((item) => (
+                <ActivityRow key={item.key} item={item} />
+              ))}
+            </ActivitySection>
           )}
 
           {recentlyFinished.length > 0 && (

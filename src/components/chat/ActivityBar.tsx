@@ -28,8 +28,16 @@
 // transparency surface and must stay reachable for it. A purely-successful
 // idle history still disappears entirely, preserving the original "glance,
 // not a permanent history browser" intent for the common case.
+//
+// Delegation chat surface (D5): two pills, one panel. Agents mounts for an
+// open agent child (queued included) or a retained non-shell failure; its
+// NUMBER is runningChildren (ADR-091 FR-E-005 — lifecycleState 'running'
+// only, so bash and queued children are not counted). Commands mounts for
+// background bash, or a retained bash failure. Each pill also stays while
+// the panel it opened is still open. Commands opens that same panel
+// scrolled to the background-commands section.
 
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ArrowsClockwise, CaretRight } from '@phosphor-icons/react'
 import { ActivityAvatar } from './ActivityAvatar'
 import { ActivityPanel } from './ActivityPanel'
@@ -51,120 +59,152 @@ function isFailedStatus(status: ActivityItem['status']): boolean {
   return status === 'error' || status === 'interrupted' || status === 'timeout'
 }
 
+const PILL_CLASS =
+  'h-auto max-w-full justify-start self-start rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-secondary)]'
+
+/** Which pill opened the panel — that pill stays mounted while the panel is open (Fix 1), the other does not (D5). */
+type PillKind = 'agents' | 'commands'
+
+function ActivityPill({
+  testId,
+  labelTestId,
+  name,
+  label,
+  spinning,
+  failed,
+  expanded,
+  onClick,
+  leading,
+}: {
+  testId: string
+  labelTestId: string
+  name: string
+  label: string
+  spinning: boolean
+  failed: boolean
+  expanded: boolean
+  onClick: () => void
+  leading?: ReactNode
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      data-testid={testId}
+      onClick={onClick}
+      aria-haspopup="dialog"
+      aria-expanded={expanded}
+      aria-label={`${name} — ${label}`}
+      className={PILL_CLASS}
+    >
+      {leading}
+      {spinning ? (
+        <ArrowsClockwise size={12} className="shrink-0 animate-spin text-[var(--color-accent)]" aria-hidden="true" />
+      ) : failed ? (
+        statusDot('bg-[var(--color-error)]')
+      ) : (
+        statusDot('bg-[var(--color-muted)]')
+      )}
+      <span className="shrink-0 font-medium text-[var(--color-secondary)]">{name}</span>
+      <span
+        data-testid={labelTestId}
+        className={`min-w-0 truncate font-medium ${failed && !spinning ? 'text-[var(--color-error)]' : 'text-[var(--color-secondary)]'}`}
+      >
+        {label}
+      </span>
+      <CaretRight size={12} className="shrink-0 text-[var(--color-muted)]" aria-hidden="true" />
+    </Button>
+  )
+}
+
 export function ActivityBar() {
-  // ADR-091 D7/FR-E-005 (founder decision, round 8): this is "the pill" the
-  // spec refers to — its running count and spin state now answer "how many
-  // sub-agents are running" (`runningChildren`), excluding background shell
-  // jobs. `runningCount` (agent spans + bash jobs together) still exists on
-  // the hook for any other consumer, but is no longer what THIS indicator's
-  // label/spin state is driven by. `running` (the broader list, still
-  // including queued/lifecycle-terminal spans and shell jobs) is passed
-  // through to ActivityPanel unchanged below — only the avatar stack here
-  // uses `runningChildItems`, the SAME set `runningChildren` counts (cross-
-  // family review finding 20), so the stack's avatars and the pill's number
-  // always describe the same agents.
+  // The Agents NUMBER is runningChildren (isRunningAgentChild: kind 'agent'
+  // and lifecycleState 'running'). The mount gate is wider: any open agent
+  // span, including queued — a queued launch emits subagent_start then
+  // subagent_state(queued), so runningChildren stays 0 until Dispatch
+  // (steer_launcher.go::publishSteeredLaunch). Bash never enters that count.
   const { runningChildren, runningChildItems, running, recentlyFinished } = useRunningActivity()
   const [panelOpen, setPanelOpen] = useState(false)
+  const [heldByPanel, setHeldByPanel] = useState<PillKind | null>(null)
+  const [scrollRequest, setScrollRequest] = useState<{ section: 'commands'; nonce: number } | null>(null)
 
-  const isRunning = runningChildren > 0
-  const failedRecent = recentlyFinished.filter((item) => isFailedStatus(item.status))
-  const hasFailedRecent = failedRecent.length > 0
-
-  // Defect 1 fix (ADR-091 fix lane RX-FRONTEND): commit 8b8d6ef9d narrowed
-  // `runningChildren` to count ONLY `lifecycleState === 'running'`
-  // (useRunningActivity.ts::isRunningAgentChild) but left this mount gate
-  // reading that same narrowed count via `isRunning` above. A queued launch
-  // emits `subagent_start` then `subagent_state(queued)` back-to-back
-  // (verified: pkg/agent/steer_launcher.go::publishSteeredLaunch) —
-  // `running` (lifecycleState arrives later, at Dispatch) — so under a
-  // saturated admission gate a child can sit at `queued` indefinitely:
-  // `runningChildren` stays 0 and nothing has finished, so `isRunning` alone
-  // can never make the bar appear — the delegation becomes entirely
-  // invisible even though ActivityPanel's queued dot (efc29991a) is fully
-  // able to render it once mounted. `running` (unlike `runningChildren`)
-  // already carries every direct agent child whose SPAN is still open —
-  // queued, running, needs_input, paused, or lifecycle-terminal-but-not-yet
-  // -subagent_end'd (see RunningActivity.runningChildren's doc comment) —
-  // exactly the same set ActivityPanel's "Running now" section renders, so
-  // reusing it here keeps the pill and the panel's contents in sync by
-  // construction. Bash sessions are excluded (kind !== 'agent'), preserving
-  // FR-E-005's "shell jobs never drive the pill" rule.
-  // Background shell jobs live in `running` alongside agent children. They are
-  // deliberately excluded from the pill's COUNT (FR-E-005 governs the NUMBER:
-  // "the number of the open session's direct agent children ... via a selector
-  // that excludes background") — but excluding them from the MOUNT gate too
-  // made the pill vanish whenever a background command was the only thing
-  // running, and the pill is ActivityPanel's ONLY entry point (setPanelOpen
-  // exists nowhere else), so those commands became unreachable even though the
-  // panel renders them (ActivityPanel row: item.kind === 'bash' -> command).
-  // Founder decision 2026-09-25: restore the pill for any open background
-  // work, shell included. The count stays agent-only, so FR-E-005 is untouched.
+  const agentOpen = running.some((item) => item.kind === 'agent')
   const bashRunning = running.filter((item) => item.kind === 'bash').length
-  const hasOpenWork = running.length > 0
+  const failedAgents = recentlyFinished.filter((item) => item.kind !== 'bash' && isFailedStatus(item.status))
+  const failedCommands = recentlyFinished.filter((item) => item.kind === 'bash' && isFailedStatus(item.status))
 
-  const shouldMount = hasOpenWork || panelOpen || hasFailedRecent
-  if (!shouldMount) return null
+  const showAgents = agentOpen || failedAgents.length > 0 || (panelOpen && heldByPanel === 'agents')
+  const showCommands = bashRunning > 0 || failedCommands.length > 0 || (panelOpen && heldByPanel === 'commands')
+  if (!showAgents && !showCommands) return null
+
+  const agentLabel = runningChildren > 0
+    ? `${runningChildren} running`
+    : failedAgents.length > 0
+      ? `${failedAgents.length} failed`
+      : 'Activity'
+  const commandLabel = bashRunning > 0
+    ? `${bashRunning} background ${bashRunning === 1 ? 'command' : 'commands'}`
+    : failedCommands.length > 0
+      ? `${failedCommands.length} failed`
+      : 'Activity'
 
   const stackItems = runningChildItems.slice(0, MAX_STACK_AVATARS)
 
-  const label = isRunning
-    ? `${runningChildren} running`
-    : bashRunning > 0
-      ? `${bashRunning} background ${bashRunning === 1 ? 'command' : 'commands'}`
-      : hasFailedRecent
-      ? `${failedRecent.length} failed`
-      : 'Activity'
+  function openAgents() {
+    setHeldByPanel('agents')
+    setScrollRequest(null)
+    setPanelOpen(true)
+  }
+
+  function openCommands() {
+    setHeldByPanel('commands')
+    setScrollRequest((prev) => ({ section: 'commands', nonce: (prev?.nonce ?? 0) + 1 }))
+    setPanelOpen(true)
+  }
 
   return (
     <>
-      <Button
-        type="button"
-        variant="ghost"
-        data-testid="activity-bar"
-        onClick={() => setPanelOpen(true)}
-        aria-haspopup="dialog"
-        aria-expanded={panelOpen}
-        aria-label={`Activity — ${label}`}
-        className="h-auto max-w-full justify-start self-start rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-secondary)]"
-      >
-        <div className="flex -space-x-[var(--space-2)] shrink-0">
-          {stackItems.map((item) => (
-            <div key={item.key} className="rounded-full ring-2 ring-[var(--color-surface-1)]">
-              <ActivityAvatar item={item} size="sm" />
-            </div>
-          ))}
-        </div>
-
-        {/* Status indicator — running keeps the spinning ArrowsClockwise
-            (same running-icon vocabulary as toolStatusConfig's
-            getToolBadgeStatusConfig/getSpanStatusDot 'running' case);
-            otherwise, while idle-but-mounted (Fix 1), an 8px statusDot in
-            the same slot signals WHY the pill is still here — red for a
-            retained failure, muted otherwise. The icon/dot is decorative;
-            the adjacent label text already carries the same information for
-            assistive tech. */}
-        {isRunning || bashRunning > 0 ? (
-          <ArrowsClockwise size={12} className="shrink-0 animate-spin text-[var(--color-accent)]" aria-hidden="true" />
-        ) : hasFailedRecent ? (
-          statusDot('bg-[var(--color-error)]')
-        ) : (
-          statusDot('bg-[var(--color-muted)]')
+      <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+        {showAgents && (
+          <ActivityPill
+            testId="activity-bar"
+            labelTestId="activity-bar-label"
+            name="Agents"
+            label={agentLabel}
+            spinning={runningChildren > 0}
+            failed={failedAgents.length > 0 && runningChildren === 0}
+            expanded={panelOpen}
+            onClick={openAgents}
+            leading={
+              <div className="flex -space-x-[var(--space-2)] shrink-0">
+                {stackItems.map((item) => (
+                  <div key={item.key} className="rounded-full ring-2 ring-[var(--color-surface-1)]">
+                    <ActivityAvatar item={item} size="sm" />
+                  </div>
+                ))}
+              </div>
+            }
+          />
         )}
-        <span
-          data-testid="activity-bar-label"
-          className={`min-w-0 truncate font-medium ${hasFailedRecent && !isRunning && bashRunning === 0 ? 'text-[var(--color-error)]' : 'text-[var(--color-secondary)]'}`}
-        >
-          {label}
-        </span>
-
-        <CaretRight size={12} className="shrink-0 text-[var(--color-muted)]" aria-hidden="true" />
-      </Button>
-
+        {showCommands && (
+          <ActivityPill
+            testId="activity-pill-commands"
+            labelTestId="activity-pill-commands-label"
+            name="Commands"
+            label={commandLabel}
+            spinning={bashRunning > 0}
+            failed={failedCommands.length > 0 && bashRunning === 0}
+            expanded={panelOpen}
+            onClick={openCommands}
+          />
+        )}
+      </div>
       <ActivityPanel
         open={panelOpen}
         onOpenChange={setPanelOpen}
         running={running}
         recentlyFinished={recentlyFinished}
+        scrollRequest={scrollRequest}
       />
     </>
   )

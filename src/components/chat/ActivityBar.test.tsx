@@ -9,7 +9,7 @@
 // ever appears while something is running.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ActivityBar } from './ActivityBar'
@@ -200,8 +200,15 @@ describe('ActivityBar — N running (agent children only, ADR-091 FR-E-005)', ()
       })
     })
     renderBar()
-    expect(screen.getByTestId('activity-bar')).toBeInTheDocument()
-    expect(screen.getByText('1 background command')).toBeInTheDocument()
+    // Commands pill only — an agent-only mount gate fails this test (AC-1).
+    // The Agents pill must stay down: a background command is not an agent child (D5).
+    expect(screen.queryByTestId('activity-bar')).not.toBeInTheDocument()
+    const commands = screen.getByTestId('activity-pill-commands')
+    expect(commands).toHaveTextContent('Commands')
+    expect(commands).toHaveTextContent('1 background command')
+    fireEvent.click(commands)
+    expect(screen.getByText('npm test')).toBeInTheDocument()
+    expect(screen.getByTestId('activity-section-commands')).toContainElement(screen.getByText('npm test'))
   })
 })
 
@@ -226,7 +233,7 @@ describe('ActivityBar — avatar stack cap', () => {
     await waitFor(() => {
       expect(screen.getByText('5 running')).toBeInTheDocument()
     })
-    expect(screen.getByTestId('activity-bar')).toHaveAttribute('aria-label', 'Activity — 5 running')
+    expect(screen.getByTestId('activity-bar')).toHaveAttribute('aria-label', 'Agents — 5 running')
 
     // Stack itself is capped at MAX_STACK_AVATARS (4) — each stacked avatar is
     // wrapped in a `ring-2` div in ActivityBar.tsx's stackItems.map render.
@@ -463,5 +470,122 @@ describe('ActivityBar — Defect 1: a queued-only child must mount the bar', () 
     await waitFor(() => {
       expect(screen.getByText('saturated gate, still queued')).toBeInTheDocument()
     })
+  })
+})
+
+describe('ActivityBar — two pills (D5, AC-2, AC-3)', () => {
+  function bashCall(id: string, command: string) {
+    return {
+      id,
+      call_id: id,
+      tool: 'bash',
+      params: { command, run_in_background: true },
+      status: 'success' as const,
+      result: `{"sessionId":"${id}","status":"running"}`,
+    }
+  }
+
+  it('AC-2: an agent child alone mounts the Agents pill and not the Commands pill', async () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [makeAssistantMessage([runningSpan({ agentId: 'ray' })])],
+      })
+    })
+    renderBar()
+    const agents = await screen.findByTestId('activity-bar')
+    expect(agents).toHaveTextContent('Agents')
+    expect(within(agents).getByTestId('activity-bar-label')).toHaveTextContent('1 running')
+    expect(screen.queryByTestId('activity-pill-commands')).not.toBeInTheDocument()
+  })
+
+  it('AC-2: the Agents count excludes bash and queued children; the command gets its own pill', async () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [
+          makeAssistantMessage([
+            runningSpan({ spanId: 's_run', parentCallId: 'c_run', agentId: 'ray' }),
+            runningSpan({
+              spanId: 's_q',
+              parentCallId: 'c_q',
+              agentId: 'ray',
+              lifecycleState: 'queued',
+              taskLabel: 'waiting',
+            }),
+          ]),
+        ],
+        toolCalls: {
+          call_1: bashCall('call_1', 'npm test'),
+          call_2: bashCall('call_2', 'npm run lint'),
+        },
+      })
+    })
+    renderBar()
+    const agents = await screen.findByTestId('activity-bar')
+    // 1 running agent, not 2 (the queued child) and not 4 (queued + two commands).
+    expect(within(agents).getByTestId('activity-bar-label')).toHaveTextContent('1 running')
+    expect(agents).not.toHaveTextContent('background')
+    const commands = screen.getByTestId('activity-pill-commands')
+    expect(within(commands).getByTestId('activity-pill-commands-label')).toHaveTextContent('2 background commands')
+  })
+
+  it('AC-3: both pills open one panel, and Commands scrolls it to the background-commands section', async () => {
+    // jsdom does not implement scrollIntoView; define it so the spy can record the call.
+    Element.prototype.scrollIntoView ??= () => {}
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {})
+    act(() => {
+      useChatStore.setState({
+        messages: [makeAssistantMessage([runningSpan({ agentId: 'ray', taskLabel: 'digging into logs' })])],
+        toolCalls: { call_1: bashCall('call_1', 'npm test') },
+      })
+    })
+    renderBar()
+    const agents = await screen.findByTestId('activity-bar')
+    const commands = screen.getByTestId('activity-pill-commands')
+
+    fireEvent.click(agents)
+    const commandsSection = await screen.findByTestId('activity-section-commands')
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    expect(screen.getByText('Running now')).toBeInTheDocument()
+    expect(scrollIntoView.mock.instances).not.toContain(commandsSection)
+
+    scrollIntoView.mockClear()
+    fireEvent.click(commands)
+    await waitFor(() => {
+      expect(scrollIntoView.mock.instances).toContain(commandsSection)
+    })
+    // Still one dialog — Commands did not open a second panel.
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    expect(agents).toHaveAttribute('aria-expanded', 'true')
+    expect(commands).toHaveAttribute('aria-expanded', 'true')
+    expect(within(commandsSection).getByText('npm test')).toBeInTheDocument()
+    scrollIntoView.mockRestore()
+  })
+})
+
+describe('ActivityBar — queued section (AC-4)', () => {
+  it('lists queued children under Queued in launch order and adds no delegation chat line', () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [
+          makeAssistantMessage([
+            runningSpan({ spanId: 'run', parentCallId: 'c0', lifecycleState: 'running', taskLabel: 'already going' }),
+            runningSpan({ spanId: 'q1', parentCallId: 'c1', lifecycleState: 'queued', taskLabel: 'zeta first' }),
+            runningSpan({ spanId: 'q2', parentCallId: 'c2', lifecycleState: 'queued', taskLabel: 'alpha second' }),
+          ]),
+        ],
+      })
+    })
+    renderBar()
+    // The children are on screen, so a chat line rendered next to them would be visible.
+    fireEvent.click(screen.getByTestId('activity-bar'))
+    const queued = screen.getByTestId('activity-section-queued')
+    expect(within(queued).getAllByTestId('activity-queue-position').map((el) => el.textContent)).toEqual(['1', '2'])
+    const queuedText = queued.textContent ?? ''
+    expect(queuedText.indexOf('zeta first')).toBeGreaterThanOrEqual(0)
+    expect(queuedText.indexOf('zeta first')).toBeLessThan(queuedText.indexOf('alpha second'))
+    expect(within(queued).queryByText('already going')).not.toBeInTheDocument()
+    expect(screen.getByText('already going')).toBeInTheDocument()
+    expect(screen.queryByText(/Delegated to/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/started ·/)).not.toBeInTheDocument()
   })
 })
