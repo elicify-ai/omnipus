@@ -6,8 +6,12 @@
  * yields the same lines.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, beforeEach } from 'vitest'
+import { act } from 'react'
 import type { ToolCall } from '@/lib/api'
+import { getMessages, useChatStore } from '@/store/chat'
+import { useSessionStore } from '@/store/session'
+import { useConnectionStore } from '@/store/connection'
 import { deriveDelegationEvents } from './delegationEvents'
 import type { DelegationEventSource, DelegationMessageView, DelegationSpanView } from './delegationEvents'
 
@@ -383,7 +387,8 @@ describe('parent actions', () => {
                 id: 'follow-1',
                 tool: 'delegate',
                 params: { action: 'follow_up', session_id: 'child-1', task: 'Check the rest' },
-                result: runResult('running'),
+                // Real follow_up result is prose, not JSON (pkg/tools/delegate_followup.go::spawnCorrectiveFollowUp).
+                result: 'Follow-up dispatched for session child-1 at generation 2 (state: running)',
               }),
             ],
             spans: [span({ status: 'running', lifecycleState: 'running' })],
@@ -521,5 +526,575 @@ describe('live and rebuilt snapshots', () => {
     )
     expect(events).toHaveLength(1)
     expect(events[0].kind).toBe('refused')
+  })
+})
+
+const LONG_TEXT = 'Check the remaining logs and write down every mismatch you find in the archive'
+
+function launched(extra: ToolCall[]): ToolCall[] {
+  return [
+    tool({
+      id: 'bash-run',
+      tool: 'bash',
+      params: { command: 'npm test', run_in_background: true },
+      result: JSON.stringify({ sessionId: 'bash-1', status: 'running' }),
+    }),
+    ...extra,
+  ]
+}
+
+describe('background command outcome', () => {
+  it('H2: a read that says done without an exit code does not lock a later poll into a clean finish', () => {
+    const read = tool({
+      id: 'bash-read',
+      tool: 'bash',
+      params: { action: 'read', session_id: 'bash-1' },
+      // executeRead returns sessionId, status, output — never exitCode (pkg/tools/shell_bg.go::executeRead).
+      result: JSON.stringify({ sessionId: 'bash-1', status: 'done', output: 'FAIL src/app.test.ts' }),
+    })
+    const poll = tool({
+      id: 'bash-poll',
+      tool: 'bash',
+      params: { action: 'poll', session_id: 'bash-1' },
+      result: JSON.stringify({ sessionId: 'bash-1', status: 'done', exitCode: 1 }),
+    })
+    expect(read.result).not.toContain('exitCode')
+    expect(poll.result).toContain('"exitCode":1')
+
+    const events = deriveDelegationEvents(
+      source({ messages: [message({ id: 'm1', toolCalls: launched([read, poll]) })] }),
+    )
+    expect(kinds(events)).toEqual(['bash_launched', 'bash_failed'])
+    expect(events[1].exitCode).toBe(1)
+    expect(JSON.stringify(events)).not.toContain('FAIL src/app.test.ts')
+  })
+
+  it('H2: ended with no reported exit code is not a clean success', () => {
+    const read = tool({
+      id: 'bash-read',
+      tool: 'bash',
+      params: { action: 'read', session_id: 'bash-1' },
+      result: JSON.stringify({ sessionId: 'bash-1', status: 'done', output: 'still no exit' }),
+    })
+    const events = deriveDelegationEvents(
+      source({ messages: [message({ id: 'm1', toolCalls: launched([read]) })] }),
+    )
+    expect(events.some((event) => event.kind === 'bash_launched')).toBe(true)
+    expect(events.some((event) => event.kind === 'bash_finished')).toBe(false)
+    expect(events.some((event) => event.kind === 'bash_failed')).toBe(false)
+  })
+
+  it('D7: killed and canceled are bash_stopped; timeout stays bash_failed', () => {
+    const stopped = (status: 'killed' | 'canceled', id: string) =>
+      deriveDelegationEvents(
+        source({
+          messages: [
+            message({
+              id: 'm1',
+              toolCalls: launched([
+                tool({
+                  id,
+                  tool: 'bash',
+                  params: { action: status === 'killed' ? 'kill' : 'poll', session_id: 'bash-1' },
+                  result: JSON.stringify({ sessionId: 'bash-1', status, exitCode: 137 }),
+                }),
+              ]),
+            }),
+          ],
+        }),
+      )
+    expect(kinds(stopped('killed', 'bash-kill'))).toEqual(['bash_launched', 'bash_stopped'])
+    expect(stopped('killed', 'bash-kill')[1].exitCode).toBeUndefined()
+    expect(kinds(stopped('canceled', 'bash-cancel'))).toEqual(['bash_launched', 'bash_stopped'])
+
+    const timedOut = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: launched([
+              tool({
+                id: 'bash-timeout',
+                tool: 'bash',
+                params: { action: 'poll', session_id: 'bash-1' },
+                result: JSON.stringify({ sessionId: 'bash-1', status: 'timeout', exitCode: 124 }),
+              }),
+            ]),
+          }),
+        ],
+      }),
+    )
+    expect(kinds(timedOut)).toEqual(['bash_launched', 'bash_failed'])
+    expect(timedOut[1].exitCode).toBe(124)
+  })
+
+  it('M2: a truncated read still yields sessionId and status from its preview', () => {
+    const preview = '{"sessionId":"bash-1","status":"killed","output":"' + 'x'.repeat(80)
+    expect(() => JSON.parse(preview)).toThrow()
+    const events = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: launched([
+              tool({
+                id: 'bash-read',
+                tool: 'bash',
+                params: { action: 'read', session_id: 'bash-1' },
+                result: { _truncated_client: true, original_size_bytes: 80_000, preview },
+              }),
+            ]),
+          }),
+        ],
+      }),
+    )
+    expect(kinds(events)).toEqual(['bash_launched', 'bash_stopped'])
+    expect(JSON.stringify(events)).not.toContain('x'.repeat(40))
+  })
+})
+
+describe('follow-up generations', () => {
+  it('M3: the open link uses the session id in the prose, and the title prefers label, then text, then task', () => {
+    const prose = 'Follow-up for "Audit the logs" dispatched for session child-new at generation 2 (state: running)'
+    expect(prose.startsWith('{')).toBe(false)
+    const events = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: [
+              runCall(),
+              tool({
+                id: 'follow-1',
+                tool: 'delegate',
+                params: {
+                  action: 'follow_up',
+                  session_id: 'child-1',
+                  label: 'Short label',
+                  text: LONG_TEXT,
+                  task: 'Deprecated alias',
+                },
+                result: prose,
+              }),
+            ],
+            spans: [span({ status: 'running', lifecycleState: 'running' })],
+          }),
+        ],
+      }),
+    )
+    const follow = events.find((event) => event.kind === 'follow_up')
+    expect(follow).toMatchObject({ title: 'Short label', childSessionId: 'child-new', agentName: 'Ray' })
+    expect(JSON.stringify(follow)).not.toContain(LONG_TEXT)
+
+    const fromText = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: [
+              runCall(),
+              tool({
+                id: 'follow-text',
+                tool: 'delegate',
+                params: { action: 'follow_up', session_id: 'child-1', text: LONG_TEXT, task: 'Deprecated alias' },
+                result: 'Follow-up dispatched for session child-1 at generation 2 (state: running)',
+              }),
+            ],
+            spans: [span({ status: 'running' })],
+          }),
+        ],
+      }),
+    )
+    const textTitle = fromText.find((event) => event.kind === 'follow_up')?.title ?? ''
+    expect(textTitle.length).toBe(60)
+    expect(LONG_TEXT.startsWith(textTitle)).toBe(true)
+    expect(textTitle).not.toBe('Deprecated alias')
+  })
+})
+
+describe('follow-up generation spans', () => {
+  it('D9: run, finish, follow-up, finish is delegated, finished, follow_up, finished — no second delegated', () => {
+    const run = runCall()
+    const events = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: [
+              run,
+              tool({
+                id: 'follow-1',
+                tool: 'delegate',
+                params: { action: 'follow_up', session_id: 'child-1', text: 'Look again' },
+                result: 'Follow-up dispatched for session child-1 at generation 2 (state: running)',
+              }),
+            ],
+            spans: [
+              span({ spanId: 'span_run-1', parentCallId: 'run-1', status: 'success', lifecycleState: 'completed' }),
+              span({
+                spanId: 'span_run-1_g2',
+                parentCallId: 'run-1',
+                status: 'success',
+                lifecycleState: 'completed',
+                taskLabel: 'Look again',
+              }),
+            ],
+          }),
+        ],
+      }),
+    )
+    expect(kinds(events)).toEqual(['delegated', 'finished', 'follow_up', 'finished'])
+    expect(events.filter((event) => event.kind === 'delegated')).toHaveLength(1)
+    expect(events.map((event) => event.id)).toEqual([
+      'delegated:span_run-1',
+      'finished:span_run-1',
+      'follow_up:follow-1',
+      'finished:span_run-1_g2',
+    ])
+  })
+
+  it('gap 2: a cancel suppresses only the generation it hit', () => {
+    const events = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: [
+              runCall(),
+              tool({
+                id: 'cancel-1',
+                tool: 'delegate',
+                params: { action: 'cancel', session_id: 'child-1' },
+                result: 'Session child-1 hard-cancelled immediately.',
+              }),
+              tool({
+                id: 'follow-1',
+                tool: 'delegate',
+                params: { action: 'follow_up', session_id: 'child-1', text: 'Try once more' },
+                result: 'Follow-up dispatched for session child-1 at generation 2 (state: running)',
+              }),
+            ],
+            spans: [
+              span({ spanId: 'span_run-1', parentCallId: 'run-1', status: 'cancelled', lifecycleState: 'cancelled' }),
+              span({ spanId: 'span_run-1_g2', parentCallId: 'run-1', status: 'error', lifecycleState: 'failed' }),
+            ],
+          }),
+        ],
+      }),
+    )
+    expect(kinds(events)).toEqual(['delegated', 'cancelled', 'follow_up', 'stopped'])
+    expect(events.filter((event) => event.kind === 'stopped')).toEqual([
+      expect.objectContaining({ id: 'stopped:span_run-1_g2', childSessionId: 'child-1' }),
+    ])
+  })
+})
+
+describe('queued children that never ran', () => {
+  it('D10 / gap 6: a parent cancel of a queued child is only cancelled; a system end is nothing', () => {
+    const byParent = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: [
+              runCall('queued'),
+              tool({
+                id: 'cancel-q',
+                tool: 'delegate',
+                params: { action: 'cancel', session_id: 'child-1' },
+                result: 'Session child-1 was still queued behind the concurrency limit and had not started; it has been dropped and will never run.',
+              }),
+            ],
+            spans: [span({ status: 'cancelled', lifecycleState: 'cancelled' })],
+          }),
+        ],
+      }),
+    )
+    expect(kinds(byParent)).toEqual(['cancelled'])
+
+    const bySystem = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: [runCall('queued')],
+            spans: [span({ status: 'error', lifecycleState: 'failed' })],
+          }),
+        ],
+      }),
+    )
+    expect(bySystem).toEqual([])
+
+    const timedOut = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: [runCall('queued')],
+            spans: [span({ status: 'timeout', lifecycleState: 'timed_out' })],
+          }),
+        ],
+      }),
+    )
+    expect(timedOut).toEqual([])
+  })
+
+  it('a queued child that did run still gets started and its own ending', () => {
+    const ranThenFailed = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: [runCall('queued')],
+            spans: [span({ status: 'error', lifecycleState: 'running' })],
+          }),
+        ],
+      }),
+    )
+    expect(kinds(ranThenFailed)).toEqual(['started', 'stopped'])
+
+    const ranThenFinished = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: [runCall('queued')],
+            spans: [span({ status: 'success', lifecycleState: 'completed' })],
+          }),
+        ],
+      }),
+    )
+    expect(kinds(ranThenFinished)).toEqual(['started', 'finished'])
+  })
+})
+
+describe('terminal span statuses', () => {
+  it('gap 7: parked has no terminal line; timeout and interrupted are stopped', () => {
+    const parked = deriveDelegationEvents(
+      source({
+        messages: [message({ id: 'm1', toolCalls: [runCall()], spans: [span({ status: 'parked', lifecycleState: 'needs_input' })] })],
+      }),
+    )
+    expect(kinds(parked)).toEqual(['delegated'])
+
+    const timedOut = deriveDelegationEvents(
+      source({
+        messages: [message({ id: 'm1', toolCalls: [runCall()], spans: [span({ status: 'timeout', lifecycleState: 'timed_out' })] })],
+      }),
+    )
+    expect(kinds(timedOut)).toEqual(['delegated', 'stopped'])
+
+    const interrupted = deriveDelegationEvents(
+      source({
+        messages: [message({ id: 'm1', toolCalls: [runCall()], spans: [span({ status: 'interrupted' })] })],
+      }),
+    )
+    expect(kinds(interrupted)).toEqual(['delegated', 'stopped'])
+  })
+})
+
+describe('failed parent actions and refusals', () => {
+  it('D6: a failed steer, respond, cancel, or follow_up produces no line', () => {
+    const failed = (action: string, id: string) =>
+      tool({
+        id,
+        tool: 'delegate',
+        status: 'error',
+        params: { action, session_id: 'child-1', text: 'nope' },
+        result: 'delegate: no such session',
+        error: 'delegate: no such session',
+      })
+    const events = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: [
+              runCall(),
+              failed('steer', 'steer-bad'),
+              failed('respond', 'respond-bad'),
+              failed('cancel', 'cancel-bad'),
+              failed('follow_up', 'follow-bad'),
+            ],
+            spans: [span({ status: 'running', lifecycleState: 'running' })],
+          }),
+        ],
+      }),
+    )
+    expect(kinds(events)).toEqual(['delegated'])
+  })
+
+  it('L3 / gap 11: a delegation_denied frame with status error and no reason falls back to call.error', () => {
+    // Live wire: IsError → status "error", result is the parsed object (pkg/gateway/websocket_forward_hub.go::hubToolExecEnd).
+    const events = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: [
+              tool({
+                id: 'run-denied',
+                tool: 'delegate',
+                status: 'error',
+                params: { action: 'run', agent_id: 'ray' },
+                result: { error: 'delegation_denied', policy: 'depth', tool: 'delegate' },
+                error: 'delegation denied by policy',
+              }),
+            ],
+          }),
+        ],
+      }),
+    )
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      kind: 'refused',
+      reason: 'delegation denied by policy',
+    })
+    expect(events[0].childSessionId).toBeUndefined()
+  })
+})
+
+const LIVE_SESSION = 'dcs-f1-live'
+const REPLAY_SESSION = 'dcs-f1-replay'
+
+function resetDelegationStore(activeSessionId: string) {
+  act(() => {
+    useChatStore.setState({
+      sessionsById: {},
+      messages: [],
+      isStreaming: false,
+      toolCalls: {},
+      toolCallOrder: [],
+      textAtToolCallStart: {},
+      sessionTokens: 0,
+      sessionCost: 0,
+      isReplaying: false,
+      replayCompletedForSession: null,
+      rateLimitEvent: null,
+      lastUserMessageAt: null,
+      cancelStage: null,
+      lastReceivedEventTime: null,
+    })
+    useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
+    useSessionStore.setState({ activeSessionId, activeAgentId: 'ray', activeAgentType: null })
+  })
+}
+
+function feedDelegationFrames(sessionId: string, finish: boolean) {
+  const frame = (body: Record<string, unknown>) => {
+    act(() => {
+      useChatStore.getState().handleFrame({ session_id: sessionId, ...body } as never)
+    })
+  }
+  frame({ type: 'token', content: 'Delegating.', agent_id: 'ray' })
+  frame({
+    type: 'tool_call_start',
+    call_id: 'run-1',
+    tool: 'delegate',
+    params: { action: 'run', agent_id: 'ray', label: 'Audit the logs' },
+    agent_id: 'ray',
+  })
+  frame({
+    type: 'tool_call_result',
+    call_id: 'run-1',
+    tool: 'delegate',
+    status: 'success',
+    result: runResult('running'),
+  })
+  frame({
+    type: 'subagent_start',
+    span_id: 'span_run-1',
+    parent_call_id: 'run-1',
+    task_label: 'Audit the logs',
+    agent_id: 'ray',
+    child_session_id: 'child-1',
+  })
+  for (let index = 0; index < 3; index += 1) {
+    frame({
+      type: 'tool_call_start',
+      call_id: `status-${index}`,
+      tool: 'delegate',
+      params: { action: 'status', session_id: 'child-1' },
+      agent_id: 'ray',
+    })
+    frame({
+      type: 'tool_call_result',
+      call_id: `status-${index}`,
+      tool: 'delegate',
+      status: 'success',
+      result: `poll saw ${CHILD_SENTINEL}`,
+    })
+  }
+  frame({
+    type: 'subagent_state',
+    span_id: 'span_run-1',
+    state: 'completed',
+    created_at: '2026-09-25T12:00:02.000Z',
+  })
+  frame({
+    type: 'subagent_end',
+    span_id: 'span_run-1',
+    status: 'success',
+    duration_ms: 10,
+    final_result: CHILD_SENTINEL,
+  })
+  if (finish) frame({ type: 'done', stats: { tokens: 1, cost: 0, duration_ms: 10 } })
+}
+
+function eventsFromStore(sessionId: string) {
+  const bucket = useChatStore.getState().sessionsById[sessionId]
+  expect(bucket, 'handleFrame must have created the session bucket').toBeDefined()
+  const messages = getMessages(bucket!)
+  const stored = messages.flatMap((item) => item.spans ?? []).find((item) => item.spanId === 'span_run-1')
+  expect(stored?.finalResult, 'the child result must actually be on the span the store kept').toContain(CHILD_SENTINEL)
+  return deriveDelegationEvents({
+    sessionId,
+    messages: messages.map((item) => ({
+      id: item.id,
+      timestamp: item.timestamp,
+      spans: item.spans?.map((itemSpan) => ({
+        spanId: itemSpan.spanId,
+        parentCallId: itemSpan.parentCallId,
+        taskLabel: itemSpan.taskLabel,
+        agentId: itemSpan.agentId,
+        childSessionId: itemSpan.childSessionId,
+        status: itemSpan.status,
+        lifecycleState: itemSpan.lifecycleState,
+        finalResult: itemSpan.finalResult,
+        statusLine: itemSpan.statusLine,
+        lastUpdateAt: itemSpan.lastUpdateAt,
+      })),
+      toolCalls: item.tool_calls as ToolCall[] | undefined,
+    })),
+    liveToolCalls: bucket!.toolCalls,
+    liveToolCallOrder: bucket!.toolCallOrder,
+    toolCallOwnerMessageId: bucket!.toolCallOwnerMessageId,
+    agentNames: NAMES,
+  })
+}
+
+function comparableLine(events: { id: string; kind: string; agentName?: string; title?: string; childSessionId?: string }[]) {
+  return events.map(({ id, kind, agentName, title, childSessionId }) => ({ id, kind, agentName, title, childSessionId }))
+}
+
+describe('live and replay through the store', () => {
+  beforeEach(() => resetDelegationStore(LIVE_SESSION))
+
+  it('gap 9: a live turn and the same frames after done derive the same lines, with no child text', () => {
+    feedDelegationFrames(LIVE_SESSION, false)
+    const live = eventsFromStore(LIVE_SESSION)
+    expect(useChatStore.getState().sessionsById[LIVE_SESSION].toolCallOrder.length).toBeGreaterThan(0)
+
+    resetDelegationStore(REPLAY_SESSION)
+    feedDelegationFrames(REPLAY_SESSION, true)
+    const replayed = eventsFromStore(REPLAY_SESSION)
+    expect(useChatStore.getState().sessionsById[REPLAY_SESSION].toolCallOrder).toEqual([])
+    expect(getMessages(useChatStore.getState().sessionsById[REPLAY_SESSION]).some((item) => (item.tool_calls?.length ?? 0) > 0)).toBe(true)
+
+    expect(live.length).toBeGreaterThan(0)
+    expect(comparableLine(replayed)).toEqual(comparableLine(live))
+    expect(kinds(live)).toEqual(['delegated', 'finished'])
+    expect(JSON.stringify(live)).not.toContain(CHILD_SENTINEL)
+    expect(JSON.stringify(replayed)).not.toContain(CHILD_SENTINEL)
   })
 })
