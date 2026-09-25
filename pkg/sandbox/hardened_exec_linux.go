@@ -52,8 +52,8 @@ func applyPlatformHardening(cmd *exec.Cmd, lim Limits) error {
 const memoryLimitSupported = true
 
 // childNProcSlack caps the number of NEW user-level processes a hardened-exec
-// subtree can spawn beyond the current per-UID baseline (RLIMIT_NPROC, v0.2
-// #155 item 5). The cap is inherited by every fork() the child performs, so
+// subtree can spawn beyond the current per-UID baseline (RLIMIT_NPROC, #155
+// item 5). The cap is inherited by every fork() the child performs, so
 // a fork-bomb that slips past the shell-guard regex (e.g. via `sh fork.sh`
 // indirection) hits the kernel limit before saturating the host.
 //
@@ -163,7 +163,7 @@ func readCurrentUserNProc() uint64 {
 // earlier hook (PreExec is unsafe), so this is the best available without
 // re-implementing fork+exec.
 //
-// RLIMIT_NPROC is set unconditionally (v0.2 #155 item 5). RLIMIT_AS is
+// RLIMIT_NPROC is set unconditionally (#155 item 5). RLIMIT_AS is
 // gated on a non-zero Limits.MemoryLimitBytes per the existing contract.
 func applyPostStartHardening(cmd *exec.Cmd, lim Limits) error {
 	if cmd.Process == nil {
