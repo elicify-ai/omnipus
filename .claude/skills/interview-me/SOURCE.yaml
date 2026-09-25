@@ -1,0 +1,16 @@
+# Provenance record for the vendored `interview-me` skill (community skill, MIT).
+# Added 2026-09-25 by founder decision: team-lead is also the requirements
+# engineer and collects requirements in interview style using this skill.
+# Reviewed before vendoring: prompt files only, no scripts, no network calls.
+
+source_repo: https://github.com/Sorbh/interview-me
+source_branch: main
+source_commit: ad9e1a886396095989d05381519bc479df01db87
+upstream_subpath: skills/interview-me
+copy_date: 2026-09-25
+copy_or_derived: copy
+license: MIT (copied as LICENSE in this directory)
+
+# Local edits (design 6.4, recorded here): VERIFY.md step 1's fallback search
+# list named `docs/specs/`, which this repo does not have; replaced with this
+# repo's specs folder `docs/internal/specs/`. No rule or method changed.
