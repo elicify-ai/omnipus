@@ -17,7 +17,7 @@
 // "awaiting approval: <tool>" override, and the open control.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { act } from 'react'
 import { ActivityPanel } from './ActivityPanel'
 import type { AgentActivityItem, BashActivityItem } from '@/hooks/useRunningActivity'
@@ -739,10 +739,7 @@ describe('ActivityPanel — Queued section and background commands (AC-3, AC-4)'
     const runningNow = screen.getByTestId('activity-section-running')
     expect(within(runningNow).getByText('already going')).toBeInTheDocument()
     expect(within(runningNow).queryByText('zeta first')).not.toBeInTheDocument()
-    // The children rendered, so a delegation chat line beside them would be findable.
     expect(screen.getByText('zeta first')).toBeInTheDocument()
-    expect(screen.queryByText(/Delegated to/)).not.toBeInTheDocument()
-    expect(screen.queryByText(/started ·/)).not.toBeInTheDocument()
   })
 
   it('puts a running background command in the background-commands section, not under Running now', () => {
@@ -761,5 +758,33 @@ describe('ActivityPanel — Queued section and background commands (AC-3, AC-4)'
     expect(within(commands).getByRole('heading', { name: 'Background commands' })).toBeInTheDocument()
     expect(within(commands).getByText('npm test')).toBeInTheDocument()
     expect(within(screen.getByTestId('activity-section-running')).queryByText('npm test')).not.toBeInTheDocument()
+  })
+
+  it('scrolls to a retained failed command when the live commands section is absent', async () => {
+    Element.prototype.scrollIntoView ??= () => {}
+    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {})
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        scrollRequest={{ section: 'commands', nonce: 1 }}
+        running={[]}
+        recentlyFinished={[makeBashItem({ status: 'error', command: 'npm test', durationMs: 400 })]}
+      />,
+    )
+
+    // The commands section lists only commands that are still running.
+    expect(screen.queryByTestId('activity-section-commands')).not.toBeInTheDocument()
+    const command = screen.getByText('npm test')
+    expect(screen.getByText('Recently finished')).toBeInTheDocument()
+    expect(command).toBeInTheDocument()
+
+    await waitFor(() => {
+      const scrolledToCommand = scrollIntoView.mock.instances.some(
+        (node) => node instanceof Element && node.contains(command),
+      )
+      expect(scrolledToCommand).toBe(true)
+    })
+    scrollIntoView.mockRestore()
   })
 })

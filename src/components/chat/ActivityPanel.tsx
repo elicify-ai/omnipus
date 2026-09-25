@@ -43,7 +43,7 @@
 // wire mechanism first. ADR-091 D7 replaces it for real: the status line and
 // open control above are the wired-up version of the same idea.
 
-import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
 import { Check, X, ArrowSquareOut } from '@phosphor-icons/react'
 import { useNavigate } from '@tanstack/react-router'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -313,15 +313,43 @@ export function ActivityPanel({
   scrollRequest,
 }: ActivityPanelProps) {
   const commandsRef = useRef<HTMLDivElement>(null)
+  const failedCommandRef = useRef<HTMLDivElement>(null)
+  // The sheet mounts its rows after this component's first effect, so a scroll
+  // attempted only from that effect hits a null ref and never retries. Remember
+  // which click already scrolled so a later mount still scrolls once, and a
+  // 1-second activity refresh does not yank the panel back to the top.
+  const scrolledNonce = useRef<number | null>(null)
   const { queued, active, commands } = partitionRunning(running)
   const isEmpty = running.length === 0 && recentlyFinished.length === 0
+  // A retained failure keeps the Commands pill up after the command has left
+  // "running", so it is not in the commands section. The first such row is
+  // the scroll target when that section is absent.
+  const failedCommandIndex = recentlyFinished.findIndex(
+    (item) => item.kind === 'bash' && item.status === 'error',
+  )
+  const pendingScroll = open && scrollRequest?.section === 'commands' ? scrollRequest.nonce : null
 
-  // Commands pill: scroll the shared panel to the shell section. Agents leaves
-  // scrollRequest null, so opening from that pill does not jump.
+  const scrollCommandsTarget = useCallback(() => {
+    if (pendingScroll === null || scrolledNonce.current === pendingScroll) return
+    const target = commandsRef.current ?? failedCommandRef.current
+    if (!target || typeof target.scrollIntoView !== 'function') return
+    target.scrollIntoView({ block: 'start' })
+    scrolledNonce.current = pendingScroll
+  }, [pendingScroll])
+
   useEffect(() => {
-    if (!open || scrollRequest?.section !== 'commands') return
-    commandsRef.current?.scrollIntoView({ block: 'start' })
-  }, [open, scrollRequest])
+    scrollCommandsTarget()
+  }, [scrollCommandsTarget])
+
+  const assignCommandsRef = useCallback((node: HTMLDivElement | null) => {
+    commandsRef.current = node
+    if (node) scrollCommandsTarget()
+  }, [scrollCommandsTarget])
+
+  const assignFailedCommandRef = useCallback((node: HTMLDivElement | null) => {
+    failedCommandRef.current = node
+    if (node) scrollCommandsTarget()
+  }, [scrollCommandsTarget])
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -363,7 +391,7 @@ export function ActivityPanel({
           )}
 
           {commands.length > 0 && (
-            <ActivitySection title="Background commands" testId="activity-section-commands" sectionRef={commandsRef}>
+            <ActivitySection title="Background commands" testId="activity-section-commands" sectionRef={assignCommandsRef}>
               {commands.map((item) => (
                 <ActivityRow key={item.key} item={item} />
               ))}
@@ -376,9 +404,15 @@ export function ActivityPanel({
                 Recently finished
               </h3>
               <div className="space-y-[var(--space-1)]">
-                {recentlyFinished.map((item) => (
-                  <ActivityRow key={item.key} item={item} />
-                ))}
+                {recentlyFinished.map((item, index) =>
+                  index === failedCommandIndex ? (
+                    <div key={item.key} ref={assignFailedCommandRef} data-testid="activity-failed-command">
+                      <ActivityRow item={item} />
+                    </div>
+                  ) : (
+                    <ActivityRow key={item.key} item={item} />
+                  ),
+                )}
               </div>
             </div>
           )}
