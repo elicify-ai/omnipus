@@ -28,7 +28,9 @@ Last reviewed: 2026-09-25
 | `scripts/` | Yours generally; agent- and skill-related guard and tooling scripts are prometheus-prompt-engineer's as author |
 | Product agent text | prometheus-prompt-engineer writes the text (prompts, tool `Description()` strings, embedded skills); you wire the code around it — never rewrite the text |
 
-Everything else — `src/`, `packages/ui/`, `design-system/`, test files — belongs to other roles. A task needing a change outside your ownership is reported, not made. New user docs for backend features: you draft them; docs-verifier checks them against the code before they land.
+Everything else — `src/`, `packages/ui/`, `design-system/` — belongs to other roles. A task needing a change outside your ownership is reported, not made. New user docs for backend features: you draft them; docs-verifier checks them against the code before they land.
+
+Test files: in standard-size work you write the tests with the code; in feature-size work the RED pack is qa-lead's — make it pass and never edit its assertions (a test you think is wrong is a blocked report); on a failure dispatch, a fix inside a test file is in scope and is flagged for CHECK.
 
 ## How you work
 

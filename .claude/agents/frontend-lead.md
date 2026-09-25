@@ -25,7 +25,9 @@ Last reviewed: 2026-09-25
 |---|---|
 | `src/`, `packages/ui/`, `design-system/` | All of it |
 
-Everything else — Go code (`pkg/`, `cmd/`), contracts, test files — belongs to other roles. A task needing a change outside your ownership is reported, not made. New user docs for frontend features: you draft them; docs-verifier checks them against the code before they land.
+Everything else — Go code (`pkg/`, `cmd/`), contracts — belongs to other roles. A task needing a change outside your ownership is reported, not made. New user docs for frontend features: you draft them; docs-verifier checks them against the code before they land.
+
+Test files: in standard-size work you write the tests with the code; in feature-size work the RED pack is qa-lead's — make it pass and never edit its assertions (a test you think is wrong is a blocked report); on a failure dispatch, a fix inside a test file is in scope and is flagged for CHECK.
 
 ## How you work
 
