@@ -298,16 +298,43 @@ func (t *SendEmailTool) Name() string           { return "send_email" }
 func (t *SendEmailTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *SendEmailTool) Category() ToolCategory { return CategoryCommunication }
 func (t *SendEmailTool) Description() string {
-	return "Send a new email from your mailbox to a recipient. Provide to, subject, and body. IMPORTANT: to accepts exactly ONE recipient address — there is no CC/BCC and no way to address multiple recipients in one call. If subject is left empty, the sent message uses the literal subject \"(no subject)\" rather than failing."
+	return "Send a new email from your mailbox. Provide to (a list of addresses — a single address string also works), subject, and body (Markdown; rendered to HTML + plain text server-side). Optional: cc, bcc (lists of addresses; bcc addresses all receive the mail but no recipient sees the bcc list), in_reply_to (Message-ID to thread under), and attachments (workspace file paths — files anywhere except protected credential files; at most 10 files, 25 MiB total). Attaching files carries NO separate approval: this tool's own permission governs the whole call. If subject is left empty, the sent message uses the literal subject \"(no subject)\" rather than failing."
 }
 
 func (t *SendEmailTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"to":      map[string]any{"type": "string", "description": "A single recipient email address. Only one address is supported — this tool has no CC/BCC and cannot address multiple recipients."},
+			"to": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"minItems":    1,
+				"description": "Recipient addresses (a single address string is also accepted).",
+			},
+			"cc": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Carbon-copy addresses.",
+			},
+			"bcc": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Blind carbon-copy addresses: every bcc address receives the mail, but no recipient sees the bcc list (the transmitted copy carries no Bcc header).",
+			},
 			"subject": map[string]any{"type": "string", "description": "Subject line. If omitted or empty, the message is sent with the subject \"(no subject)\"."},
-			"body":    map[string]any{"type": "string", "description": "Plain-text message body."},
+			"body": map[string]any{
+				"type":        "string",
+				"description": "Message body in Markdown (rendered server-side to HTML and plain text; the plain part is derived from the same parse).",
+			},
+			"in_reply_to": map[string]any{
+				"type":        "string",
+				"description": "Message-ID of the message this mail replies to (sets In-Reply-To and References).",
+			},
+			"attachments": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Workspace file paths to attach — resolved like send_file (any file anywhere except protected credential files), at most 10 files, 25 MiB total, enforced before the message is sent.",
+			},
 		},
 		"required": []string{"to", "subject", "body"},
 	}
@@ -318,19 +345,57 @@ func (t *SendEmailTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	to, _ := args["to"].(string)
+	recips, err := parseMailRecipients(t.Name(), args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
 	subject, _ := args["subject"].(string)
 	body, _ := args["body"].(string)
-	if strings.TrimSpace(to) == "" {
-		return ErrorResult("send_email: to is required")
-	}
 	if strings.TrimSpace(body) == "" {
 		return ErrorResult("send_email: body is required")
 	}
-	if err := tp.Send(ctx, email.SendRequest{To: to, Subject: subject, Body: body}); err != nil {
+	if err := checkMailBodyBound(t.Name(), body); err != nil {
+		return ErrorResult(err.Error())
+	}
+	if strings.TrimSpace(subject) == "" {
+		subject = "(no subject)"
+	}
+	inReplyTo, _ := args["in_reply_to"].(string)
+	refs, _ := args["attachments"].([]any)
+	attach, err := resolveMailAttachments(ctx, t.Name(), refs)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+
+	envelope := strings.Join(recips.Envelope, ",")
+	req := email.SendRequest{To: envelope, Subject: subject, Body: body, InReplyTo: inReplyTo}
+	var sentCopy []byte
+	if from := mailboxFrom(tp); from != "" {
+		out, cerr := composeMail(mailComposeInput{
+			toolName: t.Name(), from: from, subject: subject, markdown: body,
+			inReplyTo: inReplyTo, recips: recips, attach: attach,
+		})
+		if cerr != nil {
+			return ErrorResult(cerr.Error())
+		}
+		req.Raw = out.Transmitted
+		sentCopy = out.SentCopy
+	}
+	if err := tp.Send(ctx, req); err != nil {
 		return ErrorResult(fmt.Sprintf("send_email failed: %v", err))
 	}
-	return NewToolResult(fmt.Sprintf(`{"sent":true,"to":%q}`, to))
+	sentSaved, saveWarning := saveSentCopy(ctx, tp, sentCopy)
+	return NewToolResult(fmt.Sprintf(`{"sent":true,"to":%q,"sent_saved":%t,"save_warning":%q}`,
+		envelope, sentSaved, saveWarning))
+}
+
+// mailboxFrom returns the transport's sending identity, or "" when it does
+// not expose one (degrades to the transport's own plain send path).
+func mailboxFrom(tp email.Transport) string {
+	if ident, ok := tp.(mailboxIdentity); ok {
+		return ident.AccountAddress()
+	}
+	return ""
 }
 
 // --- reply ---
@@ -349,7 +414,7 @@ func (t *ReplyTool) Name() string           { return "reply" }
 func (t *ReplyTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *ReplyTool) Category() ToolCategory { return CategoryCommunication }
 func (t *ReplyTool) Description() string {
-	return "Reply to an email by its uid (from read_inbox or search_email). The reply goes to the address the sender wants replies sent to (the message's Reply-To header, when the sender set one; otherwise the original From address), threads correctly (In-Reply-To), and uses a 'Re:' subject. Provide the uid and the reply body. IMPORTANT: this does NOT quote the original message in the reply body — only your body text is sent. It also only replies to the sender (or their Reply-To address): any other To/Cc recipients on the original message are NOT included."
+	return "Reply to an email by its uid (from read_inbox or search_email). The reply goes to the address the sender wants replies sent to (the message's Reply-To header, when the sender set one; otherwise the original From address), threads correctly (In-Reply-To), and uses a 'Re:' subject. Provide the uid and the reply body (Markdown; rendered server-side). Optional: cc and bcc lists, reply_all (true adds the original's To/Cc recipients, minus your own address), and attachments (workspace file paths, max 10 files / 25 MiB total). This does NOT quote the original message in the reply body — only your body text is sent."
 }
 
 func (t *ReplyTool) Parameters() map[string]any {
@@ -361,7 +426,26 @@ func (t *ReplyTool) Parameters() map[string]any {
 				"minimum":     1,
 				"description": "The uid of the message to reply to.",
 			},
-			"body": map[string]any{"type": "string", "description": "Plain-text reply body."},
+			"body": map[string]any{"type": "string", "description": "Reply body in Markdown (rendered server-side to HTML and plain text)."},
+			"cc": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Carbon-copy addresses.",
+			},
+			"bcc": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Blind carbon-copy addresses (no recipient sees the bcc list).",
+			},
+			"reply_all": map[string]any{
+				"type":        "boolean",
+				"description": "When true, the original message's To and Cc recipients are added (minus your own address), beyond the primary recipient.",
+			},
+			"attachments": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Workspace file paths to attach — resolved like send_file, at most 10 files, 25 MiB total, enforced before the reply is sent.",
+			},
 		},
 		"required": []string{"uid", "body"},
 	}
@@ -379,6 +463,9 @@ func (t *ReplyTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 	body, _ := args["body"].(string)
 	if strings.TrimSpace(body) == "" {
 		return ErrorResult("reply: body is required")
+	}
+	if err := checkMailBodyBound("reply", body); err != nil {
+		return ErrorResult(err.Error())
 	}
 
 	orig, err := tp.ReadMessage(ctx, uid)
@@ -409,16 +496,40 @@ func (t *ReplyTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 	if !strings.HasPrefix(strings.ToLower(subject), "re:") {
 		subject = "Re: " + subject
 	}
+	recips, err := parseReplyRecipients(t.Name(), args, orig, to, mailboxFrom(tp))
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	refs, _ := args["attachments"].([]any)
+	attach, err := resolveMailAttachments(ctx, t.Name(), refs)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+	envelope := strings.Join(recips.Envelope, ",")
 	req := email.SendRequest{
-		To:        to,
+		To:        envelope,
 		Subject:   subject,
 		Body:      body,
 		InReplyTo: orig.MessageID,
 	}
+	var sentCopy []byte
+	if from := mailboxFrom(tp); from != "" {
+		out, cerr := composeMail(mailComposeInput{
+			toolName: t.Name(), from: from, subject: subject, markdown: body,
+			inReplyTo: orig.MessageID, recips: recips, attach: attach,
+		})
+		if cerr != nil {
+			return ErrorResult(cerr.Error())
+		}
+		req.Raw = out.Transmitted
+		sentCopy = out.SentCopy
+	}
 	if err := tp.Send(ctx, req); err != nil {
 		return ErrorResult(fmt.Sprintf("reply failed: %v", err))
 	}
-	return NewToolResult(fmt.Sprintf(`{"replied":true,"to":%q,"uid":%d}`, to, uid))
+	sentSaved, saveWarning := saveSentCopy(ctx, tp, sentCopy)
+	return NewToolResult(fmt.Sprintf(`{"replied":true,"to":%q,"uid":%d,"sent_saved":%t,"save_warning":%q}`,
+		to, uid, sentSaved, saveWarning))
 }
 
 // --- helpers ---
@@ -479,5 +590,6 @@ func EmailToolset(tps EmailTransports) []Tool {
 		NewReadMessageTool(tps),
 		NewSendEmailTool(tps),
 		NewReplyTool(tps),
+		NewCreateEmailDraftTool(tps),
 	}
 }

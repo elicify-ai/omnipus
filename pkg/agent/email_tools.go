@@ -8,11 +8,13 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/email"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // registerEmailToolsForAgent registers the M11 email tools (read_inbox,
-// search_email, read_message, send_email, reply) on the given agent
+// search_email, read_message, send_email, reply, create_email_draft — the
+// sixth added by email-mail-view-spec §2.7 point 6) on the given agent
 // UNCONDITIONALLY, like every other builtin. Whether the agent may use them is
 // its tool POLICY; whether it has an inbox to use them ON is data, resolved per
 // turn.
@@ -82,12 +84,14 @@ func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *Agent
 		}
 
 		client, err := email.NewClient(email.Account{
-			IMAPHost: mb.IMAPHost,
-			IMAPPort: mb.IMAPPort,
-			SMTPHost: mb.SMTPHost,
-			SMTPPort: mb.SMTPPort,
-			Username: mb.Username,
-			Password: password,
+			IMAPHost:     mb.IMAPHost,
+			IMAPPort:     mb.IMAPPort,
+			SMTPHost:     mb.SMTPHost,
+			SMTPPort:     mb.SMTPPort,
+			Username:     mb.Username,
+			Password:     password,
+			SentFolder:   mb.SentFolderName,
+			DraftsFolder: mb.DraftsFolderName,
 		})
 		if err != nil {
 			slog.Warn("email tools: mailbox transport construction failed — skipping pair",
@@ -98,6 +102,18 @@ func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *Agent
 	}
 
 	for _, t := range tools.EmailToolset(transports) {
+		// FR-015: the draft tool's chat_link is derived from the gateway's
+		// canonical public origin — the SAME derivation serve_web's preview
+		// URLs use (middleware.CanonicalGatewayOrigin, FR-022 order: public_url
+		// first, wildcard-bind → ""). Injected via an optional setter so
+		// EmailToolset's signature stays tool-map-only (the RED suite constructs
+		// the toolset from transports alone; origin "" → chat_link null with a
+		// stated reason).
+		if origin := middleware.CanonicalGatewayOrigin(cfg); origin != "" {
+			if setter, ok := t.(interface{ SetChatLinkOrigin(string) }); ok {
+				setter.SetChatLinkOrigin(origin)
+			}
+		}
 		// registerSharedTools re-runs during config reload and fast agent
 		// upsert. Replacing this first-party toolset is expected: each fresh
 		// instance carries the current workspace-to-mailbox map. Keep strict

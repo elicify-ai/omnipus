@@ -88,6 +88,12 @@ type Account struct {
 	SMTPPort int
 	Username string
 	Password string
+	// SentFolder is the IMAP folder sent copies are APPENDed to
+	// (email-mail-view-spec §2.1 sent_folder_name). Empty means "Sent".
+	SentFolder string
+	// DraftsFolder is the IMAP folder agent drafts are APPENDed to with \Draft
+	// (email-mail-view-spec §2.1 drafts_folder_name). Empty means "Drafts".
+	DraftsFolder string
 }
 
 // withDefaults returns a copy of a with default ports applied.
@@ -98,8 +104,20 @@ func (a Account) withDefaults() Account {
 	if a.SMTPPort == 0 {
 		a.SMTPPort = defaultSMTPPort
 	}
+	if a.SentFolder == "" {
+		a.SentFolder = "Sent"
+	}
+	if a.DraftsFolder == "" {
+		a.DraftsFolder = "Drafts"
+	}
 	return a
 }
+
+// sentFolder returns the effective Sent folder name.
+func (a Account) sentFolder() string { return a.withDefaults().SentFolder }
+
+// draftsFolder returns the effective Drafts folder name.
+func (a Account) draftsFolder() string { return a.withDefaults().DraftsFolder }
 
 // Message is a transport-level representation of a single email message,
 // independent of the underlying IMAP library types so tools and tests do not
@@ -118,6 +136,9 @@ type Message struct {
 	// senders) and callers such as the reply tool should prefer it over From.
 	ReplyTo string `json:"reply_to,omitempty"`
 	To      string `json:"to,omitempty"`
+	// Cc is the comma-joined Cc address list, when the message carries one
+	// (the reply tool's reply_all uses it — MAJ-014).
+	Cc      string `json:"cc,omitempty"`
 	Subject string `json:"subject"`
 	// Date is the message Date header in RFC 3339 (UTC), best-effort.
 	Date string `json:"date,omitempty"`
@@ -554,7 +575,10 @@ func bufferToMessage(m *imapclient.FetchMessageBuffer, withBody bool) Message {
 		msg.ReplyTo = addressString(env.ReplyTo[0])
 	}
 	if len(env.To) > 0 {
-		msg.To = addressString(env.To[0])
+		msg.To = addressListString(env.To)
+	}
+	if len(env.Cc) > 0 {
+		msg.Cc = addressListString(env.Cc)
 	}
 	if !env.Date.IsZero() {
 		msg.Date = env.Date.UTC().Format(time.RFC3339)
@@ -835,6 +859,19 @@ func addressString(a imap.Address) string {
 		return a.Mailbox + "@" + a.Host
 	}
 	return a.Mailbox
+}
+
+// addressListString renders an IMAP address list as comma-joined bare
+// addresses ("a@x.test, b@y.test") — the shape Message.To/Cc carry so the
+// reply tool's reply_all can re-address everyone the original went to.
+func addressListString(addrs []imap.Address) string {
+	parts := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		if s := addressString(a); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // MarkSeen sets the \Seen flag on the message with the given UID.

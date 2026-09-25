@@ -1233,6 +1233,17 @@ type MailboxConfig struct {
 	// PasswordRef is the credential-store key for the mailbox password. The
 	// plaintext password never appears in config.json.
 	PasswordRef string `json:"password_ref,omitempty"`
+	// SignatureHTML is the account signature as ALREADY-SANITIZED HTML
+	// (email-mail-view-spec §2.1 signature_html, MC-1: at most 16,384 chars —
+	// sanitized and bounded at the REST setter; Compose re-sanitizes
+	// defensively on every use). Empty means no signature.
+	SignatureHTML string `json:"signature_html,omitempty"`
+	// SentFolderName is the IMAP folder sent copies are APPENDed to
+	// (email-mail-view-spec §2.1). Empty means the server default ("Sent").
+	SentFolderName string `json:"sent_folder_name,omitempty"`
+	// DraftsFolderName is the IMAP folder agent drafts are APPENDed to with
+	// \Draft (email-mail-view-spec §2.1). Empty means the default ("Drafts").
+	DraftsFolderName string `json:"drafts_folder_name,omitempty"`
 }
 
 // MailboxesConfig maps agent ID → workspace ID → mailbox. Every (agent,
