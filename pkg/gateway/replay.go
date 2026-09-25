@@ -449,6 +449,35 @@ func (sr *streamReplayState) emitFlatToolCall(
 	return streamReplayStateNext, nil
 }
 
+// dispatchTurnCancelled replays one persisted turn-cancelled entry as the
+// same role:"turn_canceled" ReplayMessageFrame the live stream showed.
+// Extracted from dispatchSpecialEntry with no behaviour change, so that
+// function stays under the size budget.
+//
+// Wave 3 fix 5c: before this path existed, replay never read these entries,
+// so a canceled turn vanished on reload. entry.TurnID, stamped by
+// pkg/agent/cancel.go's onCancelFinish, rides the frame's turn_id so the
+// client can match the cancellation to the assistant message it interrupted
+// without relying on stream adjacency. Async delegation can interleave other
+// frames in between. This entry type carries no Content, so it cannot fall
+// through the generic content gate.
+func (sr *streamReplayState) dispatchTurnCancelled(entry session.TranscriptEntry, emitFrame func(any) error) (streamReplayStateFlow, error) {
+	cancelFrame := generated.ReplayMessageFrame{
+		Type:      string(generated.WsFrameTypeReplayMessage),
+		SessionId: sr.sessionID,
+		Role:      "turn_canceled",
+		Content:   turnCancelledContent(entry),
+	}
+	if entry.TurnID != "" {
+		turnIDCopy := entry.TurnID
+		cancelFrame.TurnId = &turnIDCopy
+	}
+	if err := emitFrame(cancelFrame); err != nil {
+		return streamReplayStateReturn, err
+	}
+	return streamReplayStateContinue, nil
+}
+
 // dispatchSpecialEntry handles every entry-type/subtype special case that
 // either fully replays an entry as its own typed frame (returning
 // streamReplayStateContinue so streamReplay's loop moves on to the next
@@ -467,34 +496,11 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 		return streamReplayStateContinue, nil
 	}
 
-	// Wave 3 fix 5c: emit a role:"turn_canceled" ReplayMessageFrame for
-	// EntryTypeTurnCancelled entries (pkg/agent/cancel.go's onCancelFinish
-	// callback, ~line 224). Before this fix, replay had no code path that
-	// read these persisted entries at all — a canceled turn simply
-	// vanished on reload instead of showing the same cancellation marker
-	// the live WS stream showed. entry.TurnID (stamped by the same
-	// callback) travels onto the frame's turn_id field so the client can
-	// match this cancellation to the specific preceding assistant message
-	// it interrupted without relying on stream-adjacency — async
-	// delegation can interleave other agents'/turns' frames in between.
-	// This entry type carries no Content (cancel.go's literal never sets
-	// it), so it needs its own unconditional branch rather than falling
-	// through the `entry.Content != ""` gate below.
+	// A canceled turn replays as role:"turn_canceled". The frame build
+	// lives in dispatchTurnCancelled so this function stays under the
+	// size budget. Same frame, same position, as before the extraction.
 	if entry.Type == session.EntryTypeTurnCancelled {
-		cancelFrame := generated.ReplayMessageFrame{
-			Type:      string(generated.WsFrameTypeReplayMessage),
-			SessionId: sr.sessionID,
-			Role:      "turn_canceled",
-			Content:   turnCancelledContent(entry),
-		}
-		if entry.TurnID != "" {
-			turnIDCopy := entry.TurnID
-			cancelFrame.TurnId = &turnIDCopy
-		}
-		if err2 := emitFrame(cancelFrame); err2 != nil {
-			return streamReplayStateReturn, err2
-		}
-		return streamReplayStateContinue, nil
+		return sr.dispatchTurnCancelled(entry, emitFrame)
 	}
 
 	// review r2 RV1: EntryTypeJudgeVerdict entries (ADR-049 D2/D4, written
@@ -802,8 +808,10 @@ func (sr *streamReplayState) prepareReplay() {
 	sr.spanRealAgentIDs = buildSpanRealAgentIDs(sr.entries, sr.spawnIDsWithChildren)
 
 	// persistedSubagentStartSpans / persistedSubagentEndSpans: the set of
-	// span IDs ("span_" + the originating spawn/delegate ToolCall.ID, same
-	// convention as buildSubagentStart below) that already have a REAL
+	// span IDs from agent.SubagentSpanID. Generation 1 is "span_" + the
+	// originating call id. Generation N >= 2 appends "_g<N>", recovered
+	// from the entry id by canonicalReplaySpanID, because the call id
+	// alone is not enough. The indexes hold every id that already has a REAL
 	// persisted subagent_start / subagent_end system entry somewhere in
 	// this transcript (steer_frames.go's deliverSubagentStart/
 	// deliverSubagentEnd — ADR-091 D7/I-4). Two independent uses:
@@ -1069,7 +1077,10 @@ func (sr *streamReplayState) classifyToolCall(ei int, entry session.TranscriptEn
 	// in truth, still working; the real completion arrives later either
 	// over the live WS event stream, or on the next reload once
 	// deliverSubagentEnd has persisted it.
-	sr.stillActive = isDelegateSpawnCall && sr.persistedSubagentStartSpans[sr.spanID] && !sr.persistedSubagentEndSpans[sr.spanID]
+	// A later finished generation also clears stillActive. See
+	// laterGenerationFinished.
+	gen1Open := sr.persistedSubagentStartSpans[sr.spanID] && !sr.persistedSubagentEndSpans[sr.spanID]
+	sr.stillActive = isDelegateSpawnCall && gen1Open && !laterGenerationFinished(sr.persistedSubagentEndSpans, sr.spanID)
 	return streamReplayStateNext
 }
 
@@ -1392,6 +1403,29 @@ func canonicalReplaySpanID(entryID, storedSpanID, parentCallID string) string {
 		return agent.SubagentSpanID(parentCallID, 1)
 	}
 	return storedSpanID
+}
+
+// laterGenerationFinished reports whether some generation N >= 2 of this
+// generation-1 span already has a persisted end. Revive can bump the
+// generation before completeSteeredTurn delivers generation 1's end
+// (pkg/agent/steer_completion.go returns once the generation has changed),
+// so a stopped-then-revived run can sit on disk as a generation-1 start
+// with no generation-1 end. That must not keep the outer call "still
+// running" after a later generation of the same call has finished.
+// The suffix is the same "_g<N>" agent.SubagentSpanID appends.
+func laterGenerationFinished(ends map[string]bool, gen1SpanID string) bool {
+	prefix := gen1SpanID + "_g"
+	for id := range ends {
+		if !strings.HasPrefix(id, prefix) {
+			continue
+		}
+		n, err := strconv.Atoi(id[len(prefix):])
+		if err != nil || n < 2 {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // buildPersistedSubagentSpanIndexes scans entries once for every persisted
