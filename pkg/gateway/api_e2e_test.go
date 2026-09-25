@@ -125,7 +125,8 @@ func TestRetentionRetroactiveSweep(t *testing.T) {
 //
 // BDD: Given agent "alpha" has a session, When agent "alpha" is deleted,
 //
-//	Then GET session returns 200 with transcript + agent_removed=true; POST message returns 422.
+//	Then GET session returns 200 with transcript + agent_removed=true; POST message returns 422
+//	(acceptance text — this route does not return 422; see the gap note below).
 //
 // Traces to: temporal-puzzling-melody.md §4 Axis-3 test 7
 // Acceptance: Plan 3 §1 — "Session with deleted agent: read-only transcript + 'Agent removed' banner"
@@ -140,13 +141,17 @@ func TestRetentionRetroactiveSweep(t *testing.T) {
 //	Then GET session returns 200 with transcript data,
 //	And POST new message to the session returns an error response.
 //
-// Gap note: the "agent_removed" field and the strict 422 on POST for deleted-
-// agent sessions are not yet implemented as of v0.1. The transcript read path
+// Gap note: GET session detail surfaces agent_removed when the session's agent
+// is gone (rest_sessions.go, #103). A strict 422 on POST for a deleted-agent
+// session is not implemented. HandleSessions answers
+// POST /api/v1/sessions/{id}/message with 405 Method Not Allowed and does not
+// look up the agent (rest_sessions.go::HandleSessions). Creating a session for
+// an unknown agent returns 400, not 422 (rest_sessions.go::createSessionHTTP).
+// This test therefore asserts non-2xx rather than 422. The transcript read path
 // works because it's file-based and doesn't require the agent to exist in-memory.
-// The POST path currently reaches the agent lookup and returns a non-200 when
-// the agent is not found — we assert a non-200 status rather than 422 specifically.
 //
-// When v0.2 / #155 ships agent_removed + 422 semantics, tighten the assertion.
+// Do not tighten the assertion to 422 until that status exists on this path
+// (not yet implemented, no release scheduled).
 //
 // Traces to: temporal-puzzling-melody.md §4 Axis-3 test 7
 // Acceptance: Plan 3 §1 — "Session with deleted agent: read-only transcript + 'Agent removed' banner"
@@ -206,14 +211,16 @@ func TestDeletedAgentSessionReadOnly(t *testing.T) {
 		api.HandleSessions(postW, postReq)
 	}()
 
-	// The POST must return a non-2xx status (agent not found / session read-only).
-	// We accept any 4xx or 5xx; v0.2 #155 will narrow this to exactly 422.
+	// The POST must return a non-2xx status. On this route that is 405
+	// Method Not Allowed: HandleSessions does not dispatch
+	// /sessions/{id}/message and does not look up the agent. There is no
+	// deleted-agent 422 on this path (not yet implemented, no release scheduled).
 	//
 	// TODO: tighten to assert.Equal(t, http.StatusUnprocessableEntity, postW.Code)
-	//       when v0.2 #155 ships agent_removed semantics.
+	//       only once that status is what this route returns.
 	if postW.Code >= 200 && postW.Code < 300 {
 		t.Errorf("POST to deleted-agent session must not succeed (2xx=%d); "+
-			"expected 4xx/5xx — agent %q is not in the registry", postW.Code, agentID)
+			"expected 4xx/5xx (this route is 405 Method Not Allowed)", postW.Code)
 	}
 }
 

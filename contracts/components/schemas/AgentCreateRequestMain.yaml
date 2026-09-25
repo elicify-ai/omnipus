@@ -124,7 +124,7 @@ properties:
     type: string
     nullable: true
     description: >
-      Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
+      Per-agent persona voice identifier (Main only). Schema-pinned; not yet active (TTS, tracked #306).
     example: "alloy"
   max_tool_iterations:
     type: integer

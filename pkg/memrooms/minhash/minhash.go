@@ -5,8 +5,8 @@
 //   - 128-permutation MinHash over 3-shingles (3 consecutive words).
 //   - Jaccard similarity threshold: 0.85 (configurable via DefaultThreshold).
 //   - Non-destructive: near-duplicates are LINKED in minhash.jsonl, never
-//     deleted. The near-duplicate link is an append-only record so v0.2
-//     can prune later if desired, without losing provenance.
+//     deleted. The near-duplicate link is an append-only record so a
+//     future pass can prune later if desired, without losing provenance.
 //   - The minhash.jsonl lives at <room_root>/.index/minhash.jsonl (DERIVED).
 //   - All writes are via fileutil.AppendJSONL (POSIX-safe sub-PIPE_BUF appends).
 //   - Pure-Go: no CGo, no external C libs.
@@ -69,7 +69,7 @@ func (s Signature) IsZero() bool {
 }
 
 // NearDupRecord is the frozen v0.1.0 schema for a minhash.jsonl near-dup link.
-// Append-only. Never delete records — v0.2 may prune, not v0.1.
+// Append-only. Never delete records — pruning is left to a future pass.
 type NearDupRecord struct {
 	// TS is the UTC RFC3339 timestamp of the dedup event.
 	TS time.Time `json:"ts"`

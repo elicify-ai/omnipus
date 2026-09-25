@@ -321,7 +321,7 @@ func TestLoad2000Sessions(t *testing.T) {
 	// With the mock OpenAI provider eliminating network latency (see
 	// mockOpenRouterServer), p95 ≈ steering-queue-wait, which is the
 	// architectural ceiling. Asserting either against the v0.1 SLO values
-	// would block CI on perf work that belongs in v0.2/v0.3. Keep both
+	// would block CI on perf work deferred beyond this release. Keep both
 	// numbers visible so regressions in OTHER paths (webchat retry, replay
 	// buffer, agent-loop slowdowns) remain catchable from the JSON trend.
 	if totalDropped > sloDroppedFrames {

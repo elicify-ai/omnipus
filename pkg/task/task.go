@@ -95,7 +95,7 @@ var validCancelReasons = map[CancelReason]bool{
 func IsValidCancelReason(r CancelReason) bool { return validCancelReasons[r] }
 
 // Action is the kind of work a task performs (remediation D4). Tier 2 ships
-// `llm` only; the type reserves room for v0.3 (human/tool/notify/sub_workflow).
+// `llm` only; the type reserves room for future action types (human/tool/notify/sub_workflow).
 type Action string
 
 // ActionLLM is the only Tier-2 action: run an agent.
@@ -118,7 +118,7 @@ const (
 func IsValidSurface(s Surface) bool { return s == SurfaceUser || s == SurfaceHeartbeat }
 
 // TriggerType is the discriminator for a TaskTrigger (remediation Detail #3).
-// Tier 2 ships time-only kinds; v0.3 adds event kinds additively.
+// Tier 2 ships time-only kinds; future growth adds event kinds additively (design intent — do not build in this release).
 type TriggerType string
 
 // Trigger kinds (Tier 2, time-only).
@@ -141,7 +141,7 @@ func IsValidTriggerType(t TriggerType) bool {
 
 // TriggerConfig holds the kind-specific parameters of a TaskTrigger. The
 // relevant subset depends on the trigger Type. This is the open growth surface
-// for v0.3 event kinds — they add their own keys here without changing the
+// for future event kinds — they add their own keys here without changing the
 // outer shape.
 type TriggerConfig struct {
 	// AtMs is the Unix epoch-milliseconds instant for a `once` fire.
@@ -164,7 +164,7 @@ type TriggerConfig struct {
 }
 
 // Trigger is when (and how) a task fires (remediation Detail #3). Modeled as
-// an extensible {type, config} shape so the v0.3 multi-trigger future grows
+// an extensible {type, config} shape so the future multi-trigger growth path grows
 // additively, but Tier-2-restricted to time-only kinds.
 type Trigger struct {
 	Type   TriggerType   `json:"type"`

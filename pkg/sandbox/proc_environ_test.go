@@ -6,7 +6,7 @@
 // /proc/<parent-pid>/environ because Linux grants same-uid processes read access
 // to /proc/<pid>/environ unless PR_SET_DUMPABLE is set to 0.
 //
-// CLOSED in v0.2 #155: sandbox.HardenGatewaySelf() applies PR_SET_DUMPABLE=0
+// CLOSED by #155: sandbox.HardenGatewaySelf() applies PR_SET_DUMPABLE=0
 // at gateway boot, which makes /proc/<gateway-pid>/{environ,mem,maps,...}
 // owned by root and unreadable even by other same-uid processes. The test
 // now calls HardenGatewaySelf in the parent before spawning the child, so
@@ -31,7 +31,7 @@ import (
 // the "gateway" parent). The test asserts EACCES or EPERM from the kernel.
 //
 // Expected outcome today: FAIL (the child CAN read the parent's environ).
-// Expected outcome after v0.2 C6 fix: PASS.
+// Expected outcome after the C6 fix (#155): PASS.
 //
 // The test is structured as a subprocess re-exec using the same env-sentinel
 // pattern as TestLandlock_ApplySubprocess to avoid permanently restricting

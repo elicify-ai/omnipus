@@ -515,7 +515,7 @@ func hexToKey(hexKey string) ([]byte, error) {
 
 // loadKeyFile reads a hex master key from path, enforcing strict 0600 permissions.
 //
-// Threat model (v0.2 #155 item 2): a master key file with mode bits beyond
+// Threat model (#155 item 2): a master key file with mode bits beyond
 // owner read+write (0o600) is a configuration smell — group- and world-readable
 // keys defeat the encryption-at-rest model entirely. We refuse to load such a
 // file rather than silently downgrade security. The check is symmetric across
