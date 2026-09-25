@@ -269,7 +269,34 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 	// generation — never the steering queue.
 	if sessionID := strings.TrimSpace(msg.SessionID); sessionID != "" {
 		if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
-			if rec, lerr := lifecycle.Load(sessionID); lerr == nil && rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+			if rec, lerr := lifecycle.Load(sessionID); lerr == nil && (rec.Terminal() || (rec.Stop != nil && rec.Stop.Generation == rec.Generation)) {
+				// ADR-093 D4: classify before reviving - an ordinary root is
+				// revived Revive-only and the message is routed to the
+				// ordinary inbound-turn path (a fresh root turn on the new
+				// generation), never into the stopped generation's steering
+				// queue and never dispatched as a steered turn with the
+				// steered machinery's instruction write (MAJ-003). A steered
+				// child - and any other class (damaged, legacy, unreadable),
+				// which is not decidable root-vs-child - keeps the pre-ADR-093
+				// shape: revive-and-redispatch through ReviveStoppedSession,
+				// whose widened predicate also admits terminal records.
+				class, cerr := NewSteerRecordClassifier(lifecycle, al.ResolveSessionStore(sessionID)).Classify(context.Background(), sessionID)
+				if cerr != nil {
+					return fmt.Errorf("enqueueSteeringFromMessage: classify %q: %w", sessionID, cerr)
+				}
+				if class == steer.ClassOrdinaryRoot {
+					if rerr := al.reviveRecordForHumanTurn(context.Background(), sessionID,
+						steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}); rerr != nil {
+						return fmt.Errorf("enqueueSteeringFromMessage: revive ordinary root %q: %w", sessionID, rerr)
+					}
+					if _, _, perr := al.processMessage(context.Background(), msg); perr != nil {
+						return fmt.Errorf("enqueueSteeringFromMessage: ordinary turn on revived root %q: %w", sessionID, perr)
+					}
+					return nil
+				}
+				// Every class other than ordinary root keeps the pre-ADR-093
+				// shape: revive-and-redispatch through ReviveStoppedSession,
+				// falling back to the ordinary enqueue when the revive declines.
 				revived, rerr := al.ReviveStoppedSession(context.Background(), sessionID,
 					steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}, msg.Content)
 				if rerr != nil {
@@ -301,7 +328,9 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 // tool's own steer/respond enqueued into a steering queue no live turn would
 // ever drain, silently orphaning the message.
 //
-// Returns (false, nil) when sessionID is not durably stopped at its current
+// Returns (false, nil) when sessionID is neither terminal nor durably stopped
+// at its current generation (ADR-093 D4) - the caller's ordinary path applies
+// instead. instruction, when
 // generation — the caller's ordinary path applies instead. instruction, when
 // non-blank, is appended to the session's durable history BEFORE dispatch,
 // exactly like follow_up's own appendFollowUpInstruction
@@ -319,7 +348,13 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 	if err != nil {
 		return false, err
 	}
-	if rec.Stop == nil || rec.Stop.Generation != rec.Generation {
+	if !rec.Terminal() && (rec.Stop == nil || rec.Stop.Generation != rec.Generation) {
+		// ADR-093 D4: the child path widens to terminal records too - a
+		// terminal child (completed, failed, interrupted) is resumable until
+		// housekeeping deletes it, via the same revive-and-redispatch shape
+		// a stopped child already had. SteerCanceller.Revive itself already
+		// handles terminal records; only this predicate (and executeSteer's
+		// routing predicate in pkg/tools/delegate_followup.go) blocked it.
 		return false, nil
 	}
 	// [Defect 4, ADR-091 fix lane RX-DELIVERY, HIGH] The instruction lands

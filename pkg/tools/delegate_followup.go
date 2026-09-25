@@ -163,7 +163,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// below relies on) trips the store's own immutable-terminal invariant
 	// (ErrLifecycleTerminalImmutable) — Mutate's no-op persist is only
 	// harmless when the record is NOT terminal.
-	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+	if rec.Terminal() || (rec.Stop != nil && rec.Stop.Generation == rec.Generation) {
 		if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
 			return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
 		}

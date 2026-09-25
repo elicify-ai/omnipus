@@ -1988,8 +1988,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// resolve against (FR-022: bare "confirm" is ordinary chat, no
 	// interception exists). Nothing stands between handleCommand above and
 	// runAgentLoop below anymore.
-	resp, err := pm.al.runAgentLoop(pm.ctx, agent, pm.opts)
-	return resp, agent, err
+	return pm.al.runInboundTurnWithRevival(pm.ctx, agent, pm.msg, pm.opts)
 }
 
 // runAgentLoop remains the top-level shell that starts a turn and publishes
