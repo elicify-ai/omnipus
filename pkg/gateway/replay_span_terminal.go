@@ -98,6 +98,7 @@ func delegateActionLaunchesChild(tc session.ToolCall) bool {
 	}
 	action, ok := raw.(string)
 	if !ok {
+		// Deliberate: a malformed action loses a span rather than inventing one.
 		return false
 	}
 	switch strings.TrimSpace(action) {
@@ -180,16 +181,9 @@ func (sr *streamReplayState) latestStartedGeneration(callID string) (int, bool) 
 	if sr.persistedSubagentStartSpans[agent.SubagentSpanID(callID, 1)] {
 		latest = 1
 	}
-	prefix := agent.SubagentSpanID(callID, 1) + "_g"
+	gen1Span := agent.SubagentSpanID(callID, 1)
 	for id := range sr.persistedSubagentStartSpans {
-		if !strings.HasPrefix(id, prefix) {
-			continue
-		}
-		n, err := strconv.Atoi(id[len(prefix):])
-		if err != nil || n < 2 {
-			continue
-		}
-		if n > latest {
+		if n, ok := spanGeneration(id, gen1Span); ok && n > latest {
 			latest = n
 		}
 	}
@@ -239,15 +233,29 @@ func (sr *streamReplayState) childSessionForGeneration(callID string, generation
 }
 
 func spanBelongsToCall(span, gen1Span string) bool {
+	_, ok := spanGeneration(span, gen1Span)
+	return ok
+}
+
+// spanGeneration is the one place replay recovers a generation from a span id
+// (the inverse of agent.SubagentSpanID): gen1Span itself is generation 1,
+// gen1Span + "_g<N>" with N >= 2 is generation N. Span ids are parsed, not
+// keyed: a call id that is another call id followed by "_g<digits>" would be
+// attributed to that other call. Random tool-call ids make this vanishingly
+// unlikely, so it is accepted rather than defended against.
+func spanGeneration(span, gen1Span string) (int, bool) {
 	if span == gen1Span {
-		return true
+		return 1, true
 	}
 	prefix := gen1Span + "_g"
 	if !strings.HasPrefix(span, prefix) {
-		return false
+		return 0, false
 	}
 	n, err := strconv.Atoi(span[len(prefix):])
-	return err == nil && n >= 2
+	if err != nil || n < 2 {
+		return 0, false
+	}
+	return n, true
 }
 
 // lifecycleRecord loads the child record once per replay. A missing record
