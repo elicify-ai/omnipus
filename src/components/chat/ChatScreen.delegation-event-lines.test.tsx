@@ -316,4 +316,135 @@ describe('ChatScreen delegation event lines', () => {
     expect(document.querySelector('[data-testid="tool-call-badge"][data-tool="delegate"]')).toBeNull()
     expect(screen.queryByTestId('delegation-event-line')).toBeNull()
   })
+
+  it('places the delegated line between the text before the call and the text after it, with finished directly after', async () => {
+    const before = "I'll hand this to the worker."
+    const after = 'The worker has finished. All done.'
+    const call = {
+      id: 'call-wire',
+      tool: 'delegate',
+      params: { action: 'run', label: 'Wire the gate' },
+      status: 'success' as const,
+      result: { ok: true },
+      textOffset: before.length,
+    }
+    const msg = message('m-inline', before + after, [call] as NonNullable<ChatMessage['tool_calls']>)
+    msg.spans = [
+      {
+        spanId: 'span-wire',
+        parentCallId: 'call-wire',
+        taskLabel: 'Wire the gate',
+        status: 'success',
+        durationMs: 10,
+        childSessionId: 'child-gp',
+      },
+    ]
+    seed([msg])
+    eventBox.current = [
+      {
+        id: 'finished:span-wire',
+        kind: 'finished',
+        sessionId: SID,
+        at: 2,
+        anchorMessageId: 'm-inline',
+        agentName: 'General Purpose',
+        title: 'Wire the gate',
+        childSessionId: 'child-gp',
+      },
+      {
+        id: 'delegated:span-wire',
+        kind: 'delegated',
+        sessionId: SID,
+        at: 1,
+        anchorMessageId: 'm-inline',
+        agentName: 'General Purpose',
+        title: 'Wire the gate',
+        childSessionId: 'child-gp',
+      },
+    ]
+    await renderScreen()
+
+    const beforeEl = screen.getByText(before)
+    const delegated = screen.getByText('Delegated to General Purpose · Wire the gate')
+    const finished = screen.getByText('General Purpose finished · Wire the gate')
+    const afterEl = screen.getByText(after)
+    const following = Node.DOCUMENT_POSITION_FOLLOWING
+    expect(beforeEl.compareDocumentPosition(delegated) & following).toBeTruthy()
+    expect(delegated.compareDocumentPosition(finished) & following).toBeTruthy()
+    expect(finished.compareDocumentPosition(afterEl) & following).toBeTruthy()
+  })
+
+  it('keeps a live line after the bubble when its call has a snapshot but no tool part', async () => {
+    // The live path is the virtualized list. The other tests in this file turn
+    // ResizeObserver off so they stay on the replay list.
+    class StubResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = StubResizeObserver
+
+    const msg = message('m-live', "I'll hand this to the worker.")
+    msg.isStreaming = true
+    msg.spans = [
+      {
+        spanId: 'span-live',
+        parentCallId: 'call-live',
+        taskLabel: 'Wire the gate',
+        status: 'running',
+      },
+    ]
+    const bucket = makeBucketMessages([msg])
+    const snapshots = { 'call-live': "I'll hand this to the worker." }
+    act(() => {
+      useChatStore.setState((s) => ({
+        ...s,
+        sessionsById: {
+          [SID]: {
+            ...((s.sessionsById ?? {})[SID] ?? {}),
+            ...bucket,
+            isStreaming: true,
+            isReplaying: false,
+            replayCompletedForSession: SID,
+            toolCalls: {},
+            toolCallOrder: [],
+            textAtToolCallStart: snapshots,
+            sessionTokens: 0,
+            sessionCost: 0,
+            rateLimitEvent: null,
+            lastUserMessageAt: null,
+            cancelStage: null,
+            lastReceivedEventTime: null,
+            trimmedCount: 0,
+          },
+        },
+        messages: [msg],
+        isStreaming: true,
+        isReplaying: false,
+        replayCompletedForSession: SID,
+        textAtToolCallStart: snapshots,
+      }))
+    })
+    eventBox.current = [
+      {
+        id: 'delegated:span-live',
+        kind: 'delegated',
+        sessionId: SID,
+        at: 1,
+        anchorMessageId: 'm-live',
+        agentName: 'General Purpose',
+        title: 'Wire the gate',
+        childSessionId: 'child-gp',
+      },
+    ]
+    await renderScreen()
+
+    const anchor = screen.getByTestId('streaming-message-anchor')
+    const lines = screen.getAllByText('Delegated to General Purpose · Wire the gate')
+    expect(lines).toHaveLength(1)
+    const position = anchor.compareDocumentPosition(lines[0])
+    // After the bubble, not inside it. A missing part must not swallow the line.
+    expect(position & Node.DOCUMENT_POSITION_CONTAINED_BY).toBe(0)
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
 })
