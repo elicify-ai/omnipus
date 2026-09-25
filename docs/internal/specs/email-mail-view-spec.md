@@ -2,8 +2,8 @@
 
 **Created**: 2026-09-25
 **Status:** Approved
-**Revision**: founder-directed correction, 2026-09-26 — applies founder decisions D31–D34 (founder approved building on 2026-09-25 after corrections): D33 resolves FQ-1 (agent tools gain workspace-file attachments on exactly the send policy — no separate gate), D31 states agents handle mail only when asked or via an operator-configured heartbeat/scheduled task, D32 records the drainer-test outcome (the old drainer works; the watcher's "last checked" state closes its success-logging gap), D34 moves the work branch; prior revision: fix round 2, 2026-09-25 — folds grill round-2 findings (40) and founder decisions D27–D30; D27 supersedes D20's agent-turn switch (removed — the switch never ships)
-**Input**: `docs/internal/specs/spec-email-mail-view.md` (interview-me output, Decisions Log D1–D34; later IDs override earlier ones)
+**Revision**: founder-directed correction, 2026-09-26 — applies founder decisions D35–D38: D35 adds the UI-prototype gate before the frontend build (§17), D36 replaces the "E2E has no mail server" stance with the built-in fake IMAP/SMTP server (§7), D37 moves UAT to a separate instance against GreenMail in Docker plus a post-landing live smoke (T44, §17), D38 adds the "read by agent" tag via the `$OmnipusAgentRead` IMAP keyword (US-6, FR-039/MC-36, B-53..B-55, T68..T71); prior revision: founder-directed correction, 2026-09-26 — applies D31–D34 (attachments ride exactly the send policy — D33; nothing about mail is automatic — D31; drainer-test outcome recorded — D32; work-branch move — D34); prior revision: fix round 2, 2026-09-25 — folds grill round-2 findings (40) and founder decisions D27–D30; D27 supersedes D20's agent-turn switch (removed — the switch never ships)
+**Input**: `docs/internal/specs/spec-email-mail-view.md` (interview-me output, Decisions Log D1–D38; later IDs override earlier ones)
 **Round-1 review**: `docs/internal/specs/email-mail-view-spec-review.md` (BLOCK, 32 findings — every finding is dispositioned in §20)
 **Round-2 review**: `docs/internal/specs/email-mail-view-spec-review-round2.md` (BLOCK, 40 findings — every finding is dispositioned in §21)
 **Work branch**: `feature/email-mail` (D34 — cut from `release/v0.1.1` @ b6a6f8c87, carrying the spec history of `feat/email-mail-view`) · Integration branch: `release/v0.1.1` (D1 — ships in v0.1.1)
@@ -49,6 +49,11 @@ In scope (all on the existing ADR-033 pair model):
   per-mailbox switch "Let the agent handle new mail" is **removed** — it never ships. The watcher only
   advances its UID state and feeds the unread badge and the "last checked" state, refreshed every 60 s from
   the saved watcher state with no IMAP login (D29/R2-5).
+- **"Read by agent" tag (D38)**: an agent reading a message with `read_message` marks it read (`\Seen`) and
+  sets the `$OmnipusAgentRead` IMAP keyword in the same flag store; the Mail panel shows a small
+  "read by agent" tag on messages the agent handled, so the human still sees what it did. When a mail server
+  rejects custom keywords, the message is still marked read and simply shows no tag — never an error
+  (FR-039). Nothing is marked read automatically; a human opening a message in the panel marks it read.
 - **Attachments** (D28 for humans, **D33 for agents**): download attachments from any message; attach files
   when composing and when editing drafts — including drafts started in other mail programs, whose
   attachments are carried over unchanged, listed explicitly in the panel before send. **D33**: the agent
@@ -108,7 +113,7 @@ bodies — D6-permitted; see FR-033).
 |---|---|---|
 | `MailFolder` | One of the three D5 folders for one mailbox | `slug` (enum `inbox`\|`sent`\|`drafts`), `display_name` (string — the server's real folder name), `total` (int), `unread_count` (int \| null — **Inbox only, null elsewhere**, round-1 MIN-005) |
 | `MailFolderList` | Folders for one mailbox | `folders: []MailFolder` |
-| `MailMessageSummary` | Envelope row (list results) | `message_id` (string \| null — some inbound mail lacks one), `uid` (int), `uidvalidity` (int), `folder` (slug), `subject` (string), `from` (string), `from_name` (string \| null), `to` (string[]), `cc` (string[] — **D26**), `date` (RFC 3339), `seen` (bool), `is_draft` (bool — `\Draft` flag), `is_omnipus_draft` (bool — `X-Omnipus-Draft` header present, FR-029) |
+| `MailMessageSummary` | Envelope row (list results) | `message_id` (string \| null — some inbound mail lacks one), `uid` (int), `uidvalidity` (int), `folder` (slug), `subject` (string), `from` (string), `from_name` (string \| null), `to` (string[]), `cc` (string[] — **D26**), `date` (RFC 3339), `seen` (bool), `is_draft` (bool — `\Draft` flag), `is_omnipus_draft` (bool — `X-Omnipus-Draft` header present, FR-029), `read_by_agent` (bool — the `$OmnipusAgentRead` IMAP keyword is present in the message's flag list, FR-039) |
 | `MailMessagePage` | One page of envelopes | `messages: []MailMessageSummary`, `truncated` (bool), `next_before_uid` (int \| null — mirrors `SearchResult`'s explicit-truncation contract, `pkg/email/transport.go::SearchResult`) |
 | `MailMessage` | Full message (read path) | All summary fields, plus `reply_to` (string \| null), `in_reply_to` (string \| null), `references` (string \| null), `body_text` (string — decoded plain text), `has_html` (bool), `bcc` (string[] \| null — returned only on the owner's own copies: drafts and Sent; §2.3 note), `attachments` ([]MailAttachment — D28), `body_markdown` (string \| null — the draft's editable source: the stored `text/markdown` part for an Omnipus draft whose `X-Omnipus-Render-Hash` matches the rendered text part; otherwise the **server-derived** Markdown (foreign draft, FR-030) with `markdown_lossy=true`), `markdown_lossy` (bool) |
 | `MailAttachment` | Attachment descriptor on `MailMessage` (inbound + drafts, D28) | `part_index` (int), `filename` (string — sanitized for download: no path separators, edge case 21), `content_type` (string), `size_bytes` (int) |
@@ -137,6 +142,14 @@ through the same workspace-path resolution the generic file tools use
 carry (`MailAttachmentInput` over the REST routes; `MailAttachment` descriptors already render on
 `MailMessage.attachments`, so an agent-attached draft is listed in the approval panel with no UI change).
 `CreateEmailDraftResult` is unchanged.
+
+**Agent read marker (D38) — contract story.** `read_by_agent` is **derived, never stored by Omnipus**: on
+every envelope or full-message fetch the mail server reports the message's flags, and the gateway sets the
+field to `true` only when that flag list carries `$OmnipusAgentRead` (FR-039). The keyword is set by agent
+`read_message` alone — never by the panel's seen endpoint, never by the watcher — and the mail server holds
+it, so no Omnipus state is added and D6 is untouched. When the server rejects custom keywords, the gateway
+reports `false`: no tag renders, and nothing errors (MC-36). Since `MailMessage` carries all summary fields,
+the full-message path inherits the same field.
 
 ### 2.3 New REST endpoints (all session-authenticated, versioned under `/api/v1`)
 
@@ -185,8 +198,8 @@ Notes binding the whole table:
   the list/read path — every list/read/preview fetch uses **`BODY.PEEK[]`** (or `EXAMINE`), because today's
   non-peek fetch marks `\Seen` implicitly (round-2 MAJ-003; verified `pkg/email/transport.go::Client.ReadMessage`
   fetches `BODY[]` without peek). The **only** \Seen writers are: the `POST …/seen` endpoint (panel open,
-  once per open — FR-020), agent `read_message` (existing behavior, unchanged), and — never — the watcher
-  (FR-023).
+  once per open — FR-020), agent `read_message` (D38: `BODY.PEEK` fetch plus one explicit STORE of `\Seen`
+  **and** `$OmnipusAgentRead` — FR-039), and — never — the watcher (FR-023).
 - **One IMAP session per REST request** (round-1 MAJ-012): every STATUS/LIST/SEARCH/fetch of one request runs
   on one IMAP connection; the gateway caps concurrent mail operations (A8) — excess requests **queue** under
   the FR-027 deadline, then fail **503 + error class** (round-2 MIN-003). Identical concurrent refreshes for
@@ -531,26 +544,36 @@ weighted below the agent flows it reuses.
 4. **Given** the compose dialog, **When** the human attaches up to 10 files (≤ 25 MiB total, D28) and sends,
    **Then** the recipients receive them as MIME attachments and the Sent copy carries them too (FR-034).
 
-### US-6 — Read state that stays honest (P1) — D20 (as amended by D27)
+### US-6 — Read state that stays honest (P1) — D20 (as amended by D27), D38
 
 Read state is IMAP `\Seen`, shared with the owner's own mail client. The Mail panel's list never marks
 anything read; **opening** a message in the panel marks it `\Seen` via the dedicated seen endpoint (FR-020,
-round-2 MAJ-003). Agent `read_message` keeps its existing `\Seen` behavior (unchanged). **D27: an email
+round-2 MAJ-003). Agent `read_message` marks the message read **and** sets the `$OmnipusAgentRead` IMAP
+keyword in the same flag store (D38, FR-039) — the mailbox belongs to that agent, so its reads are reads.
+The Mail panel shows a small **"read by agent"** tag on messages whose flag list carries the keyword, so the
+human still sees what the agent handled — the answer to the interview's open point O5. Nothing is marked
+read automatically; a human opening a message in the panel marks it read (plain `\Seen`, no keyword — the
+two states stay distinguishable). When a mail server rejects custom keywords, the fallback marks `\Seen`
+only: no tag renders, and nothing errors (D38, MC-36). **D27: an email
 never starts an agent turn.** The watcher never mutates flags, never creates Board tasks, and never starts
 an agent turn — it feeds only the unread badge and the "last checked" state; the email tools are used
 actively by the agent inside turns that humans, tasks or heartbeats started (D31: agents handle mail only
 when asked, or through an operator-configured heartbeat / scheduled task — nothing automatic). D20's per-mailbox switch
 "Let the agent handle new mail" is **removed** and never ships — no code, no UI, no config key (it never
 existed in code; the round-2 CRIT-002 attack path is closed by removal, and the R2-1 tool-restriction
-question dies with it). (This story replaces the round-1 draft's "handled by agent" badge, which was built
-on the drainer that #631 deletes — round-1 CRIT-001.)
+question dies with it). (The story's tag replaces the round-1 draft's "handled by agent" badge, which was
+built on the drainer that #631 deletes — round-1 CRIT-001; the D38 tag survives the drainer's deletion
+because it rides an IMAP keyword the tool itself sets, not the drainer's task records.)
 
 **Why this priority**: display correctness, not capability — the panel works without it, but a founder whose
-Inbox always shows zero unread will distrust it.
+Inbox always shows zero unread, and who cannot tell what the agent already handled, will distrust it.
 
 **Independent test**: with one unseen message, open it in the panel and confirm the seen endpoint was called
-and the flag flipped; let the watcher cycle over new mail and confirm the message's flags are unchanged, no
-Board task exists, and no turn was started (there is no trigger to start one).
+and the flag flipped (no keyword); let the agent read another message with `read_message` and confirm `\Seen`
+**and** the keyword land together and the panel shows the tag, then repeat on a keyword-rejecting server and
+confirm the same read outcome with no tag and no error; let the watcher cycle over new mail and confirm the
+message's flags are unchanged, no Board task exists, and no turn was started (there is no trigger to start
+one).
 
 **Acceptance scenarios**:
 
@@ -562,6 +585,12 @@ Board task exists, and no turn was started (there is no trigger to start one).
    for it (D20 as amended by D27).
 3. **Given** any inbound email, **When** it arrives, **Then** no agent turn is started by the mail system —
    no switch, no trigger, no path from mail to a turn (D27; round-2 CRIT-002 is closed by removal, §14).
+4. **Given** a message unseen by anyone, **When** the agent reads it with `read_message`, **Then** exactly one
+   flag store adds `\Seen` **and** `$OmnipusAgentRead`, the envelope row carries `read_by_agent=true`, and the
+   Mail panel shows the small "read by agent" tag (D38, FR-039).
+5. **Given** a mail server that rejects custom keywords, **When** the agent reads a message with
+   `read_message`, **Then** the message is still marked `\Seen`, the read result is normal, no error appears
+   on any surface, and the message simply carries no tag (D38, MC-36).
 
 ### US-7 — Draft panel actions: view, edit, send, discard (P0) — D12, D23, D24
 
@@ -668,6 +697,10 @@ it); edit a foreign draft carrying an attachment and send — the attachment arr
   ride the message as MIME parts (a draft included, so the approval panel lists exactly what would be sent),
   within the general message limits (MC-32), with the attachment names and sizes recorded in the audit and
   transcript like any send (MC-19).
+- When an agent reads a message with `read_message`, the message is marked read (`\Seen`) **and** carries the
+  `$OmnipusAgentRead` keyword set in the same flag store; the Mail panel shows its small "read by agent" tag.
+  When the server rejects custom keywords, the message is still marked read and simply shows no tag — never
+  an error (D38, FR-039, MC-36).
 
 ### 5.2 Explicit non-behaviors
 
@@ -679,8 +712,9 @@ it); edit a foreign draft carrying an attachment and send — the attachment arr
   error class only (FR-033).
 - The system must not let the Mail panel's list/read path mutate mailbox flags; the only \Seen writers are
   the panel's once-per-open call to the seen endpoint (FR-020, round-2 MAJ-003) and agent `read_message`
-  (unchanged) — the watcher never writes flags (D20), because flags are shared with the owner's own mail
-  client.
+  (D38: one explicit `\Seen` + `$OmnipusAgentRead` STORE) — the watcher never writes flags (D20), because
+  flags are shared with the owner's own mail client. The system must not turn a keyword-rejecting server
+  into a failed agent read: the fallback marks `\Seen` only and omits the tag (D38, MC-36).
 - The system must never start an agent turn from an email — no switch, no trigger, no config key (D27; the
   round-2 CRIT-002 path is removed, not hardened), because unattended attacker-triggered turns are the exact
   prompt-injection shape CRIT-002 described. **D31**: agents handle mail only when asked (inside a
@@ -749,6 +783,7 @@ it); edit a foreign draft carrying an attachment and send — the attachment arr
 | MC-33 | Connection resilience (D29/R2-8, R2-9; round-2 MAJ-016..018): context-aware dial (FR-037) retries **only** name-resolution failures, bounded (3 attempts, 250 ms → 1 s) inside the overall dial bound; never retries auth/TLS; per-mailbox backoff 60 s → 2 → 4 … cap 15 min with ±20% jitter, first cycles randomly offset 0–60 s so same-host mailboxes never align; `auth_failed` backs off to the cap; manual Retry bypasses backoff for that one request; identical concurrent refreshes coalesce (N tabs = 1 login); no automatic dial while backing off | injected-resolver unit tests (fails twice → succeeds once; always-fails → `dns` class within the bound); fake-clock backoff/jitter tests; `startMemIMAP` LOGIN-count test with 3 tabs |
 | MC-34 | FR-036 logging-rate rule holds (round-2 MIN-015): a 13-mailbox failure window produces bounded log volume (first failure + state changes, not per cycle) | unit test with a scripted multi-mailbox failure window |
 | MC-35 | Agent tool attachment parameter (D33): an attachment-bearing call resolves under **exactly the same effective policy** as the same call without it — no separate ask gate, no separate ceiling/fill/inventory/auto-approve entry (send tools stay `AutoAsks`, so auto-approve never silently runs them, Hard Constraint #6); references resolve through the tools' workspace-path resolution (`pkg/tools/resolvepath.go::ResolvePath`) — a reference resolving **outside the workspace or to a nonexistent file is invalid input**, rejected before any SMTP connection or APPEND, naming the offending reference; only the general message limits apply (MC-32 caps, MC-22 body bound, MC-27 recipient cap); audit/transcript records carry attachment filenames and sizes | unit tests (T64/T65/T67): policy identical with/without the parameter; caps and invalid references rejected pre-dial; audit/transcript carries names + sizes |
+| MC-36 | **Agent read marker (D38).** `read_message` fetches with `BODY.PEEK` (never the implicit-`\Seen` non-peek `BODY[]` — verified `pkg/email/transport.go::Client.ReadMessage` fetches `BODY[]` without peek today) and issues **one** STORE adding `\Seen` **and** `$OmnipusAgentRead`; when the server rejects the keyword, the fallback STORE sets `\Seen` only — the read result is unaffected, no error surfaces on any surface, the tag is absent, and the keyword is not re-attempted until the process restarts (one WARN per process per mailbox); `read_by_agent` is derived from the fetched flag list — no Omnipus-persisted state (D6 untouched); a server that rejects even `\Seen` makes the read fail visibly (the same failure class as the panel's seen endpoint on that server, FR-018) — a read-only agent mailbox is not a supported configuration; keyword comparisons in tests are case-insensitive (the in-tree `imapmemserver` lowercases keywords — go-imap v2 `imapmemserver/message.go::canonicalFlag`; real servers preserve case per RFC 3501) | `startMemIMAP` command-capture integration test (one STORE, both flags; fallback forced by a keyword-rejecting transport wrapper); envelope-derivation unit test |
 
 ### 5.4 Integration boundaries
 
@@ -760,11 +795,15 @@ it); edit a foreign draft carrying an attachment and send — the attachment arr
 | Chat (link → panel) | The `chat_link` URL scheme: `…/#/workspaces/{wsId}/mail?mailbox={agentId}&folder=drafts&message=mid%3A%3C…%3E` (hash-history pattern match — `src/main.tsx::createHashHistory`) | Absolute http(s) URL derived like `serve_web` (passes `isSafeHref`); `chat_link` null-with-reason when no origin is derivable (FR-015) | Unknown/deleted target → panel not-found state (US-4 AS-3); sent draft → "Sent on" state (US-4 AS-4) |
 
 Development uses the in-memory transport fake pattern that already exists for the five tools
-(`pkg/tools/email.go` header note: "fully unit-testable against an in-memory fake") — no real IMAP/SMTP server
-is a dependency of the test suite; live-mailbox acceptance belongs to the UAT campaign (§9.3). D18 (generic
-IMAP only) means **no provider-specific behavior anywhere in the pipeline** — including no Sent-copy
-dedication logic; the duplicate-Sent-copy consequence on providers that auto-file sent mail is documented as
-accepted (FR-006).
+(`pkg/tools/email.go` header note: "fully unit-testable against an in-memory fake"). **Testing is
+three-tier (D36/D37):** logic and server-side flag/APPEND semantics live at unit + integration level
+against the in-tree real-protocol harness `pkg/email/imapserver_test.go::startMemIMAP` (round-2 MAJ-004);
+every main mail flow runs in a real browser on every CI run against the **built-in fake IMAP/SMTP server**
+started by the E2E fixture (§7 E2E note, T71); and live-server acceptance happens once, in the **D37 UAT
+campaign** (T44 — separate instance vs GreenMail in Docker), followed by the post-landing live smoke. D18
+(generic IMAP only) means **no provider-specific behavior anywhere in the pipeline** — including no
+Sent-copy dedication logic; the duplicate-Sent-copy consequence on providers that auto-file sent mail is
+documented as accepted (FR-006).
 
 ---
 
@@ -1119,7 +1158,8 @@ accepted (FR-006).
 
 #### Scenario B-47: A real message advances the badge within two cycles
 **Traces to**: US-3, AS-8 · **Category**: Happy Path
-- **Given** the watcher running against a real mailbox (UAT harness, D29/R2-10's live test)
+- **Given** the watcher running against the UAT instance's real IMAP/SMTP server (GreenMail — D37;
+  D29/R2-10's live test proved the mechanism on the live drainer)
 - **When** a real email arrives and two cycles elapse
 - **Then** `last_seen_uid` advances and `unseen_total` rises, and the badge moves — the blindness check
   round-2 MAJ-019 demanded (last_checked + UID advance observable, MC-23)
@@ -1165,18 +1205,53 @@ accepted (FR-006).
   transmitted, nothing drafted (B-41's pre-dial discipline, MC-32/MC-35)
 - **And** the failure names the offending reference
 
+#### Scenario B-53: Agent read marks read and tags "read by agent"
+**Traces to**: US-6, AS-4 · **Category**: Happy Path
+- **Given** a message unseen by anyone
+- **When** the agent reads it with `read_message`
+- **Then** exactly one flag store adds `\Seen` **and** `$OmnipusAgentRead` together (D38, MC-36)
+- **And** the envelope reports `read_by_agent=true` and the Mail panel row shows the small "read by agent"
+  tag; a human-opened message shows `\Seen` but never the tag
+
+#### Scenario B-54: Keyword-rejecting server degrades to \Seen only, never an error
+**Traces to**: US-6, AS-5 · **Category**: Error Path
+- **Given** a mail server that rejects custom keywords on STORE
+- **When** the agent reads a message with `read_message`
+- **Then** the fallback store sets `\Seen` only, the read result is unaffected, and no error surfaces on any
+  surface (D38, MC-36)
+- **And** the message carries no tag; the keyword is not re-attempted until the process restarts (one WARN
+  per process per mailbox)
+
+#### Scenario B-55: The tag never lies about who read
+**Traces to**: US-6, AS-4 · **Category**: Edge Case
+- **Given** a mailbox holding one agent-read message (keyword set), one human-opened message (`\Seen` via the
+  seen endpoint), and one untouched message
+- **When** the panel lists the Inbox
+- **Then** exactly the agent-read row shows the tag; the human-opened row is read but untagged; the untouched
+  row stays unread and untagged
+- **And** after the agent reads a message the human had already opened (plain `\Seen`), the store adds only
+  the keyword — no duplicate flag write, and the tag appears
+
 ---
 
 ## 7. TDD plan (tests designed before implementation)
 
-E2E note: Playwright E2E against a **live IMAP/SMTP server is not part of CI** — the suite has no mail
-server. Logic coverage lives at unit + gateway-integration level. **IMAP-observable behavior (flags, APPEND,
-EXPUNGE, UIDVALIDITY, peek) is tested against the in-tree real-protocol harness `pkg/email/imapserver_test.go::startMemIMAP`
-(round-2 MAJ-004) — a hand-written fake cannot model implicit `\Seen` from a non-peek fetch, so server-side
-end states are asserted there; fakes remain only for tool-level shape tests.** Live-mailbox behavior is
-accepted in the **UAT campaign** with real mailboxes, and E2E is limited to surfaces that need no mail server
-(tab/panel reachability, signature editor open/save, compose validation, empty/error states with an
-unreachable mailbox, refresh cadence with fake timers).
+E2E note (D36): Playwright E2E runs the real gateway against the **built-in fake IMAP/SMTP server** — a
+small in-tree helper (same go-imap v2 `imapmemserver` module `pkg/email/imapserver_test.go::startMemIMAP`
+already uses — no new dependency) plus a minimal SMTP sink, started by the E2E fixture: the fixture binds it
+on dynamic ports (`tests/e2e/setup.ts::getFreePort`), points a throwaway gateway's mailbox config at
+`127.0.0.1` (the `tests/e2e/fixtures/gateway-process.ts::GatewayProcess` pattern — own port, own
+OMNIPUS_HOME), and drives the Mail panel in a real browser on every CI run. The test seeds mail state
+through the fake server (APPEND a draft with `X-Omnipus-Draft`, STORE the `$OmnipusAgentRead` keyword)
+rather than driving live agent turns — live-LLM flows stay in the conformance lanes, and the
+`read_message`→keyword mechanism is asserted server-side by T68. Covered flows (D36): **read**, **open marks
+read**, **edit agent draft**, **send with attachment**, **signature**, **Sent copy** (the fake SMTP sink
+records the transmission; the fake IMAP holds the Sent APPEND), and the **read-by-agent tag**. IMAP-observable
+behavior (flags, APPEND, EXPUNGE, UIDVALIDITY, peek) is asserted against the in-tree real-protocol harness
+`startMemIMAP` (round-2 MAJ-004) — a hand-written fake cannot model the server's flag semantics, so
+server-side end states are asserted there; fakes remain only for tool-level shape tests. Live-mail
+acceptance belongs to the **UAT campaign** (D37 — separate instance against GreenMail, T44) and the
+post-landing live smoke (D37).
 
 | Order | Test name (indicative) | Level | Traces to BDD | Description |
 |---|---|---|---|---|
@@ -1223,7 +1298,7 @@ unreachable mailbox, refresh cadence with fake timers).
 | 41 | `MailHtmlFrame.spec.ts` | Component | B-17 | Sandboxed frame posture; "Load images" re-mint; `cid:` part route used |
 | 42 | `DraftDeepLink.spec.ts` | E2E (stubbed route state) | B-20, B-21, B-22 | Link → panel navigation; not-found state; "Sent on" state |
 | 43 | `MailDraftMarkdownRender.test.tsx` | Component | (MIN-009) | Raw HTML in draft Markdown stays inert (`skipHtml`; hostile `<img onerror>` renders nothing) |
-| 44 | UAT lane — live mailbox | UAT | B-1..B-52 (sample) | Real IMAP/SMTP: signature on received mail, Sent APPEND visible in the owner's client (duplicates accepted per D18 on auto-filing providers — the check is "appears", not "appears exactly once"), draft link → panel, edit, send, discard, watcher badge moves on real mail (B-47), **real test email to the live gateway (D30's live check; outcome recorded as D32 — the old drainer worked, creating the Board task 38 s after the send; its verified gap is success-logging, which the watcher's `last_success_at`/"last checked" state closes, MC-23)**, **agent send/draft with a workspace-file attachment arrives with the attachment (D33, B-49/B-50)** |
+| 44 | UAT campaign — separate instance vs GreenMail (D37) + post-landing live smoke | UAT | B-1..B-55 (sample) | **D37: a separate instance built from the feature branch against GreenMail in Docker** (real IMAP/SMTP, several test accounts that mail each other) — **no live passwords, no overlap with the live instance; 2 uat-tester lanes + 2 independent uat-validators**. Coverage sample: signature on received mail, Sent APPEND visible in a mail client pointed at GreenMail (duplicates accepted per D18 on auto-filing providers — the check is "appears", not "appears exactly once"), draft link → panel, edit, send, discard, watcher badge moves on real mail (B-47), **agent send/draft with a workspace-file attachment arrives with the attachment (D33, B-49/B-50)**, **agent read sets the read-by-agent tag through a real server that accepts keywords (B-53)**. **Post-landing (D37): one short live smoke on the live instance with the Dmitri/Aisha mailboxes covers provider-specific behaviour** (keyword support case included; a keyword-rejecting provider exercises the D38 fallback, B-54). Historical note: D30/D32's live test email proved the old drainer (Board task 38 s after the send; its verified gap was success-logging, closed by the watcher's `last_success_at`/"last checked" state, MC-23) |
 | 45 | `TestSeenEndpoint_IdempotentNoop204` | `startMemIMAP` | B-27 | Repeat seen call → 204 no-op, no second flag STORE (MC-24) |
 | 46 | `TestFetchCommands_PeekOnly` | `startMemIMAP` (command capture) | B-12, B-17 | Captured FETCH commands on list/read/preview: **no non-peek `BODY[]` fetch** (MC-25; round-2 MAJ-003) |
 | 47 | `TestMailboxConfigurePolicyFill` | Unit | B-46 | The MC-26 table: absent → ask/allow per tool; explicit `allow`/`ask`/`deny` unchanged; a seeded Admin's `deny` stays (round-2 MAJ-013, D19) |
@@ -1247,6 +1322,10 @@ unreachable mailbox, refresh cadence with fake timers).
 | 65 | `TestAgentAttachment_SamePolicyResolution` | Unit | B-51 | Effective policy identical with/without the `attachments` parameter; no separate gate, ceiling/fill/inventory entry or auto-approve classification (MC-35, D33) |
 | 66 | `TestCreateEmailDraftTool_AttachmentsToPanel` | Unit (fake) + Integration | B-50 | Draft carries attachments as MIME parts; `MailMessage.attachments` lists them in the panel; panel send re-attaches unchanged (FR-034/FR-035) |
 | 67 | `TestAgentAttachment_CapsAndInvalidRefPreDial` | Unit | B-52 | 11th file / > 25 MiB / outside-workspace or nonexistent reference → tool error pre-dial, nothing transmitted; the failure names the reference (MC-32, MC-35) |
+| 68 | `TestAgentRead_SeenAndKeywordOneStore` | `startMemIMAP` (command capture) | B-53 | Agent `read_message` captures exactly one flag STORE adding `\Seen` **and** `$OmnipusAgentRead` (case-insensitive compare — the memserver lowercases keywords via go-imap v2 `imapmemserver/message.go::canonicalFlag`); the fetch itself is `BODY.PEEK` (MC-36) |
+| 69 | `TestAgentRead_KeywordRejectedFallback` | Unit (scripted IMAP server that answers NO to the keyword STORE) | B-54 | Keyword STORE rejected → exactly one `\Seen`-only STORE follows, the read still succeeds with the full message, no error surfaces, the keyword is not re-attempted for the rest of the process (one WARN per process per mailbox), `read_by_agent` stays false (MC-36) |
+| 70 | `TestEnvelope_ReadByAgentDerived` | Unit | B-53, B-55 | `read_by_agent` on the envelope/summary is derived from the fetched flag list only — keyword present (any case variant) → true; `\Seen` alone → false; no persisted Omnipus state involved (MC-36, FR-039) |
+| 71 | `mail-panel.spec.ts` — fake IMAP/SMTP server (D36) | E2E | B-1, B-7, B-12, B-27, B-30, B-31, B-39, B-53 | Every main mail flow in a real browser per CI run against the built-in fake IMAP/SMTP server: read (B-12), open marks read (B-27), panel edit of an agent draft (B-30) and panel send (B-31), compose send with attachment (B-39) — the fake SMTP sink records the transmission carrying the signature HTML (B-1) and the fake IMAP holds the Sent APPEND (B-7) — plus the read-by-agent tag (B-53). Seeded via APPEND/STORE on the fake server, never live agent turns; new spec file assigned to exactly one shard in `tests/e2e/shards.json` (`scripts/e2e-shards.sh check` fails CI on a missing or double assignment) (MC-36) |
 
 ### 7.1 Test datasets
 
@@ -1261,6 +1340,7 @@ unreachable mailbox, refresh cadence with fake timers).
 | DS-7 Mailbox roster | 0 mailboxes (empty state), 1 mailbox (no picker), 2 mailboxes (picker), mailbox enabled but password unresolvable (skip + explicit state) | B-11, B-13, B-14 |
 | DS-8 Watcher cycles | no new mail (expected: state unchanged), new mail (expected: `last_seen_uid`/`unseen_total` advance), 30+ new messages in one cycle (**expected: state advances once, badge shows one count — no per-message work**), mailbox in error (expected: class stored, backoff starts per D29/R2-8), **UIDVALIDITY reset (expected: silent re-baseline, log once — round-2 MAJ-001)**, **mail read by another client (expected: UID state still advances — UID-keyed, round-2 MAJ-019)**, **backoff schedule with fake clock (expected: 60s→2→4…15min ±20% jitter, auth_failed at cap)**, **3-tab coalescing (expected: ≤1 LOGIN/tick, zero auto-dials in backoff)** | B-18, B-28, B-29, B-43..B-45, B-48 |
 | DS-9 Agent attachment inputs | 1 workspace file (happy), 10 files at the cap (pass), 11th (reject), 25 MiB total boundary (pass / over rejects), reference resolving **outside the workspace** (reject), nonexistent file (reject), unicode filename, filename with path separators (sanitized per MC-32) | B-49, B-50, B-52 |
+| DS-10 Agent read flag states | keyword supported (STORE succeeds → `\Seen` + keyword in one store → tag), keyword rejected (fallback `\Seen`-only STORE, in-process suppression until restart, one WARN per process per mailbox), `\Seen` also rejected (visible failure — a read-only agent mailbox is unsupported per MC-36), case-variant keyword (`$omnipusagentread` on the server vs `$OmnipusAgentRead` compared → still derived true), the three reader states (agent-read = both flags; human-opened = `\Seen` only, no keyword → no tag; untouched = neither flag) | B-53, B-54, B-55 |
 
 ### 7.2 Regression impact
 
@@ -1275,9 +1355,13 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
   no mail before. Its verified defect is observability: it logs nothing on success. The watcher's per-mailbox
   "last checked" state (`last_success_at`, MC-23/T61, B-47) closes exactly that gap; the deletion is by
   decision (#631/D20/D27 — no task path, no turn path), never by failure.
-- `read_inbox` / `search_email` / `read_message` semantics unchanged (folder=INBOX only, \Seen on
-  `read_message`, envelope-only lists, pagination cursors) — `pkg/tools` email suites stay green; only
-  recipient-list (D26), description-text (D3) and attachment-parameter (D33) assertions change (MC-15).
+- `read_inbox` / `search_email` / `read_message` semantics unchanged (folder=INBOX only, mail read by
+  `read_message` **is still marked \Seen**, envelope-only lists, pagination cursors) — `pkg/tools` email
+  suites stay green; only recipient-list (D26), description-text (D3) and attachment-parameter (D33)
+  assertions change (MC-15). **D38 changes the mechanism, not the semantics**: `read_message` switches from
+  the implicit `\Seen` of a non-peek `BODY[]` fetch to `BODY.PEEK` plus one explicit STORE of `\Seen` and
+  `$OmnipusAgentRead` (T68/T69, MC-36) — the mailbox owner (the reading agent, ADR-033) still finds the
+  message marked read either way.
 - Send-policy resolution is **unchanged** (D15): the ceiling ships as it ships today; built-in roles keep
   `ask` via the ADR-090 inventory; the only behavior change is D19's configure-time fill (replacing
   `grantEmailToolAllows`), which writes **only** where the agent has no explicit entry. T34 asserts both agent
@@ -1486,12 +1570,20 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
   exactly what would be sent — and audit/transcript records MUST carry attachment filenames and sizes like
   any send (MC-19, MC-35). **D31 context**: these tools are used when the agent is asked, or inside an
   operator-configured heartbeat/scheduled task — mail is never the trigger. [D33, D31]
+- **FR-039** (D38): Agent `read_message` MUST mark the message read by fetching with `BODY.PEEK` and issuing
+  exactly **one** flag STORE that adds `\Seen` **and** the `$OmnipusAgentRead` keyword. If the server rejects
+  the keyword, the fallback MUST be exactly one `\Seen`-only STORE with the read still succeeding — no error
+  to the agent, no tag in the panel, and the keyword not re-attempted until process restart (one WARN per
+  process per mailbox). If the server rejects `\Seen` too, that is a visible failure (a read-only agent
+  mailbox is unsupported). `read_by_agent` MUST be **derived** from the fetched flag list at read time —
+  compared case-insensitively, since real servers differ in keyword case handling — and never persisted by
+  Omnipus (D6). A human opening a message via the panel MUST set `\Seen` only, no keyword. [D38, D20, D6]
 
 ## 9. Success criteria
 
 - **SC-001**: With a signature configured, 100% of outgoing messages from that mailbox (all five send paths:
   `send_email`, `reply`, panel send, manual send, and a sent draft's Sent copy) carry the signature on both
-  MIME parts — verified by unit + integration suites and the UAT lane.
+  MIME parts — verified by unit + integration suites, the D36 E2E fake server, and the D37 UAT campaign.
 - **SC-002**: Zero occurrences of `<script`, `on*=` handlers or `javascript:` URIs survive the renderer or
   the signature-save policy across DS-1's and DS-2's hostile rows.
 - **SC-003**: Every send with successful SMTP results in a Sent-folder APPEND success or an explicit warning —
@@ -1529,6 +1621,12 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
   effective policy of an attachment-bearing call is identical to the attachment-less call (T65); audit and
   transcript records carry attachment names and sizes (T32/T64).
 
+- **SC-011** (D38): Agent reads are distinguishable from human reads everywhere the state is shown: agent
+  `read_message` sets `\Seen` + `$OmnipusAgentRead` in one STORE (T68), the keyword-rejecting fallback keeps
+  the read working with `\Seen` only and no tag (T69), `read_by_agent` is derived from the flag list
+  (T70), the Mail panel shows the "read by agent" tag exactly on agent-read rows (T71/E2E, T44/UAT), and a
+  human panel open never produces the tag (B-55).
+
 ## 10. Traceability matrix
 
 | Requirement | User story | BDD scenario(s) | Test(s) |
@@ -1541,7 +1639,7 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
 | FR-006 | US-2, US-5, US-7 | B-7, B-8, B-26, B-31 | T5, T6, T20, T24 |
 | FR-007 | US-3 | B-11, B-18 | T37 (tab), UAT T44 |
 | FR-008 | US-3 | B-11, B-37 | T10, T17 |
-| FR-009 | US-3 | B-12, B-15 | T36, T44 (live) |
+| FR-009 | US-3 | B-12, B-15 | T36, T44 |
 | FR-010 | US-3 | B-13 | T37 |
 | FR-011 | US-3..US-7 | all endpoint scenarios | T16–T26, T31–T33 |
 | FR-012 | US-4 | B-19, B-23, B-36 | T9, T12, T14 |
@@ -1571,11 +1669,12 @@ Existing behaviors that MUST be preserved (or are deliberately deleted):
 | FR-036 | US-6, US-3 | B-43 | T60 |
 | FR-037 | US-3, US-6 | B-14a, B-14b, B-42, B-43, B-44 | T53, T54, T59 |
 | FR-038 | US-8 | B-49, B-50, B-51, B-52 | T64, T65, T66, T67 |
+| FR-039 | US-6 | B-53, B-54, B-55 | T68, T69, T70, T71 |
 
-Every FR-001..FR-038 appears above; every scenario B-1..B-52 plus B-14a/B-14b appears at least once; every
+Every FR-001..FR-039 appears above; every scenario B-1..B-55 plus B-14a/B-14b appears at least once; every
 scenario traces to a US+AS pair in §6, and every US AS maps to ≥ 1 scenario (US-1: B-1..B-5, B-46;
 US-2: B-6..B-10, B-41; US-3: B-11..B-18, B-14a/b, B-42..B-44, B-47; US-4: B-19..B-24, B-36; US-5: B-25,
-B-26; US-6: B-27..B-29, B-45, B-48; US-7: B-30..B-35, B-38; US-8: B-39, B-40, B-49..B-52). FR-013, FR-026
+B-26; US-6: B-27..B-29, B-45, B-48, B-53..B-55; US-7: B-30..B-35, B-38; US-8: B-39, B-40, B-49..B-52). FR-013, FR-026
 and FR-036 have no user-visible BDD scenario (policy resolution, route throttling and log rate are not
 observable in the UI) — their assertion is behavioral at the test level (T34/T47, T33, T60), recorded here
 to keep the matrix honest.
@@ -1661,6 +1760,7 @@ to keep the matrix honest.
 | 20 | 51st recipient on any send path | Pre-SMTP 400/tool error naming the offending address; nothing transmitted (B-41, MC-27) |
 | 21 | Attachment filename path traversal / hostile name (`../../`, control chars) | Sanitized on **serve** and on **attach**; only the sanitized name is ever offered to disk or header (US-8 AS-2, MC-32, T56) |
 | 22 | Agent attachment reference resolving outside the workspace, or to a nonexistent file | Invalid input: tool error **before any SMTP connection or APPEND**, naming the offending reference; nothing transmitted, nothing drafted (D33, MC-35, T67 — validity, not a policy gate) |
+| 23 | IMAP server that rejects custom keywords (STORE `$OmnipusAgentRead` answered NO) | Agent read still succeeds: exactly one `\Seen`-only STORE follows the rejected combined STORE, no error to the agent, no "read by agent" tag in the panel, the keyword is not re-attempted until process restart (one WARN per process per mailbox) (B-54, FR-039, T69) |
 
 ## 13. Holdout evaluation scenarios (post-implementation, NOT in the traceability matrix)
 
@@ -1702,7 +1802,11 @@ D13 + D17 (sandboxed no-scripts frame; images blocked with "Load images"); Q4 �
 agents); Q5 → D20 (the drainer question dissolved — unread is plain `\Seen`; the watcher never touches
 flags); Q6 → D21 (folder-scoped `uid:`/`mid:` addressing per MAJ-005); Q7 → D11 (Library-style docked panel
 + pop-out). Round-2: R2-1/R2-2 → D27; R2-3/R2-5/R2-6/R2-7/R2-8/R2-9 and CRIT-001 → D29; R2-4 → D28;
-R2-10 → D30. The fix-round open point **FQ-1 is resolved by D33** (agent tool attachments — below).
+R2-10 → D30. The fix-round open point **FQ-1 is resolved by D33** (agent tool attachments — below). Founder-directed
+correction, 2026-09-26: **D35–D38 are applied** (D35 → the §17 prototype gate; D36 → the §7 fake-server E2E;
+D37 → the T44 UAT campaign on a separate GreenMail instance + the post-landing live smoke; D38 → US-6 /
+FR-039, the read-by-agent tag) — **D38 closes open point O5** (agent-read vs human-read is the
+`$OmnipusAgentRead` keyword with derived `read_by_agent`, B-53..B-55).
 
 Points that could have become questions are recorded as reviewer-challengeable assumptions instead, because
 each is an obvious default carried from today's behavior or explicitly delegated by a decision:
@@ -1802,13 +1906,13 @@ renders them; the approval panel already lists what will be sent.
   fields (US-1) — **no mail-trigger switch exists (D27)**; workspace tab strip shows **Mail** and opens the
   docked panel (US-3); compose action reachable from the panel header (US-5).
 - **Human via chat**: a posted draft link — or the tool result's "Open draft" action — opens the preview
-  panel in the same tab (US-4), exercised in the UAT lane with a real mailbox.
+  panel in the same tab (US-4), exercised in the D37 UAT campaign on the GreenMail instance.
 - **Agent**: `create_email_draft` is registered for every agent via
   `pkg/agent/email_tools.go::registerEmailToolsForAgent` (so it appears on the per-agent permissions screen),
   wired at all **seven** §2.7 touch points, and behaviorally asserted for both agent kinds (T34 / SC-007).
   All three agent mail tools accept the D33 `attachments` parameter (workspace files) on the tools' own
-  policy — no separate policy surface; the UAT lane exercises an agent send/draft with a workspace-file
-  attachment on a real mailbox (T44, SC-010).
+  policy — no separate policy surface; the D37 UAT campaign exercises an agent send/draft with a
+  workspace-file attachment on the GreenMail instance (T44, SC-010).
 - **Endpoints the UI depends on are all in the contract** (§2.3): the folder/message/summary reads, the seen
   endpoint, the attachment download endpoint, and the mail HTML preview served under the **non-API
   `/mail-preview/` prefix** (never the API prefix — MC-10/CRIT-001 posture).
@@ -1816,23 +1920,27 @@ renders them; the approval panel already lists what will be sent.
   turn — or through a heartbeat / scheduled task the operator configures ("check your inbox"); nothing about
   mail is automatic. No mail surface ships that implies otherwise.
 - **Mail panel reachable from two surfaces**: the workspace tab strip entry (docked panel, D11) and chat
-  links ("Open draft" / `chat_link`) — both exercised by T37/T42 and the UAT lane.
+  links ("Open draft" / `chat_link`) — both exercised by T37/T42 and the D37 UAT campaign.
+- **Prototype gate (D35, process step)**: before the frontend build, `frontend-lead` delivers Wave 1 —
+  Mail panel, draft preview/edit, compose and signature editor — as design-system stories with sample data
+  (no backend, Library look); the founder approves or adjusts from screenshots (dark theme, desktop +
+  narrow) plus a usability-heuristics review before the real build starts.
 - **Delivery statement (two lines, never merged)**: *code correct and tested* — unit + gateway-integration
-  suites green, contract verification green; *reachable by a user and an agent* — tab entry, docked panel,
-  signature editor, compose, draft link, panel actions, and the agent tool all invocable as listed above,
-  confirmed by the UAT lane on a real mailbox.
+  suites green, the D36 fake-server E2E green, contract verification green; *reachable by a user and an
+  agent* — tab entry, docked panel, signature editor, compose, draft link, panel actions, and the agent
+  tool all invocable as listed above, confirmed by the D37 UAT campaign and the post-landing live smoke (D37).
 
 ## 18. Assembly summary (plan-spec Phase 6)
 
 | Measure | Count |
 |---|---|
 | User stories | 8 (US-1 … US-8) |
-| BDD scenarios | 54 — Happy Path 25 · Alternate Path 8 · Error Path 11 · Edge Case 10 (B-1..B-52 plus B-14a/B-14b) |
-| Machine-verifiable constraints | 37 (MC-1 … MC-35 plus MC-31a/MC-31b) |
-| Test datasets | 9 (DS-1 … DS-9) |
-| TDD plan rows | 67 (orders 1–67; T-number = order) |
-| Functional requirements | 38 (FR-001 … FR-038) |
-| Success criteria | 10 (SC-001 … SC-010) |
+| BDD scenarios | 57 — Happy Path 26 · Alternate Path 8 · Error Path 12 · Edge Case 11 (B-1..B-55 plus B-14a/B-14b) |
+| Machine-verifiable constraints | 38 (MC-1 … MC-36 plus MC-31a/MC-31b) |
+| Test datasets | 10 (DS-1 … DS-10) |
+| TDD plan rows | 71 (orders 1–71; T-number = order) |
+| Functional requirements | 39 (FR-001 … FR-039) |
+| Success criteria | 11 (SC-001 … SC-011) |
 | Founder questions open | 0 (FQ-1 resolved by D33 — §14) |
 | Round-1 findings dispositioned | 32 of 32 (§20) |
 | Round-2 findings dispositioned | 40 of 40 (§21) — 0 CRITICAL still open |
