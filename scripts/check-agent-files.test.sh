@@ -19,6 +19,24 @@
 # CASES:
 #   0     baseline (unmutated) -> exit 0, "OK"
 #   1-13  one targeted mutation per check 1..13 -> exit 1, "check<N>:" present
+#   14    (review C9) a tools: allow-list that omits Skill fires
+#   2b    (review C8) a dead path under ui/ is caught (design's own F9 example)
+#   3b    (review C5) a role's skills: frontmatter omitting its required
+#         preload fires, even though the skill name appears elsewhere in
+#         the file text
+#   4b    (review C7) a TAGGED whole-repo `go test ./...` is banned too —
+#         not just the untagged form
+#   4c    (review C7) `tsc --noEmit` without `-b` is banned
+#   4d    (review C7) a lowercase `Co-authored-by: Claude` trailer is banned
+#   6b    (review C4) check 6 fires on a foreign-skill citation even when
+#         the line never contains the word "skill"
+#   9b    (review C2) check 9's drift WARN fires from a real local_clone
+#         git comparison when the upstream branch has moved
+#   11b   (review C6) an agent file outside every role-classification list
+#         fires "role not classified" instead of silently passing
+#   12b   (F1 hand-off, finding A13) the dispatch template's shared-traits
+#         block is now diffed byte for byte against canonical too, not
+#         just reviewer-rules
 #   FP-a  allow-marker suppresses a check-5 hit on the marked line
 #   FP-b  check 3's user-level skill allowlist (webapp-testing) passes
 #         without existing on disk
@@ -28,12 +46,21 @@
 #         mention of a phantom role name is never flagged
 #   FP-e  check 2 never matches a path-shaped token embedded inside a
 #         longer absolute, outside-repo path
-#   FP-f  check 9's upstream-drift comparison is WARN-only and never fails
-#         the exit code
-#   FP-g  a vendored directory (SOURCE.yaml present) is exempt from content
-#         checks 2/4/5/10 — it is copied byte-for-byte and never edited
+#   FP-f  check 9's local_clone drift comparison is best-effort: an
+#         unreachable/non-git clone path never fails the exit code or
+#         produces a finding
+#   FP-g  (review C3, narrowed) a vendored directory (SOURCE.yaml present)
+#         is exempt from check 8 ONLY — content checks 2/4/5/10 now scan
+#         every file in the tree, including knowledge/ subfiles
 #   FP-h  the allow-marker suppresses a check-6 isolation hit (design 8.2
 #         names check 6 as marker-covered)
+#   FP-i  (review C7) `tsc -b --noEmit` (the correct wrapped form) is not
+#         flagged
+#   FP-j  (review C4) an ordinary backtick role mention (e.g. `qa-lead`) is
+#         never treated as a skill citation
+#   FP-k  (review C9) a tools: allow-list that DOES name Skill is not flagged
+#   FP-l  (review C2) no drift WARN when the local_clone tip matches the
+#         pinned source_commit
 #   REAL  the real repository is never touched by any of the above
 #
 # Exit code: 0 if every assertion passes, 1 if any fails.
@@ -177,6 +204,10 @@ cat > "$BASE_DIR/.claude/templates/plugin-reviewer-dispatch.md" <<EOF
 # Plugin reviewer dispatch template (fixture)
 
 Load \`omnipus-shared-rules\` with the Skill tool before you begin.
+
+<!-- agent-discipline:shared-traits:start -->
+$SHARED_TRAITS_TXT
+<!-- agent-discipline:shared-traits:end -->
 
 <!-- agent-discipline:reviewer-rules:start -->
 $REVIEWER_RULES_TXT
@@ -401,6 +432,18 @@ assert_exit_code "c2-exit" 1 "$ge"
 assert_output_contains "c2-check" "check2:" "$TMP_BASE/c2.out"
 assert_output_contains "c2-detail" "docs/does-not-exist-xyz.md" "$TMP_BASE/c2.out"
 
+# ─── Case 2b: check 2 (review C8) — dead path under ui/ or .github/ ───────
+
+echo ""
+echo "Case 2b (C8): check 2 fires on a dead path under ui/ (design's own F9 example)"
+T="$(clone_baseline c2b)"
+append_line "$T/.claude/agents/backend-lead.md" 'See ui/src/components/Example.tsx for the pattern.'
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/c2b.out" 2>&1
+ge=$?
+assert_exit_code "c2b-exit" 1 "$ge"
+assert_output_contains "c2b-check" "check2:" "$TMP_BASE/c2b.out"
+assert_output_contains "c2b-detail" "ui/src/components/Example.tsx" "$TMP_BASE/c2b.out"
+
 # ─── Case 3: check 3 — phantom skill citation ──────────────────────────────
 
 echo ""
@@ -415,17 +458,74 @@ assert_exit_code "c3-exit" 1 "$ge"
 assert_output_contains "c3-check" "check3:" "$TMP_BASE/c3.out"
 assert_output_contains "c3-detail" "omnipus-phantom-skill" "$TMP_BASE/c3.out"
 
+# ─── Case 3b: check 3 (review C5) — required preload missing ──────────────
+
+echo ""
+echo "Case 3b (C5): check 3 fires when a role's skills: frontmatter omits its required preload"
+T="$(clone_baseline c3b)"
+mutate "$T/.claude/agents/backend-lead.md" $'  - omnipus-backend-rules\n' ''
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/c3b.out" 2>&1
+ge=$?
+assert_exit_code "c3b-exit" 1 "$ge"
+assert_output_contains "c3b-check" "check3:" "$TMP_BASE/c3b.out"
+assert_output_contains "c3b-detail" "'omnipus-backend-rules' is not preloaded in the skills:" "$TMP_BASE/c3b.out"
+
 # ─── Case 4: check 4 — banned command pattern ──────────────────────────────
 
 echo ""
-echo "Case 4: check 4 fires on an untagged 'go build ./...' instruction"
+echo "Case 4: check 4 fires on a whole-repo 'go build ./...' instruction"
 T="$(clone_baseline c4)"
 append_line "$T/.claude/agents/backend-lead.md" 'Run go build ./... before committing.'
 REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/c4.out" 2>&1
 ge=$?
 assert_exit_code "c4-exit" 1 "$ge"
 assert_output_contains "c4-check" "check4:" "$TMP_BASE/c4.out"
-assert_output_contains "c4-detail" "go build ./... (untagged)" "$TMP_BASE/c4.out"
+assert_output_contains "c4-detail" "go build ./... (whole-repo target)" "$TMP_BASE/c4.out"
+
+# ─── Case 4b: check 4 (review C7) — TAGGED whole-repo run is banned too ───
+
+echo ""
+echo "Case 4b (C7): check 4 fires on a TAGGED whole-repo 'go test ./...' too"
+T="$(clone_baseline c4b)"
+append_line "$T/.claude/agents/backend-lead.md" 'Run go test -tags goolm,stdjson ./... before committing.'
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/c4b.out" 2>&1
+ge=$?
+assert_exit_code "c4b-exit" 1 "$ge"
+assert_output_contains "c4b-check" "check4:" "$TMP_BASE/c4b.out"
+assert_output_contains "c4b-detail" "go test ./... (whole-repo target)" "$TMP_BASE/c4b.out"
+
+# ─── Case 4c: check 4 (review C7) — bare 'tsc --noEmit' (no -b) is banned ──
+
+echo ""
+echo "Case 4c (C7): check 4 fires on 'tsc --noEmit' without -b"
+T="$(clone_baseline c4c)"
+append_line "$T/.claude/agents/backend-lead.md" 'Just run tsc --noEmit to check types.'
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/c4c.out" 2>&1
+ge=$?
+assert_exit_code "c4c-exit" 1 "$ge"
+assert_output_contains "c4c-check" "check4:" "$TMP_BASE/c4c.out"
+assert_output_contains "c4c-detail" "tsc --noEmit without -b" "$TMP_BASE/c4c.out"
+
+echo ""
+echo "FP-i (C7): 'tsc -b --noEmit' (the correct wrapped form) is not flagged"
+T="$(clone_baseline fp_i)"
+append_line "$T/.claude/agents/backend-lead.md" 'Use npm run typecheck (wired to tsc -b --noEmit).'
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/fpi.out" 2>&1
+ge=$?
+assert_exit_code "fpi-exit" 0 "$ge"
+assert_output_not_contains "fpi-no-check4" "check4:" "$TMP_BASE/fpi.out"
+
+# ─── Case 4d: check 4 (review C7) — lowercase AI trailer is banned too ────
+
+echo ""
+echo "Case 4d (C7): check 4 fires on a lowercase 'Co-authored-by: Claude' trailer"
+T="$(clone_baseline c4d)"
+append_line "$T/.claude/agents/backend-lead.md" 'Co-authored-by: Claude <noreply@anthropic.com>'
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/c4d.out" 2>&1
+ge=$?
+assert_exit_code "c4d-exit" 1 "$ge"
+assert_output_contains "c4d-check" "check4:" "$TMP_BASE/c4d.out"
+assert_output_contains "c4d-detail" "AI co-author trailer instruction" "$TMP_BASE/c4d.out"
 
 # ─── Case 5: check 5 — retired surface name ────────────────────────────────
 
@@ -452,6 +552,31 @@ ge=$?
 assert_exit_code "c6-exit" 1 "$ge"
 assert_output_contains "c6-check" "check6:" "$TMP_BASE/c6.out"
 assert_output_contains "c6-detail" "outside role 'backend-lead' allowed set" "$TMP_BASE/c6.out"
+
+# ─── Case 6b: check 6 (review C4) — isolation without the word "skill" ────
+
+echo ""
+echo "Case 6b (C4): check 6 fires on a foreign-skill citation even without the word 'skill' on the line"
+T="$(clone_baseline c6b)"
+# Backticks below must stay literal (a fixture skill citation).
+# shellcheck disable=SC2016
+append_line "$T/.claude/agents/backend-lead.md" 'See `omnipus-frontend-rules` for CSS conventions.'
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/c6b.out" 2>&1
+ge=$?
+assert_exit_code "c6b-exit" 1 "$ge"
+assert_output_contains "c6b-check" "check6:" "$TMP_BASE/c6b.out"
+assert_output_contains "c6b-detail" "outside role 'backend-lead' allowed set" "$TMP_BASE/c6b.out"
+
+echo ""
+echo "FP-j (C4): an ordinary backtick role mention is never treated as a skill citation"
+T="$(clone_baseline fp_j)"
+# Backticks below must stay literal (an ordinary role mention, not a skill).
+# shellcheck disable=SC2016
+append_line "$T/.claude/agents/backend-lead.md" 'Coordinate with `qa-lead` on the test plan.'
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/fpj.out" 2>&1
+ge=$?
+assert_exit_code "fpj-exit" 0 "$ge"
+assert_output_not_contains "fpj-no-check3" "cites skill 'qa-lead'" "$TMP_BASE/fpj.out"
 
 # ─── Case 7: check 7 — phantom teammate ────────────────────────────────────
 
@@ -491,6 +616,54 @@ assert_exit_code "c9-exit" 1 "$ge"
 assert_output_contains "c9-check" "check9:" "$TMP_BASE/c9.out"
 assert_output_contains "c9-detail" "SOURCE.yaml incomplete" "$TMP_BASE/c9.out"
 
+# ─── Case 9b: check 9 (review C2) — real local_clone drift comparison ─────
+# The old drift check tested os.path.isdir(source_repo), which is always
+# False since source_repo is an https:// URL — always dead. This proves
+# the replacement: a real local git clone whose branch has moved past the
+# pinned source_commit produces a WARN.
+
+echo ""
+echo "Case 9b (C2): check 9's drift WARN fires from a real local_clone git comparison"
+T="$(clone_baseline c9b)"
+UPSTREAM_C9B="$TMP_BASE/upstream-c9b"
+mkdir -p "$UPSTREAM_C9B"
+git -C "$UPSTREAM_C9B" init -q -b main
+git -C "$UPSTREAM_C9B" config user.email "fixture@example.com"
+git -C "$UPSTREAM_C9B" config user.name "Fixture"
+echo "v1" > "$UPSTREAM_C9B/f.txt"
+git -C "$UPSTREAM_C9B" add -A
+git -C "$UPSTREAM_C9B" commit -q -m "v1"
+OLD_SHA_C9B="$(git -C "$UPSTREAM_C9B" rev-parse HEAD)"
+echo "v2" > "$UPSTREAM_C9B/f.txt"
+git -C "$UPSTREAM_C9B" add -A
+git -C "$UPSTREAM_C9B" commit -q -m "v2"
+mutate "$T/.claude/skills/elicify-test-writing/SOURCE.yaml" "source_commit: abc1234" "source_commit: $OLD_SHA_C9B"
+append_line "$T/.claude/skills/elicify-test-writing/SOURCE.yaml" "local_clone: $UPSTREAM_C9B"
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/c9b.out" 2>&1
+ge=$?
+assert_exit_code "c9b-exit" 0 "$ge"
+assert_output_contains "c9b-warn" "WARN check9:" "$TMP_BASE/c9b.out"
+assert_output_contains "c9b-detail" "re-copy and diff" "$TMP_BASE/c9b.out"
+
+echo ""
+echo "FP-l (C2): no drift WARN when the local_clone tip matches the pinned source_commit"
+T="$(clone_baseline fp_l)"
+UPSTREAM_FPL="$TMP_BASE/upstream-fpl"
+mkdir -p "$UPSTREAM_FPL"
+git -C "$UPSTREAM_FPL" init -q -b main
+git -C "$UPSTREAM_FPL" config user.email "fixture@example.com"
+git -C "$UPSTREAM_FPL" config user.name "Fixture"
+echo "v1" > "$UPSTREAM_FPL/f.txt"
+git -C "$UPSTREAM_FPL" add -A
+git -C "$UPSTREAM_FPL" commit -q -m "v1"
+SHA_FPL="$(git -C "$UPSTREAM_FPL" rev-parse HEAD)"
+mutate "$T/.claude/skills/elicify-test-writing/SOURCE.yaml" "source_commit: abc1234" "source_commit: $SHA_FPL"
+append_line "$T/.claude/skills/elicify-test-writing/SOURCE.yaml" "local_clone: $UPSTREAM_FPL"
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/fpl.out" 2>&1
+ge=$?
+assert_exit_code "fpl-exit" 0 "$ge"
+assert_output_not_contains "fpl-no-warn" "WARN check9:" "$TMP_BASE/fpl.out"
+
 # ─── Case 10: check 10 — hard-coded integration branch ─────────────────────
 
 echo ""
@@ -515,6 +688,29 @@ assert_exit_code "c11-exit" 1 "$ge"
 assert_output_contains "c11-check" "check11:" "$TMP_BASE/c11.out"
 assert_output_contains "c11-detail" "differs from canonical" "$TMP_BASE/c11.out"
 
+# ─── Case 11b: check 11 (review C6) — unclassified role fails open no more ─
+
+echo ""
+echo "Case 11b (C6): check 11 fires when a new agent file is not in any role-classification list"
+T="$(clone_baseline c11b)"
+cat > "$T/.claude/agents/perf-lead.md" <<'EOF'
+---
+name: perf-lead
+description: Fixture unclassified role.
+skills:
+  - omnipus-shared-rules
+---
+
+# perf-lead (fixture)
+
+Last reviewed: 2026-09-25
+EOF
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/c11b.out" 2>&1
+ge=$?
+assert_exit_code "c11b-exit" 1 "$ge"
+assert_output_contains "c11b-check" "check11:" "$TMP_BASE/c11b.out"
+assert_output_contains "c11b-detail" "role not classified" "$TMP_BASE/c11b.out"
+
 # ─── Case 12: check 12 — dispatch template missing the Skill-tool load ─────
 
 echo ""
@@ -531,6 +727,20 @@ assert_exit_code "c12-exit" 1 "$ge"
 assert_output_contains "c12-check" "check12:" "$TMP_BASE/c12.out"
 assert_output_contains "c12-detail" "does not instruct loading with the Skill tool" "$TMP_BASE/c12.out"
 
+# ─── Case 12b: check 12 (F1 hand-off, finding A13) — shared-traits block ──
+# in the dispatch template must also byte-match the canonical source, not
+# just reviewer-rules.
+
+echo ""
+echo "Case 12b (A13): check 12 fires when the dispatch template's shared-traits block drifts from canonical"
+T="$(clone_baseline c12b)"
+mutate "$T/.claude/templates/plugin-reviewer-dispatch.md" "$SHARED_TRAITS_TXT" "$SHARED_TRAITS_TXT (locally edited, out of sync)"
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/c12b.out" 2>&1
+ge=$?
+assert_exit_code "c12b-exit" 1 "$ge"
+assert_output_contains "c12b-check" "check12:" "$TMP_BASE/c12b.out"
+assert_output_contains "c12b-detail" "'shared-traits' discipline block differs from canonical" "$TMP_BASE/c12b.out"
+
 # ─── Case 13: check 13 — banned model: frontmatter key ─────────────────────
 
 echo ""
@@ -544,6 +754,31 @@ ge=$?
 assert_exit_code "c13-exit" 1 "$ge"
 assert_output_contains "c13-check" "check13:" "$TMP_BASE/c13.out"
 assert_output_contains "c13-detail" "banned 'model:' key" "$TMP_BASE/c13.out"
+
+# ─── Case 14: new check (review C9) — tools: allow-list omitting Skill ────
+
+echo ""
+echo "Case 14 (C9): check 14 fires when a tools: allow-list omits Skill"
+T="$(clone_baseline c14)"
+old=$'  - omnipus-backend-rules\n---'
+new=$'  - omnipus-backend-rules\ntools: Read, Grep, Glob, Edit\n---'
+mutate "$T/.claude/agents/backend-lead.md" "$old" "$new"
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/c14.out" 2>&1
+ge=$?
+assert_exit_code "c14-exit" 1 "$ge"
+assert_output_contains "c14-check" "check14:" "$TMP_BASE/c14.out"
+assert_output_contains "c14-detail" "does not name Skill" "$TMP_BASE/c14.out"
+
+echo ""
+echo "FP-k (C9): a tools: allow-list that DOES name Skill is not flagged"
+T="$(clone_baseline fp_k)"
+old=$'  - omnipus-backend-rules\n---'
+new=$'  - omnipus-backend-rules\ntools: Read, Grep, Glob, Edit, Skill\n---'
+mutate "$T/.claude/agents/backend-lead.md" "$old" "$new"
+REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/fpk.out" 2>&1
+ge=$?
+assert_exit_code "fpk-exit" 0 "$ge"
+assert_output_not_contains "fpk-no-check14" "check14:" "$TMP_BASE/fpk.out"
 
 # ─── False-positive handling (design 8.2) ──────────────────────────────────
 
@@ -595,28 +830,31 @@ assert_exit_code "fpe-exit" 0 "$ge"
 assert_output_not_contains "fpe-no-state-md" "state.md" "$TMP_BASE/fpe.out"
 
 echo ""
-echo "FP-f: check 9's upstream-drift comparison is WARN-only and never fails the exit code"
+echo "FP-f (C2): check 9's local_clone drift comparison is best-effort — an unreachable/non-git clone never fails the exit code or produces a finding"
 T="$(clone_baseline fp_f)"
-mutate "$T/.claude/skills/elicify-test-writing/SOURCE.yaml" \
-  "source_repo: /tmp/fixture-elicify-skills-does-not-need-to-exist" \
-  "source_repo: $TMP_BASE"
+append_line "$T/.claude/skills/elicify-test-writing/SOURCE.yaml" "local_clone: $TMP_BASE/does-not-exist-fpf"
 REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/fpf.out" 2>&1
 ge=$?
 assert_exit_code "fpf-exit" 0 "$ge"
-assert_output_contains "fpf-warn" "WARN check9:" "$TMP_BASE/fpf.out"
+assert_output_not_contains "fpf-no-check9-finding" "check9:" "$TMP_BASE/fpf.out"
 
 echo ""
-echo "FP-g: a vendored directory (SOURCE.yaml present) is exempt from content checks 2/4/5/10 — copied byte-for-byte, never edited"
+echo "FP-g (C3, narrowed): a vendored directory is exempt from check 8 ONLY — content checks 2/4/5/10 now scan every file in the tree, including knowledge/ subfiles"
 T="$(clone_baseline fp_g)"
-append_line "$T/.claude/skills/elicify-test-writing/SKILL.md" \
-  'See docs/does-not-exist-vendored.md and run go build ./... and mind the exec allowlist and release/v0.1.1.'
+mkdir -p "$T/.claude/skills/elicify-test-writing/knowledge"
+cat > "$T/.claude/skills/elicify-test-writing/knowledge/bad-example.md" <<'EOF'
+See docs/does-not-exist-vendored.md and run go build ./... and mind the exec allowlist and release/v0.1.1.
+EOF
 REPO_ROOT="$T" bash "$GUARD" > "$TMP_BASE/fpg.out" 2>&1
 ge=$?
-assert_exit_code "fpg-exit" 0 "$ge"
-assert_output_not_contains "fpg-no-check2" "does-not-exist-vendored" "$TMP_BASE/fpg.out"
-assert_output_not_contains "fpg-no-check4" "go build ./... (untagged)" "$TMP_BASE/fpg.out"
-assert_output_not_contains "fpg-no-check5" "check5:" "$TMP_BASE/fpg.out"
-assert_output_not_contains "fpg-no-check10" "hard-coded integration branch" "$TMP_BASE/fpg.out"
+assert_exit_code "fpg-exit" 1 "$ge"
+assert_output_contains "fpg-check2" "does-not-exist-vendored" "$TMP_BASE/fpg.out"
+assert_output_contains "fpg-check4" "go build ./... (whole-repo target)" "$TMP_BASE/fpg.out"
+assert_output_contains "fpg-check5" "check5:" "$TMP_BASE/fpg.out"
+assert_output_contains "fpg-check10" "hard-coded integration branch" "$TMP_BASE/fpg.out"
+# still exempt from check 8 — the vendored SKILL.md itself still carries no
+# Last reviewed header, and that must not fire.
+assert_output_not_contains "fpg-still-no-check8" "check8: .claude/skills/elicify-test-writing/SKILL.md" "$TMP_BASE/fpg.out"
 
 echo ""
 echo "FP-h: the '# agent-guard: allow' marker suppresses a check-6 isolation hit (design 8.2 lists check 6)"

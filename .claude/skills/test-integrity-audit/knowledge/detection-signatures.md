@@ -205,7 +205,7 @@ exit code (raw, not piped)
 
 ```bash
 pytest --collect-only -q | tail -5           # collection count, independent of execution
-go test ./... -list '.*' | wc -l
+go test ./... -list '.*' | wc -l             # generic cross-ecosystem example; in a repo that requires build tags, add them: -tags <tags> # agent-guard: allow
 npx jest --listTests | wc -l
 ```
 

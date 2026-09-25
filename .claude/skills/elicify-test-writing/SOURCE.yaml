@@ -7,8 +7,19 @@ source_commit: 687242a67612744c88aa1c6b4ac0a56a5537cde3
 upstream_subpath: skills/elicify-test-writing
 copy_date: 2026-09-25
 copy_or_derived: copy
+local_clone: /Users/danielpiatkowski/AI-Agent-Workspace/elicify-Skills
 
 # When the source moves to `main` (once elicify-Skills PR #1 and the
 # `feat/test-integrity-audit-skill` branch merge), update `source_branch`
 # and `source_commit` here and retarget guard check 9's drift watch at the
 # merged skill on `main`.
+#
+# Local edits (design 6.4, recorded here per review C3, applied
+# 2026-09-25): SKILL.md's report-format example and
+# knowledge/test-plan-template.md's specification-sources table both used
+# the fictional example path `docs/pricing-spec.md` — dropped the `docs/`
+# prefix (now `pricing-spec.md`) in both files. This repo's guard check 2
+# treats any `docs/...`-shaped citation as a real repo path to verify;
+# the example was illustrative, not a citation into this or any real
+# repo, so the fix keeps the example's meaning and removes the false
+# dead-path match instead of suppressing the check.

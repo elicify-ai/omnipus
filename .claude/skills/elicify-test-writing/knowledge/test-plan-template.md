@@ -15,8 +15,8 @@ below zero is rejected.">
 
 | Expectation | Source |
 |---|---|
-| discount rate for pro tier | `docs/pricing-spec.md` §3.2 |
-| rejection of negative price | `docs/pricing-spec.md` §3.5 |
+| discount rate for pro tier | `pricing-spec.md` §3.2 |
+| rejection of negative price | `pricing-spec.md` §3.5 |
 | unknown-tier error message | ticket ENG-4471 |
 
 **"The implementation returns it" is not a valid source.** Any expectation

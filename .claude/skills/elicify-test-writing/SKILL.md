@@ -320,7 +320,7 @@ tests added        : 14   (9 positive, 5 negative)
 observed red first : 14 / 14
 mutations applied  : 6    caught: 6    survived: 0
 full suite         : 1,428 collected / 1,428 passed / 0 skipped / 0 errors
-expectations from  : docs/pricing-spec.md §3.2, ticket ENG-4471
+expectations from  : pricing-spec.md §3.2, ticket ENG-4471
 not covered        : concurrent-write path — needs an integration harness
 ```
 
