@@ -495,6 +495,11 @@ func (c *Client) ReadMessage(ctx context.Context, uid uint32) (*Message, error) 
 	if len(msgs) == 0 {
 		return nil, fmt.Errorf("email transport: message uid %d not found", uid)
 	}
+	// MC-36: reading marks \Seen + the read-by-agent keyword in one STORE,
+	// with a \Seen-only fallback when the server rejects keywords.
+	if err := c.markAgentRead(ctx, client, imap.UIDSetNum(imap.UID(uid))); err != nil {
+		return nil, err
+	}
 	return &msgs[0], nil
 }
 
@@ -505,10 +510,12 @@ func (c *Client) ReadMessage(ctx context.Context, uid uint32) (*Message, error) 
 func (c *Client) fetchMessages(ctx context.Context, client *imapclient.Client, numSet imap.NumSet, withBody bool) ([]Message, error) {
 	opts := &imap.FetchOptions{Envelope: true, Flags: true, UID: true}
 	if withBody {
-		// BODY[] — the whole message including the headers that declare
+		// BODY.PEEK[] — the whole message including the headers that declare
 		// Content-Type / Content-Transfer-Encoding / boundary, which BODY[TEXT]
-		// omitted. Those headers are what makes MIME decoding possible.
-		opts.BodySection = []*imap.FetchItemBodySection{{}}
+		// omitted. Those headers are what makes MIME decoding possible. PEEK
+		// is required everywhere (MC-25): fetching must never set \Seen as a
+		// side effect.
+		opts.BodySection = []*imap.FetchItemBodySection{{Peek: true}}
 	}
 	fetched, err := runIMAP(ctx, "fetch", func() ([]*imapclient.FetchMessageBuffer, error) {
 		return client.Fetch(numSet, opts).Collect()
@@ -864,7 +871,7 @@ func (c *Client) Send(ctx context.Context, req SendRequest) error {
 	}
 	to := strings.TrimSpace(req.To)
 	if to == "" {
-		return fmt.Errorf("email transport: recipient (to) is the empty")
+		return fmt.Errorf("email transport: recipient (to) is empty")
 	}
 	rcpts, bad := parseRecipientList([]string{to})
 	if len(bad) > 0 {

@@ -166,12 +166,12 @@ type services struct {
 	// which meant `next` tasks never dispatched on those installs; TaskDrain is
 	// decoupled from that path so `next` tasks always dispatch.
 	TaskDrain *heartbeat.TaskDrainService
-	// MailboxDrain owns the M11 unhandled-mail → Board-task poll. Like TaskDrain
+	// MailWatch owns the new-mail watcher poll (badge state only). Like TaskDrain
 	// it is decoupled from the HEARTBEAT.md path so email work surfaces on the
 	// Board regardless of which heartbeat path is active. Nil when no mailbox is
 	// configured (the scanner is a no-op).
-	MailboxDrain *heartbeat.MailboxDrainService
-	MediaStore   media.MediaStore
+	MailWatch  *heartbeat.MailWatchService
+	MediaStore media.MediaStore
 	// PlanEngine is the single hybrid plan-coordinator instance (ADR-049 D4,
 	// Wave 2-B). Constructed once at boot alongside planStore (both are
 	// process-lifetime singletons — a hot reload Stop()s/Start()s the SAME
@@ -1693,8 +1693,8 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	if runningServices.TaskDrain != nil {
 		runningServices.TaskDrain.Stop()
 	}
-	if runningServices.MailboxDrain != nil {
-		runningServices.MailboxDrain.Stop()
+	if runningServices.MailWatch != nil {
+		runningServices.MailWatch.Stop()
 	}
 	if runningServices.CronService != nil {
 		runningServices.CronService.Stop()
