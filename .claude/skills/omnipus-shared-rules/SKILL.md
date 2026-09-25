@@ -26,7 +26,7 @@ to the section instead of copying it, so there is one source per fact.
    CI is the authority for Go results. Exact command shape and the SPA-embed-stub trap:
    `CLAUDE.md` ("Build, test, and quality gates").
 3. `npm run typecheck` is the only TypeScript gate that means anything — never bare
-   `tsc --noEmit` (`CLAUDE.md`, same section; the trap is why, `docs/internal/false-green-patterns.md` section 9).
+   `tsc --noEmit` # agent-guard: allow (`CLAUDE.md`, same section; the trap is why, `docs/internal/false-green-patterns.md` section 9).
 4. Wire types come only from the generated directories (`src/lib/api/generated/`,
    `pkg/api/generated/`) — never hand-written, never copied from a curl response.
 5. Definition of Done is reachability: a real user or real agent can invoke the thing.

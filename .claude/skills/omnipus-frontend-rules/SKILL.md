@@ -14,7 +14,7 @@ authoritative on the facts this restates.
 ## Build and test
 
 - `npm run typecheck` (wired to `tsc -b --noEmit`) is the only TypeScript gate that
-  means anything. Never bare `tsc --noEmit` — `tsconfig.json` is a project-references
+  means anything. Never bare `tsc --noEmit` # agent-guard: allow — `tsconfig.json` is a project-references
   root with no `include`/`files`, so a bare invocation is a silent no-op that always
   exits 0 (`docs/internal/false-green-patterns.md` section 9).
 - Local test runs are capped by shared rule 2: one `npx vitest run <file>` or
