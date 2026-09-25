@@ -17,7 +17,7 @@
 // "awaiting approval: <tool>" override, and the open control.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { act } from 'react'
 import { ActivityPanel } from './ActivityPanel'
 import type { AgentActivityItem, BashActivityItem } from '@/hooks/useRunningActivity'
@@ -713,5 +713,53 @@ describe('ActivityPanel — open control (ADR-091 FR-E-004)', () => {
       />,
     )
     expect(screen.queryByTestId('activity-row-open')).not.toBeInTheDocument()
+  })
+})
+
+describe('ActivityPanel — Queued section and background commands (AC-3, AC-4)', () => {
+  it('AC-4: numbers queued children in list order under Queued, and does not repeat them under Running now', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[
+          makeAgentItem({ key: 'run', taskLabel: 'already going', lifecycleState: 'running' }),
+          makeAgentItem({ key: 'q-zeta', taskLabel: 'zeta first', lifecycleState: 'queued' }),
+          makeAgentItem({ key: 'q-alpha', taskLabel: 'alpha second', lifecycleState: 'queued' }),
+        ]}
+        recentlyFinished={[]}
+      />,
+    )
+    const queued = screen.getByTestId('activity-section-queued')
+    expect(within(queued).getByRole('heading', { name: 'Queued' })).toBeInTheDocument()
+    expect(within(queued).getAllByTestId('activity-queue-position').map((el) => el.textContent)).toEqual(['1', '2'])
+    const queuedText = queued.textContent ?? ''
+    expect(queuedText.indexOf('zeta first')).toBeLessThan(queuedText.indexOf('alpha second'))
+    expect(within(queued).queryByText('already going')).not.toBeInTheDocument()
+    const runningNow = screen.getByTestId('activity-section-running')
+    expect(within(runningNow).getByText('already going')).toBeInTheDocument()
+    expect(within(runningNow).queryByText('zeta first')).not.toBeInTheDocument()
+    // The children rendered, so a delegation chat line beside them would be findable.
+    expect(screen.getByText('zeta first')).toBeInTheDocument()
+    expect(screen.queryByText(/Delegated to/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/started ·/)).not.toBeInTheDocument()
+  })
+
+  it('puts a running background command in the background-commands section, not under Running now', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[
+          makeAgentItem({ taskLabel: 'digging into logs', lifecycleState: 'running' }),
+          makeBashItem({ command: 'npm test' }),
+        ]}
+        recentlyFinished={[]}
+      />,
+    )
+    const commands = screen.getByTestId('activity-section-commands')
+    expect(within(commands).getByRole('heading', { name: 'Background commands' })).toBeInTheDocument()
+    expect(within(commands).getByText('npm test')).toBeInTheDocument()
+    expect(within(screen.getByTestId('activity-section-running')).queryByText('npm test')).not.toBeInTheDocument()
   })
 })
