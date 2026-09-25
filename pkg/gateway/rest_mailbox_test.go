@@ -296,20 +296,11 @@ func TestListMailboxes_EmptyAndConfigured(t *testing.T) {
 }
 
 func TestSetAgentMailbox_GrantsEmailToolAllowsForDenyDefaultAgent(t *testing.T) {
-	// Only the Assistant seed carries the five email-tool allows; every other
-	// agent is deny-by-default WITHOUT them (coreagent.NewCustomAgentToolsCfg
-	// — denyAllThenOverride — an explicit, fully-enumerated "deny" entry per
-	// tool, not an absent one; there is no default_policy field any more,
-	// CLAUDE.md hard constraint 6), so a mailbox configured for such an agent
-	// registered tools that policy silently hid (live-UAT find, 2026-07-03).
-	// Enabling a mailbox is the operator's explicit opt-in — the wire
-	// contract's `enabled` means "register the email tools" — so the save
-	// must flip the seed's deny-by-default email tools to allow. A genuine
-	// operator override survives: no seed ever sets an email tool to "ask"
-	// (only "allow" for Mia, or denyAllThenOverride's "deny" baseline for
-	// everyone else), so a persisted "ask" can only reflect a deliberate
-	// choice made via the Tool Policies UI/API, and grantEmailToolAllows must
-	// never override it.
+	// D19 / MC-26: mailbox configure fills email-tool policy only where the
+	// key is absent. NewCustomAgentToolsCfg's denyAllThenOverride entries are
+	// explicit denies, so enabling a mailbox must leave them deny. An explicit
+	// ask (operator intent) still survives. The pre-D19 flip of seed deny to
+	// allow is the regression this test now forbids.
 	api := newMailboxTestAPI(t, nil)
 	seedWorkspaceFile(t, api.homePath, "ws_my")
 
@@ -346,9 +337,9 @@ func TestSetAgentMailbox_GrantsEmailToolAllowsForDenyDefaultAgent(t *testing.T) 
 	require.NoError(t, err)
 	updatedPolicies := updated.Tools.Builtin.Policies
 
-	// Seed-deny email tools were granted…
+	// Explicit seed denies stay denies (MC-26 / D19). They are not absent keys.
 	for _, name := range []string{"read_inbox", "search_email", "read_message", "reply"} {
-		assert.Equal(t, config.ToolPolicyAllow, updatedPolicies[name], "tool %s must be granted", name)
+		assert.Equal(t, config.ToolPolicyDeny, updatedPolicies[name], "MC-26: explicit deny on %s must survive mailbox configure", name)
 	}
 	// …the explicit operator override survived…
 	assert.Equal(t, config.ToolPolicyAsk, updatedPolicies["send_email"], "explicit operator ask must never be overridden")
@@ -411,10 +402,8 @@ func TestSetAgentMailbox_AlreadyEnabledEditDoesNotReGrantExplicitDeny(t *testing
 	// 1. ADR-054: seed a real "mia" entity record via the agent store with a
 	//    real, fully-enumerated deny-by-default tools_cfg (the actual seed
 	//    constructor, not a hand-fabricated shape) and enable the mailbox for
-	//    the FIRST time — the disabled→enabled transition. This must still
-	//    grant the seed-deny email tools, proving the original fix
-	//    (TestSetAgentMailbox_GrantsEmailToolAllowsForDenyDefaultAgent) stays
-	//    intact.
+	//    the FIRST time — the disabled→enabled transition. D19/MC-26: that
+	//    transition must not rewrite an explicit seed deny into allow.
 	seedPolicies := coreagent.NewCustomAgentToolsCfg().Builtin.Policies
 	policies := make(map[string]config.ToolPolicy, len(seedPolicies))
 	for k, v := range seedPolicies {
@@ -435,8 +424,8 @@ func TestSetAgentMailbox_AlreadyEnabledEditDoesNotReGrantExplicitDeny(t *testing
 
 	updated, err := store.Get("mia")
 	require.NoError(t, err)
-	require.Equal(t, config.ToolPolicyAllow, updated.Tools.Builtin.Policies["send_email"],
-		"the disabled→enabled transition must still grant the seed-deny email tool")
+	require.Equal(t, config.ToolPolicyDeny, updated.Tools.Builtin.Policies["send_email"],
+		"MC-26: the disabled→enabled transition must not rewrite an explicit seed deny")
 
 	// 2. Operator deliberately locks send_email back down to "deny" (e.g. via
 	//    the Tool Policies UI/API) — simulated as a direct entity-store write,
@@ -467,11 +456,9 @@ func TestSetAgentMailbox_AlreadyEnabledEditDoesNotReGrantExplicitDeny(t *testing
 		policies2["send_email"],
 		"an edit to an ALREADY-enabled mailbox must NOT re-grant an operator's explicit deny (privilege-widening regression)",
 	)
-	// The other seed-deny email tools (granted in step 1) must remain
-	// allowed — this proves the fix is scoped to skipping the re-grant on an
-	// already-enabled save, not a blanket regression of the original grant.
+	// The other explicit seed denies stay denies too (MC-26 / D19).
 	for _, name := range []string{"read_inbox", "search_email", "read_message", "reply"} {
-		assert.Equal(t, config.ToolPolicyAllow, policies2[name], "tool %s must remain granted from the first enable", name)
+		assert.Equal(t, config.ToolPolicyDeny, policies2[name], "MC-26: explicit deny on %s must survive a later mailbox edit", name)
 	}
 }
 
