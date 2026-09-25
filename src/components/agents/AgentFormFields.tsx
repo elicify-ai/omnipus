@@ -230,7 +230,7 @@ export function BehaviorFields({
             </div>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               Per-agent persona voice identifier (e.g. <span className="font-mono text-[length:var(--type-caption-size)]">alloy</span>).
-              Saved now, but voice playback is not yet active (tracked #306).
+              Saved now, but voice playback is not yet available.
               Leave empty for the engine default.
             </p>
             <VoiceProviderSub
