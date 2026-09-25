@@ -70,7 +70,7 @@ Both sides — **RED runs under the developer rules; CHECK runs under the review
 
 ### The evidence table (mandatory; ends every report)
 
-Every dispatch report ends with this table. A report without it is a finding in your dispatcher's (team-lead or squad-lead) output review, not a formality gap.
+Every dispatch report ends with this table — including a stop-and-ask, blocked or question report: what you verified before stopping (for example the search that proved an element absent) goes in it. A report without it is a finding in your dispatcher's (team-lead or squad-lead) output review, not a formality gap.
 
 | Column | Content |
 |---|---|
