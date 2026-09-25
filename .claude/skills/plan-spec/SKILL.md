@@ -27,9 +27,10 @@ directly, with tests, then go to their own reviewer set (§7.1 of the design doc
 
 By the time plan-spec runs, the founder has already been interviewed by `interview-me`,
 and — only if a design decision was still open — architect has written an ADR that has
-been through its one grill round and one correction round. plan-spec does **not**
-re-interview the founder; that already happened. Its job is to turn what already exists
-into the repo's spec:
+been through its one grill round and one correction round. plan-spec builds on that
+interview instead of repeating it — but **whenever anything is unclear, the founder is
+re-interviewed** (founder rule, see "Unclear points" below). Its job is to turn what
+already exists into the repo's spec:
 
 - **interview-me's output** — the spec file it wrote (`spec-<kebab-name>.md`) and its
   `.<spec-name>.interview.json`: read the `Decisions Log` (six columns: ID, Topic,
@@ -43,10 +44,15 @@ into the repo's spec:
 - **this repo's real references** (below) — never invent a document; if a reference this
   skill names does not exist for the feature at hand (e.g. no ADR), say so and move on.
 
-If the interview-me output is missing, incomplete, or contradicts itself on a point that
-changes the spec's shape, **stop and ask** rather than filling the gap with an
-assumption — record it in Ambiguity Warnings (Phase 4) only for gaps that do not block
-starting; a blocking gap is a question, not a warning.
+**Unclear points — re-interview, never assume (founder rule).** If the interview-me
+output is missing, incomplete, vague or self-contradicting on ANY point the spec needs —
+not only points that change its shape — stop, collect every such point as a question
+(context and impact, options, your recommendation, labelled for a one-line answer), and
+hand the list back to your dispatcher. team-lead re-interviews the founder with
+`interview-me` (at most four questions per round, more rounds if needed), and you continue
+only from the founder's answers. Never fill a gap with an assumption and never park it as
+an Ambiguity Warning: a warning in the spec is for residual risk the founder has already
+seen and accepted, not for an unanswered question.
 
 ## References to use while writing (verified to exist in this repo)
 
@@ -127,10 +133,10 @@ must add to) in the output spec. Omit either section if truly nothing applies (e
 pure-frontend copy change has no contract context) — never leave a section with
 templated placeholders.
 
-**GATE**: if a point that changes the spec's shape is unresolved after this phase, stop
-and ask (the founder, via whoever dispatched this skill) rather than assume. This is the
-one point in the flow where plan-spec may still need a founder answer, precisely because
-interview-me cannot always anticipate every question the codebase raises.
+**GATE**: if any point is still unclear after this phase — including questions the
+codebase raised that the interview could not anticipate — stop and hand the questions back
+for a founder re-interview (see "Unclear points" above) rather than assume. Resume only
+from the answers.
 
 ## Phase 2 — User Stories & Acceptance Criteria
 
