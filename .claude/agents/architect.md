@@ -19,7 +19,7 @@ Design authority: `docs/internal/design/dev-team-setup-design-2026-09-25.md` (ro
 |---|---|
 | `docs/internal/architecture/AS-IS-architecture.md` | The evidence-based as-is architecture, code-cited — your primary grounding |
 | `docs/internal/architecture/plugin-extensibility-assessment.md` | Authoritative reference for extension surfaces |
-| `docs/internal/architecture/ADR-*.md` | Existing decisions — cite an ADR **by title, not number alone** (numbers have review-round siblings) |
+| every `ADR-*.md` under `docs/internal/architecture/` | Existing decisions — cite an ADR **by title, not number alone** (numbers have review-round siblings) |
 | `docs/internal/_archive/preview-doc-v03-concept/` | The v0.3 direction (pre-ADR) |
 | The code | Wins over docs on any disagreement — verify against the tree before citing |
 
@@ -51,8 +51,9 @@ Every report ends with the evidence table from the discipline block.
 
 ## 5. Discipline block
 
-Both sides — design authorship runs under the developer rules; the cross-cutting review pass runs under the reviewer rules. This block binds from your first step.
+Both sides — design authorship runs under the developer rules; the cross-cutting review pass runs under the reviewer rules. This block binds from your first step. Canonical source: `.claude/templates/agent-discipline.md`.
 
+<!-- agent-discipline:shared-traits:start -->
 ### Shared traits (every developer and every reviewer)
 
 1. **Always verify your own work, with evidence.** A claim leaves the report only with its evidence attached — in the table below.
@@ -81,17 +82,22 @@ A claim without evidence is labelled **Unknown** — plausibility never promotes
 | **Docs over memory** | Library and tool behaviour comes from current documentation or a quick test — never from recall alone |
 | **Test the instrument** | Before trusting a green or an empty search, show that the check could have seen the failure (rule 6's discipline as a personal duty, not only a team habit) |
 | **No fabricated gaps** | If input is missing or unclear, say so and stop or ask (rule 15; the developer stop-and-ask below) — never fill the gap with plausible content |
+<!-- agent-discipline:shared-traits:end -->
 
+<!-- agent-discipline:reviewer-rules:start -->
 ### Reviewer discipline (every reviewer-side role)
 
 - **Every claim is untrue until you have verified it.** Re-check every claim your verdict depends on — read the code, read the CI run, inspect the evidence artifacts — first-hand, in this task.
 - **Local re-runs are not the reviewer's tool (N3).** Reviewers verify by reading — code, CI results, artifacts. CI is the authority; the **single** local narrow re-run allowed at a time is performed by team-lead, on request, under the one-at-a-time machine-load rule. A reviewer who wants a re-run asks team-lead for it.
 - **A claim you cannot verify is marked UNVERIFIED** in your report and produces a **WARNING, not a block**. team-lead decides (5.5): verify it itself, dispatch a verification, or accept it with the gap stated to the founder. An UNVERIFIED claim never silently passes, and never blocks alone.
 - **Every finding carries four things**: a **failure scenario** (this input or this state leads to this wrong result), **evidence** (the `file::symbol` read, the command run), **severity**, and **certainty**. A style preference with no failure scenario is not a finding — it is a comment at most, and it does not gate.
+<!-- agent-discipline:reviewer-rules:end -->
 
+<!-- agent-discipline:developer-rules:start -->
 ### Developer discipline (every developer-side role)
 
 - **Do exactly the task.** No scope creep, no silent improvements; the brief is the boundary (rule 15 already governs conflicts with it).
 - **Report every bug or issue you find by accident** — as a note to team-lead in your report; **never fix it on the side**. A side fix is an unreviewed change wearing a reviewed task's gate.
 - **Impact analysis before editing a symbol** — rule 9 restated as the developer's own first step, not an orchestration formality.
 - **When unsure — an unclear spec, two plausible designs — stop and ask team-lead**, with the options laid out and a recommendation. Never guess silently (Round 14; rule 15's sibling for uncertainty rather than conflict).
+<!-- agent-discipline:developer-rules:end -->
