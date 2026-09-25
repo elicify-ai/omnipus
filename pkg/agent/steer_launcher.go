@@ -429,6 +429,19 @@ func (l *SteerLauncher) launchSteered(
 			// sentence telling the model a new message resumes the
 			// conversation.
 			if parentRec.Terminal() || parentRec.Stopped() {
+				// Gate SFH#6: a session whose most recent revive attempt itself
+				// failed is a different refusal state from a session that is
+				// merely stopped. The standard D5 sentence tells the user to
+				// send a new message to resume — the exact action that just
+				// failed — so return the typed revival-failed sentinel wrapped
+				// around the revive cause (double %w keeps BOTH the sentinel
+				// and the underlying cause identifiable with errors.Is) and
+				// let the tool layer map it to the truthful variant sentence.
+				// Still before any write, so D2's other invariants hold.
+				if rf, ok := l.al.lastRevivalFailure(req.SteeringSessionID); ok {
+					return nil, fmt.Errorf("%w: last resume attempt failed: %w",
+						steer.ErrSteeringRevivalFailed, rf.cause)
+				}
 				return nil, steer.ErrSteeringStopped
 			}
 			steererMeta, metaErr := sessions.GetMeta(req.SteeringSessionID)

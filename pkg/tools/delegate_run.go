@@ -283,6 +283,14 @@ func steeringUnavailableResult(err error) *ToolResult {
 	if !steer.IsSteeringUnavailable(err) {
 		return nil
 	}
+	// Gate SFH#6: a revival-failed refusal gets the truthful variant sentence —
+	// the standard sentence points at "send a new message", the exact action
+	// that just failed. Same no-raw-text surface: the cause stays on the
+	// result's WithError side (machine-readable), not in the user-visible
+	// string.
+	if errors.Is(err, steer.ErrSteeringRevivalFailed) {
+		return ErrorResult(steer.SteeringRevivalFailedMessage).WithError(err)
+	}
 	return ErrorResult(steer.SteeringUnavailableMessage).WithError(err)
 }
 
