@@ -466,7 +466,7 @@ func TestStreamReplay_SpawnSpan_PersistsChildSessionID(t *testing.T) {
 		return nil
 	}
 	rs := computeReplayStats(entries)
-	_, err := streamReplay(context.Background(), "session_test", entries, rs, emit, nil, nil, nil)
+	_, err := streamReplay(context.Background(), "session_test", entries, rs, emit, nil, nil, nil, nil)
 	require.NoError(t, err, "streamReplay must not return an error for valid input")
 
 	var got struct {

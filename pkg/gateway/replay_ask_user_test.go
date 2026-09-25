@@ -52,7 +52,7 @@ func runReplayWithAsk(t *testing.T, entries []session.TranscriptEntry, terminalA
 	t.Helper()
 	sink := &sliceSink{}
 	rs := computeReplayStats(entries)
-	_, err := streamReplay(context.Background(), "session_test", entries, rs, sink.emit, nil, nil, terminalAsk)
+	_, err := streamReplay(context.Background(), "session_test", entries, rs, sink.emit, nil, nil, terminalAsk, nil)
 	require.NoError(t, err)
 	return sink.all()
 }
