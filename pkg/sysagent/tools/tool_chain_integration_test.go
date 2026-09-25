@@ -487,7 +487,7 @@ func TestToolChain_SendMessage_Differentiation(t *testing.T) {
 //
 // NOTE: The current delete_workspace implementation deletes the workspace file
 // only; it does NOT cascade-delete child tasks (a future concern per the
-// BRD; the v0.3 label is retired).  This test asserts the CURRENT behavior: after delete_workspace, the
+// BRD; not yet scheduled).  This test asserts the CURRENT behavior: after delete_workspace, the
 // workspace itself is gone (list_workspaces does not include it), while the
 // task store is still accessible separately.
 //

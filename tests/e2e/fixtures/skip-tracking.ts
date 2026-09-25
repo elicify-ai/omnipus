@@ -8,7 +8,7 @@
  * The manifest captures every `softSkip()` call made during the run, whether
  * authorized (in SKIP_ALLOWLIST) or unauthorized. Direct `test.skip(...)` /
  * `test.fixme(...)` calls bypass this gate today — capture of those is
- * tracked as follow-up work (v0.2 label retired — no release scheduled) and is
+ * tracked as follow-up work (no release scheduled) and is
  * the reason the SKIP_ALLOWLIST should also
  * cover any test that uses them.
  *
@@ -238,8 +238,7 @@ export interface SkipManifest {
     test: string;
     reason: string;
     // Only `softSkip()` calls are captured today. `test.skip()` /
-    // `test.fixme()` capture is a planned follow-up (no release scheduled —
-    // the v0.2 label is retired).
+    // `test.fixme()` capture is a planned follow-up (no release scheduled).
     // When that lands, the corresponding entries must already be in SKIP_ALLOWLIST.
     // The union is intentionally narrow: 'softSkip' only. Do not widen it here
     // until the teardown suite-walk for raw skips is implemented.

@@ -326,4 +326,4 @@ func TestIntegration_DefaultRetroRetentionIs180(t *testing.T) {
 // without waiting for the nightly tick).  The session-sweep endpoint at
 // pkg/gateway/rest.go::HandleRetentionSweep is the template.  Tracking issue
 // should be opened for this testability gap flagged by the reviewers
-// (v0.2/v0.3 release labels retired 2026-09-25 — no target release).
+// (not yet scheduled).
