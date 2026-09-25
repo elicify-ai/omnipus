@@ -2934,19 +2934,36 @@ func TestProcessMessage_PublishesReasoningContentToReasoningChannel(t *testing.T
 		t.Fatalf("processMessage() response = %q, want %q", response, "final answer")
 	}
 
-	select {
-	case outbound := <-msgBus.OutboundChan():
-		if outbound.Channel != "telegram" {
-			t.Fatalf("reasoning channel = %q, want %q", outbound.Channel, "telegram")
+	// Two faults lived in this wait. It asserted on whatever arrived FIRST, so any
+	// unrelated outbound publish ahead of the reasoning one failed the test with a
+	// misleading "reasoning channel = ..." message about the wrong frame. And its 3s
+	// budget is the short end of this package's range (2s-30s; 10s is used 24 times):
+	// it expired at 3.03s on CI run for release 7df13b436 while the publish itself was
+	// working -- the same test is green on fadf741ea and the only files that changed
+	// between those tips are two TEST files, neither in pkg/agent, so nothing could
+	// have stopped the publish happening. Late, not absent.
+	//
+	// Drain until the reasoning frame arrives, identified by its own chat id, and keep
+	// every assertion on the matched frame. A reasoning publish that never happens
+	// still fails; an unrelated frame no longer can.
+	deadline := time.After(10 * time.Second)
+	for {
+		var outbound bus.OutboundMessage
+		select {
+		case outbound = <-msgBus.OutboundChan():
+		case <-deadline:
+			t.Fatal("expected reasoning content to be published to reasoning channel")
 		}
 		if outbound.ChatID != "reason-chat" {
-			t.Fatalf("reasoning chatID = %q, want %q", outbound.ChatID, "reason-chat")
+			continue
+		}
+		if outbound.Channel != "telegram" {
+			t.Fatalf("reasoning channel = %q, want %q", outbound.Channel, "telegram")
 		}
 		if outbound.Content != "thinking trace" {
 			t.Fatalf("reasoning content = %q, want %q", outbound.Content, "thinking trace")
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("expected reasoning content to be published to reasoning channel")
+		return
 	}
 }
 
