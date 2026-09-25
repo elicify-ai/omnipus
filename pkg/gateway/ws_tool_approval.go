@@ -144,23 +144,20 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 			"approval_id", entry.ApprovalID, "tool", entry.ToolName)
 	}
 	for _, wc := range conns {
-		go sendApprovalFrame(wc, raw, entry.ApprovalID)
+		sendApprovalFrame(wc, raw, entry.ApprovalID)
 	}
 }
 
-// sendApprovalFrame delivers one approval frame to one connection, waiting up
-// to approvalFrameSendTimeout for buffer space instead of dropping on a full
-// buffer (D-82). A connection that closes meanwhile is skipped silently; one
-// that stays full past the timeout is logged loudly, because that is the one
-// case left where a human is never asked.
+// sendApprovalFrame delivers one approval frame to one connection through
+// its ordered queue (#823 ws_conn_queue.go). D-82's guarantee — a human is
+// always asked — now holds without a timeout: the queue never drops; a
+// connection too far behind is closed with 4008, reconnects, and its
+// session_state lists the pending approval. A connection already closed is
+// logged, since the approval then waits for a reconnect.
 func sendApprovalFrame(wc *wsConn, raw []byte, approvalID string) {
-	select {
-	case wc.sendCh <- raw:
-	case <-wc.doneCh:
-	case <-time.After(approvalFrameSendTimeout):
-		slog.Warn("ws: tool_approval_required dropped — send buffer full past timeout",
+	if !wc.enqueue(raw) {
+		slog.Warn("ws: tool_approval_required not queued — connection closed; it will be re-offered via session_state on reconnect",
 			"approval_id", approvalID, "user_id", wc.userID)
-		wc.droppedFrames.Add(1)
 	}
 }
 
@@ -226,7 +223,15 @@ func (h *WSHandler) emitSessionState(wc *wsConn, sessionID string) {
 	if wc == nil {
 		return
 	}
+	if raw := h.sessionStateBytes(wc, sessionID); raw != nil {
+		sendRawFrameBytes(wc, string(generated.WsFrameTypeSessionState), raw)
+	}
+}
 
+// sessionStateBytes builds the session_state frame emitSessionState sends
+// (nil on a marshal failure, which is logged). The attach path queues these
+// bytes itself, ahead of its held live frames (BE-DESIGN.md §4.1 A6).
+func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 	// Always initialize to non-nil slice so JSON encodes as [] not null.
 	pendingApprovals := make([]generated.SessionStatePendingApproval, 0)
 
@@ -256,6 +261,13 @@ func (h *WSHandler) emitSessionState(wc *wsConn, sessionID string) {
 		UserId:           wc.userID,
 		PendingApprovals: pendingApprovals,
 		EmittedAt:        time.Now().UTC().Format(time.RFC3339),
+	}
+	// #823 BE-DESIGN.md §3.4: every connection opens with a session_state,
+	// so this is how a client learns the gateway's current boot id and can
+	// tell that a stored cursor predates a restart.
+	if h.hubs != nil {
+		bootID := h.hubs.bootID
+		frame.BootId = &bootID
 	}
 
 	// ADR-082 review CR3: stamp the session this snapshot describes so a
@@ -313,25 +325,8 @@ func (h *WSHandler) emitSessionState(wc *wsConn, sessionID string) {
 	raw, err := json.Marshal(frame)
 	if err != nil {
 		slog.Error("ws: marshal session_state", "error", err)
-		return
+		return nil
 	}
-
-	select {
-	case wc.sendCh <- raw:
-		slog.Debug("ws: session_state emitted", "user_id", wc.userID, "pending", len(pendingApprovals))
-	case <-wc.doneCh:
-		// Connection closed before we could send — ignore.
-	default:
-		slog.Warn("ws: session_state dropped — send buffer full", "user_id", wc.userID)
-		wc.droppedFrames.Add(1)
-	}
+	slog.Debug("ws: session_state built", "user_id", wc.userID, "pending", len(pendingApprovals))
+	return raw
 }
-
-// approvalFrameSendTimeout bounds how long broadcastToolApprovalRequired waits
-// for a connection's send buffer to drain before giving up on it. The frame
-// used to be dropped instantly when the buffer was full ("best-effort"); a
-// dropped approval frame is a modal that never appears while the agent sits
-// blocked for the whole approval window, which is the shape UAT 2026-09-13
-// D-82 reported ("denied with no modal ever shown; only a reload brought it
-// back"). It is treated as a critical frame now, like "done" and "error".
-const approvalFrameSendTimeout = 2 * time.Second

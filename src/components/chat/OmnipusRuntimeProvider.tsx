@@ -7,7 +7,7 @@ import { useOmnipusRuntime } from "@/lib/omnipus-runtime";
 import { useChatStore } from "@/store/chat";
 import { useConnectionStore } from "@/store/connection";
 import { startMemoryObserver, addMemoryObserver } from "@/lib/memory-observer";
-import { useSessionStore, resetChatBucketForReplay } from "@/store/session";
+import { useSessionStore, attachSessionCursorFields } from "@/store/session";
 import { WsConnection } from "@/lib/ws";
 import { queryClient } from "@/lib/queryClient";
 import type { Session, SessionDetail } from "@/lib/api";
@@ -154,19 +154,21 @@ export function reattachActiveSession(
   if (seedAgentId) {
     useSessionStore.getState().setActiveSession(activeSessionId, seedAgentId);
   }
-  // The gateway will replay the entire transcript. Mark the session as replaying
-  // symmetrically here (same as in attachToSession).
+  // The gateway will confirm catch-up completion (or send a session_snapshot)
+  // — mark the session as replaying symmetrically here (same as in
+  // attachToSession) until that lands.
   useChatStore.setState({ isReplaying: true });
-  // Pass the since-cursor so the gateway only replays frames the SPA hasn't seen.
-  const since =
-    useChatStore.getState().sessionsById[activeSessionId]?.lastReceivedEventTime ?? undefined;
-  // Reset the bucket ONLY on the success path, where the gateway's replay is in
-  // flight and will repopulate it from scratch (preventing duplicate
-  // "Browse to … / Browse to …" bubbles). If send() fails, the reattach never
-  // happens and no replay will rebuild the transcript, so wiping the bucket
-  // would leave the user a blank chat behind the "please reload" error. Preserve
-  // the existing transcript instead.
-  const sent = conn.send({ type: "attach_session", session_id: activeSessionId, since });
+  // #823 catch-up redesign (BE-DESIGN.md §6.1): send this bucket's own
+  // numbered cursor (if any) so the gateway can answer with an incremental
+  // catch-up instead of a full replay — the same wiring attachToSession uses
+  // (src/store/session.ts::attachSessionCursorFields). A first-ever attach
+  // (no cursor yet) sends the bare frame, same as before Step 0 removed the
+  // legacy `since` field.
+  const sent = conn.send({
+    type: "attach_session",
+    session_id: activeSessionId,
+    ...attachSessionCursorFields(activeSessionId),
+  });
   if (!sent) {
     // send() returned false — socket closed between onopen and here. Preserve
     // local state (do not wipe bucket) and surface an error. Clear the replaying
@@ -176,7 +178,11 @@ export function reattachActiveSession(
     setConnectionError('Failed to reattach session — please reload');
     return false;
   }
-  resetChatBucketForReplay(activeSessionId);
+  // #823 catch-up redesign (BE-DESIGN.md §6.1): the bucket is NO LONGER
+  // wiped here on success either — the cursor just sent carries it across
+  // the reattach. Only an explicit `session_snapshot` frame wipes history
+  // now (src/store/chat/slices/catchup-frames.ts). See this file's own
+  // reattach.test.ts for the rewritten test and its full Q3 provenance.
   return true;
 }
 

@@ -78,6 +78,17 @@ properties:
       bubble and the Stop control exactly as if it had started the turn.
       Absent when no turn is running. Keep in sync by hand with
       contracts/asyncapi.yaml's inline SessionStateFrame.
+  boot_id:
+    type: string
+    description: >
+      #823 review finding 7 — a stable identifier for THIS gateway process,
+      minted once at startup and unchanged for its whole lifetime.
+      session_state is always the first frame of a connection-open or
+      attach_session response, so the SPA learns the current boot_id here,
+      stores it alongside its per-session seq cursor, and sends it back as
+      attach_session's own boot_id field on a later reconnect — see that
+      field's doc comment for what the gateway does with a mismatch. Keep in
+      sync by hand with contracts/asyncapi.yaml's inline SessionStateFrame.
   emitted_at:
     type: string
     format: date-time

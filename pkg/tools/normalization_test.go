@@ -20,10 +20,26 @@ func pngDataURL() string {
 	return "data:image/png;base64," + singlePixelPNG
 }
 
-// newTestStore returns a FileMediaStore for use in tests.
+// newTestStore returns a FileMediaStore for use in tests. Store() schedules
+// a debounced registry save (pkg/media/store.go's scheduleSave, saveDebounce
+// = 200ms) that fires on its own background timer regardless of which
+// constructor built the store — NewFileMediaStore's "without background
+// cleanup" doc comment describes the TTL cleaner goroutine only, not this
+// save timer. An un-Stopped store's save timer survives the test that
+// scheduled it and later calls media.TempDir(), which re-reads OMNIPUS_HOME
+// at FIRE time: it can land on whatever later test currently holds that env
+// var (t.Setenv mutates a process-global), racing that test's own
+// t.TempDir() cleanup and failing it with "directory not empty"
+// (TestEnforceShellPermissionMode_D7ClassifiesCommonWriteCommands was hit by
+// exactly this from an earlier, unrelated test). t.Cleanup(store.Stop) here
+// flushes/cancels that timer before this test returns, matching the
+// convention pkg/media's own tests already follow (see e.g.
+// store_test.go:641, registry_save_test.go:107).
 func newTestStore(t *testing.T) *media.FileMediaStore {
 	t.Helper()
-	return media.NewFileMediaStore()
+	store := media.NewFileMediaStore()
+	t.Cleanup(store.Stop)
+	return store
 }
 
 // TestToolSessionID_ContextRoundTrip verifies the context helper round-trip.
@@ -169,6 +185,10 @@ func TestCleanExpired_DoesNotDeleteForgetOnly(t *testing.T) {
 		MaxAge:   time.Nanosecond,
 		Interval: time.Hour, // don't auto-trigger; we call CleanExpired manually
 	})
+	// Store() below schedules a debounced registry save independent of the
+	// cleaner ticker above; Stop it so it can't fire later against a
+	// different test's OMNIPUS_HOME (see newTestStore's doc comment).
+	t.Cleanup(store.Stop)
 
 	// Register ephemeral file — delete_on_cleanup.
 	ephRef, err := store.Store(ephemeralPath, media.MediaMeta{

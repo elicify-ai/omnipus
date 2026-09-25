@@ -4245,6 +4245,11 @@ export interface components {
              */
             id: string;
             /**
+             * @description #823 catch-up redesign. Present on a user entry that was persisted with a client-supplied correlation id (mirrors MessageFrame.client_message_id / ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent bubble against this REST-loaded entry by id instead of by content+timestamp matching. Absent on entries written before this field existed and on non-user entries.
+             * @example cmid_01HXYZ
+             */
+            client_message_id?: string;
+            /**
              * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
              * @example message
              * @enum {string}
@@ -16098,6 +16103,11 @@ export interface components {
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             child_session_id?: string;
+            /**
+             * Format: int64
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             */
+            seq?: number;
         };
         /**
          * SubagentStateFrame
@@ -16140,6 +16150,11 @@ export interface components {
              * @example 2026-07-22T10:00:00Z
              */
             created_at: string;
+            /**
+             * Format: int64
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             */
+            seq?: number;
         };
         /**
          * SubagentMessageFrame
@@ -16200,6 +16215,11 @@ export interface components {
              * @example 2026-07-22T10:00:00Z
              */
             created_at: string;
+            /**
+             * Format: int64
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             */
+            seq?: number;
         };
         /**
          * SubagentEndFrame
@@ -16232,6 +16252,11 @@ export interface components {
             parent_call_id?: string;
             /** @description Internal reason string emitted by the orphan-watchdog synthetic end frame. Not rendered directly in the UI. */
             message?: string;
+            /**
+             * Format: int64
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             */
+            seq?: number;
         };
         /**
          * ExternalCliTool

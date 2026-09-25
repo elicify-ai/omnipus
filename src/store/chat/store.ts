@@ -549,7 +549,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
             isStreaming: false,
             activeTurnId: null,
             activeTurnAgentId: null,
-            activeTurnBubbleOpened: false,
           }
         }
         // FR-21 / T21–T26: set isStreaming:false AND status:'interrupted' on the message.
@@ -588,7 +587,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // still awaiting catch-up" and open a stray empty placeholder.
           draft.activeTurnId = null
           draft.activeTurnAgentId = null
-          draft.activeTurnBubbleOpened = false
         }) as Partial<SessionChatState>
       })
       // An explicit `sessionId` (e.g. the browser panel's pinned session)

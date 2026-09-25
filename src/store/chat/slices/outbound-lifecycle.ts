@@ -7,11 +7,15 @@ import { generateId } from '@/lib/constants'
 import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
-import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
+// Runtime (value) schema from the self-contained ws-schemas.ts, not
+// schemas.ts — the latter also carries the REST Zodios `makeApi([...])`
+// call, which references every REST schema and defeats tree-shaking
+// (bundle-budget incident, PR #860).
+import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/ws-schemas'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
-import { EMPTY_BUCKET, pendingCancelAckSids, replayingClearTimers } from '../runtime-state'
+import { EMPTY_BUCKET, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
 
@@ -174,6 +178,25 @@ interface OutboundLifecycleContext {
   abandonPendingKickoffInternal: () => void
   maybeDrainNext: () => void
   runtime: { agentIdAtLastMintSend: string | null }
+}
+
+// #823: called when the connection drops. Extracted from
+// createOutboundLifecycleSlice to keep it under its grandfathered line budget
+// (scripts/budgets/functions.txt) — no behaviour change.
+//   - Opus review round 2 item 7: any gap re-attach in flight for this
+//     connection is moot the instant it drops — reconnecting goes through the
+//     normal attach_session path (session.ts::attachToSession), not this
+//     guard, so a stale entry would just block the NEXT gap's re-attach
+//     forever after a future reconnect.
+//   - N4: any replay_error retry timer scheduled for a PREVIOUS connection
+//     would send its eventual attach_session over a connection that no
+//     longer exists — same "reconnect goes through the normal path" reasoning.
+function clearCatchUpSideChannelsOnDisconnect(): void {
+  inFlightReattachSids.clear()
+  for (const sid of Object.keys(replayErrorRetryTimers)) {
+    clearTimeout(replayErrorRetryTimers[sid])
+    delete replayErrorRetryTimers[sid]
+  }
 }
 
 export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, abandonPendingKickoffInternal, maybeDrainNext, runtime }: OutboundLifecycleContext): OutboundLifecycleSlice {
@@ -840,7 +863,6 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           isStreaming: false,
           activeTurnId: null,
           activeTurnAgentId: null,
-          activeTurnBubbleOpened: false,
         }))
         maybeDrainNext()
         return
@@ -903,6 +925,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // outstanding cancel — stale entries here would otherwise persist across
       // reconnects and could misattribute an unrelated later frame.
       pendingCancelAckSids.clear()
+      clearCatchUpSideChannelsOnDisconnect()
       // S6: a socket drop means no more frames — done, error, or otherwise —
       // are coming on THIS connection for any outstanding replay either. A
       // bucket that is mid-replay (isReplaying:true) but not yet
@@ -981,50 +1004,45 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             cancelStage: null,
             activeTurnId: null,
             activeTurnAgentId: null,
-            activeTurnBubbleOpened: false,
           }
-          if (needsMsgFix) {
-            const messagesById = { ...bucket.messagesById }
-            for (let i = order.length - 1; i >= 0; i--) {
-              const m = messagesById[order[i]]
-              if (m?.role === 'assistant' && (m.isStreaming || m.status === 'streaming')) {
-                // Preserve an already-'interrupted' status; otherwise close as 'done'.
-                messagesById[order[i]] = {
-                  ...m,
-                  isStreaming: false,
-                  status: m.status === 'interrupted' ? 'interrupted' : 'done',
-                  pendingTextBoundary: false,
-                } as ChatMessage
-              }
-            }
-            next.messagesById = messagesById
-          }
+          // BE-DESIGN.md §6.3 / real-browser regression (orchestrator report,
+          // 2026-09-24, BUG 1): a hard disconnect must NOT close the
+          // still-streaming bubble. A turn never depends on a UI connection
+          // (ADR-082 P1) — the agent hasn't stopped, only this tab's socket
+          // has. The bucket-level isStreaming/activeTurnId/etc. above still
+          // clear (so the Stop button and composer don't hang forever on a
+          // dead connection), but the MESSAGE itself stays exactly as it was
+          // — still isStreaming/'streaming' — so that reconnect's catch-up
+          // (session_state{active_turn} -> tokens for the SAME message_id ->
+          // catch_up_complete -> live tokens -> done) resumes the SAME
+          // bubble. This used to flip the bubble to 'done' here, which then
+          // made the §4.2 "already-complete bubble ignores further tokens
+          // for its message_id" overlap rule (frames.ts::
+          // resolveTokenBubbleByMessageId) silently discard the entire
+          // catch-up and every live token behind it — the tab froze at
+          // whatever text had streamed before the cut.
           if (hasPendingTools) {
-            const toolCalls = { ...bucket.toolCalls }
-            for (const key of Object.keys(toolCalls)) {
-              if (toolCalls[key].status === 'running') {
-                toolCalls[key] = { ...toolCalls[key], status: 'cancelled' }
-              }
-            }
-            // Bake every pending tool call — not just the ones just flipped to
-            // 'cancelled' above — into its OWNING message's tool_calls array
-            // (routed via toolCallOwnerMessageId, falling back to the last
-            // assistant message for unmapped/legacy calls — never blindly
-            // "the last message": a turn can produce more than one assistant
-            // bubble, per Fix 5a / the sync/await-mode delegate attribution
-            // fix) before clearing the live bucket state below. Terminal
-            // ('success'/'error') calls need this too: otherwise they vanish
-            // the instant isStreaming flips false, because the renderer
-            // switches from the live toolCalls bucket to message.tool_calls at
-            // that point (mirrors the `done` case's `toolCallOrder.length > 0`
-            // gate/baking block below).
+            // Bake every pending tool call — not just terminal ones — into
+            // its OWNING message's tool_calls array (routed via
+            // toolCallOwnerMessageId, falling back to the last assistant
+            // message for unmapped/legacy calls — never blindly "the last
+            // message": a turn can produce more than one assistant bubble,
+            // per Fix 5a / the sync/await-mode delegate attribution fix)
+            // before clearing the live bucket state below. This still has to
+            // happen even though the bubble itself is left open: the
+            // renderer switches from the live toolCalls bucket to
+            // message.tool_calls the instant bucket-level isStreaming flips
+            // false (mirrors the `done` case's `toolCallOrder.length > 0`
+            // gate/baking block below) — otherwise an in-flight tool card
+            // would simply vanish. Each call keeps whatever status it
+            // actually had (commonly still 'running') rather than being
+            // force-flipped to 'cancelled' first — §6.3 says a disconnect
+            // must not mark running tools cancelled either; the tool may
+            // still resolve server-side and its real result will (mostly)
+            // reconcile once catch-up delivers it.
             const lastAssistantId = findLastAssistantMessageId(order, bucket.messagesById)
-            // Ensure a fresh shallow copy — bakeToolCallsByOwner reassigns
-            // individual entries by key, which must not mutate the object
-            // `next` may still share by reference with `bucket` (when the
-            // needsMsgFix branch above didn't already copy it).
             next.messagesById = { ...next.messagesById }
-            bakeToolCallsByOwner(next.messagesById, bucket.toolCallOrder, toolCalls, bucket.toolCallOwnerMessageId ?? {}, lastAssistantId, bucket.textAtToolCallStart)
+            bakeToolCallsByOwner(next.messagesById, bucket.toolCallOrder, bucket.toolCalls, bucket.toolCallOwnerMessageId ?? {}, lastAssistantId, bucket.textAtToolCallStart)
             next.toolCalls = {}
             next.toolCallOrder = []
             next.textAtToolCallStart = {}

@@ -325,8 +325,8 @@ func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 			// this to hide controls that are inoperative when bypass is
 			// active." This field was documented and generated
 			// (gen.AppState.DevModeBypass) but never populated here, so every
-			// SPA gate keyed on it (GodModeControl / GodModeActiveBanner,
-			// commit 671a68ad6) silently never engaged: `appState?.
+			// SPA gate keyed on it (GodModeControl / the sidebar God Mode
+			// pill, commit 671a68ad6) silently never engaged: `appState?.
 			// dev_mode_bypass === true` read false even when bypass was on,
 			// because the field was always absent, not false. Confirmed via
 			// CI run 35990283526's gateway.log: 79

@@ -89,16 +89,29 @@ export function ActivityBar() {
   // reusing it here keeps the pill and the panel's contents in sync by
   // construction. Bash sessions are excluded (kind !== 'agent'), preserving
   // FR-E-005's "shell jobs never drive the pill" rule.
-  const hasOpenAgentChildren = running.some((item) => item.kind === 'agent')
+  // Background shell jobs live in `running` alongside agent children. They are
+  // deliberately excluded from the pill's COUNT (FR-E-005 governs the NUMBER:
+  // "the number of the open session's direct agent children ... via a selector
+  // that excludes background") — but excluding them from the MOUNT gate too
+  // made the pill vanish whenever a background command was the only thing
+  // running, and the pill is ActivityPanel's ONLY entry point (setPanelOpen
+  // exists nowhere else), so those commands became unreachable even though the
+  // panel renders them (ActivityPanel row: item.kind === 'bash' -> command).
+  // Founder decision 2026-09-25: restore the pill for any open background
+  // work, shell included. The count stays agent-only, so FR-E-005 is untouched.
+  const bashRunning = running.filter((item) => item.kind === 'bash').length
+  const hasOpenWork = running.length > 0
 
-  const shouldMount = hasOpenAgentChildren || panelOpen || hasFailedRecent
+  const shouldMount = hasOpenWork || panelOpen || hasFailedRecent
   if (!shouldMount) return null
 
   const stackItems = runningChildItems.slice(0, MAX_STACK_AVATARS)
 
   const label = isRunning
     ? `${runningChildren} running`
-    : hasFailedRecent
+    : bashRunning > 0
+      ? `${bashRunning} background ${bashRunning === 1 ? 'command' : 'commands'}`
+      : hasFailedRecent
       ? `${failedRecent.length} failed`
       : 'Activity'
 
@@ -130,7 +143,7 @@ export function ActivityBar() {
             retained failure, muted otherwise. The icon/dot is decorative;
             the adjacent label text already carries the same information for
             assistive tech. */}
-        {isRunning ? (
+        {isRunning || bashRunning > 0 ? (
           <ArrowsClockwise size={12} className="shrink-0 animate-spin text-[var(--color-accent)]" aria-hidden="true" />
         ) : hasFailedRecent ? (
           statusDot('bg-[var(--color-error)]')
@@ -139,7 +152,7 @@ export function ActivityBar() {
         )}
         <span
           data-testid="activity-bar-label"
-          className={`min-w-0 truncate font-medium ${hasFailedRecent && !isRunning ? 'text-[var(--color-error)]' : 'text-[var(--color-secondary)]'}`}
+          className={`min-w-0 truncate font-medium ${hasFailedRecent && !isRunning && bashRunning === 0 ? 'text-[var(--color-error)]' : 'text-[var(--color-secondary)]'}`}
         >
           {label}
         </span>

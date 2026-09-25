@@ -45,6 +45,7 @@ import { MAX_MESSAGES_PER_SESSION, evictMessageFromBucket, findAssistantMessageI
 import { isTurnFinished, schedulePlanStatusInvalidate } from '../routing'
 import { sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
+import { insertHistoryMessageId } from '../cursor'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, RateLimitEventData, SessionChatState } from '../types'
 
 
@@ -56,6 +57,44 @@ interface ReplayAndStatusFrameContext {
   get: StoreApi<ChatStore>['getState']
   withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void
   armRateLimitClear: (sid: string, event: RateLimitEventData) => void
+}
+
+// #823 Opus review round 2 item 2: a role:'user' replay_message can name the
+// SAME message this tab already holds as its own send-time optimistic
+// bubble — which is stored under the CLIENT's locally-generated id
+// (sendMessage's own buildQueuedUserMessage), never the server's
+// `messageId`, because nothing re-keys it once sent. Checking `messageId`
+// alone therefore missed this case entirely and created a second, duplicate
+// bubble on every reconnect that replayed a message this tab itself had
+// sent. Detected via `client_message_id` (which the optimistic bubble's
+// `id` equals) and RE-KEYED to the server's real id — safe here
+// specifically because this is a RECONNECT replay, not the live first send:
+// message_status for this client_message_id (the only OTHER reader keyed on
+// it) already ran on an earlier connection cycle. Returns true when it
+// handled (deduped) the frame — the caller must return without any further
+// processing of this replay_message.
+function reconcileOwnOptimisticBubble(
+  draft: SessionChatState,
+  clientMessageId: string | undefined,
+  messageId: string | undefined,
+  role: string,
+  targetSid: string | null,
+): boolean {
+  if (!clientMessageId || !draft.messageOrder.includes(clientMessageId) || clientMessageId === messageId) {
+    return false
+  }
+  const idx = draft.messageOrder.indexOf(clientMessageId)
+  const existing = draft.messagesById[clientMessageId]
+  if (messageId) {
+    delete draft.messagesById[clientMessageId]
+    draft.messagesById[messageId] = { ...existing, id: messageId, deliveryStatus: 'received' }
+    draft.messageOrder[idx] = messageId
+  } else {
+    existing.deliveryStatus = 'received'
+  }
+  console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: 'client-message-id-match' })
+  logDiagnostic('chatReplayDedupSkipped', { messageId, role, reason: 'client-message-id-match', sessionId: targetSid })
+  return true
 }
 
 // Extracted from handleReplayAndStatusFrame's 'session_state' case (budget
@@ -139,26 +178,15 @@ function handleSessionStateFrame(
     // it a second time — a permanent Stop button and locked
     // composer.
     if (!isTurnFinished(targetSid, activeTurn.turn_id)) {
-      withBucket(targetSid, (b) => {
-        // If a bubble for this session is already streaming (e.g.
-        // an older gateway that sends session_state LAST, after
-        // tokens have already started flowing for this very
-        // turn), do not reset the "bubble opened" flag to false —
-        // the 'token' case's own fix already flipped it true the
-        // instant the first token landed, and stomping it back to
-        // false here would make a later replay-terminator-shaped
-        // done wrongly think it still needs to open a placeholder.
-        const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
-        const lastMsg = lastMsgId ? b.messagesById[lastMsgId] : undefined
-        const alreadyStreaming =
-          !!lastMsg && (lastMsg.isStreaming === true || lastMsg.status === 'streaming')
-        return {
-          isStreaming: true,
-          activeTurnId: activeTurn.turn_id,
-          activeTurnAgentId: activeTurn.agent_id,
-          activeTurnBubbleOpened: b.activeTurnBubbleOpened || alreadyStreaming,
-        }
-      })
+      // #823 catch-up redesign pass 2 (§6.3, Q3): no "bubble opened" flag
+      // to maintain any more — bubble existence is now derived directly
+      // from message_id-keyed lookups (resolveTokenBubbleByMessageId,
+      // slices/frames.ts), not tracked as separate bucket state.
+      withBucket(targetSid, () => ({
+        isStreaming: true,
+        activeTurnId: activeTurn.turn_id,
+        activeTurnAgentId: activeTurn.agent_id,
+      }))
     }
   } else {
     // CR3: this snapshot says NO turn is in flight for this
@@ -183,11 +211,13 @@ function handleSessionStateFrame(
     const existing = get().sessionsById[targetSid]
     if (existing?.activeTurnId) {
       withBucket(targetSid, (b) => {
-        const bubbleOpen = !!b.activeTurnBubbleOpened
+        // #823 catch-up redesign pass 2: "is a bubble actually open" is now
+        // answered directly (findOpenAssistantMessageId) rather than via a
+        // separately-tracked flag.
+        const bubbleOpen = findOpenAssistantMessageId(b.messageOrder, b.messagesById) !== null
         return {
           activeTurnId: null,
           activeTurnAgentId: null,
-          activeTurnBubbleOpened: false,
           ...(bubbleOpen ? {} : { isStreaming: false }),
         }
       })
@@ -585,6 +615,8 @@ function handleReplayMessageFrame({
       // Cursor advancement is handled centrally before the switch (I1);
       // no per-case advance needed here.
       const msgs = getMessages(b)
+      // #823 Opus review round 2 item 2 — see reconcileOwnOptimisticBubble above.
+      if (reconcileOwnOptimisticBubble(draft, replayFrame.client_message_id, messageId, role, targetSid)) return
       // Reconnection dedup: prefer server-assigned id match when present;
       // fall back to (content + role + timestamp) tuple. Content-only dedup
       // was silently dropping legitimate identical user retries.
@@ -711,7 +743,13 @@ function handleReplayMessageFrame({
           : {}),
       }
       draft.messagesById[newMsg.id] = newMsg
-      draft.messageOrder.push(newMsg.id)
+      // #823 Opus review round 2 item 2 (founder decision Q1): a
+      // replay_message is HISTORY the server already persisted — insert it
+      // before the pending tail (unresolved queued/sending/failed sends),
+      // not blindly at the true end of messageOrder, so a pending message a
+      // session_snapshot preserved never renders ABOVE history it was sent
+      // after.
+      insertHistoryMessageId(draft.messageOrder, draft.messagesById, newMsg.id)
       // Ring buffer enforcement during replay — evict oldest entry plus all dependent maps.
       if (draft.messageOrder.length > MAX_MESSAGES_PER_SESSION) {
         const evictId = draft.messageOrder[0]

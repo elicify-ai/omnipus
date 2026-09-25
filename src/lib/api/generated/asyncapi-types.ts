@@ -75,7 +75,10 @@ export type WsFrameType =
   | "browser_input_control_ack"
   | "browser_handover_notice"
   | "goal_outcome"
-  | "library_changed";
+  | "library_changed"
+  | "session_snapshot"
+  | "catch_up_complete"
+  | "user_message";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -116,7 +119,8 @@ export interface PongFrame {
 export interface AttachSessionFrame {
   type: "attach_session";
   session_id: string;
-  since?: string;
+  since_seq?: number;
+  boot_id?: string;
 }
 
 export interface DevicePairingResponseFrame {
@@ -129,6 +133,8 @@ export interface SessionStartedFrame {
   type: "session_started";
   session_id: string;
   agent_id?: string;
+  seq?: number;
+  boot_id?: string;
 }
 
 export interface MessageStatusFrame {
@@ -136,6 +142,7 @@ export interface MessageStatusFrame {
   session_id: string;
   client_message_id: string;
   state: "received" | "working" | "failed";
+  seq?: number;
 }
 
 export interface TokenFrame {
@@ -143,6 +150,10 @@ export interface TokenFrame {
   session_id: string;
   content: string;
   agent_id?: string;
+  turn_id?: string;
+  message_id?: string;
+  replace?: boolean;
+  seq?: number;
 }
 
 export interface DoneStats {
@@ -165,6 +176,9 @@ export interface DoneFrame {
   type: "done";
   session_id: string;
   stats?: DoneStats;
+  turn_id?: string;
+  message_id?: string;
+  seq?: number;
 }
 
 export interface LLMError {
@@ -187,6 +201,7 @@ export interface ErrorFrame {
   payload?: {
     llm_error: LLMError;
   };
+  seq?: number;
 }
 
 export interface ToolCallStartFrame {
@@ -199,6 +214,7 @@ export interface ToolCallStartFrame {
   };
   parent_call_id?: string;
   agent_id?: string;
+  seq?: number;
 }
 
 export interface TruncatedResult {
@@ -276,6 +292,7 @@ export interface ToolCallResultFrame {
   error?: string;
   parent_call_id?: string;
   agent_id?: string;
+  seq?: number;
 }
 
 export interface SubagentStartFrame {
@@ -286,6 +303,7 @@ export interface SubagentStartFrame {
   task_label: string;
   agent_id?: string;
   child_session_id?: string;
+  seq?: number;
 }
 
 export interface SubagentEndFrame {
@@ -299,6 +317,7 @@ export interface SubagentEndFrame {
   agent_id?: string;
   parent_call_id?: string;
   message?: string;
+  seq?: number;
 }
 
 export interface SubagentMessageFrame {
@@ -314,6 +333,7 @@ export interface SubagentMessageFrame {
   sender_identity: string;
   untrusted_origin: boolean;
   created_at: string;
+  seq?: number;
 }
 
 export interface SubagentStateFrame {
@@ -327,6 +347,7 @@ export interface SubagentStateFrame {
     applied_at: string;
   };
   created_at: string;
+  seq?: number;
 }
 
 export interface TaskStatusChangedFrame {
@@ -357,6 +378,7 @@ export interface ReplayMessageFrame {
   turn_id?: string;
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";
+  client_message_id?: string;
 }
 
 export interface ReplayErrorFrame {
@@ -379,6 +401,7 @@ export interface ToolResultProjectionFrame {
   archive_line: number;
   content_state: "capped" | "emptied";
   mark?: string;
+  seq?: number;
 }
 
 export interface RateLimitFrame {
@@ -390,6 +413,7 @@ export interface RateLimitFrame {
   retry_after_seconds: number;
   agent_id?: string;
   tool?: string;
+  seq?: number;
 }
 
 export interface LibraryChangedFrame {
@@ -411,6 +435,7 @@ export interface MediaFrame {
   type: "media";
   session_id: string;
   parts: Array<MediaPart>;
+  seq?: number;
 }
 
 export interface AgentSwitchedFrame {
@@ -419,6 +444,7 @@ export interface AgentSwitchedFrame {
   agent_id?: string;
   message?: string;
   producing_session_id?: string;
+  seq?: number;
 }
 
 export interface CommandSegmentInfo {
@@ -526,6 +552,7 @@ export interface SessionStateFrame {
   session_id?: string;
   auto_approve_modifier?: boolean | null;
   active_turn?: SessionStateActiveTurn;
+  boot_id?: string;
   emitted_at: string;
 }
 
@@ -559,6 +586,7 @@ export interface CancelStageFrame {
   skipped_newer_generation?: Array<string>;
   skipped_terminal?: Array<string>;
   partial?: boolean;
+  seq?: number;
 }
 
 export interface SessionCloseAckFrame {
@@ -861,6 +889,7 @@ export interface GoalStatusFrame {
     status: "pending" | "met" | "unmet";
     clause_count?: number;
   }>;
+  seq?: number;
 }
 
 export interface LoopStatusFrame {
@@ -871,6 +900,7 @@ export interface LoopStatusFrame {
   max_runs: number;
   next_delay?: number;
   state: string;
+  seq?: number;
 }
 
 export interface PlanStatusFrame {
@@ -909,6 +939,7 @@ export interface JudgeVerdictFrame {
   judged_at: string;
   judge_agent_id: string;
   session_id?: string;
+  seq?: number;
 }
 
 export interface BrowserHandoverNoticeFrame {
@@ -934,6 +965,7 @@ export interface GoalOutcomeFrame {
   session_id: string;
   message_id: string;
   outcome: GoalOutcomeFrameOutcome;
+  seq?: number;
 }
 
 export interface KnowledgeIndexProgressFrame {
@@ -995,6 +1027,39 @@ export interface BrowserInputControlAckFrame {
   reason?: string;
   capture_id?: string;
   capture_generation?: number;
+}
+
+export interface SessionSnapshotFrame {
+  type: "session_snapshot";
+  session_id: string;
+  seq: number;
+  boot_id?: string;
+  reason?: "cursor_ahead" | "retention_exceeded" | "unknown_position" | "boot_mismatch";
+}
+
+export interface CatchUpCompleteFrame {
+  type: "catch_up_complete";
+  session_id: string;
+  seq: number;
+  boot_id?: string;
+  mode: "incremental" | "snapshot";
+}
+
+export interface UserMessageFrame {
+  type: "user_message";
+  session_id: string;
+  id: string;
+  client_message_id?: string;
+  content: string;
+  attachments?: Array<{
+    type: "image" | "audio" | "video" | "file";
+    path: string;
+    size: number;
+    mime_type: string;
+  }>;
+  timestamp: string;
+  agent_id?: string;
+  seq?: number;
 }
 
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────
@@ -1069,7 +1134,10 @@ export type WsFrame =
   | BrowserInputOfferFrame
   | BrowserInputAnswerFrame
   | BrowserInputStateFrame
-  | BrowserInputControlAckFrame;
+  | BrowserInputControlAckFrame
+  | SessionSnapshotFrame
+  | CatchUpCompleteFrame
+  | UserMessageFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -1152,4 +1220,7 @@ export type ServerFrame =
   | KnowledgeIndexProgressFrame
   | BrowserInputAnswerFrame
   | BrowserInputStateFrame
-  | BrowserInputControlAckFrame;
+  | BrowserInputControlAckFrame
+  | SessionSnapshotFrame
+  | CatchUpCompleteFrame
+  | UserMessageFrame;

@@ -18,6 +18,22 @@ test('steered session is reachable in its own live view without leaking child ou
   test.setTimeout(420_000)
 
   await page.goto('/')
+  // A pending approval modal left over from earlier work keeps a Radix
+  // dialog-overlay mounted, and it intercepts pointer events — so
+  // selectAgent's click never lands and the test burns its whole budget in a
+  // retry loop. CI evidence: 826 retries against
+  // `<div data-testid="dialog-overlay"> intercepts pointer events`, then
+  // `Test timeout of 420000ms exceeded` at selectAgent, on 2 of 4 attempts
+  // (neither reached the behaviour under test). Clear it first; Escape is the
+  // same dismissal accessibility.spec.ts already uses for its sign-in dialog.
+  const blockingOverlay = page.locator('[data-testid="dialog-overlay"]')
+  if ((await blockingOverlay.count()) > 0) {
+    await page.keyboard.press('Escape')
+    await expect(
+      blockingOverlay,
+      'a leftover modal overlay must be dismissable — it blocks every click beneath it',
+    ).toHaveCount(0, { timeout: 10_000 })
+  }
   await selectAgent(page, /Jim/i)
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 15_000 })
@@ -119,7 +135,32 @@ test('steered session is reachable in its own live view without leaking child ou
   const childSessionID = await boundSurface.getAttribute('data-active-session-id')
   expect(childSessionID, 'the open control must bind the chat surface to the child session').toBeTruthy()
 
-  await expect(page.getByText(CHILD_ONLY_SENTINEL, { exact: false })).toBeVisible({ timeout: 240_000 })
+  // Two wrong oracles have stood here. Matching CHILD_ONLY_SENTINEL page-wide proved
+  // only that the child RECEIVED the task: the parent interpolates the sentinel into
+  // the task text, so it renders as the child's own INBOUND user message the moment
+  // the view opens — it passed ~0.8s in, against a child that had done no work.
+  //
+  // Requiring the sentinel in an ASSISTANT row was worse, not better. It demands the
+  // model emit an exact magic string, so the test fails whenever the child paraphrases
+  // or reports a tool failure instead of completing the task — which is exactly the
+  // model-compliance oracle the steer assertion below was repaired to remove. It duly
+  // failed in CI with "element(s) not found" while the child was working correctly.
+  //
+  // What "reachable in its own live view" claims is that the CHILD's own transcript
+  // renders here. Assert the system-decided facts: an assistant message exists, and it
+  // is attributed to an agent other than the parent. `agent-label` renders that
+  // message's own agentId (ChatScreen.tsx), so no model wording can satisfy or break it.
+  await expect(
+    page.locator('[data-message-role="assistant"]').first(),
+    'the child session must render its own assistant output in its own live view',
+  ).toBeVisible({ timeout: 240_000 })
+  const firstChildLabel = (
+    await page.getByTestId('agent-label').first().innerText({ timeout: 30_000 })
+  ).trim()
+  expect(
+    firstChildLabel,
+    'the child view must attribute its output to the worker, not to the parent agent',
+  ).not.toMatch(/Jim/i)
 
   const childInput = chatInput(page)
   await expect(childInput).toBeEnabled({ timeout: 30_000 })
@@ -151,20 +192,118 @@ test('steered session is reachable in its own live view without leaking child ou
   // what this test means by "reachable", it is decided by the server rather
   // than by a language model, and it cannot pass while the steer went to
   // the wrong session or to no live turn at all.
+  //
+  // The badge's accessible name lives on the IconButton INSIDE the testid
+  // wrapper (ConnectionStatus.tsx::StatusTooltip renders
+  // `<IconButton aria-label={label}>`), not on the wrapper itself — the
+  // wrapper holds only role="status" and the icon, so reading its text or
+  // aria-label yields "" forever. CI run on 2aca3f4fe failed exactly that
+  // way: 'Received string: ""'. Match the button by its accessible name so
+  // the assertion reads the node that actually carries the state.
   const steerDelivery = page.getByTestId('user-message-delivery-status').last()
   await expect(steerDelivery).toBeVisible({ timeout: 30_000 })
-  await expect
-    .poll(async () => (await steerDelivery.getAttribute('aria-label')) ?? (await steerDelivery.innerText()), {
-      timeout: 120_000,
-      message:
-        'the steer never reached a live turn on the child session — the delivery badge never advanced to "working"',
-    })
-    .toMatch(/working on it/i)
+  await expect(
+    steerDelivery.getByRole('button', { name: /working on it/i }),
+    'the steer never reached a live turn on the child session — the delivery badge never advanced to "working"',
+  ).toBeVisible({ timeout: 120_000 })
+
+  // ── Containment probe: WHO produced the message, not WHAT it says ─────────
+  //
+  // CI run 36096479273 / job 107950031485 (b19dd0c2c), attempt 1, proved the
+  // old probe here —
+  // `expect(parentView.getByText(CHILD_ONLY_SENTINEL)).toHaveCount(0)` —
+  // unsound by construction, and the artifacts say so three separate ways:
+  //
+  //   1. THE PARENT ITSELF TYPES THE SENTINEL. It is interpolated verbatim
+  //      into the `task:` line of the human's own prompt above (this file,
+  //      the input.fill() block). test-failed-2.png for that attempt is the
+  //      parentView, and the sentinel is plainly visible inside the user
+  //      bubble carrying that prompt. So the parent chat legitimately
+  //      contains it with containment working perfectly — "Received: 1" was
+  //      the test reading its OWN input back.
+  //   2. IT IS NOT IN A TOOL-CALL BADGE. ToolCallBadge.tsx renders the
+  //      Parameters <pre> only under `{expanded && !isRunning && ...}`
+  //      (ToolCallBadge.tsx:104 opens the badge, the detail block is gated
+  //      below it) and badges start collapsed — so "exclude the delegate
+  //      badge" would not have fixed anything; the match is the human's own
+  //      message row.
+  //   3. THE COUNT IS NOT STABLE, so "assert at most N" is not available
+  //      either. Retry #2 of the same job got PAST this line with a count of
+  //      ZERO and failed much later (its error-context.md shows the final
+  //      ActivityBar assertion, line ~203). The message list is virtualised
+  //      — useVirtualizer with `overscan: 5`, ChatScreen.tsx:1678-1686 — and
+  //      re-pins to the BOTTOM on mount (ChatScreen.tsx:1610), so the human's
+  //      prompt (the OLDEST row) is mounted or not depending purely on how
+  //      long the parent's transcript grew. A count-based oracle here is a
+  //      coin flip.
+  //
+  // And the sentinel is unusable even in principle: "only the child's final
+  // answer, through the proper envelope" means an answer propagating C->B->A
+  // ->parent may legitimately carry it. The same job's child-A snapshot
+  // (error-context.md, attempt 1) shows child A's own assistant prose quoting
+  // "...finish with exactly ADR091_CHILD_VIEW_ONLY" unprompted. Any
+  // text-match on this string in the parent chat is therefore either a
+  // model-compliance oracle or a false alarm. Do not reinstate one.
+  //
+  // Replaced with ATTRIBUTION, which the DOM does expose. Note what it is
+  // NOT: rendered messages carry no producing-session attribute at all —
+  // ChatScreen.tsx's four message rows (1006, 1068, 1075, 1264) and
+  // MessageItem.tsx:184 stamp only data-message-role / data-message-id /
+  // data-status, so "no message in the parent view belongs to the child
+  // session" cannot be written directly. What IS stamped per message is the
+  // agent that produced it: `agent-label` renders `agentDisplayName`, derived
+  // from that MESSAGE's own `agentId` (ChatScreen.tsx:1162-1164 for the
+  // virtualised row, 1808-1811 for the live one — the session's active agent
+  // is only the fallback). The id->name mapping is a server-side roster fact
+  // pinned in Go: pkg/coreagent/adr090_roster_test.go:23 maps agent id
+  // "worker" (the `agent_id` this test's prompt delegates to) to the display
+  // name "General Purpose", while the parent runs Jim.
+  //
+  // So: read the child's attribution off the child view at runtime rather
+  // than hard-coding it (a hard-coded string that drifts would make this
+  // assertion silently vacuous), prove it is NOT the parent's own agent — an
+  // absence assertion is only worth writing if the thing could have been
+  // present, and a worker-attributed row provably exists, in the child view,
+  // right now — then require the parent thread to contain none of it.
+  //
+  // This is the ADR-091 D7 rule stated literally: "the parent's chat shows
+  // nothing of the child ... a child's steps, narration and output never
+  // render there" (ADR-091-steered-sessions-replace-subagents.md:201, :205).
+  // The regression it is aimed at is a child turn's frame carrying the
+  // PARENT's session id as its routing key — the one thing that would file
+  // child output into the parent's own store bucket and render it
+  // (src/store/chat/slices/frames.ts routes purely by frame.session_id; a
+  // frame stamped with the CHILD's id lands in a separate bucket and is not
+  // rendered in the parent view at all). `agent_id` rides those same frames,
+  // so the leaked row arrives already labelled with the worker.
+  //
+  // KNOWN LIMIT, stated rather than papered over: a leaked frame carrying NO
+  // agent_id would fall back to the parent's session agent and render as
+  // "Jim", which this probe cannot see. The tool-call half of that hole is
+  // covered by the delegate-chip count below — the child's OWN nested
+  // delegate calls would push it past 1.
+  const childAgentLabel = (
+    await page.getByTestId('agent-label').first().innerText({ timeout: 30_000 })
+  ).trim()
+  expect(
+    childAgentLabel,
+    'the child view must attribute its assistant messages to some agent, or there is no attribution to look for in the parent',
+  ).not.toBe('')
+  expect(
+    childAgentLabel,
+    'the child must run a DIFFERENT agent from the parent (Jim), or "no child-attributed message in the parent" is vacuous',
+  ).not.toMatch(/Jim/i)
 
   const parentView = await context.newPage()
   await parentView.goto(parentURL)
   await expect(parentView.locator('[data-testid="chat-input"]').first()).toBeVisible({ timeout: 15_000 })
-  await expect(parentView.getByText(CHILD_ONLY_SENTINEL, { exact: false })).toHaveCount(0)
+  // The parent's transcript must actually be mounted before absence means
+  // anything — otherwise every check below passes against an empty thread.
+  await expect(parentView.locator('[data-message-role="assistant"]').first()).toBeVisible({ timeout: 30_000 })
+  await expect(
+    parentView.getByTestId('agent-label').filter({ hasText: childAgentLabel }),
+    `the parent thread renders a message attributed to "${childAgentLabel}" — the delegated child's own output reached the human's chat instead of staying in its own session`,
+  ).toHaveCount(0)
   // Containment, restated so it cannot pass vacuously: the STEER ITSELF was
   // addressed to the child's session, so the parent's chat must not render
   // it. 'Steering update' is text we sent, so it provably exists somewhere
@@ -191,12 +330,23 @@ test('steered session is reachable in its own live view without leaking child ou
     parentView.locator('[data-testid="tool-call-badge"][data-tool="delegate"]'),
     'the parent\'s delegate chip is the delegation surface that persists across reload at idle',
   ).toHaveCount(1)
-  // And the inverse of the old assertion is itself part of the design
-  // contract: an idle, purely-successful parent deliberately mounts no bar
-  // (same shouldMount gate; pins the /visual-qa decision so an
-  // always-visible idle bar cannot quietly come back).
-  await expect(
-    parentView.locator('[data-testid="activity-bar"]'),
-    'ActivityBar mounts nothing when idle after a purely-successful delegation (shouldMount: no open child, no panel, no failure)',
-  ).toHaveCount(0)
+  // This previously asserted the bar mounts NOTHING here. That premise —
+  // "idle and purely successful" — is not something this test can guarantee, and
+  // it failed in CI for a legitimate reason: a retained "1 failed" chip made
+  // hasFailedRecent true, so the gate mounted the bar correctly and the
+  // assertion called it a regression. Since 37965946f the gate also mounts for
+  // any open background command (founder decision: the pill is ActivityPanel's
+  // only entry point), giving the old form a SECOND premise it cannot control.
+  //
+  // Assert the invariant that actually matters instead, and which no unrelated
+  // background work can disturb: once the delegation has finished, nothing may
+  // still be CLAIMED as running. A retained failure or a live shell job may
+  // legitimately keep the pill up — a phantom "N running" may not.
+  const parentBarLabel = parentView.locator('[data-testid="activity-bar-label"]')
+  if ((await parentBarLabel.count()) > 0) {
+    await expect(
+      parentBarLabel,
+      'after the delegation finished the pill must not still claim a running child',
+    ).not.toHaveText(/\d+ running/)
+  }
 })

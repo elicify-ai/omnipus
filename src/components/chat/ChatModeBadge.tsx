@@ -36,7 +36,7 @@ export function ChatModeBadge({ className }: { className?: string }) {
   const { resolved, kernelSandboxActive, godModeActive } = useResolvedAutoApprove()
 
   if (godModeActive) {
-    // error variant, matching GodModeActiveBanner's own red styling — God
+    // error variant, matching the sidebar God Mode pill's red styling — God
     // Mode is the highest-risk state this badge can report, not a neutral
     // status like Ask/Auto.
     return (
