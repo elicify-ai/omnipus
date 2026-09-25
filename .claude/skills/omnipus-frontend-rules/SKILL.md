@@ -17,10 +17,9 @@ authoritative on the facts this restates.
   means anything. Never bare `tsc --noEmit` — `tsconfig.json` is a project-references
   root with no `include`/`files`, so a bare invocation is a silent no-op that always
   exits 0 (`docs/internal/false-green-patterns.md` section 9).
-- Vite builds to `dist/spa/`, copied to `pkg/gateway/spa/` and embedded via `go:embed`
-  (`CLAUDE.md`, "Tech stack and platforms"). <!-- agent-guard: allow, pkg/gateway/spa/ is gitignored and absent until the first SPA build --> A missing `pkg/gateway/spa/` in a
-  fresh worktree is backend-lead's stub trap, not a frontend defect — do not "fix" it by
-  editing frontend build config.
+- Vite builds to `dist/spa/`, copied to `pkg/gateway/spa/` and embedded via `go:embed` (`CLAUDE.md`, "Tech stack and platforms"). # agent-guard: allow
+  `pkg/gateway/spa/` is gitignored and absent until the first SPA build. # agent-guard: allow
+  A missing `pkg/gateway/spa/` in a fresh worktree is backend-lead's stub trap, not a frontend defect — do not "fix" it by editing frontend build config. # agent-guard: allow
 - A green under one flag set is not a pass here either: a design-system-only stage keeps
   its lighter gate (`/code-review high`), never the full 7-reviewer/8-reviewer gate.
 

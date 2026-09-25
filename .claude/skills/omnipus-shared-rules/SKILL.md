@@ -35,7 +35,7 @@ to the section instead of copying it, so there is one source per fact.
    commit authorship (MANDATORY)").
 8. One worktree per writer — never two writers in one working copy. Same-file overlap
    between parallel streams is fine (parallel branches, conflict resolved at merge);
-   sharing a working copy is not. Never bare `git stash` (the stash stack is shared
+   sharing a working copy is not. Never bare `git stash` (quoted to forbid it # agent-guard: allow) (the stash stack is shared
    across worktrees); commit frequently on the working branch; never merge to `main`
    without human approval (`CLAUDE.md`, "Merging to main (MANDATORY)").
 9. Run GitNexus impact analysis before editing any symbol; warn on HIGH/CRITICAL blast
@@ -63,8 +63,8 @@ to the section instead of copying it, so there is one source per fact.
 
 - Cite `file::symbol`, never `file:line` — line numbers go stale within days.
 - Authoritative refs, ADR handling, and archived-BRD superseding: `CLAUDE.md` ("Project").
-- `docs/internal/plan/` no longer exists — wave specs moved to `docs/internal/_archive/`.
-  Agent files/skills still pointing at `docs/internal/plan/...` cite a dead path. <!-- agent-guard: allow, cited as a do-not-cite warning -->
+- `docs/internal/plan/` no longer exists # agent-guard: allow (cited as a do-not-cite warning) — wave specs moved to `docs/internal/_archive/`.
+  Agent files/skills still pointing at `docs/internal/plan/...` cite a dead path. # agent-guard: allow (cited as a do-not-cite warning)
 - Codebase questions: GitNexus MCP first (`query`, `context`, `impact`, `trace`,
   `explain`), Read/Grep as fallback — `graphify` is retired, no `graphify-out/` exists
   (`CLAUDE.md`, "Code intelligence: GitNexus").
@@ -134,7 +134,7 @@ to the section instead of copying it, so there is one source per fact.
   starting — worktree branches have been found 1650+ commits behind.
 - No hotfix branches: a feature ships together on its one branch, urgency is P0
   ordering within it, not a separate branch.
-- One worktree per writing agent (rule 8); never `git stash` bare — commit a WIP or use
+- One worktree per writing agent (rule 8); never `git stash` bare (quoted to forbid it # agent-guard: allow) — commit a WIP or use
   a plain file copy; never force-push, never reset to a remote ref (roll back to a
   captured SHA — origin can be behind).
 - Before committing, `git diff --cached --name-status` must list only intended files —

@@ -17,7 +17,7 @@ this restates.
   build`, which inject the tags. `build constraints exclude all Go files in
   .../pkg/channels/matrix` means a missing tag, not a broken package (`CLAUDE.md`,
   "Build, test, and quality gates").
-- Never run the full Go suite locally (`go test ./...` OOM-kills the shared machine <!-- agent-guard: allow, quoted to forbid it -->). At
+- Never run the full Go suite locally (`go test ./...` OOM-kills the shared machine # agent-guard: allow (quoted to forbid it)). At
   most ONE narrowly-scoped local test:
   `CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/<one>/` — never
   multiple Go suites in parallel.
@@ -56,8 +56,8 @@ this restates.
   hardcoded allow/deny/ask fallback, no `DefaultPolicy` field, no fail-closed per-agent
   backfill — do not reintroduce (`scripts/check-no-fail-closed-backfill.sh`). Lock a tool
   down with an explicit `deny`, per-agent or on the ceiling.
-- Retired security surfaces (shell deny-pattern list, per-binary exec allowlist,
-  `ExecApprovalManager`) stay deleted <!-- agent-guard: allow, retired names quoted to forbid reintroducing them -->; enforcer:
+- Retired security surfaces (shell deny-pattern list, per-binary exec allowlist, # agent-guard: allow
+  `ExecApprovalManager`) stay deleted # agent-guard: allow (retired names quoted to forbid reintroducing them); enforcer:
   `scripts/check-no-shell-deny-patterns.sh`.
 
 ## Size budgets
