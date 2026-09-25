@@ -30,11 +30,10 @@ the script or test for each.
   along with SubagentBlock itself, and deleted `shouldRenderToolCallInPanel` /
   ToolCallBadge's `surface="panel"` prop along with the ActivityPanel step
   list they gated — a child's own frames never arrive in the parent's bucket
-  any more (I-4), so there is no span/step surface left anywhere. The
-  `delegate` tool-call chip (`shouldRenderToolCall`'s `delegate` case) is now
-  the parent chat's ONLY delegation surface, and ADR-091 D7/AC-7 requires it
-  to carry that job: a `run` action (the default) is visible in the normal,
-  non-verbose thread; only `status` (polling) stays hidden.
+  any more (I-4), so there is no span/step surface left anywhere.
+  Every `delegate` action is hidden in the non-verbose thread (delegation
+  chat surface spec D2). The grey event line is that surface. Verbose chat
+  shows every delegate badge.
 - Hiding is render-only: hidden calls still exist in the persisted session
   transcript. Do not "fix" persistence to match what the UI shows.
 - The ActivityPanel slide-out (`ActivityPanel.tsx`) is a separate, unrelated
@@ -44,7 +43,7 @@ the script or test for each.
   `RECENTLY_FINISHED_CAP`.
 - "Verbose chat" (Settings → Chat, `chat-verbose-switch` in
   `src/components/settings/ChatSection.tsx`) reveals everything in the
-  thread, `delegate`'s `status` case included.
+  thread, every delegate badge included.
 
 ## Register
 
