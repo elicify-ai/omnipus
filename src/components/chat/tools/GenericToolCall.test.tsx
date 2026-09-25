@@ -248,11 +248,9 @@ describe('GenericToolCall — delegation-denied result sentinel', () => {
     expect(badge).not.toHaveTextContent(/\bFailed\b/)
   })
 
-  // ADR-091 D7/AC-7: a `delegate` call with fully default/absent args
-  // (action defaults to "run") is visible in the thread by DEFAULT, denied
-  // or not — it is the parent's ONLY delegation surface now, so it cannot
-  // wait for verbose chat. This test pins BOTH halves: visible with verbose
-  // OFF, and the exact same denial-chip content either way.
+  // Delegation chat surface D2: a policy-denied `delegate` call is hidden
+  // when verbose chat is off — the refusal is an event line, not a badge.
+  // Verbose chat shows the denial chip. This test pins both halves.
   it('a policy-denied delegation is hidden when verbose is off, and shows the denial chip when verbose is on', () => {
     const delegationDenied = {
       error: 'delegation_denied' as const,
@@ -262,8 +260,8 @@ describe('GenericToolCall — delegation-denied result sentinel', () => {
       target_agent_id: 'scout-01',
     }
 
-    // With verbose forced back OFF, the row must still be visible — a
-    // denied 'run' delegation has no other thread-side surface to defer to.
+    // Verbose off: no badge. The refusal's reader-facing surface is the
+    // event line, not this chip.
     // Issue #617: producible pairing (result + status:complete + error) —
     // see the first test in this describe block for the full rationale.
     act(() => {

@@ -1,16 +1,8 @@
 /**
- * ChatScreen.delegation-thread-visibility.test.tsx — ADR-091 D7/AC-7: the
- * parent's chat THREAD must show exactly the one line a `delegate` call
- * produces — a `run` action (the default, sync or async) is VISIBLE by
- * default, with no isError exception either way (see toolVisibility.ts's
- * shouldRenderToolCall doc comment). This supersedes the pre-ADR-091 Fix 2
- * rule (delegation hidden from the thread by default) — the span/step
- * surface that rule deferred to (SubagentBlock's delegation card,
- * `shouldRenderSubagentSpan`) is deleted: a child's own frames never arrive
- * in the parent's bucket any more, so there is nothing left for a span to
- * show, and this tool-call line is the thread's ONLY delegation surface.
- * Only `status` (polling a previously-delegated task) still stays hidden by
- * default — pure noise, no standalone meaning to a reader.
+ * ChatScreen.delegation-thread-visibility.test.tsx — delegation chat
+ * surface D2 (docs/internal/specs/delegation-chat-surface-spec.md): with
+ * verbose chat off, a `delegate` call is not a badge. The grey event line
+ * is the thread's delegation surface. Verbose chat still shows the badge.
  *
  * ADR-091 D7/D10: this file's original first describe block asserted
  * presence/absence of the SubagentBlock span card (a `./SubagentBlock`
@@ -21,7 +13,7 @@
  * verbosity. That block, and the stub, are removed with it. The remaining
  * two blocks — the flat `delegate` tool-call row (GenericToolCall's own
  * `shouldRenderToolCall` gate) and the ghost-bubble guard — are untouched
- * by that deletion and stay, updated for the new default-visible `run` rule.
+ * by that deletion and stay. They now assert D2: hidden unless verbose chat is on.
  *
  * Style mirrors ChatScreen.tool-order.test.tsx: full ChatScreen render,
  * PlainMessageList fallback (ResizeObserver forced undefined) so a finished

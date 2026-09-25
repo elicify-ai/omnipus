@@ -228,10 +228,10 @@ export function shouldRenderToolCall(
  * renders as a standalone card in the chat THREAD (ADR-049 SD-C10). Judge
  * calls are out-of-turn internal LLM actions with no standalone meaning to a
  * reader — same class as background-`bash` — so they follow the same
- * hide-by-default, verbose-only rule rather than a bespoke policy (this is
- * unlike `delegate`, ADR-091 D7/AC-7: a delegation IS a standalone,
- * reader-meaningful action, which is why that case is visible by default —
- * a judge verdict is not). The verdict is still fully persisted (transcript
+ * hide-by-default, verbose-only rule rather than a bespoke policy.
+ * Delegate badges are verbose-only too (delegation chat surface D2); the
+ * grey event line is the normal-thread delegation surface, and a judge
+ * verdict is not that line. The verdict is still fully persisted (transcript
  * entry) and fully transparent via the ActivityPanel (panel visibility is
  * NOT gated by this function at all — see `useRunningActivity`/
  * `ActivityPanel`, which always render a judge row regardless of verbose
