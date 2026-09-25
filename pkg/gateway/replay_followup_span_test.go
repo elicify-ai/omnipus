@@ -178,3 +178,46 @@ func TestReplay_SteeringReceiptSpanIDRoundTrips(t *testing.T) {
 		t.Fatalf("replayed receipt span_id = %q, want span_call-1_g2", got)
 	}
 }
+
+// TestReplay_Gen1StartWithoutEnd_FinishedGen2IsNotStillActive is the
+// stop-then-revive hole. Revive can bump the generation before generation
+// 1's end is written: completeSteeredTurn returns without delivering once
+// the generation has changed (pkg/agent/steer_completion.go). The
+// transcript then holds a generation-1 start, no generation-1 end, and a
+// finished generation 2. The outer delegate call must not stay "still
+// running" — its tool_call_result must be replayed.
+func TestReplay_Gen1StartWithoutEnd_FinishedGen2IsNotStillActive(t *testing.T) {
+	const callID = "call-1"
+	const gen1Label = "gen1-open-sentinel"
+	gen1Start := followUpStartEntry(callID+":start", "span_"+callID, callID)
+	gen1Start.SubagentStart.TaskLabel = gen1Label
+	entries := []session.TranscriptEntry{
+		assistantEntry("delegating", "mia", toolCall(callID, "delegate", "success", 0, map[string]any{"task": "write the report"}, nil)),
+		gen1Start,
+		followUpStartEntry(callID+":g2:start", "span_"+callID+"_g2", callID),
+		followUpEndEntry(callID+":g2:end", "span_"+callID+"_g2", callID, "success"),
+	}
+	frames, _ := runReplay(t, entries)
+
+	var sawResult, sawGen2End, sawGen1Start bool
+	for _, f := range frames {
+		if f.Type == "tool_call_result" && f.CallID == callID {
+			sawResult = true
+		}
+		if f.Type == "subagent_end" && f.SpanID == "span_"+callID+"_g2" && f.Status == "success" {
+			sawGen2End = true
+		}
+		if f.Type == "subagent_start" && f.SpanID == "span_"+callID && f.TaskLabel == gen1Label {
+			sawGen1Start = true
+		}
+	}
+	if !sawGen1Start {
+		t.Fatal("generation-1 start with label gen1-open-sentinel was not replayed; the fixture was not indexed")
+	}
+	if !sawGen2End {
+		t.Fatal("generation 2's successful end was not replayed")
+	}
+	if !sawResult {
+		t.Fatal("outer delegate call stayed stillActive after a finished later generation: tool_call_result was withheld")
+	}
+}

@@ -1077,7 +1077,10 @@ func (sr *streamReplayState) classifyToolCall(ei int, entry session.TranscriptEn
 	// in truth, still working; the real completion arrives later either
 	// over the live WS event stream, or on the next reload once
 	// deliverSubagentEnd has persisted it.
-	sr.stillActive = isDelegateSpawnCall && sr.persistedSubagentStartSpans[sr.spanID] && !sr.persistedSubagentEndSpans[sr.spanID]
+	// A later finished generation also clears stillActive. See
+	// laterGenerationFinished.
+	gen1Open := sr.persistedSubagentStartSpans[sr.spanID] && !sr.persistedSubagentEndSpans[sr.spanID]
+	sr.stillActive = isDelegateSpawnCall && gen1Open && !laterGenerationFinished(sr.persistedSubagentEndSpans, sr.spanID)
 	return streamReplayStateNext
 }
 
@@ -1400,6 +1403,29 @@ func canonicalReplaySpanID(entryID, storedSpanID, parentCallID string) string {
 		return agent.SubagentSpanID(parentCallID, 1)
 	}
 	return storedSpanID
+}
+
+// laterGenerationFinished reports whether some generation N >= 2 of this
+// generation-1 span already has a persisted end. Revive can bump the
+// generation before completeSteeredTurn delivers generation 1's end
+// (pkg/agent/steer_completion.go returns once the generation has changed),
+// so a stopped-then-revived run can sit on disk as a generation-1 start
+// with no generation-1 end. That must not keep the outer call "still
+// running" after a later generation of the same call has finished.
+// The suffix is the same "_g<N>" agent.SubagentSpanID appends.
+func laterGenerationFinished(ends map[string]bool, gen1SpanID string) bool {
+	prefix := gen1SpanID + "_g"
+	for id := range ends {
+		if !strings.HasPrefix(id, prefix) {
+			continue
+		}
+		n, err := strconv.Atoi(id[len(prefix):])
+		if err != nil || n < 2 {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // buildPersistedSubagentSpanIndexes scans entries once for every persisted
