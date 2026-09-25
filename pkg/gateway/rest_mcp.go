@@ -176,9 +176,21 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 			sort.Strings(keys)
 			entry.EnvKeys = &keys
 		}
-		if len(srv.Headers) > 0 {
-			names := make([]string, 0, len(srv.Headers))
+		// Issue #638: names from BOTH sources — literal Headers (pre-#638
+		// install) and HeaderRefs (credential-store-backed, everything the
+		// REST create/patch path has written since) — are reported, so a
+		// ref-backed server still shows its header configuration in the UI
+		// edit pre-fill. Names only; values never cross the wire either way.
+		if len(srv.Headers) > 0 || len(srv.HeaderRefs) > 0 {
+			nameSet := make(map[string]struct{}, len(srv.Headers)+len(srv.HeaderRefs))
 			for k := range srv.Headers {
+				nameSet[k] = struct{}{}
+			}
+			for k := range srv.HeaderRefs {
+				nameSet[k] = struct{}{}
+			}
+			names := make([]string, 0, len(nameSet))
+			for k := range nameSet {
 				names = append(names, k)
 			}
 			sort.Strings(names)
@@ -311,6 +323,27 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 			envRefs[key] = credKey
 		}
 	}
+	// Issue #638: header values (Authorization, Proxy-Authorization, Cookie,
+	// and any other request header the operator sets) are credentials — they
+	// go to the encrypted credential store exactly like env values above, and
+	// only their NAMES land in config.json, under header_refs. The literal
+	// headers block this used to write (`entry["headers"] = *req.Headers`) is
+	// gone: persisting the values there was the #638 leak. Same partial-
+	// failure semantics as env: a mid-loop store failure leaves earlier
+	// entries stored but harmless (no config write happens) and 500s.
+	var headerRefs map[string]string
+	if req.Headers != nil && len(*req.Headers) > 0 {
+		headerRefs = make(map[string]string, len(*req.Headers))
+		for key, value := range *req.Headers {
+			credKey := mcpHeaderCredKey(req.Name, key)
+			if _, err := a.storeCredential(credKey, value); err != nil {
+				slog.Error("rest: add mcp server: store header credential", "server", req.Name, "header", key, "error", err)
+				jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not store header credential %q: %v", key, err))
+				return
+			}
+			headerRefs[key] = credKey
+		}
+	}
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
 		if tools == nil {
@@ -363,8 +396,12 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		if req.EnvFile != nil && *req.EnvFile != "" {
 			entry["env_file"] = *req.EnvFile
 		}
-		if req.Headers != nil && len(*req.Headers) > 0 {
-			entry["headers"] = *req.Headers
+		// Issue #638: only the ref NAMES are persisted; the values live in
+		// the encrypted credential store (written above the closure). The
+		// literal `entry["headers"] = *req.Headers` write is deleted — that
+		// plaintext persistence was the leak the issue closes.
+		if len(headerRefs) > 0 {
+			entry["header_refs"] = headerRefs
 		}
 		servers[req.Name] = entry
 		return nil
@@ -379,6 +416,15 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 				if delErr := a.removeStoredCredential(credKey); delErr != nil {
 					slog.Warn("rest: add mcp server: name-collision race — failed to roll back env credential",
 						"server", req.Name, "env_key", envKey, "cred_key", credKey, "error", delErr)
+				}
+			}
+			// Same rollback for #638's header credentials: a rejected create
+			// must not leave its header secrets stored under the winning
+			// server's deterministic keys.
+			for headerName, credKey := range headerRefs {
+				if delErr := a.removeStoredCredential(credKey); delErr != nil {
+					slog.Warn("rest: add mcp server: name-collision race — failed to roll back header credential",
+						"server", req.Name, "header", headerName, "cred_key", credKey, "error", delErr)
 				}
 			}
 			jsonErr(w, http.StatusConflict, err.Error())
@@ -465,6 +511,9 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 	// deleting the credential entries before the config write is confirmed
 	// would risk destroying secrets for a removal that then fails to persist.
 	var removedEnvRefs map[string]string
+	// Issue #638: the server's ref-backed header secrets are cleaned up
+	// exactly like its env secrets below — after the config write confirms.
+	var removedHeaderRefs map[string]string
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
 		if tools == nil {
@@ -485,6 +534,7 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 				var current config.MCPServerConfig
 				if uErr := json.Unmarshal(raw, &current); uErr == nil {
 					removedEnvRefs = current.EnvRefs
+					removedHeaderRefs = current.HeaderRefs
 				}
 			}
 			delete(servers, id)
@@ -513,6 +563,13 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 		if err := a.removeStoredCredential(credKey); err != nil {
 			slog.Warn("rest: delete mcp server: failed to delete env credential",
 				"server", id, "env_key", envKey, "cred_key", credKey, "error", err)
+		}
+	}
+	// Issue #638: same cleanup for the ref-backed header secrets.
+	for headerName, credKey := range removedHeaderRefs {
+		if err := a.removeStoredCredential(credKey); err != nil {
+			slog.Warn("rest: delete mcp server: failed to delete header credential",
+				"server", id, "header", headerName, "cred_key", credKey, "error", err)
 		}
 	}
 	// Config write succeeded — reconcile the live manager so the removed server is
@@ -578,8 +635,7 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, r *http.Request, id strin
 	// Resolve any credential-store env refs the same way production
 	// reconciliation does (pkg/agent/loop_mcp.go's reconcileLocked) — a
 	// server added via add_mcp_server carries EnvRefs, not literal Env, so
-	// without this the throwaway test connection would spawn the process
-	// with its secrets missing and report a misleading failure.
+	// without this the throwaway connection would report a misleading failure.
 	if a.credStore != nil {
 		resolvedSrv, err = mcp.ResolveServerEnvRefs(resolvedSrv, a.credStore.Get)
 	} else {
@@ -589,6 +645,22 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, r *http.Request, id strin
 		jsonOK(w, gen.McpServerTestResponse{
 			Success: false,
 			Message: fmt.Sprintf("env credential reference: %s", err.Error()),
+		})
+		return
+	}
+	// Issue #638: resolve credential-store header refs the same way — an
+	// sse/http server carries its Authorization/Cookie/Proxy-Authorization
+	// as HeaderRefs, and a Test click must exercise the connection exactly
+	// as production would make it.
+	if a.credStore != nil {
+		resolvedSrv, err = mcp.ResolveServerHeaderRefs(resolvedSrv, a.credStore.Get)
+	} else {
+		resolvedSrv, err = mcp.ResolveServerHeaderRefs(resolvedSrv, nil)
+	}
+	if err != nil {
+		jsonOK(w, gen.McpServerTestResponse{
+			Success: false,
+			Message: fmt.Sprintf("header credential reference: %s", err.Error()),
 		})
 		return
 	}
@@ -748,9 +820,8 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		if req.EnvFile != nil {
 			current.EnvFile = *req.EnvFile
 		}
-		if req.Headers != nil {
-			current.Headers = *req.Headers
-		}
+		// req.Headers is handled in the credential block below (issue #638):
+		// values go to the encrypted store, only names land in config.json.
 
 		// Transport-consistency on the MERGED result (transport itself is immutable
 		// via PATCH): stdio uses command (no url); sse/http use url (no command).
@@ -791,6 +862,36 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 				current.EnvRefs[key] = credKey
 				if current.Env != nil {
 					delete(current.Env, key)
+				}
+			}
+		}
+
+		// Issue #638: header values are credentials - same treatment as env
+		// directly above. Each provided header's value is stored (or overwritten
+		// in place for an already ref-backed key) and its name lands in
+		// HeaderRefs; the literal copy in current.Headers is deleted (superseded
+		// by its ref). Headers NOT mentioned in an incoming PATCH, literal or
+		// ref-backed alike, are left untouched - mirroring the env block's merge
+		// semantics. Deliberate asymmetry vs the pre-#638 merge
+		// (`current.Headers = *req.Headers`): an empty headers map in the
+		// request no longer CLEARS all headers; per-header updates and adds are
+		// unchanged (send the header with its new value), so the only lost
+		// operation is "clear everything at once", which the UI can express
+		// per-header. Placed after the transport-consistency validation for the
+		// same reason env's block is: a request that fails validation never
+		// reaches a credential-store write.
+		if req.Headers != nil && len(*req.Headers) > 0 {
+			if current.HeaderRefs == nil {
+				current.HeaderRefs = make(map[string]string, len(*req.Headers))
+			}
+			for key, value := range *req.Headers {
+				credKey := mcpHeaderCredKey(id, key)
+				if _, credErr := a.storeCredential(credKey, value); credErr != nil {
+					return fmt.Errorf("store header credential %q: %w", key, credErr)
+				}
+				current.HeaderRefs[key] = credKey
+				if current.Headers != nil {
+					delete(current.Headers, key)
 				}
 			}
 		}

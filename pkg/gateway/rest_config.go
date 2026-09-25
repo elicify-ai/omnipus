@@ -60,6 +60,12 @@ func (a *restAPI) getConfig(w http.ResponseWriter) {
 
 	// Redact any top-level field names that look like credentials.
 	redactSensitiveFields(m)
+	// Issue #638: header values under tools.mcp.servers.<name>.headers are
+	// request credentials (Authorization/Cookie/Proxy-Authorization) whose
+	// NAMES match no keyword in redactSensitiveFields — redact them here so
+	// GET /api/v1/config never carries an MCP header value, whatever wrote
+	// the literal into config.json.
+	redactMCPServerHeaderValues(m)
 
 	// Strip internal-only bookkeeping keys from the wire.
 	sanitizeConfigForWire(m)
@@ -240,6 +246,56 @@ func channelCredKey(channelID, field string) string {
 // diverge between them.
 func mcpEnvCredKey(serverName, envKey string) string {
 	return "mcp_" + serverName + "_" + envKey
+}
+
+// mcpHeaderCredKey returns the canonical credential-store key for one MCP
+// server's request-header secret (issue #638) — "mcp_<server>_header_<header>".
+// The REST create/patch paths (addMCPServer/patchMCPServer) write refs under
+// this key; pkg/mcp.ResolveServerHeaderRefs reads regardless of which path
+// created the ref. The "_header_" infix keeps these keys disjoint from env
+// keys ("mcp_<server>_<envKey>") for every realistic name: a collision needs
+// an env var literally named "header_<HeaderName>" on the SAME server, and
+// even then both keys belong to that one server's own credential namespace.
+func mcpHeaderCredKey(serverName, header string) string {
+	return "mcp_" + serverName + "_header_" + header
+}
+
+// redactMCPServerHeaderValues redacts the values of
+// tools.mcp.servers.<name>.headers in a decoded config map (issue #638).
+// redactSensitiveFields's keyword list ("key/token/secret/password/credential/
+// api_key") cannot match the HTTP header names that carry credentials —
+// "Authorization", "Proxy-Authorization", "Cookie" — so literal header values
+// (a pre-#638 install, or a config hand-seeded in tests) sail through. Header
+// values are request credentials by definition; a header whose value is NOT a
+// secret (User-Agent) loses nothing material to [redacted].
+func redactMCPServerHeaderValues(m map[string]any) {
+	tools, _ := m["tools"].(map[string]any)
+	if tools == nil {
+		return
+	}
+	mcp, _ := tools["mcp"].(map[string]any)
+	if mcp == nil {
+		return
+	}
+	servers, _ := mcp["servers"].(map[string]any)
+	if servers == nil {
+		return
+	}
+	for _, srv := range servers {
+		srvMap, ok := srv.(map[string]any)
+		if !ok {
+			continue
+		}
+		headers, ok := srvMap["headers"].(map[string]any)
+		if !ok {
+			continue
+		}
+		for k, v := range headers {
+			if s, ok := v.(string); ok && s != "" {
+				headers[k] = "[redacted]"
+			}
+		}
+	}
 }
 
 // removeStoredCredential removes refName from the credential store. A missing

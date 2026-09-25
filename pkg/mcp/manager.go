@@ -330,6 +330,46 @@ func ResolveServerEnvRefs(
 	return resolved, nil
 }
 
+// ResolveServerHeaderRefs is ResolveServerEnvRefs for sse/http request
+// headers (issue #638): each cfg.HeaderRefs entry (key = header name, value =
+// credential-store key) is resolved against the same credential-store lookup
+// and merged into cfg.Headers IN MEMORY ONLY. A HeaderRefs entry overrides a
+// same-named literal Headers entry, mirroring EnvRefs-over-Env. The same
+// semantics apply as for env: empty HeaderRefs is a no-op even with a nil
+// resolve; non-empty HeaderRefs with a nil resolve is an ERROR — silently
+// connecting without the Authorization/Cookie/Proxy-Authorization header the
+// operator configured would surface as a baffling remote 401/403 at best, and
+// as a successful-looking connection to the wrong endpoint at worst.
+func ResolveServerHeaderRefs(
+	cfg config.MCPServerConfig,
+	resolve func(refKey string) (string, error),
+) (config.MCPServerConfig, error) {
+	if len(cfg.HeaderRefs) == 0 {
+		return cfg, nil
+	}
+	if resolve == nil {
+		return cfg, fmt.Errorf(
+			"server has %d header credential reference(s) but no credential resolver is configured",
+			len(cfg.HeaderRefs),
+		)
+	}
+
+	resolved := cfg
+	mergedHeaders := make(map[string]string, len(cfg.Headers)+len(cfg.HeaderRefs))
+	for k, v := range cfg.Headers {
+		mergedHeaders[k] = v
+	}
+	for key, credKey := range cfg.HeaderRefs {
+		value, err := resolve(credKey)
+		if err != nil {
+			return cfg, fmt.Errorf("resolving header credential %q (ref %q): %w", key, credKey, err)
+		}
+		mergedHeaders[key] = value
+	}
+	resolved.Headers = mergedHeaders
+	return resolved, nil
+}
+
 // buildStdioServerEnv computes the environment slice for a spawned stdio MCP
 // server subprocess, applying the C7 secret-scrub and the documented override
 // semantics. It is extracted from ConnectServer so the scrub is unit-testable

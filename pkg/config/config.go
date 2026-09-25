@@ -2286,8 +2286,23 @@ type MCPServerConfig struct {
 	Type string `json:"type,omitempty"`
 	// URL is used for SSE/HTTP transport
 	URL string `json:"url,omitempty"`
-	// Headers are HTTP headers to send with requests (sse/http only)
+	// Headers are HTTP headers to send with requests (sse/http only).
+	// Written directly here means the value is stored in config.json IN
+	// PLAINTEXT — legacy/back-compat path only (reading an install that
+	// predates issue #638 must keep working). Prefer HeaderRefs: since #638
+	// the gateway REST create/patch routes store every header value in the
+	// encrypted credential store and write only refs here, exactly like Env.
 	Headers map[string]string `json:"headers,omitempty"`
+	// HeaderRefs are credential-store references for sse/http request
+	// headers (issue #638): key = header name (e.g. "Authorization"),
+	// value = the credential-store key holding the real secret
+	// (mcpHeaderCredKey, "mcp_<name>_header_<header>"). At connect time,
+	// pkg/mcp.ResolveServerHeaderRefs resolves each ref to its real value
+	// and merges it into Headers IN MEMORY ONLY (never written back to
+	// config.json); a HeaderRefs entry overrides a same-named literal
+	// Headers entry. Greenfield ruling: old installs with literal headers
+	// are NOT migrated — they keep loading and connecting as before.
+	HeaderRefs map[string]string `json:"header_refs,omitempty"`
 }
 
 // MCPConfig defines configuration for all MCP servers
