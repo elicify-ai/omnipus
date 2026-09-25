@@ -253,7 +253,7 @@ describe('GenericToolCall — delegation-denied result sentinel', () => {
   // or not — it is the parent's ONLY delegation surface now, so it cannot
   // wait for verbose chat. This test pins BOTH halves: visible with verbose
   // OFF, and the exact same denial-chip content either way.
-  it('a policy-denied delegation with fully default/absent args is visible by default, showing the full denial chip', () => {
+  it('a policy-denied delegation is hidden when verbose is off, and shows the denial chip when verbose is on', () => {
     const delegationDenied = {
       error: 'delegation_denied' as const,
       reason: 'Scout is not in your trust set for delegation.',
@@ -269,10 +269,23 @@ describe('GenericToolCall — delegation-denied result sentinel', () => {
     act(() => {
       useChatPreferencesStore.setState({ verboseChatEnabled: false })
     })
+    const hidden = render(
+      <GenericToolCall
+        toolName="delegate"
+        result={delegationDenied}
+        status={COMPLETE_STATUS}
+        error={delegationDenied.reason}
+      />
+    )
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+    hidden.unmount()
+
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
     render(
       <GenericToolCall
         toolName="delegate"
-        // No `args` prop at all — the default/common shape.
         result={delegationDenied}
         status={COMPLETE_STATUS}
         error={delegationDenied.reason}
@@ -615,7 +628,7 @@ describe('GenericToolCall — verbose chat gate', () => {
   // (SubagentBlock, deleted along with `shouldRenderSubagentSpan`) is gone,
   // so this tool-call chip is now the thread's ONLY delegation surface and
   // is visible by default, not gated behind verbose chat.
-  it('a background delegate call (default action=run, async=true) renders by default (verboseChatEnabled false)', () => {
+  it('a background delegate call renders no badge when verbose is off (the event line replaces it)', () => {
     render(
       <GenericToolCall
         toolName="delegate"
@@ -623,14 +636,28 @@ describe('GenericToolCall — verbose chat gate', () => {
         status={COMPLETE_STATUS}
       />
     )
-    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
   })
 
-  it('an explicit blocking delegate call (async: false) is ALSO visible by default — no sync exception', () => {
+  it('an explicit blocking delegate call also renders no badge when verbose is off', () => {
     render(
       <GenericToolCall
         toolName="delegate"
         args={{ async: false }}
+        status={COMPLETE_STATUS}
+      />
+    )
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+  })
+
+  it('a delegate run renders a badge once verbose chat is on (AC-9)', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    render(
+      <GenericToolCall
+        toolName="delegate"
+        args={{}}
         status={COMPLETE_STATUS}
       />
     )
@@ -682,7 +709,7 @@ describe('GenericToolCall — verbose chat gate', () => {
   // (poll/read/dispatch), by contrast, keeps its own no-outcome-exception
   // rule: the calling agent's own turn explains the failure, and only
   // verboseChatEnabled brings that row back.
-  it('a background delegate call with a _marshal_error result and non-error status stays VISIBLE — no outcome exception needed, already visible', () => {
+  it('a delegate run with a _marshal_error stays HIDDEN when verbose is off — outcome does not bring the badge back', () => {
     render(
       <GenericToolCall
         toolName="delegate"
@@ -691,7 +718,7 @@ describe('GenericToolCall — verbose chat gate', () => {
         status={COMPLETE_STATUS}
       />
     )
-    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
   })
 
   it('a delegate status poll with a _marshal_error result and non-error status stays HIDDEN — no outcome exception for delegate', () => {

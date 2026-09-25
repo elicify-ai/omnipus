@@ -4,12 +4,11 @@
 // (the SubagentBlock delegation-card gate) along with SubagentBlock itself —
 // a child's own frames never arrive in the parent's bucket any more, so
 // there is no span content left in the thread at any verbosity. The
-// `delegate` tool-call line (shouldRenderToolCall's own case, below) is
-// therefore the thread's ONLY delegation surface, and ADR-091 D7/AC-7
-// requires it to carry that job alone: the parent's chat must show exactly
-// the one line a delegation produces, so a `run` delegation (the default
-// action) is visible in the normal, non-verbose thread — not deferred to a
-// span/step surface that no longer exists.
+// `delegate` tool-call badges are hidden in the normal thread: the grey
+// event line (DelegationEventLine) is that surface now. Verbose chat still
+// renders every delegate call as a badge (delegation-chat-surface spec D2 /
+// AC-9). ADR-091 D7's "run is visible by default" rule is superseded for
+// the non-verbose path only.
 //
 // The ActivityPanel slide-out's own step-level policy
 // (`shouldRenderToolCallInPanel`, ToolCallBadge's `surface="panel"` prop) is
@@ -73,15 +72,11 @@ function paramBool(params: Record<string, unknown> | undefined, key: string): bo
  *     narrate (see the ADR's D3 §3 and D3.1's audit-vs-render distinction —
  *     the call is still audited and still in the transcript either way, this
  *     is render-only).
- *   - `delegate` (ADR-091 D7/AC-7): visibility is param-based only —
- *     `isError` is never consulted. The `run` action (the default) is
- *     visible unconditionally: it is the parent's chat surface for a
- *     delegation, full stop, now that the span/step surfaces this case used
- *     to defer to (SubagentBlock's delegation card, `shouldRenderSubagentSpan`)
- *     are deleted — a child's own frames never arrive in the parent's bucket
- *     any more, so there is nothing left for a span to show. Only `status`
- *     (polling a previously-delegated task) stays hidden, unconditionally —
- *     pure noise with no standalone meaning to a reader, on any outcome.
+ *   - `delegate`: hidden for every action when verbose chat is off. The
+ *     event line carries the story (a `status`/`peek`/`inbox` call produces
+ *     no line either — that is the event derivation's job). `isError` is
+ *     never consulted. Verbose chat still shows every call (the short-
+ *     circuit above).
  *   - The background-dispatch/poll/read sub-cases of `bash`: NO error
  *     exception. A failed background shell command is returned to the
  *     CALLING agent's own turn as the tool result — that agent decides how
@@ -161,26 +156,13 @@ export function shouldRenderToolCall(
       return false
 
     case 'delegate': {
-      // action defaults to "run" (pkg/tools/delegate.go execute()).
-      const action = paramString(params, 'action') ?? 'run'
-      if (action === 'status') {
-        // Polling a previously-delegated task's status — noisy, and wins
-        // over async since delegate.go dispatches on action first. Hidden
-        // unconditionally (isError is not consulted): a poll's own outcome
-        // has no standalone meaning to a reader either way.
-        return false
-      }
-      // ADR-091 D7/AC-7: `run` (sync or async, the default) and every other
-      // action (e.g. 'kill') are visible — unconditionally, `isError`
-      // included. The span/step surfaces this case used to defer to
-      // (SubagentBlock's delegation card, `shouldRenderSubagentSpan`) are
-      // deleted: a child's own frames never arrive in the parent's bucket
-      // any more, so there is nothing left for a span to render. This line
-      // — the delegate tool call itself — is therefore now the parent's
-      // ONLY delegation surface in the thread, at any verbosity, and AC-7
-      // requires it to show by default rather than only when verbose chat
-      // is on.
-      return true
+      // Delegation chat surface (spec D2): with verbose chat off, the grey
+      // event line is the thread surface, so every delegate call — `run`
+      // included — stays off the badge row. Verbose chat already returned
+      // true above (AC-9), so this branch is the non-verbose path only.
+      // `isError` is not consulted: a refusal is a line, not a badge, unless
+      // the reader has opted into verbose chat.
+      return false
     }
 
     case 'bash': {
