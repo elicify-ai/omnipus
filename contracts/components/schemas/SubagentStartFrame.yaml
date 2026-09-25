@@ -24,8 +24,14 @@ properties:
     type: string
     minLength: 1
     description: >
-      Unique identifier for this span. Constructed by the server as
-      "span_" + parent spawn ToolCall.ID.
+      Unique identifier for this span. Opaque on the wire. The server
+      builds it with pkg/agent.SubagentSpanID from the parent spawn
+      ToolCall.ID (parent_call_id) and the child's generation.
+      Generation 1, and any generation below 2, is "span_" plus that id.
+      Generation N of 2 or above is that same string plus "_g" plus N,
+      so a follow-up does not reuse generation 1's id. This frame has
+      no generation field. Replay recovers N from the transcript entry
+      id ("<call id>:g<N>:start" or ":end").
   parent_call_id:
     type: string
     minLength: 1

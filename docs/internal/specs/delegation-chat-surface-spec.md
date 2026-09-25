@@ -1,5 +1,7 @@
 # Delegation chat surface — two pills, and delegation as sentences
 
+**Status:** Implemented
+
 ## Summary
 
 Delegation is currently legible only as tool-call badges. A parent that launches two
@@ -58,6 +60,23 @@ the panel's existing route.
 **D5 — Two pills, one panel.** Each pill mounts only when it has something to show.
 The Commands pill scrolls the panel to the background-commands section.
 
+**D6 — Failed parent actions stay out of the chat (2026-09-25).** A `steer`, `respond`,
+`cancel` or `follow_up` call that fails produces no line: the parent agent sees the failure
+and retries. Verbose chat still shows the call's badge (D2).
+
+**D7 — A background command stopped on purpose reads `⊘ Stopped <command>` (2026-09-25).**
+Only a real failure (non-zero exit, error, timeout) reads `failed`.
+
+**D8 — No cascade count (2026-09-25).** A cascading cancel reads `⊘ Stopped <agent>`; the
+SPA never receives the number of stopped descendants, and the panel already lists them.
+
+**D9 — Each follow-up run is its own span (2026-09-25).** The gateway gives every
+`follow_up` generation its own span identity and start frame, so a follow-up's outcome gets
+its own line and never rewrites the original run's line — live and after a reload.
+
+**D10 — A queued worker ended before it ever ran produces no line (2026-09-25).** It never
+announced itself (D3), so there is nothing to close.
+
 ## The event lines
 
 One muted line, no expander. `<agent>` is the display name; `<title>` the task label.
@@ -70,13 +89,15 @@ One muted line, no expander. `<agent>` is the display name; `<title>` the task l
 | child ends without finishing | `⚠ <agent> stopped without finishing` | yes |
 | `steer` | `→ Sent <agent> a new instruction` | yes |
 | `respond` | `→ Answered <agent>'s question` | yes |
-| `cancel` | `⊘ Stopped <agent>` (+ ` and N below it` when it cascaded) | yes |
+| `cancel` | `⊘ Stopped <agent>` | yes |
 | `follow_up` | `→ Gave <agent> follow-up work · <title>` | yes |
 | refusal (depth, concurrency cap, unknown skill) | `⚠ Delegation refused · <reason>` | no |
 | `status`, `peek`, `inbox`, `inbox_ack` | **nothing** | — |
 | background command launched | `→ Running in background · <command>` | no |
 | background command finished | `✓ <command> finished` | no |
-| background command failed | `⚠ <command> failed (exit N)` | no |
+| background command failed (non-zero exit, error, timeout) | `⚠ <command> failed (exit N)` | no |
+| background command stopped on purpose (killed / cancelled by the agent) | `⊘ Stopped <command>` | no |
+| a `steer` / `respond` / `cancel` / `follow_up` call that FAILS | **nothing** (verbose chat shows the badge) | — |
 
 ### Why `status` and `peek` render nothing
 

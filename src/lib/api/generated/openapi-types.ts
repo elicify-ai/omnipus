@@ -16090,7 +16090,7 @@ export interface components {
             type: "subagent_start";
             /** @description Session in which this sub-turn is running. */
             session_id: string;
-            /** @description Unique identifier for this span. Constructed by the server as "span_" + parent spawn ToolCall.ID. */
+            /** @description Unique identifier for this span. Opaque on the wire. The server builds it with pkg/agent.SubagentSpanID from the parent spawn ToolCall.ID (parent_call_id) and the child's generation. Generation 1, and any generation below 2, is "span_" plus that id. Generation N of 2 or above is that same string plus "_g" plus N, so a follow-up does not reuse generation 1's id. This frame has no generation field. Replay recovers N from the transcript entry id ("<call id>:g<N>:start" or ":end"). */
             span_id: string;
             /** @description The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts. */
             parent_call_id: string;

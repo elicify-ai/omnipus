@@ -17924,7 +17924,7 @@ type Message struct {
 		// SessionId Session in which this sub-turn is running.
 		SessionId string `json:"session_id"`
 
-		// SpanId Unique identifier for this span. Constructed by the server as "span_" + parent spawn ToolCall.ID.
+		// SpanId Unique identifier for this span. Opaque on the wire. The server builds it with pkg/agent.SubagentSpanID from the parent spawn ToolCall.ID (parent_call_id) and the child's generation. Generation 1, and any generation below 2, is "span_" plus that id. Generation N of 2 or above is that same string plus "_g" plus N, so a follow-up does not reuse generation 1's id. This frame has no generation field. Replay recovers N from the transcript entry id ("<call id>:g<N>:start" or ":end").
 		SpanId string `json:"span_id"`
 
 		// TaskLabel Human-readable label for the subagent task, extracted from the spawn call's "label" or "task" parameter (truncated to 60 chars by the server; schema allows up to 100 to accommodate edge cases).
@@ -21334,7 +21334,7 @@ type SessionDetail struct {
 			// SessionId Session in which this sub-turn is running.
 			SessionId string `json:"session_id"`
 
-			// SpanId Unique identifier for this span. Constructed by the server as "span_" + parent spawn ToolCall.ID.
+			// SpanId Unique identifier for this span. Opaque on the wire. The server builds it with pkg/agent.SubagentSpanID from the parent spawn ToolCall.ID (parent_call_id) and the child's generation. Generation 1, and any generation below 2, is "span_" plus that id. Generation N of 2 or above is that same string plus "_g" plus N, so a follow-up does not reuse generation 1's id. This frame has no generation field. Replay recovers N from the transcript entry id ("<call id>:g<N>:start" or ":end").
 			SpanId string `json:"span_id"`
 
 			// TaskLabel Human-readable label for the subagent task, extracted from the spawn call's "label" or "task" parameter (truncated to 60 chars by the server; schema allows up to 100 to accommodate edge cases).

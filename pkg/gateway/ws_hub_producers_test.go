@@ -221,7 +221,7 @@ func TestFinalize_PersistsAnswerUnderItsLiveMessageID(t *testing.T) {
 	assert.Equal(t, "msg-final-1", persisted.ID, "persisted under the live message_id")
 
 	sink := &sliceSink{}
-	_, err = streamReplay(t.Context(), sid, entries, computeReplayStats(entries), sink.emit, nil, nil, nil)
+	_, err = streamReplay(t.Context(), sid, entries, computeReplayStats(entries), sink.emit, nil, nil, nil, nil)
 	require.NoError(t, err)
 	var sawReplayID, sawClientID bool
 	for _, raw := range sink.frames {

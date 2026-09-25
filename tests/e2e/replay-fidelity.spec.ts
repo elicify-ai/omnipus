@@ -383,9 +383,11 @@ test(
  * together instead of leaving one silently seeding a shape the gateway no
  * longer reads.
  *
- * `span_id` MUST be `"span_" + <originating tool-call id>`: that is
- * `pkg/agent/steer_frames.go::subagentSpanID`'s convention, and
- * `pkg/gateway/replay.go::classifyToolCall` recomputes it the same way to
+ * `span_id` for generation 1 MUST be `"span_" + <originating tool-call id>`:
+ * that is `pkg/agent/steer_frames.go::SubagentSpanID`'s convention for
+ * generation 1 (generation N >= 2 appends `_g<N>`).
+ * `pkg/gateway/replay.go::classifyToolCall` recomputes the generation-1 id
+ * the same way to
  * decide whether this span already has a persisted start/end
  * (`persistedSubagentStartSpans` / `persistedSubagentEndSpans`). Get it wrong
  * and replay silently falls back to the reconstructed, child_session_id-less
@@ -406,6 +408,7 @@ function appendPersistedSubagentStart(
     )
   }
   const now = new Date().toISOString()
+  // generation 1 deliberately (see SubagentSpanID)
   const spanId = `span_${callId}`
   const entries = [
     {
