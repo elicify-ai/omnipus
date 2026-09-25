@@ -366,6 +366,10 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	// — the follow_up caller is not necessarily the agent that originally
 	// spawned the session, and re-sourcing would silently re-parent it. Do
 	// not replace this copy with field-by-field construction.
+	// Origin.CallID stays the original run's call id on every generation.
+	// The follow-up's own span is not a new call id: pkg/agent.SubagentSpanID
+	// appends _g<N> for generation N >= 2, and replay rebuilds that same
+	// string. Minting a new CallID here would break parent_call_id.
 	newRec := *rec
 	newRec.SessionID = newSessionID
 	newRec.Generation = rec.Generation + 1

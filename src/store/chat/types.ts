@@ -94,6 +94,15 @@ interface SubagentSpanBase {
    */
   lifecycleState?: SubagentStateFrame['state']
   /**
+   * Sticky. True once a runnable `subagent_state` (`running`, `needs_input`,
+   * `paused`, or `completed`) has been reduced onto this span. Never cleared
+   * by a later terminal state. The last `lifecycleState` cannot say this: a
+   * child that ran and then failed ends on `failed`, the same final shape as
+   * one dropped from the queue before it ran (delegation chat surface D10).
+   * Replay rebuilds it because every persisted state frame is reduced again.
+   */
+  hasRun?: boolean
+  /**
    * ADR-091 D7 table's own status-line example, "last update N s ago":
    * the ISO timestamp (`created_at`) of the last `subagent_message` OR
    * `subagent_state` frame reduced onto this span (also seeded at
@@ -467,7 +476,7 @@ export interface SessionChatState {
    * message-only update and a later state-only update for the SAME span_id
    * both survive to be applied together.
    */
-  pendingSpanUpdatesBySpanId?: Record<string, { statusLine?: string; lifecycleState?: SubagentStateFrame['state']; lastUpdateAt?: string }>
+  pendingSpanUpdatesBySpanId?: Record<string, { statusLine?: string; lifecycleState?: SubagentStateFrame['state']; lastUpdateAt?: string; hasRun?: boolean }>
   /**
    * Session-scoped record of every replay_message id that has EVER been
    * merged (via the `replay_message` same-turn/same-agent coalesce branch)
