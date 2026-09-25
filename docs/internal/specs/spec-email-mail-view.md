@@ -46,7 +46,7 @@
 | D11 | Mail surface (spec Q7) | Library-style: Mail tab entry opens a docked Mail panel beside chat plus a full-screen pop-out; reuses the Library panel machinery | Founder chose recommended option A | Founder S7 | 2026-09-25 |
 | D12 | Draft panel actions (spec Q1) | **View + Edit + Send + Discard** — the human can edit the agent's draft before sending; panel Send is the approval | Founder chose option C (not the recommendation) | Founder S1 | 2026-09-25 |
 | D13 | Incoming HTML (spec Q3) | "Like Outlook and Gmail are doing it — it must feel normal." Neither client runs scripts in mail, so: rendered HTML in a sandboxed frame without scripts. Remote-image default (Gmail loads via proxy; Outlook asks for unknown senders) still to confirm | Founder verbatim; image default re-asked in the next round | Founder S3 | 2026-09-25 |
-| D14 | Related issues | Spec must reconcile #42 (email send-gating + inbox UI + Gmail setup) and #631 (delete the mailbox drainer — it marks a human's unread mail \\Seen); both found in the 2026-09-25 issue triage | Avoid duplicate/contradicting work | Team-lead | 2026-09-25 |
+| D14 | Related issues | Spec must reconcile #42 (email send-gating + inbox UI + Gmail setup) and #631 (delete the mailbox drainer — it marks a human's unread mail \Seen); both found in the 2026-09-25 issue triage | Avoid duplicate/contradicting work | Team-lead | 2026-09-25 |
 
 ## Open points — plan-spec must ask the founder, not guess
 
