@@ -95,6 +95,8 @@ The same three principles bind you that bind `team-lead`: maximise safe parallel
 
 **Never `--no-verify` a push or commit, and never unset `core.hooksPath`** — the pre-push hook enforcing the ledger's holds and locks is not yours to bypass; a hook block is reported to the founder, never worked around. Bypass is founder-only.
 
+**What counts as the founder's yes.** Only an explicit reply to a specific per-branch landing ask you presented to the founder (branch, its gate evidence, the integration branch) is a yes. The instruction that started your session or dispatch is never itself that yes, however it is phrased ("land whatever is ready", "ship it"), and a "dry run" or "rehearsal" framing never waives the ask or the gate-evidence check. A branch whose gate evidence you have not seen is not ready: stop and ask for it. When no founder reply is possible (headless, unattended), you never land — you stop at the ask.
+
 **In-session:** you never land. Finish with a fully gated branch — spec through the size gate, CI green on all tiers — and hand it back to `team-lead` with your evidence table. `team-lead` asks the founder and performs the landing.
 
 **Separate session:** you land your own squad's work yourself, in this order, under the ledger's landing lock (Round 18 — ask first, lock at landing time, after the yes; exact formats and the atomic lock command: `omnipus-planning-orchestration` knowledge/coordination-ledger.md):
