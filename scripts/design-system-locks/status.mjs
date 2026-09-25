@@ -922,6 +922,21 @@ function classifyGovernedModulePaint(node, statusKey, env, syntaxNode) {
   return true
 }
 
+// True only for an interpolation that cannot carry paint: a plain local identifier
+// whose resolved initializer (if it has one) carries no colour. Anything else — an
+// element access like palette['cancelled'], a property access, a call — is treated
+// as possibly paint-bearing and is NOT exempted, so the unresolved-palette-read
+// finding is preserved. Deliberately narrow: a false "prose" verdict would silence
+// a real status-colour violation, so only the shape we can prove inert qualifies.
+function isProseInterpolation(node, sf) {
+  const core = unwrap(node)
+  if (!core || !ts.isIdentifier(core)) return false
+  if (isColorLikeNode(core)) return false
+  const resolved = resolveConstInitializer(core, sf)
+  if (resolved && resolved !== core && isColorLikeNode(resolved)) return false
+  return true
+}
+
 function classifyValue(node, statusKey, env, syntaxNode = node) {
   const core = unwrap(node)
   if (!core) return
@@ -947,6 +962,18 @@ function classifyValue(node, statusKey, env, syntaxNode = node) {
   }
   if (ts.isTemplateExpression(core)) {
     if (core.templateSpans.length > 0 && core.templateSpans.every((span) => classifyGovernedModulePaint(span.expression, statusKey, env, syntaxNode))) return
+    // A template with no colour anywhere in it is not a status-COLOUR concern, the
+    // same posture the StringLiteral branch above takes (`if (colors.length === 0)
+    // return`). Without this, prose returned under a case label that happens to
+    // fold to a D4 status word failed closed as `unsupported` — e.g.
+    // `case 'cancelled': return \`Stopped ${agent}\`` in
+    // src/lib/delegationEventLine.ts, which carries no hex, token or class — while
+    // the byte-identical value written as a string literal, or in a ternary
+    // (walkConditional gates on isColorLikeNode), passed. This check is placed
+    // AFTER the governed-paint check above so a paint-resolving template is still
+    // accepted, and before reportOutcome so a template carrying a real colour
+    // (or an unresolvable palette read) is still a finding.
+    if (extractColors(core.getText()).length === 0 && core.templateSpans.every((span) => isProseInterpolation(span.expression, env.sf))) return
     reportOutcome(env, syntaxNode, statusKey, 'unsupported', 'template expression')
     return
   }
