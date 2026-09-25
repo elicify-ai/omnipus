@@ -435,7 +435,7 @@ function deriveHiddenRunningToolLabel(
       if (toolName === 'bash') {
         return deriveBashThinkingLabel(args)
       }
-      return null // ToolSearch, a delegate status poll, or any other hidden tool with no rule — generic pool.
+      return null // ToolSearch, any delegate action, or any other hidden tool with no rule — generic pool.
     }
     return null
   } catch {
@@ -550,13 +550,14 @@ function AssistantTextPart() {
 // Uses useMessage() for reactive state (not getState() which is a snapshot).
 //
 // Context-aware: when the current in-progress step is a HIDDEN tool call
-// (ToolSearch, background bash, a delegate status poll — see
-// toolVisibility.ts) whose tool-call part is present in message.content but
-// rendered invisible, this shows a specific, stable label for it (e.g.
-// "Running the test suite…") instead of the generic rotating pool — see
-// deriveHiddenRunningToolLabel above. ADR-091 D7/AC-7 removed the
-// `agents`-dependent "Delegating to <name>…" case: a `delegate` 'run' call
-// is visible unconditionally now, so it no longer reaches this label at all.
+// (ToolSearch, background bash, any delegate action — see toolVisibility.ts)
+// whose tool-call part is present in message.content but rendered invisible,
+// this shows a specific, stable label for it (e.g. "Running the test suite…")
+// instead of the generic rotating pool — see deriveHiddenRunningToolLabel
+// above. Every delegate action is hidden in the non-verbose thread (spec D2);
+// the grey event line is that surface, and a running delegate call has no
+// specific label of its own here. Verbose chat shows every delegate badge,
+// so the call is already visible and this label is not used.
 function InlineThinkingIndicator() {
   const message = useMessage()
   const isRunning = message.status?.type === 'running'
@@ -780,10 +781,11 @@ function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled')
  * ToolCallBadge each apply at render time (Fix 3, 2026-07-16). Used ONLY to
  * decide whether a message has any VISIBLE content, so the ghost-bubble
  * empty-placeholder / bare-Copy-bar logic below doesn't unmask a bubble
- * whose only content is a hidden delegate status poll or background-bash
- * dispatch (the D-fix UAT defect resurfacing once the thread started hiding
- * those by default — toolVisibility.ts; a `delegate` 'run' call no longer
- * hides at all, ADR-091 D7/AC-7, so it no longer exercises this path).
+ * whose only content is a hidden delegate call or background-bash dispatch
+ * (the D-fix UAT defect). Every delegate action is hidden in the non-verbose
+ * thread (spec D2); the grey event line is the surface, so a message that is
+ * only a delegation still exercises this path. Verbose chat shows every
+ * delegate badge, and those calls then count as visible content.
  * Reuses the same sentinel-detection semantics and the shouldRenderToolCall
  * classifier those components call directly.
  *
@@ -1851,11 +1853,13 @@ function AssistantMessage() {
   )
   // Fix 3 (2026-07-16): VISIBLE tool calls only — mirrors the historical
   // path's wouldToolCallBeVisible check (same function, same rationale: a
-  // hidden delegate status poll or background-bash dispatch must not count
-  // as "content" for the ghost-bubble guard below — a `delegate` 'run' call
-  // IS content, ADR-091 D7/AC-7). part.isError is the closest available
-  // proxy for this surface's outcome signal — see wouldToolCallBeVisible's
-  // own doc comment for why.
+  // hidden delegate call or background-bash dispatch must not count as
+  // "content" for the ghost-bubble guard below). Every delegate action is
+  // hidden in the non-verbose thread (spec D2); the grey event line is the
+  // surface. Verbose chat shows every delegate badge, and those calls then
+  // count as content. part.isError is the closest available proxy for this
+  // surface's outcome signal — see wouldToolCallBeVisible's own doc comment
+  // for why.
   const hasVisibleToolCall = message.content?.some(
     (part) =>
       part.type === 'tool-call' &&
