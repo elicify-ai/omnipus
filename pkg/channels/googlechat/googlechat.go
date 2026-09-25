@@ -544,20 +544,20 @@ func (c *GoogleChatChannel) refreshJWKS() error {
 	return nil
 }
 
-// truncatePreview returns the first max runes of s for a log-preview field.
+// truncatePreview returns the first maxRunes runes of s for a log-preview field.
 // #648: the previous bare [:50] byte slice panicked on any message shorter
 // than 50 bytes — and processEvent runs as a bare goroutine, so that panic
 // crashed the whole gateway. Range-over-string yields rune start offsets, so
 // the cut always lands on a rune boundary and multi-byte content is never
 // split; invalid UTF-8 bytes count as one rune each and are passed through
 // untouched.
-func truncatePreview(s string, max int) string {
-	if max <= 0 {
+func truncatePreview(s string, maxRunes int) string {
+	if maxRunes <= 0 {
 		return ""
 	}
 	n := 0
 	for i := range s {
-		if n == max {
+		if n == maxRunes {
 			return s[:i]
 		}
 		n++

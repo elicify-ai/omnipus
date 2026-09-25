@@ -130,7 +130,7 @@ func TestProcessEvent_ShortMessage_NoPanic(t *testing.T) {
 // the multi-byte half of the bug — never cuts through a multi-byte character
 // (every output must stay valid UTF-8, which a byte slice cannot guarantee).
 func TestTruncatePreview(t *testing.T) {
-	const max = 50
+	const maxRunes = 50
 	cases := []struct {
 		name string
 		in   string
@@ -156,10 +156,10 @@ func TestTruncatePreview(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := truncatePreview(tc.in, max)
+			got := truncatePreview(tc.in, maxRunes)
 			if got != tc.want {
 				t.Errorf("truncatePreview(len=%d bytes, max=%d) = %d runes, want %d runes",
-					len(tc.in), max, len([]rune(got)), len([]rune(tc.want)))
+					len(tc.in), maxRunes, len([]rune(got)), len([]rune(tc.want)))
 			}
 			if !utf8.ValidString(got) {
 				t.Errorf("truncatePreview output is not valid UTF-8: %q", got)
