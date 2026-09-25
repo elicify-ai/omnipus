@@ -18,6 +18,22 @@ test('steered session is reachable in its own live view without leaking child ou
   test.setTimeout(420_000)
 
   await page.goto('/')
+  // A pending approval modal left over from earlier work keeps a Radix
+  // dialog-overlay mounted, and it intercepts pointer events — so
+  // selectAgent's click never lands and the test burns its whole budget in a
+  // retry loop. CI evidence: 826 retries against
+  // `<div data-testid="dialog-overlay"> intercepts pointer events`, then
+  // `Test timeout of 420000ms exceeded` at selectAgent, on 2 of 4 attempts
+  // (neither reached the behaviour under test). Clear it first; Escape is the
+  // same dismissal accessibility.spec.ts already uses for its sign-in dialog.
+  const blockingOverlay = page.locator('[data-testid="dialog-overlay"]')
+  if ((await blockingOverlay.count()) > 0) {
+    await page.keyboard.press('Escape')
+    await expect(
+      blockingOverlay,
+      'a leftover modal overlay must be dismissable — it blocks every click beneath it',
+    ).toHaveCount(0, { timeout: 10_000 })
+  }
   await selectAgent(page, /Jim/i)
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 15_000 })
@@ -119,7 +135,20 @@ test('steered session is reachable in its own live view without leaking child ou
   const childSessionID = await boundSurface.getAttribute('data-active-session-id')
   expect(childSessionID, 'the open control must bind the chat surface to the child session').toBeTruthy()
 
-  await expect(page.getByText(CHILD_ONLY_SENTINEL, { exact: false })).toBeVisible({ timeout: 240_000 })
+  // The parent interpolates CHILD_ONLY_SENTINEL into the task it hands down, so
+  // it renders in the child's view as the child's own INBOUND user text the
+  // moment the view opens. Matching it page-wide therefore proved only that the
+  // child RECEIVED the task — it passed ~0.8s in, against a child that had done
+  // no work, and then let the steer below fire while the child was still on its
+  // first round. Require the sentinel in an ASSISTANT row, which only the child
+  // can author (`data-message-role="assistant"`, ChatScreen.tsx).
+  await expect(
+    page
+      .locator('[data-message-role="assistant"]')
+      .filter({ hasText: CHILD_ONLY_SENTINEL })
+      .first(),
+    'the child must PRODUCE the sentinel in its own reply, not merely be handed it in the task',
+  ).toBeVisible({ timeout: 240_000 })
 
   const childInput = chatInput(page)
   await expect(childInput).toBeEnabled({ timeout: 30_000 })
@@ -289,12 +318,23 @@ test('steered session is reachable in its own live view without leaking child ou
     parentView.locator('[data-testid="tool-call-badge"][data-tool="delegate"]'),
     'the parent\'s delegate chip is the delegation surface that persists across reload at idle',
   ).toHaveCount(1)
-  // And the inverse of the old assertion is itself part of the design
-  // contract: an idle, purely-successful parent deliberately mounts no bar
-  // (same shouldMount gate; pins the /visual-qa decision so an
-  // always-visible idle bar cannot quietly come back).
-  await expect(
-    parentView.locator('[data-testid="activity-bar"]'),
-    'ActivityBar mounts nothing when idle after a purely-successful delegation (shouldMount: no open child, no panel, no failure)',
-  ).toHaveCount(0)
+  // This previously asserted the bar mounts NOTHING here. That premise —
+  // "idle and purely successful" — is not something this test can guarantee, and
+  // it failed in CI for a legitimate reason: a retained "1 failed" chip made
+  // hasFailedRecent true, so the gate mounted the bar correctly and the
+  // assertion called it a regression. Since 37965946f the gate also mounts for
+  // any open background command (founder decision: the pill is ActivityPanel's
+  // only entry point), giving the old form a SECOND premise it cannot control.
+  //
+  // Assert the invariant that actually matters instead, and which no unrelated
+  // background work can disturb: once the delegation has finished, nothing may
+  // still be CLAIMED as running. A retained failure or a live shell job may
+  // legitimately keep the pill up — a phantom "N running" may not.
+  const parentBarLabel = parentView.locator('[data-testid="activity-bar-label"]')
+  if ((await parentBarLabel.count()) > 0) {
+    await expect(
+      parentBarLabel,
+      'after the delegation finished the pill must not still claim a running child',
+    ).not.toHaveText(/\d+ running/)
+  }
 })
