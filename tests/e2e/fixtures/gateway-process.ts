@@ -249,6 +249,15 @@ export class GatewayProcess {
     this.csrfToken = csrf.value;
   }
 
+  /** Storage state for a browser aimed at THIS gateway only. Cookies are for
+   * this process's host, not the shared e2e gateway. */
+  async browserStorageState() {
+    if (!this.ctx) {
+      throw new Error('GatewayProcess.browserStorageState: not authenticated — call start() first')
+    }
+    return this.ctx.storageState()
+  }
+
   /** REST call against THIS gateway's own authenticated context — the
    * isolated-process twin of the shared spec file's apiFetch(page, ...). */
   async apiFetch<T = unknown>(

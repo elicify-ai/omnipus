@@ -98,7 +98,8 @@
         "tests/e2e/uat-shell-and-screens.spec.ts",
         "tests/e2e/ws-reconnect.spec.ts",
         "tests/e2e/xss.spec.ts",
-        "tests/e2e/steered-session-stop.spec.ts"
+        "tests/e2e/steered-session-stop.spec.ts",
+        "tests/e2e/mail-panel.spec.ts"
       ]
     },
     {
