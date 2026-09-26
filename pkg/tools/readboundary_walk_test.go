@@ -133,6 +133,18 @@ func TestReadBoundary_SkillsRegistryGate(t *testing.T) {
 		if rr := f.read.Execute(f.ctx, map[string]any{"path": skillMD}); !rr.IsError {
 			t.Fatalf("S-2.3 parity: read_file of the registry SKILL.md must be refused, got: %s", rr.ForLLM)
 		}
+		// "Refused like read_file" (S-2.3) — by the same decision, not by a
+		// grep-only lexical rule: grep's refusal row carries the reason
+		// read_file records for the same path (FR-020, MV-2).
+		rows := f.rows(t)
+		g := rbRowsFor(rows, rbAccessDeniedEvent, "grep")
+		r := rbRowsFor(rows, rbAccessDeniedEvent, "read_file")
+		if len(g) != 1 || len(r) != 1 {
+			t.Fatalf("S-2.3: want one path.access_denied row each for grep and read_file, got grep=%d read_file=%d: %+v", len(g), len(r), rows)
+		}
+		if g[0].detail("reason") != r[0].detail("reason") {
+			t.Errorf("S-2.3 / MV-2: grep reason %q != read_file reason %q for the same registry SKILL.md", g[0].detail("reason"), r[0].detail("reason"))
+		}
 	})
 
 	t.Run("S-2.4 project-shelf instruction file stays searchable", func(t *testing.T) {

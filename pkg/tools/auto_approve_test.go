@@ -139,8 +139,12 @@ var founderAsksNames = []string{
 // founderRunsIfArgsNames are the §3 "runs" entries that carry the J2
 // workspace path condition on their file argument (§3.8). browser_screenshot
 // is in the table as runs-if; its classifier is lane L2's.
+//
+// #920 (read-boundary-consistency-spec.md D3, FR-017, MV-5; ADR-092 D9
+// amendment of 2026-09-26): read_file and list_directory moved from RUNS-IF
+// to RUNS, so they are no longer on this list.
 var founderRunsIfArgsNames = []string{
-	"read_file", "list_directory", "write_file", "edit_file", "append_file", "send_file", "browser_screenshot",
+	"write_file", "edit_file", "append_file", "send_file", "browser_screenshot",
 }
 
 func TestAutoApprove_ClassTableMatchesFounderFile(t *testing.T) {
@@ -373,38 +377,47 @@ func TestAutoApprove_T1_WriteFile(t *testing.T) {
 	}
 }
 
-// T2 (§9): read_file inside the work folder or a mount runs; /etc/hosts and
-// any other path outside both asks (J2); a secret-set path asks, and the
-// tool then refuses it even once a human approves.
+// T2, rewritten for #920 (read-boundary-consistency-spec.md D3, FR-017,
+// FR-018; ADR-092 D9 amendment): read_file is class "runs" — it runs under
+// Auto inside the work folder, in a mount, outside both and on /etc/hosts
+// alike, with no pinned paths. A secret-set path is still refused by the
+// tool itself (DS-2 row 8). The old J2 "outside asks" rows are superseded.
 func TestAutoApprove_T2_ReadFile(t *testing.T) {
 	f := newAutoFixture(t)
 	tool := NewReadFileTool(f.work, true, 0)
-	r := fspolicy.PathGrantAccessRead
 	mustWrite(t, filepath.Join(f.work, "in.txt"), "inside")
 	mustWrite(t, filepath.Join(f.mount, "m.csv"), "a,b")
 	mustWrite(t, filepath.Join(f.outside, "o.txt"), "outside")
 	secret := filepath.Join(f.home, "credentials.json")
 	mustWrite(t, secret, "SECRET-CREDENTIALS")
 
-	requireRuns(t, ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": "in.txt"}),
-		filepath.Join(realDir(t, f.work), "in.txt"), r)
-	requireRuns(t, ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": "extra/m.csv"}),
-		filepath.Join(realDir(t, f.mount), "m.csv"), r)
-	requireAsks(t, ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": filepath.Join(f.outside, "o.txt")}))
+	paths := []string{"in.txt", "extra/m.csv", filepath.Join(f.outside, "o.txt"), secret}
 	if _, err := os.Stat("/etc/hosts"); err == nil {
-		requireAsks(t, ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": "/etc/hosts"}))
+		paths = append(paths, "/etc/hosts")
 	}
-	requireAsks(t, ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": secret}))
+	for _, p := range paths {
+		v := ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": p})
+		if !v.Run || v.Class != AutoVerdictClassRuns || len(v.Paths) != 0 {
+			t.Errorf("read_file %q: verdict %+v, want Run=true Class=%q and no pinned paths (D3)", p, v, AutoVerdictClassRuns)
+		}
+	}
 
-	// Human-approved (no pin): the secret is refused by the tool itself.
-	res := tool.Execute(f.ctx, map[string]any{"path": secret})
-	if !res.IsError || strings.Contains(res.ForLLM, "SECRET-CREDENTIALS") {
-		t.Fatalf("secret read must be refused, got IsError=%v: %s", res.IsError, res.ForLLM)
+	// Auto-run (pinned) and human-approved alike, the secret is refused by the tool.
+	pinned := WithAutoApproved(f.ctx, AutoPinForVerdict("read_file",
+		ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": secret})))
+	for _, ctx := range []context.Context{f.ctx, pinned} {
+		res := tool.Execute(ctx, map[string]any{"path": secret})
+		if !res.IsError || strings.Contains(res.ForLLM, "SECRET-CREDENTIALS") {
+			t.Fatalf("secret read must be refused, got IsError=%v: %s", res.IsError, res.ForLLM)
+		}
 	}
-	// Human-approved outside read still works: J2 narrows Auto, not the tool.
-	if res := tool.Execute(f.ctx, map[string]any{"path": filepath.Join(f.outside, "o.txt")}); res.IsError ||
+	// An Auto-run read outside the workspace returns the content (D8: the
+	// runs-class pin is not re-checked against the workspace rule).
+	outsidePinned := WithAutoApproved(f.ctx, AutoPinForVerdict("read_file",
+		ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": filepath.Join(f.outside, "o.txt")})))
+	if res := tool.Execute(outsidePinned, map[string]any{"path": filepath.Join(f.outside, "o.txt")}); res.IsError ||
 		!strings.Contains(res.ForLLM, "outside") {
-		t.Fatalf("an approved read outside the workspace must still succeed: %s", res.ForLLM)
+		t.Fatalf("an Auto-run read outside the workspace must succeed (D3, D8): %s", res.ForLLM)
 	}
 }
 
@@ -424,27 +437,12 @@ func swapToSymlink(t *testing.T, path, target string) {
 // a symlink to a file outside the workspace; the pinned tool refuses and
 // nothing is read or written.
 func TestAutoApprove_T6_PinRecheckRefusesSwappedPath(t *testing.T) {
-	t.Run("read_file", func(t *testing.T) {
-		f := newAutoFixture(t)
-		tool := NewReadFileTool(f.work, true, 0)
-		a := filepath.Join(f.work, "a.md")
-		mustWrite(t, a, "inside")
-		secret := filepath.Join(f.outside, "secret.txt")
-		mustWrite(t, secret, "OUTSIDE-SECRET")
-
-		v := ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": "a.md"})
-		requireRuns(t, v, filepath.Join(realDir(t, f.work), "a.md"), fspolicy.PathGrantAccessRead)
-		swapToSymlink(t, a, secret)
-
-		pinned := WithAutoApproved(f.ctx, AutoPinForVerdict("read_file", v))
-		res := tool.Execute(pinned, map[string]any{"path": "a.md"})
-		if !res.IsError || strings.Contains(res.ForLLM, "OUTSIDE-SECRET") {
-			t.Fatalf("pinned read of a swapped symlink must be refused, got IsError=%v: %s", res.IsError, res.ForLLM)
-		}
-		if !errors.Is(res.Err, ErrAutoPinMoved) {
-			t.Errorf("refusal must come from the pin re-check, got err %v", res.Err)
-		}
-	})
+	// #920 (read-boundary-consistency-spec.md D3, FR-018): the read_file
+	// subtest is gone. read_file is class "runs" now, so its Auto decision
+	// carries no path and is not re-checked (D8); a read that follows a
+	// symlink outside the workspace is an ordinary permitted read (D1). The
+	// pin re-check still protects the write tools below and send_file /
+	// browser_screenshot.
 	t.Run("write_file", func(t *testing.T) {
 		f := newAutoFixture(t)
 		// Writes have two layers: ResolvePath's own write confinement already
@@ -548,11 +546,16 @@ func TestAutoApprove_OtherFileToolClassifiers(t *testing.T) {
 	workReal := realDir(t, f.work)
 	outsideFile := filepath.Join(f.outside, "e.md")
 
+	// #920 (D3, FR-017): list_directory is class "runs" — it runs under
+	// Auto for the work folder, a mount and a folder outside both, with no
+	// pinned paths.
 	list := NewListDirTool(f.work, true)
-	requireRuns(t, ClassifyAutoApprove(f.ctx, "list_directory", list, map[string]any{}), workReal, fspolicy.PathGrantAccessRead)
-	requireRuns(t, ClassifyAutoApprove(f.ctx, "list_directory", list, map[string]any{"path": "extra"}),
-		realDir(t, f.mount), fspolicy.PathGrantAccessRead)
-	requireAsks(t, ClassifyAutoApprove(f.ctx, "list_directory", list, map[string]any{"path": f.outside}))
+	for _, args := range []map[string]any{{}, {"path": "extra"}, {"path": f.outside}} {
+		v := ClassifyAutoApprove(f.ctx, "list_directory", list, args)
+		if !v.Run || v.Class != AutoVerdictClassRuns || len(v.Paths) != 0 {
+			t.Errorf("list_directory %v: verdict %+v, want Run=true Class=%q and no pinned paths", args, v, AutoVerdictClassRuns)
+		}
+	}
 
 	edit := NewEditFileTool(f.work, true)
 	requireRuns(t, ClassifyAutoApprove(f.ctx, "edit_file", edit, map[string]any{"path": "e.md"}), filepath.Join(workReal, "e.md"), rw)

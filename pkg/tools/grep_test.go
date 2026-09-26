@@ -43,9 +43,13 @@ func TestGrepTool_ArgValidation(t *testing.T) {
 		{"non-string pattern", map[string]any{"pattern": 42}},
 		{"invalid case value", map[string]any{"pattern": "x", "case": "loud"}},
 		{"non-string case value", map[string]any{"pattern": "x", "case": 1}},
-		{"path escapes with ..", map[string]any{"pattern": "x", "path": "../elsewhere"}},
-		{"path is absolute", map[string]any{"pattern": "x", "path": "/etc/passwd"}},
-		{"path nested ..", map[string]any{"pattern": "x", "path": "sub/../../escape"}},
+		// #920 (read-boundary-consistency-spec.md, Regression Test
+		// Requirements): absolute and ".."-bearing `path` values are no longer
+		// argument errors — they go through the single read decision (D1,
+		// FR-001) and are covered by TestReadBoundary_ParityMatrix,
+		// TestReadBoundary_MissingPathIsError and
+		// TestReadBoundary_GrepRefusesProtected. The NUL case stays here.
+		{"path contains NUL", map[string]any{"pattern": "x", "path": "sub\x00x"}},
 		{"include_globs wrong type", map[string]any{"pattern": "x", "include_globs": 5}},
 		{"include_globs array of non-strings", map[string]any{"pattern": "x", "include_globs": []any{1, 2}}},
 		{"exclude_globs wrong type", map[string]any{"pattern": "x", "exclude_globs": map[string]any{}}},
