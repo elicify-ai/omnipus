@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 )
 
 // Private and reserved IPv4 CIDR ranges that SSRF protection blocks.
@@ -336,6 +338,21 @@ func (sc *SSRFChecker) isAllowedGatewayOrigin(rawURL string) bool {
 	}
 
 	host = strings.ToLower(host)
+
+	// ADR-094 FR-021: the Mode 1 preview-label class — one grammar-valid
+	// label + exactly ".localhost" + the wired gateway port — is admitted
+	// for ANY path, independent of the exact-host exception below. The
+	// scheme must be http(s): extractHostPort ignores the scheme, so an
+	// ftp:// URL with the same authority would otherwise sneak through the
+	// grammar match (DS-6 row 5). There is deliberately NO registry consult
+	// and NO entropy floor here (spec F-1: admission is deployment-agnostic;
+	// the gateway's label registry — a 404 for an unknown label — is the
+	// real Mode-1 gate) and NO wildcard expansion — exactly one label.
+	if schemeIsHTTPish(rawURL) {
+		if label, _, isLabel := middleware.ParsePreviewLabelHost(host); isLabel && middleware.IsValidPreviewLabel(label) {
+			return true
+		}
+	}
 	hostMatches := host == gwHost
 	if !hostMatches {
 		// Accept the resolved-loopback literal forms as equivalent to a
@@ -353,6 +370,20 @@ func (sc *SSRFChecker) isAllowedGatewayOrigin(rawURL string) bool {
 	// the preview surface, not the whole gateway origin (which includes the
 	// internal REST API). Require the path to actually be under /preview/.
 	return strings.HasPrefix(extractPath(rawURL), requiredGatewayOriginPathPrefix)
+}
+
+// schemeIsHTTPish reports whether rawURL carries an explicit http(s) scheme.
+// stripURLToAuthority discards the scheme, but the preview-label class
+// (isAllowedGatewayOrigin's ADR-094 branch) is http(s)-only (DS-6 row 5:
+// ftp:// with a matching authority must refuse), so the scheme is re-checked
+// at the string level. A URL with no "://" at all is not http-ish.
+func schemeIsHTTPish(rawURL string) bool {
+	idx := strings.Index(rawURL, "://")
+	if idx == -1 {
+		return false
+	}
+	scheme := strings.ToLower(rawURL[:idx])
+	return scheme == "http" || scheme == "https"
 }
 
 // extractPath returns rawURL's path component (query string and fragment
