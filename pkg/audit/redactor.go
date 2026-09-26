@@ -38,8 +38,12 @@ var defaultPatternLabels = []string{
 	"AWS temporary access-key ID (ASIA…)",
 	"JSON Web Token (JWT)",
 	"Google OAuth access token (ya29.…)",
-	"email address",
+	emailPatternLabel,
 }
+
+// emailPatternLabel is the defaultPatternLabels entry of the email-address
+// pattern. newAuditRedactor drops the pattern carrying this label.
+const emailPatternLabel = "email address"
 
 const redactedValue = "[REDACTED]"
 
@@ -92,9 +96,51 @@ type Redactor struct {
 // Pass nil for customPatterns to use only default patterns.
 // Returns an error if a custom pattern is invalid.
 func NewRedactor(customPatterns []string) (*Redactor, error) {
-	var patterns []*regexp.Regexp
+	return newRedactorFrom(defaultPatterns, customPatterns)
+}
 
-	for _, p := range defaultPatterns {
+// newAuditRedactor creates the Redactor the audit Logger uses: every default
+// credential pattern plus customPatterns, but NOT the email-address pattern.
+// The audit log must record mail recipients and Message-IDs in full (founder
+// ruling MC-19, issue #914), so only credentials are redacted there.
+// defaultPatterns itself stays untouched: secretscan.go depends on its order
+// and on defaultPatternLabels, and NewRedactor's callers keep the full set.
+func newAuditRedactor(customPatterns []string) (*Redactor, error) {
+	return newRedactorFrom(auditCredentialPatterns(), customPatterns)
+}
+
+// auditCredentialPatterns returns defaultPatterns without the email-address
+// pattern, located by its label so a reorder of defaultPatterns cannot make it
+// drop the wrong entry. It panics on a hardcoded-table defect (labels out of
+// step with patterns, or no email label found) — the same class of bug as an
+// invalid hardcoded pattern in newRedactorFrom.
+func auditCredentialPatterns() []string {
+	if len(defaultPatterns) != len(defaultPatternLabels) {
+		panic(fmt.Sprintf("BUG: defaultPatterns (%d) and defaultPatternLabels (%d) length mismatch",
+			len(defaultPatterns), len(defaultPatternLabels)))
+	}
+	patterns := make([]string, 0, len(defaultPatterns))
+	dropped := 0
+	for i, p := range defaultPatterns {
+		if defaultPatternLabels[i] == emailPatternLabel {
+			dropped++
+			continue
+		}
+		patterns = append(patterns, p)
+	}
+	if dropped != 1 {
+		panic(fmt.Sprintf("BUG: expected exactly one %q pattern in defaultPatterns, found %d", emailPatternLabel, dropped))
+	}
+	return patterns
+}
+
+// newRedactorFrom compiles base (hardcoded, so a compile failure is a bug and
+// panics) followed by customPatterns (operator input, so a compile failure is
+// returned as an error).
+func newRedactorFrom(base, customPatterns []string) (*Redactor, error) {
+	patterns := make([]*regexp.Regexp, 0, len(base)+len(customPatterns))
+
+	for _, p := range base {
 		re, err := regexp.Compile(p)
 		if err != nil {
 			panic(fmt.Sprintf("BUG: invalid hardcoded redaction pattern %q: %v", p, err))

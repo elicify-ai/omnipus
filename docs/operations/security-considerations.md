@@ -121,6 +121,12 @@ Filtering is best-effort and can be switched off. Configure it under `tools` in 
 
 This filter only covers values Omnipus has registered and patterns recognized by the audit redactor. It does not discover every secret in arbitrary text. Treat any suspected exposure as real and rotate the affected credential.
 
+### Audit log redaction
+
+Separately from the filter above, the audit logger always redacts before it writes: every entry's command, parameters and details (nested values included) pass through the credential patterns, and any value under a secret-named field (`password`, `token`, `api_key`, `authorization` and similar) becomes `[REDACTED]`. There is no setting to turn it off. Redaction runs before the entry is signed, so the tamper-evident chain covers the redacted text and still verifies. Email addresses are deliberately not redacted in the audit log, so mail recipients and Message-IDs are recorded in full.
+
+Audit files written before this was switched on (issue #914) are not rewritten — rewriting them would break the signature chain. They may contain credentials typed into `bash`, `web_serve` or `environment_setup` commands; rotate those credentials if that matters.
+
 ---
 
 ## Run by trusted users only

@@ -450,6 +450,10 @@ If any entry cannot be opened during the upgrade, nothing is changed and the gat
 
 The viewer refreshes every 30 seconds. The log includes security events, policy decisions, and tool executions. It can show security-setting changes with their previous and new values.
 
+Before an entry is written, Omnipus replaces recognised credentials with `[REDACTED]` — in shell commands, tool parameters and event details. That covers common key and token formats (for example `sk-…` keys, `Bearer …` tokens, GitHub, Slack, AWS and Google tokens, JSON Web Tokens) and any value stored under a field named like a secret (`password`, `token`, `api_key`, `authorization` and similar). This is always on and cannot be switched off. Email addresses are kept, so mail recipients and message IDs appear in full. A secret in no recognised format — a plain password typed as a command argument, for example — is not caught.
+
+Logs written before this redaction was switched on (issue #914) are not rewritten. They may contain credentials typed into shell commands. If that matters for your installation, rotate those credentials.
+
 ## Limits and things to watch
 
 - Security controls reduce risk but do not make every agent action safe. Read approval details before allowing a request.
