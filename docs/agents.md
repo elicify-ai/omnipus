@@ -62,6 +62,32 @@ You create one of three types. The create buttons sit in the section headers of 
 
 To change an agent, open its card. The edit slide-over saves as you type. Its tabs are **Basics**, **Personality**, **Tools**, **Skills**, and **Advanced**; an external worker shows **Runtime** instead of Tools and Skills. **Delete agent** asks you to confirm.
 
+## How to lower one agent's tool-call limit
+
+Every agent may make at most a set number of tool calls in one turn. The global limit lives in Settings, Performance; see [settings](settings.md#tool-calls-per-turn). One agent can have its own lower limit, for example a worker you want to keep on a short leash. An agent's own limit can equal or be lower than the global limit, never higher.
+
+1. Open the agent's card and go to the **Advanced** tab.
+2. Under **Execution**, type a number into **Max tool calls per turn**. It saves by itself.
+3. The line under the field says where the agent's limit comes from:
+
+| The line reads | Meaning |
+|---|---|
+| Using the global limit (200) | The agent has no own value and follows the global limit. |
+| Lowered for this agent: 50 (global limit 200) | The agent's own value, 50, applies. |
+| Own value 500 is above the global limit (200) and has no effect | See "An old higher value" below. |
+
+4. To go back to the global limit, click **Use global limit** next to the field. That clears the agent's own value.
+
+You can also set the value when you create the agent: open **Advanced** in the create form (on the **Tools** step for Main and Subagent, on the **Personality** step for an external worker). Leave it empty to follow the global limit.
+
+A value above the global limit is not saved. On the profile, the field shows the refusal, which names the global limit and suggests raising it in Settings, Performance; your other changes on the profile still save. In the create form, creating the agent fails with the same message. Values must be whole numbers from 1 to 1000.
+
+The same rules apply everywhere an agent is created or changed, including when you ask an agent in a chat to do it, as you would with Ava. The `create_agent` and `update_agent` tools refuse a value above the global limit or outside 1 to 1000, and sending an empty value (`null`) to `update_agent` clears the agent's own value.
+
+**An old higher value.** Earlier releases let an agent's own limit be higher than the global one. Upgrading keeps that stored value untouched, but it no longer applies: the agent runs at the global limit, and its profile says the value has no effect. The gateway log lists every such agent in one warning at start-up. Type a lower value or click **Use global limit** to clear the warning. Lowering the global limit in Settings is the only thing that ever rewrites an agent's own value, and it asks you first.
+
+A change applies from the agent's next turn; a turn already running keeps the limit it started with.
+
 ## Workers and delegation
 
 A worker is just a session that another agent owns and steers. The delegating agent hands the worker a task and keeps working; the worker runs in its own session, with its own tools, its own transcript, and a chat you can open to watch it live.
@@ -98,6 +124,7 @@ Two things to watch with external workers:
 
 - The tool choice is fixed when you create the worker. To move to a different tool, create a new worker. The path to the tool's program stays editable.
 - Omnipus tool permissions do not reach inside the external tool. It uses its own tools and its own safety settings; the allow, ask, and deny rules govern Omnipus [tools](tools.md) only.
+- The tool-call limit does reach it. An external worker follows the same global **Max tool calls per turn**, and can have its own lower limit on its **Advanced** tab like any other agent. Omnipus passes the limit to the tool as its cap on agent turns: Claude Code receives it as `--max-turns`, and for Codex and OpenCode Omnipus counts the turns and stops the run when it goes past the cap. There is no separate built-in default for external workers.
 
 ## How to set up a heartbeat
 
@@ -117,6 +144,7 @@ If nothing needs attention, the agent records an all-clear. Heartbeat sessions s
 - Workers are invisible to chat. They have no voice, no heartbeat, and can never be the default.
 - A worker with no delegation edge does nothing. Wire the edge on the workspace Team tab.
 - An external worker depends on its tool being installed. If the tool is missing, the create menu shows it greyed out.
+- An agent's own tool-call limit can only be lower than or equal to the global limit in Settings, Performance.
 - Editing autosaves. A red save indicator means the last change failed; correct the field it names and the next change saves.
 
 ## Related pages
