@@ -39,11 +39,11 @@ func (c *Client) AppendMessage(ctx context.Context, folder string, flags []strin
 		opts = &imap.AppendOptions{Flags: imapFlags, Time: time.Now()}
 	}
 	cmd := client.Append(folder, int64(len(raw)), opts)
-	if _, err := cmd.Write(raw); err != nil {
-		return 0, 0, fmt.Errorf("email transport: append to %s: %w", folder, err)
+	if _, werr := cmd.Write(raw); werr != nil {
+		return 0, 0, fmt.Errorf("email transport: append to %s: %w", folder, werr)
 	}
-	if err := cmd.Close(); err != nil {
-		return 0, 0, fmt.Errorf("email transport: append to %s: %w", folder, err)
+	if cerr := cmd.Close(); cerr != nil {
+		return 0, 0, fmt.Errorf("email transport: append to %s: %w", folder, cerr)
 	}
 	data, err := cmd.Wait()
 	if err != nil {

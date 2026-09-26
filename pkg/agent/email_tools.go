@@ -110,7 +110,7 @@ func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *Agent
 		// the toolset from transports alone; origin "" → chat_link null with a
 		// stated reason).
 		if origin := middleware.CanonicalGatewayOrigin(cfg); origin != "" {
-			if setter, ok := t.(interface{ SetChatLinkOrigin(string) }); ok {
+			if setter, ok := t.(interface{ SetChatLinkOrigin(origin string) }); ok {
 				setter.SetChatLinkOrigin(origin)
 			}
 		}

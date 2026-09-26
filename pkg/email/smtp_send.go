@@ -33,23 +33,23 @@ func sendSMTPWithSTARTTLS(ctx context.Context, addr string, auth smtp.Auth, from
 	}
 	defer cl.Close()
 
-	if err := smtpStep(ctx, cl.StartTLS(tlsCfg), "STARTTLS"); err != nil {
-		return err
+	if stepErr := smtpStep(ctx, cl.StartTLS(tlsCfg), "STARTTLS"); stepErr != nil {
+		return stepErr
 	}
-	if err := smtpStep(ctx, cl.Auth(auth), "auth"); err != nil {
-		return err
+	if stepErr := smtpStep(ctx, cl.Auth(auth), "auth"); stepErr != nil {
+		return stepErr
 	}
-	if err := smtpStep(ctx, cl.Mail(from), "MAIL FROM"); err != nil {
-		return err
+	if stepErr := smtpStep(ctx, cl.Mail(from), "MAIL FROM"); stepErr != nil {
+		return stepErr
 	}
 	for _, r := range rcpts {
-		if err := smtpStep(ctx, cl.Rcpt(r), "RCPT TO"); err != nil {
-			return err
+		if stepErr := smtpStep(ctx, cl.Rcpt(r), "RCPT TO"); stepErr != nil {
+			return stepErr
 		}
 	}
 	w, err := cl.Data()
-	if err := smtpStep(ctx, err, "DATA"); err != nil {
-		return err
+	if stepErr := smtpStep(ctx, err, "DATA"); stepErr != nil {
+		return stepErr
 	}
 	if _, err := io.WriteString(w, body); err != nil {
 		return smtpStep(ctx, err, "write body")
@@ -82,20 +82,20 @@ func sendSMTPS(ctx context.Context, addr, username, password, from string, rcpts
 	defer cl.Close()
 
 	auth := smtp.PlainAuth("", from, password, tlsCfg.ServerName)
-	if err := smtpStep(ctx, cl.Auth(auth), "auth"); err != nil {
-		return err
+	if stepErr := smtpStep(ctx, cl.Auth(auth), "auth"); stepErr != nil {
+		return stepErr
 	}
-	if err := smtpStep(ctx, cl.Mail(from), "MAIL FROM"); err != nil {
-		return err
+	if stepErr := smtpStep(ctx, cl.Mail(from), "MAIL FROM"); stepErr != nil {
+		return stepErr
 	}
 	for _, r := range rcpts {
-		if err := smtpStep(ctx, cl.Rcpt(r), "RCPT TO"); err != nil {
-			return err
+		if stepErr := smtpStep(ctx, cl.Rcpt(r), "RCPT TO"); stepErr != nil {
+			return stepErr
 		}
 	}
 	w, err := cl.Data()
-	if err := smtpStep(ctx, err, "DATA"); err != nil {
-		return err
+	if stepErr := smtpStep(ctx, err, "DATA"); stepErr != nil {
+		return stepErr
 	}
 	if _, err := io.WriteString(w, body); err != nil {
 		return smtpStep(ctx, err, "write body")

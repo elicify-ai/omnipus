@@ -402,8 +402,8 @@ func (t *CreateEmailDraftTool) Execute(ctx context.Context, args map[string]any)
 	if strings.TrimSpace(body) == "" {
 		return ErrorResult("create_email_draft: body is required")
 	}
-	if err := checkMailBodyBound(t.Name(), body); err != nil {
-		return ErrorResult(err.Error())
+	if boundErr := checkMailBodyBound(t.Name(), body); boundErr != nil {
+		return ErrorResult(boundErr.Error())
 	}
 	subject, _ := args["subject"].(string)
 	inReplyTo, _ := args["in_reply_to"].(string)

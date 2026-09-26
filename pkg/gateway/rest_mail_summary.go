@@ -5,6 +5,7 @@ package gateway
 // watcher state on disk. It never dials IMAP (round-2 MAJ-019).
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -24,16 +25,17 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 			continue
 		}
 		st, err := email.LoadWatcherState(a.homePath, agentID, workspaceID)
-		if err != nil {
+		if err != nil && !errors.Is(err, email.ErrNoWatcherState) {
 			continue
 		}
 		row := gen.MailboxNewMailSummary{WatcherState: gen.MailboxNewMailSummaryWatcherStateOk}
 		if st == nil {
 			st = &email.WatcherState{State: "ok", UnseenTotal: 0}
 		}
-		if st.State == "error" {
+		switch st.State {
+		case "error":
 			row.WatcherState = gen.MailboxNewMailSummaryWatcherStateError
-		} else if st.State == "backoff" {
+		case "backoff":
 			row.WatcherState = gen.MailboxNewMailSummaryWatcherStateBackoff
 		}
 		row.AgentId = agentID

@@ -69,11 +69,10 @@ func NewWatcher(cfg WatcherConfig) (*Watcher, error) {
 // mutates flags, never creates tasks, never starts a turn (D20/D27): it only
 // updates the per-mailbox state file the Mail panel badge reads.
 type Watcher struct {
-	mu             sync.Mutex
-	cfg            WatcherConfig
-	statePath      string
-	state          WatcherState
-	backoffAttempt int
+	mu        sync.Mutex
+	cfg       WatcherConfig
+	statePath string
+	state     WatcherState
 }
 
 // WatcherState is the persisted per-mailbox watcher state (MC-23/MC-31):
@@ -333,15 +332,21 @@ func (w *Watcher) cycleIfDue(ctx context.Context, now time.Time) error {
 	return w.Cycle(ctx)
 }
 
-// LoadWatcherState reads one mailbox's saved watcher state. (nil, nil) means
-// no state has ever been saved for the pair — the summary endpoint renders the
-// never-checked shape (round-2 MAJ-019: ok never lies about blindness).
+// ErrNoWatcherState is returned by LoadWatcherState when no state has ever
+// been saved for the mailbox pair (no state file on disk). Callers check it
+// with errors.Is; the returned state is nil in that case.
+var ErrNoWatcherState = errors.New("email watcher: no state saved for mailbox pair")
+
+// LoadWatcherState reads one mailbox's saved watcher state. A nil state with
+// ErrNoWatcherState means no state has ever been saved for the pair — the
+// summary endpoint renders the never-checked shape (round-2 MAJ-019: ok
+// never lies about blindness).
 func LoadWatcherState(stateDir, agentID, workspaceID string) (*WatcherState, error) {
 	p := filepath.Join(stateDir, "email-watch", keyFor(agentID, workspaceID)+".json")
 	b, err := os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, ErrNoWatcherState
 		}
 		return nil, err
 	}

@@ -155,7 +155,7 @@ func Compose(in ComposeInput) (ComposeOutput, error) {
 		mixBoundary := randomBoundary()
 		var mix strings.Builder
 		mix.WriteString("--" + mixBoundary + "\r\n")
-		mix.WriteString(fmt.Sprintf("Content-Type: multipart/alternative; boundary=%q\r\n\r\n", altBoundary))
+		_, _ = fmt.Fprintf(&mix, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n", altBoundary)
 		mix.WriteString(altBody)
 		if in.Draft {
 			mix.WriteString(renderMarkdownPart(mixBoundary, in.Markdown))
@@ -465,7 +465,10 @@ func (r *plainTextRenderer) heading(w util.BufWriter, _ []byte, _ ast.Node, ente
 
 func (r *plainTextRenderer) text(w util.BufWriter, source []byte, n ast.Node, entering bool) (ast.WalkStatus, error) {
 	if entering {
-		t := n.(*ast.Text)
+		t, ok := n.(*ast.Text)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
 		_, _ = w.Write(t.Segment.Value(source))
 		if t.SoftLineBreak() {
 			_, _ = w.WriteString("\n")
@@ -479,7 +482,11 @@ func (r *plainTextRenderer) text(w util.BufWriter, source []byte, n ast.Node, en
 
 func (r *plainTextRenderer) stringNode(w util.BufWriter, source []byte, n ast.Node, entering bool) (ast.WalkStatus, error) {
 	if entering {
-		_, _ = w.Write(n.(*ast.String).Value)
+		s, ok := n.(*ast.String)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		_, _ = w.Write(s.Value)
 	}
 	return ast.WalkContinue, nil
 }
@@ -498,21 +505,33 @@ func (r *plainTextRenderer) codeBlock(w util.BufWriter, source []byte, n ast.Nod
 
 func (r *plainTextRenderer) link(w util.BufWriter, _ []byte, n ast.Node, entering bool) (ast.WalkStatus, error) {
 	if !entering {
-		_, _ = w.WriteString(" (" + string(n.(*ast.Link).Destination) + ")")
+		l, ok := n.(*ast.Link)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		_, _ = w.WriteString(" (" + string(l.Destination) + ")")
 	}
 	return ast.WalkContinue, nil
 }
 
 func (r *plainTextRenderer) image(w util.BufWriter, _ []byte, n ast.Node, entering bool) (ast.WalkStatus, error) {
 	if !entering {
-		_, _ = w.WriteString(" (" + string(n.(*ast.Image).Destination) + ")")
+		img, ok := n.(*ast.Image)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		_, _ = w.WriteString(" (" + string(img.Destination) + ")")
 	}
 	return ast.WalkContinue, nil
 }
 
 func (r *plainTextRenderer) autoLink(w util.BufWriter, source []byte, n ast.Node, entering bool) (ast.WalkStatus, error) {
 	if !entering {
-		_, _ = w.WriteString(" (" + string(n.(*ast.AutoLink).URL(source)) + ")")
+		al, ok := n.(*ast.AutoLink)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		_, _ = w.WriteString(" (" + string(al.URL(source)) + ")")
 	}
 	return ast.WalkContinue, nil
 }
@@ -563,7 +582,11 @@ func (r *plainTextRenderer) thematic(w util.BufWriter, _ []byte, _ ast.Node, ent
 
 func (r *plainTextRenderer) taskBox(w util.BufWriter, _ []byte, n ast.Node, entering bool) (ast.WalkStatus, error) {
 	if entering {
-		if n.(*extast.TaskCheckBox).IsChecked {
+		cb, ok := n.(*extast.TaskCheckBox)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		if cb.IsChecked {
 			_, _ = w.WriteString("[x] ")
 		} else {
 			_, _ = w.WriteString("[ ] ")

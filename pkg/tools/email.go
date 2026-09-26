@@ -354,8 +354,8 @@ func (t *SendEmailTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	if strings.TrimSpace(body) == "" {
 		return ErrorResult("send_email: body is required")
 	}
-	if err := checkMailBodyBound(t.Name(), body); err != nil {
-		return ErrorResult(err.Error())
+	if boundErr := checkMailBodyBound(t.Name(), body); boundErr != nil {
+		return ErrorResult(boundErr.Error())
 	}
 	if strings.TrimSpace(subject) == "" {
 		subject = "(no subject)"
@@ -469,8 +469,8 @@ func (t *ReplyTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 	if strings.TrimSpace(body) == "" {
 		return ErrorResult("reply: body is required")
 	}
-	if err := checkMailBodyBound("reply", body); err != nil {
-		return ErrorResult(err.Error())
+	if boundErr := checkMailBodyBound("reply", body); boundErr != nil {
+		return ErrorResult(boundErr.Error())
 	}
 
 	orig, err := tp.ReadMessage(ctx, uid)
