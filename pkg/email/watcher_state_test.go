@@ -45,8 +45,8 @@ func TestLoadWatcherState_NotFoundPath(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(p, b, 0o600); err != nil {
-			t.Fatal(err)
+		if writeErr := os.WriteFile(p, b, 0o600); writeErr != nil {
+			t.Fatal(writeErr)
 		}
 
 		got, err := LoadWatcherState(dir, agentID, wsID)
