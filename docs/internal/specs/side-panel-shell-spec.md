@@ -1,15 +1,22 @@
 # Feature Specification: Workspace side-panel shell (shared, resizable)
 
 **Created**: 2026-09-26
-**Status:** Draft — grill round 2 still to come (fix round 1 applied 2026-09-26)
-**Input**: Founder interview output — `docs/internal/specs/spec-side-panel-shell.md` (request verbatim + Decisions Log SP-1..SP-24). Process order (founder, verbatim): "capture the requirements and update the design documents first, after another demo — let's do it properly." Requirements → this spec → clickable demo reviewed by the founder in a real browser (SP-10) → spec review rounds → build.
+**Status:** **Approved** (2026-09-26 — fix round 2 applied; the final round of the fixed two-round grill process)
+**Input**: Founder interview output — `docs/internal/specs/spec-side-panel-shell.md` (request verbatim + Decisions Log SP-1..SP-31). Process order (founder, verbatim): "capture the requirements and update the design documents first, after another demo — let's do it properly." Requirements → this spec → clickable demo reviewed by the founder in a real browser (SP-10, split per SP-31) → spec review rounds → build.
 
 **Review-fix round 1 (2026-09-26)**: grill-spec round 1 returned BLOCK
 (`side-panel-shell-spec-spec-review.md`: 1 critical, 12 major, 9 minor, 3 observation).
 The founder answered all eight grill questions in a post-grill interview — decisions
 SP-16..SP-24 in the Decisions Log, applied throughout this revision. Q1/Q2 in the old
-§14 (width storage, bare browser deep link) are answered (SP-20, SP-21); **there are no
-open founder questions**. Review-finding dispositions are in §19.
+§14 (width storage, bare browser deep link) are answered (SP-20, SP-21). Review-finding
+dispositions are in §19.
+
+**Review-fix round 2 (2026-09-26, final)**: grill-spec round 2 returned REVISE
+(`side-panel-shell-spec-spec-review-round2.md`: 0 critical, 13 major (MAJ-201..213),
+11 minor, 3 observation). The founder answered the six product questions in a
+post-grill interview — decisions SP-25..SP-31 — and every remaining finding carries a
+stated default, applied as recommended. No blocking finding remains open; nothing is
+escalated. Round-2 dispositions are in §19b.
 
 ---
 
@@ -206,24 +213,28 @@ Close render, the panel docks beside (not over) the chat, and Close removes it.
 ### US-2 — Resizable width with shared defaults (SP-2, SP-3, SP-17) — P0 [wave 1]
 
 An operator wants to decide how much space a panel gets by dragging its border — the
-same interaction for every panel. **Width rules (SP-17, founder)**: the panel docks
-side-by-side with the chat only while BOTH floors hold — the chat column stays
-≥360px AND the panel stays ≥320px. The panel's maximum width is
-`min(70% of the viewport, viewport − sidebar width − 360px)` (all measured on the root
-flex row — MIN-001's basis; the sidebar term is the pinned sidebar's current width, 0
-when it is not pinned, i.e. below its 1024px breakpoint,
-`src/store/sidebar.ts::SIDEBAR_PIN_BREAKPOINT`). **When the window is too narrow to fit
-both floors, the panel becomes an OVERLAY floating above the chat** (the chat keeps its
-full row width and stays interactive underneath) instead of squeezing the chat below
-360px. Minimum 320px; default = today's width (45% of the row clamped to 320–720px);
-double-click on the border resets. Keyboard accessible: focusable separator, arrow keys,
-Home/End. Below 640px there is no drag: full-screen takeover, as today (US-8).
+same interaction for every panel. **Width rules (SP-17, as amended by SP-25)**: the
+panel docks side-by-side with the chat — the chat column stays ≥360px AND the panel
+stays ≥320px. The panel's maximum width is
+`min(70% of the row, row − sidebar width − 360px)` (all measured on the root
+flex row — MIN-001's basis; the sidebar term is the pinned sidebar's current width
+(256px), 0 when the sidebar is not pinned — a user preference enforced only at
+≥1024px, `src/store/sidebar.ts::SIDEBAR_PIN_BREAKPOINT`; below 1024px the sidebar is
+never in the row). **At every viewport ≥680px these floors always fit** (row − sidebar
+≥ 680 − 0 = 680 = 360 + 320, since the sidebar term is 0 below 1024px and 256px at
+≥1024px leaves row ≥ 768), so the panel ALWAYS docks above the breakpoint — there is
+NO overlay state (SP-25 deleted it). **Below 680px the panel takes over the full
+screen** (US-8, SP-25; was 640px before SP-25). Minimum 320px; default =
+`clamp(0.45 × row, 320px, min(720px, ceiling))` — the default is capped by the same
+ceiling (MAJ-203: an uncapped 45% broke the chat's 360px floor at 1024px with the
+sidebar pinned); double-click on the border resets. Keyboard accessible: focusable
+separator, arrow keys, Home/End.
 
-**Why this priority**: the feature's namesake ask; the demo gate (SP-10/SP-16) shows it.
+**Why this priority**: the feature's namesake ask; the demo gate (SP-10/SP-31) shows it.
 
 **Independent test**: render the shell, drag the border, assert width changes within
-bounds and the chat column never drops below 360px; narrow the window until the floors
-cannot both fit and assert the panel overlays instead of squeezing.
+bounds and the chat column never drops below 360px; narrow the window past 680px and
+assert the panel takes over the full screen.
 
 **Acceptance scenarios**:
 
@@ -234,31 +245,42 @@ cannot both fit and assert the panel overlays instead of squeezing.
    the SP-17 ceiling `min(70% of row, row − sidebar − 360px)`, **Then** the width stops
    at that bound (hard clamp, no rubber-banding, chat never below 360px).
 3. **Given** an open panel, **When** the operator double-clicks the border, **Then**
-   width resets to the default (45% clamped 320–720px).
+   width resets to the default (`clamp(0.45 × row, 320px, min(720px, ceiling))`).
 4. **Given** a window resize while a panel is open, **When** the window shrinks, **Then**
-   the panel re-clamps to the new ceiling while both floors still fit; **when the floors
-   no longer both fit (still ≥640px), the panel switches to overlay** — the chat column
-   is never squeezed below 360px on a ≥640px viewport.
-5. **Given** the Browser panel being resized, **When** the width settles, **Then** the
-   existing remote-viewport resize handover runs (its visible "Resizing browser… / input
-   will resume" status shows; a failure is visible with Retry — never a silent
-   stall — reusing `BrowserLiveView`'s existing handover UI).
+   the panel re-clamps to the new ceiling (transient — the stored width is untouched,
+   MAJ-009); **when the viewport crosses below 680px, the panel takes over the full
+   screen** (US-8, SP-25) — the chat column is never squeezed below 360px on a ≥680px
+   viewport.
+5. **Given** the Browser panel being resized, **When** keyboard/drag input SETTLES
+   (300ms after the last input — MIN-205), **Then** the existing remote-viewport resize
+   handover runs (its visible "Resizing browser… / input will resume" status shows; a
+   failure is visible with Retry — never a silent stall — reusing
+   `BrowserLiveView`'s existing handover UI). Handover runs once per settle, not once
+   per keypress.
 
 ### US-3 — Width memory per user × panel × workspace (SP-13, SP-3, SP-20) — P0 [wave 1]
 
-An operator who widens Tasks in one workspace and narrows Library in another wants each
-choice remembered where they made it. The remembered width is keyed **per USER + panel
-+ workspace** (SP-20: two accounts on one browser never share widths — MIN-004
-resolved). Storage is browser-local localStorage (SP-20), in the pattern of the SPA's
-existing persisted stores. Panels opened with no workspace context (sidebar Library at
-the virtual root, Browser from a global screen) use a single `app` bucket.
+An operator who widens Tasks in one workspace and narrows Library at the virtual root
+wants each choice remembered where they made it. The remembered width is keyed **per
+USER + panel + workspace** (SP-20: two accounts on one browser never share widths —
+MIN-004 resolved). Storage is browser-local localStorage (SP-20), in the pattern of the
+SPA's existing persisted stores. Panels opened with no workspace context (sidebar
+Library at the virtual root) use the `app` bucket; **the Browser panel ALWAYS uses the
+`app` bucket** — its identity is a browser session, not a workspace (MAJ-201), so it
+has ONE width per user regardless of which session/screen it was opened from.
 
-**Write rules (MAJ-009)**: the stored value is written ONLY on a user choice — drag
-release, keyboard adjustment, or reset. A reset **deletes** the stored value (the
-default is re-derived at read time, never stored — storing a default in px would freeze
-it to one window size). A window-driven re-clamp (window shrink, zoom change) is
-**transient**: it changes the applied width for as long as the window is that size and
-MUST NOT overwrite the stored value; the clamp is re-applied at read time.
+**Write rules (MAJ-009 + MIN-205)**: the stored value is written ONLY on a settled user
+choice — drag release, keyboard SETTLE (300ms after the last keypress), or reset. A
+reset **deletes** the stored value (the default is re-derived at read time, never
+stored — storing a default in px would freeze it to one window size). Storage is ONE
+localStorage key per user × panel × workspace under a namespaced prefix,
+`panel-width:<username>:<panelId>:<workspaceId|app>` (MIN-204: one key per combination;
+the SPA's account record carries only a display `username`, `src/store/auth.ts`, so
+that is the key's user term). Deleted-workspace entries are pruned on the next write —
+ONLY the signed-in user's own entries (MIN-204: other accounts' entries are never
+touched). A window-driven re-clamp (window shrink, zoom change) is **transient**: it
+changes the applied width for as long as the window is that size and MUST NOT overwrite
+the stored value; the clamp is re-applied at read time.
 
 **Why this priority**: part of the resize story (SP-3); wrong granularity would force a
 rebuild of the persistence key later.
@@ -282,12 +304,18 @@ window (transient re-clamp), restore it, and assert the stored width comes back.
    **Then** the default applies again (the reset DELETED the stored value, not stored a
    default in px).
 5. **Given** the operator switches workspace while a panel is open, **When** the new
-   workspace's context loads, **Then** the panel stays open, re-targets to the new
-   workspace's content, and re-clamps to the new workspace's remembered width — **after
-   passing the unsaved-edit guard when the outgoing panel is the Library** (FR-013).
-6. **Given** a window shrink re-clamped an open panel from 950px to 700px, **When** the
-   window returns to its previous size, **Then** the panel returns to 950px and the
-   stored value was never overwritten (transient re-clamp, MAJ-009).
+   workspace's context loads, **Then** the per-panel workspace-switch rule applies
+   (SP-29, FR-020): Browser stays anchored to its own session (never closed, never
+   moved); Library follows ONLY if it was opened scoped to the workspace being left
+   (a Library opened from the all-workspaces root stays as it is — today's behaviour);
+   Tasks, Calendar and Mail follow the new workspace — **after passing the unsaved-edit
+   guard when the outgoing panel is a following Library** (FR-013); the width bucket
+   re-resolves with the panel's CURRENT context (a following panel re-reads the new
+   workspace's bucket; a root-scoped Library stays in `app`).
+6. **Given** a window shrink re-clamped an open panel from 950px to 640px (1400px →
+   1000px viewport, sidebar unpinned — ceiling = 1000 − 360 = 640), **When** the
+   window returns to 1400px, **Then** the panel returns to 950px and the stored value
+   was never overwritten (transient re-clamp, MAJ-009).
 
 ### US-4 — One panel at a time, never silently discarding edits (SP-7, CRIT-001) — P0 [wave 1]
 
@@ -374,25 +402,33 @@ link without pressed state.
 "Open in new tab" opens the panel's full-page view in a new browser tab AND closes the
 panel in the original tab (chat regains full width) — today's Library (C4) and Browser
 (flushSync close) already do this; the shell generalizes it. **One behaviour, stated
-once (SP-18)**: clicking a panel's toggle when that panel's full-page tab is ALREADY
-open means SWITCH to that tab — never "open here too", never a duplicate. "Already
-open" is scoped PER WORKSPACE: a tab counts as already open only when it shows that
-panel for the SAME workspace; the same panel for a DIFFERENT workspace opens normally
-here. The honest browser constraint stands (§8.3): only tabs Omnipus opened itself can
-be reliably re-focused; a manually-opened tab gets the realistic degrade — detected via
-BroadcastChannel presence, no duplicate opened, no docked panel opened here either, and
-a visible "already open in another tab — switch" affordance whose switch action is
-best-effort focus (`window.focus` is not guaranteed — the affordance is the
-guarantee). The reuse mechanism is an **in-memory handle registry** (§8.3, MAJ-002) —
-never a re-navigating `window.open(url, name)`.
+once (SP-18, extended by SP-30)**: invoking ANY entry point for a panel when that
+panel's full-page tab is ALREADY open for the same scope means SWITCH to that tab —
+never "open here too", never a duplicate. **Every entry point participates (SP-30)**:
+the tab-strip toggle, Expand, the sidebar "Library" button, "Open library",
+"Watch live", the chat draft link (Mail), and the retargeted `media` redirect — one
+list, no implicit toggle/Expand-only rule. "Already open" is scoped by the panel's
+IDENTITY (§8.1): a tab counts as already open only when it currently shows that panel
+for the SAME workspace (workspace panels) or the SAME session + agent (Browser,
+MAJ-201); the same panel for a DIFFERENT scope opens normally here. **Matching is by
+CURRENT scope, not open-time scope (MAJ-213)**: a full-page tab that navigated to
+another workspace is no longer "already open" for the workspace it left. The honest
+browser constraint stands (§8.3): only tabs Omnipus opened itself (window handle in
+the registry) can be reliably focused; a manually-opened tab gets the realistic
+degrade — detected via the BroadcastChannel presence list, no duplicate opened, no
+docked panel opened here either, and a visible "already open in another tab — switch"
+affordance whose switch action is best-effort focus (`window.focus` is not guaranteed —
+the affordance is the guarantee). The reuse mechanism is an **in-memory handle
+registry** (§8.3, MAJ-002) — never a re-navigating `window.open(url, name)`.
 
 **Why this priority**: cross-window behaviour, fully specified by founder choices
-(SP-12 recommended option chosen; SP-18 answered the round-1 grill).
+(SP-12 recommended option chosen; SP-18 answered the round-1 grill; SP-30 answered the
+round-2 grill).
 
 **Independent test**: open Library, Expand; assert new tab opens and the docked panel
-closed. Re-click Library's toggle: with the app-opened tab present it is focused and no
-docked panel opens here; with a manually-opened tab present the affordance shows; no
-path duplicates a tab.
+closed. Re-invoke Library from the toggle, the sidebar button and "Open library" in
+turn: with the app-opened tab present each is focused and no docked panel opens here;
+with a manually-opened tab present the affordance shows; no path duplicates a tab.
 
 **Acceptance scenarios**:
 
@@ -400,91 +436,158 @@ path duplicates a tab.
    expand-target route opens in a new browser tab and the docked panel closes in the
    original tab (chat regains the width).
 2. **Given** the app itself opened a panel's full-page tab earlier and still holds its
-   window handle (§8.3), **When** the operator triggers Expand or clicks the panel's
-   toggle again (same workspace), **Then** the existing tab is focused via the handle —
-   no second tab, no navigation or reload of that tab, and no docked panel opens here.
+   window handle (§8.3), **When** the operator invokes ANY entry point (toggle,
+   sidebar "Library", "Open library", "Watch live"), **Then** the existing tab is
+   focused via the handle — no second tab, no navigation or reload of that tab, and no
+   docked panel opens here.
 3. **Given** a panel's full-page tab exists that the USER opened manually (no window
-   handle; e.g. via browser chrome or a shared link), **When** the operator clicks that
-   panel's toggle, **Then** BroadcastChannel presence answers (§8.3), the docked panel
+   handle; e.g. via browser chrome or a shared link), **When** the operator invokes any
+   entry point, **Then** the presence list answers (§8.3), the docked panel
    does NOT open here, no duplicate opens, and a visible "already open in another tab —
    switch" affordance offers the best-effort switch.
-4. **Given** the manually-opened tab is then closed, **When** the operator clicks the
-   toggle again, **Then** the panel opens normally (presence detection cleared — no
+4. **Given** the manually-opened tab is then closed, **When** the operator invokes the
+   entry point again, **Then** the panel opens normally (presence detection cleared — no
    stale "already open" state).
 5. **Given** a Library full-page tab open for workspace A, **When** the operator clicks
    the Library toggle in a tab showing workspace B, **Then** that is NOT "already open"
    (per-workspace scoping, SP-18): Library opens docked here for workspace B normally.
+6. **Given** an app-opened Library full-page tab for workspace A that the operator
+   navigated to workspace B inside the tab, **When** the Library toggle is clicked in
+   a tab showing workspace A, **Then** it is NOT "already open" for A anymore
+   (matching is by CURRENT scope, MAJ-213): Library opens docked here for A normally,
+   and no context post is sent to the tab now showing B (never yanked back).
 
-### US-7 — URL-addressable panel state (SP-14, SP-21, SP-22, SP-23) — P1 [wave 1]
+### US-7 — URL-addressable panel state (SP-14, SP-21, SP-22, SP-23, SP-27, SP-28) — P1 [wave 1]
 
 The open panel is part of the page address (`…/chat?panel=team`); reload and shared
 links restore it. Hash routing applies (the router's search lives in the `#/` fragment
 — `src/components/library/LibraryPanel.tsx::LibraryPanel.handlePopOut` comment;
 `src/routes/_app/-library.deep-link.test.tsx`). **Panel toggles are not pages
-(SP-22)**: opening, closing and switching a panel uses history REPLACE, never push —
-the browser Back button behaves exactly as it does today. Valid `panel` values are the
-REGISTERED panel ids (MAJ-012): an unregistered-but-future id (`tasks` in wave 1) is
-treated exactly like an unknown id — dropped with a URL replace.
+(SP-22, amended by MAJ-206)**: on desktop widths, opening, closing and switching a
+panel uses history REPLACE, never push — and on Back/Forward the app's OWN state wins:
+a restored history entry's stale `panel` value is ignored and immediately re-projected
+from the store (replace), so Back behaves exactly as it does today (panels never
+reopen from old history entries). **EXCEPTION — phone mode (SP-26)**: opening a panel
+below 680px pushes ONE history step, and Back over that step closes the panel. Valid
+`panel` values are the REGISTERED panel ids (MAJ-012): an unregistered-but-future id
+(`tasks` in wave 1) is treated exactly like an unknown id — dropped with a URL replace.
+**Browser exclusion (SP-28)**: `panel=browser` is NEVER restored from a reload or a
+shared link — the param is always dropped; the Browser panel reopens only from its
+entry points ("Watch live", "Open browser"), and no session id is ever placed in a
+shareable chat-link. **Shared links through sign-in (SP-27)**: after signing in, the
+user returns to the link they opened — workspace and panel both restored, not dropped
+to `/`.
 
 **Why this priority**: founder-chosen recommended option (SP-14); makes the one-panel
 state shareable and reload-stable.
 
 **Independent test**: open a panel, copy the URL, reload in a fresh tab; assert the
-same panel restores; press Back after toggling panels and assert history is unchanged
-from today's behaviour.
+same panel restores; sign out, open the shared link, sign in, and assert the linked
+workspace and panel come back (SP-27); press Back after toggling panels and assert
+history is unchanged from today's behaviour.
 
 **Acceptance scenarios**:
 
-1. **Given** any panel open on a workspace Chat route, **When** the operator reloads,
-   **Then** the same panel restores at its default view with its width.
-2. **Given** a shared link carrying `?panel=calendar` (wave 3), **When** it is opened,
-   **Then** the Calendar panel opens over Chat without any further click.
+1. **Given** a panel open on a workspace Chat route (**any panel EXCEPT Browser**,
+   SP-28), **When** the operator reloads, **Then** the same panel restores at its
+   default view with its width.
+2. **Given** a shared link carrying `?panel=calendar` (wave 3), **When** it is opened
+   by a signed-out colleague, **Then** sign-in returns them to the link they opened
+   (SP-27): the linked workspace's chat with the Calendar panel restored.
 3. **Given** a link with no `panel` param, **When** opened, **Then** no panel opens
    (today's behaviour for links).
 4. **Given** a link with an unknown or UNREGISTERED panel id, **When** opened, **Then**
    the param is dropped (URL replaced) and no panel opens — the chat still renders; the
    failure is never silent-invisible (the URL visibly changes).
-5. **Given** `?panel=browser` without session/agent context, **When** opened, **Then**
-   the param is dropped and just the chat renders (SP-21, founder: never trigger a paid
-   agent session from a pasted link).
+5. **Given** ANY `?panel=browser` link (bare, or with session/agent context), **When**
+   opened (fresh or reloaded), **Then** the param is dropped with a URL replace, no
+   session is created, and just the chat renders (SP-21 + SP-28: the Browser panel is
+   excluded from URL restore entirely; no session id is ever placed in a shareable
+   chat-link; "Watch live" is the only way back into a live browser).
 6. **Given** `?panel=mail` with no agent/mailbox selected, **When** opened, **Then** the
    Mail panel opens on its "choose a mailbox" state (SP-23 — Mail starts nothing
-   costly, unlike Browser).
-7. **Given** the operator opens, switches and closes panels, **When** they press the
-   browser Back button afterwards, **Then** navigation history is exactly as if the
-   panels had never been toggled (SP-22 — replace, never push).
+   costly; the link MAY carry `&agent=…` to land directly on that mailbox, SP-23).
+7. **Given** the operator opens, switches and closes panels, then navigates to
+   Settings and back (history now holds entries with stale `panel` values), **When**
+   they press the browser Back button onto such an entry, **Then** the app's own state
+   wins: the entry's stale `panel` value is ignored, the panel state shown is the
+   store's current state, and the URL is re-projected (replace) — Back never opens or
+   switches a panel (SP-22 as amended by MAJ-206).
+8. **Given** ANY router navigation while the Library panel has unsaved edits
+   (deep link pasted in the address bar, Back/Forward, workspace switch via the
+   sidebar), **When** the navigation is intercepted by the router blocker (MAJ-205,
+   FR-013), **Then** the discard-confirmation appears and a cancel leaves the route,
+   URL and panel unchanged — the navigation never happens.
 
-### US-8 — Phone behaviour (SP-3, SP-4) — P0 [wave 1]
+### US-8 — Phone behaviour: takeover + three ways back to the chat (SP-3, SP-4, SP-25, SP-26) — P0 [wave 1]
 
-Below 640px the panel takes over the full screen and the chat region is `inert` —
-exactly today's behaviour, generalized to every panel.
+Below **680px** the panel takes over the full screen and the chat region is `inert` —
+today's behaviour generalized to every panel, with the breakpoint raised from 640px to
+680px (SP-25, which also deleted overlay mode entirely). In phone mode there are
+**THREE ways back to the chat (SP-26)**:
 
-**Why this priority**: preserves an existing accessibility behaviour; the inert
-treatment must not be lost for new panels.
+1. **The panel header's ✕ (Close)** closes the panel.
+2. **The phone's Back gesture / hardware button**: opening a panel in phone mode adds
+   ONE history step, so Back closes the panel and reveals the chat underneath. Desktop
+   is UNCHANGED — SP-22's history-REPLACE stays exactly as specified in US-7; this
+   history-PUSH is phone-mode-only.
+3. **Swipe-to-close**: a horizontal touch drag that begins within 24px of the screen's
+   LEFT edge, moving rightward — the panel slides right, revealing the chat (the chat
+   sits conceptually to the left, matching the docked geometry). It closes on release
+   after ≥96px of rightward travel, OR on release with velocity ≥0.4 px/ms after ≥48px
+   of rightward travel; below the thresholds it springs back and nothing closes. It
+   MUST NOT conflict with horizontal scrolling inside the panel's own content (a
+   Library file carousel, a Calendar week view): a horizontal drag that begins on an
+   element (or ancestor up to the panel root) that can scroll horizontally in the
+   drag's direction is delivered to that scroller — it scrolls, the panel does not
+   close; the edge-swipe recognizer owns the gesture only when the touch starts in the
+   edge zone on a target with no horizontally-scrollable ancestor in the drag
+   direction, or on such a scroller already at its left end. Content can also opt out
+   entirely by claiming the pan.
 
-**Independent test**: at <640px open a panel; assert full-width takeover and inert chat.
+**Why this priority**: preserves the inert-chat accessibility behaviour; the three
+affordances are the founder's answer to "how does a phone user get back to the chat"
+(SP-26).
+
+**Independent test**: at <680px open a panel; assert full-width takeover and inert
+chat; close via ✕, via Back, and via the edge swipe in turn; assert each closes the
+panel and restores the interactive chat; drag inside a horizontal scroller (carousel
+fixture) and assert it scrolls without closing the panel.
 
 **Acceptance scenarios**:
 
-1. **Given** a <640px viewport, **When** a panel opens, **Then** it occupies the full
+1. **Given** a <680px viewport, **When** a panel opens, **Then** it occupies the full
    content width, the chat region is `inert` (not focusable, not clickable), and no
    resize handle is offered.
-2. **Given** the takeover state, **When** the operator closes the panel, **Then** the
-   chat region becomes interactive again and the panel is gone.
-3. **Given** a viewport crossing 640px while a panel is open, **When** the layout
-   re-evaluates, **Then** the panel docks at its remembered width with a resize
-   handle (no stuck takeover state).
+2. **Given** the takeover state, **When** the operator taps the header's ✕, **Then**
+   the panel closes and the chat region becomes interactive again (SP-26 affordance 1).
+3. **Given** the takeover state, **When** the operator uses the phone's Back
+   gesture/button, **Then** the panel closes and the chat is revealed (SP-26
+   affordance 2 — SP-26's history push); the chat page underneath was never navigated
+   away from.
+4. **Given** the takeover state, **When** the operator swipes from the left edge
+   rightward past the thresholds, **Then** the panel closes (SP-26 affordance 3); a
+   swipe below the thresholds springs back and the panel stays.
+5. **Given** panel content with a horizontal scroller (Library carousel, Calendar week
+   view), **When** the operator drags horizontally INSIDE it, **Then** the scroller
+   scrolls and the panel does NOT close — the close-swipe and in-content horizontal
+   scrolling are distinguishable (SP-26's non-conflict rule).
+6. **Given** a viewport crossing 680px upward while a panel is open, **When** the
+   layout re-evaluates, **Then** the panel docks at its remembered width with a resize
+   handle (no stuck takeover state); the phone history step (SP-26) is collapsed
+   (replaced away) when leaving phone mode.
 
 ### US-9 — Keyboard and screen-reader access (SP-3, SP-4) — P0 [wave 1]
 
 The resize border is a focusable separator with complete assistive state; opening and
 closing manages focus; panels are labelled landmarks. **Focus-return rules, per case
-(MIN-002)**: toggling a panel closed returns focus to the toggle that invoked it;
-Close/Expand in the shell header returns focus to the chat input (matching the
+(MIN-002, extended MIN-208)**: toggling a panel closed returns focus to the toggle that
+invoked it; Close/Expand in the shell header returns focus to the chat input (matching the
 Browser's existing behaviour — `BrowserLivePanel.tsx::handlePopOut` focuses the chat
-input today); when the invoking control no longer exists (a collapsed dropdown item, a
-relaid-out strip), focus falls back to the chat input; a deep-link panel restored on
-page load moves NO focus (never steal focus on load).
+input today); an Escape close follows the same per-case rules (the panel's invoking
+toggle, else the chat input); when the invoking control no longer exists (a collapsed
+dropdown item, a relaid-out strip), focus falls back to the chat input; a deep-link
+panel restored on page load moves NO focus (never steal focus on load).
 
 **Why this priority**: SP-3 explicitly requires keyboard accessibility; non-negotiable.
 
@@ -523,39 +626,54 @@ Primary flows:
   Chat remains the page underneath.
 - When Expand is clicked, the full-page route opens in a new tab and the docked panel
   closes (SP-12).
-- When a panel's toggle is clicked and its full-page tab for the SAME workspace is
-  already open, the app SWITCHES to that tab (handle-focus when it holds the handle;
-  affordance + best-effort switch for a manual tab) — it never opens a duplicate and
-  never also opens the docked panel here (SP-18, stated once).
-- When the panel's width is dragged, changed by keyboard, or reset (double-click), the
-  new width is remembered per user + panel + workspace (SP-13, SP-20) — written only on
-  user choice, never on a window-driven re-clamp (MAJ-009).
+- When ANY entry point for a panel is invoked (tab toggle, Expand, sidebar "Library",
+  "Open library", "Watch live", chat draft link, `media` redirect) and that panel's
+  full-page tab is already open for the same identity scope, the app SWITCHES to that
+  tab (handle-focus when it holds the handle; affordance + best-effort switch for a
+  manual tab) — it never opens a duplicate and never also opens the docked panel here
+  (SP-18 + SP-30, one list of entry points, stated once).
+- When the panel's width is dragged, adjusted by keyboard (written on settle, 300ms
+  after the last keypress), or reset (double-click), the new width is remembered per
+  user + panel + workspace (SP-13, SP-20) — written only on a settled user choice,
+  never on a window-driven re-clamp (MAJ-009, MIN-205).
 - When a URL carries `?panel=<registered id>`, that panel opens; reload and shared
-  links restore it; toggling panels never adds history entries (SP-14, SP-22).
+  links restore it; on desktop toggling panels never adds history entries and Back
+  never re-opens a panel from a stale history entry (SP-14, SP-22, MAJ-206); in phone
+  mode opening a panel pushes ONE history step that Back consumes (SP-26).
+- When a shared link is opened signed-out, sign-in returns the user to the link they
+  opened (workspace + panel), never dropped to `/` (SP-27).
 
 Error flows:
 - When ANY path closes or replaces the Library panel with unsaved edits, the
-  discard-confirmation runs; cancelling leaves the panel open (FR-013, CRIT-001).
+  discard-confirmation runs; cancelling leaves the panel open (FR-013, CRIT-001) —
+  on app-initiated paths via the shell's `beforeLeave` gate, on URL-initiated paths
+  (address-bar deep links, Back/Forward, workspace switch) via the router blocker
+  (MAJ-205), and the "Open browser" path creates NO paid session before the guard
+  passes (MIN-206).
 - When an unknown or unregistered panel id arrives via URL, the param is dropped and no
   panel opens.
-- When a bare `?panel=browser` link arrives with no session/agent, the param is dropped
-  and no session is created (SP-21).
+- When ANY `?panel=browser` link arrives (bare or with context), the param is dropped
+  with a URL replace and no session is created — the Browser panel is never restored
+  from reload or a shared link (SP-21 + SP-28); "Watch live" is the only way back in.
 - When `?panel=mail` arrives with no mailbox selected, the Mail panel opens on its
   "choose a mailbox" state (SP-23).
 - When the Browser panel cannot open its pop-out, today's visible toast + the panel
   staying open is preserved.
+- When ANY panel's Expand cannot open its new tab (`window.open` returns null or
+  throws — popup blocker), a visible error toast shows and the docked panel STAYS open
+  (MAJ-209 — for every panel, never a silently vanished panel).
 - When WebRTC video fails inside the Browser panel, the visible error + Retry
   (ADR-061) is untouched by the shell.
 
 Boundary conditions:
 - When width hits 320px or the SP-17 ceiling `min(70% row, row − sidebar − 360px)`, it
   clamps (drag, keyboard, and restore alike).
-- When the floors (chat ≥360px, panel ≥320px) no longer both fit, the panel overlays
-  the chat instead of squeezing it (SP-17).
+- At every viewport ≥680px the floors always fit (row − sidebar ≥ 680 = 360 + 320), so
+  the panel ALWAYS docks — there is no overlay state (SP-25 deleted it).
 - When the window shrinks or zooms, the open panel re-clamps TRANSIENTLY — the stored
   width is untouched and returns when the window does (MAJ-009).
-- When the viewport is <640px, the panel takes over full screen, the chat is `inert`,
-  and resizing is disabled.
+- When the viewport is <680px, the panel takes over full screen, the chat is `inert`,
+  and resizing is disabled (SP-25; was 640px).
 - When Escape is pressed inside the Browser panel, it keeps its "stop driving" meaning
   and the panel stays open (SP-19); every other panel closes on Escape.
 - When the browser tab is reloaded, the URL restores the panel; the remembered width
@@ -565,11 +683,14 @@ Boundary conditions:
 
 ## 6. Edge cases
 
-- **Panel open + workspace switch** (US-3.5): the panel stays open, re-targets to the
-  new workspace, and takes the new workspace's remembered width — after the leave guard
-  when the outgoing panel is the Library (FR-013).
-- **Browser panel deep link without session/agent** (US-7.5, SP-21): the param drops,
-  just the chat renders, no session is created.
+- **Panel open + workspace switch** (US-3.5, SP-29): the per-panel rule applies —
+  Browser anchored; Library conditional; Tasks/Calendar/Mail follow. (A following
+  Library passes the leave guard, FR-013.)
+- **Browser deep link, ANY form** (US-7.5, SP-21 + SP-28): `panel=browser` is always
+  dropped with a URL replace — bare or carrying session/agent context, fresh or
+  reloaded — no session is created, just the chat renders; the Browser panel is never
+  restored from reload or a shared link, and no session id is ever placed in a
+  shareable chat-link.
 - **Mail deep link with no mailbox** (US-7.6, SP-23): the Mail panel opens on its
   "choose a mailbox" state.
 - **Escape while a modal is above the panel**: modal closes first (US-1.3).
@@ -578,29 +699,36 @@ Boundary conditions:
   control.
 - **Escape during Library unsaved-edits**: the confirmation dialog takes Escape
   (topmost layer); a cancel keeps the panel open.
-- **Double-click reset while below 640px**: no border exists in takeover — no-op.
+- **Double-click reset while below 680px**: no border exists in takeover — no-op
+  (SP-25).
 - **Two entry points racing** (e.g. "Watch live" in chat while the Library toggle is
   clicked in the same interaction window): last open wins; one panel at a time holds;
-  the leave guard still runs (a dirty Library cancels the race loser).
-- **Browser pop-out close re-docks only into an EMPTY panel slot** (MAJ-006): a pop-out
-  close re-docks its panel only if NO panel is open in the source tab; if a different
-  panel has since been opened there, the re-dock is a NO-OP — it never clobbers or
-  replaces the panel the operator is using (CRIT-001 safe: no unmount, no guard needed
-  on this path).
+  the leave guard still runs (a dirty Library cancels the race loser — the losing
+  transition is the one whose `beforeLeave` resolves false; the winner re-runs its own
+  gate once the dialog closes).
+- **Pop-out close re-docks: ONLY the opener tab, only the same panel** (MAJ-006 as
+  corrected by MAJ-208): only the tab that OPENED the pop-out (holds its window
+  handle — the Browser's existing `watchPopoutClosed` pattern) reacts to a pop-out
+  close; a manually-opened full-page tab's close triggers NO re-dock anywhere. In the
+  opener tab: if the SAME panel is open, it re-docks/follows the pop-out's last
+  workspace (the Dana UAT fix, preserved) — through the leave guard when that panel is
+  a dirty Library; if a DIFFERENT panel is open, the re-dock is a NO-OP (never
+  clobbers what the operator is using); if no panel is open, it re-docks normally.
 - **Browser panel with an owned pop-out** (today's subscribe logic): clicking another
   panel's toggle must not strand the owned pop-out — the existing
   "close docked panel, focus owned window" reaction (`BrowserLivePanel.tsx`) is
   preserved for the Browser's own toggle; opening a DIFFERENT panel while an owned
   Browser pop-out exists closes the docked Browser panel state and leaves the pop-out
-  owned and running (its re-dock reaction on pop-out close fires per the no-clobber
+  owned and running (its re-dock reaction on pop-out close fires per the opener-only
   rule above).
-- **Reload with `?panel=browser` and a valid session**: the Browser panel restores;
-  a session that no longer exists shows the view's existing error state, not a silent
-  blank (ADR-061 posture).
-- **Window too narrow for both floors** (SP-17): at ≥640px with chat floor 360px and
-  panel floor 320px, a window narrower than `sidebar + 360 + 320` puts the panel in
-  overlay mode over the interactive chat — the old "70% ≥ 448px always fits" reasoning
-  is gone (MIN-005 replaced by the SP-17 floors).
+- **Reload with `?panel=browser`** (SP-28): the param is dropped and just the chat
+  renders — the Browser panel never restores from a reload; "Watch live" reopens it.
+- **Phone-mode panel switch**: opening a second panel while one is open in phone mode
+  replaces it WITHOUT adding another history step — exactly one pushed step exists for
+  "a panel is open", so Back still closes straight to the chat (SP-26).
+- **Boundary note (SP-25)**: below 680px is takeover; at ≥680px the floors always fit
+  (row − sidebar ≥ 680 = 360 + 320) so the panel always docks — the old
+  "floors stop fitting / overlay" case no longer exists anywhere.
 
 ---
 
@@ -611,10 +739,10 @@ Boundary conditions:
 - The system must not reintroduce the retired Sheet/overlay panel MODE — the retired
   surface is the slide-out Sheet with its pin toggle as the panel's hosting mode
   (retired 2026-07-16 by operator direction; `src/store/ui.ts::UiStore`,
-  `LibraryPanel.tsx` module docs). SP-17's narrow-window OVERLAY degradation is a
-  DIFFERENT thing: a docking fallback for windows too narrow for both floors, with no
-  Sheet component, no pin toggle, and docking restored as soon as the floors fit again.
-  It is in scope, and it is not the retired mode.
+  `LibraryPanel.tsx` module docs). SP-25 DELETED the SP-17 narrow-window overlay
+  fallback entirely (MAJ-204's founder answer): there is NO overlay state anywhere —
+  below 680px is full-screen takeover, at ≥680px the panel always docks. The only
+  surviving prohibition is the retired hosting mode itself.
 - The shell must not remove any capability inventoried in §2.2/§2.3; per-panel buttons
   may move to the shell header (capability preserved), never disappear.
 - The shell must not know panel internals: it renders content supplied per panel and
@@ -622,8 +750,16 @@ Boundary conditions:
   handover semantics stay content-level).
 - The system must not silently drop a failed Browser pop-out or a failed WebRTC stream
   (visible toast / visible error + Retry today; stays that way — ADR-061).
-- The system must not open a second tab when one already exists for a panel (SP-18);
-  worst case is a visible "already open" affordance, never a silent duplicate.
+- The system must not open a second tab when one already exists for a panel's identity
+  scope (SP-18 + SP-30: any entry point); worst case is a visible "already open"
+  affordance, never a silent duplicate.
+- The system must not close the docked panel when its Expand fails to open the new tab
+  (MAJ-209): a blocked/failed `window.open` shows a visible error toast and the docked
+  panel stays open — for every panel.
+- The shell's own open/close path must not require any network call (§1: no backend) —
+  the one exception is content-level: with no active session, "Open browser" creates a
+  session before opening (MIN-206), and on that path the leave guard MUST run BEFORE
+  the session creation, so a cancelled guard never creates a paid session.
 - The system must not let the panel exceed the SP-17 ceiling
   `min(70% of row, row − sidebar − 360px)` — the chat stays usable (SP-3's purpose,
   SP-17's formula).
@@ -632,66 +768,104 @@ Boundary conditions:
   no panel session on the gateway).
 - Settings must never become a panel (SP-6); the workspace-name entry keeps navigating
   to the settings page.
-- The system must not gate panel open/close on any network call — all state is local
-  (§1: no backend).
+- The shell's own open/close decisions must not require any network call — all panel
+  state is local (§1: no backend); the only network call on an open path is the
+  content-level session creation named in the exception above (MIN-206).
 - No path may silently discard unsaved Library edits (CRIT-001): every close/replace
   path is gated (FR-013).
 
 ### Machine-verifiable constraints
 
-**Geometry (SP-17)**:
+**Geometry (SP-17 as amended by SP-25, MAJ-203)**:
 - Docked layout requires BOTH floors: chat column ≥360px AND panel ≥320px. All widths
   are measured on the root flex row; percentages use the row width as their single
   basis (MIN-001's basis — today's `sm:w-[45%]` is 45% of the row).
 - Panel maximum width MUST equal `min(0.70 × row, row − sidebar − 360px)` (sidebar term
-  = the pinned sidebar's current width; 0 when unpinned, below its 1024px breakpoint).
-- When `row − sidebar < 360 + 320` (floors cannot both fit) at ≥640px, the panel MUST
-  switch to OVERLAY: it floats above the chat at its clamped width, the chat keeps the
-  full row and stays interactive (no inert), and the resize handle keeps working.
-- Default width MUST be 45% of the row clamped to [320px, 720px].
+  = 256px when the sidebar is PINNED — a user preference honoured only at ≥1024px,
+  `src/store/sidebar.ts::SIDEBAR_PIN_BREAKPOINT`; 0 when not pinned, which is always
+  the case below 1024px).
+- At every viewport ≥680px the floors always fit (row − sidebar ≥ 680 = 360 + 320):
+  the panel ALWAYS docks side-by-side. **There is NO overlay state** — SP-25 deleted
+  it; below 680px the panel takes over the full screen (US-8).
+- Default width MUST equal `clamp(0.45 × row, 320px, min(720px, ceiling))` — the
+  default is capped by the same ceiling (MAJ-203: an uncapped 45% gave a 1024px/pinned
+  window a 461px default against a 408px ceiling, squeezing the chat to 307px, below
+  its 360px floor). Computed px values are floored to whole pixels.
 - Keyboard resize step MUST be 16px per keypress; Home = 320px; End = the SP-17
   ceiling.
-- Viewport <640px MUST take over full width and MUST NOT render a resize handle.
+- Viewport <680px MUST take over full width and MUST NOT render a resize handle.
 
-**Performance (MIN-006)**:
+**Performance (MIN-006 + MIN-205)**:
 - Live drag MUST update the width via a CSS variable driven by requestAnimationFrame;
   layout-commit happens on drag release. No full React re-render per pointer move.
+- Keyboard resize rides the same rAF path; the storage write and (for the Browser) the
+  remote-viewport handover run when keyboard input SETTLES — 300ms after the last
+  keypress — matching drag release, never once per keypress.
 
-**State machine**:
+**State machine (two transition classes — MAJ-205)**:
 - At most one panel open at any instant (SP-7) — every open path (tab toggle, sidebar,
   ChatControls, "Watch live", deep link, email draft link) MUST route through the same
   single-panel state.
-- **Every transition that closes or replaces the open panel is gated by the outgoing
-  panel's `beforeLeave()` (CRIT-001 fix, FR-013)**: tab toggle close, open-other (any
-  entry point), deep-link replace, workspace-switch re-target, header Close, Expand.
-  The transition proceeds only when `beforeLeave()` resolves true; a false cancels it
-  (no state change, URL unchanged, panel stays). Pop-out re-dock fires only when no
-  panel is open (MAJ-006), so it never needs the gate.
+- **App-initiated transitions** (tab toggle close, open-other from any entry point,
+  header Close, Expand) are gated by the outgoing panel's `beforeLeave()`
+  (CRIT-001 fix, FR-013): the shell awaits it BEFORE touching the store, URL or
+  content; a `false` cancels (no state change, URL unchanged, panel stays).
+- **URL-initiated transitions** (address-bar deep links, Back/Forward, workspace
+  switch via a sidebar click, any router navigation) change the URL first, so they are
+  gated by a ROUTER BLOCKER — the existing `useBlocker` pattern
+  (`src/routes/_app/library.tsx::LibraryRoute`, already wired to
+  `confirmDiscardLibraryEdits`): while the open panel has unsaved edits, ANY router
+  navigation runs the outgoing panel's `beforeLeave`; on cancel the navigation does
+  not happen — route, address and panel stay unchanged. Replaces the old
+  "one model, no dual authority" claim: the true rule is store→URL projection for
+  app-initiated changes, URL→store adoption for URL-initiated ones, each gated by its
+  own mechanism.
+- Pop-out re-dock is OPENER-ONLY (MAJ-208, FR-018): only the tab holding the pop-out's
+  window handle reacts to its close; a same-panel re-dock follows the pop-out's last
+  workspace (the Dana UAT fix) THROUGH the `beforeLeave` gate; a different-panel-open
+  re-dock is a no-op; a manual full-page tab's close triggers no re-dock anywhere.
 - Clicking the open panel's toggle MUST close it (SP-11) — through the gate.
-- Expand MUST close the docked panel in the source tab (SP-12) — through the gate.
+- Expand MUST close the docked panel in the source tab (SP-12) — through the gate; a
+  failed/blocked new tab leaves the docked panel open with a visible toast (MAJ-209).
 
-**URL**:
+**URL (SP-14, SP-22, SP-26, SP-28, MAJ-205, MAJ-206)**:
 - The open panel MUST be encoded as search param `panel` on the workspace Chat route,
-  whose value MUST be a REGISTERED panel id (MAJ-012); any other value — unknown or
-  unregistered-but-future — MUST be dropped with a URL replace.
+  whose value MUST be a REGISTERED panel id (MAJ-012); any other value — unknown,
+  unregistered-but-future, or `browser` (SP-28: Browser is excluded from URL restore
+  entirely) — MUST be dropped with a URL replace.
 - Under the app's hash routing the param lives under `#/` (e.g.
   `/#/workspaces/{id}/chat?panel=team`).
-- Panel toggles use history REPLACE, never push (SP-22): open, switch and close are
-  `router.replace`-class operations; Back/Forward behave exactly as today.
+- Desktop: panel open/switch/close are history REPLACE, never push (SP-22); on
+  Back/Forward the store wins — a restored entry's stale `panel` value is ignored and
+  immediately re-projected from the store (replace), so Back behaves exactly as today
+  (MAJ-206).
+- Phone (<680px): opening a panel pushes ONE history step carrying a phone-push
+  marker; Back over that step closes the panel (SP-26); desktop entries never carry
+  the marker.
+- Workspace navigation is NOT a panel change: a workspace switch under an open panel
+  follows SP-29's per-panel rules (FR-020), never a URL panel-param edit.
 
-**Persistence (SP-20, MAJ-009)**:
-- Remembered width key MUST be **user id × panel id × workspace id** (workspace-less
-  contexts use the `app` bucket), in browser-local storage (SP-20 — one namespaced
-  JSON entry in the existing persisted-store pattern; deleted workspaces' entries are
-  ignored on read and pruned on the next write, so the key space cannot grow without
-  bound — MIN-004).
-- Stored value is px, written ONLY on a user choice: drag release, keyboard adjustment,
-  or reset. Reset DELETES the key (default re-derived at read time; a default is never
-  stored in px). A window-driven re-clamp is transient and MUST NOT write.
+**Persistence (SP-20, MAJ-009, MIN-204, MIN-205)**:
+- Remembered width key MUST be **`panel-width:<username>:<panelId>:<workspaceId|app>`**
+  — ONE localStorage key per combination (MIN-204; no single JSON blob), in
+  browser-local storage (SP-20). `username` is the signed-in account's display name —
+  the only account identifier the SPA holds (`src/store/auth.ts`); the Browser panel
+  always uses the `app` workspace term (MAJ-201).
+- Stored value is px, written ONLY on a settled user choice: drag release, keyboard
+  settle (300ms after the last keypress), or reset. Reset DELETES the key (default
+  re-derived at read time; a default is never stored in px). A window-driven re-clamp
+  is transient and MUST NOT write.
+- Pruning: on each write, the signed-in user's OWN entries for workspaces no longer in
+  their workspace list are removed; other accounts' entries are never touched
+  (MIN-204 — the SPA cannot see another account's entries' meaning, only its own
+  list).
+- Storage failure (quota exceeded, private mode): the width works in memory for the
+  session, nothing is persisted, NO error is surfaced — an explicit, accepted,
+  documented degrade for a preference, not a silent failure (MIN-204).
 - Storage location: browser-local localStorage (SP-20, decided). A future server-side
   home would be a contract-first change — not in this spec.
 
-**Accessibility**:
+**Accessibility (MIN-002, MIN-003, MIN-208)**:
 - The separator MUST be focusable, role `separator`, `aria-orientation="vertical"`,
   with an accessible name ("Resize <Panel> panel"), `aria-controls` referencing the
   panel element, `aria-valuetext` ("<n> pixels wide"), and
@@ -701,11 +875,28 @@ Boundary conditions:
   Browser panel, where Escape NEVER closes the panel (SP-19: Escape releases the
   wheel, per `BrowserLiveView.tsx::handleKeyDown`, WCAG 2.1.2; only Close closes it).
   The shell's Escape listener is bubble-phase on the shell root, fires only when focus
-  is inside the shell, and only when `event.defaultPrevented` is false — content that
-  consumes Escape (Radix menus, IME, the chat composer) calls `preventDefault()`.
-- On open (by user action), focus MUST move into the panel; on close, focus MUST follow
-  the per-case rules in US-9 (invoking toggle, else chat input; never steals focus on a
-  load-time deep-link restore).
+  is inside the shell, and only when `event.defaultPrevented` is false AND
+  `event.isComposing` is false (MIN-208: IME composition must be detected with
+  `isComposing`, not assumed to call `preventDefault()`; Radix layers DO call
+  `preventDefault` when they dismiss). "Focus inside the shell" means the active
+  element's composed DOM path contains the shell root or an element the shell has
+  registered as one of its portalled layers (MIN-208 — DOM tree, not React tree, so
+  portalled content counts).
+- On open (by user action), focus MUST move into the panel; on close — including an
+  Escape close — focus MUST follow the per-case rules in US-9 (invoking toggle, else
+  chat input; never steals focus on a load-time deep-link restore).
+
+**Broadcast channels and the same-origin preview surface (MIN-207, STRIDE note)**:
+- Presence/context messages are validated on receipt: malformed or wrong-version
+  messages are ignored, never applied. File paths and Library selections are NEVER
+  posted over BroadcastChannel (any same-origin page can read them — agent-built
+  dev apps are served same-origin at `/preview/` per ADR-044 "Serve /preview/ on the
+  main gateway listener"); per-target context (e.g. a new Library selection) travels
+  to a specific registry handle via targeted `postMessage`, not the broadcast
+  channel. Recorded assumption (§17): same-origin preview apps can join the SPA's
+  channels; validation + the no-paths rule bound the exposure to channel noise (a
+  spoofed "already open" answer or a fake close signal), never to file-path
+  disclosure.
 
 ---
 
@@ -733,14 +924,25 @@ Shell state (store, single slice replacing browserPanel/libraryPanel):
 - `context` carries what the panel needs (Library: `workspaceId?`; Browser:
   `sessionId, agentId`; workspace panels: `workspaceId`; Mail: mailbox context per the
   email spec).
+- **Each panel's identity key (MAJ-201)** — what "already open", presence, the handle
+  registry and the entry-point switch all match on (§8.3), and what scopes the width
+  bucket:
+  | Panel | Identity key | Width bucket |
+  |---|---|---|
+  | Library / Tasks / Team / Calendar | `panelId × workspaceId` (`app` when opened at the virtual root) | that workspace, or `app` at the root |
+  | Browser | `panelId × sessionId × agentId` (MAJ-201: a session, NOT a workspace — today's `browserPanel` is `{sessionId, agentId}`, `src/store/ui.ts`) | **`app` always** (one width per user for the Browser panel) |
+  | Mail | `panelId × workspaceId` + mailbox context per the email spec | that workspace |
+  A Library full-page tab that navigates to another workspace no longer matches its
+  old workspace's identity (matching is by CURRENT scope, MAJ-213).
 - `beforeLeave` is supplied ONLY by panels with an unsaved-edit risk (Library today:
   its existing `confirmDiscardLibraryEdits`); panels without such risk omit it, and
   transitions replace them freely. The shell awaits it BEFORE touching the store, URL
   or content (the guard must run while the outgoing panel is still mounted — its dialog
   is hosted inside the mounted content, `unsavedGuard.ts`).
-- **The shell derives the width-memory key itself** — `panel-width.<user>.<id>.<ws|app>`
-  — from `id × context.workspaceId × signed-in user` (SP-20); panels do not supply it
-  (OBS-001: the per-panel `widthMemoryKey` was unnecessary indirection, removed).
+- **The shell derives the width-memory key itself** —
+  `panel-width:<username>:<panelId>:<workspaceId|app>` — from `id × identity scope ×
+  signed-in user` (SP-20, MIN-204; Browser = `app` per MAJ-201); panels do not supply
+  it (OBS-001: the per-panel `widthMemoryKey` was unnecessary indirection, removed).
 - Panels register through a single registry; adding Mail (wave 2) and
   Tasks/Team/Calendar (wave 3) MUST require no shell change beyond a new
   `PanelDefinition` entry (SP-4's test: "each panel supplies only its content and its
@@ -749,18 +951,35 @@ Shell state (store, single slice replacing browserPanel/libraryPanel):
   own pop-out behaviour (selection-carrying for Library, ownership handover for
   Browser — §2.3 kept differences).
 
-### 8.2 URL and deep-link contract (SP-14, SP-21, SP-22, SP-23)
+### 8.2 URL and deep-link contract (SP-14, SP-21..SP-23, SP-27, SP-28, MAJ-205, MAJ-206)
 
 - Param `panel` on the workspace Chat route's search (under `#/`). Canonical example:
   `/#/workspaces/{workspaceId}/chat?panel=team`. **The workspace Chat route is the only
-  route whose search schema declares `panel`** (today it declares none — verified);
+  route whose search schema declares `panel` (plus `agent`, meaningful only with
+  `panel=mail`, SP-23)** (today it declares none — verified);
   the Chat route's own `{workspaceId}` param scopes every panel's workspace context,
   which is why no extra workspace param is needed. A `panel` param arriving on any
   other route is dropped (URL replace).
-- **Source of truth (MAJ-004)**: the store slice (`activePanel`) is the runtime source
-  of truth; the URL `panel` param is its addressable projection — written with history
-  REPLACE on every change and read on load (reload/deep link). One model, no dual
-  authority. Toggles are replace, never push (SP-22) — Back behaves exactly as today.
+- **Two transition directions (MAJ-004 as corrected by MAJ-205)**: the store slice
+  (`activePanel`) is the runtime source of truth and the URL `panel` param is its
+  addressable projection — but the old "one model, no dual authority" claim was wrong
+  for navigations that start at the URL. The actual rule: **store→URL projection**
+  (history REPLACE) for app-initiated changes (toggle, open-other, Close, Expand,
+  workspace-switch re-target), and **URL→store adoption** for URL-initiated ones
+  (deep link, Back/Forward, workspace switch via a sidebar click) — the latter gated
+  by the router blocker (below). Desktop toggles are replace, never push (SP-22); on
+  Back/Forward the store wins (MAJ-206): a restored entry's stale `panel` value is
+  ignored and re-projected from the store, so Back behaves exactly as today. Phone
+  mode is the SP-26 exception (one pushed step; Back closes the panel).
+- **URL-initiated transitions are gated by a router blocker (MAJ-205)** — the
+  existing `useBlocker` pattern already in this codebase
+  (`src/routes/_app/library.tsx::LibraryRoute`, wired to
+  `confirmDiscardLibraryEdits`): while the open panel has unsaved edits, ANY router
+  navigation (deep link pasted in the address bar, Back/Forward, a sidebar click to
+  another workspace or route) runs the outgoing panel's `beforeLeave`; **on cancel the
+  navigation does not happen — route, address and panel stay unchanged**. For a
+  workspace-switch cancel this means the route stays on the outgoing workspace's chat,
+  with the Library left exactly as it was (US-3.5, FR-020).
 - **Cross-route navigation (MAJ-004)**: panels are app-global (§17) — navigating to a
   non-chat route (Agents, Settings) keeps the open panel open in the store but the URL
   stops carrying `panel` (only the Chat route declares it); navigating back to a
@@ -769,28 +988,47 @@ Shell state (store, single slice replacing browserPanel/libraryPanel):
   carry `panel` there).
 - Valid `panel` values are the REGISTERED panel ids (MAJ-012); `tasks` in wave 1 is
   treated exactly like `bogus` — dropped with a URL replace, no panel.
+- **Sign-in return (SP-27, wave 1)**: the auth gate preserves the original hash URL
+  (path + search) across the login redirect (today `_app.tsx` redirects to `/login`
+  with no return address, and `login.tsx` navigates to `/` after sign-in — verified);
+  after signing in, the user lands back on the link they opened — workspace and panel
+  both restored, never dropped to `/`. This closes SC-004 (shared links work for
+  signed-out colleagues too).
 - Panel context that cannot live in the URL:
-  - **Browser (SP-21, decided)**: a bare `panel=browser` (no `session`/`agent` in the
-    link and none in session state) NEVER auto-starts a session — never trigger a paid
-    agent session from a pasted link. The param is dropped (URL replaced) and just the
-    chat renders. `panel=browser` WITH session/agent context restores normally. The
-    `/browser-live` route's existing visible "Missing session or agent" refusal
-    (`BrowserLiveRoute`) is unchanged.
-    **Shared-link authorization (MIN-009 disposition)**: a shared
-    `panel=browser&session=…&agent=…` link relies on the gateway's existing per-user
-    authorization of the live stream (the ADR-044 session cookie) — stated here as an
-    ASSUMPTION, not a verified property. Required wave-1 regression test (test-16
-    scope): a second account following the link sees the panel's visible denial
+  - **Browser — EXCLUDED from URL restore (SP-21 + SP-28, decided)**: a `panel=browser`
+    param is ALWAYS dropped with a URL replace — bare or carrying context, fresh or
+    reloaded. The Browser panel is NEVER restored from a reload or a shared link; it
+    reopens only via its entry points ("Watch live", "Open browser"). **No session id
+    is ever placed in a shareable chat-link** — the chat route's `panel` projection
+    never carries `session`/`agent` for the Browser; "session state" as a restore
+    source does not exist. The `/browser-live` route's existing visible
+    "Missing session or agent" refusal (`BrowserLiveRoute`) is unchanged — that
+    full-page route keeps its existing params (today's expand target, not a panel
+    deep link).
+    **Shared-link authorization (MIN-009 disposition)**: the one URL that still
+    carries a session id is the full-page `/browser-live?session=…&agent=…` expand
+    target (today's route). It relies on the gateway's existing per-user
+    authorization of the live stream (ADR-044 "Serve /preview/ on the main gateway
+    listener", session-cookie decision) — stated here as an ASSUMPTION, not a
+    verified property. Required wave-1 regression test (test 17): a second account
+    following the owner's `/browser-live` link sees the panel's visible denial
     surface, never the other user's stream.
   - **Mail (SP-23, decided)**: `panel=mail` with no agent/mailbox selected opens the
-    Mail panel on its "choose a mailbox" state (Mail starts nothing costly, unlike
-    Browser); a link MAY carry `&agent=…` to land directly on that mailbox.
+    Mail panel on its "choose a mailbox" state (Mail starts nothing costly); a link
+    MAY carry `&agent=…` to land directly on that mailbox — declared in the chat
+    route's search schema, meaningful only with `panel=mail`.
   - **Library (MAJ-010 honesty)**: `panel=library` restores the Library scoped to the
     Chat route's `{workspaceId}` at its DEFAULT view (the workspace's root). It does
     NOT restore a path/folder selection — selection-carrying links remain the existing
     full-page `/library?workspace=…&path=…&folder=…` form, whose `folder` is a one-time
     initial seed (`src/routes/_app/library.tsx::librarySearchSchema`). No new context
     params are introduced.
+    **Virtual-root reload difference (MIN-211, accepted)**: a Library opened from the
+    sidebar sits at the all-workspaces root (`openLibraryPanel()` with no workspace,
+    `Sidebar.tsx`), but the URL cannot express root scope (`?panel=library` on the
+    chat route) — on reload it restores scoped to the route's workspace, in that
+    workspace's width bucket. Accepted, stated difference; the width bucket moves
+    accordingly on that restore (root `app` → workspace bucket).
 - The `media` redirect stub
   (`src/routes/_app/workspaces.$workspaceId.media.tsx::WorkspaceMediaRedirect`)
   retargets to the deep-link form: navigate to
@@ -799,62 +1037,83 @@ Shell state (store, single slice replacing browserPanel/libraryPanel):
 - Full-page routes (`/library`, `/browser-live`, `/workspaces/{id}/{board,team,calendar}`)
   keep working exactly as today: a shared full-page link lands on the full page (US-5.4).
 
-### 8.3 Already-open-tab contract (SP-18)
+### 8.3 Already-open-tab contract (SP-18, SP-30, MAJ-201, MAJ-202, MAJ-209, MAJ-213, MIN-207)
 
 Verified web-platform facts this contract rests on (MDN Window/open, Window/focus):
 
 1. `window.open(url, name)` on an existing named window **navigates** that window to
    `url` — it does not merely focus it. A second Expand under the old "stable window
    name reuse" design would have navigated the existing Browser tab to `about:blank`
-   and torn down a live viewer (MAJ-002). **The named-window reuse mechanism is
-   therefore REPLACED by an in-memory handle registry** (below). A stable per-
-   workspace+panel window name is still used for NEW opens —
-   `omnipus-panel-<panelId>-<workspaceId|app>` — as an identity label and collision
-   guard, never as a reuse mechanism.
-2. With `noopener`, a non-empty custom name is treated like `_blank` — no reuse, and
-   `open()` returns null. The Library's current pop-out uses
-   `'noopener,noreferrer'` (`LibraryPanel.tsx::handlePopOut`), so the named open
-   REQUIRES dropping `noopener` and severing `window.opener` after the open instead —
-   exactly the Browser's existing pattern (`BrowserLivePanel.tsx::handlePopOut`:
-   `popup.opener = null`).
+   and torn down a live viewer (MAJ-002). **MAJ-202 drops the stable window name
+   entirely** — no `omnipus-panel-*` name is used for any open; every new tab is a
+   plain `_blank` open. Identity lives in the handle registry and the presence list
+   (below), not in window names.
+2. Opening with a custom name would require dropping `noopener` for nothing — with
+   `_blank` the open works with `noopener` set, but then `open()` returns null and no
+   handle can be held. So new opens use `_blank` WITHOUT `noopener` (as the Browser
+   already does: `BrowserLivePanel.tsx::handlePopOut`, which then severs
+   `popup.opener = null`), purely to hold the handle; `window.opener` is severed
+   immediately after the open. The Library's current `'noopener,noreferrer'`
+   (`LibraryPanel.tsx::handlePopOut`) is replaced by this pattern.
 3. `window.focus()` "may fail due to user settings and the window isn't guaranteed to
    be frontmost" (MDN Window/focus) — a background tab focusing itself is best-effort.
 
-**The handle registry (MAJ-002 fix)**:
+**Identity keys (MAJ-201, §8.1's table)**: every already-open check matches by the
+panel's identity key — `panelId × workspaceId` for Library/Tasks/Team/Calendar
+(`app` at the root), `panelId × sessionId × agentId` for Browser. **MAJ-213: matching
+runs against the panel's CURRENT scope** — a full-page tab whose panel navigated from
+workspace A to B is "already open" for B only; it no longer matches A (clicking A's
+toggle opens docked at A; it does not yank the other tab's context back).
+
+**The handle registry (MAJ-002/MAJ-202)**:
 
 - On each Expand (new tab), the app stores the returned `Window` handle in a
-  module-level registry keyed `panelId × workspaceId|app` — the Browser's existing
+  module-level registry keyed by the identity key — the Browser's existing
   `ownedPopout` is the precedent (`BrowserLivePanel.tsx`).
-- On a subsequent Expand or toggle click for the same `panelId × workspace` (SP-18's
-  per-workspace scoping), the app checks the registry: **if the handle exists and
-  `!handle.closed`, it calls `handle.focus()` and posts the current context (e.g. a new
-  Library selection) over the existing handoff BroadcastChannel — it NEVER re-calls
-  `window.open` for that tab** (no re-navigation, no blanking). A stale handle
-  (`handle.closed`) is dropped.
+- On a subsequent click for the SAME identity key (SP-30: EVERY entry point —
+  toggle, Expand, sidebar Library, "Open library", "Watch live"), the app checks the
+  registry: **if the handle exists and `!handle.closed`, it calls `handle.focus()` and
+  posts the current context (e.g. a new Library selection) over the existing handoff
+  BroadcastChannel — it NEVER re-calls `window.open` for that tab** (no re-navigation,
+  no blanking). A stale handle (`handle.closed`) is dropped.
 - The docked panel does NOT open here in the reuse path (SP-18: only switch).
 - A handle is lost when the source tab reloads; in that case the flow falls back to
-  BroadcastChannel presence detection (below), exactly as for a manually-opened tab.
+  presence detection (below), exactly as for a manually-opened tab.
 
-**Manually-opened tabs** (user hit the URL directly): no window handle exists. The app
-detects presence over a BroadcastChannel (extending the
-`libraryHandoff`/`browserLiveHandoff` precedents), **keyed `panelId × workspaceId|app`**
-— a Team full page for workspace A never blocks Team for workspace B. A toggle click
-pings the channel and waits a bounded 150ms for a presence reply:
+**Presence list (OBS-202 — replaces the old 150ms ping-and-wait)**: every Omnipus tab
+continuously announces itself on the handoff BroadcastChannel (extending the
+`libraryHandoff`/`browserLiveHandoff` precedents): on load, on scope change, and on
+`pagehide` (exit). Each announcement carries the identity keys of the full-page panels
+that tab currently shows — a small `{panelId, workspaceId|app}` set; **MIN-207: never
+file paths, selections or session contents ride the channel**, and incoming messages
+are validated before use. Because the list is continuously present, an entry-point
+click resolves synchronously — no wait window:
 
-- **Reply received (same workspace)** → SP-18 applies: no duplicate, no docked panel
+- **Present (same identity key)** → SP-18/SP-30 apply: no duplicate, no docked panel
   opens here; a visible "already open in another tab — switch" affordance offers the
   best-effort switch (the affordance is the guarantee — programmatic focus is not).
-  Multiple replies (two manual tabs) → the affordance targets the most recent replier;
+  Multiple entries (two manual tabs) → the affordance targets the most recent joiner;
   nothing duplicates.
-- **No reply within 150ms** → the panel opens docked here normally (and stores its
-  handle if Expand was the trigger).
+- **Absent** → the panel opens docked here normally (and stores its handle if Expand
+  was the trigger).
+
+**Open ordering (MAJ-209)**: the presence check and any `window.open` MUST run
+synchronously inside the user-gesture handler — the only way a popup is not
+block-headed. So: (1) resolve against registry + presence list first; (2) only if
+nothing is already open, call `window.open(url, '_blank', features)` synchronously in
+the click handler, then sever `opener`, store the handle, close the docked panel
+(SP-12) and project the URL (REPLACE) — in that order. Deferred async work
+(presence refreshes, context posts) happens after, never between the click and the
+open. If the popup IS blocked (rare, but possible under strict browser settings), the
+docked panel stays open and an error toast tells the user — no silent no-op, no
+docked-panel loss (MAJ-209's fail-visible rule; US-6 AS-5).
 
 Presence state MUST clear when the tab closes (channel disconnect / pagehide) so a
-later toggle reopens normally (US-6.4).
+later entry point reopens normally (US-6.4).
 
 ---
 
-## 9. Clickable DEMO requirements (SP-10, SP-16) — gate BEFORE any build
+## 9. Clickable DEMO requirements (SP-10, SP-16, SP-31) — split gates BEFORE build
 
 Per SP-10 and the founder process line: a clickable demo of the shell is reviewed by
 the founder in a real browser BEFORE the build, and it must first pass team-lead's own
@@ -871,11 +1130,25 @@ shows one-at-a-time across all six); the stand-ins live in the demo build only a
 replaced by each panel's real story set when its wave lands (SP-24, §10). Sample data
 comes from story fixtures — no live gateway (SP-15).
 
+**SP-31 (founder, grill round 2): the gate SPLITS in two.**
+
+- **Wave-0 gate — Storybook stories** cover every LAYOUT-ONLY row: resize, floors and
+  ceiling, double-click reset, per-panel/workspace width memory, one-at-a-time
+  switching, phone takeover, the three SP-26 close affordances, keyboard walkthrough.
+  A small **dev-only Storybook request-mocking add-on** (e.g. msw-style story-level
+  request interception) is ALLOWED for panel content that would otherwise need the
+  gateway — a dev dependency only, never shipped in the app bundle.
+- **Wave-1 exit criterion — the REAL running app** covers every row that needs real
+  browser chrome: address-bar deep links, new-tab opens and already-open switching,
+  live Browser driving, sign-in return, Back/Forward behaviour. These rows are
+  click-tested against a running dev build during wave 1, before wave 1's own gate —
+  they are NOT waived because the Storybook demo passed.
+
 **Stories inventory (the demo scope — SP-15/SP-16)**:
 
 | Story set | Wave | Sample content |
 |---|---|---|
-| Shell (empty, docking, overlay, phone, guard) | 0–1 | Generic sample panel + Library/Browser content |
+| Shell (empty, docking, phone, guard) | 0–1 | Generic sample panel + Library/Browser content |
 | `library` | 0–1 | Real explorer on fixture data (no gateway) |
 | `browser` | 0–1 | Static placeholder view (no live WebRTC required) |
 | `mail` | 2 (stand-in 0) | Real content wave 2; wave-0 stand-in: static message list + reader |
@@ -883,59 +1156,85 @@ comes from story fixtures — no live gateway (SP-15).
 | `team` | 3 (stand-in 0) | Real content wave 3; stand-in: narrow agent-graph |
 | `calendar` | 3 (stand-in 0) | Real content wave 3; stand-in: day/week |
 
-**What the demo must demonstrate** (each maps to a US):
+**Viewport coverage (MIN-201)**: every shell story renders at BOTH `680×900` (takeover
+boundary — one pixel decides the mode) and `1280×800` (docked), via Storybook viewport
+dropdown variants; layout rows are checked at both, not just the default canvas width.
+
+**What the wave-0 demo must demonstrate** (each maps to a US):
 
 1. Resize by dragging, with the 320px floor and the SP-17 ceiling visibly enforced;
-   chat column absorbing the remainder; overlay kicks in when the floors stop fitting
-   (US-2).
+   chat column absorbing the remainder; at no width does the panel overlay the chat —
+   below 680px total the takeover takes over instead (US-2, SP-25).
 2. Double-click reset; width memory per user + panel + workspace across close/reopen
    (US-3).
 3. One-at-a-time switching through the tab-strip toggles, pressed state + second-click
    close (US-4, US-5).
-4. Expand → new tab + source panel closes; re-click switches to the open tab (handle
-   focus, or the manual-tab affordance) — never a duplicate (US-6, SP-18).
-5. Deep link: copy URL with `?panel=…`, reopen in a fresh tab, panel restores; unknown
-   id dropped; bare `?panel=browser` drops without a session (US-7, SP-21).
-6. Phone width: takeover + inert chat, no resize handle (US-8).
-7. Keyboard walkthrough: Tab to separator, arrows, Home/End, Escape (except Browser,
+4. Phone width: takeover + inert chat, no resize handle; the THREE SP-26 close
+   affordances — ✕, Back (one pushed history step), swipe-to-close with its
+   direction/threshold rules (US-8, SP-26).
+5. Keyboard walkthrough: Tab to separator, arrows, Home/End, Escape (except Browser,
    SP-19), focus return (US-9).
 
-**Real-browser click-test list** (team-lead executes against the static Storybook
-build and records evidence before the founder review; every step is a pass/fail with a
-screenshot):
+**Wave-0 real-browser click-test list** (team-lead executes against the static
+Storybook build and records evidence before the founder review; every step is a
+pass/fail with a screenshot):
+
+| # | Action | Expected | Viewport |
+|---|---|---|---|
+| 1 | Click Library tab entry | Panel docks beside chat; entry pressed | 1280×800 |
+| 2 | Drag border to far left | Stops at 320px; chat still visible and interactive | 1280×800 |
+| 3 | Drag border toward far right | Stops at the SP-17 ceiling `min(70% row, row − sidebar − 360px)`; chat never below 360px | 1280×800 |
+| 4 | Double-click border | Width returns to default; persists after close/reopen | 1280×800 |
+| 5 | Set width in workspace A; switch to workspace B; open same panel | B's width (or default) applies, not A's | 1280×800 |
+| 6 | Click Tasks entry while Library open (unsaved Library edits → CANCEL the guard) | Navigation/switch does not happen; Library stays exactly as it was | 1280×800 |
+| 7 | Repeat row 6, choose CONTINUE | Library closes (through the leave guard); Tasks docks; pressed state moves | 1280×800 |
+| 8 | Click Tasks entry again | Panel closes; pressed state clears | 1280×800 |
+| 9 | Open Browser panel, then click Calendar entry | Browser closes (one-at-a-time); no stranded state | 1280×800 |
+| 10 | Set viewport 679px; open Mail | Full-screen takeover; chat inert; no resize handle | 679×900 |
+| 11 | Set viewport 680px with the panel open | Docked layout renders — floors 360+320 fit exactly | 680×900 |
+| 12 | Phone ✕ | Panel closes; chat visible again | 679×900 |
+| 13 | Phone Back (memory-router story) | Panel closes; chat shows; history returns to the pre-open entry | 679×900 |
+| 14 | Phone swipe right from the left edge, ≥96px | Panel closes; chat visible again | 679×900 |
+| 15 | Phone swipe INSIDE a horizontal scroller (carousel/week view) | Panel does NOT close; content scrolls | 679×900 |
+| 16 | Keyboard: Tab to border, arrows/Home/End/Escape | Steps work; focus returns per US-9's per-case rules; Escape on the BROWSER panel releases driving and does NOT close it (SP-19) | 1280×800 |
+
+**Wave-1 real-app click-test list** (executed against a RUNNING dev build during
+wave 1, before wave 1's gate — SP-31's second half; rows NOT covered by the Storybook
+demo):
 
 | # | Action | Expected |
 |---|---|---|
-| 1 | Click Library tab entry | Panel docks beside chat; entry pressed; URL has `?panel=library` |
-| 2 | Drag border to far left | Stops at 320px; chat still visible and interactive |
-| 3 | Drag border to far right, then narrow the window until the floors stop fitting | Stops at the SP-17 ceiling `min(70% row, row − sidebar − 360px)`; below that, panel OVERLAYS the interactive chat (chat ≥360px) |
-| 4 | Double-click border | Width returns to default; persists after close/reopen |
-| 5 | Set width in workspace A; switch to workspace B; open same panel | B's width (or default) applies, not A's |
-| 6 | Click Tasks entry while Library open | Library closes (through the leave guard); Tasks docks; pressed state moves; URL `?panel=tasks` |
-| 7 | Click Tasks entry again | Panel closes; pressed state clears; `panel` param gone |
-| 8 | Click Expand on Library | New tab opens full-page Library; original tab's panel closed; chat full width |
-| 9 | Click Library toggle again with the app-opened tab still open | Existing tab is focused (handle registry); no duplicate tab; no docked panel opens here |
-| 10 | Open full-page Library URL manually in a second tab; click Library toggle in tab 1 | No duplicate; no docked panel opens here; "already open — switch" affordance shown |
-| 11 | Close the manual tab; click the toggle | Panel opens normally |
-| 12 | Copy URL with `?panel=calendar`; paste into fresh tab | Calendar panel restores |
-| 13 | URL with `?panel=bogus` (and, in wave 1, `?panel=tasks` unregistered) | Param dropped; chat renders; no panel |
-| 14 | Set viewport <640px; open Mail | Full-screen takeover; chat inert; no resize handle |
-| 15 | Keyboard: Tab to border, arrows/Home/End/Escape | Steps work; focus returns per US-9's per-case rules; Escape on the BROWSER panel releases driving and does NOT close it (SP-19) |
-| 16 | Open Browser panel, then click Calendar entry | Browser closes (one-at-a-time); no stranded state |
+| W1 | Copy URL with `?panel=calendar`; paste into fresh tab | Calendar panel restores |
+| W2 | URL with `?panel=bogus` (and, in wave 1, `?panel=tasks` unregistered) | Param dropped; chat renders; no panel |
+| W3 | URL with `?panel=browser` — bare, or with `session`/`agent` | Param ALWAYS dropped (SP-28); chat renders; no panel; no session id ever in the link |
+| W4 | Click Expand on Library | New tab opens full-page Library; original tab's panel closed; chat full width |
+| W5 | Click Library toggle again with the app-opened tab still open | Existing tab is focused (handle registry); no duplicate tab; no docked panel opens here |
+| W6 | Click the sidebar LIBRARY button while a Library full-page tab is open (SP-30) | The open TAB is focused — not a docked panel, not a second tab |
+| W7 | Open full-page Library URL manually in a second tab; click Library toggle in tab 1 | No duplicate; no docked panel opens here; "already open — switch" affordance shown |
+| W8 | Close the manual tab; click the toggle | Panel opens normally |
+| W9 | Open a Browser live session; reload the page | Browser panel NOT restored (SP-28); chat renders; reopen via "Watch live" |
+| W10 | Browser panel open, navigate Back then Forward (MAJ-206) | Panel state follows the store (store wins over the stale URL value), no duplicate history steps |
+| W11 | Sign out (or use a signed-out tab), open `?panel=calendar` link, sign in | Land back on the opened link — workspace + Calendar restored (SP-27), not `/` |
+| W12 | Blocked-popup browser setting; click "Watch live" | Error toast; docked panel stays open; no silent failure (MAJ-209) |
 
-A demo failing any step is fixed and re-tested before the founder sees it (SP-10's
-"team-lead's own browser check first"). Drag smoothness (MIN-006) is observed during
-rows 2–3: live width updates ride a CSS variable via requestAnimationFrame — no visible
+A demo failing any step is fixed and re-tested before the gate it feeds (SP-10's
+"team-lead's own browser check first"; OBS-201: rows W4/W5/W7 need real multi-tab
+behaviour — they are scripted as Playwright multi-tab tests where feasible and
+click-tested otherwise). Drag smoothness (MIN-006) is observed during wave-0 rows
+2–3: live width updates ride a CSS variable via requestAnimationFrame — no visible
 jank on a long chat transcript.
 
 ---
 
 ## 10. Rollout sequence (SP-8) with narrow layouts (SP-6)
 
-**Wave 0 — this spec + the Storybook demo (SP-10, SP-16).** Spec review rounds; the
-static Storybook demo build (shell + Library/Browser stories + sample stand-ins for the
-later-wave panels) click-tested and founder-approved in a real browser. No production
-build starts before that approval.
+**Wave 0 — this spec + the Storybook demo (SP-10, SP-16, SP-31).** Spec review rounds;
+the static Storybook demo build (shell + Library/Browser stories + sample stand-ins for
+the later-wave panels) click-tested against the **wave-0 gate rows** (§9's wave-0
+list — layout only: resize, limits, reset, one-at-a-time, phone takeover + the three
+SP-26 affordances, keyboard) and founder-approved in a real browser. No production
+build starts before that approval. The address-bar / new-tab / deep-link /
+live-Browser rows are NOT part of this gate — they moved to wave 1 (SP-31).
 
 **Wave 1 — Shell + Library + Browser (P0) [wave 1 FRs].** The shared shell lands
 hosting Library and Browser: resize + width memory (SP-2/SP-3/SP-13/SP-17/SP-20),
@@ -943,9 +1242,14 @@ one-at-a-time WITH the every-path leave guard (SP-7, FR-013/CRIT-001), Escape wi
 Browser exception (SP-19), header actions (§2.2/§2.3 buttons move to the shell header,
 capabilities preserved), tab-strip Library toggle with the new ARIA model (SP-11,
 MAJ-007), deep links with replace history (SP-14, SP-22), already-open-tab behaviour
-via the handle registry + presence (SP-18, §8.3), phone takeover generalized. Entry
-points (sidebar, ChatControls, "Watch live") keep working through the new store slice.
-Stories: shell + Library + Browser sets (SP-24).
+via the handle registry + presence list (SP-18, SP-30, §8.3), phone takeover at 680px
+with the three close affordances (SP-25, SP-26), sign-in return (SP-27), Browser
+excluded from URL restore (SP-28), per-panel workspace-switch rules (SP-29), the
+router leave-blocker (MAJ-205). **Wave 1's own gate additionally requires the §9
+wave-1 real-app rows to pass** — that is SP-31's exit criterion for the
+address-bar/new-tab/deep-link/live-Browser behaviours. Entry points (sidebar,
+ChatControls, "Watch live") keep working through the new store slice. Stories: shell +
+Library + Browser sets (SP-24).
 
 **Wave 2 — Mail adopts the shell (on `feature/email-mail`).** The email spec's D11
 (docked Mail panel, Library-style, plus fullscreen pop-out) is satisfied by registering
@@ -982,7 +1286,7 @@ ANSWERED (SP-20, SP-21) — nothing blocks wave 1 pending §14.
 #### Scenario: Panel docks beside chat with shell header
 **Traces to**: US-1, AS-1 · **Category**: Happy Path
 - **Given** the shell hosting the Library panel
-- **When** the Library panel is open on a ≥640px viewport
+- **When** the Library panel is open on a ≥680px viewport
 - **Then** the shell header shows the title "Library", an Expand action and a Close action
 - **And** the Library content renders with breadcrumb, Show-hidden, mounts pill and create menu intact
 - **And** the chat column shares the remaining width (both visible, no overlay)
@@ -1012,23 +1316,23 @@ ANSWERED (SP-20, SP-21) — nothing blocks wave 1 pending §14.
 
 #### Scenario: Drag resize clamps at both bounds
 **Traces to**: US-2, AS-2 · **Category**: Edge Case
-- **Given** an open panel on a 1400px-wide window
-- **When** the border is dragged beyond 70% of the window (980px)
-- **Then** the width stops at 980px
+- **Given** an open panel on a 1400px-wide window with the sidebar PINNED (256px)
+- **When** the border is dragged toward the right
+- **Then** the width stops at the SP-17 ceiling `min(70% row, row − sidebar − 360px)` = min(980, 784) = **784px** — not 70% alone
 - **When** the border is dragged below 320px
 - **Then** the width stops at 320px
 
 #### Scenario: Double-click resets to default
 **Traces to**: US-2, AS-3 · **Category**: Happy Path
-- **Given** a panel widened to 900px
+- **Given** a panel widened to 900px on a 1400px UNPINNED row
 - **When** the border is double-clicked
-- **Then** width becomes 45% of the content area clamped to [320, 720] px
+- **Then** width becomes `clamp(0.45 × row, 320px, min(720px, ceiling))` — 630px here (0.45 × 1400)
 
 #### Scenario: Window shrink re-clamps the open panel
 **Traces to**: US-2, AS-4 · **Category**: Edge Case
-- **Given** a panel at 900px on a 1400px window
+- **Given** a panel at 900px on a 1400px unpinned window
 - **When** the window shrinks to 1000px
-- **Then** the panel re-clamps to 700px (70%)
+- **Then** the panel re-clamps to 640px (the SP-17 ceiling `min(700, 1000 − 360)`)
 
 #### Scenario Outline: Width memory per panel × workspace
 **Traces to**: US-3, AS-1/2 · **Category**: Happy Path
@@ -1041,7 +1345,7 @@ ANSWERED (SP-20, SP-21) — nothing blocks wave 1 pending §14.
 | panel | workspace | remembered | expected |
 |---|---|---|---|
 | library | A | 640px | 640px |
-| tasks | A | 950px | 950px (≤70%) |
+| tasks | A | 950px | 950px (within the SP-17 ceiling at a 1400px unpinned row) |
 | library | B | none recorded | default (45% clamped) |
 
 #### Scenario: Workspace switch re-targets and re-widths the open panel
@@ -1057,7 +1361,7 @@ ANSWERED (SP-20, SP-21) — nothing blocks wave 1 pending §14.
 - **Then** the Browser panel docks and Library is closed
 
 #### Scenario: Second click on the toggle closes the panel
-**Traces to**: US-4, AS-2 · **Category**: Alternate Path
+**Traces to**: US-4, AS-2 + US-5, AS-2 · **Category**: Alternate Path
 - **Given** the Tasks panel open via its tab entry
 - **When** the entry is clicked again
 - **Then** the panel closes and the entry de-highlights
@@ -1115,10 +1419,11 @@ ANSWERED (SP-20, SP-21) — nothing blocks wave 1 pending §14.
 - **Then** it fills the content width, the chat region is inert, and no resize handle renders
 
 #### Scenario: Viewport grows out of takeover
-**Traces to**: US-8, AS-3 · **Category**: Edge Case
+**Traces to**: US-8, AS-6 · **Category**: Edge Case
 - **Given** a panel open in phone takeover
-- **When** the viewport grows past 640px
+- **When** the viewport reaches 680px
 - **Then** the panel docks at its remembered width with a resize handle
+- **And** the phone-mode history step collapses (Back no longer closes the panel)
 
 #### Scenario: Keyboard resize full walkthrough
 **Traces to**: US-9, AS-1/2/3 · **Category**: Happy Path
@@ -1128,7 +1433,7 @@ ANSWERED (SP-20, SP-21) — nothing blocks wave 1 pending §14.
 - **When** Right-arrow is pressed four times
 - **Then** width increases by 64px total (16px steps, clamped)
 - **When** Home then End are pressed
-- **Then** width is 320px then the 70% bound
+- **Then** width is 320px then the SP-17 ceiling — 980px on a 1400px unpinned row
 - **When** Escape closes the panel
 - **Then** focus returns to the toggle that opened it
 
@@ -1145,12 +1450,13 @@ ANSWERED (SP-20, SP-21) — nothing blocks wave 1 pending §14.
 - **When** the border is dragged left/right
 - **Then** the panel width follows the pointer and the chat column width changes by the same amount
 
-#### Scenario: Narrow window puts the panel in overlay mode
-**Traces to**: US-2, AS-4 · **Category**: Edge Case
-- **Given** a window where `row − sidebar < 360 + 320` (floors cannot both fit), viewport ≥640px
+#### Scenario: Narrow window crosses into phone takeover at 680px (SP-25)
+**Traces to**: US-2, AS-4 + US-8, AS-1 · **Category**: Edge Case
+- **Given** a viewport narrowed to exactly 679px
 - **When** a panel opens
-- **Then** the panel overlays the interactive chat (chat keeps the full row, ≥360px, not inert)
-- **And** the resize handle still works within the overlay ceiling
+- **Then** it takes over the full content width (phone mode) — there is NO overlay mode (SP-25 deleted it)
+- **When** the viewport is widened to exactly 680px
+- **Then** the panel docks beside the chat — the 360px + 320px floors fit exactly at 680px
 
 #### Scenario: No remembered width falls back to the default
 **Traces to**: US-3, AS-3 · **Category**: Happy Path
@@ -1167,7 +1473,7 @@ ANSWERED (SP-20, SP-21) — nothing blocks wave 1 pending §14.
 #### Scenario: Transient shrink never overwrites the stored width
 **Traces to**: US-3, AS-6 · **Category**: Edge Case
 - **Given** a stored width of 950px
-- **When** the window shrinks (panel re-clamps to 700px) and then returns
+- **When** the window shrinks (panel re-clamps to 640px) and then returns
 - **Then** the panel shows 950px again and the stored value is still 950px (MAJ-009)
 
 #### Scenario: "Watch live" with an unsaved Library edit prompts before replacing
@@ -1219,11 +1525,39 @@ ANSWERED (SP-20, SP-21) — nothing blocks wave 1 pending §14.
 - **When** the strip renders
 - **Then** Library shows as a toggle with `aria-pressed` while Tasks/Team/Calendar remain navigation links with no pressed state
 
-#### Scenario: Reload restores the open panel
+#### Scenario: Reload restores the open panel — EXCEPT Browser
 **Traces to**: US-7, AS-1 · **Category**: Happy Path
-- **Given** any panel open on a workspace Chat route
+- **Given** any panel except Browser open on a workspace Chat route
 - **When** the operator reloads
 - **Then** the same panel restores at its default view with its width
+
+#### Scenario: Reload does NOT restore the Browser panel (SP-28)
+**Traces to**: US-7, AS-1 · **Category**: Error Path
+- **Given** the Browser panel open on a live session
+- **When** the operator reloads
+- **Then** no Browser panel restores — the chat renders without a panel
+- **And** the session id appears NOWHERE in the URL (never in a shareable link)
+- **And** the panel comes back only via its entry point ("Watch live")
+
+#### Scenario: Sign-in returns to the opened link (SP-27)
+**Traces to**: US-7, AS-2 · **Category**: Alternate Path
+- **Given** a signed-out tab opening `…chat?panel=calendar` (the auth gate intercepts)
+- **When** the operator signs in
+- **Then** they land on the link they opened — workspace restored AND the Calendar panel restored — never on bare `/`
+
+#### Scenario: Address-bar navigation with unsaved edits is blocker-gated (MAJ-205)
+**Traces to**: US-7, AS-8 · **Category**: Error Path
+- **Given** the Library panel open with an unsaved edit
+- **When** a navigation that starts at the URL fires (pasted deep link, Back/Forward, sidebar click to another workspace)
+- **Then** the router blocker runs the Library's `beforeLeave` discard confirmation
+- **And** cancelling leaves the route, the address and the panel EXACTLY unchanged (a workspace-switch cancel stays on the outgoing workspace's chat with the Library as it was)
+
+#### Scenario: Back/Forward lets the store win over a stale panel value (MAJ-206)
+**Traces to**: US-7, AS-7 · **Category**: Edge Case
+- **Given** history entries carrying different `panel` values from before (REPLACE kept them stale)
+- **When** the operator presses Back or Forward
+- **Then** the panel state follows the STORE — the stale URL value is ignored and re-projected
+- **And** the phone pushed entry is the one exception: Back over it closes the panel (SP-26)
 
 #### Scenario: A link with no panel param opens nothing
 **Traces to**: US-7, AS-3 · **Category**: Happy Path
@@ -1251,9 +1585,31 @@ ANSWERED (SP-20, SP-21) — nothing blocks wave 1 pending §14.
 
 #### Scenario: Closing the phone takeover restores the chat
 **Traces to**: US-8, AS-2 · **Category**: Happy Path
-- **Given** a panel open at <640px (chat inert)
+- **Given** a panel open at <680px (chat inert)
 - **When** the panel is closed
 - **Then** the chat region becomes interactive again and the panel is gone
+
+#### Scenario: Phone Back closes the panel (SP-26 affordance 2)
+**Traces to**: US-8, AS-3 · **Category**: Alternate Path
+- **Given** a panel open in phone takeover (one history step was PUSHED on open)
+- **When** the phone's Back gesture/button is used
+- **Then** the panel closes, the chat shows, and history is back at the pre-open entry
+- **And** on desktop no such step was pushed — Back still behaves exactly as today (SP-22 REPLACE)
+
+#### Scenario: Phone swipe-to-close honours its thresholds (SP-26 affordance 3)
+**Traces to**: US-8, AS-4 · **Category**: Alternate Path
+- **Given** a panel open in phone takeover
+- **When** a touch drag starts in the 24px left-edge zone and moves rightward
+- **Then** the panel tracks the finger, and closes on ≥96px travel OR velocity ≥0.4px/ms after ≥48px
+- **When** the drag ends short of both thresholds
+- **Then** the panel springs back open
+
+#### Scenario: In-content horizontal scroll never closes the panel (SP-26 conflict rule)
+**Traces to**: US-8, AS-5 · **Category**: Error Path
+- **Given** panel content with its own horizontal scroller (Library carousel, Calendar week view)
+- **When** the operator swipes horizontally INSIDE that scroller
+- **Then** the content scrolls and the panel does NOT close (scroller-ancestor direction check)
+- **And** the panel only closes from an edge-zone swipe, or when content opts out by claiming the pan
 
 #### Scenario: Focus moves into the panel on open
 **Traces to**: US-9, AS-3 · **Category**: Happy Path
@@ -1273,11 +1629,57 @@ ANSWERED (SP-20, SP-21) — nothing blocks wave 1 pending §14.
 - **When** the pop-out tab is closed
 - **Then** the re-dock is a NO-OP — the Tasks panel stays open and untouched
 
+#### Scenario: Pop-out close re-docks ONLY in the opener tab (MAJ-208)
+**Traces to**: US-6 / §6 (MAJ-208) · **Category**: Edge Case
+- **Given** a Library pop-out opened from tab 1, and a THIRD tab independently showing the same workspace's chat with no panel
+- **When** the pop-out tab is closed
+- **Then** only tab 1 — the tab holding the window handle — re-docks the Library
+- **And** the third tab stays as it was (no panel appears there)
+
+#### Scenario: Pop-out re-dock follows the pop-out's last workspace
+**Traces to**: US-6 / §6 (MAJ-208, Dana fix) · **Category**: Alternate Path
+- **Given** a Library pop-out for workspace A, whose tab later navigated to workspace B's Library
+- **When** the pop-out tab is closed
+- **Then** the opener re-docks the Library for workspace B (where the pop-out actually was), through the same leave guard as any open
+
+#### Scenario: Workspace switch moves each panel per SP-29
+**Traces to**: US-3, AS-5 (SP-29) · **Category**: Alternate Path
+- **Given** the Browser panel anchored to its session AND the Tasks panel open, workspace A
+- **When** the operator switches to workspace B
+- **Then** Browser stays exactly as it is (anchored to its session — not closed, not moved)
+- **And** Tasks re-targets to workspace B; Calendar and Mail would too
+- **When** instead a Library opened from the sidebar (all-workspaces root) is open
+- **Then** it does NOT follow — it stays at the root scope
+
+#### Scenario: Every entry point honours the already-open tab (SP-30)
+**Traces to**: US-6, AS-2 · **Category**: Alternate Path
+- **Given** a Library full-page tab open (app-opened or manual)
+- **When** ANY Library entry point fires — the sidebar Library button, "Open library", "Watch live" for Browser, the tab-strip toggle, Expand
+- **Then** each switches to the already-open tab per the single §8.3 list — none docks a second copy
+
 #### Scenario: Presence is scoped per panel × workspace
 **Traces to**: US-6, AS-5 · **Category**: Alternate Path
 - **Given** a Library full-page tab open for workspace A (manual)
 - **When** the Library toggle is clicked in a tab showing workspace B
 - **Then** workspace B does NOT treat it as "already open" — the Library docks here for workspace B (SP-18)
+
+#### Scenario: All six panels dock through the same shell (MIN-202 gap: US-1 AS-4)
+**Traces to**: US-1, AS-4 · **Category**: Happy Path
+- **Given** all six panels registered (waves 1–3 combined)
+- **When** each opens in turn
+- **Then** each docks with the same border, header and actions — no panel-specific hosting code beyond content + expand target
+
+#### Scenario: Width memory is per user as well as per workspace (MIN-202 gap: US-3 AS-2)
+**Traces to**: US-3, AS-2 · **Category**: Edge Case
+- **Given** user 1 has a remembered Library width for workspace A
+- **When** user 2 signs in on the SAME browser profile and opens the Library in workspace A
+- **Then** user 2 gets the default width — never user 1's value (the storage key carries the username)
+
+#### Scenario: Tab-strip markup change preserves test ids (MIN-202 gap: US-5 AS-6)
+**Traces to**: US-5, AS-6 · **Category**: Edge Case
+- **Given** the tab strip rewritten from tablist to toggle group
+- **When** the existing Playwright specs run
+- **Then** they pass unchanged — the `workspace-tab-*` test ids persist (semantics changed; markup ids did not)
 
 ---
 
@@ -1294,11 +1696,11 @@ dirs already covered (library, browser, workspaces) or the routes' colocated tes
 | Order | Test name (behaviour) | Level | Traces to BDD | Level notes |
 |---|---|---|---|---|
 | 1 | Panel registry resolves every registered id to title + expand target; an UNREGISTERED id resolves to nothing | Unit | Header/docking scenario | Wave-1 registry (library, browser); MAJ-012 |
-| 2 | Width clamp math: [320, min(70%·row, row − sidebar − 360)], default 45% clamped [320,720]; overlay when the floors don't fit | Unit | Drag clamp; narrow-window overlay | Pure functions |
+| 2 | Width clamp math: [320, min(70%·row, row − sidebar − 360)], default `clamp(0.45×row, 320, min(720, ceiling))`; below 680px → takeover (no overlay exists) | Unit | Drag clamp; 680 boundary | Pure functions |
 | 3 | Width memory: per-user key build + read/write/delete; reset deletes; transient re-clamp never writes (MAJ-009) | Unit | Width-memory outline; shrink-restore | Storage injected |
 | 4 | Single-panel reducer: open replaces, toggle closes, close clears URL param; EVERY path awaits `beforeLeave`, a `false` cancels store+URL (CRIT-001) | Unit | One-at-a-time; guard scenarios | SP-7/SP-11/FR-013 |
 | 5 | Panel-param validation: registered ids kept; unknown AND unregistered-but-future ids dropped via URL replace | Unit | Unknown id dropped | SP-14/MAJ-012 |
-| 6 | Deep-link restore maps `panel=<id>` (+browser session/agent; mail agent) to state; bare browser drops (SP-21); mail no-mailbox → choose state (SP-23) | Unit | Deep link restores; bare browser; mail choose-state | SP-21/SP-23 |
+| 6 | Deep-link restore maps `panel=<id>` to state; ANY `panel=browser` value drops (SP-28 — bare or with context, never restored); mail no-mailbox → choose state (SP-23) | Unit | Deep link restores; browser never restores; mail choose-state | SP-21/SP-23/SP-28 |
 | 7 | Shell renders header (title/Expand/Close) + content + separator | Component | Panel docks beside chat | Vitest, shell component |
 | 8 | Library under shell: EVERY close/replace path runs the guard — header Close, Expand, open-other (Watch live, tab toggle, sidebar), deep-link replace, workspace switch; cancel keeps panel + edit | Component | Guard scenarios (Close, Watch live, deep-link replace, workspace switch) | `confirmDiscardLibraryEdits` via `beforeLeave`, CRIT-001 |
 | 8b | Cancelled transition is clean: store, URL and content untouched after a `false` from `beforeLeave` | Component | Guard scenarios (cancel clean) | CRIT-001's loss mechanism was store-switch-first — this pins the order |
@@ -1307,33 +1709,48 @@ dirs already covered (library, browser, workspaces) or the routes' colocated tes
 | 9b | Browser under shell: width change triggers the existing settle/handover with visible status | Component | Browser handover | FR-015's ONLY mapping (MAJ-011 fix) |
 | 10 | Separator a11y: role/orientation/name/controls/valuetext/values, 16px steps, Home/End | Component | Keyboard walkthrough; landmark | MIN-003 |
 | 11 | Tab-strip toggle semantics: `aria-pressed` model, dropdown parity, mixed mode (links vs toggles) | Component | Tab toggles; dropdown parity; mixed mode | MAJ-007/MAJ-012 |
-| 12 | Phone: takeover + inert chat + no handle at <640px; grows out cleanly | Component | Phone scenarios | `useMediaQuery` |
+| 12 | Phone: takeover + inert chat + no handle at <680px; grows out cleanly at 680; the three SP-26 affordances — ✕, Back (one pushed step, desktop REPLACE unchanged), swipe (edge zone, thresholds, scroller non-conflict) | Component | Phone scenarios; SP-26 affordance scenarios | `useMediaQuery`/touch emulation |
 | 13 | Escape layers: modal above panel first; BROWSER Escape never closes (SP-19); focus follows the per-case rules | Component | Escape scenarios | SP-19/MIN-002 |
-| 14 | Already-open tab: handle focus WITHOUT re-navigating; presence keyed panel × workspace; 150ms timeout; affordance; presence clears; stale handle dropped | Component | Reuse/detection scenarios | MAJ-002/SP-18 |
+| 14 | Already-open tab: handle focus WITHOUT re-navigating; presence list keyed by identity key (MAJ-201); synchronous resolution in the gesture (MAJ-209, no wait window); affordance; presence clears; stale handle dropped; blocked popup → toast + panel stays | Component | Reuse/detection scenarios; popup-blocked toast | MAJ-002/SP-18/SP-30/MAJ-209 |
 | 15 | Full-page routes still render (deep links to `/workspaces/{id}/team` etc.); Back after toggles equals today's history | Integration | US-5.4; back-button scenario | SP-22 |
-| 16 | E2E: the §9 click-test list — AUTOMATED rows 1–7 and 12–16 (Playwright); MANUAL rows 8–11 (cross-tab window-handle rows — also executed by team-lead per §9/SP-10) — spec files assigned to a `ui-*` group in `tests/e2e/shards.json` (`scripts/e2e-shards.sh check` enforces assignment; MIN-008) | E2E | All | Owner: qa-lead, `tests/e2e` |
+| 16 | E2E: the §9 click-test rows, SPLIT BY GATE (SP-31): wave-0 rows (1–16) run against the static Storybook build; the wave-1 rows (W1–W12) are the real-app rows — AUTOMATED where Playwright can reach them (W1–W3, W9–W11; OBS-201: W4/W5/W7 as Playwright multi-tab where feasible) and click-tested by team-lead otherwise — spec files assigned to a `ui-*` group in `tests/e2e/shards.json` (`scripts/e2e-shards.sh check` enforces assignment; MIN-008) | E2E | All | Owner: qa-lead, `tests/e2e` |
+| 17 | Cross-account denial on `/browser-live`: a second account opening the owner's full-page link sees the visible denial surface, never the stream (MIN-009, re-scoped to the full-page route — the panel form never carries a session id, SP-28) | Integration | Browser-never-restores scenario | Owner: qa-lead |
+| 18 | Sign-in return: signed-out deep link → sign-in → land back on the linked workspace + panel (SP-27, SC-004) | Integration | Sign-in returns scenario | Router redirect capture |
+| 19 | Pop-out close re-dock: ONLY the opener tab re-docks (handle-keyed); a third tab shows nothing; the re-dock follows the pop-out's last workspace through the leave guard | Component | Opener-only re-dock; Dana-fix scenarios | MAJ-208 |
+| 20 | Workspace switch with panels open: Browser anchored (untouched), Library root scope does not follow, Library workspace-scoped follows, Tasks/Calendar/Mail follow (SP-29) | Component | SP-29 scenario | Per-panel `beforeLeave`/re-target |
+| 21 | Phone affordances + boundary: ✕ closes; Back (pushed step) closes and restores history; swipe thresholds close; scroller-internal swipe scrolls instead; 679px takeover vs 680px docked | Component | SP-26 scenarios; 680 boundary | Touch emulation + resize |
 
 ### Test datasets
 
 #### Dataset: width bounds (drives tests 2, 10)
 
-Basis: the root flex row width; the sidebar term is 256px when pinned (≥1024px) and 0
-when not. Expected = requested clamped to [320, min(70%·row, row − sidebar − 360)].
-Below 640px there is no resize (takeover). In the overlay band (floors cannot both
-fit) the width clamps to [320, 70% of row] — the SP-17 chat floor governs the DOCKED
-layout, where the panel shares the row; in overlay the chat column keeps the row.
+Basis: the root flex row width; the sidebar term is 256px when pinned (≥1024px, per
+the pinned preference) and 0 when not. Expected = requested clamped to
+[320, min(70%·row, row − sidebar − 360)]; no request → default
+`clamp(0.45×row, 320, min(720, ceiling))`, floored. **There is no overlay band** —
+below 680px total the takeover takes over (SP-25); the floors 360+320 fit at exactly
+680px, so the docked layout is reachable at every width ≥680px (sidebar term 0 below
+1024px; at ≥1024px a pinned row is ≥768px) — the invariant that let SP-25 delete
+overlay.
 
 | # | row / sidebar | requested | expected | Traces to |
 |---|---|---|---|---|
-| 1 | 1400 / 256 pinned | 980 | 784 (= min(980, 1400−256−360)) | BDD drag clamp (SP-17 ceiling) |
+| 1 | 1400 / 256 pinned | 980 | 784 (= min(980, 1400−256−360)) | BDD drag clamp |
 | 2 | 1400 / unpinned | 1200 | 980 (70% cap) | BDD drag clamp |
-| 3 | 1400 / 256 pinned | 100 | 320 (floored) | BDD drag clamp |
-| 4 | 1000 / unpinned | 900 | 640 (= min(700, 1000−360) — the chat floor binds) | BDD drag clamp / window shrink |
-| 5 | 1400 / 256 pinned | none | 630 (45% default; ceiling 784 not binding) | BDD double-click reset |
-| 6 | 900 / unpinned | none | 405 (45% default) | default |
-| 7 | 640 / unpinned | 500 | 448 (OVERLAY mode — floors don't fit at 640; overlay clamps [320, 70%]) | narrow-window overlay |
-| 8 | 600 / unpinned | none | <640 → phone takeover, no resize | takeover |
-| 9 | 1400→1000→1400 / unpinned | stored 950 | shows 700 at 1000 (transient re-clamp, NOT written), 950 again at 1400; stored stays 950 | shrink-restore (MAJ-009) |
+| 3 | 1400 / pinned | 100 | 320 (floor) | BDD drag clamp |
+| 4 | 1000 / unpinned | 900 | 640 (= min(700, 1000−360) — chat floor binds) | BDD drag clamp / window shrink |
+| 5 | 1400 / pinned | none | 630 (default; 0.45×1400=630, ceiling not binding) | BDD double-click reset |
+| 6 | 900 / unpinned | none | 405 (default; ceiling 540 not binding) | default |
+| 7 | 680 / unpinned | 500 | 320 (ceiling min(476, 320)=320 — chat exactly at its floor) | 680 boundary |
+| 8 | 680 / unpinned | none | 320 (raw default 306 clamps up to the 320 floor) | 680 boundary |
+| 9 | 1024 / pinned | none | 408 (raw 45% default 461 clamps to ceiling 1024−256−360=408 — chat exactly 360) | default/ceiling |
+| 10 | 1119 / pinned | none | 503 (raw 503.55 floored; ceiling 503 binds) | default/ceiling |
+| 11 | 1120 / pinned | none | 504 (ceiling 504) | default/ceiling |
+| 12 | 1023 / unpinned | 900 | 663 (= min(716, 1023−360)) | ceiling |
+| 13 | 1024 / unpinned | 900 | 664 (= min(716, 1024−360)) | ceiling |
+| 14 | 1024 / pinned | 900 | 408 (ceiling) | ceiling |
+| 15 | 1400→1000→1400 / unpinned | stored 950 | 950→640→950: transient re-clamp at 1000 is NOT written; stored stays 950 (MAJ-009) | shrink-restore |
+| 16 | 679 / unpinned | any | NO resize — <680 is phone takeover (SP-25); no docked width applies | takeover |
 
 #### Dataset: panel param validation (drives test 5, 6)
 
@@ -1343,10 +1760,11 @@ layout, where the panel shares the row; in overlay the chat column keeps the row
 | 2 | `calendar` | opens Calendar (wave 3) | deep link restores |
 | 3 | `bogus` | dropped, URL replaced, no panel | unknown id dropped |
 | 4 | (absent) | no panel | US-7.3 |
-| 5 | `browser` + session/agent | Browser panel with context | §8.2 |
-| 6 | `browser` bare | dropped, URL replaced, NO session created (SP-21, decided) | §8.2 |
+| 5 | `browser` — bare | dropped, URL replaced, NO session created (SP-21 + SP-28) | §8.2 |
+| 6 | `browser&session=…&agent=…` | ALSO dropped — SP-28 excludes Browser from URL restore entirely; no session id is ever placed in a shareable chat-link | §8.2 |
 | 7 | `tasks` in wave 1 (unregistered) | dropped, URL replaced, no panel (treated exactly like `bogus` — MAJ-012) | unknown id dropped |
 | 8 | `mail`, no agent selected | Mail panel opens on "choose a mailbox" (SP-23, wave 2) | §8.2 |
+| 9 | `browser&session=…` pasted while that session is LIVE in another tab | STILL dropped — restore never happens even when the session exists; reopening goes via "Watch live" (SP-28) | §8.2 |
 
 #### Dataset: regression — preserved behaviours (drives test 15 + existing suites)
 
@@ -1358,6 +1776,8 @@ layout, where the panel shares the row; in overlay the chat column keeps the row
 | 4 | Library pop-out carries selection; docked re-docks on popout close | `LibraryPanel.handlePopOut`; `LibraryRoute` announcements | US-6.1 |
 | 5 | Chat region inert on phone while panel open | `AppShell.tsx::AppShell` | US-8.1 |
 | 6 | Browser pop-out close re-docks ONLY into an empty slot — it never replaces a panel opened since (semantic change from today's unconditional re-dock, encoded as a regression test so it cannot silently revert) | `LibraryPanel.tsx::onLibraryPopoutClosed`; `BrowserLivePanel.tsx::watchPopoutClosed` — both re-open unconditionally today | §6 re-dock rule (MAJ-006) |
+| 7 | Pop-out close re-docks ONLY in the opener tab (the one holding the window handle); a third tab showing the same workspace never re-docks (semantic change, MAJ-208) | `BrowserLivePanel.tsx::watchPopoutClosed` (opener-owned `ownedPopout`) | §6/§8.3 (MAJ-208) |
+| 8 | Sidebar-rooted Library does NOT follow a workspace switch (stays at root scope); workspace-scoped Library still follows (SP-29 change) | `Sidebar.tsx` `openLibraryPanel()` (no workspace today) | §6/US-3 AS-5 (SP-29) |
 
 ### Regression test requirements
 
@@ -1376,6 +1796,12 @@ silently revert):
    carries those actions (§2.2/§2.3).
 3. A pop-out close re-docks only into an empty slot (MAJ-006) — never over a panel the
    operator opened since.
+4. A Library opened from the sidebar (all-workspaces root) NO LONGER follows a
+   workspace switch — it stays at the root scope; a workspace-SCOPED Library still
+   follows (SP-29 changes today's follow-always behaviour).
+5. A pop-out close re-docks ONLY in the tab holding the window handle — other tabs
+   showing the same workspace never re-dock (MAJ-208 narrows today's
+   popout-closed → re-open path to the opener).
 
 No backend regression surface exists (§1).
 
@@ -1389,25 +1815,30 @@ Wave tags (MAJ-012): `[wave 1]` ships with shell+Library+Browser; `[wave 2]` wit
 `[wave 3]` with Team/Tasks/Calendar. A `[wave 1]` behaviour applies to every later
 panel automatically.
 
-- **FR-001** [wave 1]: The system MUST host every panel (library, browser, mail, tasks, team,
-  calendar) in ONE shared shell providing title, Expand, Close, resize border, docking
-  beside the chat, phone takeover and Escape-to-close (Browser per FR-012); panels
-  supply only content and expand target. [SP-4; US-1]
+- **FR-001** [wave 1 shell; panels per wave]: The system MUST host every panel (library,
+  browser, mail, tasks, team, calendar) in ONE shared shell providing title, Expand,
+  Close, resize border, docking beside the chat, phone takeover and Escape-to-close
+  (Browser per FR-012); panels supply only content and expand target. [SP-4; US-1]
 - **FR-002** [wave 1]: The shell migration MUST preserve every capability in the §2.2/§2.3
   inventories; per-panel Expand/Close buttons move to the shell header, content
   controls stay. [SP-4; US-1]
 - **FR-003** [wave 1]: Every panel MUST be resizable by dragging its border, clamped to
-  [320px, min(70% of row, row − sidebar − 360px)] (SP-17); when the floors (chat ≥360,
-  panel ≥320) cannot both fit, the panel switches to overlay over the interactive chat;
-  default 45% clamped to [320, 720]px; double-click reset. [SP-2, SP-3, SP-17; US-2]
+  [320px, min(70% of row, row − sidebar − 360px)] (SP-17); there is NO overlay mode —
+  below 680px total the phone takeover applies (SP-25), and the floors are guaranteed
+  to fit at every docked width; default `clamp(0.45 × row, 320px, min(720px, ceiling))`;
+  double-click reset. [SP-2, SP-3, SP-17, SP-25; US-2]
 - **FR-004** [wave 1]: The resize separator MUST be keyboard accessible (focusable, role
   separator, arrow keys 16px steps, Home/End) with full ARIA state: accessible name,
   `aria-controls`, `aria-valuetext`, dynamic `aria-valuemax` (MIN-003). [SP-3; US-9]
 - **FR-005** [wave 1]: Remembered width MUST be keyed per USER + panel + workspace
-  (SP-20, `app` bucket when none) in browser-local storage; written ONLY on a user
-  choice (drag release, keyboard change, reset — reset DELETES the key); a
+  (SP-20, `app` bucket when none) in browser-local storage — key
+  `panel-width:<username>:<panelId>:<workspaceId|app>` (MIN-204; the username is the
+  SPA's only account identifier); written ONLY on a user choice settling — drag
+  release, keyboard change, or 300ms after the last resize keystroke (MIN-205; the
+  settle write doubles as the pop-out handover trigger); reset DELETES the key; a
   window-driven re-clamp is transient and never writes (MAJ-009); clamp re-applied at
-  read time. [SP-13, SP-20; US-3]
+  read time; a storage failure degrades to memory-only for the session — never an
+  error surfaced to the user. [SP-13, SP-20; US-3]
 - **FR-006** [wave 1]: At most one panel MUST be open at any instant; opening one replaces the
   open one across ALL entry points, every path through the `beforeLeave` gate
   (FR-013). [SP-7, CRIT-001; US-4]
@@ -1416,21 +1847,31 @@ panel automatically.
   full strip and the compact dropdown (MAJ-007's ARIA model); unregistered entries stay
   navigation links until their wave; Chat stays the page underneath; Settings stays
   a page. [SP-11, SP-6; US-5]
-- **FR-008** [wave 1]: Expand MUST open the panel's full-page route in a new browser tab and
-  close the docked panel in the source tab. [SP-12; US-6]
-- **FR-009** [wave 1]: If a panel's full-page tab for the SAME workspace is already open,
-  re-invoking its toggle or Expand MUST SWITCH to it — via the in-memory handle
-  registry (focus + context post, never re-navigation) when the app holds the handle;
-  via BroadcastChannel presence (150ms bound), no docked open, and the visible
-  "already open — switch" affordance for manual tabs; never a duplicate; per-workspace
-  scoping throughout. [SP-9, SP-18, MAJ-002, MAJ-003; US-6]
-- **FR-010** [wave 1]: The open panel MUST be URL-addressable as `panel=<registered id>` under the
-  workspace Chat route's hash search, restored on reload and shared links; unknown or
-  unregistered ids dropped with URL replace; open/switch/close use history REPLACE,
-  never push (SP-22). [SP-14, SP-22, MAJ-012; US-7]
-- **FR-011** [wave 1]: Below 640px the panel MUST take over the full width, the chat region
-  MUST be inert, and no resize handle MUST render; crossing the breakpoint MUST
-  transition cleanly. [SP-3, SP-4; US-8]
+- **FR-008** [wave 1]: Expand MUST open the panel's full-page route in a NEW browser tab
+  (plain `_blank`; no stable window name — MAJ-202) and close the docked panel in the
+  source tab; the open runs synchronously in the user gesture (MAJ-209), the handle is
+  kept by severing `window.opener` after the open, and a blocked popup is fail-visible
+  (toast, docked panel stays). [SP-12, MAJ-202, MAJ-209; US-6]
+- **FR-009** [wave 1]: If a panel's full-page tab with the SAME identity key is already
+  open, re-invoking ANY of its entry points MUST SWITCH to it — toggle, Expand, sidebar
+  Library, "Open library", "Watch live" (SP-30) — via the in-memory handle registry
+  (focus + context post, never re-navigation) when the app holds the handle, or via the
+  continuous BroadcastChannel presence list (no wait window — OBS-202) with no docked
+  open and the visible "already open — switch" affordance for manual tabs; never a
+  duplicate; identity keys per §8.1 (MAJ-201) matched by the panel's CURRENT scope
+  (MAJ-213). [SP-9, SP-18, SP-30, MAJ-002, MAJ-201, MAJ-213, OBS-202; US-6]
+- **FR-010** [wave 1]: The open panel MUST be URL-addressable as `panel=<registered id>`
+  under the workspace Chat route's hash search, restored on reload and shared links
+  (Browser excluded per FR-019's SP-28 rule); unknown or unregistered ids dropped with
+  URL replace; open/switch/close use history REPLACE, never push (SP-22), with the
+  store winning over stale URL values on Back/Forward (MAJ-206) and the one SP-26
+  phone-mode exception; a `beforeLeave`-gated router blocker (MAJ-205) gates every
+  URL-initiated navigation over unsaved edits — cancel leaves route, URL and panel
+  unchanged. [SP-14, SP-22, MAJ-012, MAJ-205, MAJ-206; US-7]
+- **FR-011** [wave 1]: Below 680px the panel MUST take over the full content width, the chat
+  region MUST be inert, and no resize handle MUST render; crossing 680px MUST
+  transition cleanly (with the phone history step collapsing on the way up). [SP-3,
+  SP-4, SP-25, SP-26; US-8]
 - **FR-012** [wave 1]: Escape MUST close the topmost layer (modal above panel first, then
   panel) — EXCEPT the Browser panel, where Escape NEVER closes the panel and keeps its
   "stop driving" meaning (SP-19); honouring the Library unsaved-edits guard; focus
@@ -1446,8 +1887,9 @@ panel automatically.
   a new panel registration plus per-panel narrow layouts — no shell modification.
   [SP-4, SP-6, SP-8; US-1]
 - **FR-015** [wave 1]: The Browser panel's resize MUST drive the existing remote-viewport
-  handover with its visible status and Retry (ADR-061 posture), never a silent stall.
-  [US-2]
+  handover triggered on SETTLE (300ms after the last resize keystroke — MIN-205, so a
+  fast drag never floods the remote viewport), with its visible status and Retry
+  (ADR-061 "Remove JPEG screencast fallback" posture), never a silent stall. [US-2]
 - **FR-016** [wave 0–3, per SP-24]: Every panel the shell touches MUST have Storybook
   stories with sample data (no live gateway) — shell/Library/Browser in wave 0–1, Mail
   in wave 2, Team/Tasks/Calendar in wave 3, each replacing its wave-0 demo stand-in;
@@ -1455,12 +1897,38 @@ panel automatically.
 - **FR-017** [wave 1]: The shell MUST satisfy the design-system publication contract (public
   export → catalog → manifest → story → executed checks, per the design-system skill;
   touch-target and focus-visible on the separator included). [MAJ-008; US-1]
+- **FR-018** [wave 1]: A full-page pop-out's close MUST re-dock the panel ONLY in the tab
+  that opened it (the window-handle holder) — a third tab showing the same workspace
+  never re-docks — following the pop-out's last workspace, through the same
+  `beforeLeave` guard as any open (MAJ-208; keeps the round-1 Dana re-dock fix).
+  [MAJ-208; §6, §8.3]
+- **FR-019** [wave 1]: The Browser panel MUST NOT be restorable from a reload or a shared
+  link — ANY `panel=browser` URL value is dropped with a URL replace, no session id is
+  ever placed in a shareable chat-link, and the panel reopens only via its entry points
+  ("Watch live"); the auth gate MUST preserve the original hash URL so signing in
+  returns to the opened link — workspace + panel restored (SP-27, closes SC-004).
+  [SP-27, SP-28; US-7]
+- **FR-020** [wave 1]: A workspace switch MUST move each open panel per its own scope:
+  Browser anchored to its session (not closed, not moved), Library following only when
+  it was opened scoped to the workspace being left (a sidebar-rooted Library stays at
+  the all-workspaces root), Tasks/Calendar/Mail following — each through its own
+  `beforeLeave` gate. [SP-29; US-3 AS-5, §6]
+- **FR-021** [wave 1]: In phone takeover there MUST be THREE ways back to the chat: the
+  header ✕; Back (opening a panel in phone mode adds ONE pushed history step — desktop
+  keeps SP-22's REPLACE and Back behaviour); swipe-to-close (24px edge zone, rightward,
+  close at ≥96px travel OR velocity ≥0.4px/ms after ≥48px; a panel-content
+  scroller claiming the pan wins, so in-content horizontal scroll never closes the
+  panel). [SP-26; US-8]
 
 ### Success criteria
 
-- **SC-001**: Every §9 click-test row passes in a real-browser run against the
-  static Storybook build (SP-16 — the stories ARE the demo) with recorded evidence
-  BEFORE the founder demo and the build (SP-10 gate).
+- **SC-001** [wave-0 gate, SP-31]: Every §9 WAVE-0 click-test row passes in a
+  real-browser run against the static Storybook build (SP-16 — the stories ARE the
+  demo) with recorded evidence BEFORE the founder demo and the build (SP-10 gate).
+- **SC-009** [wave-1 exit criterion, SP-31]: Every §9 WAVE-1 real-app row (address bar,
+  new tab, deep links, live Browser, sign-in return, Back/Forward) passes against a
+  running dev build during wave 1, before wave 1's own gate — the Storybook demo
+  passing does NOT waive these rows.
 - **SC-002**: The shell hosts a panel with no panel-specific hosting code — proven by
   a TEST-ONLY third registration that mounts through the shell with ZERO shell edits
   (MAJ-012's acceptance proof); production wave-1 code contains exactly two real
@@ -1468,7 +1936,10 @@ panel automatically.
 - **SC-003**: A keyboard-only operator can open, resize (within 16px granularity),
   reset, switch, and close every panel without a mouse.
 - **SC-004**: A shared link `…chat?panel=<id>` restores the named panel on a machine
-  that has never visited the app before this call (width defaults, panel restores).
+  that has never visited the app before this call (width defaults, panel restores);
+  a signed-out colleague returns to that link after signing in (SP-27) — the Browser
+  is the exception (SP-28: never restored; the panel form of the link never carries a
+  session id).
 - **SC-005**: No simultaneous Library+Browser open exists anywhere in the app after
   wave 1 (grep + store shape prove one open path); the change is covered by a
   regression test per §12.
@@ -1490,7 +1961,7 @@ panel automatically.
 |---|---|---|---|
 | FR-001 | US-1 | Panel docks beside chat; Escape closes topmost layer | 1, 7, 13 |
 | FR-002 | US-1 | Panel docks beside chat (content controls intact); guard scenario | 7, 8, 9 |
-| FR-003 | US-2 | Drag clamp; narrow-window overlay; double-click reset; window shrink | 2, 10, 12 |
+| FR-003 | US-2 | Drag clamp; 680 boundary (takeover); double-click reset; window shrink | 2, 10, 12, 21 |
 | FR-004 | US-9 | Keyboard walkthrough; landmark preserved | 10 |
 | FR-005 | US-3 | Width-memory outline; shrink-restore; workspace switch | 3 |
 | FR-006 | US-4 | Second panel replaces; toggle closes | 4 |
@@ -1503,25 +1974,52 @@ panel automatically.
 | FR-013 | US-1, US-4 | Guard scenarios (every path); cancelled transition clean | 8, 8b |
 | FR-014 | US-1 | (registry design; SC-002 test-only registration) | 1 |
 | FR-015 | US-2 | Browser handover on width change | 9b |
-| FR-016 | — (§9/§10 demo + stories) | §9 click-test list runs on the static build | 16 |
+| FR-016 | — (§9/§10 demo + stories) | §9 wave-0 rows on the static build; W-rows on the real app | 16 |
 | FR-017 | US-1 | Design-system publication checks | 7, 16 |
+| FR-018 | US-6/§6 | Pop-out re-dock: opener-only; follows pop-out's last workspace; no-clobber | 8c, 19 |
+| FR-019 | US-7 | Browser never restores (reload + ANY link); sign-in return | 6, 17, 18 |
+| FR-020 | US-3 | Workspace switch moves panels per SP-29 | 20 |
+| FR-021 | US-8 | Phone ✕ / Back / swipe; scroller non-conflict; 680 boundary | 12, 21 |
 
 **Completeness**: every FR appears; every BDD scenario traces; test numbers refer to
 §12's order column (including 8b, 8c, 9b).
 
-### Decision coverage (SP-16..SP-24)
+### Decision coverage (SP-16..SP-31 + round-2 defaults)
 
 | Decision | Decision (one line) | Lands in | Verified by |
 |---|---|---|---|
-| SP-16 | Stories ARE the demo — one static build, click-tested before the founder sees it | §9, §10, FR-016, SC-001 | Test 16; team-lead manual rows 8–11 |
-| SP-17 | Floors chat ≥360 / panel ≥320; ceiling min(70%, row−sidebar−360); overlay when floors don't fit | §4 US-2, §6, §7 Geometry, FR-003 | Test 2; width-bounds dataset; click-test row 3 |
-| SP-18 | Already-open elsewhere: ONLY switch, per workspace; honest browser constraint | §5, §8.3, FR-009 | Test 14; click-test rows 9–10 |
-| SP-19 | Browser panel Escape NEVER closes the panel | §4 US-1 AS-3, §6, §7 Accessibility, FR-012 | Test 13; click-test row 15; §11 scenario |
+| SP-16 | Stories ARE the demo — one static build, click-tested before the founder sees it | §9, §10, FR-016, SC-001 | Test 16; §9 wave-0 rows |
+| SP-17 | Floors chat ≥360 / panel ≥320; ceiling min(70%, row−sidebar−360) — as amended by SP-25: no overlay, takeover below 680px | §4 US-2, §6, §7 Geometry, FR-003 | Test 2; width-bounds dataset; click-test rows 3, 10, 11 |
+| SP-18 | Already-open elsewhere: ONLY switch, per identity key; honest browser constraint | §5, §8.3, FR-009 | Test 14; W4–W8 |
+| SP-19 | Browser panel Escape NEVER closes the panel | §4 US-1 AS-3, §6, §7 Accessibility, FR-012 | Test 13; click-test row 16; §11 scenario |
 | SP-20 | Width stored browser-locally, keyed per USER + panel + workspace | §1, §7 Persistence, FR-005 | Test 3 |
-| SP-21 | Bare `?panel=browser` never auto-starts a session — drops the param | §3.1, §6, §8.2, FR-010 | Test 6; dataset row 6 |
+| SP-21 | Bare `?panel=browser` never auto-starts a session — drops the param | §3.1, §6, §8.2, FR-010 | Test 6; dataset rows 5–6 |
 | SP-22 | Panel open/close/switch = history REPLACE; Back behaves as today | §4 US-7, §7 URL, FR-010 | Test 15; §11 back-button scenario |
 | SP-23 | `?panel=mail` with no mailbox → "choose a mailbox" state | §6, §8.2, FR-010 | Test 6; dataset row 8 |
 | SP-24 | Stories ship per wave with each panel | §9 Stories inventory, §10, FR-016, SC-007 | §10 wave gate |
+| SP-25 | Overlay deleted; takeover threshold 680px | §4 US-2/US-8, §6, §7 Geometry, FR-003, FR-011 | Test 2; width-bounds rows 7, 8, 16; 680-boundary BDD row |
+| SP-26 | Phone close: ✕ + Back (one pushed step) + swipe (edge zone, thresholds, scroller rule) | §4 US-8, §6, §7, FR-021 | Test 12/21; §11 SP-26 scenarios; wave-0 click rows 12–15 |
+| SP-27 | Sign-in returns to the opened link (workspace + panel) | §8.2, FR-019, SC-004 | Test 18; W11 |
+| SP-28 | Browser NEVER restored from reload/share; no session id in shareable links | §8.2, FR-019, SC-004 | Test 6/17; dataset rows 5/6/9; W3/W9 |
+| SP-29 | Workspace switch per panel: Browser anchored; Library only if workspace-scoped; Tasks/Calendar/Mail follow | §6, FR-020 | Test 20; §11 SP-29 scenario |
+| SP-30 | EVERY entry point switches to the already-open tab | §5, §8.3, FR-009 | Test 14; W5/W6 |
+| SP-31 | Demo gate split: wave-0 Storybook rows; wave-1 real-app exit criterion | §9, §10, SC-001/SC-009 | Test 16; §9 W-rows |
+| MAJ-201 | Identity keys: panelId × workspaceId (Browser + session + agent) | §8.1, §8.3, FR-009 | Test 14 |
+| MAJ-202 | No stable window names; `_blank` opens; opener severed after | §8.3, FR-008 | Test 14; W4 |
+| MAJ-203 | Default = clamp(0.45·row, 320, min(720, ceiling)) | §4 US-2, FR-003 | Test 2; dataset rows 5/6/8–11 |
+| MAJ-205 | Router blocker gates URL-initiated transitions; cancel = unchanged | §4 US-7, §8.2, FR-010 | §11 blocker scenario; test 8 |
+| MAJ-206 | Store wins on Back/Forward over stale panel values | §4 US-7, §8.2, FR-010 | §11 stale-Back scenario; test 15 |
+| MAJ-208 | Pop-out re-dock: opener-only, follows last workspace | §6, §8.3, FR-018 | Tests 8c/19; regression rows 7 |
+| MAJ-209 | Sync `window.open` in the gesture; blocked popup → toast + panel stays | §8.3, FR-008 | Test 14; W12 |
+| MIN-204 | Width key `panel-width:<username>:<panelId>:<workspaceId\|app>`; prune own keys only; degrade memory-only | §7 Persistence, §8.1, FR-005 | Test 3 |
+| MIN-205 | Width write + Browser handover on settle (300ms) | §4 US-3, FR-005, FR-015 | Test 3/9b |
+| MIN-207 | Channel messages validated; no paths/selections on BroadcastChannel | §7 STRIDE note, §8.3 | Test 14 |
+| MIN-208 | Escape ignored while composing; focus-inside via composed DOM path incl. portals | §4 US-9, §7 Accessibility | Test 13 |
+| OBS-202 | Continuous presence list replaces the 150ms wait | §8.3, FR-009 | Test 14 |
+
+*(Round-2 defaults applied without a new founder question: MAJ-201, MAJ-202,
+MAJ-203, MAJ-205, MAJ-206, MAJ-208, MAJ-209 — per the grill round-2 defaults
+table, §19b carries each finding's disposition.)*
 
 ---
 
@@ -1545,6 +2043,21 @@ Recorded here so the answers are auditable; nothing is pending.
 | Grill Q7 — separate demo build or Storybook? | The SP-15 stories ARE the demo — one static build, click-tested first | SP-16 (MAJ-008) |
 | Grill Q8 — do all seven story sets land up front? | No — per wave, with each panel | SP-24 |
 
+**Grill round 2 (2026-09-26) — founder answers (SP-25..SP-31); no question left open:**
+
+| Question | Answer | Decision |
+|---|---|---|
+| R2-Q1 — what happens when the window is too narrow for chat + panel? | Overlay is DELETED; the phone takeover threshold covers every window below 680px | SP-25 (MAJ-204) |
+| R2-Q2 — shared links through sign-in? | After signing in the user returns to the opened link (workspace + panel restored) | SP-27 (MAJ-211) |
+| R2-Q3 — Browser panel reload / shared links? | NEVER restored — reopen only via "Watch live"; no session id ever in a shareable link | SP-28 (MAJ-207) |
+| R2-Q4 — workspace switch with panels open? | Per panel: Browser anchored to its session; Library follows only if opened scoped to the workspace being left; Tasks/Calendar/Mail follow | SP-29 (MAJ-212) |
+| R2-Q5 — which entry points switch to the already-open tab? | EVERY entry point for same panel + same workspace — sidebar Library, "Open library", "Watch live" included | SP-30 (MAJ-213) |
+| R2-Q6 — demo gate on real-app behaviours? | Split: Storybook stories gate the layout rows; address-bar/new-tab/deep-link/live-Browser rows are a wave-1 real-app exit criterion | SP-31 (MAJ-210) |
+
+Defaults applied without a new founder question (grill round-2 stated defaults, each
+disposition in §19b): MAJ-201, MAJ-202, MAJ-203, MAJ-205, MAJ-206, MAJ-208, MAJ-209,
+plus the 11 MIN and 3 OBS findings at their own recommended defaults.
+
 ---
 
 ## 15. Reachability (Definition of Done)
@@ -1567,8 +2080,10 @@ inventory in §2.1):
 
 **Reachability gates for this feature**:
 
-- The §9 click-test list executed in a real browser against the static Storybook
-  build (SP-16) with evidence, THEN the founder demo (SP-10) — before build.
+- The §9 wave-0 click-test rows executed in a real browser against the static
+  Storybook build (SP-16) with evidence, THEN the founder demo (SP-10) — before
+  build; the §9 wave-1 real-app rows pass against a running dev build before wave
+  1's own gate (SP-31, SC-009).
 - Wave-1 delivery claims a user can: open Library and Browser from at least two entry
   points each, resize both, expand both to tabs, deep-link both, on desktop and phone
   widths — evidenced by executed tests, not written ones.
@@ -1587,8 +2102,8 @@ inventory in §2.1):
    (tab strip, sidebar, Watch live). Expected: only the last is open at every step;
    no stranded highlight in the strip. Category: Happy Path.
 3. **Happy**: founder shares `…chat?panel=calendar` to a colleague (wave 3) — colleague
-   opens it logged-in. Expected: Calendar panel visible immediately, correct workspace.
-   Category: Happy Path.
+   opens it logged-out, signs in. Expected: Calendar panel visible immediately on the
+   linked workspace (SP-27 return). Category: Happy Path.
 4. **Error**: kill the network after the Browser panel is open. Expected: existing
    WebRTC/connection error surfaces visibly with Retry inside the panel; the shell
    header keeps working (Close still closes). Category: Error.
@@ -1599,7 +2114,7 @@ inventory in §2.1):
    Category: Edge Case.
 7. **Edge**: resize panel to 70% cap, then zoom browser to 200% (window.innerWidth
    shrinks in CSS px). Expected: panel re-clamps to the new SP-17 ceiling
-   (min(70% of row, row − sidebar − 360px); overlay if the floors stop fitting);
+   (min(70% of row, row − sidebar − 360px); takeover below 680px, no overlay);
    nothing overflows the viewport. Category: Edge Case.
 
 ---
@@ -1629,11 +2144,21 @@ inventory in §2.1):
   `package.json` has no resizable dependency; the docking/overlay/takeover interaction
   is bespoke to this shell. The separator is a shell-owned component published through
   the design-system chain (FR-017, MAJ-008) rather than a ported shadcn/ui primitive.
-- The SP-17 overlay degradation is NOT the retired overlay hosting mode: the retired
-  surface is the Sheet-component panel hosting mode with a pin toggle (root CLAUDE.md,
-  "Retired surfaces"); SP-17's overlay is a narrow-window layout state of the same
-  docked shell — same panel, same header, chat stays interactive, no Sheet component,
-  no pin toggle.
+- **Overlay mode is DELETED (SP-25, round 2)** — the earlier assumption that SP-17's
+  overlay degradation was not the retired Sheet-hosting mode is moot: nothing
+  overlays the chat anymore. Below 680px total width the phone takeover applies; the
+  docked layout always keeps chat ≥360px and panel ≥320px. The retired Sheet-hosting
+  surface (root CLAUDE.md, "Retired surfaces") stays retired.
+- **`/preview/` is same-origin (MIN-207)**: the shell's cross-tab messaging assumes
+  preview apps are served on the main gateway listener — ADR-044 "Serve /preview/ on
+  the main gateway listener". BroadcastChannel never carries file paths, selections or
+  session contents; targeted `postMessage` to known handles only, messages validated
+  on receipt.
+- **Dev-only dependencies for the demo gate (SP-31)**: the no-new-deps stance is
+  AMENDED for dev dependencies only — a Storybook request-mocking add-on (e.g.
+  msw-storybook-decorator style) is allowed for wave-0 stories, and the phone-Back
+  story needs a memory-router decorator; neither ships in the app bundle, and no
+  runtime dependency is added.
 
 ## 18. Clarifications (from the founder interview — `spec-side-panel-shell.md`)
 
@@ -1650,18 +2175,20 @@ inventory in §2.1):
   location → decided browser-local (SP-20, §14).
 - Q: Deep links? → A: Yes — `?panel=<id>`, reload + shared links restore (SP-14).
 - Q: Already-open tab? → A: Switch to it; browser constraints stated honestly —
-  stable window name for app-opened tabs, detection + affordance for manual tabs
-  (SP-9, §8.3).
+  window-handle registry for app-opened tabs, presence list + affordance for manual
+  tabs (SP-9, §8.3; mechanism as amended by MAJ-202).
 - Q: Demo before build? → A: Yes — clickable, real-browser-verified, founder-approved
   (SP-10, §9).
 - Q: Sequencing? → A: Shell + Library + Browser → Mail → Team/Tasks/Calendar (SP-8, §10).
 - Q: Separate demo build or Storybook? → A: The stories ARE the demo — one static
   build, click-tested before the founder sees it (SP-16, §9).
 - Q: Window too narrow for chat + panel? → A: Floors chat ≥360 / panel ≥320, ceiling
-  min(70%, row − sidebar − 360); below that the panel overlays the interactive chat
-  (SP-17, §4 US-2).
-- Q: Panel already open in another tab? → A: ONLY switch — per workspace; app-opened
-  tabs re-focused via the handle, manual tabs detected with an affordance (SP-18, §8.3).
+  min(70%, row − sidebar − 360); below 680px total the phone takeover applies — there
+  is no overlay (SP-17 as amended by SP-25, §4 US-2).
+- Q: Panel already open in another tab? → A: ONLY switch — per identity key (§8.1);
+  app-opened tabs re-focused via the window-handle registry (no stable window name —
+  MAJ-202), manual tabs detected via the continuous presence list with an affordance
+  (SP-18, §8.3).
 - Q: Do panel toggles push history? → A: No — history REPLACE; Back as today (SP-22, §8.2).
 - Q: Does Browser Escape close the panel? → A: Never — Escape stops driving; close
   only via ✕ (SP-19, §7).
@@ -1670,6 +2197,25 @@ inventory in §2.1):
 - Q: Where is width stored, and when is it written? → A: Browser-local, per user +
   panel + workspace; written only on a user choice (SP-20 + MAJ-009 rules, §7).
 - Q: All story sets up front? → A: No — per wave, with each panel (SP-24, §10).
+
+**Grill round 2 (2026-09-26):**
+
+- Q: Window too narrow for chat + panel (re-asked)? → A: Overlay DELETED; takeover
+  below 680px (SP-25, §4 US-2/US-8).
+- Q: Phone panel-close affordances? → A: THREE — ✕, Back (one pushed history step,
+  phone only), swipe-to-close with thresholds that never conflict with in-content
+  horizontal scroll (SP-26, §4 US-8).
+- Q: Shared links through sign-in? → A: Return to the opened link — workspace + panel
+  restored (SP-27, §8.2).
+- Q: Browser panel on reload/shared links? → A: NEVER restored; reopen via "Watch
+  live"; no session id in any shareable link (SP-28, §8.2).
+- Q: Workspace switch with panels open? → A: Browser anchored to its session; Library
+  follows only if opened scoped to the workspace being left; Tasks/Calendar/Mail
+  follow (SP-29, §6).
+- Q: Which entry points switch to the already-open tab? → A: EVERY entry point for
+  the same panel + same workspace (SP-30, §8.3).
+- Q: Demo gate on real-app behaviours? → A: Split — wave-0 Storybook rows gate the
+  build; wave-1 real-app rows are the exit criterion (SP-31, §9).
 
 ---
 
@@ -1688,7 +2234,7 @@ MIN findings are either fixed or dispositioned; OBS are noted.
 | MAJ-004 (history push/replace) | **FIXED** — SP-22: REPLACE everywhere; Back as today; store is source of truth, URL the projection | §4 US-7, §7 URL, §8.2, FR-010, test 15 |
 | MAJ-005 (Browser Escape) | **FIXED** — SP-19: Browser Escape never closes; others keep Escape-to-close; bubble-phase/defaultPrevented rule stated | §4 US-1 AS-3, §6, §7 Accessibility, FR-012, test 13 |
 | MAJ-006 (pop-out close clobbers) | **FIXED** — re-dock only into an EMPTY slot; never replaces a panel opened since; encoded as a new regression test | §6 re-dock rule, §7 State machine, test 8c, regression row 6 |
-| MAJ-007 (tab ARIA + dropdown) | **FIXED** — strip is not a tablist; Chat keeps tab semantics; panel entries `aria-pressed` toggle buttons; dropdown mirrors semantics; mixed mode until wave 3 | §4 US-5, §7 Accessibility, FR-007, test 11 |
+| MAJ-007 (tab ARIA + dropdown) | **FIXED** — strip is not a tablist; Chat keeps tab semantics; panel entries `aria-pressed` toggle buttons; dropdown mirrors semantics; mixed mode until wave 3. Round 2 (MIN-201) completed the visibility half: the pressed state is exercised at BOTH demo viewports via §9's viewport column | §4 US-5, §7 Accessibility, FR-007, test 11, §9 viewport column |
 | MAJ-008 (demo = stories) | **FIXED** — SP-16: stories ARE the demo; design-system publication contract added | §9, §10, FR-016/FR-017, SC-001 |
 | MAJ-009 (width write rules) | **FIXED** — persist only on drag release / keyboard change / reset; reset DELETES the key; window re-clamp is transient, never written | §4 US-3, §7 Persistence, FR-005, test 3, dataset row 9 |
 | MAJ-010 (mail deep link no mailbox) | **FIXED** — SP-23: opens on "choose a mailbox" | §6, §8.2, FR-010, test 6, dataset row 8 |
@@ -1708,4 +2254,54 @@ MIN findings are either fixed or dispositioned; OBS are noted.
 | OBS-003 (no GitNexus impact run) | **NOTED** — GitNexus unavailable in this checkout; citations are file::symbol reads; the implementing lead reruns `impact` on every shell-touched symbol before build (§3.2) | §3.2 |
 
 **Verdict context**: the round-1 verdict was BLOCK pending exactly this fix round;
-round 2 re-grills the corrected spec. Status stays Draft.
+round 2 re-grilled the corrected spec; round 2's fix round (final) is dispositioned
+below. Status: **Approved** (2026-09-26).
+
+---
+
+## 19b. Review-finding dispositions (grill round 2 — `side-panel-shell-spec-spec-review-round2.md`)
+
+All 27 round-2 findings applied; nothing deferred, nothing escalated to the founder —
+every founder question became SP-25..SP-31, every other finding landed at the
+review's own recommended default. Round-1 disposition text above reflects that
+round's state and is superseded where round 2 changed it (notably SP-25's overlay
+deletion). Status: **Approved** (2026-09-26).
+
+### Founder decisions
+
+| Finding | Disposition | Where |
+|---|---|---|
+| MAJ-204 (overlay serves a 40px band, hides the chat it claims to keep working) | **APPLIED (founder SP-25)** — overlay DELETED; phone takeover threshold covers every window below 680px (was <640px); width dataset recomputed | §4 US-2/US-8, §5, §6, §7 Geometry, §11, §12 dataset, FR-003/FR-011 |
+| MAJ-207 (Browser reload/shared-link restore undefined) | **APPLIED (founder SP-28)** — Browser NEVER restored from reload or shared link; ALWAYS reopens via "Watch live"; no session id ever in a shareable link; excluded from `?panel=` restore | §4 US-7, §8.2, §11, §12 dataset, FR-019, SC-004 |
+| MAJ-211 (sign-in drops the shared link — SC-004 unreachable) | **APPLIED (founder SP-27)** — auth gate preserves the original hash URL; sign-in returns to the opened link, workspace + panel restored; closes SC-004 | §4 US-7 AS-2, §8.2, FR-019, §14, SC-004 |
+| MAJ-212 (workspace-switch re-target undefined for Browser; undeclared Library change) | **APPLIED (founder SP-29)** — per-panel rules: Browser anchored to its session; Library follows ONLY if opened scoped to the workspace being left; Tasks/Calendar/Mail follow | §4 US-3 AS-5, §6, §11, FR-020, test 20 |
+| MAJ-213 (which entry points switch; stale scope matching) | **APPLIED (founder SP-30 + MAJ-213 current-scope default)** — EVERY entry point switches (sidebar Library, "Open library", "Watch live" included); matching by CURRENT scope; no context yank | §4 US-6, §5, §8.1, §8.3, §11, FR-009 |
+| MAJ-210 (Storybook demo cannot execute half the click-test list) | **APPLIED (founder SP-31)** — gate split: wave-0 Storybook rows (layout + phone + keyboard, with a dev-only request-mocking add-on allowed) vs wave-1 real-app rows as exit criterion | §9, §10, §12 test 16, §15, SC-001/SC-009 |
+
+### Stated defaults (review's own recommendation)
+
+| Finding | Disposition | Where |
+|---|---|---|
+| MAJ-201 (Browser identity = session, not workspace) | **APPLIED** — identity keys per §8.1: Library/Tasks/Team/Calendar = `panelId × workspaceId`; Browser = `panelId × sessionId × agentId` (width bucket `app` always) | §8.1, §8.3, FR-009, test 14 |
+| MAJ-202 (fixed window name still navigates the tab) | **APPLIED** — stable window names DROPPED; every open is a plain `_blank`; handle held by opening without `noopener` and severing `window.opener` immediately (Browser's existing pattern; Library drops `'noopener,noreferrer'`) | §8.3, FR-008 |
+| MAJ-203 (geometry numbers contradict; default breaks the chat floor) | **APPLIED** — default = `clamp(0.45×row, 320px, min(720px, ceiling))`; every width number recomputed from SP-17-as-amended (16-row dataset) | §4 US-2, FR-003, §11, §12 dataset |
+| MAJ-205 (URL-initiated transitions ungated) | **APPLIED** — router blocker (existing `useBlocker` pattern, `library.tsx::LibraryRoute`) gates URL-initiated navigations through `beforeLeave`; cancel leaves route/URL/panel unchanged | §4 US-7 AS-8, §8.2, §11, FR-010 |
+| MAJ-206 (stale panel values on Back/Forward) | **APPLIED** — store wins: stale `panel` values in old history entries ignored and re-projected; the one exception is the SP-26 phone pushed step (Back closes the panel) | §4 US-7 AS-7, §8.2, §11, FR-010 |
+| MAJ-208 (re-dock regresses the Dana fix; fires in every tab) | **APPLIED** — opener-only re-dock via the window handle; follows the pop-out's last workspace through the guard; third tab never re-docks; manual tabs trigger nothing | §6, §8.3, §11, FR-018, tests 8c/19, regression rows 7 |
+| MAJ-209 (Expand failure path + gesture timing unspecified) | **APPLIED** — `window.open` runs synchronously in the user gesture (enabled by OBS-202's presence list); failure → error toast + docked panel stays open, EVERY panel | §8.3, §4 US-6 AS-5, FR-008, W12 |
+| MIN-201 (round-1 MAJ-007 visibility half still open) | **APPLIED** — §9 gained a viewport column; shell stories render at 680×900 and 1280×800 variants | §9, §19 MAJ-007 note |
+| MIN-202 (traceability holes: US-1 AS-4, US-3 AS-2, US-5 AS-2/3/6) | **APPLIED** — scenarios added for each; US-5 AS-2 also traced from the second-click scenario | §11 |
+| MIN-203 (boundary rows missing; two geometry statements wrong) | **APPLIED** — 679/680 boundary rows added; drag-clamp (784 pinned), shrink (640), keyboard End (980) recomputed | §9, §11, §12 dataset |
+| MIN-204 (width-storage details inconsistent/impossible) | **APPLIED** — key `panel-width:<username>:<panelId>:<workspaceId\|app>`; prune only own keys; storage failure = memory-only for the session, never an error | §7 Persistence, §8.1, FR-005 |
+| MIN-205 (keyboard resize writes every keypress) | **APPLIED** — write + Browser handover fire on SETTLE (300ms after the last keystroke), not per keypress | §4 US-3 AS-5 note, FR-005, FR-015, test 9b |
+| MIN-206 ("Open browser" needs a network call, runs before the guard) | **APPLIED** — guard runs BEFORE any `createSession`; no session created before the leave gate passes; §5 error flow states it | §5 error flows, §7 State machine |
+| MIN-207 (presence/context messages trust any same-origin page) | **APPLIED** — incoming channel messages validated; no file paths/selections/session contents on BroadcastChannel; targeted postMessage to handles | §7 STRIDE note, §8.3, test 14 |
+| MIN-208 (Escape during composition; focus-inside undefined) | **APPLIED** — Escape ignored while `event.isComposing`; "focus inside shell" = composed DOM path contains shell root or a registered portalled layer | §4 US-9, §7 Accessibility |
+| MIN-209 (ADRs cited by number only, one ambiguously) | **APPLIED** — ADRs cited by title ("ADR-044 — Serve /preview/ on the main gateway listener", ADR-039 "User-initiated browsing and annotate", ADR-061 "Remove JPEG screencast fallback") | §8.2, FR-015 |
+| MIN-210 (Decisions Log still describes window names) | **APPLIED** — dated mechanism-only amendment to SP-18's rationale in `spec-side-panel-shell.md` (handle registry replaced stable-window-name re-focus) | `spec-side-panel-shell.md` SP-18 rationale |
+| MIN-211 (virtual-root Library reload changes scope + bucket) | **APPLIED** — stated as an accepted difference: reload restores workspace-scoped, in that workspace's width bucket; `&scope=root` rejected as URL surface growth | §8.2 Library bullet |
+| OBS-201 (cross-tab rows CAN be automated) | **APPLIED** — W4/W5/W7 scripted as Playwright multi-tab where feasible, click-tested otherwise | §9 note, §12 test 16 |
+| OBS-202 (150ms wait slows every open) | **APPLIED** — continuous presence list (announce on load/scope-change/pagehide); click resolves synchronously; also unblocks MAJ-209's sync open | §8.3, FR-009 |
+| OBS-203 (GitNexus impact still not run) | **CARRIED FORWARD** — unchanged from §3.2/OBS-003: the implementing lead runs `impact` on `UiStore`, `AppShell`, `WorkspaceTabBar`, `LibraryPanel`, `BrowserLivePanel` before wave 1 starts (a spec-round obligation, not a spec defect) | §3.2 |
+
+Nothing in §19b is "Deferred" — every finding landed now.
