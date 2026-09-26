@@ -153,7 +153,7 @@ func envelopeRecipientsDedup(lists ...[]mail.Address) []string {
 }
 
 // resolveMailAttachments resolves every attachment ref through the one
-// authoritative per-turn filesystem policy (FR-036) with the FSOpSend
+// authoritative per-turn filesystem policy (FR-038) with the FSOpSend
 // disclosure op (D33/sign-off C2: allowed anywhere except the secret set —
 // no outside-workspace gate), reads the bytes through the handle (the
 // credentials/master.key carve-out is re-verified at I/O time inside
@@ -203,8 +203,10 @@ func resolveMailAttachments(ctx context.Context, toolName string, refs []any) ([
 }
 
 // checkMailBodyBound enforces MC-22/FR-031: the Markdown body is bounded at
-// 1 MiB, rejected before any dial or APPEND (Compose re-validates, but the
-// tool layer owns the pre-flight).
+// 1 MiB, rejected before any dial or APPEND. Compose itself imposes no body
+// bound; the SMTP edge re-checks Body-carried sends in transport.Send (a
+// Raw-carried send skips that check, so this pre-flight is the tool path's
+// only body bound).
 func checkMailBodyBound(toolName, body string) error {
 	if len(body) > 1<<20 {
 		return fmt.Errorf("%s: the message body is %d bytes; the bound is 1 MiB (1048576 bytes) (MC-22)",
@@ -307,15 +309,15 @@ func draftChatLink(origin, wsID, agentID, messageID string) (string, string) {
 // CreateEmailDraftResult is the create_email_draft tool result (spec §2.2
 // CreateEmailDraftResult — the SPA chat tool-result renderer consumes these
 // property names; the gateway wire type is generated from the same contract).
-// ChatLink is nil when no origin is derivable (FR-015), with ChatLinkReason
-// stating why.
+// ChatLink is nil when no origin is derivable (FR-015), with chat_link_reason
+// stating why (null when the link was built).
 type CreateEmailDraftResult struct {
 	Created        bool    `json:"created"`
 	MessageID      string  `json:"message_id"`
 	UID            uint32  `json:"uid"`
 	UIDValidity    uint32  `json:"uidvalidity"`
 	ChatLink       *string `json:"chat_link"`
-	ChatLinkReason string  `json:"chat_link_reason"`
+	ChatLinkReason *string `json:"chat_link_reason"`
 }
 
 // CreateEmailDraftTool APPENDs a composed draft (X-Omnipus-Draft, text/
@@ -445,14 +447,16 @@ func (t *CreateEmailDraftTool) Execute(ctx context.Context, args map[string]any)
 
 	link, reason := draftChatLink(t.origin, ToolWorkspaceID(ctx), ToolAgentID(ctx), messageID)
 	res := CreateEmailDraftResult{
-		Created:        true,
-		MessageID:      messageID,
-		UID:            uid,
-		UIDValidity:    uidvalidity,
-		ChatLinkReason: reason,
+		Created:     true,
+		MessageID:   messageID,
+		UID:         uid,
+		UIDValidity: uidvalidity,
 	}
 	if link != "" {
 		res.ChatLink = &link
+	}
+	if reason != "" {
+		res.ChatLinkReason = &reason
 	}
 	data, err := json.Marshal(res)
 	if err != nil {

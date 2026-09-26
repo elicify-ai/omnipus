@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -26,13 +27,15 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 		}
 		st, err := email.LoadWatcherState(a.homePath, agentID, workspaceID)
 		if err != nil && !errors.Is(err, email.ErrNoWatcherState) {
+			slog.Warn("rest: mail summary state load failed; mailbox omitted from the panel",
+				"agent_id", agentID, "workspace_id", workspaceID, "error", err)
 			continue
 		}
 		row := gen.MailboxNewMailSummary{WatcherState: gen.MailboxNewMailSummaryWatcherStateOk}
 		if st == nil {
 			st = &email.WatcherState{State: "ok", UnseenTotal: 0}
 		}
-		switch st.State {
+		switch st.EffectiveState(time.Now()) {
 		case "error":
 			row.WatcherState = gen.MailboxNewMailSummaryWatcherStateError
 		case "backoff":

@@ -208,16 +208,18 @@ func (a *restAPI) getAgentMailbox(w http.ResponseWriter, agentID, workspaceID st
 
 // restAPISetAgentMailbox carries the shared state of setAgentMailbox across its stages.
 type restAPISetAgentMailbox struct {
-	a                *restAPI
-	w                http.ResponseWriter
-	r                *http.Request
-	agentID          string
-	workspaceID      string
-	req              gen.MailboxConfigureRequest
-	refName          string
-	passwordProvided bool
-	clearPassword    bool
-	persistedRef     string
+	a                  *restAPI
+	w                  http.ResponseWriter
+	r                  *http.Request
+	agentID            string
+	workspaceID        string
+	req                gen.MailboxConfigureRequest
+	refName            string
+	passwordProvided   bool
+	clearPassword      bool
+	persistedRef       string
+	signatureProvided  bool
+	sanitizedSignature string
 }
 
 // setAgentMailbox handles PUT /api/v1/agents/{id}/mailboxes/{workspaceId}.
@@ -310,8 +312,20 @@ func (sm *restAPISetAgentMailbox) validateAccessAndRequest() bool {
 		return true
 	}
 
+	// signature_html (MC-1): sanitized AT THE SETTER. Raw input over 16,384
+	// chars is HTTP 400 (the contract), pre-sanitize; what persistConfig writes
+	// is the sanitized allowlisted HTML, never raw operator input.
+	sm.signatureProvided = sm.req.SignatureHtml != nil
+	if sm.signatureProvided {
+		san, serr := email.SanitizeSignatureHTML(*sm.req.SignatureHtml)
+		if serr != nil {
+			jsonErr(sm.w, http.StatusBadRequest, serr.Error())
+			return true
+		}
+		sm.sanitizedSignature = san
+	}
+
 	// NOTE: the 0.1.0 cap-1-per-workspace rule was removed 2026-07-03
-	// (operator-approved): every agent may own a mailbox, several per workspace.
 	// Pair-addressing (same day) further lifted "one mailbox per agent" — an
 	// agent may hold a distinct mailbox in each workspace it belongs to.
 
@@ -375,6 +389,33 @@ func (sm *restAPISetAgentMailbox) persistConfig() bool {
 		}
 		if sm.req.SmtpPort != nil {
 			existing["smtp_port"] = *sm.req.SmtpPort
+		}
+
+		// signature_html and the folder-name overrides: present in the request
+		// → replace; omitted → keep what is stored (the imap_port precedent).
+		// The signature arrived sanitized (validateAccessAndRequest, MC-1);
+		// an empty sanitized value clears the stored one. Folder overrides are
+		// trimmed; empty clears the override so the standard name resumes.
+		if sm.signatureProvided {
+			if sm.sanitizedSignature != "" {
+				existing["signature_html"] = sm.sanitizedSignature
+			} else {
+				delete(existing, "signature_html")
+			}
+		}
+		if sm.req.SentFolderName != nil {
+			if name := strings.TrimSpace(*sm.req.SentFolderName); name != "" {
+				existing["sent_folder_name"] = name
+			} else {
+				delete(existing, "sent_folder_name")
+			}
+		}
+		if sm.req.DraftsFolderName != nil {
+			if name := strings.TrimSpace(*sm.req.DraftsFolderName); name != "" {
+				existing["drafts_folder_name"] = name
+			} else {
+				delete(existing, "drafts_folder_name")
+			}
 		}
 
 		// Password handling: stored → set ref; cleared → drop ref; omitted → keep.
@@ -498,6 +539,15 @@ func (sm *restAPISetAgentMailbox) reloadAndPrepareResponse() {
 	}
 	if sm.req.SmtpPort != nil {
 		out.SMTPPort = *sm.req.SmtpPort
+	}
+	if sm.signatureProvided && sm.sanitizedSignature != "" {
+		out.SignatureHTML = sm.sanitizedSignature
+	}
+	if sm.req.SentFolderName != nil {
+		out.SentFolderName = strings.TrimSpace(*sm.req.SentFolderName)
+	}
+	if sm.req.DraftsFolderName != nil {
+		out.DraftsFolderName = strings.TrimSpace(*sm.req.DraftsFolderName)
 	}
 	jsonOK(sm.w, mailboxToWire(sm.agentID, sm.workspaceID, out, configured))
 }
@@ -694,45 +744,12 @@ var emailToolFillPolicies = map[string]config.ToolPolicy{
 // grantEmailToolAllows applies the D19 configure-time fill (MC-26,
 // email-mail-view-spec §2.7 point 2): for each email tool whose key is
 // ABSENT from the agent's builtin policy map, it writes the fill value
-// (send_email/reply ask, read tools and create_email_draft allow). An
-// explicit allow, ask or deny is operator or seed intent and is never
-// rewritten — including the deny an agent inherits from a deny-by-default
-// custom-agent seed. ADR-054 D2/§11 checklist item 5: agents are per-entity
-// records under entities/agents/<id>.json, not config.json's agents.list —
-// this grants via the agent store instead of splicing the raw config map
-// that setAgentMailbox's safeUpdateConfigJSON closure operates on (that
-// closure's `m` is the MAILBOX config, a setting per ADR-054 R2 — this
-// function no longer touches it at all).
-//
-// Historical context: before the DefaultPolicy/default_policy fallback was
-// removed (CLAUDE.md hard constraint 6), an agent's builtin.policies map was
-// typically SPARSE — a missing entry meant "fall back to the agent's
-// default_policy field," so a deny-by-default agent's email tools were
-// implicitly denied simply by being absent from the map. This function used
-// to check that default_policy field and only fill genuinely-missing
-// entries. Now every agent's policies map is fully enumerated (seeded
-// explicitly allow/deny per tool via coreagent.denyAllThenOverride; the
-// two-layer model under ADR-077 lets an unmentioned tool ride the reconciled
-// global ceiling instead of a per-agent deny backfill) —
-// there is no default_policy field any more, so a deny-by-default agent's
-// email tools are no longer "missing," they carry an EXPLICIT "deny" entry
-// inherited from the seed. Checking builtin["default_policy"] (as this
-// function used to) is therefore always empty/absent, always compares
-// unequal to "deny", and the function ALWAYS silently no-op'd — meaning
-// enabling a mailbox for any agent whose email tools are seed-deny (every
-// agent except Mia) left those tools permanently denied with zero
-// operator-visible signal (found live, three independent reviewers,
-// 2026-07-06).
-//
-// Fixed to operate directly on the real builtin["policies"] map: an entry
-// currently "deny" (the ubiquitous, non-deliberate baseline inherited from
-// the seed) is functionally equivalent to the old "missing" case and is
-// fill-eligible. An entry already "allow" needs no change. An entry "ask" is
-// preserved untouched: no core-agent seed (pkg/coreagent/core.go) ever
-// assigns "ask" to an email tool — only "allow" (Mia) or the
-// denyAllThenOverride baseline "deny" — so a persisted "ask" can only have
-// come from a deliberate operator action via the Tool Policies UI/API, which
-// this function must never override.
+// (send_email/reply ask, the read tools and create_email_draft allow).
+// Any entry already present — allow, ask, or deny — is operator or seed
+// intent and is never rewritten, so an inherited deny survives a mailbox
+// enable untouched. Under the two-layer model (ADR-077) a sparse map is the
+// normal state — an agent with no explicit entry rides the reconciled
+// global ceiling — which is exactly why the fill targets absent keys only.
 func grantEmailToolAllows(homePath, agentID string) {
 	var granted []string
 	_, err := agentstore.New(homePath).Update(agentID, func(ag *config.AgentConfig) error {
@@ -771,7 +788,7 @@ func grantEmailToolAllows(homePath, agentID string) {
 		return
 	}
 	if len(granted) > 0 {
-		slog.Info("mailbox: granted email tool allows (deny/missing email-tool policy, mailbox enabled)",
+		slog.Info("mailbox: granted email tool allows (absent email-tool policy filled, mailbox enabled)",
 			"agent_id", agentID, "tools", strings.Join(granted, ","))
 	}
 }
@@ -813,6 +830,21 @@ func mailboxToWire(agentID, workspaceID string, mb config.MailboxConfig, configu
 	if mb.Username != "" {
 		v := mb.Username
 		out.Username = &v
+	}
+	// The signature and folder overrides are operator-set config, echoed to the
+	// authenticated panel exactly like the hosts/ports (the password is the
+	// only field that is never returned).
+	if mb.SignatureHTML != "" {
+		v := mb.SignatureHTML
+		out.SignatureHtml = &v
+	}
+	if mb.SentFolderName != "" {
+		v := mb.SentFolderName
+		out.SentFolderName = &v
+	}
+	if mb.DraftsFolderName != "" {
+		v := mb.DraftsFolderName
+		out.DraftsFolderName = &v
 	}
 	return out
 }

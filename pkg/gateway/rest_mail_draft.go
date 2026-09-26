@@ -136,6 +136,10 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		p := cur.Attachments[idx]
+		if p.DataUnavailable {
+			jsonErr(w, http.StatusBadRequest, "keep_attachment_parts names an unavailable part")
+			return
+		}
 		ct := p.ContentType
 		if ct == "" {
 			ct = "application/octet-stream"
@@ -147,11 +151,21 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 		if ct == "" {
 			ct = "application/octet-stream"
 		}
-		if len(at.DataBase64) > mailMaxAttachmentBytes {
-			jsonErr(w, http.StatusBadRequest, "attachments too large (max 25 MiB total)")
-			return
-		}
-		in.Attachments = append(in.Attachments, email.Attachment{Name: at.Filename, ContentType: ct, Data: at.DataBase64})
+		in.Attachments = append(in.Attachments, email.Attachment{Name: email.SanitizeAttachmentName(at.Filename), ContentType: ct, Data: at.DataBase64})
+	}
+	// MC-32 (same trio as the manual send): the carried-over parts count toward
+	// the same caps as the new uploads — count first, then decoded total.
+	if len(in.Attachments) > mailMaxAttachments {
+		jsonErr(w, http.StatusBadRequest, "too many attachments (max 10)")
+		return
+	}
+	totalAtt := 0
+	for _, at := range in.Attachments {
+		totalAtt += len(at.Data)
+	}
+	if totalAtt > mailMaxAttachmentBytes {
+		jsonErr(w, http.StatusBadRequest, "attachments too large (max 25 MiB total)")
+		return
 	}
 	out, cerr := email.Compose(in)
 	if cerr != nil {
@@ -190,7 +204,7 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 			Filename    string `json:"filename"`
 			PartIndex   int    `json:"part_index"`
 			SizeBytes   int    `json:"size_bytes"`
-		}{ContentType: at.ContentType, Filename: at.Name, PartIndex: len(resp.Attachments), SizeBytes: len(at.Data)})
+		}{ContentType: at.ContentType, Filename: email.SanitizeAttachmentName(at.Name), PartIndex: len(resp.Attachments), SizeBytes: len(at.Data)})
 	}
 	jsonOK(w, resp)
 }
@@ -214,7 +228,8 @@ func (a *restAPI) handleMailDraftDiscard(w http.ResponseWriter, r *http.Request,
 		mailErr502(w, err)
 		return
 	}
-	if derr := client.DeleteDraft(r.Context(), uid); derr != nil {
+	expunged, derr := client.DeleteDraftStatus(r.Context(), uid)
+	if derr != nil {
 		mailErr502(w, derr)
 		return
 	}
@@ -222,7 +237,7 @@ func (a *restAPI) handleMailDraftDiscard(w http.ResponseWriter, r *http.Request,
 	auditMail(a, audit.EventMailPanelDraftDiscarded, audit.DecisionAllow, map[string]any{
 		"workspace_id": workspaceID, "agent_id": agentID,
 		"message_id": bracketMessageID(cur.MessageID), "uid": uid, "uidvalidity": uv,
-		"expunged": true,
+		"expunged": expunged,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -334,6 +349,14 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 	if req.Cc != nil {
 		cc = *req.Cc
 	}
+	// MC-27 (pre-dial): the contract documents recipient validation as a 400,
+	// and >50 recipients previously fell through to the transport layer and
+	// surfaced as a 502 server_error. Same check and message as the manual
+	// send path.
+	if totalRcpt := len(to) + len(cc) + len(derefStrings(req.Bcc)); totalRcpt > mailMaxRecipients {
+		jsonErr(w, http.StatusBadRequest, "too many recipients (max 50 across to, cc, bcc)")
+		return
+	}
 	mb, mbOK := a.mailComposeConfig(agentID, workspaceID)
 	if !mbOK {
 		jsonErr(w, http.StatusNotFound, "no mailbox configured for this agent and workspace")
@@ -359,12 +382,30 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 				return
 			}
 			p := cur.Attachments[idx]
+			if p.DataUnavailable {
+				jsonErr(w, http.StatusBadRequest, "keep_attachment_parts names an unavailable part")
+				return
+			}
 			ct := p.ContentType
 			if ct == "" {
 				ct = "application/octet-stream"
 			}
 			in.Attachments = append(in.Attachments, email.Attachment{Name: p.Filename, ContentType: ct, Data: p.Data})
 		}
+	}
+	// MC-32 (same trio as the manual send): carried-over parts count toward
+	// the same caps as any new attachments — count first, then decoded total.
+	if len(in.Attachments) > mailMaxAttachments {
+		jsonErr(w, http.StatusBadRequest, "too many attachments (max 10)")
+		return
+	}
+	totalAtt := 0
+	for _, at := range in.Attachments {
+		totalAtt += len(at.Data)
+	}
+	if totalAtt > mailMaxAttachmentBytes {
+		jsonErr(w, http.StatusBadRequest, "attachments too large (max 25 MiB total)")
+		return
 	}
 	out, cerr := email.Compose(in)
 	if cerr != nil {
@@ -391,12 +432,10 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 		slog.Warn("rest: draft sent copy APPEND failed", "agent_id", agentID, "error", aerr)
 	}
 	cleanupWarn := ""
-	expunged := false
-	if derr := client.DeleteDraft(r.Context(), cur.UID); derr != nil {
+	expunged, derr := client.DeleteDraftStatus(r.Context(), cur.UID)
+	if derr != nil {
 		cleanupWarn = "the message was sent, but deleting the draft copy failed"
 		slog.Warn("rest: draft cleanup after send failed", "agent_id", agentID, "error", derr)
-	} else {
-		expunged = true
 	}
 	resp.DraftCleanupWarning = nil
 	if cleanupWarn != "" {

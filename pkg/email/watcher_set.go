@@ -32,6 +32,7 @@ func (s *MailboxWatcherSet) CycleAll(ctx context.Context) {
 	}
 	for _, mb := range s.provider.Mailboxes() {
 		if mb.Transport == nil || mb.AgentID == "" || mb.WorkspaceID == "" {
+			slog.Warn("email watcher: skipping malformed mailbox (missing agent, workspace or transport)", "agent_id", mb.AgentID, "workspace_id", mb.WorkspaceID)
 			continue
 		}
 		w, err := NewWatcher(WatcherConfig{

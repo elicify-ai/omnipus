@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,6 +90,30 @@ type WatcherState struct {
 	LastSuccessAt  string `json:"last_success_at"`
 	NextAttemptAt  string `json:"next_attempt_at"`
 	Attempt        int    `json:"attempt"`
+}
+
+// EffectiveState derives the summary state of one persisted state — the ONE
+// derivation point for the summary's watcher_state enum (MC-23/MC-31):
+// "backoff" when the last cycle failed AND the next attempt is still in the
+// future (MC-33: no dial until then), "error" when it failed but the watcher
+// is due again, "ok" otherwise. Backoff is a RENDER-TIME fact: recordFailure
+// persists "error" plus a future NextAttemptAt, and the reader derives
+// "backoff" from them at read time — a persisted "backoff" value would go
+// stale the moment NextAttemptAt passed, which is why nothing ever writes
+// the literal "backoff" into the state file.
+func (s *WatcherState) EffectiveState(now time.Time) string {
+	if s == nil {
+		return "ok"
+	}
+	if s.State == "error" {
+		if s.NextAttemptAt != "" {
+			if next, err := time.Parse(time.RFC3339, s.NextAttemptAt); err == nil && now.Before(next) {
+				return "backoff"
+			}
+		}
+		return "error"
+	}
+	return "ok"
 }
 
 // WatcherBackoff is the per-mailbox reconnect backoff (MC-33/B-43).
@@ -234,14 +259,24 @@ func (w *Watcher) now() time.Time {
 	return time.Now()
 }
 
-// load reads the persisted state if present.
+// load reads the persisted state if present. A missing state file is the
+// normal never-ran case (silent); ANY other read failure (permission, EIO,
+// is-a-directory) or an unmarshal failure (corrupt/truncated file) is logged
+// before the fresh-state fallback so the reset is never silent — the save
+// path's slog.Error has a visible mirror here now.
 func (w *Watcher) load() {
 	b, err := os.ReadFile(w.statePath)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("email watcher: state load failed; resetting",
+				"path", w.statePath, "error", err)
+		}
 		return
 	}
 	var st WatcherState
-	if json.Unmarshal(b, &st) != nil {
+	if err := json.Unmarshal(b, &st); err != nil {
+		slog.Warn("email watcher: state load failed; resetting",
+			"path", w.statePath, "error", err)
 		return
 	}
 	w.state = st
@@ -270,6 +305,13 @@ func classifyMailError(err error) string {
 		return ""
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return "timeout"
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return "timeout"
+	}
+	var neterr net.Error
+	if errors.As(err, &neterr) && neterr.Timeout() {
 		return "timeout"
 	}
 	if errors.Is(err, syscall.ECONNREFUSED) {

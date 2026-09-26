@@ -129,12 +129,14 @@ func (a *restAPI) mailPairClient(w http.ResponseWriter, agentID, workspaceID str
 		return nil
 	}
 	client, cerr := email.NewClient(email.Account{
-		IMAPHost: mb.IMAPHost,
-		IMAPPort: mb.IMAPPort,
-		SMTPHost: mb.SMTPHost,
-		SMTPPort: mb.SMTPPort,
-		Username: mb.Username,
-		Password: password,
+		IMAPHost:     mb.IMAPHost,
+		IMAPPort:     mb.IMAPPort,
+		SMTPHost:     mb.SMTPHost,
+		SMTPPort:     mb.SMTPPort,
+		Username:     mb.Username,
+		Password:     password,
+		SentFolder:   mb.SentFolderName,
+		DraftsFolder: mb.DraftsFolderName,
 	})
 	if cerr != nil {
 		slog.Warn("rest: mail transport construction failed", "agent_id", agentID, "error", cerr)
@@ -155,8 +157,9 @@ func (a *restAPI) mailComposeConfig(agentID, workspaceID string) (config.Mailbox
 	return mb, true
 }
 
-// auditMail writes one mail panel audit entry (MC-19). Auditor absence (a
-// nil auditor in tests) skips silently; write failures are WARN, never fatal.
+// auditMail writes one mail panel audit entry (MC-19). A nil auditor — audit
+// logging disabled — is a legitimate production state, not a test-only
+// shape; it skips silently. Write failures are WARN, never fatal.
 func auditMail(a *restAPI, event audit.EventName, decision audit.Decision, details map[string]any) {
 	if a.auditor == nil {
 		return

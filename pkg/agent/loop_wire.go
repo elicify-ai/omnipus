@@ -703,11 +703,14 @@ func (rw *registerSharedToolsWire3) registerHandoffAndSkills(agentID string, age
 		// above no longer targets. Do not reintroduce it.
 	}
 
-	// Email tools (M11) — registered ONLY for the agent that owns a configured,
-	// enabled mailbox with a resolvable password. Email is a TOOL surface
-	// (read_inbox · search_email · read_message · send_email · reply) over the
-	// pure-Go IMAP/SMTP transport, not a conversational channel. The tools flow
-	// through the normal per-agent tool policy, so god-mode / O7 policy applies.
+	// Email tools (M11) — registered UNCONDITIONALLY for every agent. The
+	// tools themselves resolve the mailbox per (agent, workspace) pair at
+	// call time; an agent without a configured, enabled mailbox gets an empty
+	// transport set and no reachable email surface. Email is a TOOL surface
+	// (read_inbox · search_email · read_message · send_email · reply ·
+	// create_email_draft) over the pure-Go IMAP/SMTP transport, not a
+	// conversational channel. The tools flow through the normal per-agent
+	// tool policy, so god-mode / O7 policy applies.
 	registerEmailToolsForAgent(rw.cfg, agentID, agent)
 }
 

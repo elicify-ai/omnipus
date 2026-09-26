@@ -7,9 +7,7 @@ package gateway
 import (
 	"errors"
 	"log/slog"
-	"mime"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -278,15 +276,26 @@ func (a *restAPI) handleMailAttachment(w http.ResponseWriter, r *http.Request, w
 		jsonErr(w, http.StatusNotFound, "no such attachment part")
 		return
 	}
+	if part.DataUnavailable {
+		jsonErr(w, http.StatusRequestEntityTooLarge, "attachment part unavailable: over the 25 MiB per-part fetch cap or failed to decode")
+		return
+	}
 	name := email.SanitizeAttachmentName(part.Filename)
 	if name == "" {
 		name = "attachment"
 	}
-	ctype := part.ContentType
-	if ctype == "" {
-		ctype = mime.TypeByExtension(strings.ToLower(filepath.Ext(name)))
-	}
-	if ctype == "" {
+	var ctype string
+	// MC-42 (Content-Type discipline): the type is derived from the sanitized
+	// filename's EXTENSION through the compiled-in fixed table (library_mime.go)
+	// — never from the host MIME registry (mime.TypeByExtension answers
+	// differently per machine, FR-015b) and not from the part's self-declared
+	// type when the table knows the extension. Unknown extension → the part's
+	// declared type if any, else the one stated default.
+	if ct, ok := libraryExtContentTypes[libraryExtOf(name)]; ok {
+		ctype = ct
+	} else if part.ContentType != "" {
+		ctype = part.ContentType
+	} else {
 		ctype = "application/octet-stream"
 	}
 	// MC-42: an .html part is never inline. The headers go through the shared

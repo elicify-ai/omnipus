@@ -164,6 +164,13 @@ func (p *mailPreviewRoutes) handleMint(w http.ResponseWriter, r *http.Request) {
 		HTML: mailSanitizePreviewHTML(v.HTMLBody, v.Inline, remoteURLs), Inline: inlineParts, RemoteURLs: remoteURLs,
 	})
 	if merr != nil {
+		// A full per-session token table is the caller's doing, not a server
+		// fault: refuse 429 with the actionable text and no ERROR log — the
+		// 500 path stays for genuine mint failures.
+		if errors.Is(merr, ErrMailPreviewCap) {
+			jsonErr(w, http.StatusTooManyRequests, "too many concurrent previews: close older previews to mint a new one")
+			return
+		}
 		slog.Error("rest: mail preview mint failed", "error", merr)
 		jsonErr(w, http.StatusInternalServerError, "could not mint preview token")
 		return

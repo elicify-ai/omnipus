@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"sort"
 	"strconv"
@@ -294,12 +295,12 @@ func (c *Client) fetchMailRows(ctx context.Context, client *imapclient.Client, s
 		row.To = splitAddressList(addressListString(buf.Envelope.To))
 		row.Cc = splitAddressList(addressListString(buf.Envelope.Cc))
 		for _, f := range buf.Flags {
-			switch string(f) {
-			case string(imap.FlagSeen):
+			switch {
+			case string(f) == string(imap.FlagSeen):
 				row.Seen = true
-			case string(imap.FlagDraft):
-				row.IsDraft = string(imap.FlagDraft) == string(f)
-			case "$OmnipusAgentRead":
+			case string(f) == string(imap.FlagDraft):
+				row.IsDraft = true
+			case strings.EqualFold(string(f), readByAgentKeyword):
 				row.ReadByAgent = true
 			}
 		}
@@ -377,13 +378,21 @@ type MailPart struct {
 	ContentID   string
 	Disposition string
 	Data        []byte
+	// DataUnavailable marks a part that is listed but whose bytes are NOT
+	// present: it exceeded maxViewPartBytes (memory guard, D6) or its body
+	// failed to read. The gateway refuses such a part download-side (413)
+	// and the draft keep paths refuse it (400) instead of silently
+	// transmitting or serving nothing.
+	DataUnavailable bool
 }
 
 // maxViewPartBytes is the gateway's memory guard for one inbound part: a
 // hostile giant attachment must not materialize whole in RAM (D6: nothing is
-// stored; this is in-memory only). It mirrors the MC-32 outbound cap — parts
-// larger than 25 MiB are listed by header claim but their bytes are not
-// fetched, so addressing them download-side fails closed.
+// stored; this is in-memory such only). It mirrors the MC-32 outbound cap —
+// parts larger than 25 MiB (or whose bytes failed to decode) are still
+// LISTED by their header claim, with a loud unavailable marker (the
+// decodeBody house style), but their bytes are not fetched and addressing
+// them download-side fails closed (413).
 const maxViewPartBytes = 25 << 20
 
 // ReadView fetches one message fully (BODY.PEEK[]) by folder-scoped ref and
@@ -441,7 +450,7 @@ func (c *Client) ReadView(ctx context.Context, slug, ref string) (*MailView, err
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("email transport: message %s fetched empty", ref)
 	}
-	view := viewFromRaw(raw)
+	view := viewFromRaw(raw, slug, uid)
 	view.UID = uid
 	view.UIDValidity = uidvalidity
 	for _, f := range buf.Flags {
@@ -514,7 +523,8 @@ func splitAddressList(joined string) []string {
 // only on the owner's own copies, X-Omnipus-* draft markers, References) and
 // the MIME leaf walk (text bodies, the stored text/markdown part of Omnipus
 // drafts, attachment and inline parts).
-func viewFromRaw(raw []byte) *MailView {
+// slug and uid exist only so the unavailable-part WARN can name folder and UID.
+func viewFromRaw(raw []byte, slug string, uid uint32) *MailView {
 	view := &MailView{}
 	reader, err := gomail.CreateReader(bytes.NewReader(raw))
 	if err == nil {
@@ -562,14 +572,32 @@ func viewFromRaw(raw []byte) *MailView {
 				Disposition: disp,
 			}
 			data, rerr := io.ReadAll(io.LimitReader(part.Body, maxViewPartBytes+1))
-			if rerr == nil && len(data) <= maxViewPartBytes {
+			unavailReason := ""
+			switch {
+			case rerr != nil:
+				p.DataUnavailable = true
+				unavailReason = "failed to decode"
+			case len(data) > maxViewPartBytes:
+				p.DataUnavailable = true
+				unavailReason = "over the 25 MiB per-part fetch cap"
+			default:
 				p.Data = data
 				p.SizeBytes = len(data)
-				if p.Disposition == "attachment" || p.Filename != "" {
-					view.Attachments = append(view.Attachments, p)
-				} else {
-					view.Inline = append(view.Inline, p)
+			}
+			isAttachment := p.Disposition == "attachment" || p.Filename != ""
+			if p.DataUnavailable {
+				if claimed, perr := strconv.Atoi(dispParams["size"]); perr == nil && claimed > 0 {
+					p.SizeBytes = claimed
 				}
+				p.Filename += " [attachment unavailable: " + unavailReason + "]"
+				slog.Warn("email view: attachment part listed but unavailable",
+					"folder", slug, "uid", uid, "part_index", p.PartIndex,
+					"reason", unavailReason)
+			}
+			if isAttachment {
+				view.Attachments = append(view.Attachments, p)
+			} else {
+				view.Inline = append(view.Inline, p)
 			}
 		}
 	}
@@ -655,25 +683,35 @@ func (c *Client) MarkSeenIn(ctx context.Context, slug string, uid uint32) error 
 	return nil
 }
 
-// DeleteDraft flags a draft \\Deleted and, when the server supports UIDPLUS,
-// expunges EXACTLY that UID (FR-032). Without UIDPLUS the flag stays for
-// deferred expunge — a plain EXPUNGE would also purge unrelated \Deleted
-// messages a human's other client may have, so it is never sent here.
+// DeleteDraft flags a draft \Deleted and, when the server supports UIDPLUS,
+// expunges EXACTLY that UID (FR-032). Thin wrapper over DeleteDraftStatus
+// that discards the expunge fact.
 func (c *Client) DeleteDraft(ctx context.Context, uid uint32) error {
+	_, err := c.DeleteDraftStatus(ctx, uid)
+	return err
+}
+
+// DeleteDraftStatus is DeleteDraft with the expunge fact exposed: expunged is
+// true only when the UIDPLUS UIDExpunge actually ran. Without UIDPLUS the
+// \Deleted flag stays for deferred expunge — a plain EXPUNGE would also purge
+// unrelated \Deleted messages a human's other client may have, so it is
+// never sent here. The panel's discard and send paths audit this value so
+// the log never claims an expunge that did not happen.
+func (c *Client) DeleteDraftStatus(ctx context.Context, uid uint32) (expunged bool, err error) {
 	if uid == 0 {
-		return fmt.Errorf("email transport: uid is required")
+		return false, fmt.Errorf("email transport: uid is required")
 	}
 	name, err := c.folderNameFor(FolderDrafts)
 	if err != nil {
-		return err
+		return false, err
 	}
 	client, _, err := c.dialIMAP(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer client.Close()
 	if _, _, err := c.selectFolder(ctx, client, name); err != nil {
-		return err
+		return false, err
 	}
 	storeFlags := &imap.StoreFlags{
 		Op:     imap.StoreFlagsAdd,
@@ -683,16 +721,17 @@ func (c *Client) DeleteDraft(ctx context.Context, uid uint32) error {
 	if _, err := runIMAP(ctx, "store deleted", func() (struct{}, error) {
 		return struct{}{}, client.Store(imap.UIDSetNum(imap.UID(uid)), storeFlags, nil).Close()
 	}); err != nil {
-		return fmt.Errorf("email transport: flag draft uid %d deleted: %w", uid, err)
+		return false, fmt.Errorf("email transport: flag draft uid %d deleted: %w", uid, err)
 	}
 	if client.Caps().Has(imap.CapUIDPlus) {
 		if _, err := runIMAP(ctx, "uid expunge", func() (struct{}, error) {
 			return struct{}{}, client.UIDExpunge(imap.UIDSetNum(imap.UID(uid))).Close()
 		}); err != nil {
-			return fmt.Errorf("email transport: expunge draft uid %d: %w", uid, err)
+			return false, fmt.Errorf("email transport: expunge draft uid %d: %w", uid, err)
 		}
+		expunged = true
 	}
-	return nil
+	return expunged, nil
 }
 
 // ResolveRef resolves a folder-scoped ref to its current (uidvalidity, uid)
