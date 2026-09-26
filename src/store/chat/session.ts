@@ -23,6 +23,7 @@ export function emptySessionState(): SessionChatState {
     sessionCost: 0,
     rateLimitEvent: null,
     providerRetryEvent: null,
+    providerFallbackPairsSeen: new Set<string>(),
     lastUserMessageAt: null,
     cancelStage: null,
     autoApproveEffective: null,

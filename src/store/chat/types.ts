@@ -468,6 +468,21 @@ export interface SessionChatState {
    */
   providerRetryEvent?: ProviderRetryEventData | null
   /**
+   * provider-messages §7.4/D17 — the (unavailable, answered) model pairs for
+   * which a fallback note is already visible in THIS chat (live-appended by
+   * the `provider_fallback` case, or seeded by a `replay_provider_fallback`
+   * carrier on load), keyed by fallbackPairKey(). The live view's half of the
+   * once-per-CHAT-per-pair rule: the backend emits the frame on every
+   * same-pair fallback (a later iteration re-frames), so without this guard a
+   * same-pair repeat renders duplicate notes live and then collapses to one
+   * on reload. Matches the backend's pair-ever-noted transcript scan
+   * (pkg/agent/fallback_note.go::queueProviderFallbackNote): the set only
+   * grows. Reset with the bucket (load/snapshot wipe); replay re-seeds it so
+   * a freshly-loaded chat starts consistent with what replay showed.
+   * Optional — see the fixture-compat note on goalStatus.
+   */
+  providerFallbackPairsSeen?: Set<string>
+  /**
    * H1-FE: Unix timestamp (ms) when the most recent user message was sent for
    * this session. Used to guard against force-clearing isStreaming on the active
    * bucket when an unknown-sid done arrives — if the active session just sent a

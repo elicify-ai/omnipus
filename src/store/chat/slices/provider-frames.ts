@@ -43,11 +43,24 @@ export function assembleFallbackNoteMessage(
 }
 
 /**
+ * The (unavailable, answered) pair key for the D17 once-per-CHAT-per-pair
+ * guard. NUL separator — model ids cannot contain NUL, so the join is
+ * collision-free where a literal `|` would not be (('ab','c') vs ('a','bc')).
+ */
+export function fallbackPairKey(unavailableModel: string, answeredModel: string): string {
+  return `${unavailableModel}\u0000${answeredModel}`
+}
+
+/**
  * Live path: the SPA has no transcript-entry id for a just-received
  * `provider_fallback` frame, so the synthetic note message gets a generated
- * id. No live→replay dedup key exists — and none is needed: a reconnect's
- * session_snapshot wipes history and the persisted note replays from its
- * carrier, so exactly one instance ever renders (spec FB-2/MIN-103).
+ * id. The backend emits the frame on EVERY same-pair fallback (a later
+ * iteration re-frames — §7.4/D17) but queues the transcript note only when
+ * the pair is fresh, so the live view dedupes on the (unavailable, answered)
+ * pair (fallbackPairKey) — the store-level half of D17's once-per-CHAT-per-
+ * pair rule. A replay seed (below) stops a live duplicate after a load; a
+ * reconnect's session_snapshot resets the set, and the persisted note's
+ * carrier re-seeds it (spec FB-2/MIN-103/D17).
  */
 export function buildFallbackNoteMessage(params: {
   id: string
@@ -133,10 +146,20 @@ export function handleProviderFrame({ frame, targetSid, get, withBucket }: Provi
         message,
         ...(pickNewModelHint ? { pickNewModelHint } : {}),
       })
-      withBucket(targetSid, (b) => ({
-        providerRetryEvent: null,
-        ...applyMessageArray([...getMessages(b), note], b),
-      }))
+      const pairKey = fallbackPairKey(fallbackFrame.unavailable_model, fallbackFrame.answered_model)
+      withBucket(targetSid, (b) => {
+        // D17 once-per-CHAT-per-pair guard: the backend re-frames every
+        // same-pair fallback, so only a pair NOT already noted in this chat
+        // (live or replay-seeded) appends a note. The retry-slot clear is
+        // deliberately OUTSIDE the guard — every frame still clears it; the
+        // guard dedupes the visible note, never the frame.
+        if (b.providerFallbackPairsSeen?.has(pairKey)) return { providerRetryEvent: null }
+        return {
+          providerRetryEvent: null,
+          providerFallbackPairsSeen: new Set(b.providerFallbackPairsSeen).add(pairKey),
+          ...applyMessageArray([...getMessages(b), note], b),
+        }
+      })
       return true
     }
 
@@ -167,7 +190,21 @@ export function handleProviderFrame({ frame, targetSid, get, withBucket }: Provi
         // second row (a gap re-attach that re-reads an already-applied seq
         // range, or a defensive double-delivery).
         if (b.messagesById[noteFrame.entry_id] != null) return {}
-        return applyMessageArray([...getMessages(b), note], b)
+        const patch = applyMessageArray([...getMessages(b), note], b)
+        // Seed the D17 pair guard so a later live frame for a pair replay
+        // already rendered adds no duplicate (dispatch Finding 1: live must
+        // start consistent with what replay showed). Carriers that predate
+        // model fields (never produced today — buildReplayFallbackNote always
+        // sets them) seed nothing rather than guessing a pair.
+        if (noteFrame.answered_model != null && noteFrame.unavailable_model != null) {
+          return {
+            ...patch,
+            providerFallbackPairsSeen: new Set(b.providerFallbackPairsSeen).add(
+              fallbackPairKey(noteFrame.unavailable_model, noteFrame.answered_model),
+            ),
+          }
+        }
+        return patch
       })
       return true
     }
