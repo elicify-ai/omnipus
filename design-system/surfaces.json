@@ -6466,6 +6466,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/tools/toolResultDisplay.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/tools/toolResultSentinels.ts",
       "lane": 3
     },
