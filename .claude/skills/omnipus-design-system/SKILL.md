@@ -371,8 +371,8 @@ The audit scans test and story files like any other source. A new `.test.tsx`/`.
 or `.stories.tsx` file that renders a raw control (`<button>`,
 `React.createElement('button')`, …) fails the audit until that exact file is registered as
 a reviewed boundary in `design-system/enforcement/ledger.json` (`path` + `kind: "test" |
-"story"` + `reason`) — or until the mock comes from the shared AssistantUI test stand-in in
-`src/test/` instead of being hand-rolled. Registrations are per-file: the audit refuses
+"story"` + `reason`) — or until the mock comes from the shared AssistantUI test stand-in
+`src/test/assistantUiMock.tsx` (`createAssistantUiMock`) instead of being hand-rolled. Registrations are per-file: the audit refuses
 blanket registrations — a folder path or a `*`/`?` wildcard fires `blanket-directory`
 ("reviewed boundary path is not an exact file") — and a `kind` that doesn't match the
 path's suffix fires `invalid-reviewed-boundary`. When the audit goes red, read
@@ -383,8 +383,8 @@ run `npm run lint:design-system-locks` before hand-back: the local lock half of 
 errors plus one count line.
 
 **Enforced by** `scripts/design-system-locks/audit.mjs`: a new test/story file with raw
-controls and no matching boundary fires `new-debt` (CI's `design-system` job red — PR #912
-was exactly this); a folder/wildcard boundary path fires `blanket-directory`;
+controls and no matching boundary fires `new-debt` (CI's "Design system lock audit" job red —
+before that job existed, PR #912 was exactly this); a folder/wildcard boundary path fires `blanket-directory`;
 `npm run lint:design-system-locks` runs the scanner half locally.
 
 ## Escape hatches, all of them
