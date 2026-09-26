@@ -518,6 +518,7 @@ const readerLengthParamDesc = "Amount to read. Plain text: bytes (silently cappe
 
 func (t *ReadFileTool) Description() string {
 	return "Read text and supported documents, or inspect a PNG or JPEG image in the current model turn. " +
+		"`path` may be workspace-relative or absolute. " +
 		readerImageInspectionParagraph +
 		"Text supports pagination via `offset` and `length` as bytes. " +
 		"Word (.docx), PowerPoint (.pptx), Excel (.xlsx), and PDF (.pdf) documents are " +
@@ -1171,7 +1172,8 @@ func (t *ListDirTool) Name() string {
 func (t *ListDirTool) Description() string {
 	return "List files and directories in a path. Large directories page with offset/limit " +
 		"(entries), the same way read_file pages a file with offset/length (bytes). `path` " +
-		"defaults to \".\" (the workspace root) when omitted. A directory that is a knowledge " +
+		"may be workspace-relative or absolute, and defaults to \".\" (the workspace root) when " +
+		"omitted. A directory that is a knowledge " +
 		"base is marked KB: instead of DIR: — use knowledge_list or knowledge_describe on it " +
 		"rather than reading its files directly."
 }
