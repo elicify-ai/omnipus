@@ -284,8 +284,9 @@ real agents:
    `deny` for seeded roles, so without this the tool is denied for Mia and every seeded agent).
 4. `pkg/coreagent/seed.go` tool-name literal — `create_email_draft` added, or `validateOverrideKeys`
    **panics at boot** once any policy override references it.
-5. `pkg/tools/auto_approve.go` — `create_email_draft` classified **AutoAsks** (conservative: if policy ever
-   resolves it to `ask`, auto-approve never silently runs it).
+5. `pkg/tools/auto_approve.go` — `create_email_draft` classified **AutoRuns** (corrected 2026-09-26 per
+   decision D45: a draft only ever appends to the mailbox's own Drafts folder and never sends, so it
+   runs under Auto like the other non-sending email tools).
 6. `pkg/tools/email.go::EmailToolset` — so registration, permissions screen and tests come from the same list
    the five existing tools use.
 7. `pkg/coreagent/prompts_adr090.go` — the agent-prompt text enumerating the email tools (**owned by
@@ -326,7 +327,7 @@ MC-15's schema-change scope covers the new parameter (§5.3).
 | `pkg/config/defaults.go::defaultToolPolicyCeiling` | extends | Shipped ceiling entries for the five email tools (`read_inbox`/`send_email` … `allow`, verified ~299–303); `config.ReconcileToolPolicyCeiling` self-heals new entries |
 | `pkg/coreagent/role_policies_adr090.go::ADR090RolePolicyInventory` | extends | Seeded roles default every unlisted tool to `deny`; `send_email`/`reply` granted `ask` per role (verified) — `create_email_draft` must be added per §2.7 |
 | `pkg/coreagent/seed.go` tool-name literal | extends | `read_inbox, search_email, read_message, send_email, reply` (verified ~141); an override key absent from this literal panics boot via `validateOverrideKeys` |
-| `pkg/tools/auto_approve.go` | extends | Email classification verified: send tools `AutoAsks`, read tools `AutoRuns`; `create_email_draft` joins as `AutoAsks` |
+| `pkg/tools/auto_approve.go` | extends | Email classification verified: send tools `AutoAsks`, read tools `AutoRuns`; `create_email_draft` joins as `AutoRuns` (corrected 2026-09-26 per decision D45) |
 | `pkg/email/transport.go::Transport` | extends | Interface: `ReadInbox / Search / ReadMessage / Send / MarkSeen` — **no folder parameter, no APPEND**; `Client.dialIMAP` always SELECTs INBOX |
 | `pkg/email/transport.go::buildEmailBody` | modifies | Builds `text/plain`-only RFC 5322 messages; bare `From`; header injection guard `sanitizeHeader` |
 | `pkg/email/transport.go::Client.Send` | modifies | `func (c *Client) Send(_ context.Context, req SendRequest) error` — **the context is discarded** (verified); `sendSMTPWithSTARTTLS` uses `smtp.Dial`, `sendSMTPS` uses `tls.Dial`, neither with a deadline; the `dialTimeout`/`commandTimeout` constants apply only on the IMAP side. SMTP today can hang forever (#629) — absorbed by FR-027 |

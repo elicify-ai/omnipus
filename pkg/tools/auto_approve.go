@@ -149,11 +149,11 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	"send_file":    AutoRunsIfArgs,
 	"send_email":   AutoAsks,
 	"reply":        AutoAsks,
-	// create_email_draft saves to the Drafts folder and never sends (D8),
-	// but it still writes to the operator's real mailbox — it asks like the
-	// other outbound email tools (spec §2.7 point 5); D33: attachments add
+	// create_email_draft only appends to the mailbox's own Drafts folder and
+	// never sends, so it runs under Auto like the other non-sending email
+	// tools (founder ruling 2026-09-26, decision D45); D33: attachments add
 	// NO separate touch point, this entry governs the whole call.
-	"create_email_draft": AutoAsks,
+	"create_email_draft": AutoRuns,
 	"read_inbox":         AutoRuns,
 	"search_email":       AutoRuns,
 	"read_message":       AutoRuns,
