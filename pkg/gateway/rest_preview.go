@@ -21,6 +21,7 @@
 package gateway
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -34,6 +35,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/validation"
@@ -65,13 +67,32 @@ func (a *restAPI) HandlePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// FR-011: a preview request carrying service-worker metadata is refused
+	// before any serving — a registered service worker would outlive the
+	// preview tab and keep serving from (or fetching through) the preview
+	// origin after the registration is gone. This is the ONE code path for
+	// both modes: dispatched Mode 1 label requests and Mode 2 /preview/ path
+	// requests both enter here.
+	if strings.EqualFold(r.Header.Get("Service-Worker"), "script") ||
+		strings.EqualFold(r.Header.Get("Sec-Fetch-Dest"), "serviceworker") {
+		a.auditServeFailure(r, "preview.serviceworker_refused", "deny", "", "", http.StatusForbidden, startedAt)
+		writeDevProxyError(w, http.StatusForbidden, "service workers are not allowed for previews")
+		return
+	}
+
+	// ADR-094 Mode 1: the request arrived dispatched under a preview label
+	// Host — the preview-host mux (preview_host_dispatch.go) has already
+	// classified, rate-limited and labelled it. Serve by label; the /preview/
+	// path parsing below is the Mode 2 surface only.
+	if label := previewHostLabelFromContext(r.Context()); label != "" {
+		a.servePreviewByLabel(w, r, label, startedAt)
+		return
+	}
+
 	if r.Method == http.MethodOptions {
 		a.handleServePreviewPreflight(w, r)
 		return
 	}
-	// B1.3b: emit CORS headers on actual GET/HEAD responses so the SPA's
-	// cors-mode HEAD probe can read the status code.
-	a.addPreviewCORSHeaders(w, r)
 
 	remainder := strings.TrimPrefix(r.URL.Path, middleware.PreviewPathPrefix)
 	if strings.HasPrefix(remainder, "/") {
@@ -141,7 +162,7 @@ func (a *restAPI) HandlePreview(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 				return
 			}
-			a.serveStaticFile(w, r, entry.AbsDir, remaining, agentID, token, startedAt)
+			a.serveStaticFile(w, r, entry.AbsDir, remaining, agentID, token, token, startedAt)
 			return
 		}
 	}
@@ -150,7 +171,14 @@ func (a *restAPI) HandlePreview(w http.ResponseWriter, r *http.Request) {
 	jsonErr(w, http.StatusNotFound, "preview registration not found or expired")
 }
 
-// handleServePreviewPreflight handles CORS OPTIONS for /preview/ (FR-007a).
+// handleServePreviewPreflight handles CORS OPTIONS for /preview/ (FR-007a +
+// ADR-094 FR-012/DS-7 row 4): the preflight answers EXACTLY
+// "GET, HEAD, OPTIONS" — no allow-headers wildcard, ever (a wildcard would
+// permit cross-origin non-simple writes to the dev upstream) — for ANY
+// origin; Access-Control-Allow-Origin itself is emitted only for the main
+// origin (the SPA probe) so a foreign origin gets no read permission even
+// though it learns the methods list. The foreign-origin 204 with no ACAO is
+// the pre-existing FR-007a stealth-rejection posture, kept.
 func (a *restAPI) handleServePreviewPreflight(w http.ResponseWriter, r *http.Request) {
 	cfg := configFromContext(r.Context())
 	if cfg == nil {
@@ -164,42 +192,26 @@ func (a *restAPI) handleServePreviewPreflight(w http.ResponseWriter, r *http.Req
 		strings.TrimRight(mainOrigin, "/"),
 	) {
 		w.Header().Set("Access-Control-Allow-Origin", mainOrigin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
-		w.Header().Set("Access-Control-Max-Age", "86400")
 	}
+	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	w.Header().Set("Access-Control-Max-Age", "86400")
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// addPreviewCORSHeaders adds Access-Control-Allow-Origin to GET/HEAD
-// responses on the preview listener so the SPA's cors-mode HEAD probe
-// (B1.3b) can read the HTTP status code and detect 5xx errors.
-// Only emitted when the request carries an Origin header that matches the
-// configured main origin (same same-origin check as the preflight handler).
-func (a *restAPI) addPreviewCORSHeaders(w http.ResponseWriter, r *http.Request) {
-	cfg := configFromContext(r.Context())
-	if cfg == nil {
-		cfg = a.agentLoop.GetConfig()
-	}
-	mainOrigin := resolveMainOrigin(cfg)
-	requestOrigin := r.Header.Get("Origin")
-	if mainOrigin != "" && requestOrigin != "" && strings.EqualFold(
-		strings.TrimRight(requestOrigin, "/"),
-		strings.TrimRight(mainOrigin, "/"),
-	) {
-		w.Header().Set("Access-Control-Allow-Origin", mainOrigin)
-		w.Header().Set("Vary", "Origin")
-	}
 }
 
 // serveStaticFile serves the file at absDir/relPath with path-traversal guards,
 // symlink resolution, MIME detection, and buffered/streaming delivery.
-// Used by HandlePreview's static-mode branch.
+// Used by HandlePreview's static-mode branch. dedupKey keys the serve.served
+// audit dedup set; auditToken feeds the audit details — they are separate
+// because the Mode 1 static branch dedups under a "label:" key but must keep
+// the LABEL out of the audit details (FR-026 redaction), so it audits with an
+// empty auditToken (token_prefix "<invalid>") while the Mode 2 path passes
+// the registration token for both.
 func (a *restAPI) serveStaticFile(
 	w http.ResponseWriter,
 	r *http.Request,
 	absDir string,
 	relPath string,
-	agentID, token string,
+	agentID, dedupKey, auditToken string,
 	startedAt time.Time,
 ) {
 	cfg := configFromContext(r.Context())
@@ -219,7 +231,7 @@ func (a *restAPI) serveStaticFile(
 		}
 		cleaned := filepath.Clean(candidate)
 		if cleaned != absDir && !strings.HasPrefix(cleaned, dirWithSep) {
-			a.auditServeFailure(r, "serve.path_invalid", "error", agentID, token, http.StatusForbidden, startedAt)
+			a.auditServeFailure(r, "serve.path_invalid", "error", agentID, auditToken, http.StatusForbidden, startedAt)
 			jsonErr(w, http.StatusForbidden, "access denied: path is outside the registered directory")
 			return
 		}
@@ -241,13 +253,13 @@ func (a *restAPI) serveStaticFile(
 			if resolved != absDir && resolved != resolvedBase &&
 				!strings.HasPrefix(resolved, dirWithSep) &&
 				!strings.HasPrefix(resolved, resolvedBaseWithSep) {
-				a.auditServeFailure(r, "serve.path_invalid", "error", agentID, token, http.StatusForbidden, startedAt)
+				a.auditServeFailure(r, "serve.path_invalid", "error", agentID, auditToken, http.StatusForbidden, startedAt)
 				jsonErr(w, http.StatusForbidden, "access denied: path is outside the registered directory")
 				return
 			}
 			cleaned = resolved
 		} else if !errors.Is(evalErr, os.ErrNotExist) {
-			a.auditServeFailure(r, "serve.path_invalid", "error", agentID, token, http.StatusForbidden, startedAt)
+			a.auditServeFailure(r, "serve.path_invalid", "error", agentID, auditToken, http.StatusForbidden, startedAt)
 			jsonErr(w, http.StatusForbidden, "access denied: path could not be resolved")
 			return
 		}
@@ -257,7 +269,7 @@ func (a *restAPI) serveStaticFile(
 	info, err := os.Stat(absPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			a.auditServeFailure(r, "serve.path_invalid", "error", agentID, token, http.StatusNotFound, startedAt)
+			a.auditServeFailure(r, "serve.path_invalid", "error", agentID, auditToken, http.StatusNotFound, startedAt)
 			jsonErr(w, http.StatusNotFound, "file not found")
 			return
 		}
@@ -269,7 +281,7 @@ func (a *restAPI) serveStaticFile(
 		indexPath := filepath.Join(absPath, "index.html")
 		indexInfo, indexErr := os.Stat(indexPath)
 		if indexErr != nil || indexInfo.IsDir() {
-			a.auditServeFailure(r, "serve.path_invalid", "error", agentID, token, http.StatusNotFound, startedAt)
+			a.auditServeFailure(r, "serve.path_invalid", "error", agentID, auditToken, http.StatusNotFound, startedAt)
 			jsonErr(w, http.StatusNotFound, "no index.html in directory")
 			return
 		}
@@ -277,7 +289,7 @@ func (a *restAPI) serveStaticFile(
 		info = indexInfo
 	}
 
-	emitFirstServed := a.markFirstServed(token)
+	emitFirstServed := a.markFirstServed(dedupKey)
 
 	if info.Size() <= workspaceStreamingThreshold {
 		data, readErr := os.ReadFile(absPath)
@@ -286,7 +298,7 @@ func (a *restAPI) serveStaticFile(
 			jsonErr(w, http.StatusInternalServerError, "could not read file")
 			return
 		}
-		setWorkspaceSecurityHeaders(w, mainOrigin)
+		setPreviewStaticHeaders(w, r, mainOrigin)
 		w.Header().Set("Content-Type", contentTypeForPath(absPath))
 		w.WriteHeader(http.StatusOK)
 		if r.Method != http.MethodHead {
@@ -295,7 +307,7 @@ func (a *restAPI) serveStaticFile(
 			}
 		}
 		if emitFirstServed {
-			a.auditServeSuccess(r, "serve.served", agentID, token, http.StatusOK, startedAt, int64(len(data)))
+			a.auditServeSuccess(r, "serve.served", agentID, auditToken, http.StatusOK, startedAt, int64(len(data)))
 		}
 		return
 	}
@@ -311,7 +323,7 @@ func (a *restAPI) serveStaticFile(
 			slog.Debug("rest: serveStaticFile: file close error", "error", closeErr)
 		}
 	}()
-	setWorkspaceSecurityHeaders(w, mainOrigin)
+	setPreviewStaticHeaders(w, r, mainOrigin)
 	w.Header().Set("Content-Type", contentTypeForPath(absPath))
 	w.WriteHeader(http.StatusOK)
 	var bytesOut int64
@@ -323,7 +335,7 @@ func (a *restAPI) serveStaticFile(
 		}
 	}
 	if emitFirstServed {
-		a.auditServeSuccess(r, "serve.served", agentID, token, http.StatusOK, startedAt, bytesOut)
+		a.auditServeSuccess(r, "serve.served", agentID, auditToken, http.StatusOK, startedAt, bytesOut)
 	}
 }
 
@@ -337,6 +349,71 @@ var reservedGatewayCookieNames = map[string]struct{}{
 	"omnipus-session": {},
 	"csrf":            {},
 	"__Host-csrf":     {},
+}
+
+// filterReservedCookiePairs removes the gateway's own credential cookie PAIRS
+// from a raw Cookie header value and reports whether anything was removed
+// (ADR-094 FR-012b). Names are matched case-SENSITIVELY (cookie names are
+// case-sensitive per RFC 6265; "CSRF=" is the app's own cookie), pairs are
+// split on ";" and trimmed, and a pair with no "=" is dropped (it is not a
+// valid cookie pair). An empty result deletes the header entirely.
+func filterReservedCookiePairs(cookieHeader string) (filtered string, dropped bool) {
+	if cookieHeader == "" {
+		return "", false
+	}
+	pairs := strings.Split(cookieHeader, ";")
+	kept := make([]string, 0, len(pairs))
+	for _, pair := range pairs {
+		p := strings.TrimSpace(pair)
+		if p == "" {
+			dropped = true
+			continue
+		}
+		name := p
+		if i := strings.IndexByte(p, '='); i >= 0 {
+			name = p[:i]
+		} else {
+			// A pair with no "=" is not a valid cookie pair — drop it.
+			dropped = true
+			continue
+		}
+		if _, reserved := reservedGatewayCookieNames[strings.TrimSpace(name)]; reserved {
+			dropped = true
+			continue
+		}
+		kept = append(kept, p)
+	}
+	if !dropped {
+		// Common case: nothing reserved present. Leave the header byte-exact —
+		// no re-serialization risk.
+		return cookieHeader, false
+	}
+	if len(kept) == 0 {
+		return "", true
+	}
+	return strings.Join(kept, "; "), true
+}
+
+// gatewayOwnsBearer reports whether the gateway's own validator would accept
+// authz as a bearer credential (ADR-094 FR-012b): a user token or CLI token
+// via resolveBearerIdentity, or the legacy OMNIPUS_BEARER_TOKEN env token via
+// a constant-time compare (the same compare checkBearerAuth runs). A foreign
+// bearer — the previewed app's own API token — returns false and reaches the
+// app untouched.
+func gatewayOwnsBearer(cfg *config.Config, authz string) bool {
+	const prefix = "Bearer "
+	if !strings.HasPrefix(authz, prefix) {
+		return false
+	}
+	raw := strings.TrimPrefix(authz, prefix)
+	if _, _, matched := resolveBearerIdentity(cfg, raw); matched {
+		return true
+	}
+	if required := os.Getenv("OMNIPUS_BEARER_TOKEN"); required != "" &&
+		subtle.ConstantTimeCompare([]byte(raw), []byte(required)) == 1 {
+		return true
+	}
+	return false
 }
 
 // proxyDevRequest forwards the request to the dev-server's loopback port.
@@ -374,29 +451,48 @@ func (a *restAPI) proxyDevRequest(
 	mainOrigin := resolveMainOrigin(cfg)
 	emitFirstServed := a.markFirstServed(token)
 
+	// ADR-094 mode discrimination: a dispatched label request (Mode 1) gets
+	// the minimal CSP, no redirect rule and the same CORS policy; the /preview/
+	// path surface (Mode 2) gets the byte-stable CSP template and the DS-2
+	// redirect rule. The prefix is percent-encoded per DS-7's reserved-char
+	// rows; the client document URL is what the browser resolves a relative
+	// Location against.
+	mode1 := previewHostLabelFromContext(r.Context()) != ""
+	prefix := middleware.PreviewPathPrefix + url.PathEscape(agentID) + "/" + url.PathEscape(token)
+	clientOrigin := &url.URL{Scheme: schemeFromRequest(r), Host: r.Host}
+	clientBase := &url.URL{
+		Scheme: clientOrigin.Scheme,
+		Host:   r.Host,
+		Path:   prefix + "/" + remaining,
+	}
+
 	origDirector := rp.Director
 	rp.Director = func(req *http.Request) {
 		origDirector(req)
 		req.URL.Path = "/" + remaining
 		req.URL.RawPath = ""
-		// FR-013: strip the ENTIRE Cookie header (not just Authorization) —
-		// the previewed dev server never legitimately needs the operator's
-		// origin cookies (omnipus-session, csrf, or anything else scoped to
-		// the main gateway origin). This closes the read-vector half of the
-		// session-riding threat via the proxy path (the accepted residual for
-		// a directly-opened preview tab is documented in the spec's
-		// Non-Behaviors section).
-		//
-		// TRADE-OFF (accepted): the browser sends ALL same-origin cookies on a
-		// /preview/ request, so stripping the whole header also removes the
-		// previewed app's OWN cookies. The app can still SET cookies (its
-		// Set-Cookie survives — neutralizeReservedSetCookies drops only the
-		// reserved gateway names), but they are stripped on the next request, so
-		// a browser-cookie session INSIDE the previewed app does not persist
-		// across requests. Deliberate: not leaking the operator's gateway session
-		// outranks cookie-session fidelity for a dev preview.
-		req.Header.Del("Cookie")
-		req.Header.Del("Authorization")
+		// ADR-094 FR-012b: strip ONLY the gateway's own credential cookies —
+		// the previewed dev server never legitimately needs them, while the
+		// previewed app's OWN cookies (any other name, including case-variant
+		// look-alikes like "CSRF") must survive the hop so a cookie-sessioned
+		// app keeps working. Pair-level filtering, not a name filter: the
+		// browser sends `name=value; name2=value2` on ONE header line, so
+		// removing the reserved NAMES means removing their PAIRS.
+		filteredCookie, dropped := filterReservedCookiePairs(req.Header.Get("Cookie"))
+		if dropped {
+			if filteredCookie == "" {
+				req.Header.Del("Cookie")
+			} else {
+				req.Header.Set("Cookie", filteredCookie)
+			}
+		}
+		// ADR-094 FR-012b: strip Authorization only when the gateway's own
+		// validator would ACCEPT it (user token, CLI token, legacy env token)
+		// — a foreign bearer (the previewed app's own API token) must reach
+		// the app untouched.
+		if gatewayOwnsBearer(cfg, req.Header.Get("Authorization")) {
+			req.Header.Del("Authorization")
+		}
 		req.Header.Set("X-Forwarded-Host", r.Host)
 		req.Header.Set("X-Forwarded-Proto", schemeFromRequest(r))
 	}
@@ -406,7 +502,17 @@ func (a *restAPI) proxyDevRequest(
 		resp.Header.Del("Content-Security-Policy-Report-Only")
 		resp.Header.Del("X-Frame-Options")
 		neutralizeReservedSetCookies(resp)
+		applyPreviewResponseCORS(resp.Header)
 		setWorkspaceSecurityHeaders(responseHeaderWriter{resp.Header}, mainOrigin)
+		if mode1 {
+			resp.Header.Set("Content-Security-Policy", previewMode1CSP)
+		} else {
+			resp.Header.Set("Content-Security-Policy",
+				buildPreviewCSP(mainOrigin, wsOriginFor(mainOrigin), prefix))
+		}
+		if !mode1 {
+			applyPreviewRedirectRule(resp, clientOrigin, clientBase, prefix)
+		}
 		if emitFirstServed {
 			a.auditDevSuccess(r, "dev.proxied", agentID, token, resp.StatusCode, startedAt, -1)
 		}

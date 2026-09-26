@@ -1412,6 +1412,27 @@ func (stg *setupAndStartServicesState) prepareListener() (*services, bool, error
 		return nil, true, fmt.Errorf("wrapping HTTP handler with CSRF: %w", stg.err)
 	}
 
+	// ADR-094 preview isolation — the outer three wraps, in execution order
+	// dispatcher → navigation guard → planted-cookie guard (outermost-LAST:
+	// each later wrap sits outside the previous one). The dispatcher claims
+	// <label>.localhost:<canonical-port> Hosts for the preview-host mux,
+	// structurally bypassing everything wrapped below it (FR-028/MIN-007:
+	// the exemption is scoped by dispatch, not by path); the guards below it
+	// run only on the main branch. PlantedCookieGuard sits OUTSIDE the CSRF
+	// gate so a planted-cookie hit writes its own typed 403 envelope instead
+	// of CSRF's generic one (DS-5), and its context marker makes
+	// ResolveUserFromCookie fail closed on the GET branch (401, not a
+	// half-authenticated request).
+	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(middleware.PlantedCookieGuard()); stg.err != nil {
+		return nil, true, fmt.Errorf("wrapping HTTP handler with planted-cookie guard: %w", stg.err)
+	}
+	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(middleware.NavigationGuard()); stg.err != nil {
+		return nil, true, fmt.Errorf("wrapping HTTP handler with navigation guard: %w", stg.err)
+	}
+	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(stg.api.previewHostDispatchMW); stg.err != nil {
+		return nil, true, fmt.Errorf("wrapping HTTP handler with preview host dispatch: %w", stg.err)
+	}
+
 	// Wire the /reload trigger BEFORE StartAll launches the HTTP listener.
 	// Otherwise there is a boot-ordering window where /health already answers
 	// 200 (listener live) but HealthServer.reloadFunc is still nil, so a
