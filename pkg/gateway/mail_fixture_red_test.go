@@ -80,8 +80,8 @@ func listenCount(t *testing.T) (int, *atomic.Int32) {
 	var n atomic.Int32
 	go func() {
 		for {
-			c, err := ln.Accept()
-			if err != nil {
+			c, acceptErr := ln.Accept()
+			if acceptErr != nil {
 				return
 			}
 			n.Add(1)

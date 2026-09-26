@@ -37,11 +37,11 @@ func TestWatcher_BackoffJitterAuthCap(t *testing.T) {
 	if got := email.WatcherBackoff(2, "timeout", 0.5); got != 120*time.Second {
 		t.Fatalf("backoff(2, timeout, 0.5) = %s, want 120s", got)
 	}
-	cap := 15 * time.Minute
-	if got := email.WatcherBackoff(1, "auth_failed", 0.5); got != cap {
+	capDuration := 15 * time.Minute
+	if got := email.WatcherBackoff(1, "auth_failed", 0.5); got != capDuration {
 		t.Fatalf("backoff(1, auth_failed, 0.5) = %s, want the 15 min cap", got)
 	}
-	if got := email.WatcherBackoff(20, "timeout", 0.5); got != cap {
+	if got := email.WatcherBackoff(20, "timeout", 0.5); got != capDuration {
 		t.Fatalf("backoff(20, timeout, 0.5) = %s, want the 15 min cap", got)
 	}
 	if got := email.WatcherInitialOffset(0); got != 0 {
@@ -62,8 +62,8 @@ func TestDial_DNSErrorBoundedRetry(t *testing.T) {
 	defer ln.Close()
 	go func() {
 		for {
-			c, err := ln.Accept()
-			if err != nil {
+			c, acceptErr := ln.Accept()
+			if acceptErr != nil {
 				return
 			}
 			_ = c.Close()

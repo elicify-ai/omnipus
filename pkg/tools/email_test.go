@@ -895,7 +895,7 @@ func assertComposedSend(t *testing.T, raw, from, to, subject, plain, html string
 	var nPlain, nHTML, n int
 	for {
 		part, err := mr.NextPart()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

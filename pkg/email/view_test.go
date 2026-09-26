@@ -49,7 +49,7 @@ func startViewIMAP(t *testing.T, folderOf ...string) (*Client, [][]byte) {
 		t.Fatalf("login (append): %v", err)
 	}
 	folderNames := map[string]string{"inbox": "INBOX", "sent": "Sent", "drafts": "Drafts"}
-	var raws [][]byte
+	raws := make([][]byte, 0, len(folderOf))
 	for i, folder := range folderOf {
 		raw := mkMsg("Subject "+strconv.Itoa(i+1), "ada@box.test", "body "+strconv.Itoa(i+1))
 		name, ok := folderNames[folder]
@@ -354,11 +354,11 @@ func TestMarkSeenIn(t *testing.T) {
 		t.Fatalf("page: err=%v len=%d", err, len(page))
 	}
 	uid := page[0].UID
-	if err := cl.MarkSeenIn(context.Background(), FolderInbox, uid); err != nil {
-		t.Fatalf("MarkSeenIn: %v", err)
+	if seenErr := cl.MarkSeenIn(context.Background(), FolderInbox, uid); seenErr != nil {
+		t.Fatalf("MarkSeenIn: %v", seenErr)
 	}
-	if err := cl.MarkSeenIn(context.Background(), FolderInbox, uid); err != nil {
-		t.Fatalf("MarkSeenIn (idempotent): %v", err)
+	if seenErr := cl.MarkSeenIn(context.Background(), FolderInbox, uid); seenErr != nil {
+		t.Fatalf("MarkSeenIn (idempotent): %v", seenErr)
 	}
 	stats, err := cl.FolderCounts(context.Background())
 	if err != nil {
@@ -379,8 +379,8 @@ func TestDeleteDraft_UIDExpunge(t *testing.T) {
 	if err != nil || len(page) != 1 {
 		t.Fatalf("page: err=%v len=%d", err, len(page))
 	}
-	if err := cl.DeleteDraft(context.Background(), page[0].UID); err != nil {
-		t.Fatalf("DeleteDraft: %v", err)
+	if deleteErr := cl.DeleteDraft(context.Background(), page[0].UID); deleteErr != nil {
+		t.Fatalf("DeleteDraft: %v", deleteErr)
 	}
 	after, _, _, err := cl.ReadFolderPage(context.Background(), FolderDrafts, 10, 0)
 	if err != nil {
@@ -397,8 +397,8 @@ func TestDeleteDraft_DeferredWithoutUIDPLUS(t *testing.T) {
 	if err != nil || len(page) != 1 {
 		t.Fatalf("page: err=%v len=%d", err, len(page))
 	}
-	if err := cl.DeleteDraft(context.Background(), page[0].UID); err != nil {
-		t.Fatalf("DeleteDraft (deferred): %v", err)
+	if deleteErr := cl.DeleteDraft(context.Background(), page[0].UID); deleteErr != nil {
+		t.Fatalf("DeleteDraft (deferred): %v", deleteErr)
 	}
 	after, _, _, err := cl.ReadFolderPage(context.Background(), FolderDrafts, 10, 0)
 	if err != nil {

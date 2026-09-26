@@ -25,15 +25,15 @@ const agentReadKeyword = "$OmnipusAgentRead"
 
 func TestFetchCommands_PeekOnly(t *testing.T) {
 	// MC-25 / B-12: list and read fetches must not issue a non-peek BODY[].
-	cap := startCaptureIMAP(t, [][]byte{mkMsg("Hello", "ada@box.test", "body")}, nil, false)
-	if _, err := cap.cl.ReadInbox(context.Background(), InboxOptions{Limit: 10}); err != nil {
+	capture := startCaptureIMAP(t, [][]byte{mkMsg("Hello", "ada@box.test", "body")}, nil, false)
+	if _, err := capture.cl.ReadInbox(context.Background(), InboxOptions{Limit: 10}); err != nil {
 		t.Fatalf("ReadInbox: %v", err)
 	}
-	if _, err := cap.cl.ReadMessage(context.Background(), 1); err != nil {
+	if _, err := capture.cl.ReadMessage(context.Background(), 1); err != nil {
 		t.Fatalf("ReadMessage: %v", err)
 	}
 	var bad []string
-	for _, line := range clientCommands(cap.log.String()) {
+	for _, line := range clientCommands(capture.log.String()) {
 		if !strings.Contains(strings.ToUpper(line), " FETCH ") {
 			continue
 		}
@@ -49,20 +49,20 @@ func TestFetchCommands_PeekOnly(t *testing.T) {
 func TestAgentRead_SeenAndKeywordOneStore(t *testing.T) {
 	// MC-36 / B-53: read_message's transport fetch is BODY.PEEK and exactly one
 	// STORE adds \Seen and $OmnipusAgentRead together.
-	cap := startCaptureIMAP(t, [][]byte{mkMsg("Hello", "ada@box.test", "body")}, nil, false)
-	if _, err := cap.cl.ReadMessage(context.Background(), 1); err != nil {
+	capture := startCaptureIMAP(t, [][]byte{mkMsg("Hello", "ada@box.test", "body")}, nil, false)
+	if _, err := capture.cl.ReadMessage(context.Background(), 1); err != nil {
 		t.Fatalf("ReadMessage: %v", err)
 	}
-	stores := storeCommands(cap.log.String())
+	stores := storeCommands(capture.log.String())
 	if len(stores) != 1 {
 		t.Fatalf("MC-36: client STORE commands = %d, want exactly 1 adding \\Seen and %s\ncommands:\n%s",
-			len(stores), agentReadKeyword, strings.Join(clientCommands(cap.log.String()), "\n"))
+			len(stores), agentReadKeyword, strings.Join(clientCommands(capture.log.String()), "\n"))
 	}
 	line := strings.ToLower(stores[0])
 	if !strings.Contains(line, "seen") || !strings.Contains(line, "omnipusagentread") {
 		t.Fatalf("MC-36: STORE = %q, want both \\Seen and %s", stores[0], agentReadKeyword)
 	}
-	flags := inboxFlags(t, cap.addr, 1)
+	flags := inboxFlags(t, capture.addr, 1)
 	if !flagPresent(flags, imap.FlagSeen) || !flagPresent(flags, imap.Flag(agentReadKeyword)) {
 		t.Fatalf("MC-36: flags after read = %v, want \\Seen and %s (case-insensitive)", flags, agentReadKeyword)
 	}
@@ -71,11 +71,11 @@ func TestAgentRead_SeenAndKeywordOneStore(t *testing.T) {
 func TestAgentRead_KeywordRejectedFallback(t *testing.T) {
 	// MC-36 / B-54: a server that rejects the keyword still gets exactly one
 	// follow-up STORE of \Seen only. The read succeeds and the keyword is absent.
-	cap := startCaptureIMAP(t, [][]byte{mkMsg("Hello", "ada@box.test", "body")}, nil, true)
-	if _, err := cap.cl.ReadMessage(context.Background(), 1); err != nil {
+	capture := startCaptureIMAP(t, [][]byte{mkMsg("Hello", "ada@box.test", "body")}, nil, true)
+	if _, err := capture.cl.ReadMessage(context.Background(), 1); err != nil {
 		t.Fatalf("MC-36: keyword rejection must not fail the read: %v", err)
 	}
-	stores := storeCommands(cap.log.String())
+	stores := storeCommands(capture.log.String())
 	if len(stores) != 2 {
 		t.Fatalf("MC-36: STORE commands = %d, want 2 (keyword attempt, then \\Seen-only)\n%s",
 			len(stores), strings.Join(stores, "\n"))
@@ -87,7 +87,7 @@ func TestAgentRead_KeywordRejectedFallback(t *testing.T) {
 	if !strings.Contains(second, "seen") || strings.Contains(second, "omnipusagentread") {
 		t.Fatalf("MC-36: fallback STORE = %q, want \\Seen only", stores[1])
 	}
-	flags := inboxFlags(t, cap.addr, 1)
+	flags := inboxFlags(t, capture.addr, 1)
 	if !flagPresent(flags, imap.FlagSeen) {
 		t.Fatalf("MC-36: flags after fallback = %v, want \\Seen", flags)
 	}
