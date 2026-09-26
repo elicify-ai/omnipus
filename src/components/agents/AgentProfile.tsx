@@ -81,6 +81,8 @@ import { buildExecutorPreviewRequest } from '@/hooks/useCommandPreview'
 import { detectEntryFor, resolveCliDetectHint } from '@/lib/cliDetect'
 import { CONTEXT_WINDOW_SOURCE_LABEL } from '@/components/settings/ContextSection'
 import { buildAgentUpdate } from './agentDraft'
+import { ToolIterationLimitField } from './ToolIterationLimitField'
+import { useGlobalToolIterationLimit } from '@/hooks/useGlobalToolIterationLimit'
 
 /** Editor's fallback entry — `FallbackModel` from the contract with `provider` narrowed to required (the editor always populates it at hydration). */
 type FallbackEntry = FallbackModel & { provider: string }
@@ -363,22 +365,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // Schema-pinned on Agent.voice; TTS playback not yet active (tracked #306). Empty string
   // means "not configured" — the wire payload omits the field entirely.
   const [voice, setVoice] = useState('')
-  const [maxToolIterations, setMaxToolIterations] = useState(200)
-  // Draft strings for the two number inputs. A controlled number input backed
-  // directly by the committed number turns "clear the field to type" into
-  // Number('') === 0 — and because this form AUTO-SAVES on state change, the 0
-  // was persisted mid-keystroke (P0, 2026-07-03: five agents + the global
-  // default were zero-clobbered on a live install). The draft absorbs
-  // in-progress typing; only a VALID value commits (and autosaves); blur with
-  // an invalid/empty draft restores the last committed value.
-  const [maxToolIterationsDraft, setMaxToolIterationsDraft] = useState('200')
+  // #904 (tool-iteration-limit spec FR-017, D9): the operator's pending edit
+  // of the agent's OWN limit. `undefined` = untouched (the PUT omits the
+  // field, so an unrelated autosave never re-sends it — not even a capped
+  // own value above the global); `null` = "Use global limit" (PUT sends a
+  // raw JSON null); a number = set. Reset to untouched on every hydration —
+  // the server's effective/source/own fields are rendered from `agent`.
+  const [maxToolIterationsEdit, setMaxToolIterationsEdit] = useState<number | null | undefined>(undefined)
   // ADR-066 D9 (T068-30): per-agent context-window override (D2 rung 1,
   // lower-only — the backend clamps to the model's capability). Three-valued
   // on purpose: `undefined` = the wire omitted it and the operator has not
   // touched it (the PUT omits the field → backend leaves it unchanged);
   // `null` = the operator cleared it (the PUT sends null → backend clears);
-  // a number = set. Same draft pattern as the two inputs above so clearing
-  // the field to type never autosaves 0 (the wire minimum is 1).
+  // a number = set. A draft string absorbs typing so clearing the field to
+  // type never autosaves 0 (the wire minimum is 1) — the 2026-07-03
+  // zero-clobber P0.
   const [contextWindowOverride, setContextWindowOverride] = useState<number | null | undefined>(undefined)
   const [contextWindowOverrideDraft, setContextWindowOverrideDraft] = useState('')
   // Wave 5 / spec §6.1 BDD #15: Edit slide-over footer Delete agent.
@@ -410,8 +411,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // part of the agent autosave. Only meaningful when editAgentWorkspaceId is set.
   const [hbEnabled, setHbEnabled] = useState(false)
   const [hbIntervalMinutes, setHbIntervalMinutes] = useState(30)
-  // Draft string for the interval input (mirrors `timeoutDraft`/
-  // `maxToolIterationsDraft` above) — a controlled number input backed
+  // Draft string for the interval input (mirrors the context-window
+  // override draft above) — a controlled number input backed
   // directly by the committed number turned "clear the field to retype"
   // into an immediate snap-to-5 on every keystroke (Number('') coerced via
   // the old `raw === ''` branch), which fought the operator mid-edit: clear
@@ -605,8 +606,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // renders 3 spaces and the wire round-trip is clean (whitespace was
     // silently reaching the server).
     setVoice((agent.voice ?? '').trim())
-    setMaxToolIterations(agent.max_tool_iterations ?? 200)
-    setMaxToolIterationsDraft(String(agent.max_tool_iterations ?? 200))
+    setMaxToolIterationsEdit(undefined)
     setContextWindowOverride(agent.context_window_override ?? undefined)
     setContextWindowOverrideDraft(agent.context_window_override != null ? String(agent.context_window_override) : '')
     // Spec-4: hydrate executor (absent → native default, modelled as undefined).
@@ -648,14 +648,20 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // `model` (ExecutorConfig carries no model field on the wire — the model
   // an external CLI runs with is `AgentConfig.model`, the same field every
   // agent type uses). `runtimePanel` (below) only ever renders for
-  // subagent_3p agents (`isExternalAgent`), and `formData` above shows that
-  // tier EXCLUDES `max_tool_iterations` from the wire payload entirely
-  // (agent-types-field-matrix.md Decisions #1 — the external CLI runs its
-  // own tool loop) — so it is deliberately omitted here too, letting the
-  // preview fall back to the same server-side default (50) real dispatch
-  // uses for this tier.
+  // subagent_3p agents (`isExternalAgent`). #904 D14: the agent's own
+  // tool-iteration limit (pending edit, else the stored own value) is sent
+  // too; with none the key is omitted and the server previews the global
+  // limit — the same effective value real dispatch passes.
+  const ownToolIterationLimit = maxToolIterationsEdit !== undefined
+    ? maxToolIterationsEdit
+    : (agent?.max_tool_iterations_override ?? null)
+  // A pending edit the server has not yet accepted: a failed save while this
+  // is true carries the server's refusal (D10 / bound), shown on the field.
+  const toolIterationLimitPending = maxToolIterationsEdit !== undefined
+    && maxToolIterationsEdit !== (agent?.max_tool_iterations_override ?? null)
+  const globalToolIterationLimit = useGlobalToolIterationLimit()
   const commandPreviewRequest: ExecutorCommandPreviewRequest | undefined = executor?.cli
-    ? buildExecutorPreviewRequest(executor.cli, model, executor.cli_path, executor.cli_args)
+    ? buildExecutorPreviewRequest(executor.cli, model, executor.cli_path, executor.cli_args, ownToolIterationLimit ?? undefined)
     : undefined
 
   const formData = useMemo(() => {
@@ -667,11 +673,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       ? { name, description, color: selectedColor, icon: selectedIcon }
       : { name, description, color: selectedColor, icon: selectedIcon, default: isDefault }
     if (isSubagent3p) {
-      // agent-types-field-matrix.md, Decisions #1 (resolved 2026-07-03):
-      // excluded — subagent_3p EXCLUDES max_tool_iterations — the external
-      // CLI runs its own tool loop, and the backend now rejects the field
-      // for this type. timeout_seconds STAYS (process-level kill for a
-      // hung CLI).
+      // #904 D14 supersedes agent-types-field-matrix.md Decisions #1: the
+      // own tool-iteration limit is the CLI's turn cap, sent only when the
+      // operator changed or reset it (FR-017). timeout_seconds STAYS
+      // (process-level kill for a hung CLI).
       return {
         ...identity,
         model,
@@ -683,6 +688,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         // (pkg/gateway/agent_field_rules.go).
         memory_enabled: memoryEnabled,
         executor,
+        max_tool_iterations: maxToolIterationsEdit,
       }
     }
     return {
@@ -727,7 +733,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // form's `data` shape differs for subagent_3p vs. not) for marginal
       // benefit given the existing shield — not done.
       voice: voice.trim() !== '' ? voice.trim() : null,
-      max_tool_iterations: maxToolIterations,
+      // #904 FR-017: undefined (untouched) is dropped by buildAgentUpdate and
+      // JSON.stringify, so the limit is sent only when changed or reset.
+      max_tool_iterations: maxToolIterationsEdit,
       // ADR-066 D9 / FR-037: omitted when untouched-and-absent (undefined is
       // dropped by JSON.stringify), null to clear, number to set. Not sent
       // for subagent_3p (the external CLI owns its own window; the agent
@@ -757,7 +765,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   }, [
     agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
     temperature, maxTokens, soul, memoryEnabled, voice,
-    maxToolIterations, contextWindowOverride,
+    maxToolIterationsEdit, contextWindowOverride,
     agentSkills, executor, autoApproveDisabled,
   ])
 
@@ -2093,48 +2101,22 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           <section className="space-y-[var(--space-2-5)]">
               <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Execution</p>
               <Card variant="default" className="space-y-[var(--space-2-5)] p-[var(--space-3)]">
-                {/* Max tool calls per turn — excluded for subagent_3p
-                    (agent-types-field-matrix.md, Decisions #1 (resolved
-                    2026-07-03): excluded): the external CLI runs its own
-                    tool loop, and the backend now rejects the field for
-                    this type. */}
-                {!isExternalAgent && (
-                  <div className="flex items-center gap-[var(--space-2-5)]">
-                    <Label htmlFor="agent-max-tool-calls-input" className="text-[var(--color-muted)] w-44 shrink-0">
-                      Max tool calls per turn
-                      <span className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70">
-                        Per single turn (one message, task, or heartbeat run) — the
-                        turn pauses at the limit and can be continued. Default: 200.
-                      </span>
-                    </Label>
-                    <Input
-                      id="agent-max-tool-calls-input"
-                      type="number"
-                      min={1}
-                      data-testid="agent-max-tool-calls-input"
-                      value={maxToolIterationsDraft}
-                      onChange={(e) => {
-                        const raw = e.target.value
-                        // Item 5 (draft-field dirty gap): mark dirty on EVERY
-                        // keystroke, not only once the draft commits to a
-                        // valid value — an external hydration mid-edit could
-                        // otherwise silently reset the field the operator is
-                        // still typing into.
-                        markDirty()
-                        setMaxToolIterationsDraft(raw)
-                        const parsed = Number(raw)
-                        // Commit (and autosave) only a real value >= 1; clearing
-                        // the field to type never persists a 0 again.
-                        if (raw !== '' && Number.isInteger(parsed) && parsed >= 1) {
-                          setMaxToolIterations(parsed)
-                        }
-                      }}
-                      onBlur={() => setMaxToolIterationsDraft(String(maxToolIterations))}
-                      className="text-[length:var(--type-utility-xs-size)] h-8"
-                      disabled={!isFieldEditable('max_tool_iterations')}
-                    />
-                  </div>
-                )}
+                {/* #904: Max tool calls per turn — every agent type,
+                    subagent_3p included (D14). Server-computed state only. */}
+                <ToolIterationLimitField
+                  value={ownToolIterationLimit}
+                  onEdit={markDirty}
+                  onChange={setMaxToolIterationsEdit}
+                  globalLimit={globalToolIterationLimit}
+                  server={agent ? {
+                    effective: agent.max_tool_iterations,
+                    source: agent.max_tool_iterations_source,
+                    overrideIgnored: agent.max_tool_iterations_override_ignored,
+                    storedOverride: agent.max_tool_iterations_override,
+                  } : undefined}
+                  serverError={toolIterationLimitPending && saveStatus === 'error' ? saveError : null}
+                  disabled={!isFieldEditable('max_tool_iterations')}
+                />
                 {/* ADR-066 D9 (T068-30): per-agent context window override
                     plus the read-only effective window · source line and
                     the clamp indicator (FR-037, FR-002). The three read-only

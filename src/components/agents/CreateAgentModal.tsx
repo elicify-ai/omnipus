@@ -39,6 +39,7 @@ import type {
 } from '@/lib/api'
 import { findOrphanedPresetOverrideKeys, resolveToolsCfg } from '@/lib/toolPolicyPresets'
 import { isProviderUsable } from '@/lib/providerStatus'
+import { useGlobalToolIterationLimit } from '@/hooks/useGlobalToolIterationLimit'
 
 import {
   CreateAgentWizard,
@@ -133,6 +134,8 @@ function payloadToCreateRequest(
     if (payload.model.trim()) req.model = payload.model.trim()
     if (payload.provider?.trim()) req.provider = payload.provider.trim()
     if (payload.timeout_seconds !== undefined) req.timeout_seconds = payload.timeout_seconds
+    // #904 D14: the worker's own limit becomes the CLI's turn cap; omitted = global.
+    if (payload.max_tool_iterations !== undefined) req.max_tool_iterations = payload.max_tool_iterations
     return req
   }
 
@@ -270,6 +273,8 @@ export function CreateAgentModal({
   const globalPolicies = globalPoliciesQuery.data
     ? { policies: globalPoliciesQuery.data.policies ?? {} }
     : undefined
+  // #904: global tool-iteration limit for the Advanced step's placeholder.
+  const globalToolIterationLimit = useGlobalToolIterationLimit()
 
   // Bug: the model picker collapsed four distinct provider-catalog states
   // (query loading / query failed / provider connected but its model
@@ -334,6 +339,7 @@ export function CreateAgentModal({
       registryTools={registryTools}
       skills={skills}
       globalPolicies={globalPolicies}
+      globalToolIterationLimit={globalToolIterationLimit}
       providersLoading={providersLoading}
       providersError={providersError}
       onRetryProviders={handleRetryProviders}

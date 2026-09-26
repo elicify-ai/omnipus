@@ -7,12 +7,12 @@
 // docs/internal/architecture/agent-types-field-matrix.md):
 //   Main + Subagent: model_params, rate_limits,
 //                     timeout_seconds, max_tool_iterations
-//   subagent_3p:     timeout_seconds + rate_limits ONLY — the CLI manages
-//                     its own isolation/auth/retries, so model_params
-//                     and max_tool_iterations
-//                     are all rejected 400 on the wire
-//                     (`AgentCreateRequestSubagent3p` never carries them —
+//   subagent_3p:     timeout_seconds + rate_limits + max_tool_iterations —
+//                     the CLI manages its own isolation/auth/retries, so
+//                     model_params is rejected 400 on the wire
+//                     (`AgentCreateRequestSubagent3p` never carries it —
 //                     see payloadToCreateRequest in CreateAgentModal.tsx).
+//                     max_tool_iterations becomes the CLI's turn cap (#904 D14).
 //                     Without this slim disclosure an external create had
 //                     NO way to set timeout or rate limits at all — the
 //                     executor block (cli_path / env / args) stays on
@@ -26,12 +26,14 @@
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
+import { ToolIterationLimitField } from '../ToolIterationLimitField'
 import type { AdvancedProps } from './types'
 
 export function Advanced({
   payload,
   setField,
   initialType,
+  globalToolIterationLimit,
 }: AdvancedProps) {
   const isExternal = initialType === 'subagent_3p'
 
@@ -39,10 +41,10 @@ export function Advanced({
     return (
       <AdvancedDisclosure
         title="Advanced"
-        summary="Timeout and rate limits"
+        summary="Timeout, tool-call limit and rate limits"
       >
         <div className="space-y-[var(--space-3)]">
-          <ExternalAdvancedFields payload={payload} setField={setField} />
+          <ExternalAdvancedFields payload={payload} setField={setField} globalToolIterationLimit={globalToolIterationLimit} />
         </div>
       </AdvancedDisclosure>
     )
@@ -57,6 +59,7 @@ export function Advanced({
         <MainAdvancedFields
           payload={payload}
           setField={setField}
+          globalToolIterationLimit={globalToolIterationLimit}
         />
       </div>
     </AdvancedDisclosure>
@@ -64,11 +67,11 @@ export function Advanced({
 }
 
 // ── subagent_3p fields ───────────────────────────────────────────────────────
-// Slim variant: the external CLI runner manages its own isolation, sampling,
-// and tool loop, so ONLY timeout_seconds and rate_limits apply on the wire
-// (`AgentCreateRequestSubagent3p` — see the field matrix). No sampling
-// (temperature/max_tokens), max_tool_iterations, or shell policy —
-// those all 400 on this variant. `steering_mode` is NOT variant-specific
+// Slim variant: the external CLI runner manages its own isolation and
+// sampling, so ONLY timeout_seconds, rate_limits and max_tool_iterations (the
+// CLI's turn cap, #904 D14) apply on the wire (`AgentCreateRequestSubagent3p`
+// — see the field matrix). No sampling (temperature/max_tokens) or shell
+// policy — those 400 on this variant. `steering_mode` is NOT variant-specific
 // here: it is retired from the wire entirely (2026-07-17 — dead config
 // removal) and 400s on every create variant, including Main, which used
 // to be the one variant that carried it — see
@@ -80,14 +83,16 @@ export function Advanced({
 interface ExternalAdvancedFieldsProps {
   payload: AdvancedProps['payload']
   setField: AdvancedProps['setField']
+  globalToolIterationLimit?: number
 }
 
-function ExternalAdvancedFields({ payload, setField }: ExternalAdvancedFieldsProps) {
+function ExternalAdvancedFields({ payload, setField, globalToolIterationLimit }: ExternalAdvancedFieldsProps) {
   return (
     <>
       <div className="space-y-[var(--space-2)]">
         <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Runtime</p>
         <TimeoutField payload={payload} setField={setField} />
+        <WizardToolIterationLimit payload={payload} setField={setField} globalToolIterationLimit={globalToolIterationLimit} />
       </div>
       <RateLimitsFields payload={payload} setField={setField} />
     </>
@@ -99,9 +104,10 @@ function ExternalAdvancedFields({ payload, setField }: ExternalAdvancedFieldsPro
 interface MainAdvancedFieldsProps {
   payload: AdvancedProps['payload']
   setField: AdvancedProps['setField']
+  globalToolIterationLimit?: number
 }
 
-function MainAdvancedFields({ payload, setField }: MainAdvancedFieldsProps) {
+function MainAdvancedFields({ payload, setField, globalToolIterationLimit }: MainAdvancedFieldsProps) {
   const modelParams = payload.model_params ?? {}
 
   function setModelParam<K extends 'temperature' | 'max_tokens'>(
@@ -151,13 +157,7 @@ function MainAdvancedFields({ payload, setField }: MainAdvancedFieldsProps) {
         <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Runtime</p>
         <div className="space-y-[var(--space-1)]">
           <TimeoutField payload={payload} setField={setField} />
-          <NumberRow
-            label="Max tool calls per turn"
-            caption="Per single turn (one message, task, or heartbeat run) — the turn pauses at the limit and can be continued. Default 200."
-            value={payload.max_tool_iterations}
-            min={1}
-            onChange={(v) => setField('max_tool_iterations', v)}
-          />
+          <WizardToolIterationLimit payload={payload} setField={setField} globalToolIterationLimit={globalToolIterationLimit} />
         </div>
       </div>
     </>
@@ -185,6 +185,31 @@ function TimeoutField({ payload, setField }: TimeoutFieldProps) {
       value={payload.timeout_seconds}
       min={1}
       onChange={(v) => setField('timeout_seconds', v)}
+    />
+  )
+}
+
+// ── Max tool calls per turn (shared by the full and slim variants) ───────────
+// #904: the same extracted control the agent profile uses. Empty = the agent
+// rides the global limit, so the create request omits the key (US-3 AS-2);
+// a value above the global is refused by the server and surfaces on the
+// wizard's existing create-error surface — the rule is never checked here.
+
+interface WizardToolIterationLimitProps {
+  payload: AdvancedProps['payload']
+  setField: AdvancedProps['setField']
+  globalToolIterationLimit?: number
+}
+
+function WizardToolIterationLimit({ payload, setField, globalToolIterationLimit }: WizardToolIterationLimitProps) {
+  return (
+    <ToolIterationLimitField
+      id="wizard-max-tool-calls-input"
+      testId="wizard-max-tool-calls-input"
+      value={payload.max_tool_iterations ?? null}
+      onChange={(next) => setField('max_tool_iterations', next ?? undefined)}
+      globalLimit={globalToolIterationLimit}
+      emptyBehavior="clear"
     />
   )
 }

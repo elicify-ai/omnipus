@@ -163,17 +163,23 @@ export function useCommandPreview(req: ExecutorCommandPreviewRequest | undefined
  * blank model is represented on the wire (empty string vs `undefined` change
  * which preview case the backend computes — see the schema's doc comment on
  * `model`).
+ *
+ * `maxToolIterations` (#904 D14) is the agent's OWN tool-iteration limit;
+ * omit it when the agent has none — the server then previews the global
+ * limit, the same effective value real dispatch passes as the turn cap.
  */
 export function buildExecutorPreviewRequest(
   cli: ExecutorCommandPreviewRequest['cli'],
   model: string,
   cliPath: string | undefined,
   cliArgs: string | undefined,
+  maxToolIterations?: number,
 ): ExecutorCommandPreviewRequest {
   return {
     cli,
     model: model.trim() !== '' ? model.trim() : undefined,
     cli_path: cliPath,
     cli_args: cliArgs,
+    ...(maxToolIterations !== undefined ? { max_tool_iterations: maxToolIterations } : {}),
   }
 }

@@ -130,6 +130,8 @@ interface WizardProps {
   skills?: ReadonlyArray<Skill>
   /** Global (Settings → Security) tool policy — locks contradicting Step 3 controls. */
   globalPolicies?: import('@/components/shared/ToolPolicyEditor').ToolPolicyValue
+  /** #904: global tool-iteration limit in force, for the Advanced step placeholder. */
+  globalToolIterationLimit?: number
   /**
    * providers-query loading/error state, forwarded to Step 1 so the model
    * picker can tell "still fetching" and "fetch failed" apart from
@@ -193,11 +195,9 @@ function initialPayload(initialType: WizardType, initialCli?: WizardCli): Wizard
     heartbeat_interval: 1800,
     // Per the field matrix (docs/internal/architecture/agent-types-field-matrix.md)
     // timeout_seconds is O for every user-creatable type, so it always seeds.
-    // max_tool_iterations is excluded for subagent_3p (the external CLI runs
-    // its own loop — agent-types-field-matrix.md, Decisions #1 (resolved
-    // 2026-07-03): excluded).
+    // max_tool_iterations is NOT seeded (#904, US-3 AS-2): an empty field
+    // means the agent rides the global limit, so the create request omits it.
     timeout_seconds: 300,
-    ...(initialType !== 'subagent_3p' ? { max_tool_iterations: 200 } : {}),
     // Inherit-from-caller toggles default OFF so the corresponding editors
     // (model picker, tools, skills) render by default and the
     // operator makes an explicit choice. Inheritance stays an opt-in via the
@@ -218,6 +218,7 @@ export function CreateAgentWizard({
   registryTools = [],
   skills = [],
   globalPolicies,
+  globalToolIterationLimit,
   providersLoading = false,
   providersError,
   onRetryProviders,
@@ -373,6 +374,7 @@ export function CreateAgentWizard({
     registryTools,
     skills,
     globalPolicies,
+    globalToolIterationLimit,
     providersLoading,
     providersError,
     onRetryProviders,
