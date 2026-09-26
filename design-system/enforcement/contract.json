@@ -37,7 +37,9 @@
     "coverage.mjs": "GLM public executed coverage",
     "audit.mjs": "Grok orchestration/ledger",
     "policy.mjs": "lead: canonical policy loading and integration",
-    "current-checkpoint.mjs": "lead: reads currentCheckpoint above; the only legal source of the --checkpoint value any caller passes to audit.mjs"
+    "current-checkpoint.mjs": "lead: reads currentCheckpoint above; the only legal source of the --checkpoint value any caller passes to audit.mjs",
+    "print-audit-errors.mjs": "frontend-lead: errors-only summarizer for a finished audit.mjs --report file (kinds/paths/messages + one count line; never re-runs the audit)",
+    "lint.mjs": "frontend-lead: local lock-half audit wrapper (policy.mjs + audit.mjs without coverage/Storybook evidence); prints print-audit-errors output and propagates every step's non-zero exit"
   },
   "integrationFreeze": "Workers modify only new scripts/design-system-locks, tests/design-system-locks and assigned enforcement files. No existing Stage A files, package/lock/config/CI, application files, or generated outputs. Lead integrates after A gate.",
   "coverageApi": "coverage.mjs exports checkCoverage({root,indexPath,evidencePaths}) returning {errors: string[]}; compose existing Stage A validators read-only, no scanner API required.",

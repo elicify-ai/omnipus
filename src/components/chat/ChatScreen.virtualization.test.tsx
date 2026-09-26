@@ -31,98 +31,31 @@ let lastViewportAutoScroll: boolean | undefined
 // files (e.g. useRunningActivity.test.ts / ActivityBar.test.tsx) run in the same
 // batch. vi.mock factories may reference top-level `import` bindings safely —
 // only same-file local `const`/`let` declarations have the hoisting restriction.
-vi.mock('@assistant-ui/react', () => {
-  return {
-    useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
-    ThreadPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Viewport: React.forwardRef(
-        (
-          {
-            children,
-            className,
-            style,
-            autoScroll,
-            'data-testid': testId,
-          }: {
-            children?: React.ReactNode
-            className?: string
-            style?: React.CSSProperties
-            autoScroll?: boolean
-            'data-testid'?: string
-          },
-          ref: React.Ref<HTMLDivElement>
-        ) => {
-          lastViewportAutoScroll = autoScroll
-          return React.createElement('div', { ref, className, style, 'data-testid': testId }, children)
-        }
-      ),
-      Messages: () => null,
-    },
-    MessagePrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Parts: () => null,
-    },
-    ComposerPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Input: ({ disabled, placeholder, className, onChange, onKeyDown, onBlur }: {
-        disabled?: boolean; placeholder?: string; className?: string;
-        onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-        onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-        onBlur?: () => void;
-      }) =>
-        React.createElement('textarea', {
-          disabled, placeholder, className, onChange, onKeyDown, onBlur,
-          'data-testid': 'composer-input',
-        }),
-      Send: ({ disabled, children, className, 'data-testid': testId }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string; 'data-testid'?: string
-      }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'data-testid': testId ?? 'chat-send' }, children),
-      AddAttachment: ({ disabled, children, className }: { disabled?: boolean; children?: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'data-testid': 'add-attachment' }, children),
-      Attachments: () => null,
-    },
-    AttachmentPrimitive: {
-      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Name: () => null,
-      Remove: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', className }, children),
-      Thumb: () => null,
-    },
-    MessagePartPrimitive: { InProgress: () => null },
-    ActionBarPrimitive: {
-      Root: ({ children }: { children: React.ReactNode }) => React.createElement('div', {}, children),
-      Copy: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
-    },
-    AuiIf: () => null,
-    useComposerRuntime: () => ({
-      getState: () => ({ text: '' }),
-      setText: vi.fn(),
-      addAttachment: vi.fn(),
-      subscribe: vi.fn(() => vi.fn()),
-    }),
-    useMessage: () => ({
-      id: 'msg_streaming',
-      role: 'assistant',
-      status: { type: 'running' },
-      content: [],
-    }),
-    useAttachment: vi.fn(() => ({
-      id: 'att-default',
-      name: 'file.txt',
-      contentType: 'text/plain',
-      file: undefined,
-      status: { type: 'complete' },
-      content: [],
-    })),
-    makeAssistantToolUI: () => () => null,
-  }
-})
+vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
+  ThreadPrimitive: {
+    Viewport: React.forwardRef(
+              (
+                {
+                  children,
+                  className,
+                  style,
+                  autoScroll,
+                  'data-testid': testId,
+                }: {
+                  children?: React.ReactNode
+                  className?: string
+                  style?: React.CSSProperties
+                  autoScroll?: boolean
+                  'data-testid'?: string
+                },
+                ref: React.Ref<HTMLDivElement>
+              ) => {
+                lastViewportAutoScroll = autoScroll
+                return React.createElement('div', { ref, className, style, 'data-testid': testId }, children)
+              }
+            ),
+  },
+}))
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
