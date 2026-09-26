@@ -149,7 +149,7 @@ func newRedactingLoggerForTest(t *testing.T) (*Logger, string) {
 	dir := t.TempDir()
 	l, err := NewLogger(LoggerConfig{Dir: dir, RetentionDays: 90, RedactEnabled: true})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = l.Close() })
+	t.Cleanup(func() { assert.NoError(t, l.Close()) })
 	return l, dir
 }
 

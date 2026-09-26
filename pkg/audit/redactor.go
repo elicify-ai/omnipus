@@ -32,7 +32,7 @@ var defaultPatterns = []string{
 var defaultPatternLabels = []string{
 	"OpenAI/OpenRouter API key (sk-…)",
 	"generic API key (key-…)",
-	bearerPatternLabel,
+	authSchemePatternLabel,
 	"GitHub personal access token (ghp_…)",
 	"GitHub OAuth token (gho_…)",
 	"Slack bot token (xoxb-…)",
@@ -48,9 +48,9 @@ var defaultPatternLabels = []string{
 // pattern. newAuditRedactor drops the pattern carrying this label.
 const emailPatternLabel = "email address"
 
-// bearerPatternLabel is the defaultPatternLabels entry of the Bearer-token
+// authSchemePatternLabel is the defaultPatternLabels entry of the Bearer-token
 // pattern. The audit set makes that one pattern case-insensitive.
-const bearerPatternLabel = "HTTP Bearer token"
+const authSchemePatternLabel = "HTTP Bearer token"
 
 const redactedValue = "[REDACTED]"
 
@@ -165,7 +165,7 @@ func auditCredentialPatterns() []string {
 			dropped++
 			continue
 		}
-		if defaultPatternLabels[i] == bearerPatternLabel {
+		if defaultPatternLabels[i] == authSchemePatternLabel {
 			// "authorization: bearer …" is common; match any case here
 			// only — the shared default stays case-sensitive.
 			p = `(?i)` + p
