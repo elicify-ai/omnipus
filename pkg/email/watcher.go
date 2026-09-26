@@ -345,7 +345,7 @@ func LoadWatcherState(stateDir, agentID, workspaceID string) (*WatcherState, err
 	p := filepath.Join(stateDir, "email-watch", keyFor(agentID, workspaceID)+".json")
 	b, err := os.ReadFile(p)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrNoWatcherState
 		}
 		return nil, err
