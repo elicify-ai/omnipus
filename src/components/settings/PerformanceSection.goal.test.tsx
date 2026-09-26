@@ -97,13 +97,10 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
 
   it('falls back to the documented default (20) when an older backend omits goal_max_rounds', async () => {
     vi.useRealTimers()
-    vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
-      max_parallel_agents: 4,
-      effective_max_parallel_agents: 4,
-      max_parallel_agents_configured: true,
-      tools_on_demand: true,
-      // goal_max_rounds intentionally omitted.
-    } as never)
+    // SETTINGS with goal_max_rounds intentionally omitted.
+    const withoutGoal: Partial<typeof SETTINGS> = { ...SETTINGS }
+    delete withoutGoal.goal_max_rounds
+    vi.mocked(api.fetchPerformanceSettings).mockResolvedValue(withoutGoal as never)
     renderSection()
     await waitFor(() => {
       expect(screen.getByLabelText('Tries per goal')).toHaveValue(20)
