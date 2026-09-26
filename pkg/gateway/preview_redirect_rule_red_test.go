@@ -105,6 +105,13 @@ func piRedNewRedirectHarness(t *testing.T) *piRedRedirectHarness {
 	t.Cleanup(h.srv.Close)
 	h.port = fmt.Sprintf("%d", upstreamPort(t, h.srv.URL))
 
+	// Fixture parity with preview_host_dispatch_red_test.go (A-2: the FIXTURE
+	// adapts; the DS-2b assertions stand): the canonical origin must name THIS
+	// harness's port and preview must be on, or the mint/classification under
+	// the production chain cannot produce a servable /preview/ route.
+	h.api.agentLoop.GetConfig().Gateway.PublicURL = "http://localhost:" + h.port
+	h.api.agentLoop.GetConfig().Gateway.PreviewEnabled = boolPtr(true)
+
 	return h
 }
 

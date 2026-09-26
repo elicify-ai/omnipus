@@ -398,8 +398,15 @@ func TestPreviewNavigationGuard(t *testing.T) {
 			"Cookie":         "csrf=pi-red-csrf-pair",
 			"X-Csrf-Token":   "pi-red-csrf-pair",
 		}
+		// The library spy was already incremented by exempt_library_download_get_reachable
+		// above (spies accumulate across subtests in this harness), so the property
+		// under test is NO INCREASE over the count entering this subtest — an
+		// absolute zero is unsatisfiable regardless of implementation. (Test-bug
+		// fix, backend-lead GREEN 2026-09-27: oracle corrected, intent unchanged —
+		// a guard that lets the POST through still fails this assertion.)
+		before := h.spies["library"].Load()
 		h.piRedGuardGet(t, "", "/api/v1/library/ws-123/download", http.MethodPost, hdrs)
-		require.Equal(t, int32(0), h.spies["library"].Load(),
+		require.Equal(t, before, h.spies["library"].Load(),
 			"RED (FR-010, Q3): the exemption is GET-only — a document-navigation POST to an "+
 				"exempted address must be rejected before the handler; today the handler ran")
 	})

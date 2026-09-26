@@ -129,9 +129,11 @@ func (h *piRedPlantedHarness) piRedDoPlanted(
 func piRedClearSetExpectation(path string) (domainForm, hostOnlyForm []string) {
 	prefixes := piRedPathPrefixes(path)
 	for _, p := range prefixes {
-		domainForm = append(domainForm, p, p+"/")
-		if p != "/" {
-			hostOnlyForm = append(hostOnlyForm, p, p+"/")
+		for _, q := range []string{p, p + "/"} {
+			domainForm = append(domainForm, q)
+			if q != "/" {
+				hostOnlyForm = append(hostOnlyForm, q)
+			}
 		}
 	}
 	return domainForm, hostOnlyForm
