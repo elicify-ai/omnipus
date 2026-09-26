@@ -257,7 +257,15 @@ func TestPreviewCSPHeaderSet(t *testing.T) {
 		})
 		resp := h.piRedGuardGet(t, "", prefix+"/app.js", http.MethodGet, nil)
 		want := piRedMode2CSPTemplate(origin, "ws://localhost:"+h.port, prefix)
-		assert.Equal(t, want, resp.Header.Get("Content-Security-Policy"),
+		// The template is byte-stable AT THE SOURCE; on the wire net/http
+		// sanitizes header values (LF -> space, trailing trim), so the wire-
+		// observable form is the template with newlines normalized. Compare
+		// modulo that sanitization. (Test-bug fix, backend-lead GREEN
+		// 2026-09-27: oracle corrected, intent unchanged — the raw-\n form is
+		// untransmittable over HTTP, and any directive/order/source drift
+		// still flips this row.)
+		wantWire := strings.TrimSpace(strings.ReplaceAll(want, "\n", " "))
+		assert.Equal(t, wantWire, resp.Header.Get("Content-Security-Policy"),
 			"RED (FR-014, DS-7 row 1): the Mode 2 proxied CSP must be byte-identical to the "+
 				"spec template (the static tripwire oracle) — today the proxy emits no CSP at all "+
 				"and the upstream's CSP would leak through")

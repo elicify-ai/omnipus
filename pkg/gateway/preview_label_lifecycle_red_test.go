@@ -169,6 +169,13 @@ func TestPreviewLabelLifecycle(t *testing.T) {
 				nil, nil, 60, 86400)
 			result := tool.Execute(tools.WithAgentID(context.Background(), "pi-red-life-agent-dev"),
 				map[string]any{
+					// "path" is required by WebServeTool.Execute BEFORE mode
+					// dispatch — without it the call fails with "path is
+					// required" on every platform and never reaches the dev
+					// mint this subtest drives. (Test-fixture fix, backend-lead
+					// GREEN 2026-09-27: missing required argument; assertions
+					// and the darwin/Linux gate expectations unchanged.)
+					"path":    ".",
 					"command": fmt.Sprintf("python3 -m http.server %d", port),
 					"port":    port,
 				})

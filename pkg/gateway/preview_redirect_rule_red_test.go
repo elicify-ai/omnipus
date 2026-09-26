@@ -291,7 +291,16 @@ func TestPreviewRedirectRule_Mode1Passthrough(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h.upstreamHits.Store(0)
-			want := fmt.Sprintf(tc.loc, h.port)
+			// Only rows whose raw Location embeds a %s port placeholder get it
+			// substituted — Sprintf on a verb-less format appends Go's
+			// %!(EXTRA string=…) artifact and corrupts the "emitted unchanged"
+			// expected value for rows 1 and 3. (Test-oracle fix, backend-lead
+			// GREEN 2026-09-27: intended raw Location restored; the DS-2b
+			// assertions themselves are untouched.)
+			want := tc.loc
+			if strings.Contains(tc.loc, "%s") {
+				want = fmt.Sprintf(tc.loc, h.port)
+			}
 			h.piRedUpstreamEmit(t, http.StatusFound, want)
 
 			req, err := http.NewRequest(http.MethodGet, h.srv.URL+"/", nil)
