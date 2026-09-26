@@ -175,7 +175,8 @@
       "specs": [
         "tests/e2e/preview-isolation.spec.ts",
         "tests/e2e/preview-bundle.spec.ts",
-        "tests/e2e/preview-svg.spec.ts"
+        "tests/e2e/preview-svg.spec.ts",
+        "tests/e2e/preview-isolation-webserve.spec.ts"
       ]
     },
     {
