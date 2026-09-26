@@ -271,7 +271,7 @@ any new control with adjacent narrow targets.
 
 ## 13. Running the gates, in order
 
-Full inventory, `scripts/design-system-locks/` (9 scripts):
+Full inventory, `scripts/design-system-locks/` (11 scripts):
 
 | Script | Proves |
 |---|---|
@@ -284,6 +284,8 @@ Full inventory, `scripts/design-system-locks/` (9 scripts):
 | `status.mjs` | Status-token literals are registered, not invented. |
 | `coverage.mjs` | The export → catalog → manifest → story → executed-check chain (rule 9) is unbroken. |
 | `audit.mjs` | Orchestrates all of the above; hard-blocking, no `continue-on-error`. |
+| `lint.mjs` | `npm run lint:design-system-locks`: runs `policy.mjs` + `audit.mjs` without the coverage half; any failed step exits non-zero. |
+| `print-audit-errors.mjs` | Prints only `report.errors` plus one count line from an audit report; exit 1 on errors, 2 on a missing/malformed report. |
 
 **Local, before hand-back:** `npm run lint:design-system-locks` — the scanner half of the
 audit, no Storybook/browser evidence needed; on failure it prints only the errors plus one
