@@ -979,7 +979,7 @@ export interface paths {
         /**
          * Update agent concurrency settings
          * @description Updates max_parallel_agents. An explicit value is honored exactly as given — there is no ceiling, only a floor of 1; a value is never silently lowered. Set to 0 to restore the auto-detected default (available memory / ~3.5 MB per agent, floored at 2, physically bounded around 2000). Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT).
-         *     Also updates max_tool_iterations, the global tool-iteration limit (issue #904, 1–1000; out of range → 400). Only a LOWERING — a new value below the global currently in force — can rewrite agents (D20): a raise, or the current value, rewrites no agent and needs no confirmation; agents whose stored value is above the global keep it (capped and flagged). A lowering below some agents' own values lowers those agents too, but only with consent (D11): confirmed_lowering must equal — as a set keyed by agent_id, order-independent — the agents whose own value is above the new global at write time. Any difference (extra, missing or changed agent, confirmed_lowering absent while agents would be lowered, or present on a raise) is drift (D16): nothing is written and the response is 409 MaxToolIterationsLoweringConflict carrying the fresh preview. The same 409 is returned when an agent record changes (revision conflict) between the deciding check and its lowering write — the agents already lowered are rolled back first. A failure part-way through the writes rolls back the agents already lowered and leaves the global unchanged (500 ErrorResponse, code max_tool_iterations_lowering_failed, or max_tool_iterations_rollback_incomplete if a rollback also failed, with the original failure in details.cause). A failure to read the agent store while computing or checking the affected set is 500 code max_tool_iterations_agents_read_failed, nothing written. Setting the global also ends the retired environment-variable import for good (D6). A successful change reloads the agent registry so every agent's next turn uses the new limit; the response lists the lowered agents in max_tool_iterations_lowered_agents. If the save is committed but the in-memory refresh or that reload fails, the response is 500 code performance_reload_failed: the settings ARE saved (GET /performance shows them) but running agents use them only after the next reload or restart; the agents this request lowered are listed in details.lowered_agents (GET /performance does not carry them).
+         *     Also updates max_tool_iterations, the global tool-iteration limit (issue #904, 1–1000; out of range → 400). Only a LOWERING — a new value below the global currently in force — can rewrite agents (D20): a raise, or the current value, rewrites no agent and needs no confirmation; agents whose stored value is above the global keep it (capped and flagged). A lowering below some agents' own values lowers those agents too, but only with consent (D11): confirmed_lowering must equal — as a set keyed by agent_id, order-independent — the agents whose own value is above the new global at write time. Any difference (extra, missing or changed agent, confirmed_lowering absent while agents would be lowered, or a NON-EMPTY list on a raise — an empty or absent one on a raise is fine) is drift (D16): nothing is written and the response is 409 MaxToolIterationsLoweringConflict carrying the fresh preview. The same 409 is returned when an agent record changes (revision conflict) between the deciding check and its lowering write — the agents already lowered are rolled back first. A failure part-way through the writes rolls back the agents already lowered and leaves the global unchanged (500 ErrorResponse, code max_tool_iterations_lowering_failed, or max_tool_iterations_rollback_incomplete if a rollback also failed, with the original failure in details.cause). A failure to read the agent store while computing or checking the affected set is 500 code max_tool_iterations_agents_read_failed, nothing written. Setting the global also ends the retired environment-variable import for good (D6). A successful change reloads the agent registry so every agent's next turn uses the new limit; the response lists the lowered agents in max_tool_iterations_lowered_agents. If the save is committed but the in-memory refresh or that reload fails, the response is 500 code performance_reload_failed with a PerformanceReloadFailedError body: the settings ARE saved on disk and nothing is rolled back, but they are not in force yet. details.stage tells how far the apply got — refresh: the in-memory configuration was NOT swapped, so GET /performance still shows the OLD values until the next configuration reload or restart; reload: the in-memory configuration was updated (GET /performance shows the NEW values) but the agent registry reload failed, so agents' next turns keep the old limits until the next reload or restart. details.changed_fields lists the settings this request changed and details.lowered_agents the agents it lowered (GET /performance does not carry them).
          */
         put: operations["updatePerformanceSettings"];
         post?: never;
@@ -9809,6 +9809,44 @@ export interface components {
             code: string;
             preview: components["schemas"]["MaxToolIterationsLoweringPreview"];
         };
+        /**
+         * PerformanceReloadFailedDetails
+         * @description details of the 500 performance_reload_failed answer of PUT /performance (issue #904). Every write of the request is COMMITTED (config.json and any lowered agents are on disk and audited; nothing is rolled back), but the new values are not in force yet. stage says how far the apply got, and so what GET /performance shows until the next reload or restart.
+         */
+        PerformanceReloadFailedDetails: {
+            /**
+             * @description refresh — config.json was written but the in-memory configuration was NOT swapped: GET /performance still shows the OLD values and running agents keep them until the gateway reloads its configuration or restarts. reload — the in-memory configuration was updated (GET /performance shows the NEW values) but the agent registry reload failed: the agents' next turns keep the old limits until the next reload or restart.
+             * @example reload
+             * @enum {string}
+             */
+            stage: "refresh" | "reload";
+            /**
+             * @description The performance settings this request changed, i.e. the fields present in the PUT body. The client names these — and only these — in its "saved, not applied yet" message.
+             * @example [
+             *       "max_tool_iterations"
+             *     ]
+             */
+            changed_fields: ("max_parallel_agents" | "tools_on_demand" | "goal_max_rounds" | "max_tool_iterations")[];
+            /** @description The agents whose own tool-iteration limit this request lowered (spec D11); empty when none. GET /performance does not carry them, so this is the only place the summary survives. */
+            lowered_agents: components["schemas"]["MaxToolIterationAgentChange"][];
+        };
+        /**
+         * PerformanceReloadFailedError
+         * @description 500 body of PUT /performance with code performance_reload_failed (issue #904): the settings are saved but not applied yet. Envelope-compatible with ErrorResponse (error + code + details); details is typed as PerformanceReloadFailedDetails.
+         */
+        PerformanceReloadFailedError: {
+            /**
+             * @description Human-readable message naming only the settings this request changed.
+             * @example performance settings saved but the reload failed; the new tool-iteration limit applies after the next reload or restart
+             */
+            error: string;
+            /**
+             * @description Machine-readable error code; always "performance_reload_failed".
+             * @example performance_reload_failed
+             */
+            code: string;
+            details: components["schemas"]["PerformanceReloadFailedDetails"];
+        };
         /** @description A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue. */
         Provider: {
             /**
@@ -18509,7 +18547,7 @@ export interface operations {
                     "application/json": components["schemas"]["MaxToolIterationsLoweringConflict"];
                 };
             };
-            /** @description Server-side failure. code tells them apart: max_tool_iterations_agents_read_failed (the agent store could not be read; nothing written), max_tool_iterations_lowering_failed (a write failed; everything rolled back, nothing changed), max_tool_iterations_rollback_incomplete (a write failed and some agents could not be restored — the error names them; details.cause carries the original failure; the global is unchanged), performance_reload_failed (the settings ARE saved — config.json and any lowered agents are written, nothing is rolled back — but the in-memory refresh or the registry reload failed; details.lowered_agents lists the agents this request lowered). Any other failure to write config.json carries no code. */
+            /** @description Server-side failure. code tells them apart: max_tool_iterations_agents_read_failed (the agent store could not be read; nothing written), max_tool_iterations_lowering_failed (a write failed; everything rolled back, nothing changed), max_tool_iterations_rollback_incomplete (a write failed and some agents could not be restored — the error names them; details.cause carries the original failure; the global is unchanged), performance_reload_failed (the settings ARE saved — config.json and any lowered agents are written, nothing is rolled back — but not in force yet; the body is a PerformanceReloadFailedError whose details carry stage (refresh: in-memory config not swapped, GET still shows the old values; reload: in-memory config updated, registry reload failed), changed_fields and lowered_agents). Any other failure to write config.json carries no code. */
             500: {
                 headers: {
                     [name: string]: unknown;
@@ -23965,6 +24003,8 @@ export type MaxToolIterationAgentChange = components["schemas"]["MaxToolIteratio
 export type MaxToolIterationsLoweringPreview = components["schemas"]["MaxToolIterationsLoweringPreview"];
 export type MaxToolIterationsConfirmedAgent = components["schemas"]["MaxToolIterationsConfirmedAgent"];
 export type MaxToolIterationsLoweringConflict = components["schemas"]["MaxToolIterationsLoweringConflict"];
+export type PerformanceReloadFailedDetails = components["schemas"]["PerformanceReloadFailedDetails"];
+export type PerformanceReloadFailedError = components["schemas"]["PerformanceReloadFailedError"];
 export type Provider = components["schemas"]["Provider"];
 export type ProviderDependent = components["schemas"]["ProviderDependent"];
 export type ProviderDeleteRequest = components["schemas"]["ProviderDeleteRequest"];
