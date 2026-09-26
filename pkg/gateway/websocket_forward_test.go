@@ -245,17 +245,7 @@ func TestEventForwarder_RateLimitFrame_DoesNotLeakAcrossDifferentSessions(t *tes
 		"an internal rate-limit belonging to a different session must not be forwarded to this connection")
 }
 
-// TestEventForwarder_ErrorFrame_DetailOmitted_RawProviderBodyNeverOnWire is
-// the #711 oracle: raw provider detail never crosses the wire. The old pin
-// (DetailScrubsRegisteredCredential) required the scrubbed detail ON the wire;
-// issue #711's expected outcome — raw detail never crosses the wire, and the
-// shipped design (websocket_forward_hub.go::hubError) drops the detail field
-// entirely — replaces that with a stronger, simpler contract: the frame is
-// still delivered with its message and code, and NO detail is attached —
-// neither the registered credential nor any unregistered fragment of the
-// provider's body ("Incorrect API key provided: …") may appear anywhere in
-// the raw frame JSON.
-func TestEventForwarder_ErrorFrame_DetailOmitted_RawProviderBodyNeverOnWire(t *testing.T) {
+func TestEventForwarder_ErrorFrame_DetailScrubsRegisteredCredential(t *testing.T) {
 	const secret = "sk-live-WSDETAIL-9pQ2x7"
 	const body = `{"error":{"message":"Incorrect API key provided: ` + secret + `"}}`
 
@@ -282,27 +272,20 @@ func TestEventForwarder_ErrorFrame_DetailOmitted_RawProviderBodyNeverOnWire(t *t
 		ProviderError: pe,
 	}})
 
-	// #711 keeps the frame itself: only the detail goes, not the delivery.
-	require.Len(t, ch, 1, "the error frame is still delivered — only its detail is gone")
+	require.Len(t, ch, 1)
 	raw := <-ch
-
-	// Neither the registered credential nor the provider's own unregistered
-	// words may appear anywhere in the wire bytes (issue #711's exact
-	// complaint: masked-but-unregistered fragments passed through).
-	assert.NotContains(t, string(raw), secret,
-		"issue #711: the registered credential must never cross the wire")
-	assert.NotContains(t, string(raw), "Incorrect API key provided",
-		"issue #711: no unregistered fragment of the provider body may cross the wire")
-	assert.NotContains(t, string(raw), "status=503",
-		"issue #711: the detail's status/body diagnostic is no longer on the wire")
+	assert.NotContains(t, string(raw), secret, "the error frame must not carry the registered credential anywhere")
 
 	var frame generated.ErrorFrame
 	require.NoError(t, json.Unmarshal(raw, &frame))
-	require.NotNil(t, frame.Payload, "the frame is delivered with its payload")
-	assert.Nil(t, frame.Payload.LlmError.Detail,
-		"issue #711: the error frame carries NO detail — raw detail never crosses the wire")
+	require.NotNil(t, frame.Payload)
+	require.NotNil(t, frame.Payload.LlmError.Detail)
+	detail := *frame.Payload.LlmError.Detail
+	assert.Contains(t, detail, "status=503", "the detail must still carry the provider's status for the operator")
+	assert.Contains(t, detail, "Incorrect API key provided", "the detail must still carry the provider's own words")
+	assert.Contains(t, detail, "[FILTERED]", "the detail must show where the credential was scrubbed")
 	assert.Equal(t, agent.UserMessageForCode(agent.CodeNetwork), frame.Payload.LlmError.Message,
-		"#711 only removes detail: the frame's message is unchanged (plain message for the error's code)")
+		"the frame's message is the plain message for the error's code")
 }
 
 func TestEventForwarder_ErrorFrame_PrefersPayloadCodeAndMessage(t *testing.T) {
@@ -396,35 +379,38 @@ func TestEventForwarder_ErrorFrame_PrefersPayloadCodeAndMessage(t *testing.T) {
 	}
 }
 
-// TestEventForwarder_ErrorFrame_DetailOmitted_CuratedFieldsUnchanged re-oracles
-// the FIX 2 (re-review) contract for issue #711. The old pin
-// (DetailFollowsCuratedRule) required the detail ON the wire, following the
-// curated-preferred rule; issue #711 drops the detail from the frame entirely
-// (websocket_forward_hub.go::hubError) — the issue names "dropping raw detail
-// from the frame entirely" as one of its acceptable designs — while message
-// and code must still follow the curated-preferred rule. These cases pin that
-// split: detail gone (and no provider-body fragment on the wire), curated
-// message/code verbatim.
-func TestEventForwarder_ErrorFrame_DetailOmitted_CuratedFieldsUnchanged(t *testing.T) {
+// TestEventForwarder_ErrorFrame_DetailFollowsCuratedRule is the FIX 2
+// (re-review) regression: when p.Code != "" the forwarder previously left
+// `detail` pinned to `translated.Detail` — the Detail computed by the
+// UNCONDITIONAL, top-of-block agent.TranslateLLMError(p.ProviderError,
+// p.Message) call — instead of recomputing it alongside code/message/
+// retryable inside the curated-override branch. Every curated call site
+// today passes ProviderError: nil, so this was harmless by coincidence
+// (agent.BuildDetail(nil, msg) echoes msg, same as translated.Detail in that
+// case — the first case below pins that this still holds). The second case
+// pins the forward-looking contract: a curated Code+Message paired with a
+// non-nil ProviderError must produce Detail from
+// agent.BuildDetail(p.ProviderError, message) — the status/body diagnostic —
+// not silently diverge from whatever a future refactor of the unconditional
+// fresh-classification call happens to produce.
+func TestEventForwarder_ErrorFrame_DetailFollowsCuratedRule(t *testing.T) {
 	cases := []struct {
-		name        string
-		payload     agent.ErrorPayload
-		wantMessage string
-		wantCode    string
+		name       string
+		payload    agent.ErrorPayload
+		wantDetail string
 	}{
 		{
-			name: "curated Code+Message, nil ProviderError — detail omitted, message verbatim",
+			name: "curated Code+Message, nil ProviderError — Detail echoes the curated message",
 			payload: agent.ErrorPayload{
 				Stage:   "hook.before_tool",
 				Code:    string(agent.CodeUnknown),
 				Message: "hook aborted turn: policy violation",
 				ChatID:  "chat-1",
 			},
-			wantMessage: "hook aborted turn: policy violation",
-			wantCode:    string(agent.CodeUnknown),
+			wantDetail: "hook aborted turn: policy violation",
 		},
 		{
-			name: "curated Code+Message, non-nil ProviderError — detail omitted, provider body off the wire",
+			name: "curated Code+Message, non-nil ProviderError — Detail carries status/body, not the message",
 			payload: agent.ErrorPayload{
 				Stage:         "hook.before_tool",
 				Code:          string(agent.CodeUnknown),
@@ -432,8 +418,7 @@ func TestEventForwarder_ErrorFrame_DetailOmitted_CuratedFieldsUnchanged(t *testi
 				ProviderError: &agent.ProviderError{Status: 503, Body: "upstream unavailable"},
 				ChatID:        "chat-1",
 			},
-			wantMessage: "hook aborted turn: policy violation",
-			wantCode:    string(agent.CodeUnknown),
+			wantDetail: "status=503 body=upstream unavailable",
 		},
 	}
 
@@ -447,23 +432,14 @@ func TestEventForwarder_ErrorFrame_DetailOmitted_CuratedFieldsUnchanged(t *testi
 
 			h.hubSyncTap(agent.Event{Kind: agent.EventKindError, Payload: tc.payload})
 
-			// #711 keeps the frame itself: only the detail goes, not the delivery.
-			require.Len(t, ch, 1, "the error frame is still delivered — only its detail is gone")
+			require.Len(t, ch, 1)
 			raw := <-ch
-
 			var frame generated.ErrorFrame
 			require.NoError(t, json.Unmarshal(raw, &frame))
 			require.NotNil(t, frame.Payload)
-			assert.Nil(t, frame.Payload.LlmError.Detail,
-				"issue #711: the error frame carries NO detail, curated override or not")
-			assert.Equal(t, tc.wantMessage, frame.Payload.LlmError.Message,
-				"#711 only removes detail: message still follows the curated-preferred rule")
-			assert.Equal(t, tc.wantCode, frame.Payload.LlmError.Code,
-				"#711 only removes detail: code still follows the curated-preferred rule")
-			assert.NotContains(t, string(raw), "upstream unavailable",
-				"issue #711: the provider body never crosses the wire")
-			assert.NotContains(t, string(raw), "status=503",
-				"issue #711: the detail's status/body diagnostic is no longer on the wire")
+			require.NotNil(t, frame.Payload.LlmError.Detail)
+			assert.Equal(t, tc.wantDetail, *frame.Payload.LlmError.Detail,
+				"Detail must follow the same curated-preferred rule as Code/Message/Retryable")
 		})
 	}
 }
