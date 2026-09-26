@@ -325,3 +325,35 @@ describe('PerformanceSection — D11 lowering dialog and D16 drift (US-6)', () =
     expect(addToast).not.toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringMatching(/^Lowered/) }))
   })
 })
+
+describe('PerformanceSection — raise (D20) and reload failure (8-reviewer gate gaps)', () => {
+  const CAPPED = { agent_id: 'c1', agent_name: 'Capped', old_value: 500, new_value: 300 }
+
+  it('D20: raising the global opens no lowering dialog and sends no confirmed_lowering', async () => {
+    // D20: a raise never rewrites an agent, so the preview/confirm step applies
+    // only below the current global. The preview stub deliberately lists a
+    // capped agent (stored 500 > new 300) so the test proves the SPA itself
+    // does not open the dialog on a raise, whatever a preview would say.
+    previewHandler = () => ({ status: 200, body: { value: 300, agents: [CAPPED] } })
+    putHandlers = [() => ({ status: 200, body: settings({ max_tool_iterations: 300 }) })]
+    renderSection()
+    await typeLimit('300')
+    await passReAuth()
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    const body = puts()[0].body as Record<string, unknown>
+    expect(body.max_tool_iterations).toBe(300)
+    expect(body.confirmed_lowering === undefined || (Array.isArray(body.confirmed_lowering) && body.confirmed_lowering.length === 0)).toBe(true)
+  })
+
+  it('a 500 performance_reload_failed says the value was saved but not applied — not a generic server error', async () => {
+    putHandlers = [() => ({ status: 500, body: { error: 'reload failed: injected', code: 'performance_reload_failed' } })]
+    renderSection()
+    await typeLimit('300')
+    await passReAuth()
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    const shown = () => [...addToast.mock.calls.map((c) => String((c[0] as { message?: string })?.message ?? '')), document.body.textContent ?? '']
+    await waitFor(() => expect(shown().some((t) => /saved but not applied/i.test(t))).toBe(true))
+    expect(shown().some((t) => /server (is )?unavailable/i.test(t))).toBe(false)
+  })
+})
