@@ -1611,15 +1611,31 @@ func buildReplayErrorFrame(sessionID string, entry session.TranscriptEntry) gene
 		frame.AgentId = &agentIDCopy
 	}
 	if entry.ErrorCode != "" {
+		replay := generated.LLMErrorReplay{
+			Code:      entry.ErrorCode,
+			Message:   entry.Content,
+			Retryable: entry.ErrorRetryable,
+			// MAJ-104/C-14: round-trip the persisted assembled-sentence
+			// marker so the SPA renders the reloaded error exactly like
+			// the live frame did.
+			ProviderMessage: llmErrorReplayFlag(entry.ProviderMessage),
+		}
 		frame.Payload = &generated.ReplayErrorPayload{
-			LlmError: generated.LLMErrorReplay{
-				Code:      entry.ErrorCode,
-				Message:   entry.Content,
-				Retryable: entry.ErrorRetryable,
-			},
+			LlmError: replay,
 		}
 	}
 	return frame
+}
+
+// llmErrorReplayFlag returns nil for false (omitted from the wire) and a
+// pointer to true when the persisted entry carries the provider-messages
+// assembled-sentence marker.
+func llmErrorReplayFlag(v bool) *bool {
+	if !v {
+		return nil
+	}
+	f := true
+	return &f
 }
 
 // toJudgeVerdictFrame converts an internal task.JudgeVerdict into the

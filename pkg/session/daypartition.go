@@ -273,6 +273,15 @@ type TranscriptEntry struct {
 	ErrorCode string `json:"error_code,omitempty"`
 	// ErrorRetryable is the translated LLMError.retryable flag.
 	ErrorRetryable bool `json:"error_retryable,omitempty"`
+	// ProviderMessage is the provider-messages spec §12/MAJ-104/C-14
+	// persisted marker: true when this error entry's content is the §6
+	// assembled sentence (a §6 template applied with the failing
+	// attempt's identity). Written by the agent's provider stage
+	// (pkg/agent/turn_transcript.go::persistErrorTranscript) and
+	// round-tripped by the replay path (pkg/gateway/replay.go::
+	// buildReplayErrorFrame) so the SPA renders the persisted entry
+	// exactly like the live frame.
+	ProviderMessage bool `json:"provider_message,omitempty"`
 	// CacheReadTokens and CacheWriteTokens carry the provider cache split for
 	// this assistant turn. Both are 0 for non-assistant entries and for legacy
 	// entries written before Wave 1 token tracking. Used to accumulate

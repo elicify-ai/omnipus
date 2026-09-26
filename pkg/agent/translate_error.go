@@ -76,6 +76,28 @@ const (
 	// it — it does not.
 	CodeRateLimited LLMErrorCode = "rate_limited"
 
+	// CodeQuotaBilling (C-5, provider-messages spec §7.3): the provider
+	// rejected the request because the account is out of credit — an
+	// explicit 402, the structured insufficient_quota error code, or a
+	// C-5 vocabulary phrase (billingPhrases). Billing takes precedence
+	// over rate_limited on a 429 (quota EXHAUSTION is not "too many
+	// requests") and never fires on a >=500 status. Not retryable: the
+	// same request fails identically until the operator tops up the
+	// account. Attribution `config` — the operator's fix in Settings.
+	CodeQuotaBilling LLMErrorCode = "quota_billing"
+
+	// CodeModelRetired (C-24, provider-messages spec §7.3): the provider
+	// answered 404 AND the body carries one of the three retirement
+	// phrases (modelRetiredPhrases) — the model has been withdrawn.
+	// User-side copy ONLY: the routing classifier (pkg/providers) never
+	// reads a retirement verdict (D12 — 404 routes FailoverUnknown, so
+	// the fallback chain still answers), and the media strip-retry
+	// fallback gate (outcomeFallbackEligible) is NOT re-pointed —
+	// near-misses stay CodeUnknown byte-identically. Not retryable under
+	// this code's copy; the operator picks a new model in the agent's
+	// settings.
+	CodeModelRetired LLMErrorCode = "model_retired"
+
 	// CodeNetwork: 408 / 5xx / timeout / connection drop. Retryable.
 	CodeNetwork LLMErrorCode = "network"
 
@@ -265,6 +287,18 @@ type LLMError struct {
 	Message   string
 	Retryable bool
 	Detail    string
+
+	// Provider-messages spec §7.3 (MAJ-001/C-14): the failing attempt's
+	// identity and captured request id, plus the assembled-sentence flag.
+	// Provider/Model come from the per-candidate attempt (MAJ-110) via the
+	// *ProviderError; RequestID from the boundary's request-id candidates.
+	// ProviderMessage marks Message as the §6 assembled sentence (a §6
+	// template applied with real identity); the transcript persists the
+	// sentence when this is true, replay round-trips it.
+	Provider        string
+	Model           string
+	RequestID       string
+	ProviderMessage bool
 }
 
 // userMessages maps each code to its generic user-facing message. Generic
@@ -589,7 +623,18 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 
 	switch {
 	case status == 429:
+		// C-5 on the 429 path, BEFORE rate_limited: a structured
+		// insufficient_quota / C-5-phrase quota exhaustion is BILLING even
+		// on a 429 (dataset D2), while rate-limit quota prose stays
+		// rate_limited. Never on a >=500 status.
+		if isBillingEvidence(body, status) {
+			return CodeQuotaBilling
+		}
 		return CodeRateLimited
+	case status == 402:
+		// C-5: status-first — an explicit 402 is billing whatever the body
+		// says (dataset D2: "402 any body").
+		return CodeQuotaBilling
 	case status == 408:
 		return CodeNetwork
 	case status >= 500 && status <= 599:
@@ -626,6 +671,20 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 		body = strings.TrimSpace(body)
 		if body == "" {
 			return CodeUnknown
+		}
+		// C-5 (provider-messages spec §7.3): billing evidence precedes every
+		// other 4xx body detector — a 400 Anthropic "credit balance too low"
+		// is quota_billing (dataset D2), not a generic rejection. The >=500
+		// guard lives in isBillingEvidence.
+		if isBillingEvidence(body, status) {
+			return CodeQuotaBilling
+		}
+		// C-24: a 404 carrying a retirement phrase is model_retired. The
+		// 404-gate keeps every near-miss (a 410, or the phrase on another
+		// status) CodeUnknown byte-identically; the media strip-retry gate
+		// (outcomeFallbackEligible) is not re-pointed.
+		if isModelRetiredBody(body, status) {
+			return CodeModelRetired
 		}
 		// 4xx with body: check media / capability / policy substrings
 		// BEFORE falling through. This is the documented exception to
@@ -734,6 +793,20 @@ func TranslateLLMError(pe *ProviderError, message string) LLMError {
 		Message:   defaultUserMessage(code),
 		Retryable: isRetryable(code),
 		Detail:    buildDetail(pe, message),
+	}
+	// provider-messages spec §7.3 (MAJ-001/C-16): assemble the §6 sentence
+	// when the failing attempt's identity is known and the classified code
+	// has a provider-message template. Identity rides the *ProviderError
+	// (per-candidate attempt, MAJ-110); without it the catalogue copy
+	// stands and the flag stays false (AU2).
+	if pe != nil {
+		llm.Provider = pe.Provider
+		llm.Model = pe.Model
+		llm.RequestID = pe.RequestID
+		if sentence := providerMessageFor(code, pe.Provider); sentence != "" {
+			llm.Message = sentence
+			llm.ProviderMessage = true
+		}
 	}
 	return llm
 }
@@ -1005,7 +1078,7 @@ func buildDetail(pe *ProviderError, message string) string {
 			parts = append(parts, "status="+itoa(pe.Status))
 		}
 		if len(pe.Body) > 0 {
-			preview := strings.TrimSpace(logger.ScrubSensitiveValues(pe.Body))
+			preview := strings.TrimSpace(scrubDetailText(pe.Body))
 			if len(preview) > 512 {
 				preview = preview[:512] + "..."
 			}
@@ -1013,7 +1086,7 @@ func buildDetail(pe *ProviderError, message string) string {
 		}
 	}
 	if len(parts) == 0 && message != "" {
-		parts = append(parts, logger.ScrubSensitiveValues(message))
+		parts = append(parts, scrubDetailText(message))
 	}
 	return strings.Join(parts, " ")
 }
@@ -1057,6 +1130,16 @@ type ProviderError struct {
 	Status int
 	Body   string
 	Err    error
+
+	// Provider-messages spec §7.2 (MAJ-110): the identity of the PER-CANDIDATE
+	// ATTEMPT that failed — which provider's SDK client made the call and
+	// which model it asked for. Filled by the emit sites that know the attempt
+	// (ProviderErrorFromFailover reads it off the FailoverError; the agent
+	// loop's provider-response handler from the attempt context). Never
+	// inferred from message text.
+	Provider  string
+	Model     string
+	RequestID string
 }
 
 // Error implements error so *ProviderError can participate in the
@@ -1120,8 +1203,13 @@ func ProviderErrorFromFailover(fe *providers.FailoverError) *ProviderError {
 			// Preserve the original error chain on Err for Verbose-Chat
 			// Detail — buildDetail joins Status + body-preview; not
 			// replacing with pp keeps the wrapping context visible.
+			pe.RequestID = pp.RequestID
 		}
 	}
+	// Provider-messages spec §7.2 (MAJ-110): the identity of the attempt
+	// that failed, carried by the FailoverError the chain stamped.
+	pe.Provider = fe.Provider
+	pe.Model = fe.Model
 	return pe
 }
 
@@ -1228,12 +1316,21 @@ func providerErrorFromChain(err error) *ProviderError {
 		// Translate the provider-side ProviderError into the agent-side
 		// ProviderError. The two types share the Status field shape, but
 		// the field names differ — keep an explicit copy so the agent
-		// package owns the wire-shape seam.
-		return &ProviderError{
-			Status: pp.Status,
-			Body:   pp.Body,
-			Err:    pp,
+		// package owns the wire-shape seam. The captured request id rides
+		// the provider-side error (§7.2); identity of the attempt is read
+		// off the FailoverError when the same chain also carries one.
+		out := &ProviderError{
+			Status:    pp.Status,
+			Body:      pp.Body,
+			Err:       pp,
+			RequestID: pp.RequestID,
 		}
+		var fe *providers.FailoverError
+		if errors.As(err, &fe) {
+			out.Provider = fe.Provider
+			out.Model = fe.Model
+		}
+		return out
 	}
 	// Fallthrough: a FailoverError without an inner pe (timeout, context
 	// canceled). Body stays empty; classifier falls back to Err.
