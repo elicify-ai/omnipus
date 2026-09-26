@@ -52,7 +52,10 @@ var hiddenProtected = map[string]struct{}{
 }
 var externalUnsupported = map[string]struct{}{
 	"soul": {}, "skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {},
-	"voice": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {}, "fallback_models": {},
+	"voice": {}, "context_window_override": {}, "model_params": {}, "fallback_models": {},
+	// max_tool_iterations is supported (#904 D14): an external CLI worker
+	// follows the global tool-iteration limit and may lower it; the
+	// effective value is the CLI's turn cap.
 	// An external CLI worker runs its own CLI's tools, never Omnipus's
 	// ask-policy tools, so there is no Auto-approve to switch off.
 	"auto_approve_disabled": {},

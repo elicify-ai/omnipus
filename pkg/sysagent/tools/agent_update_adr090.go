@@ -55,11 +55,12 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 	}
 	known := knownToolPolicies(t.deps)
 	inv := t.deps.currentInventory()
+	defaults := t.deps.agentDefaults()
 	result, mutateErr := store.MutateState(id, revision, func(a *config.AgentConfig) error {
 		if err := agentmutation.ValidateFields(*a, fields); err != nil {
 			return err
 		}
-		return applyAgentToolArgs(a, args, known, inv)
+		return applyAgentToolArgs(a, args, known, inv, defaults)
 	}, soul)
 	if mutateErr != nil {
 		return t.mutateErrorResult(id, result, mutateErr)
