@@ -1494,19 +1494,29 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 
 	// (1) kill -9 mid-plan: persist the cross-section of stranded sessions.
 	//     A running session with a checkpoint + undelivered messages.
+	//     ADR-093 D3: a standing root (no SteeredBy edge) is now exempt from
+	//     this sweep, so bs-running/bs-queued are stamped as steered workers
+	//     — the shape D3's own text still calls honest to sweep — to keep
+	//     testing the sweep mechanism itself; bs-owner/bs-stale-goal below
+	//     stay plain roots because their own exemptions ((b) and N-15) must
+	//     still fire for a standing root exactly as for any other record.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-running", Generation: 1, State: session.LifecycleRunning,
 		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind:        session.OwnerScopeHuman,
+		Origin:                &session.Origin{Kind: session.OriginKindDelegate},
+		SteeredBy:             &session.SteeredBy{SteeringSessionID: "bs-parent", RootSessionID: "bs-parent"},
 		LastCheckpointRef:     "ckpt-bs",
 		UndeliveredMessageIDs: []string{"bs-msg-1", "bs-msg-2"},
 		CreatedAt:             time.Now().Add(-1 * time.Hour),
 	})
-	// A queued session — also non-terminal, also swept.
+	// A queued session — also non-terminal, also swept. Same D3 note above.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-queued", Generation: 1, State: session.LifecycleQueued,
 		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman,
+		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "bs-parent", RootSessionID: "bs-parent"},
 	})
 	// A terminal session — MUST be left alone.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
