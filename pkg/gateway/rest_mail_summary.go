@@ -14,15 +14,7 @@ import (
 
 func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, workspaceID string) {
 	cfg := a.agentLoop.GetConfig()
-	out := gen.MailSummaryList{Items: []struct {
-		AgentId        string                               `json:"agent_id"`
-		LastErrorClass *string                              `json:"last_error_class"`
-		LastSeenUid    *int                                 `json:"last_seen_uid"`
-		LastSuccessAt  *time.Time                           `json:"last_success_at"`
-		NextAttemptAt  *time.Time                           `json:"next_attempt_at"`
-		UnseenTotal    int                                  `json:"unseen_total"`
-		WatcherState   gen.MailSummaryListItemsWatcherState `json:"watcher_state"`
-	}{}}
+	out := gen.MailSummaryList{}
 	for agentID, ws := range cfg.Mailboxes {
 		mb, ok := ws[workspaceID]
 		if !ok || !mb.Enabled {
@@ -35,24 +27,14 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 		if err != nil {
 			continue
 		}
-		var row struct {
-			AgentId        string                               `json:"agent_id"`
-			LastErrorClass *string                              `json:"last_error_class"`
-			LastSeenUid    *int                                 `json:"last_seen_uid"`
-			LastSuccessAt  *time.Time                           `json:"last_success_at"`
-			NextAttemptAt  *time.Time                           `json:"next_attempt_at"`
-			UnseenTotal    int                                  `json:"unseen_total"`
-			WatcherState   gen.MailSummaryListItemsWatcherState `json:"watcher_state"`
-		}
-		row.WatcherState = gen.MailSummaryListItemsWatcherStateOk
+		row := gen.MailboxNewMailSummary{WatcherState: gen.MailboxNewMailSummaryWatcherStateOk}
 		if st == nil {
 			st = &email.WatcherState{State: "ok", UnseenTotal: 0}
-			row.LastSeenUid = nil
 		}
 		if st.State == "error" {
-			row.WatcherState = gen.MailSummaryListItemsWatcherStateError
+			row.WatcherState = gen.MailboxNewMailSummaryWatcherStateError
 		} else if st.State == "backoff" {
-			row.WatcherState = gen.MailSummaryListItemsWatcherStateBackoff
+			row.WatcherState = gen.MailboxNewMailSummaryWatcherStateBackoff
 		}
 		row.AgentId = agentID
 		row.UnseenTotal = st.UnseenTotal
@@ -63,13 +45,32 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 		if s := st.LastErrorClass; s != "" {
 			row.LastErrorClass = &s
 		}
-		if ts, perr := time.Parse(time.RFC3339, st.LastSuccessAt); perr == nil && st.LastSuccessAt != "" {
-			row.LastSuccessAt = &ts
+		if st.LastSuccessAt != "" {
+			if ts, perr := time.Parse(time.RFC3339, st.LastSuccessAt); perr == nil {
+				row.LastSuccessAt = &ts
+			}
 		}
-		if ts, perr := time.Parse(time.RFC3339, st.NextAttemptAt); perr == nil && st.NextAttemptAt != "" {
-			row.NextAttemptAt = &ts
+		if st.NextAttemptAt != "" {
+			if ts, perr := time.Parse(time.RFC3339, st.NextAttemptAt); perr == nil {
+				row.NextAttemptAt = &ts
+			}
 		}
-		out.Items = append(out.Items, row)
+		out.Items = append(out.Items, struct {
+			AgentId        string                               `json:"agent_id"`
+			LastErrorClass *string                              `json:"last_error_class"`
+			LastSeenUid    *int                                 `json:"last_seen_uid"`
+			LastSuccessAt  *time.Time                           `json:"last_success_at"`
+			NextAttemptAt  *time.Time                           `json:"next_attempt_at"`
+			UnseenTotal    int                                  `json:"unseen_total"`
+			WatcherState   gen.MailSummaryListItemsWatcherState `json:"watcher_state"`
+		}{
+			AgentId:        row.AgentId,
+			LastErrorClass: row.LastErrorClass,
+			LastSeenUid:    row.LastSeenUid,
+			LastSuccessAt:  row.LastSuccessAt,
+			NextAttemptAt:  row.NextAttemptAt, UnseenTotal: row.UnseenTotal,
+			WatcherState: gen.MailSummaryListItemsWatcherState(row.WatcherState),
+		})
 	}
 	jsonOK(w, out)
 }
