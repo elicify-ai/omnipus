@@ -4,6 +4,7 @@
 import { useExternalStoreRuntime } from "@assistant-ui/react";
 import type { ThreadMessageLike, AppendMessage } from "@assistant-ui/react";
 import { useChatStore } from "@/store/chat";
+import { useSessionStore } from "@/store/session";
 import type { ChatMessage, MediaAttachment } from "@/store/chat";
 import type { AssistantMessage, ToolCall } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
@@ -118,7 +119,8 @@ function buildContentParts(
   toolCalls: Record<string, StoreToolCall>,
   toolCallOrder: string[],
   textAtToolCallStart: Record<string, string>,
-  isLastAssistant: boolean
+  isLastAssistant: boolean,
+  toolCallOwnerMessageId?: Record<string, string>
 ): ThreadMessageLike["content"] {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -134,8 +136,22 @@ function buildContentParts(
     }
 
     // Last assistant message: check for live (in-progress) tool calls to interleave.
+    // Founder-reported fix (2026-09-26): this used to attach EVERY live
+    // (not-yet-baked) toolCallOrder entry to the newest bubble with no
+    // ownership check — after a mid-turn steer, the previous bubble's
+    // still-queued calls re-appeared duplicated and stuck under the NEW
+    // bubble until turn end. A live call now attaches only when the store's
+    // toolCallOwnerMessageId (stamped per call at tool_call_start) has NO
+    // entry for it — the legacy path this interleave predates — or names
+    // THIS message. No entry possible? undefined-safe: callers that predate
+    // the parameter behave exactly as before.
     const seenIds = new Set(historyTCs.map((tc) => tc.id));
-    const liveIds = toolCallOrder.filter((id) => !seenIds.has(id) && toolCalls[id]);
+    const liveIds = toolCallOrder.filter(
+      (id) =>
+        !seenIds.has(id) &&
+        toolCalls[id] &&
+        (toolCallOwnerMessageId?.[id] === undefined || toolCallOwnerMessageId[id] === msg.id)
+    );
 
     if (liveIds.length === 0) {
       pushHistoryParts(parts, msg.content, historyTCs, toolCalls, textAtToolCallStart);
@@ -215,12 +231,13 @@ export function convertMessage(
   toolCalls: Record<string, StoreToolCall>,
   toolCallOrder: string[],
   textAtToolCallStart: Record<string, string>,
-  isLastAssistant: boolean
+  isLastAssistant: boolean,
+  toolCallOwnerMessageId?: Record<string, string>
 ): ThreadMessageLike {
   return {
     id: msg.id,
     role: msg.role,
-    content: buildContentParts(msg, toolCalls, toolCallOrder, textAtToolCallStart, isLastAssistant),
+    content: buildContentParts(msg, toolCalls, toolCallOrder, textAtToolCallStart, isLastAssistant, toolCallOwnerMessageId),
     ...(msg.role === "assistant" ? { status: buildMessageStatus(msg) } : {}),
   };
 }
@@ -232,6 +249,13 @@ export function useOmnipusRuntime() {
   const toolCalls = useChatStore((s) => s.toolCalls);
   const toolCallOrder = useChatStore((s) => s.toolCallOrder);
   const textAtToolCallStart = useChatStore((s) => s.textAtToolCallStart);
+  // toolCallOwnerMessageId is bucket-internal (deliberately omitted from the
+  // foreground projection) — read it from the active session's bucket, the
+  // same pattern ChatScreen uses for its StreamingDelegation surface.
+  const activeSessionId = useSessionStore((s) => s.activeSessionId);
+  const toolCallOwnerMessageId = useChatStore((s) =>
+    activeSessionId ? s.sessionsById[activeSessionId]?.toolCallOwnerMessageId : undefined
+  );
   const isStreaming = useChatStore((s) => s.isStreaming);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const cancelStream = useChatStore((s) => s.cancelStream);
@@ -251,7 +275,7 @@ export function useOmnipusRuntime() {
       // the store are attached only to the last assistant message.
       const lastAssistantIdx = messages.map((m) => m.role).lastIndexOf('assistant');
       const isLastAssistant = lastAssistantIdx >= 0 && messages[lastAssistantIdx].id === msg.id;
-      return convertMessage(msg, toolCalls, toolCallOrder, textAtToolCallStart, isLastAssistant);
+      return convertMessage(msg, toolCalls, toolCallOrder, textAtToolCallStart, isLastAssistant, toolCallOwnerMessageId);
     },
     adapters: {
       // Native attachment handling — uploads files to /api/v1/uploads and yields

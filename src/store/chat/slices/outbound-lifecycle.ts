@@ -495,6 +495,25 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
               // seam marker on close; this site didn't, leaving a
               // representable-but-meaningless true on a finalized bubble.
               msg.pendingTextBoundary = false
+              // Founder-reported fix (2026-09-26): this close used to leave the
+              // open bubble's owned tool calls OUT of its `tool_calls` — the
+              // bubble went historical (VirtualAssistantMessageRow reads ONLY
+              // message.tool_calls) and its rows vanished (measured 3 -> 0)
+              // until turn end. Bake its owned calls in place at close time.
+              // bakeToolCallsByOwner does NOT touch toolCallOrder/toolCalls/
+              // toolCallOwnerMessageId — the live entries deliberately STAY
+              // queued: a late tool_call_result still lands in the live map,
+              // which the runtime resolves through, and turn end's bake
+              // re-merges by id with offsets preserved (stampToolCallOffset's
+              // prevOffset-first rule). Bake-in-place, not move-and-delete.
+              bakeToolCallsByOwner(
+                draft.messagesById,
+                draft.toolCallOrder,
+                draft.toolCalls,
+                draft.toolCallOwnerMessageId ?? {},
+                openId,
+                draft.textAtToolCallStart
+              )
             }) as Partial<SessionChatState>
           })
           return
