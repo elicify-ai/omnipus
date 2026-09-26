@@ -39,9 +39,11 @@ OMNIPUS_BEARER_TOKEN="" ./omnipus gateway --allow-empty &
   `$OMNIPUS_HOME/config.json`. Silent exit → `logs/gateway_panic.log`.
 - `gateway.dev_mode_bypass` (default false): with no users and no env token,
   true admits callers as admin (one-time WARN). Onboarding does NOT need it —
-  `state`, `onboarding/*`, `auth/*`, `providers`, `media`, `uploads` are
-  optional-auth. `RequireNotBypass` 503s high-blast-radius admin routes while
-  bypass is on; never remove it without an ADR.
+  `state`, `onboarding/*`, `auth/*`, `providers` are optional-auth; `uploads`
+  and workspace media require auth since #716, while legacy
+  `/api/v1/media/{uuid}` stays optional (122-bit id). `RequireNotBypass` 503s
+  high-blast-radius admin routes while bypass is on; never remove it without
+  an ADR.
 
 ## Default agent — one singleton, two ladders (ADR-054 D6.4)
 
