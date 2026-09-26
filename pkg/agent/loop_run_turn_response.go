@@ -774,8 +774,7 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 	if reasoningContent == "" {
 		reasoningContent = rr.rq.ri.rf.response.ReasoningContent
 	}
-	go rr.rq.ri.rf.rt.al.handleReasoning(
-		rr.rq.ri.rf.rt.turnCtx,
+	rr.rq.ri.rf.rt.spawnReasoningPublish(
 		reasoningContent,
 		rr.rq.ri.rf.rt.ts.channel,
 		rr.rq.ri.rf.rt.al.targetReasoningChannelID(rr.rq.ri.rf.rt.ts.channel),
@@ -806,6 +805,32 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 	}
 	logger.DebugCF("agent", "LLM response", llmResponseFields)
 	return agentLoopRunTurnResponseNext
+}
+
+// reasoningPublishScheduledHook is a test-only synchronization seam. When
+// non-nil, it runs synchronously on the reasoning-publish goroutine started
+// by spawnReasoningPublish below, immediately after the goroutine starts and
+// before any publish work happens. A test uses it to pin that goroutine at a
+// chosen point in time relative to when the turn itself ends and cancels
+// turnCtx — an ordering otherwise reproducible only by chance under load.
+// Always nil in production; never set outside a test.
+var reasoningPublishScheduledHook func()
+
+// spawnReasoningPublish launches the best-effort reasoning-trace publish for
+// this turn on its own goroutine. Nothing in runTurn waits for it — it is
+// fire-and-forget — and runTurn cancels its own turnCtx via defer
+// (loop.go::runTurn, "defer rz.rc.turnCancel()") as soon as it returns. If
+// the Go scheduler does not run this goroutine until after that
+// cancellation, handleReasoning observes an already-canceled context on
+// entry and returns without publishing — silently dropping the reasoning
+// trace under load, with no error surfaced anywhere.
+func (rt *agentLoopRunTurn) spawnReasoningPublish(reasoningContent, channel, channelID string) {
+	go func() {
+		if reasoningPublishScheduledHook != nil {
+			reasoningPublishScheduledHook()
+		}
+		rt.al.handleReasoning(rt.turnCtx, reasoningContent, channel, channelID)
+	}()
 }
 
 // recordToolCalls normalizes and records tool calls before execution begins.
