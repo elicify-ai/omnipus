@@ -24,7 +24,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -316,7 +315,7 @@ func (a *restAPI) rollbackLoweredAgents(ctx context.Context, store maxToolIterat
 	for _, d := range done {
 		_, err := setAgentMaxToolIterations(store, d.change.AgentId, d.revision, d.change.NewValue, d.change.OldValue)
 		if err != nil {
-			slog.Error("rest: PUT /performance: could not restore an agent's tool-iteration limit after a failed lowering",
+			logsafeError("rest: PUT /performance: could not restore an agent's tool-iteration limit after a failed lowering",
 				"agent_id", d.change.AgentId, "old", d.change.OldValue, "current", d.change.NewValue, "error", err)
 			stuck = append(stuck, d.change)
 			continue
@@ -365,7 +364,7 @@ func (a *restAPI) auditMaxToolIterationsChange(ctx context.Context, resource str
 		return
 	}
 	if err := audit.EmitSecuritySettingChange(ctx, a.agentLoop.AuditLogger(), resource, oldValue, newValue); err != nil {
-		slog.Error("rest: tool-iteration limit audit write failed", "resource", resource, "error", err)
+		logsafeError("rest: tool-iteration limit audit write failed", "resource", resource, "error", err)
 	}
 }
 

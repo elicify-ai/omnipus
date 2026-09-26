@@ -145,7 +145,7 @@ func mtiSnapshotFiles(t *testing.T, api *restAPI, ids ...string) map[string]stri
 func mtiSecurityChanges(t *testing.T, api *restAPI, extraDirs ...string) []map[string]any {
 	t.Helper()
 	dirs := append([]string{filepath.Join(filepath.Dir(api.agentLoop.GetConfig().AgentHomeBasePath()), "system")}, extraDirs...)
-	var out []map[string]any
+	out := make([]map[string]any, 0, len(dirs))
 	for _, d := range dirs {
 		out = append(out, readAuditEntries(t, d, "security_setting_change")...)
 	}
@@ -164,7 +164,8 @@ func mtiAssertAgentChanges(t *testing.T, got any, want []mtiLowering) {
 	t.Helper()
 	arr, ok := got.([]any)
 	require.True(t, ok, "expected a JSON array of agent changes, got %T (%v)", got, got)
-	var gotNorm, wantNorm []string
+	gotNorm := make([]string, 0, len(arr))
+	wantNorm := make([]string, 0, len(want))
 	for _, e := range arr {
 		m, _ := e.(map[string]any)
 		require.Len(t, m, 4, "MaxToolIterationAgentChange has exactly 4 fields (additionalProperties:false): %v", m)
