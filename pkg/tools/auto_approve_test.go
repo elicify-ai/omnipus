@@ -166,9 +166,11 @@ func TestAutoApprove_ClassTableMatchesFounderFile(t *testing.T) {
 		}
 	}
 	table := AutoApproveClassTable()
-	// 109 catalog tools plus bash (§3.8 catalog total 110).
-	if len(table) != 110 {
-		t.Errorf("table has %d entries, want 110 (109 founder-file tools plus bash)", len(table))
+	// 109 founder-file tools plus bash (§3.8) plus create_email_draft
+	// (D45, 2026-09-26 -- catalog grew after the founder file was saved;
+	// total 111).
+	if len(table) != 111 {
+		t.Errorf("table has %d entries, want 111 (109 founder-file tools plus bash plus create_email_draft -- D45, 2026-09-26, catalog grew after the founder file was saved)", len(table))
 	}
 	if got := table["bash"]; got != AutoShellMode {
 		t.Errorf("bash class = %s, want shell_mode (bash keeps its own mechanism, §3.7)", got)
