@@ -52,16 +52,32 @@ func bootAuditLoggerForRedactionTest(t *testing.T) (*audit.Logger, string) {
 	return auditLogger, filepath.Join(home, "system", "audit.jsonl")
 }
 
-// lastAuditLine returns the last non-empty JSONL line of path, decoded.
-func lastAuditLine(t *testing.T, path string) (string, map[string]any) {
+// readWholeAuditFile returns every byte of audit.jsonl, so absence
+// assertions cover every entry, not only the last one.
+func readWholeAuditFile(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	last := lines[len(lines)-1]
-	var parsed map[string]any
-	require.NoError(t, json.Unmarshal([]byte(last), &parsed))
-	return last, parsed
+	return string(data)
+}
+
+// auditEntryByTool returns the single decoded entry whose "tool" is tool.
+func auditEntryByTool(t *testing.T, path, tool string) map[string]any {
+	t.Helper()
+	var found map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(readWholeAuditFile(t, path)), "\n") {
+		if line == "" {
+			continue
+		}
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &parsed), "bad audit line: %s", line)
+		if parsed["tool"] == tool {
+			require.Nil(t, found, "more than one entry for tool %q", tool)
+			found = parsed
+		}
+	}
+	require.NotNil(t, found, "no audit entry for tool %q", tool)
+	return found
 }
 
 func TestProductionAuditLogger_RedactsCredentialsInBashCommand(t *testing.T) {
@@ -79,7 +95,8 @@ func TestProductionAuditLogger_RedactsCredentialsInBashCommand(t *testing.T) {
 		Command:  command,
 	}))
 
-	raw, parsed := lastAuditLine(t, auditPath)
+	raw := readWholeAuditFile(t, auditPath)
+	parsed := auditEntryByTool(t, auditPath, "bash")
 	assert.NotContains(t, raw, "abcDEF123456.ghiJKL789-token",
 		"the Bearer token must not reach audit.jsonl")
 	assert.NotContains(t, raw, orKey,
@@ -116,7 +133,7 @@ func TestProductionAuditLogger_KeepsMailRecipientsAndMessageID(t *testing.T) {
 		},
 	}))
 
-	_, parsed := lastAuditLine(t, auditPath)
+	parsed := auditEntryByTool(t, auditPath, "email_send")
 	details, ok := parsed["details"].(map[string]any)
 	require.True(t, ok, "details must be a JSON object")
 	assert.Equal(t, []any{"a@b.example"}, details["recipients"],
@@ -128,4 +145,45 @@ func TestProductionAuditLogger_KeepsMailRecipientsAndMessageID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.True(t, res.Valid, "chain must verify: broken_at=%d reason=%q", res.BrokenAt, res.Reason)
+}
+
+func TestProductionAuditLogger_RedactsURLUserinfoPasswords(t *testing.T) {
+	auditLogger, auditPath := bootAuditLoggerForRedactionTest(t)
+
+	require.NoError(t, auditLogger.Log(&audit.Entry{
+		Event:    audit.EventExec,
+		Decision: audit.DecisionAllow,
+		AgentID:  "general-purpose",
+		Tool:     "bash",
+		Command:  "psql postgres://admin:S3cretPass@db.internal/app && git clone https://oauth2:glpat-AbCdEf123456@gitlab.example/x.git",
+	}))
+
+	raw := readWholeAuditFile(t, auditPath)
+	assert.NotContains(t, raw, "S3cretPass")
+	assert.NotContains(t, raw, "glpat-AbCdEf123456")
+	got, _ := auditEntryByTool(t, auditPath, "bash")["command"].(string)
+	assert.Equal(t,
+		"psql postgres://admin:[REDACTED]@db.internal/app && git clone https://oauth2:[REDACTED]@gitlab.example/x.git",
+		got, "only the password part of the URL is replaced")
+}
+
+func TestProductionAuditLogger_KeepsTaskSlugPathsForLastWriter(t *testing.T) {
+	auditLogger, auditPath := bootAuditLoggerForRedactionTest(t)
+
+	const writtenPath = "/home/u/workspace/docs/project-task-management-level1-spec.md"
+	require.NoError(t, auditLogger.Log(&audit.Entry{
+		Event:    audit.EventFileOp,
+		Decision: audit.DecisionAllow,
+		AgentID:  "general-purpose",
+		Tool:     "write_file",
+		Details:  map[string]any{"path": writtenPath, "op": "write", "slug": "risk-assessment-framework"},
+	}))
+
+	raw := readWholeAuditFile(t, auditPath)
+	assert.Contains(t, raw, writtenPath, "a task-... path must not be mangled by the sk- key pattern")
+	assert.Contains(t, raw, "risk-assessment-framework", "a risk-... slug must not be mangled")
+
+	agentID, found := auditLogger.LastWriterForPath(audit.EventFileOp, writtenPath)
+	assert.True(t, found, "last-writer lookup must still find the write")
+	assert.Equal(t, "general-purpose", agentID)
 }
