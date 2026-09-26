@@ -171,3 +171,31 @@ func waitBudgetFrom(ctx context.Context) *WaitBudget {
 	b, _ := ctx.Value(waitBudgetKey{}).(*WaitBudget)
 	return b
 }
+
+// --- C-10: ctx-carried streamed-bytes check --------------------------------
+
+type streamedBytesKey struct{}
+
+// StreamedBytesCheck reports how many bytes of the CURRENT attempt have
+// already been streamed to the user (0 = none). The chain consults it before
+// deciding an in-place retry (C-10): once bytes have flowed, a retry would
+// duplicate visible AND persisted content — the same defensive boundary the
+// delegated single-provider retry applies (pkg/agent
+// loop_provider_retry.go::callProvider). The caller's fn must count the
+// current attempt only (the agent loop resets it per attempt); chains whose
+// closure never streams (multi-candidate) leave the check absent or at 0 and
+// the guard stays inert.
+type StreamedBytesCheck func() int64
+
+// WithStreamedBytesCheck attaches fn to ctx for one chain Execute call.
+func WithStreamedBytesCheck(ctx context.Context, fn StreamedBytesCheck) context.Context {
+	return context.WithValue(ctx, streamedBytesKey{}, fn)
+}
+
+func streamedBytesFrom(ctx context.Context) StreamedBytesCheck {
+	if ctx == nil {
+		return nil
+	}
+	fn, _ := ctx.Value(streamedBytesKey{}).(StreamedBytesCheck)
+	return fn
+}

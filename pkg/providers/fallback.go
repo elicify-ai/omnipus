@@ -36,6 +36,23 @@ type FallbackChain struct {
 	waitFunc func(ctx context.Context, d time.Duration) error
 }
 
+// WithCooldown returns a shallow copy of the chain whose cooldown tracker is
+// replaced by ct, keeping perCandidateTimeout and the test seams (all other
+// fields are pointers/funcs — safe to copy by value). The root
+// single-candidate path (pkg/agent loop_run_turn.go::callProviderOnce, gate
+// finding F1) uses a THROWAWAY tracker: today's plain path marks nothing, and
+// a shared-tracker MarkFailure would cooldown-skip the only candidate on a
+// LATER turn — an all-skipped exhaustion whose generic message would replace
+// the real error exactly when the user retries.
+func (fc *FallbackChain) WithCooldown(ct *CooldownTracker) *FallbackChain {
+	if ct == nil {
+		ct = NewCooldownTracker()
+	}
+	cp := *fc
+	cp.cooldown = ct
+	return &cp
+}
+
 func (fc *FallbackChain) now() time.Time {
 	if fc.nowFunc != nil {
 		return fc.nowFunc()
@@ -475,8 +492,20 @@ func (fc *FallbackChain) Execute(
 			// Retriable error.
 			lastErr = err
 
+			// §7.4 C-10: bytes of THIS attempt already streamed to the user
+			// (the caller's ctx-carried check; pkg/agent wires the single-
+			// candidate attempt's own counter). An in-place retry would
+			// duplicate visible and persisted content, so the rate-limit
+			// branch is bypassed and the candidate falls through to the
+			// mark-and-move-on path — with a single candidate that concludes
+			// exhaustion carrying the real error. Providers normally fail
+			// BEFORE any bytes flow, so this is a defensive bound.
+			c10Streamed := false
+			if fn := streamedBytesFrom(ctx); fn != nil && fn() > 0 {
+				c10Streamed = true
+			}
 			// §7.4: only rate-limit-class failures retry in place.
-			if failErr.Reason == FailoverRateLimit && attemptNo < maxAttemptsPerCandidate {
+			if failErr.Reason == FailoverRateLimit && attemptNo < maxAttemptsPerCandidate && !c10Streamed {
 				ras := retryAfterOf(err)
 				if ras > int(retryAfterCeiling.Seconds()) {
 					// A-4: over-ceiling — skip the retries AND the mark;
