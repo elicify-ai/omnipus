@@ -18137,7 +18137,7 @@ type Mailbox struct {
 	// DraftsFolderName Advanced override for the mailbox's Drafts folder name. Empty (default) means the folder is auto-resolved by its standard name.
 	DraftsFolderName *string `json:"drafts_folder_name,omitempty"`
 
-	// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply) are registered for the owning agent.
+	// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply, create_email_draft) are registered for the owning agent.
 	Enabled bool `json:"enabled"`
 
 	// ImapHost IMAP server hostname (implicit TLS / IMAPS).
@@ -18211,7 +18211,7 @@ type MailboxListResponse struct {
 		// DraftsFolderName Advanced override for the mailbox's Drafts folder name. Empty (default) means the folder is auto-resolved by its standard name.
 		DraftsFolderName *string `json:"drafts_folder_name,omitempty"`
 
-		// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply) are registered for the owning agent.
+		// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply, create_email_draft) are registered for the owning agent.
 		Enabled bool `json:"enabled"`
 
 		// ImapHost IMAP server hostname (implicit TLS / IMAPS).

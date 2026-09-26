@@ -11972,7 +11972,7 @@ export interface components {
              * @example mia
              */
             agent_id: string;
-            /** @description Whether the email tools (read_inbox, search_email, read_message, send_email, reply) are registered for the owning agent. */
+            /** @description Whether the email tools (read_inbox, search_email, read_message, send_email, reply, create_email_draft) are registered for the owning agent. */
             enabled: boolean;
             /**
              * @description ID of the workspace the mailbox surfaces in. Always present: a mailbox is addressed by its (agent, workspace) pair, so the server serializes this from the authoritative pair key — never from mutable state.

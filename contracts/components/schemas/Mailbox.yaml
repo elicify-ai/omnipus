@@ -23,7 +23,8 @@ properties:
     type: boolean
     description: >
       Whether the email tools (read_inbox, search_email, read_message,
-      send_email, reply) are registered for the owning agent.
+      send_email, reply, create_email_draft) are registered for the owning
+      agent.
   workspace_id:
     type: string
     description: >
