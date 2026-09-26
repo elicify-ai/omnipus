@@ -445,22 +445,32 @@ func findLiteralMCPServerHeaderDotPath(v any) string {
 }
 
 // isLiteralMCPServerHeaderDotPath reports whether the accumulated dotted path
-// p names an MCP server header value — segments tools, mcp, servers, a server
-// name, "headers", and at least one segment after it — and val is a literal
-// for it: a non-empty string other than the redactedHeaderValue round-trip
-// placeholder. The shape is matched positionally after splitting the
-// accumulated path, so mixing nesting with dot-path keys cannot escape it
-// (their concatenation IS the path), and a server literally named "headers"
-// does not match — the position decides, not a substring search.
+// p names an MCP server header value — segments tools, mcp, servers, then the
+// server name and the header name (each of which may itself contain dots and
+// split across several segments) — and val is a literal for it: a non-empty
+// string other than the redactedHeaderValue round-trip placeholder. After the
+// fixed tools.mcp.servers prefix, "headers" is matched by word anywhere
+// before the last segment (issue #638, round-3 review F6): a fixed segment
+// index cannot know where a dot-containing server name ends, so ambiguous
+// spellings are rejected — erring toward rejection is fail-safe for a write
+// guard, and a flattened key that matches no real nested layout lands in
+// config.json as a root member that no field of config.Config reads
+// (blocked_paths.go, "KNOWN LIMIT" comment).
 func isLiteralMCPServerHeaderDotPath(p string, val any) bool {
 	s, ok := val.(string)
 	if !ok || s == "" || s == redactedHeaderValue {
 		return false
 	}
 	segs := strings.Split(p, ".")
-	return len(segs) >= 6 &&
-		segs[0] == "tools" && segs[1] == "mcp" && segs[2] == "servers" &&
-		segs[4] == "headers"
+	if len(segs) < 4 || segs[0] != "tools" || segs[1] != "mcp" || segs[2] != "servers" {
+		return false
+	}
+	for _, seg := range segs[3 : len(segs)-1] {
+		if seg == "headers" {
+			return true
+		}
+	}
+	return false
 }
 
 // dropRedactedMCPServerHeaderValues removes placeholder header entries
