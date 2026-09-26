@@ -1,4 +1,4 @@
-Status: In review
+Status: Approved
 
 ADR: none — no open design decision (the founder interview settled every design point; the existing [ADR-066 — Context overflow: the sliding window extended mid-turn, tool results emptied with a recall mark, and a per-result cap at the door](../architecture/ADR-066-context-budget-and-tool-result-routing.md) carries a dated 2026-09-26 correction to its §14 item 6 pointing here)
 
@@ -81,7 +81,7 @@ All shapes below are added to `contracts/` and regenerated with `scripts/gen-con
 | `ExecutorCommandPreviewRequest` | changed | `contracts/components/schemas/ExecutorCommandPreviewRequest.yaml` | `max_tool_iterations`: `minimum: 1`, `maximum: 1000`, optional; meaning becomes "the agent's own value being previewed (omit when none)". The server previews the resolver's effective value (min(global, value), or the global when omitted). Description loses the "(50)" fallback text. |
 | `PerformanceSettings` | changed | `contracts/components/schemas/PerformanceSettings.yaml` | Add `max_tool_iterations` (integer 1–1000, always present in responses): the global limit in force. Add `max_tool_iterations_saved_state` ($ref `MaxToolIterationsSavedState`, always present) and `max_tool_iterations_saved_raw` (integer, optional; present only for `below_min` / `above_max`, carrying the value found in `config.json`) — D13's Settings warning. Add `max_tool_iterations_lowered_agents` (array of `MaxToolIterationAgentChange`, optional; present only on a PUT response that lowered agents — D11). |
 | `MaxToolIterationsSavedState` | new | `contracts/components/schemas/MaxToolIterationsSavedState.yaml` | `enum: [ok, missing, below_min, above_max]`. `missing` = key absent; `below_min` = saved value < 1 (0 included); `above_max` = saved value > 1000. |
-| `PerformanceSettingsUpdate` | changed | `contracts/components/schemas/PerformanceSettingsUpdate.yaml` | Add `max_tool_iterations` (integer, `minimum: 1`, `maximum: 1000`). Add `confirmed_lowering` (array of `MaxToolIterationsConfirmedAgent`, optional; absent = empty): the exact agent snapshot (id + old value) the admin saw in the preview and confirmed (D11, D16). Rule: the server recomputes, at write time, the set of agents whose own value is above the new global; the PUT succeeds only if that set equals `confirmed_lowering` exactly (same ids, same old values). Any difference — an extra agent, a missing agent, or a changed old value, including the case where the field is absent but agents would be lowered — is drift: nothing is written and the PUT answers 409 `MaxToolIterationsLoweringConflict`. Replaces the round-0 boolean `lower_agent_limits` (grill F2). |
+| `PerformanceSettingsUpdate` | changed | `contracts/components/schemas/PerformanceSettingsUpdate.yaml` | Add `max_tool_iterations` (integer, `minimum: 1`, `maximum: 1000`). Add `confirmed_lowering` (array of `MaxToolIterationsConfirmedAgent`, optional; absent = empty): the exact agent snapshot (id + old value) the admin saw in the preview and confirmed (D11, D16). Rule: the server recomputes, at write time, the set of agents whose own value is above the new global; the PUT succeeds only if that set equals `confirmed_lowering` **compared as a set keyed by `agent_id` — order-independent** (same ids, and for each id the same old value; array order on either side is irrelevant). A `confirmed_lowering` that names the same `agent_id` twice is malformed → 400 `confirmed_lowering lists agent <id> more than once`. Any difference — an extra agent, a missing agent, or a changed old value, including the case where the field is absent but agents would be lowered — is drift: nothing is written and the PUT answers 409 `MaxToolIterationsLoweringConflict`. Replaces the round-0 boolean `lower_agent_limits` (grill F2). |
 | `MaxToolIterationsConfirmedAgent` | new | `contracts/components/schemas/MaxToolIterationsConfirmedAgent.yaml` | `{agent_id: string, old_value: integer}`, both required, `additionalProperties: false`. The new value is implied by the PUT's `max_tool_iterations`. |
 | `MaxToolIterationsLoweringConflict` | new | `contracts/components/schemas/MaxToolIterationsLoweringConflict.yaml` | 409 body for D16 drift. Envelope-compatible with `ErrorResponse`: `error` (string, required), `code` (string, required, always `max_tool_iterations_lowering_drift`), `preview` (`MaxToolIterationsLoweringPreview`, required — the fresh list computed at refusal time, so the SPA can re-open the dialog without a second preview call). |
 | `MaxToolIterationAgentChange` | new | `contracts/components/schemas/MaxToolIterationAgentChange.yaml` | `{agent_id: string, agent_name: string, old_value: integer, new_value: integer}` all required, `additionalProperties: false`. |
@@ -97,8 +97,10 @@ Must not collide with: `ContextWindowSource` (separate ladder, untouched); `Agen
 - **Resolver.** One function in `pkg/config` (placed beside `PlanningConfig.EffectiveGoalMaxRounds`, the precedent) returns, for (global config, agent config): effective value, source, own value (if any), override-ignored flag; and a companion returns the in-force global plus its saved-state (D13). `pkg/agent`, `pkg/gateway` and `pkg/sysagent/tools` all call it; no package re-implements the rule, and no literal other than the single shipped-default constant exists (FR-004).
 - **Env migration marker (D6).** The one-time copy writes `agents.defaults.max_tool_iterations_env_imported: true` alongside the copied value, through the load-time self-heal path (`SelfHealWriteHook`, precedent `migrateCLITokenOutOfUsers`). With the marker present the env var is never read again. The marker is config-file-only, not on the wire.
 - **Endpoints.** `GET/PUT /api/v1/performance` (extended), `GET /api/v1/performance/max-tool-iterations/preview` (new), `GET/PUT/POST /api/v1/agents…` (fields changed), `POST /api/v1/agents/executor-preview` (semantics changed). All described by the schemas above.
-- **Explicit `null` vs omitted on agent PUT (grill F1).** The generated `AgentUpdateRequest.MaxToolIterations` is a `*int` with `omitempty`, so "field omitted" and "field sent as `null`" both decode to `nil`. The handler MUST use the same raw-body peek that `pkg/gateway/rest_agents_update.go` already uses for `context_window_override` (the update flow's `windowPeek`: unmarshal `uf.rawBody` into `map[string]json.RawMessage` and treat a present key whose trimmed value is `null` as "clear"). Omitted = unchanged; `null` = clear the own value; a number = set (subject to the bound and D10). The RED test for the clear case MUST send raw JSON bytes (`{"max_tool_iterations":null}`), never a marshalled generated struct — a marshalled `nil` omits the key and would make an implementation that only checks `!= nil` pass for the wrong reason. The system-agent `update_agent` path gets the same distinction from its `map[string]any` args (key present with `nil` = clear).
-- **D11/D16 write order.** `PUT /performance` with a changed `max_tool_iterations`: (1) decode and bound-check the body; (2) **pre-check** drift against the live agent set *before* consuming the step-up token, so a stale dialog costs the admin no password re-entry — on drift, 409 with the fresh preview; (3) `requireReAuth`; (4) under the config write lock (`configMu`), recompute the set and compare again (authoritative check — closes the gap between pre-check and write); on drift, 409 and nothing written; (5) lower each confirmed agent via `agentstore` `MutateState` (revision-checked; a revision conflict here is drift → 409, never a silent retry onto an unseen value), auditing each; (6) write the global and audit it; (7) registry reload. The pre-check discloses nothing the preview endpoint does not already disclose under the same gate.
+- **Explicit `null` vs omitted on agent PUT (grill F1).** The generated `AgentUpdateRequest.MaxToolIterations` is a `*int` with `omitempty`, so "field omitted" and "field sent as `null`" both decode to `nil`. The handler MUST use the same raw-body peek that `pkg/gateway/rest_agents_update.go` already uses for `context_window_override` (the update flow's `windowPeek`: unmarshal `uf.rawBody` into `map[string]json.RawMessage` and treat a present key whose trimmed value is `null` as "clear"). Omitted = unchanged; `null` = clear the own value; a number = set (subject to the bound and D10). The RED test for the clear case MUST send raw JSON bytes (`{"max_tool_iterations":null}`), never a marshalled generated struct — a marshalled `nil` omits the key and would make an implementation that only checks `!= nil` pass for the wrong reason. The system-agent `update_agent` path does **not** get this for free (grill G2, verified): in `pkg/sysagent/tools/agent_apply_args.go` the `max_tool_iterations` branch hands `raw` straight to `jsonInt`, whose `raw.(float64)` assertion fails for a JSON `null` (`nil`) and returns "max_tool_iterations must be an integer". The fix: inside `if raw, present := args["max_tool_iterations"]; present`, add an explicit `if raw == nil` check **before** calling `jsonInt` that clears the own value (sets it to 0, which the store omits — the same "key removed" outcome as the REST clear) and skips the bound/D10 checks; only a non-nil `raw` falls through to `jsonInt`, the 1–1000 bound and the D10 global check. The map-level `present` check already distinguishes omitted (unchanged) from present. Test row 11 covers this with a literal `nil` arg.
+- **D11/D16 write order.** `PUT /performance` with a changed `max_tool_iterations`: (1) decode and bound-check the body; (2) **pre-check** drift against the live agent set *before* consuming the step-up token, so a stale dialog costs the admin no password re-entry — on drift, 409 with the fresh preview; (3) `requireReAuth`; (4) under the config write lock (`configMu`), **before the first write**, run every check: recompute the affected set, compare it to `confirmed_lowering` (set-based), and read each confirmed agent's current revision and own value from the agent store; any mismatch → 409 with the fresh preview and **nothing written** (D16) — there is no retry and no partial skip; (5) still under `configMu`, lower each confirmed agent via `agentstore` `MutateState` using the revision read in step 4, auditing each; (6) write the global and audit it; (7) registry reload.
+  - **A failure during step 5 or 6 after at least one agent was written** (an agent-store I/O error, or a revision conflict from a writer that does not take `configMu` — e.g. the system-agent tools, which serialise on the agent loop's lock, not `configMu`): stop; **roll back** every agent already lowered in this request to its old value via `MutateState` with the revision its lowering write returned, auditing each rollback (`audit.EmitSecuritySettingChange`, old = new global value, new = restored old value); leave the global unchanged (it is written only after all agents succeed, step 6 — if step 6 itself fails, all agents are rolled back the same way). Response: a revision conflict → 409 `MaxToolIterationsLoweringConflict` with the fresh preview; an I/O failure → 500 `ErrorResponse`, `code: "max_tool_iterations_lowering_failed"`, `error` naming the failing agent and cause and stating that nothing was changed. A failure on the very first write needs no rollback and answers the same way.
+  - **A rollback that itself fails** is never silent: the response is 500 `ErrorResponse`, `code: "max_tool_iterations_rollback_incomplete"`, `error` = `limit not changed; could not restore <agent> (now <new>, was <old>)[, …] — set their limits again on each agent's profile`, listing every agent left at the new value; the global is unchanged; each such agent gets an ERROR log line (agent id, old, current value, cause) and its lowering audit record stands (the rollback audit is written only for successful rollbacks). This state is safe for the ceiling — those agents run at or below what the admin asked — and is visible on their profiles as an ordinary own value. The pre-check discloses nothing the preview endpoint does not already disclose under the same gate.
 - **Reload.** A successful PUT that changes the global, and the D11 lowering, end with a registry reload (`triggerReloadAndWait`, precedent `rest_context_settings.go`) so every agent's next turn uses the new limit.
 
 ---
@@ -198,6 +200,7 @@ An admin who lowers the global wants to know which agents will be changed before
 4. **Given** the admin lowers the global and no agent's own value is above it, **When** they save, **Then** no dialog appears and only the global changes.
 5. **Given** the global is later raised back to 300, **When** the admin saves, **Then** A stays at 200 (old values are not restored — founder informed, D11).
 6. **Given** the dialog lists "A: 250 → 200" and, before the admin confirms, agent B's own value is changed to 220 (or A's to 260), **When** the admin confirms, **Then** nothing is saved — neither the global nor any agent — and the dialog reloads with the new list for a fresh confirmation (D16).
+7. **Given** the admin confirmed lowering agents A and B, **When** writing B fails after A was already lowered, **Then** A is restored to its old value, the global is unchanged, the admin sees an error saying nothing was changed, and the restore is audited; if A cannot be restored, the error names A with its current and old value.
 
 ### User Story 7 — Configuration outside the rules never causes an outage (Priority: P1)
 
@@ -251,7 +254,7 @@ A user whose turn hit the limit wants to be told where to change it — not to e
 - Own value stored above 1000 (hand-edited) → capped at the global and flagged (D1); shown truthfully (e.g. 5000) with no upper bound in the response.
 - Global saved as a negative number → treated like 0 → 200 in memory, file not rewritten, WARN, state `below_min` (D17).
 - Env var not a whole number (e.g. `abc`) → not imported, WARN logged, **no** marker and no file write, gateway starts (D17). The WARN repeats on each start while the variable is set.
-- Agent PUT races the D11 lowering → the lowering reads each agent's current revision and retries once on revision conflict; an agent that still conflicts is reported as not lowered (it is then in the D1 capped state — effective is still the new global, so the ceiling holds).
+- Agent PUT races the D11 lowering → every drift and revision check runs under `configMu` before the first write (API and Data, "D11/D16 write order" step 4); a conflict found there → 409 with the fresh preview, nothing written (D16). A conflict or I/O failure part-way through the writes → the already-lowered agents are rolled back and the global is left unchanged (step 5 failure rule); there is no retry and no partial success.
 - Reload fails after the global is written → 500 "written but the reload failed" (precedent `rest_context_settings.go`); on the next successful reload or restart the new value applies.
 - A turn already running when the limit changes → keeps the limit in force when it started; the new value applies from the next turn (D18, same rule as `goal_max_rounds`).
 - Several agents capped at startup → one WARN line listing all of them (D19).
@@ -318,6 +321,7 @@ Error flows:
 - When a value outside 1–1000 is submitted anywhere (Settings, agent PUT/create, executor preview, system-agent tools), the system refuses it with a message naming the bound.
 - When a per-agent value above the current global is submitted, the system refuses it with a message naming the global limit.
 - When a global lowering would change a set of agents (or old values) different from the set the admin confirmed — including no confirmation at all — the system refuses with a conflict, changes nothing, and returns the current list (D16).
+- When a write fails part-way through a confirmed lowering, the system restores the agents it already lowered, leaves the global unchanged and says nothing was changed; if a restore fails, it names every agent left at the new value (FR-021).
 - When the reload after a global write fails, the system reports that the value was written but not yet applied.
 
 Boundary conditions:
@@ -359,12 +363,13 @@ Boundary conditions:
 ### Gateway ↔ SPA (REST)
 - **Data in / out**: Agent limit fields, Performance global, preview list.
 - **Contract**: the schemas in Contract Changes; generated types only.
-- **On failure**: 400/403/409/500 as above; SPA shows inline errors, never a false "saved"; on 409 drift the dialog reloads from the body's `preview`.
+- **On failure**: 400/403/409/500 as above; SPA shows inline errors, never a false "saved"; on 409 drift the dialog reloads from the body's `preview`; the 500 codes above are shown as their `error` text.
+- **409 consumption (grill G3).** The SPA's generic `ApiError.fromResponse` (`src/lib/api-error.ts`) keeps a non-2xx body only as an opaque string, so the `preview` is unreachable through it. frontend-lead adds, in the Performance API module, a `MaxToolIterationsLoweringConflictError extends ApiError` carrying a typed `preview`, an `isMaxToolIterationsLoweringConflict(err)` guard, and a from-response function that reads the 409 body once and re-parses it against the **generated** Zod schema for `MaxToolIterationsLoweringConflict` (from `src/lib/api/generated/`) — the same pattern as `src/lib/api/library.ts::LibraryVersionConflictError` / `::isLibraryVersionConflict` / `libraryConflictErrorFromResponse`. A 409 whose body does not match still surfaces as a plain 409 `ApiError` (shown as an error, dialog not reloaded). `PerformanceSection`'s confirm-save branches on the guard to re-open the dialog from `.preview`.
 - **Development**: real gateway in vitest via MSW-free handler tests on the Go side; SPA tests use generated types and fixtures from `src/test/factories.ts` updated with the new required fields.
 
 ### Gateway ↔ agent store / `config.json`
 - **Data**: global in `config.json` (`safeUpdateConfigJSON`); own values in `pkg/agentstore` records (`MutateState`, revision-checked).
-- **On failure**: D11 writes agents first, then the global; any agent write failure aborts before the global is written and returns 500 listing which agents were already lowered (each already audited). Because effective = min(global, own), every partial state is at or below what the admin asked for.
+- **On failure**: all checks run before the first write (409, nothing written — D16). A failure after writes began rolls back the already-lowered agents (each rollback audited), leaves the global unchanged, and answers 409 (revision conflict, with fresh preview) or 500 `max_tool_iterations_lowering_failed` (I/O). If a rollback fails, 500 `max_tool_iterations_rollback_incomplete` names every agent left at the new value, with an ERROR log line each — never silent. Full rule: API and Data, "D11/D16 write order".
 - **Development**: real temp-dir store in Go integration tests.
 
 ### Agent loop ↔ external CLI
@@ -684,6 +689,30 @@ Boundary conditions:
 - **When** `create_agent` is called with `max_tool_iterations: 0`
 - **Then** the tool returns an error naming the 1–1000 bound
 
+#### Scenario: Reordered confirmation is not drift
+**Traces to**: User Story 6, Acceptance Scenario 3
+**Category**: Edge Case
+- **Given** global 300, A own 250, B own 280; the preview for 200 listed `[{A, 250}, {B, 280}]`
+- **When** the admin PUTs `max_tool_iterations: 200, confirmed_lowering: [{B, 280}, {A, 250}]`
+- **Then** the response is 200 and A, B and the global are all 200 (Dataset "Confirmed lowering", row 2)
+
+#### Scenario: Mid-write failure rolls back already-lowered agents
+**Traces to**: User Story 6, Acceptance Scenario 7
+**Category**: Error Path
+- **Given** global 300, A own 250, B own 280, a matching confirmation for 200, and an agent store that fails the write of B with an I/O error after A's write succeeded
+- **When** the admin PUTs the confirmed lowering
+- **Then** the response is 500 with `code: "max_tool_iterations_lowering_failed"` and a message stating nothing was changed
+- **And** A's stored value is 250 again, B's is 280, the global is 300
+- **And** the audit log holds A's lowering record and A's rollback record (250 restored), and nothing for the global
+
+#### Scenario: Failed rollback is reported, not silent
+**Traces to**: User Story 6, Acceptance Scenario 7
+**Category**: Error Path
+- **Given** the same setup, and the store also fails the rollback write of A
+- **When** the admin PUTs the confirmed lowering
+- **Then** the response is 500 with `code: "max_tool_iterations_rollback_incomplete"` naming A (now 200, was 250)
+- **And** the global is 300, A's stored value is 200, and one ERROR log line names A with old 250 and current 200
+
 #### Scenario: Running turn keeps the limit it started with
 **Traces to**: User Story 1, Acceptance Scenario 6
 **Category**: Edge Case
@@ -740,10 +769,12 @@ Boundary conditions:
 | 8 | TestAgentCreate_MaxToolIterations_* | Integration | Create keeps value; rides global; above global; worker create | Guards the `normalizeVariant` drop |
 | 9 | TestAgentResponses_UseResolver | Integration | Profile flags ignored own value | list/get/create/update all return the same four fields |
 | 10 | TestExecutorPreview_MatchesDispatch | Integration | Worker preview (both) | Preview argv turn cap == dispatch `RunOptions.MaxTurns` |
-| 11 | TestSysagentAgentTools_MaxToolIterations | Integration | System agent (four) | |
+| 11 | TestSysagentAgentTools_MaxToolIterations | Integration | System agent (four) | Includes `update_agent` with a literal `nil` arg for `max_tool_iterations` → cleared, no error (G2) |
 | 12 | TestLoop_StopsAtEffectiveLimit / TestToolLimitResponse_Text | Integration | Admin raises (loop leg); Lower one (loop leg); Tool-limit message | Scripted provider |
 | 13 | TestUpgradeBootLog_ListsCappedAgents | Integration | Upgrade keeps stored value | One WARN line for A and B, not C (D19) |
-| 13a | TestPerformancePut_LoweringDrift_* | Integration | Lowering without confirmation; Drift between preview and confirm; Changed old value is drift | 409 body, nothing written, token not consumed on pre-check drift |
+| 13a | TestPerformancePut_LoweringDrift_* | Integration | Lowering without confirmation; Drift between preview and confirm; Changed old value is drift; Reordered confirmation is not drift | Dataset "Confirmed lowering"; 409 body, nothing written, token not consumed on pre-check drift |
+| 13e | TestPerformancePut_LoweringRollback_* | Integration | Mid-write failure rolls back…; Failed rollback is reported… | Fault-injecting agent-store seam; asserts stored values, audit and ERROR log |
+| 13f | maxToolIterationsLoweringConflict.test.ts | Component | Drift between preview and confirm (SPA leg) | Typed error class + guard; a non-matching 409 body stays a plain ApiError |
 | 13b | TestAgentUpdate_MaxToolIterations_NullVsOmitted | Integration | Use global limit clears…; Omitted field leaves… | Raw JSON bodies only (F1) |
 | 13c | TestLoop_RunningTurnKeepsStartLimit | Integration | Running turn keeps the limit it started with | Scripted provider; reload mid-turn |
 | 13d | PerformanceSection.maxToolIterations drift/toast tests | Component | Drift… (SPA leg); Confirmed lowering (toast + inline summary roles) | |
@@ -769,6 +800,18 @@ Boundary conditions:
 | 9 | G=200, O=5000 (hand-edited) | above max | 200, global, 5000, true | Scenario: Profile flags… | override unbounded on the wire |
 | 10 | G=200, O=0 | zero stored | 200, global, absent, false | Scenario: Admin raises the global… | 0 = none |
 | 11 | G=200, O=-5 (hand-edited) | negative stored | 200, global, absent, false | Scenario: Admin raises the global… | D17 |
+
+#### Dataset: Confirmed lowering (live own values A=250, B=280; global 300 → PUT 200)
+
+| # | Input (`confirmed_lowering`) | Boundary Type | Expected Output | Traces to | Notes |
+|---|-------|---------------|-----------------|-----------|-------|
+| 1 | `[{A,250},{B,280}]` | exact, same order | 200; A, B, global = 200 | Scenario: Confirmed lowering rewrites and audits | |
+| 2 | `[{B,280},{A,250}]` | exact, reordered | 200 (not drift) | Scenario: Reordered confirmation is not drift | G4 |
+| 3 | `[{A,250}]` | missing agent | 409, preview `[A,B]`, nothing written | Scenario: Drift between preview and confirm… | D16 |
+| 4 | `[{A,250},{B,280},{C,260}]` | extra agent | 409, nothing written | Scenario: Drift between preview and confirm… | |
+| 5 | `[{A,250},{B,270}]` | changed old value | 409, nothing written | Scenario: Changed old value is drift | |
+| 6 | absent | no confirmation | 409, token not consumed | Scenario: Lowering without confirmation is refused | |
+| 7 | `[{A,250},{A,250},{B,280}]` | duplicate id | 400 duplicate message | Scenario: Lowering without confirmation is refused | malformed |
 
 #### Dataset: Global bounds (PUT /performance `max_tool_iterations`)
 
@@ -839,9 +882,9 @@ Boundary conditions:
 - **FR-005**: A change of the global MUST reload agents so each agent's next turn uses the new effective value without a restart (Req 4).
 - **FR-006**: Every writable limit field MUST reject values outside 1–1000 with a message naming the bound (Req 5, D2).
 - **FR-007**: A per-agent save (REST create/update, system-agent tools) above the current global MUST be refused with a message naming the global (D10, D15).
-- **FR-008**: "Use global limit" MUST clear an agent's own value (explicit `null` on update, detected by the raw-body peek described in API and Data); an omitted field MUST leave the own value unchanged (D9, grill F1).
+- **FR-008**: "Use global limit" MUST clear an agent's own value (explicit `null` on update — REST via the raw-body peek, `update_agent` via the explicit nil check before `jsonInt`, both in API and Data); an omitted field MUST leave the own value unchanged (D9, grill F1).
 - **FR-009**: A stored own value above the global MUST be kept, capped, flagged in the API and profile, and listed in exactly one startup WARN line that names every capped agent with its stored value and the global (D1, D12, D19).
-- **FR-010**: Lowering the global below agents' own values MUST require explicit consent (preview → confirm dialog → PUT carrying `confirmed_lowering`), MUST refuse with 409 and write nothing when the live affected set or any old value differs from `confirmed_lowering` (D16), MUST lower exactly the confirmed agents to the new global, MUST audit each agent change and the global change, and MUST NOT restore values later (D11).
+- **FR-010**: Lowering the global below agents' own values MUST require explicit consent (preview → confirm dialog → PUT carrying `confirmed_lowering`), MUST refuse with 409 and write nothing when the live affected set or any old value differs from `confirmed_lowering`, compared as an order-independent set keyed by `agent_id` (D16, G4), MUST lower exactly the confirmed agents to the new global, MUST audit each agent change and the global change, and MUST NOT restore values later (D11).
 - **FR-011**: The env var MUST be imported once into the saved config (clamped to 1–1000, WARN when clamped), marked as imported, and never read again (D5, D6, D7).
 - **FR-012**: A saved global that is missing or below 1 MUST run as 200 and above 1000 as 1000, in memory only, with a WARN log and a Settings warning; startup MUST never be refused (D13).
 - **FR-013**: External-CLI workers MUST accept the per-agent field on create and update, show the same control and reset, and pass the effective value as their turn cap; the preview MUST show that same value (D4, D14).
@@ -849,9 +892,10 @@ Boundary conditions:
 - **FR-015**: The tool-limit message MUST point to Settings → Performance and the agent profile, not `config.json`.
 - **FR-016**: The per-agent control MUST be extracted from `AgentProfile.tsx` into its own component; `AgentProfile.tsx` MUST shrink (grandfathered budget may only shrink).
 - **FR-017**: The SPA MUST send `max_tool_iterations` on an agent PUT only when the operator changed it (or reset it).
+- **FR-018**: The lowering preview MUST use the same gate as `GET /api/v1/performance` (authenticated, blocked under dev-mode bypass), and changing the global MUST additionally require the step-up token.
 - **FR-019**: A turn already running when the limit changes MUST keep the limit in force when it started; the new effective limit MUST apply from that agent's next turn (D18).
 - **FR-020**: Below-range or non-numeric inputs MUST be treated as missing: saved global < 1 → 200 in memory with WARN and no file rewrite; non-numeric env var → not imported, WARN, no file write; stored per-agent value ≤ 0 → no own value (D17).
-- **FR-018**: The lowering preview MUST use the same gate as `GET /api/v1/performance` (authenticated, blocked under dev-mode bypass), and changing the global MUST additionally require the step-up token.
+- **FR-021**: The D11 lowering MUST run every drift and revision check before its first write; a failure after writes began MUST roll back the already-lowered agents (each rollback audited) and leave the global unchanged; a failed rollback MUST be reported in the response (every agent left lowered, with current and old value) and logged at ERROR — never silent (D16, grill G1).
 
 ## Success Criteria
 
@@ -881,9 +925,9 @@ Boundary conditions:
 | FR-005 | US-1 | Admin raises the global and every non-overriding agent follows | TestPerformancePut_MaxToolIterations_Reload |
 | FR-006 | US-1, US-2, US-8 | Global out of range is refused; Per-agent value out of range is refused; System agent out of range | TestPerformancePut_*, TestAgentUpdate_* |
 | FR-007 | US-2, US-3, US-8 | Per-agent value above the global is refused; Create above the global is refused; System agent cannot exceed the global | TestAgentUpdate_*, TestAgentCreate_*, TestSysagentAgentTools_* |
-| FR-008 | US-2, US-8 | Use global limit clears the own value; Omitted field leaves the own value unchanged; System agent clears an own value | TestAgentUpdate_MaxToolIterations_NullVsOmitted, ToolIterationLimitField.test.tsx |
+| FR-008 | US-2, US-8 | Use global limit clears the own value; Omitted field leaves the own value unchanged; System agent clears an own value | TestAgentUpdate_MaxToolIterations_NullVsOmitted, TestSysagentAgentTools_MaxToolIterations, ToolIterationLimitField.test.tsx |
 | FR-009 | US-5 | Upgrade keeps a stored value above the global (D19 multi-agent line); Profile flags…; Raising the global activates… | TestUpgradeBootLog_ListsCappedAgents, TestResolveMaxToolIterations_Table |
-| FR-010 | US-6 | Lowering preview lists only…; Cancel in the confirm dialog…; Confirmed lowering rewrites and audits; Lowering without confirmation is refused; Drift between preview and confirm…; Changed old value is drift; Lowering with no affected agents…; Raising again does not restore… | TestPerformancePreview_*, TestPerformancePut_Lowering_*, TestPerformancePut_LoweringDrift_*, PerformanceSection.maxToolIterations.test.tsx, tool-iteration-limit.spec.ts |
+| FR-010 | US-6 | Lowering preview lists only…; Cancel in the confirm dialog…; Confirmed lowering rewrites and audits; Lowering without confirmation is refused; Drift between preview and confirm…; Changed old value is drift; Reordered confirmation is not drift; Lowering with no affected agents…; Raising again does not restore… | TestPerformancePreview_*, TestPerformancePut_Lowering_*, TestPerformancePut_LoweringDrift_*, maxToolIterationsLoweringConflict.test.ts, PerformanceSection.maxToolIterations.test.tsx, tool-iteration-limit.spec.ts |
 | FR-011 | US-7 | Env var imported once; Env var ignored after import; Out-of-range env var… | TestEnvImport_OnceAndClamp |
 | FR-012 | US-7 | Saved global out of range is corrected in memory only | TestEffectiveGlobal_SavedStates, PerformanceSection.maxToolIterations.test.tsx |
 | FR-013 | US-3, US-4 | External-CLI worker created with its own limit; Worker PUT of the limit is accepted; Worker preview (both) | TestAgentCreate_Worker, TestAgentUpdate_Worker, TestExecutorPreview_MatchesDispatch |
@@ -891,11 +935,12 @@ Boundary conditions:
 | FR-015 | US-9 | Tool-limit message points to Settings | TestToolLimitResponse_Text |
 | FR-016 | US-2 | Operator lowers one agent (UI leg) | budget gate `make lint-budgets`, ToolIterationLimitField.test.tsx |
 | FR-017 | US-2 | Unrelated autosave does not resend the limit | ToolIterationLimitField.test.tsx / AgentProfile autosave test |
+| FR-018 | US-1 | Preview is blocked under dev-mode bypass; PUT without step-up token is refused; Cancelling the password prompt writes nothing | TestPerformancePreview_Bypass, TestPerformancePut_NoStepUp, PerformanceSection.maxToolIterations.test.tsx |
 | FR-019 | US-1 | Running turn keeps the limit it started with | TestLoop_RunningTurnKeepsStartLimit |
 | FR-020 | US-5, US-7 | Non-numeric env var is not imported; Saved global out of range is corrected in memory only; Admin raises the global… (Resolver rows 10–11) | TestEnvImport_OnceAndClamp, TestEffectiveGlobal_SavedStates, TestResolveMaxToolIterations_Table |
-| FR-018 | US-1 | Preview is blocked under dev-mode bypass; PUT without step-up token is refused; Cancelling the password prompt writes nothing | TestPerformancePreview_Bypass, TestPerformancePut_NoStepUp, PerformanceSection.maxToolIterations.test.tsx |
+| FR-021 | US-6 | Mid-write failure rolls back already-lowered agents; Failed rollback is reported, not silent | TestPerformancePut_LoweringRollback_* |
 
-**Completeness check**: all 20 FRs have ≥1 scenario and ≥1 test; all 42 scenarios appear at least once (verified by the author's final self-check).
+**Completeness check**: all 21 FRs have ≥1 scenario and ≥1 test; all 45 scenarios appear at least once (verified by the author's final self-check).
 
 ---
 
@@ -926,3 +971,11 @@ Boundary conditions:
 - Q: Startup warning for several capped agents? -> A: One WARN line listing all, with stored value and the global (D19).
 - Q: Explicit null vs omitted on agent PUT (grill F1)? -> A: Raw-body peek, same as `context_window_override`; RED test uses raw JSON.
 - Q: D11 result toast accessibility (grill F4)? -> A: `role="status"` toast with a 10 s duration plus a persistent inline summary.
+
+### 2026-09-26 (after grill round 2 — final)
+
+- G1: one outcome for a D11 write conflict — all checks before the first write (409, nothing written); a later failure rolls back and leaves the global unchanged; a failed rollback is reported and logged (FR-021).
+- G2: `update_agent` clear needs an explicit nil check before `jsonInt` in `pkg/sysagent/tools/agent_apply_args.go` (the earlier "same distinction" claim was wrong).
+- G3: SPA consumes the 409 through a typed `MaxToolIterationsLoweringConflictError` + guard, mirroring `src/lib/api/library.ts::LibraryVersionConflictError`.
+- G4: `confirmed_lowering` compared as an order-independent set keyed by `agent_id`; duplicates are 400.
+- G5: Functional Requirements and the traceability table are in numeric order.
