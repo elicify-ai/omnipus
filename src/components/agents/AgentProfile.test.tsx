@@ -2818,6 +2818,8 @@ describe('AgentProfile — max tool calls per turn (zero-clobber P0 fix)', () =>
       max_tool_iterations_override_ignored: false,
     })
     expect(screen.getByText('Using the global limit (350)')).toBeInTheDocument()
+    // The per-turn semantics copy still ships (ToolIterationLimitField caption).
+    expect(screen.getByText(/Per single turn/i)).toBeInTheDocument()
     expect(screen.queryByText(/Default:?\s*200/i)).toBeNull()
   })
 })
