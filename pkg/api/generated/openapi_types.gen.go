@@ -5750,6 +5750,48 @@ func (e OperationResultValidationOutcome) Valid() bool {
 	}
 }
 
+// Defines values for PerformanceReloadFailedDetailsChangedFields.
+const (
+	PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds     PerformanceReloadFailedDetailsChangedFields = "goal_max_rounds"
+	PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents PerformanceReloadFailedDetailsChangedFields = "max_parallel_agents"
+	PerformanceReloadFailedDetailsChangedFieldsMaxToolIterations PerformanceReloadFailedDetailsChangedFields = "max_tool_iterations"
+	PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand     PerformanceReloadFailedDetailsChangedFields = "tools_on_demand"
+)
+
+// Valid indicates whether the value is a known member of the PerformanceReloadFailedDetailsChangedFields enum.
+func (e PerformanceReloadFailedDetailsChangedFields) Valid() bool {
+	switch e {
+	case PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds:
+		return true
+	case PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents:
+		return true
+	case PerformanceReloadFailedDetailsChangedFieldsMaxToolIterations:
+		return true
+	case PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PerformanceReloadFailedDetailsStage.
+const (
+	PerformanceReloadFailedDetailsStageRefresh PerformanceReloadFailedDetailsStage = "refresh"
+	PerformanceReloadFailedDetailsStageReload  PerformanceReloadFailedDetailsStage = "reload"
+)
+
+// Valid indicates whether the value is a known member of the PerformanceReloadFailedDetailsStage enum.
+func (e PerformanceReloadFailedDetailsStage) Valid() bool {
+	switch e {
+	case PerformanceReloadFailedDetailsStageRefresh:
+		return true
+	case PerformanceReloadFailedDetailsStageReload:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PlanDodAuthorKind.
 const (
 	PlanDodAuthorKindAgent PlanDodAuthorKind = "agent"
@@ -18630,6 +18672,36 @@ type PendingRestartEntry struct {
 
 	// PersistedValue Value currently on disk (what will be applied after restart).
 	PersistedValue interface{} `json:"persisted_value"`
+}
+
+// PerformanceReloadFailedDetails details of the 500 performance_reload_failed answer of PUT /performance (issue #904). Every write of the request is COMMITTED (config.json and any lowered agents are on disk and audited; nothing is rolled back), but the new values are not in force yet. stage says how far the apply got, and so what GET /performance shows until the next reload or restart.
+type PerformanceReloadFailedDetails struct {
+	// ChangedFields The performance settings this request changed, i.e. the fields present in the PUT body. The client names these — and only these — in its "saved, not applied yet" message.
+	ChangedFields []PerformanceReloadFailedDetailsChangedFields `json:"changed_fields"`
+
+	// LoweredAgents The agents whose own tool-iteration limit this request lowered (spec D11); empty when none. GET /performance does not carry them, so this is the only place the summary survives.
+	LoweredAgents []MaxToolIterationAgentChange `json:"lowered_agents"`
+
+	// Stage refresh — config.json was written but the in-memory configuration was NOT swapped: GET /performance still shows the OLD values and running agents keep them until the gateway reloads its configuration or restarts. reload — the in-memory configuration was updated (GET /performance shows the NEW values) but the agent registry reload failed: the agents' next turns keep the old limits until the next reload or restart.
+	Stage PerformanceReloadFailedDetailsStage `json:"stage"`
+}
+
+// PerformanceReloadFailedDetailsChangedFields defines model for PerformanceReloadFailedDetails.ChangedFields.
+type PerformanceReloadFailedDetailsChangedFields string
+
+// PerformanceReloadFailedDetailsStage refresh — config.json was written but the in-memory configuration was NOT swapped: GET /performance still shows the OLD values and running agents keep them until the gateway reloads its configuration or restarts. reload — the in-memory configuration was updated (GET /performance shows the NEW values) but the agent registry reload failed: the agents' next turns keep the old limits until the next reload or restart.
+type PerformanceReloadFailedDetailsStage string
+
+// PerformanceReloadFailedError 500 body of PUT /performance with code performance_reload_failed (issue #904): the settings are saved but not applied yet. Envelope-compatible with ErrorResponse (error + code + details); details is typed as PerformanceReloadFailedDetails.
+type PerformanceReloadFailedError struct {
+	// Code Machine-readable error code; always "performance_reload_failed".
+	Code string `json:"code"`
+
+	// Details details of the 500 performance_reload_failed answer of PUT /performance (issue #904). Every write of the request is COMMITTED (config.json and any lowered agents are on disk and audited; nothing is rolled back), but the new values are not in force yet. stage says how far the apply got, and so what GET /performance shows until the next reload or restart.
+	Details PerformanceReloadFailedDetails `json:"details"`
+
+	// Error Human-readable message naming only the settings this request changed.
+	Error string `json:"error"`
 }
 
 // PerformanceSettings Agent concurrency and fan-out settings returned by GET /api/v1/performance. Concurrency is bounded by LIVE available memory at the moment of admission, not by a number precomputed at startup.
