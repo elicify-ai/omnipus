@@ -5,7 +5,6 @@
 package gateway
 
 import (
-	"log/slog"
 	"net/http"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -258,7 +257,7 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 // not carry them (PerformanceSettings.max_tool_iterations_lowered_agents is
 // PUT-only), so this response is the only place the summary survives.
 func writePerformanceReloadFailed(w http.ResponseWriter, outcome performanceWriteOutcome, err error) {
-	slog.Error("rest: PUT /performance: settings saved but the reload failed",
+	logsafeError("rest: PUT /performance: settings saved but the reload failed",
 		"error", err, "lowered_agents", len(outcome.lowered))
 	code := performanceReloadFailedCode
 	body := gen.ErrorResponse{

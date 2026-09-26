@@ -24,7 +24,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -145,7 +144,7 @@ func (a *restAPI) liveAgentDefaults() *config.AgentDefaults {
 // agentsReadFailure is the 500 for a failed agent-store read on the lowering
 // path; the cause is logged, not sent.
 func agentsReadFailure(stage string, err error) *performanceWriteError {
-	slog.Error("rest: PUT /performance: could not read the agents", "stage", stage, "error", err)
+	logsafeError("rest: PUT /performance: could not read the agents", "stage", stage, "error", err)
 	code := maxToolIterationsAgentsReadFailedCode
 	return &performanceWriteError{status: http.StatusInternalServerError,
 		body: gen.ErrorResponse{Error: maxToolIterationsAgentsReadMessage, Code: &code}}
@@ -405,7 +404,7 @@ func (a *restAPI) loweringFailure(ctx context.Context, store maxToolIterationsAg
 	if failingAgent != "" {
 		target = "agent " + failingAgent
 	}
-	slog.Error("rest: PUT /performance: tool-iteration lowering failed; rolling back the agents already lowered",
+	logsafeError("rest: PUT /performance: tool-iteration lowering failed; rolling back the agents already lowered",
 		"failed_at", target, "lowered_before_failure", len(done), "value", upd.value, "error", cause)
 	if stuck := a.rollbackLoweredAgents(ctx, store, done); len(stuck) > 0 {
 		parts := make([]string, 0, len(stuck))
@@ -414,7 +413,7 @@ func (a *restAPI) loweringFailure(ctx context.Context, store maxToolIterationsAg
 		}
 		// Each unrestored agent already has its own ERROR line
 		// (rollbackLoweredAgents); this one ties them to the original cause.
-		slog.Error("rest: PUT /performance: rollback incomplete after a failed tool-iteration lowering",
+		logsafeError("rest: PUT /performance: rollback incomplete after a failed tool-iteration lowering",
 			"failed_at", target, "not_restored_count", len(stuck), "cause", cause)
 		code := maxToolIterationsRollbackIncomplete
 		details := map[string]any{"cause": cause.Error()}
@@ -483,7 +482,7 @@ func (a *restAPI) writePerformanceLocked(ctx context.Context, upd *maxToolIterat
 		// the written global and "nothing was changed" would be false.
 		var refreshErr *configRefreshError
 		if errors.As(writeErr, &refreshErr) {
-			slog.Error("rest: PUT /performance: config.json written but the in-memory refresh failed; "+
+			logsafeError("rest: PUT /performance: config.json written but the in-memory refresh failed; "+
 				"keeping the lowered agents", "lowered_agents", len(done), "error", writeErr)
 			out.notApplied = writeErr
 			a.commitPerformanceOutcome(ctx, &out, upd, done, oldGlobal)
@@ -492,7 +491,7 @@ func (a *restAPI) writePerformanceLocked(ctx context.Context, upd *maxToolIterat
 		if len(done) > 0 {
 			return out, a.loweringFailure(ctx, store, defaults, upd, done, "", writeErr)
 		}
-		slog.Error("rest: PUT /performance: could not write config.json", "error", writeErr)
+		logsafeError("rest: PUT /performance: could not write config.json", "error", writeErr)
 		return out, &performanceWriteError{status: http.StatusInternalServerError,
 			body: gen.ErrorResponse{Error: fmt.Sprintf("could not update performance settings: %v", writeErr)}}
 	}
