@@ -32,6 +32,7 @@ import { gateFrameBySeq, cursorFromTerminalFrame, insertHistoryMessageId, CURSOR
 import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
 import { handleReplayAndStatusFrame } from './replay-and-status-frames'
 import { handleCatchUpFrame } from './catchup-frames'
+import { handleProviderFrame } from './provider-frames'
 
 
 
@@ -753,6 +754,16 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       }
 
       if (handleCatchUpFrame({ frame, targetSid, get, withBucket })) {
+        syncForeground()
+        return
+      }
+
+      // provider-messages spec §8 — the failover-chain frames
+      // (provider_retry / provider_fallback / replay_provider_fallback).
+      // Own-switch handler (catchup-frames.ts pattern): the main switch
+      // below is a grandfathered budget entry. Returns false for every
+      // other frame type.
+      if (handleProviderFrame({ frame, targetSid, get, withBucket })) {
         syncForeground()
         return
       }

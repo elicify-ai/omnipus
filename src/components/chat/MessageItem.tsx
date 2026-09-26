@@ -12,6 +12,7 @@ import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { fetchAgents } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { splitMessageParts } from '@/lib/messageParts'
+import { formatErrorDetail } from '@/lib/llm-error'
 import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalOutcomeRow } from './GoalOutcomeRow'
 
@@ -19,28 +20,6 @@ import { GoalOutcomeRow } from './GoalOutcomeRow'
 // Keeps a runaway provider error payload from blowing out the chat scroll.
 // Matches the cap in ChatScreen.tsx's VirtualAssistantMessageRow (parity).
 const ERROR_DETAIL_MAX_CHARS = 512
-
-/**
- * C-21/OBS-102 — the error `detail` renders as INERT TEXT (a single React
- * text node inside the disclosure's `<pre>`), never interpreted as HTML or
- * markdown. The ONLY new rendering behaviour is the JSON pretty-print: when
- * the FULL detail string parses as JSON, it is re-stringified with the
- * 2-space indent; anything else stays byte-identical raw text. The `try`/
- * `catch` is the gate — a string that merely LOOKS JSON-ish (`{"a":` cut
- * off, JSON5, a bare quoted string) falls through to raw, so the disclosure
- * never mangles a non-JSON provider payload.
- */
-function formatErrorDetail(detail: string): string {
-  const trimmed = detail.trim()
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    try {
-      return JSON.stringify(JSON.parse(detail), null, 2)
-    } catch {
-      // Not JSON — fall through to byte-identical raw text.
-    }
-  }
-  return detail
-}
 
 interface MessageItemProps {
   message: ChatMessage

@@ -263,3 +263,27 @@ export function sanitizeLegacyErrorMessage(raw: string): string {
   if (/^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*:\s/.test(trimmed)) return 'Something went wrong — please try again.'
   return raw
 }
+
+/**
+ * C-21/OBS-102 — the error `detail` renders as INERT TEXT (a single React
+ * text node inside a "Technical details" disclosure's <pre>), never
+ * interpreted as HTML or markdown. The ONLY rendering behaviour is the JSON
+ * pretty-print: when the FULL detail string parses as JSON, it is
+ * re-stringified with a 2-space indent; anything else stays byte-identical
+ * raw text. The try/catch is the gate — a string that merely LOOKS JSON-ish
+ * ({"a": cut off, JSON5, a bare quoted string) falls through to raw, so the
+ * disclosure never mangles a non-JSON provider payload. Shared by both
+ * disclosure sites (MessageItem.tsx live path, ChatScreen.tsx
+ * VirtualAssistantMessageRow replay path) — one formatter, never two.
+ */
+export function formatErrorDetail(detail: string): string {
+  const trimmed = detail.trim()
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      return JSON.stringify(JSON.parse(detail), null, 2)
+    } catch {
+      // Not JSON — fall through to byte-identical raw text.
+    }
+  }
+  return detail
+}
