@@ -17,6 +17,16 @@ import (
 const (
 	ScopeProvider = "provider"
 	ScopeMailbox  = "mailbox"
+	// ScopeVoice, ScopeWebSearch and ScopeMarketplace label the non-channel
+	// categories the shared non-channel enumeration (nonChannelRefsFor)
+	// covers: voice transcriber keys, keyed web-search provider keys, and
+	// skill-marketplace tokens. They exist so a failed non-channel ref is
+	// attributed to the config category that declared it — the same
+	// scoped-vs-store-wide classification gateway boot applies to providers
+	// and mailboxes — instead of being mislabelled "provider".
+	ScopeVoice       = "voice"
+	ScopeWebSearch   = "web_search"
+	ScopeMarketplace = "marketplace"
 
 	opResolve = "credential"
 	opSetEnv  = "set env"
@@ -92,10 +102,23 @@ func (e *CredentialRefError) Unwrap() error { return e.Err }
 // InjectFromConfig iterates over cfg.Providers entries, reads each entry's
 // APIKeyRef field, resolves the referenced credential name from store, and
 // injects the plaintext value into the process environment under that name.
+// It then does the same for mailbox password refs and for every ref the
+// shared non-channel enumeration (nonChannelRefsFor) declares — voice keys
+// (ElevenLabs, Groq), keyed web-search provider keys (Brave, Tavily,
+// Perplexity, GLM Search, Baidu Search) and skill-marketplace tokens
+// (ClawHub AuthTokenRef, GitHub TokenRef) — whose consumers read their keys
+// via os.Getenv (pkg/config's APIKey getters, voice transcribers, the skills
+// RegistryManagerFromConfig).
 //
-// If a referenced credential is missing, the affected provider fails to
-// initialize with a descriptive *CredentialRefError. Other providers continue.
-// All errors are collected and returned as a slice.
+// The non-channel enumeration is SHARED with ResolveAll (via
+// nonChannelRefsFor) so the two lists cannot drift again: before the shared
+// helper existed, this loop was missing and a fully configured Tavily sat
+// unused in the vault while search degraded to keyless DuckDuckGo.
+//
+// If a referenced credential is missing, the affected entry fails to
+// initialize with a descriptive *CredentialRefError scoped to its category
+// (provider / mailbox / voice / web_search / marketplace). Other entries
+// continue. All errors are collected and returned as a slice.
 //
 // A LOCKED store is different in kind: nothing can resolve, so it is reported
 // once as the bare ErrStoreLocked — deliberately NOT a *CredentialRefError,
@@ -170,7 +193,88 @@ func InjectFromConfig(cfg *config.Config, store *Store) []error {
 		}
 	}
 
+	// Non-channel credential refs (voice, web-search providers, skill
+	// marketplaces): the SAME enumeration ResolveAll walks for redaction,
+	// via the shared helper nonChannelRefsFor. Consumers read these keys via
+	// os.Getenv — pkg/config's APIKey getters (config_defaults_apply.go),
+	// voice transcribers, and the skills RegistryManagerFromConfig — so
+	// without this loop the vault holds the credential but the consumer
+	// sees "".
+	for _, cr := range nonChannelRefsFor(cfg) {
+		ref := strings.TrimSpace(cr.ref)
+		if ref == "" || injected[ref] {
+			continue
+		}
+		value, err := store.Get(ref)
+		if err != nil {
+			errs = append(errs, &CredentialRefError{
+				Scope: cr.scope, Owner: cr.owner, Ref: ref, Op: opResolve, Err: err,
+			})
+			continue
+		}
+		if err := os.Setenv(ref, value); err != nil {
+			errs = append(errs, &CredentialRefError{
+				Scope: cr.scope, Owner: cr.owner, Ref: ref, Op: opSetEnv, Err: err,
+			})
+			continue
+		}
+		injected[ref] = true
+		slog.Debug("credentials: injected", "ref", ref, "scope", cr.scope, "owner", cr.owner)
+	}
+
 	return errs
+}
+
+// credentialRef is one entry of the shared non-channel enumeration
+// (nonChannelRefsFor): the credential name plus the attribution a per-ref
+// failure needs so the error names the config category and entry that
+// declared it.
+type credentialRef struct {
+	ref   string
+	scope string
+	owner string
+}
+
+// nonChannelRefsFor enumerates every NON-CHANNEL credential reference in cfg
+// — voice keys, keyed web-search provider keys, and skill-marketplace tokens
+// — with the scope/owner attribution needed to report a per-ref failure. It
+// is the ONE list of what boot injects beyond providers and mailboxes:
+// InjectFromConfig walks it to publish plaintexts into the process
+// environment (os.Setenv), and ResolveAll walks it to build the redaction
+// bundle. A provider added here is automatically covered by BOTH — the
+// drift-closure this helper exists to enforce, after InjectFromConfig and
+// ResolveAll each kept their own list and a fully configured Tavily sat
+// unused in the vault while search degraded to keyless DuckDuckGo.
+//
+// Empty refs are returned and skipped by the callers (TrimSpace + empty
+// check), matching both callers' pre-helper behaviour exactly.
+//
+// Channel refs are deliberately absent: channels consume their refs
+// per-instance directly from the store, not via os.Getenv.
+func nonChannelRefsFor(cfg *config.Config) []credentialRef {
+	var out []credentialRef
+	add := func(ref, scope, owner string) {
+		out = append(out, credentialRef{ref: ref, scope: scope, owner: owner})
+	}
+	add(cfg.Voice.ElevenLabsAPIKeyRef, ScopeVoice, "elevenlabs")
+	add(cfg.Voice.GroqAPIKeyRef, ScopeVoice, "groq")
+	add(cfg.Tools.Web.Brave.APIKeyRef, ScopeWebSearch, "brave")
+	add(cfg.Tools.Web.Tavily.APIKeyRef, ScopeWebSearch, "tavily")
+	add(cfg.Tools.Web.Perplexity.APIKeyRef, ScopeWebSearch, "perplexity")
+	add(cfg.Tools.Web.GLMSearch.APIKeyRef, ScopeWebSearch, "glm_search")
+	add(cfg.Tools.Web.BaiduSearch.APIKeyRef, ScopeWebSearch, "baidu_search")
+	// Skill marketplace credential refs (FR-10.1 unified list): each
+	// marketplace entry may carry a ClawHub AuthTokenRef and/or a GitHub
+	// TokenRef, both resolved via the credential store (SEC-23).
+	for _, m := range cfg.Tools.Skills.Marketplaces {
+		owner := m.Name
+		if owner == "" {
+			owner = m.Type
+		}
+		add(m.AuthTokenRef, ScopeMarketplace, owner)
+		add(m.TokenRef, ScopeMarketplace, owner)
+	}
+	return out
 }
 
 // ResolveAll returns every resolved {ref → plaintext} pair for all provider and
@@ -241,24 +345,10 @@ func ResolveAll(cfg *config.Config, store *Store) (map[string]string, []error) {
 		}
 	}
 
-	// Non-channel credential refs.
-	nonChannelRefs := []string{
-		cfg.Voice.ElevenLabsAPIKeyRef,
-		cfg.Voice.GroqAPIKeyRef,
-		cfg.Tools.Web.Brave.APIKeyRef,
-		cfg.Tools.Web.Tavily.APIKeyRef,
-		cfg.Tools.Web.Perplexity.APIKeyRef,
-		cfg.Tools.Web.GLMSearch.APIKeyRef,
-		cfg.Tools.Web.BaiduSearch.APIKeyRef,
-	}
-	// Skill marketplace credential refs (FR-10.1 unified list): each
-	// marketplace entry may carry a ClawHub AuthTokenRef and/or a GitHub
-	// TokenRef, both resolved via the credential store (SEC-23).
-	for _, m := range cfg.Tools.Skills.Marketplaces {
-		nonChannelRefs = append(nonChannelRefs, m.AuthTokenRef, m.TokenRef)
-	}
-	for _, ref := range nonChannelRefs {
-		addRef(ref)
+	// Non-channel credential refs — the shared enumeration, shared with
+	// InjectFromConfig so the two lists cannot drift again.
+	for _, cr := range nonChannelRefsFor(cfg) {
+		addRef(cr.ref)
 	}
 
 	return result, errs
