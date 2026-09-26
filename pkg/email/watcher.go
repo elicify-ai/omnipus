@@ -325,3 +325,22 @@ func (w *Watcher) cycleIfDue(ctx context.Context, now time.Time) error {
 	}
 	return w.Cycle(ctx)
 }
+
+// LoadWatcherState reads one mailbox's saved watcher state. (nil, nil) means
+// no state has ever been saved for the pair — the summary endpoint renders the
+// never-checked shape (round-2 MAJ-019: ok never lies about blindness).
+func LoadWatcherState(stateDir, agentID, workspaceID string) (*WatcherState, error) {
+	p := filepath.Join(stateDir, "email-watch", keyFor(agentID, workspaceID)+".json")
+	b, err := os.ReadFile(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var st WatcherState
+	if err := json.Unmarshal(b, &st); err != nil {
+		return nil, err
+	}
+	return &st, nil
+}

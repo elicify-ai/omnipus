@@ -386,6 +386,30 @@ const (
 	// operator asked to delete the credential but it remains encrypted at rest.
 	EventChannelInstanceDeleted = "channel.instance.deleted"
 
+	// Mail panel mutation events (email-mail-view-spec 2.3, MC-19): every
+	// human-initiated mutation from the Mail panel carries an audit entry.
+	// Fields emitted by the gateway handlers: {workspace_id, agent_id,
+	// message_id, recipients_count, attachment_count}; draft events add
+	// {ref_folder: "drafts", uid, uidvalidity}. Recipients are recorded only
+	// as a COUNT — addresses are PII and the auditor redacts email
+	// addresses anyway.
+	EventMailPanelSend = "mail.panel.send"
+
+	// EventMailPanelDraftUpdated — INFO. The panel edited a draft (D12/D23):
+	// APPEND with the same Message-ID, old copy \Deleted-flagged. Fields:
+	// {workspace_id, agent_id, message_id, uid, uidvalidity}.
+	EventMailPanelDraftUpdated = "mail.panel.draft_updated"
+
+	// EventMailPanelDraftSent — INFO. The panel send IS the approval (D12):
+	// the draft's content transmitted, Sent APPEND, draft cleanup. Fields:
+	// {workspace_id, agent_id, message_id, sent_saved, draft_cleanup_warning}.
+	EventMailPanelDraftSent = "mail.panel.draft_sent"
+
+	// EventMailPanelDraftDiscarded — INFO. The panel discarded a draft
+	// (FR-032/MC-17): \Deleted + UID EXPUNGE when UIDPLUS, else deferred.
+	// Fields: {workspace_id, agent_id, uid, uidvalidity, expunged}.
+	EventMailPanelDraftDiscarded = "mail.panel.draft_discarded"
+
 	// EventBrowserWebRTCStreamStarted — INFO. A per-agent WebRTC capture
 	// session's encoder page was successfully started (the FIRST
 	// WebRTC-capable viewer offer for that agent — ADR-047 D2, wave-plan

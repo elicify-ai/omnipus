@@ -80,6 +80,11 @@ type ComposeInput struct {
 	SignatureHTML string
 	// InReplyTo, when set, becomes the In-Reply-To and References headers.
 	InReplyTo string
+	// MessageID, when non-empty, overrides the generated Message-ID: the
+	// draft-edit path re-APPENDs with the SAME Message-ID (round-1 MIN-004)
+	// so panel edits never orphan mid: refs. Validated with the mid: grammar
+	// (angle brackets, an @, max 998 bytes, no CR/LF). Empty = generated.
+	MessageID string
 	// Attachments ride the message as MIME parts (MC-32; capped by the caller).
 	Attachments []Attachment
 	// Draft marks this message a locally saved draft: it gains the
@@ -134,6 +139,12 @@ func Compose(in ComposeInput) (ComposeOutput, error) {
 	}
 
 	messageID := "<" + randomHex(16) + "@" + domainOf(fromAddr.Address) + ">"
+	if in.MessageID != "" {
+		if _, err := parseMailRef("mid:" + in.MessageID); err != nil {
+			return ComposeOutput{}, fmt.Errorf("compose: invalid Message-ID override")
+		}
+		messageID = in.MessageID
+	}
 	subject := encodeHeaderValue(sanitizeHeader(in.Subject))
 	altBoundary := randomBoundary()
 	altBody := renderAlternative(plain, htmlPart, altBoundary)

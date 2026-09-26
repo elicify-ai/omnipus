@@ -203,6 +203,10 @@ var validEventNames = map[EventName]struct{}{
 	EventChannelRoutingDriftDrop:   {},
 	EventChannelRoutingChanged:     {},
 	EventChannelInstanceDeleted:    {},
+	EventMailPanelSend:             {},
+	EventMailPanelDraftUpdated:     {},
+	EventMailPanelDraftSent:        {},
+	EventMailPanelDraftDiscarded:   {},
 	EventChannelInstanceConfigured: {},
 	// Cancel-flow events (FR-10, FR-11, FR-15, FR-17-21, FR-25a).
 	EventTurnCancelAttempt:  {},

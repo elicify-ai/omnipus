@@ -638,6 +638,15 @@ func (a *restAPI) HandleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	rest := strings.TrimPrefix(path, "/api/v1/workspaces")
 
+	// /api/v1/workspaces/{id}/mail/... — the Mail panel REST surface
+	// (email-mail-view-spec 2.3/2.3a). Dispatched from rest_mail.go; the mux
+	// has no wildcards, so the suffix check must come before the entity
+	// routes below.
+	if idx := strings.Index(rest, "/mail/"); idx > 0 {
+		a.handleWorkspaceMail(w, r, strings.TrimPrefix(rest, "/"))
+		return
+	}
+
 	// /api/v1/workspaces/{id}/delegation — the per-workspace delegation graph (M5).
 	if strings.HasSuffix(rest, "/delegation") {
 		id := strings.TrimSuffix(strings.TrimPrefix(rest, "/"), "/delegation")

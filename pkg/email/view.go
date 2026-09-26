@@ -168,7 +168,7 @@ func (c *Client) selectFolder(ctx context.Context, client *imapclient.Client, na
 // messages with UID strictly below it. Truncation is explicit — the caller
 // learns whether more rows exist and gets the next page cursor. Envelopes
 // only: no body fetch, so no \Seen side effect is even possible.
-func (c *Client) ReadFolderPage(ctx context.Context, slug string, limit int, beforeUID uint32) ([]Message, uint32, bool, error) {
+func (c *Client) ReadFolderPage(ctx context.Context, slug string, limit int, beforeUID uint32) ([]MailRow, uint32, bool, error) {
 	name, err := c.folderNameFor(slug)
 	if err != nil {
 		return nil, 0, false, err
@@ -193,7 +193,7 @@ func (c *Client) ReadFolderPage(ctx context.Context, slug string, limit int, bef
 	switch {
 	case beforeUID > 0:
 		if beforeUID == 1 {
-			return []Message{}, uidvalidity, false, nil
+			return []MailRow{}, uidvalidity, false, nil
 		}
 		crit := &imap.SearchCriteria{}
 		var s imap.UIDSet
@@ -218,18 +218,100 @@ func (c *Client) ReadFolderPage(ctx context.Context, slug string, limit int, bef
 		all = searchDataUIDs(sd)
 	}
 	if len(all) == 0 {
-		return []Message{}, uidvalidity, false, nil
+		return []MailRow{}, uidvalidity, false, nil
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i] > all[j] }) // newest first
 	truncated := len(all) > limit
 	if truncated {
 		all = all[:limit]
 	}
-	msgs, ferr := c.fetchMessages(ctx, client, imap.UIDSetNum(toUIDs(all)...), false)
+	rows, ferr := c.fetchMailRows(ctx, client, imap.UIDSetNum(toUIDs(all)...))
 	if ferr != nil {
 		return nil, 0, false, ferr
 	}
-	return msgs, uidvalidity, truncated, nil
+	return rows, uidvalidity, truncated, nil
+}
+
+// MailRow is one envelope page row for the Mail panel lists — the transport
+// Message envelope plus the flag bits the wire rows require (\Seen, \Draft,
+// the $OmnipusAgentRead keyword) and the X-Omnipus-Draft header peek. The
+// header peek rides the SAME fetch command (a second BODY.PEEK section:
+// HEADER.FIELDS (X-OMNIPUS-DRAFT)) so the page stays one round trip.
+type MailRow struct {
+	UID            uint32
+	UIDValidity    uint32
+	Seen           bool
+	IsDraft        bool
+	ReadByAgent    bool
+	IsOmnipusDraft bool
+	MessageID      string
+	From           string
+	FromName       string
+	ReplyTo        string
+	To             []string
+	Cc             []string
+	Subject        string
+	Date           time.Time
+}
+
+// fetchMailRows fetches envelopes + flags + the X-Omnipus-Draft header peek
+// for one UID set and maps the buffers to MailRow. The header peek rides the
+// same FETCH (round-1 MAJ-012's one-session-per-request budget is preserved —
+// this is one command, not one per row).
+func (c *Client) fetchMailRows(ctx context.Context, client *imapclient.Client, set imap.UIDSet) ([]MailRow, error) {
+	opts := &imap.FetchOptions{
+		UID: true, Flags: true, Envelope: true,
+		BodySection: []*imap.FetchItemBodySection{{
+			Specifier:    imap.PartSpecifierHeader,
+			HeaderFields: []string{"X-Omnipus-Draft"},
+			Peek:         true,
+		}},
+	}
+	bufs, err := runIMAP(ctx, "fetch rows", func() ([]*imapclient.FetchMessageBuffer, error) {
+		return client.Fetch(set, opts).Collect()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("email transport: fetch rows: %w", err)
+	}
+	rows := make([]MailRow, 0, len(bufs))
+	for _, buf := range bufs {
+		if buf == nil {
+			continue
+		}
+		row := MailRow{
+			UID:       uint32(buf.UID),
+			MessageID: buf.Envelope.MessageID,
+			Subject:   strings.TrimSpace(buf.Envelope.Subject),
+			Date:      buf.Envelope.Date.UTC(),
+		}
+		if len(buf.Envelope.From) > 0 {
+			row.From = addressString(buf.Envelope.From[0])
+			row.FromName = buf.Envelope.From[0].Name
+		}
+		if len(buf.Envelope.ReplyTo) > 0 {
+			row.ReplyTo = addressString(buf.Envelope.ReplyTo[0])
+		}
+		row.To = splitAddressList(addressListString(buf.Envelope.To))
+		row.Cc = splitAddressList(addressListString(buf.Envelope.Cc))
+		for _, f := range buf.Flags {
+			switch string(f) {
+			case string(imap.FlagSeen):
+				row.Seen = true
+			case string(imap.FlagDraft):
+				row.IsDraft = string(imap.FlagDraft) == string(f)
+			case "$OmnipusAgentRead":
+				row.ReadByAgent = true
+			}
+		}
+		for _, sec := range buf.BodySection {
+			if len(sec.Bytes) > 0 && strings.Contains(strings.ToLower(string(sec.Bytes)), "x-omnipus-draft:") {
+				row.IsOmnipusDraft = true
+			}
+		}
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].UID > rows[j].UID }) // newest first
+	return rows, nil
 }
 
 // searchDataUIDs extracts a search result's UIDs.
@@ -612,3 +694,46 @@ func (c *Client) DeleteDraft(ctx context.Context, uid uint32) error {
 	}
 	return nil
 }
+
+// ResolveRef resolves a folder-scoped ref to its current (uidvalidity, uid)
+// without fetching the body: uid-form refs ride the live folder epoch;
+// mid-form refs search only the addressed folder among non-\Deleted messages,
+// resolving multiple hits to the highest UID (round-2 MIN-005). The gateway's
+// staleness preconditions and the seen action resolve through this so list
+// rows, reads and mutations address one consistently-defined target.
+func (c *Client) ResolveRef(ctx context.Context, slug, ref string) (uint32, uint32, error) {
+	name, err := c.folderNameFor(slug)
+	if err != nil {
+		return 0, 0, err
+	}
+	r, err := parseMailRef(ref)
+	if err != nil {
+		return 0, 0, err
+	}
+	client, _, err := c.dialIMAP(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer client.Close()
+	uv, _, err := c.selectFolder(ctx, client, name)
+	if err != nil {
+		return 0, 0, err
+	}
+	if r.kind == "uid" {
+		return uv, r.uid, nil
+	}
+	uid, err := c.searchMessageID(ctx, client, r.messageID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if uid == 0 {
+		return 0, 0, fmt.Errorf("email transport: no message %s in %s", ref, slug)
+	}
+	return uv, uid, nil
+}
+
+// SanitizeAttachmentName is the exported MC-32 sanitizer for outbound
+// attachment filenames: path separators become '-', control characters are
+// dropped, and the "."/".." specials collapse to "-". The mail tools use it
+// on agent-workspace attachments; the gateway uses it on panel uploads.
+func SanitizeAttachmentName(name string) string { return sanitizeMailPartName(name) }
