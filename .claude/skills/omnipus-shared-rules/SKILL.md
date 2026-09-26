@@ -5,7 +5,7 @@ description: Baseline procedure for every Omnipus dev-team role — the fifteen 
 
 # Omnipus Shared Rules
 
-Last reviewed: 2026-09-25
+Last reviewed: 2026-09-26
 
 Root `CLAUDE.md` is the authority on project facts and hard constraints — the *what*.
 This skill is the *how*: the working procedure every dev-team role shares. It never
@@ -98,6 +98,10 @@ to the section instead of copying it, so there is one source per fact.
 - Per-OS paths are expected to differ (e.g. macOS `/etc` -> `/private/etc`) — derive the
   expected path in a test, never hard-code it. A green on one platform is not a green on
   all.
+- Absence from a log is not evidence of absence: before concluding "never happened"
+  from a log, confirm the code path logs on success at that level — a path that only
+  logs failures makes every success invisible (a reviewer has wrongly reported "never
+  enqueued" from exactly this gap).
 - Deep "is this really not our failure" diagnosis (narrowing by commit window, forcing a
   suspected timing deterministic, checking what a binary actually links): load
   `omnipus-failure-triage` on a failure dispatch — it is not preloaded here.
@@ -131,6 +135,14 @@ to the section instead of copying it, so there is one source per fact.
 - The evidence table itself, certainty labels, and the final self-check are defined in
   your own file's discipline block (rule 12), not here.
 
+## Headless dispatches
+
+- A headless worker (`claude -p`, `claudez`, `claudeg`) ends when its turn ends — no
+  completion notification resumes it. Finish inside the one turn: run long gates in the
+  foreground with a timeout, never backgrounded while waiting for their completion
+  notification, and commit and push your work branch before ending the turn. A turn
+  that ends with uncommitted work is not done.
+
 ## Retired surfaces
 
 - Reintroducing any retired surface is a regression, not conflict resolution — a merge
@@ -158,3 +170,7 @@ to the section instead of copying it, so there is one source per fact.
   drift beyond your dispatch, or any other rule conflict (rule 15), still stops work and
   produces a blocked report — name the rule, the reason it conflicts, and a proposed
   alternative. Never guess silently; team-lead decides or asks the founder.
+- Never edit or rewrite files outside your dispatch's scope to make a gate pass — not
+  even to dodge a suspected gate bug: report the gate problem instead (possibly a gate
+  bug), and team-lead decides. Turning a gate green by out-of-scope edits is a rule-15
+  conflict, not a fix.
