@@ -4172,7 +4172,8 @@ paths:
         (D6). A successful change reloads the agent registry so every
         agent's next turn uses the new limit; the response lists the lowered
         agents in max_tool_iterations_lowered_agents. If the save is
-        committed but that reload fails, the response is 500 code
+        committed but the in-memory refresh or that reload fails, the
+        response is 500 code
         performance_reload_failed: the settings ARE saved (GET /performance
         shows them) but running agents use them only after the next reload
         or restart; the agents this request lowered are listed in
@@ -4218,8 +4219,10 @@ paths:
             max_tool_iterations_rollback_incomplete (a write failed and some
             agents could not be restored — the error names them;
             details.cause carries the original failure; the global is
-            unchanged), performance_reload_failed (the settings ARE saved but
-            the registry reload failed; details.lowered_agents lists the
+            unchanged), performance_reload_failed (the settings ARE saved —
+            config.json and any lowered agents are written, nothing is rolled
+            back — but the in-memory refresh or the registry reload failed;
+            details.lowered_agents lists the
             agents this request lowered). Any other failure to write
             config.json carries no code.
           content:
