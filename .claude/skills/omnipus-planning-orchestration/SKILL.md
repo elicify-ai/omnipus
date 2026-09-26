@@ -76,6 +76,23 @@ Formats and procedures: `knowledge/coordination-ledger.md`. The core rules:
   `team-lead`. If starting a squad lead needs a model choice or any other trade-off,
   team-lead asks the founder at squad start instead of silently leading the squad — the
   silent absorption is the failure this rule exists to prevent.
+- **Every squad-lead dispatch opens with its GOAL and the goal loop** — the brief's first
+  lines state the end state (in-session: "gated branch handed back to team-lead with its
+  evidence table") and tell the squad lead to run as a goal loop until that goal is met
+  or it is blocked on a founder decision (the loop itself: `.claude/agents/squad-lead.md`
+  §4a). team-lead records that GOAL as the squad file's `GOAL` line (format:
+  `knowledge/coordination-ledger.md`) so it can re-read it after a compaction.
+- **team-lead is the goal judge for every squad lead it starts.** A squad lead that ends
+  its turn mid-lane is finished, not waiting. Every time one stops (its completion
+  notification arrives), team-lead reads the final reply against the squad's GOAL:
+  - **Goal met** — proceed: review the hand-back, then the landing ask.
+  - **BLOCKED on founder questions** — take the questions to the founder; resume the
+    squad lead with the answers.
+  - **Anything else** (a milestone, "waiting on X", "will pick up when notified") — the
+    lead went to sleep: resume it **immediately** with SendMessage, restating its GOAL
+    (re-read from the squad file) and the goal loop, and telling it where it stopped.
+
+  Never leave a stopped squad lead un-resumed mid-lane.
 - **team-lead's own job** is coordination (the ledger, chief alignment, cross-squad
   overlaps), founder interviews and decisions, landing, and the final founder-facing
   browser check — never per-specialist dispatch inside a squad; when more than one or

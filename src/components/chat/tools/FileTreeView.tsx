@@ -4,8 +4,14 @@ import { Folder, File, CaretDown, CaretUp } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { useSessionStore } from '@/store/session'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
+import {
+  ToolResultSentinelBody,
+  isSentinelResolution,
+  resolveToolResult,
+} from './toolResultDisplay'
 
 interface ListDirArgs {
   path?: string
@@ -42,13 +48,15 @@ function parseTree(text: string): TreeEntry[] {
   return entries.slice(0, 200) // cap at 200 entries
 }
 
-function FileTreeBlock({
+export function FileTreeBlock({
   toolName,
   args,
   result,
   isRunning,
   isError,
   isCancelled,
+  error,
+  sessionId,
 }: {
   toolName: string
   args: ListDirArgs
@@ -56,8 +64,15 @@ function FileTreeBlock({
   isRunning: boolean
   isError?: boolean
   isCancelled?: boolean
+  /** Failed call's reason (frame.error via replay.go::applyPersistedFailureReason). Rendered in the expanded panel when there is no listing. */
+  error?: string
+  /** Session this call belongs to — required to fetch a ToolResultRef sentinel's full body session-scoped. The live path falls back to the active session. */
+  sessionId?: string
 }) {
   const [expanded, setExpanded] = useState(false)
+  // ctui-gate fix 1: live path has no sessionId prop — fall back to the
+  // active session (same fallback BashOutputBlock uses).
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
 
   // Client-side render gate (issue #494): mirrors BashOutput.tsx's gate —
   // hides this row when shouldRenderToolCall says so, unless verbose chat is
@@ -70,7 +85,13 @@ function FileTreeBlock({
   }
 
   const path = args.path ?? '.'
-  const content = result != null ? String(result) : ''
+  // ctui-gate fix 1: resolve through the shared module — a `{ text }`
+  // envelope, an offload/truncation/marshal-error sentinel, or a structured
+  // failure renders its dedicated display instead of `String(result)`'s
+  // "[object Object]". Entries derive ONLY from a plain-string listing
+  // (honest 0 for any other shape) — never from a stringified object.
+  const resolved = resolveToolResult(result)
+  const content = resolved.kind === 'text' ? resolved.text : ''
   const entries = content ? parseTree(content) : []
 
   // Always resolves to a real config — a completed listing with zero entries
@@ -98,6 +119,7 @@ function FileTreeBlock({
     <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header */}
       <Button variant="ghost" tabIndex={0}
+        data-testid="file-tree-toggle"
         onClick={() => !isRunning && setExpanded((e) => !e)}
         className={cn(
           // rounded-none: Button's base variant adds rounded-md, but this
@@ -128,7 +150,12 @@ function FileTreeBlock({
           data-testid="file-tree-panel"
           className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] max-h-64 overflow-auto py-[var(--space-1)] pl-[var(--space-2-5)] space-y-[var(--space-0-5)]"
         >
-          {entries.length > 0 ? (
+          {isSentinelResolution(resolved) ? (
+            <ToolResultSentinelBody
+              resolved={resolved}
+              sessionId={sessionId ?? activeSessionId ?? ''}
+            />
+          ) : entries.length > 0 ? (
             entries.map((entry, i) => (
               <div
                 key={i}
@@ -144,7 +171,9 @@ function FileTreeBlock({
             ))
           ) : (
             <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all">
-              {content}
+              {content || (error ? (
+                <span className="italic text-[var(--color-error)] break-words">{error}</span>
+              ) : null)}
             </pre>
           )}
         </div>
@@ -157,31 +186,31 @@ function FileTreeBlock({
 // (set in omnipus-runtime.ts from the store's resolved ToolCall.status), not
 // from `status.type === 'incomplete'` — that can never be true for a
 // finished call carrying a result.
-export const FileTreeViewUI = makeAssistantToolUI<ListDirArgs, unknown>({
-  toolName: 'list_dir',
-  render: ({ args, result, status, isError }) => (
-    <FileTreeBlock
-      toolName="list_dir"
-      args={args ?? {}}
-      result={result}
-      isRunning={status.type === 'running'}
-      isError={isError}
-      isCancelled={isCancelledStatus(status)}
-    />
-  ),
-})
+function makeFileTreeUI(toolName: string) {
+  return makeAssistantToolUI<ListDirArgs, unknown>({
+    toolName,
+    render: ({ args, result, status, isError }) => (
+      <FileTreeBlock
+        toolName={toolName}
+        args={args ?? {}}
+        result={result}
+        isRunning={status.type === 'running'}
+        isError={isError}
+        isCancelled={isCancelledStatus(status)}
+      />
+    ),
+  })
+}
 
-// BRD C.6.1.4 tool name (dot-notation). Backend uses Omnipus convention (list_dir); both registered.
-export const FileListAliasDotUI = makeAssistantToolUI<ListDirArgs, unknown>({
-  toolName: 'file.list',
-  render: ({ args, result, status, isError }) => (
-    <FileTreeBlock
-      toolName="file.list"
-      args={args ?? {}}
-      result={result}
-      isRunning={status.type === 'running'}
-      isError={isError}
-      isCancelled={isCancelledStatus(status)}
-    />
-  ),
-})
+// Canonical backend name (pkg/tools/filesystem.go::ListDirTool.Name) — issue
+// #898: claimed as registered in OmnipusRuntimeProvider.tsx's comment but
+// never actually registered, so live AND replayed `list_directory` calls fell
+// through to the generic badge.
+export const FileTreeDirectoryUI = makeFileTreeUI('list_directory')
+
+// Legacy alias kept for backward compat with old session transcripts only
+// (historical JSONL is never migrated). Do NOT use this name for new calls.
+export const FileTreeViewUI = makeFileTreeUI('list_dir')
+
+// BRD C.6.1.4 tool name (dot-notation) — another old-transcript alias.
+export const FileListAliasDotUI = makeFileTreeUI('file.list')

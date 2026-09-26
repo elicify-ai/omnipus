@@ -1,29 +1,12 @@
 import { useState } from 'react'
-import {
-  ArrowsClockwise,
-  XCircle,
-  Prohibit,
-  Lock,
-  Warning,
-  DownloadSimple,
-  Broadcast,
-} from '@phosphor-icons/react'
+import { Broadcast } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import type { MessagePartStatus } from '@assistant-ui/react'
-import type { TruncatedResult, MarshalErrorResult } from '@/lib/ws'
-import type {
-  ToolResultRef,
-  DelegationFailure,
-  PermissionDenied,
-} from '@/lib/api/generated/asyncapi-types'
 import { isClientTruncatedResult, isToolResultRef } from '@/store/chat'
-import type { ClientTruncatedResult } from '@/store/chat'
-import { useQuery } from '@tanstack/react-query'
-import { fetchToolResult } from '@/lib/api'
 import { humanizeToolName } from '@/lib/humanizeToolName'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
@@ -32,7 +15,18 @@ import {
   isCancelledStatus,
   type ToolBadgeStatusConfig,
 } from '@/lib/toolStatusConfig'
-import { detectToolResultSentinels, policyAxisLabel } from './toolResultSentinels'
+import { detectToolResultSentinels } from './toolResultSentinels'
+import {
+  ClientTruncatedDisplay,
+  DelegationFailureDisplay,
+  FileExistsRefusalDisplay,
+  PermissionDeniedDisplay,
+  ToolResultRefDisplay,
+  ToolResultSentinelBody,
+  isMarshalErrorResult,
+  isTruncatedResult,
+  safeJson,
+} from './toolResultDisplay'
 
 interface GenericToolCallProps {
   toolName: string
@@ -61,34 +55,6 @@ interface GenericToolCallProps {
   sessionId?: string
 }
 
-function safeJson(value: unknown): string {
-  if (value === undefined || value === null) return ''
-  if (typeof value === 'string') return value
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
-}
-
-/** Returns true when the result is the truncation sentinel from replay.go:truncateResult. */
-function isTruncatedResult(value: unknown): value is TruncatedResult {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as Record<string, unknown>)['_truncated'] === true
-  )
-}
-
-/** Returns true when the result is the marshal-error sentinel from replay.go. */
-function isMarshalErrorResult(value: unknown): value is MarshalErrorResult {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as Record<string, unknown>)['_marshal_error'] === 'string'
-  )
-}
-
 // F1 (second review wave on branch fix/615-617-618-hardening): the
 // isDelegationFailure / isFileExistsRefusal / isPermissionDenied detectors
 // and policyAxisLabel used to be defined here, byte-identical to a second
@@ -103,224 +69,6 @@ function isMarshalErrorResult(value: unknown): value is MarshalErrorResult {
 // PermissionDeniedDisplay, fileExistsRefusal.reason, and excluding a matched
 // sentinel from the plain-JSON-result fallback below — see
 // detectToolResultSentinels's return type doc comment.
-
-/** Format bytes into a human-readable size string (e.g. "2.3 MiB"). */
-function humanSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
-}
-
-// Renders a server-side ToolResultRef sentinel; full body fetched lazily on click.
-function ToolResultRefDisplay({
-  sentinel,
-  sessionId,
-}: {
-  sentinel: ToolResultRef
-  sessionId: string
-}) {
-  const [fetchEnabled, setFetchEnabled] = useState(false)
-
-  const { data, isFetching, isError, error } = useQuery<unknown, Error>({
-    queryKey: ['tool-result-ref', sessionId, sentinel.ref],
-    queryFn: () => fetchToolResult(sessionId, sentinel.ref),
-    enabled: fetchEnabled && sessionId !== '',
-    // Cache the result for the lifetime of this component tree — do not re-fetch on focus.
-    staleTime: Infinity,
-    gcTime: 5 * 60 * 1000,
-    retry: 1,
-  })
-
-  return (
-    <div data-testid="result-tool-ref">
-      {/* Banner — flat: a warning-tinted left accent stands in for the old
-          amber box (ticket "Tool components in chat"); text stays warning-colored. */}
-      <div className="flex items-start gap-[var(--space-2)] border-l-2 border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
-        <Warning size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
-        <span>
-          Result stored server-side ({humanSize(sentinel.original_size_bytes)}) — preview only
-        </span>
-      </div>
-
-      {/* Preview */}
-      {!data && (
-        <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto mb-[var(--space-1)]">
-          {sentinel.preview}
-        </pre>
-      )}
-
-      {/* Full result once fetched */}
-      {data !== undefined && (
-        <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-96 overflow-auto mb-[var(--space-1)]">
-          {safeJson(data)}
-        </pre>
-      )}
-
-      {/* Fetch error */}
-      {isError && (
-        <div className="text-[var(--color-error)] text-[length:var(--type-caption-size)] font-body mb-[var(--space-1)]">
-          Failed to load: {error?.message ?? 'unknown error'}
-        </div>
-      )}
-
-      {/* Fetch button — hidden once data is loaded */}
-      {!data && !isError && (
-        <Button
-          type="button"
-          variant="link"
-          onClick={() => setFetchEnabled(true)}
-          disabled={isFetching}
-          className="rounded-none flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] font-body disabled:cursor-wait"
-        >
-          {isFetching ? (
-            <ArrowsClockwise size={11} className="animate-spin" />
-          ) : (
-            <DownloadSimple size={11} />
-          )}
-          {isFetching ? 'Loading...' : 'Show full output'}
-        </Button>
-      )}
-    </div>
-  )
-}
-
-/**
- * G4: Renders a client-side truncation sentinel (ClientTruncatedResult).
- * The full body never reached the SPA (clamped before storage), so there is
- * no fetch button — only the preview and an explanatory hint.
- */
-function ClientTruncatedDisplay({ sentinel }: { sentinel: ClientTruncatedResult }) {
-  return (
-    <div data-testid="result-client-truncated">
-      {/* Flat: warning-tinted left accent instead of the old amber box; text stays warning-colored. */}
-      <div className="flex items-start gap-[var(--space-2)] border-l-2 border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
-        <Warning size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
-        <span>
-          Truncated client-side — showing first 4 KiB of {humanSize(sentinel.original_size_bytes)}.
-          The full result is preserved in the server transcript.
-        </span>
-      </div>
-      <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
-        {sentinel.preview}
-      </pre>
-    </div>
-  )
-}
-
-/**
- * BLOCKER 2: Renders the structured delegation-denied sentinel the backend emits
- * when a delegation tool call is refused by policy. Without this path a denied
- * delegation falls through to plainResult and renders as a raw JSON blob inside a
- * collapsed "Failed" tool call. We surface the human `reason`, the `policy` axis
- * that blocked it (trust set / mode / depth), and the target agent when present.
- */
-function DelegationFailureDisplay({ failure }: { failure: DelegationFailure }) {
-  return (
-    // Flat: a warning-tinted left accent replaces the old bordered/tinted
-    // box (ticket "Tool components in chat") — icon/label text stay warning-colored.
-    <div
-      data-testid="result-delegation-denied"
-      className="border-l-2 pl-[var(--space-2)] py-[var(--space-2)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)]"
-      style={{
-        borderColor: 'color-mix(in srgb, var(--color-warning) 60%, transparent)',
-      }}
-    >
-      <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-1)]">
-        <Prohibit
-          size={13}
-          weight="fill"
-          className="shrink-0"
-          style={{ color: 'var(--color-warning)' }}
-        />
-        <span className="font-medium" style={{ color: 'var(--color-warning)' }}>
-          Delegation denied
-        </span>
-      </div>
-
-      {/* Human-readable reason */}
-      <p className="text-[var(--color-secondary)] leading-relaxed mb-[var(--space-1)] break-words">
-        {failure.reason}
-      </p>
-
-      {/* Policy axis + target agent metadata */}
-      <dl className="grid grid-cols-[auto_1fr] gap-x-[var(--space-2)] gap-y-[var(--space-0-5)] text-[var(--color-muted)]">
-        <dt>Blocked by</dt>
-        <dd className="text-[var(--color-secondary)]">{policyAxisLabel(failure.policy)}</dd>
-        {failure.target_agent_id && (
-          <>
-            <dt>Target agent</dt>
-            <dd className="text-[var(--color-secondary)] break-all">{failure.target_agent_id}</dd>
-          </>
-        )}
-      </dl>
-    </div>
-  )
-}
-
-/**
- * Renders the structured permission-denied sentinel (issue #618). Mirrors
- * DelegationFailureDisplay's layout: a warning-tinted left accent, the
- * model-facing message, and the tool/reason/permanent metadata — so a
- * permission denial reads as a distinct, human-readable block instead of a
- * raw JSON blob, matching the treatment the other two structured-failure
- * members already get.
- */
-function PermissionDeniedDisplay({ failure }: { failure: PermissionDenied }) {
-  return (
-    <div
-      data-testid="result-permission-denied"
-      className="border-l-2 pl-[var(--space-2)] py-[var(--space-2)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)]"
-      style={{
-        borderColor: 'color-mix(in srgb, var(--color-warning) 60%, transparent)',
-      }}
-    >
-      <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-1)]">
-        <Lock
-          size={13}
-          weight="fill"
-          className="shrink-0"
-          style={{ color: 'var(--color-warning)' }}
-        />
-        <span className="font-medium" style={{ color: 'var(--color-warning)' }}>
-          Permission denied
-        </span>
-      </div>
-
-      <p className="text-[var(--color-secondary)] leading-relaxed mb-[var(--space-1)] break-words">
-        {failure.message}
-      </p>
-
-      <dl className="grid grid-cols-[auto_1fr] gap-x-[var(--space-2)] gap-y-[var(--space-0-5)] text-[var(--color-muted)]">
-        <dt>Tool</dt>
-        <dd className="text-[var(--color-secondary)] break-all">{failure.tool}</dd>
-        <dt>Reason</dt>
-        <dd className="text-[var(--color-secondary)] break-words">{failure.reason}</dd>
-        <dt>Retry</dt>
-        <dd className="text-[var(--color-secondary)]">
-          {/* F4/F7: fail SAFE, not fail open. Render "Not this turn"
-              (permanent) for anything except an EXPLICIT `permanent ===
-              false` — mirrors the Go side's own fail-safe default
-              (ClassifyDenial returns Permanent: true for anything
-              unclassified). This component never actually receives a
-              `permanent`-missing payload — `failure` here is already narrowed by
-              detectToolResultSentinels' `.strict()` Zod validation
-              (./toolResultSentinels), which requires `permanent` as one of
-              its five required fields. A pre-#618 transcript (or any other
-              payload missing the field) fails that validation and falls
-              through to the plain-JSON-result dump instead of reaching this
-              component at all — a worse outcome for a human reader, but not
-              a "may succeed later" misread, since no denial reaches here
-              without `permanent` already set one way or the other. The
-              `!== false` ternary (rather than `permanent ? … : …`) is kept
-              anyway as cheap, harmless defense-in-depth against a future
-              relaxation of that schema, not because today's payload can
-              omit the field. */}
-          {failure.permanent === false ? 'May succeed later this turn' : 'Not this turn'}
-        </dd>
-      </dl>
-    </div>
-  )
-}
 
 export function GenericToolCall({
   toolName,
@@ -535,40 +283,13 @@ export function GenericToolCall({
               {/* Marshal-error sentinel: result could not be serialized. Flat:
                   error-tinted left accent instead of the old bordered box. */}
               {marshalErr && (
-                <div
-                  data-testid="result-marshal-error"
-                  className="flex items-start gap-[var(--space-2)] border-l-2 border-[var(--color-error)]/40 pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-error)]"
-                >
-                  <XCircle size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
-                  <span>Result serialization failed: {marshalErr._marshal_error}</span>
-                </div>
+                <ToolResultSentinelBody resolved={{ kind: 'marshalError', sentinel: marshalErr }} sessionId={sessionId} />
               )}
 
-              {/* Server-truncated sentinel: result exceeded 10 KiB server-side.
-                  Flat: warning-tinted left accent instead of the old amber box. */}
               {truncated && (
-                <>
-                  <div
-                    data-testid="result-truncated-banner"
-                    className="flex items-start gap-[var(--space-2)] border-l-2 border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
-                  >
-                    <Warning size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
-                    <span>
-                      Truncated — showing first 10 KiB of {humanSize(truncated.original_size_bytes)}
-                    </span>
-                  </div>
-                  <pre
-                    tabIndex={0}
-                    role="region"
-                    aria-label="Tool output"
-                    className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
-                  >
-                    {truncated.preview}
-                  </pre>
-                </>
+                <ToolResultSentinelBody resolved={{ kind: 'truncated', sentinel: truncated }} sessionId={sessionId} />
               )}
 
-              {/* G4: Client-truncated sentinel — SPA clamped before storage, no server copy */}
               {clientTruncated && <ClientTruncatedDisplay sentinel={clientTruncated} />}
 
               {/* G4: ToolResultRef sentinel — server stored full body, fetch on demand */}
@@ -578,14 +299,9 @@ export function GenericToolCall({
                   human-readable block instead of a raw JSON blob. */}
               {delegationFailure && <DelegationFailureDisplay failure={delegationFailure} />}
               {fileExistsRefusal && (
-                <div
-                  data-testid="result-file-exists"
-                  className="border-l-2 pl-[var(--space-2)] py-[var(--space-2)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
-                  style={{ borderColor: 'color-mix(in srgb, var(--color-warning) 60%, transparent)' }}
-                >
-                  {fileExistsRefusal.reason}
-                </div>
+                <FileExistsRefusalDisplay refusal={fileExistsRefusal} />
               )}
+
               {permissionDenied && <PermissionDeniedDisplay failure={permissionDenied} />}
 
               {/* Plain result: normal rendering */}

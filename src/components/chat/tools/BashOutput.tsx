@@ -19,11 +19,16 @@
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
-import { cn } from '@/lib/utils'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { useSessionStore } from '@/store/session'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
+import {
+  ToolResultSentinelBody,
+  isSentinelResolution,
+  resolveToolResult,
+} from './toolResultDisplay'
 
 // ── Args shape ────────────────────────────────────────────────────────────────
 //
@@ -63,13 +68,56 @@ function actionLabel(action: string, isBackground: boolean): string {
   return isBackground && (action === 'run' || action === 'poll') ? `${base} (bg)` : base
 }
 
-function BashOutputBlock({
+// All six tool names that render through BashOutputBlock: the canonical
+// `bash` (ADR-036 §3.1) plus the five legacy aliases kept for old, already-
+// persisted session transcripts (historical JSONL is never migrated). Single
+// source for BOTH registration paths — the live makeAssistantToolUI
+// registrations below and ChatScreen.tsx's history-replay loop, which routes
+// any of these names through the same block so a reloaded view matches the
+// live one.
+export const BASH_TOOL_NAMES = [
+  'bash',
+  'exec',
+  'workspace_shell',
+  'workspace.shell',
+  'workspace_shell_bg',
+  'workspace.shell_bg',
+] as const
+
+export function isBashToolName(name: string): boolean {
+  return (BASH_TOOL_NAMES as readonly string[]).includes(name)
+}
+
+// Header command cap (analysis: toolui-analysis.md item 1 — "first ~60
+// characters of the command, single line"). The full command always remains
+// available in the expanded body; the header is a summary only.
+const HEADER_COMMAND_MAX_CHARS = 60
+
+/**
+ * One-line, ≤60-character header summary of a (possibly huge, possibly
+ * multi-line) command: every whitespace run — newlines, tabs, repeats —
+ * collapses to a single space, then the result is hard-capped with an
+ * ellipsis. The header span also carries Tailwind's `truncate`, so a command
+ * that is still too wide for the row ellipses visually on top of this cap;
+ * normalizing here guarantees the DOM text itself can never wrap the header
+ * onto a second line (a raw multi-line command string would render its line
+ * breaks as layout even where CSS alone would not).
+ */
+export function headerCommandSummary(command: string): string {
+  const singleLine = command.replace(/\s+/g, ' ').trim()
+  if (singleLine.length <= HEADER_COMMAND_MAX_CHARS) return singleLine
+  return `${singleLine.slice(0, HEADER_COMMAND_MAX_CHARS - 1)}…`
+}
+
+export function BashOutputBlock({
   toolName,
   args,
   result,
   isRunning,
   isError,
   isCancelled,
+  error,
+  sessionId,
 }: {
   toolName: string
   args: BashArgs
@@ -77,8 +125,19 @@ function BashOutputBlock({
   isRunning: boolean
   isError?: boolean
   isCancelled?: boolean
+  /** Failed call's reason (frame.error via replay.go::applyPersistedFailureReason). Rendered in the expanded body when there is no output text. */
+  error?: string
+  /** Session this call belongs to — required to fetch a ToolResultRef sentinel's full body session-scoped. The live path falls back to the active session. */
+  sessionId?: string
 }) {
-  const [expanded, setExpanded] = useState(true)
+  // Collapsed by default (ticket "chat tool-UI collapse", 2026-09-26): the
+  // header alone carries "bash · first ~60 chars of the command · Done/Failed";
+  // the full command and the output panel live inside the expandable body.
+  const [expanded, setExpanded] = useState(false)
+  // ctui-gate fix 1: the LIVE path (makeBashUI's render) passes no sessionId
+  // prop — fall back to the active session so a ToolResultRef sentinel's
+  // full-body fetch still resolves. Replay passes the explicit prop.
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
 
   // Client-side render gate (verbose-chat off by default): hides noisy
   // background `bash` dispatches (run_in_background) and poll/read calls
@@ -118,7 +177,13 @@ function BashOutputBlock({
     toolName === 'workspace_shell_bg' ||
     toolName === 'workspace.shell_bg'
   const label = actionLabel(action, isBackground)
-  const output = result != null ? String(result) : ''
+  // ctui-gate fix 1: resolve the persisted result through the shared module —
+  // a `{ text }` envelope, an offload/truncation/marshal-error sentinel, or a
+  // structured failure now renders through its dedicated display instead of
+  // `String(result)`'s "[object Object]". Counts and bodies derive only from
+  // `text` kinds (the JSON fallback's text is never counted as content).
+  const resolved = resolveToolResult(result)
+  const output = resolved.kind === 'text' || resolved.kind === 'json' ? resolved.text : ''
 
   // Flat text-line redesign (ticket "Tool components in chat", P2): no
   // rounded-md/border/overflow-hidden card, no status-tinted border, no
@@ -147,30 +212,56 @@ function BashOutputBlock({
         >
           {statusConfig.indicator}
           <span className="text-[var(--color-muted)] shrink-0">{label}</span>
-          <span className="text-[var(--color-secondary)] truncate flex-1 min-w-0">{command}</span>
-          <span className={cn('text-[var(--color-muted)] shrink-0')}>
-            {statusConfig.label}
+          <span className="truncate flex-1 min-w-0 text-[var(--color-secondary)]">
+            {headerCommandSummary(command)}
           </span>
+          <span className="shrink-0 text-[var(--color-muted)]">{statusConfig.label}</span>
         </DisclosureRow>
       </div>
 
-      {/* Output panel — indented left-accent block; the dark terminal panel
-          keeps its own identity (bg-[var(--color-code-surface)]) but is no
-          longer wrapped in an outer bordered frame. */}
+      {/* Expandable body — indented left-accent block. The FULL command and
+          the output panel live here; the dark terminal panel keeps its own
+          identity (bg-[var(--color-code-surface)]) but is no longer wrapped
+          in an outer bordered frame. */}
       {expanded && (
         <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)]">
-          <div className="bg-[var(--color-code-surface)] rounded-sm">
-            {isRunning && !output ? (
-              <div className="px-[var(--space-2-5)] py-[var(--space-2)] text-[var(--color-muted)] italic flex items-center gap-[var(--space-2)]">
-                <ArrowsClockwise size={11} className="animate-spin" />
-                {isBackground ? 'Running in background...' : 'Executing...'}
-              </div>
-            ) : (
-              <pre className="px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
-                {output || <span className="text-[var(--color-muted)] italic">(no output)</span>}
-              </pre>
-            )}
-          </div>
+          {/* Full command — the header deliberately shows only a ~60-char
+              summary; this is where the complete, multi-line text lives. */}
+          {command && (
+            <pre
+              tabIndex={0}
+              role="region"
+              aria-label="Command"
+              className="mb-[var(--space-1)] max-h-40 overflow-auto whitespace-pre-wrap break-all bg-[var(--color-code-surface)] p-[var(--space-2)] text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)]"
+            >
+              {command}
+            </pre>
+          )}
+          {isSentinelResolution(resolved) ? (
+            <ToolResultSentinelBody
+              resolved={resolved}
+              sessionId={sessionId ?? activeSessionId ?? ''}
+            />
+          ) : (
+            <div className="bg-[var(--color-code-surface)] rounded-sm">
+              {isRunning && !output ? (
+                <div className="flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] italic text-[var(--color-muted)]">
+                  <ArrowsClockwise size={11} className="animate-spin" />
+                  {isBackground ? 'Running in background...' : 'Executing...'}
+                </div>
+              ) : (
+                <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)]">
+                  {output ? (
+                    output
+                  ) : error ? (
+                    <span className="italic text-[var(--color-error)] break-words">{error}</span>
+                  ) : (
+                    <span className="italic text-[var(--color-muted)]">(no output)</span>
+                  )}
+                </pre>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
