@@ -95,11 +95,25 @@ func (p adr093FixedReplyProvider) Chat(context.Context, []providers.Message, []p
 func (p adr093FixedReplyProvider) GetDefaultModel() string { return "adr093-fixed-reply" }
 
 // adr093FailingProvider fails every model call and counts how many ran.
-type adr093FailingProvider struct{ calls int }
+// The count is mutex-guarded: the revived turn calls Chat from another
+// goroutine (runRevivedOrdinaryTurn), and the test reads the count while
+// that goroutine may still be inside Chat.
+type adr093FailingProvider struct {
+	mu    sync.Mutex
+	calls int
+}
 
 func (p *adr093FailingProvider) Chat(context.Context, []providers.Message, []providers.ToolDefinition, string, map[string]any) (*providers.LLMResponse, error) {
+	p.mu.Lock()
 	p.calls++
+	p.mu.Unlock()
 	return nil, errors.New("model call failed")
+}
+
+func (p *adr093FailingProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
 }
 
 func (p *adr093FailingProvider) GetDefaultModel() string { return "adr093-failing" }
@@ -313,11 +327,40 @@ func TestAdr093RevivedRoot_FailedTurnIsNotQueuedAgain(t *testing.T) {
 	msg := adr093HumanMessage("Right, carry on with the plan.", parentID)
 	_ = w.enqueue(msg)
 
-	if provider.calls != 1 {
-		t.Fatalf("revived message entered the model %d times, want 1 — ADR-093 D4: one message, one turn", provider.calls)
+	// runRevivedOrdinaryTurn starts the turn and returns (gate F1: an inline
+	// processMessage would block Run's pump), so the model call is not
+	// visible on the next line. ADR-093 D4 still requires one message, one
+	// turn: poll until that single call arrives, then hold a window in which
+	// a second call or a re-queue must not appear.
+	// 2s is ReplyIsDeliveredOnTheOutboundBus's wait for this same revived
+	// path. 1s and 20ms are DoesNotOverlapTheDyingTurn's no-overlap hold.
+	deadline := time.Now().Add(2 * time.Second)
+	var calls int
+	for {
+		calls = provider.callCount()
+		if calls > 1 {
+			t.Fatalf("revived message entered the model %d times, want 1 — ADR-093 D4: one message, one turn", calls)
+		}
+		if calls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("revived message entered the model %d times, want 1 — ADR-093 D4: one message, one turn", calls)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	if queued := len(w.inbox); queued != 0 {
 		t.Fatalf("worker inbox holds %d copy(ies) of the revived message — ADR-093 D4: a failed revived turn is not run again", queued)
+	}
+	hold := time.Now().Add(time.Second)
+	for time.Now().Before(hold) {
+		if calls = provider.callCount(); calls != 1 {
+			t.Fatalf("revived message entered the model %d times, want 1 — ADR-093 D4: a failed revived turn is not run again", calls)
+		}
+		if queued := len(w.inbox); queued != 0 {
+			t.Fatalf("worker inbox holds %d copy(ies) of the revived message — ADR-093 D4: a failed revived turn is not run again", queued)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
