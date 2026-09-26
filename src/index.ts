@@ -40,6 +40,11 @@ export type { RadioGroupProps, RadioGroupItemProps } from './components/ui/radio
 export { SegmentedControl, SegmentedControlItem } from './components/ui/segmented-control'
 export type { SegmentedControlProps, SegmentedControlItemProps } from './components/ui/segmented-control'
 export { Select, SelectGroup, SelectValue, SelectTrigger, SelectContent, SelectLabel, SelectItem, SelectSeparator, SelectScrollUpButton, SelectScrollDownButton } from './components/ui/select'
+export {
+  ResizeSeparator,
+  type ResizeSeparatorProps,
+  type ResizeSeparatorSource,
+} from './components/ui/resize-separator'
 export { Separator } from './components/ui/separator'
 export { Sheet, SheetPortal, SheetOverlay, SheetTrigger, SheetClose, SheetContent, SheetHeader, SheetFooter, SheetTitle, SheetDescription } from './components/ui/sheet'
 export { Slider } from './components/ui/slider'

@@ -1,0 +1,119 @@
+{
+ "version": 1,
+ "component": "ResizeSeparator",
+ "exports": [
+  "ResizeSeparator"
+ ],
+ "category": "primitive",
+ "source": "src/components/ui/resize-separator.tsx",
+ "owner": "design-system",
+ "themes": [
+  "dark"
+ ],
+ "variants": [
+  "docked"
+ ],
+ "sizes": [
+  "default"
+ ],
+ "states": [
+  "idle",
+  "dragging"
+ ],
+ "stories": [
+  {
+   "file": "src/components/ui/resize-separator.stories.tsx",
+   "exports": [
+    "Default"
+   ]
+  }
+ ],
+ "checks": [
+  {
+   "id": "resize-separator-unit",
+   "kind": "unit",
+   "file": "src/components/ui/resize-separator.test.tsx",
+   "test": "ResizeSeparator semantics exposes the complete US-9 AS-1 assistive state",
+   "applicable": true
+  },
+  {
+   "id": "resize-separator-interaction",
+   "kind": "interaction",
+   "file": "src/components/ui/resize-separator.stories.tsx",
+   "test": "Default",
+   "applicable": true,
+   "story": "Default"
+  },
+  {
+   "id": "resize-separator-axe",
+   "kind": "axe",
+   "file": "tests/design-system/browser.spec.ts",
+   "test": "ResizeSeparator [check:resize-separator-axe] axe",
+   "story": "Default",
+   "applicable": true
+  },
+  {
+   "id": "resize-separator-browser",
+   "kind": "browser",
+   "file": "tests/design-system/browser.spec.ts",
+   "test": "ResizeSeparator [check:resize-separator-browser] browser",
+   "story": "Default",
+   "applicable": true
+  },
+  {
+   "id": "resize-separator-keyboard",
+   "kind": "keyboard",
+   "file": "tests/design-system/browser.spec.ts",
+   "test": "ResizeSeparator [check:resize-separator-keyboard] keyboard",
+   "story": "Default",
+   "applicable": true
+  },
+  {
+   "id": "resize-separator-pointer",
+   "kind": "pointer",
+   "file": "tests/design-system/browser.spec.ts",
+   "test": "ResizeSeparator [check:resize-separator-pointer] pointer",
+   "story": "Default",
+   "applicable": true
+  },
+  {
+   "id": "resize-separator-forced-colors",
+   "kind": "forced-colors",
+   "file": "tests/design-system/browser.spec.ts",
+   "test": "ResizeSeparator [check:resize-separator-forced-colors] forced-colors",
+   "story": "Default",
+   "applicable": true
+  },
+  {
+   "id": "resize-separator-reduced-motion",
+   "kind": "reduced-motion",
+   "file": "tests/design-system/browser.spec.ts",
+   "test": "ResizeSeparator [check:resize-separator-reduced-motion] reduced-motion",
+   "story": "Default",
+   "applicable": true
+  },
+  {
+   "id": "resize-separator-zoom",
+   "kind": "zoom",
+   "file": "tests/design-system/browser.spec.ts",
+   "test": "ResizeSeparator [check:resize-separator-zoom] zoom",
+   "story": "Default",
+   "applicable": true
+  },
+  {
+   "id": "resize-separator-reflow",
+   "kind": "reflow",
+   "file": "tests/design-system/browser.spec.ts",
+   "test": "ResizeSeparator [check:resize-separator-reflow] reflow",
+   "story": "Default",
+   "applicable": true
+  },
+  {
+   "id": "resize-separator-root-size-not-applicable",
+   "kind": "root-size",
+   "applicable": false,
+   "reason": "ResizeSeparator renders no text, so user font-size scaling cannot clip or shrink any label it owns."
+  }
+ ],
+ "documentation": "docs/internal/design/components/resize-separator.md"
+}

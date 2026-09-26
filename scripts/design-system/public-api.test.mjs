@@ -91,7 +91,7 @@ test('public library dependency graph cannot reach application state or domain c
     'command', 'date-picker', 'date-time-picker', 'dialog', 'disclosure-row', 'dropdown-menu',
     'input', 'label', 'popover', 'progress', 'radio-group', 'segmented-control',
     'select', 'separator', 'sheet',
-    'slider', 'smart-select', 'switch', 'table', 'tabs', 'textarea', 'tooltip',
+    'resize-separator', 'slider', 'smart-select', 'switch', 'table', 'tabs', 'textarea', 'tooltip',
     'icon-button', 'field', 'confirm-dialog', 'skeleton', 'collection-state',
     'job-status', 'empty-state', 'error-state', 'query-error-state',
     'zoomable-view',
