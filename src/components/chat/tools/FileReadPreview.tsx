@@ -15,7 +15,10 @@ function basename(p: string): string {
   return p.split(/[/\\]/).pop() ?? p
 }
 
-function FileReadBlock({
+// Exported for ChatScreen.tsx's history-replay loop: a reloaded `read_file`
+// call must render the same dedicated row the live path shows (ticket
+// "chat tool-UI collapse", item 4).
+export function FileReadBlock({
   toolName,
   args,
   result,

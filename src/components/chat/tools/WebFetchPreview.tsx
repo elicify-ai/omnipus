@@ -32,7 +32,10 @@ function displayUrl(url: string): string {
   }
 }
 
-function WebFetchBlock({
+// Exported for ChatScreen.tsx's history-replay loop: a reloaded `fetch_url`/
+// `web_fetch` call must render the same dedicated row the live path shows
+// (ticket "chat tool-UI collapse", item 4).
+export function WebFetchBlock({
   toolName,
   args,
   result,

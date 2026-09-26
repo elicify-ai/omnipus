@@ -42,7 +42,7 @@ function parseTree(text: string): TreeEntry[] {
   return entries.slice(0, 200) // cap at 200 entries
 }
 
-function FileTreeBlock({
+export function FileTreeBlock({
   toolName,
   args,
   result,
@@ -98,6 +98,7 @@ function FileTreeBlock({
     <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header */}
       <Button variant="ghost" tabIndex={0}
+        data-testid="file-tree-toggle"
         onClick={() => !isRunning && setExpanded((e) => !e)}
         className={cn(
           // rounded-none: Button's base variant adds rounded-md, but this
@@ -157,31 +158,31 @@ function FileTreeBlock({
 // (set in omnipus-runtime.ts from the store's resolved ToolCall.status), not
 // from `status.type === 'incomplete'` — that can never be true for a
 // finished call carrying a result.
-export const FileTreeViewUI = makeAssistantToolUI<ListDirArgs, unknown>({
-  toolName: 'list_dir',
-  render: ({ args, result, status, isError }) => (
-    <FileTreeBlock
-      toolName="list_dir"
-      args={args ?? {}}
-      result={result}
-      isRunning={status.type === 'running'}
-      isError={isError}
-      isCancelled={isCancelledStatus(status)}
-    />
-  ),
-})
+function makeFileTreeUI(toolName: string) {
+  return makeAssistantToolUI<ListDirArgs, unknown>({
+    toolName,
+    render: ({ args, result, status, isError }) => (
+      <FileTreeBlock
+        toolName={toolName}
+        args={args ?? {}}
+        result={result}
+        isRunning={status.type === 'running'}
+        isError={isError}
+        isCancelled={isCancelledStatus(status)}
+      />
+    ),
+  })
+}
 
-// BRD C.6.1.4 tool name (dot-notation). Backend uses Omnipus convention (list_dir); both registered.
-export const FileListAliasDotUI = makeAssistantToolUI<ListDirArgs, unknown>({
-  toolName: 'file.list',
-  render: ({ args, result, status, isError }) => (
-    <FileTreeBlock
-      toolName="file.list"
-      args={args ?? {}}
-      result={result}
-      isRunning={status.type === 'running'}
-      isError={isError}
-      isCancelled={isCancelledStatus(status)}
-    />
-  ),
-})
+// Canonical backend name (pkg/tools/filesystem.go::ListDirTool.Name) — issue
+// #898: claimed as registered in OmnipusRuntimeProvider.tsx's comment but
+// never actually registered, so live AND replayed `list_directory` calls fell
+// through to the generic badge.
+export const FileTreeDirectoryUI = makeFileTreeUI('list_directory')
+
+// Legacy alias kept for backward compat with old session transcripts only
+// (historical JSONL is never migrated). Do NOT use this name for new calls.
+export const FileTreeViewUI = makeFileTreeUI('list_dir')
+
+// BRD C.6.1.4 tool name (dot-notation) — another old-transcript alias.
+export const FileListAliasDotUI = makeFileTreeUI('file.list')

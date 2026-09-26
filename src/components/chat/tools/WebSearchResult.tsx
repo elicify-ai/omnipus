@@ -53,13 +53,16 @@ function parseSearchResults(text: string): ParsedResult[] {
   return results
 }
 
-function WebSearchBlock({
+export function WebSearchBlock({
+  toolName,
   args,
   result,
   isRunning,
   isError,
   isCancelled,
 }: {
+  /** The wire tool name this row renders — `search_web` (canonical) or the `web_search` legacy alias. */
+  toolName: string
   args: WebSearchArgs
   result: unknown
   isRunning: boolean
@@ -70,12 +73,10 @@ function WebSearchBlock({
 
   // Client-side render gate (issue #494): mirrors BashOutput.tsx's gate —
   // hides this row when shouldRenderToolCall says so, unless verbose chat is
-  // on. Must sit after every hook above and before the JSX return. Only one
-  // tool name registers this block (web_search), so it's passed literally
-  // rather than threaded as a prop.
+  // on. Must sit after every hook above and before the JSX return.
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   if (
-    !shouldRenderToolCall('web_search', args as unknown as Record<string, unknown>, verboseChatEnabled, !!isError)
+    !shouldRenderToolCall(toolName, args as unknown as Record<string, unknown>, verboseChatEnabled, !!isError)
   ) {
     return null
   }
@@ -117,7 +118,7 @@ function WebSearchBlock({
         data-testid="web-search-toggle"
       >
         {statusConfig.indicator}
-        <span className="text-[var(--color-muted)] shrink-0">web_search</span>
+        <span className="shrink-0 text-[var(--color-muted)]">{toolName}</span>
         <span className="text-[var(--color-secondary)] truncate flex-1 min-w-0 italic">{query}</span>
         <span className={cn('text-[var(--color-muted)] shrink-0')}>
           {countOrStatusLabel}
@@ -165,18 +166,31 @@ function WebSearchBlock({
 }
 
 // Issue #617: isError comes from the tool-call part's own `isError` field
-// (set in omnipus-runtime.ts from the store's resolved ToolCall.status), not
+// (set in omnipus-runtime.ts from the store's real resolved status), not
 // from `status.type === 'incomplete'` — that can never be true for a
 // finished call carrying a result.
-export const WebSearchResultUI = makeAssistantToolUI<WebSearchArgs, unknown>({
-  toolName: 'web_search',
-  render: ({ args, result, status, isError }) => (
-    <WebSearchBlock
-      args={args ?? {}}
-      result={result}
-      isRunning={status.type === 'running'}
-      isError={isError}
-      isCancelled={isCancelledStatus(status)}
-    />
-  ),
-})
+function makeWebSearchUI(toolName: string) {
+  return makeAssistantToolUI<WebSearchArgs, unknown>({
+    toolName,
+    render: ({ args, result, status, isError }) => (
+      <WebSearchBlock
+        toolName={toolName}
+        args={args ?? {}}
+        result={result}
+        isRunning={status.type === 'running'}
+        isError={isError}
+        isCancelled={isCancelledStatus(status)}
+      />
+    ),
+  })
+}
+
+// Canonical backend name (pkg/tools/web.go::WebSearchTool.Name) — issue #898:
+// this was claimed as registered in OmnipusRuntimeProvider.tsx's comment but
+// never actually registered, so live AND replayed `search_web` calls fell
+// through to the generic badge.
+export const WebSearchCanonicalUI = makeWebSearchUI('search_web')
+
+// Legacy alias kept for backward compat with old session transcripts only
+// (historical JSONL is never migrated). Do NOT use this name for new calls.
+export const WebSearchResultUI = makeWebSearchUI('web_search')

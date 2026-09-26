@@ -21,8 +21,8 @@ import {
 } from "./tools/BashOutput";
 import { FileReadPreviewUI, FileReadAliasDotUI } from "./tools/FileReadPreview";
 import { FileWriteConfirmUI, FileWriteAliasDotUI, EditFileConfirmUI, AppendFileConfirmUI } from "./tools/FileWriteConfirm";
-import { FileTreeViewUI, FileListAliasDotUI } from "./tools/FileTreeView";
-import { WebSearchResultUI } from "./tools/WebSearchResult";
+import { FileTreeViewUI, FileListAliasDotUI, FileTreeDirectoryUI } from "./tools/FileTreeView";
+import { WebSearchResultUI, WebSearchCanonicalUI } from "./tools/WebSearchResult";
 import { WebFetchPreviewUI, WebFetchLegacyUI } from "./tools/WebFetchPreview";
 import { BrowserNavigateUI, BrowserNavigateUnderscoreUI } from "./tools/BrowserNavigate";
 import { WebServeUI } from "./tools/WebServeUI";
@@ -275,42 +275,43 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
        * (Omnipus convention); dot-notation names match BRD C.6.1.4 spec. Both registered
        * to handle either naming convention from the agent.
        *   bash              → BashOutputUI              (canonical, unified shell tool — ADR-036)
-       *   exec              → ExecLegacyUI              (legacy alias, old transcripts only)
-       *   workspace_shell   → WorkspaceShellLegacyUI    (legacy alias, old transcripts only)
-       *   workspace.shell   → WorkspaceShellDotLegacyUI (legacy alias, old transcripts only)
-       *   workspace_shell_bg → WorkspaceShellBgLegacyUI (legacy alias, old transcripts only)
-       *   workspace.shell_bg → WorkspaceShellBgDotLegacyUI (legacy alias, old transcripts only)
-       *   read_file         → FileReadPreviewUI         (read file content)
-       *   file.read         → FileReadAliasDotUI        (BRD alias)
+       *   exec / workspace_shell / workspace.shell / workspace_shell_bg /
+       *   workspace.shell_bg → *LegacyUI              (legacy aliases, old transcripts only)
+       *   read_file         → FileReadPreviewUI         (canonical, pkg/tools/filesystem.go)
+       *   file.read         → FileReadAliasDotUI        (BRD alias, old transcripts only)
        *   write_file        → FileWriteConfirmUI        (create/overwrite file)
-       *   file.write        → FileWriteAliasDotUI       (BRD alias)
+       *   file.write        → FileWriteAliasDotUI       (BRD alias, old transcripts only)
        *   edit_file         → EditFileConfirmUI         (targeted string replacement)
        *   append_file       → AppendFileConfirmUI       (append to file)
-       *   list_dir          → FileTreeViewUI            (legacy alias, directory listing)
-       *   list_directory    → FileTreeViewUI            (canonical name)
-       *   file.list         → FileListAliasDotUI        (BRD alias)
-       *   search_web        → WebSearchResultUI         (canonical, search the web)
-       *   web_search        → WebSearchResultUI         (legacy alias)
+       *   list_directory    → FileTreeDirectoryUI       (canonical, pkg/tools/filesystem.go — #898)
+       *   list_dir          → FileTreeViewUI            (legacy alias, old transcripts only)
+       *   file.list         → FileListAliasDotUI        (BRD alias, old transcripts only)
+       *   search_web        → WebSearchCanonicalUI      (canonical, pkg/tools/web.go — #898)
+       *   web_search        → WebSearchResultUI         (legacy alias, old transcripts only)
        *   fetch_url         → WebFetchPreviewUI         (canonical, fetch a URL)
        *   web_fetch         → WebFetchLegacyUI          (legacy alias)
-       *   serve_web         → WebServeUI                (canonical: static or dev, kind field)
-       *   web_serve         → WebServeUI                (legacy alias)
+       *   web_serve         → WebServeUI                (static or dev, kind field)
        *   serve_workspace   → ServeWorkspaceUI          (back-compat alias → WebServeUI)
        *   run_in_workspace  → RunInWorkspaceUI          (back-compat alias → WebServeUI)
-       *   browser_navigate  → BrowserNavigateUI         (canonical, browser navigation)
-       *   browser.navigate  → BrowserNavigateUnderscoreUI (legacy dot alias)
-       *   browser_click     → BrowserClickUI            (canonical)
-       *   browser.click     → BrowserClickUnderscoreUI  (legacy dot alias)
-       *   browser_type      → BrowserTypeUI             (canonical)
-       *   browser.type      → BrowserTypeUnderscoreUI   (legacy dot alias)
-       *   browser_screenshot → BrowserScreenshotUI      (canonical)
-       *   browser.screenshot → BrowserScreenshotUnderscoreUI (legacy dot alias)
-       *   browser_get_text  → BrowserGetTextUI          (canonical)
-       *   browser.get_text  → BrowserGetTextUnderscoreUI (legacy dot alias)
-       *   browser_wait      → BrowserWaitUI             (canonical)
-       *   browser.wait      → BrowserWaitUnderscoreUI   (legacy dot alias)
-       *   browser_evaluate  → BrowserEvaluateUI         (canonical)
-       *   browser.evaluate  → BrowserEvaluateUnderscoreUI (legacy dot alias)
+       *   NOTE: the backend canonical serve name, serve_web
+       *   (pkg/tools/web_serve.go::ToolNameWebServe), is NOT registered here
+       *   yet — a live/replayed serve_web call falls to the generic badge
+       *   (issue-#898 class of gap, reported 2026-09-26, out of this
+       *   change's approved scope).
+       *   browser_navigate  → BrowserNavigateUnderscoreUI (underscore alias)
+       *   browser.navigate  → BrowserNavigateUI         (registered dotted name)
+       *   browser_click     → BrowserClickUnderscoreUI  (underscore alias)
+       *   browser.click     → BrowserClickUI            (registered dotted name)
+       *   browser_type      → BrowserTypeUnderscoreUI   (underscore alias)
+       *   browser.type      → BrowserTypeUI             (registered dotted name)
+       *   browser_screenshot → BrowserScreenshotUnderscoreUI (underscore alias)
+       *   browser.screenshot → BrowserScreenshotUI      (registered dotted name)
+       *   browser_get_text  → BrowserGetTextUnderscoreUI (underscore alias)
+       *   browser.get_text  → BrowserGetTextUI          (registered dotted name)
+       *   browser_wait      → BrowserWaitUnderscoreUI   (underscore alias)
+       *   browser.wait      → BrowserWaitUI             (registered dotted name)
+       *   browser_evaluate  → BrowserEvaluateUnderscoreUI (underscore alias)
+       *   browser.evaluate  → BrowserEvaluateUI         (registered dotted name)
        *   set_goal          → SetGoalToolUI             (ADR-082 D9: goal record card, anchored at the call)
        */}
       <BashOutputUI />
@@ -325,8 +326,10 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
       <FileWriteAliasDotUI />
       <EditFileConfirmUI />
       <AppendFileConfirmUI />
+      <FileTreeDirectoryUI />
       <FileTreeViewUI />
       <FileListAliasDotUI />
+      <WebSearchCanonicalUI />
       <WebSearchResultUI />
       <WebFetchPreviewUI />
       <WebFetchLegacyUI />
