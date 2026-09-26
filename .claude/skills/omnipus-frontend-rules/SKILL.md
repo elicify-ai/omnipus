@@ -5,7 +5,7 @@ description: TypeScript/React-specific operational detail for frontend-lead only
 
 # Omnipus Frontend Rules
 
-Last reviewed: 2026-09-25
+Last reviewed: 2026-09-26
 
 Frontend-lead only. Read `omnipus-shared-rules` first — this skill adds
 TypeScript/React-specific detail on top of it, never repeats it. Root `CLAUDE.md` stays
@@ -23,6 +23,13 @@ authoritative on the facts this restates.
 - Vite builds to `dist/spa/`, copied to `pkg/gateway/spa/` and embedded via `go:embed` (`CLAUDE.md`, "Tech stack and platforms"). # agent-guard: allow
   `pkg/gateway/spa/` is gitignored and absent until the first SPA build. # agent-guard: allow
   A missing `pkg/gateway/spa/` in a fresh worktree is backend-lead's stub trap, not a frontend defect — do not "fix" it by editing frontend build config. # agent-guard: allow
+
+## Tests
+
+- Never edit or rewrite test files — not even to reconcile legacy assertions with the
+  current spec. Loosening an assertion to make it pass (e.g. `toEqual` → `toContain`) is
+  forbidden. A legacy test that contradicts the spec goes back to qa-lead, who owns test
+  files; implementers change production code, never tests.
 
 ## Design system (load before touching any of these trees)
 

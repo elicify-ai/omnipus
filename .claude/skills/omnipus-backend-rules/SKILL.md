@@ -5,7 +5,7 @@ description: Go-specific operational detail for backend-lead only — build/test
 
 # Omnipus Backend Rules
 
-Last reviewed: 2026-09-25
+Last reviewed: 2026-09-26
 
 Backend-lead only. Read `omnipus-shared-rules` first — this skill adds Go-specific
 detail on top of it, never repeats it. Root `CLAUDE.md` stays authoritative on the facts
@@ -32,6 +32,13 @@ this restates.
   (`docs/internal/false-green-patterns.md` section 1 — errcheck read 64, was 253).
 - A green under one flag set is not a pass: race bugs need `-race`; a cross-platform
   break needs `GOOS=<target> go vet`.
+
+## Tests
+
+- Never edit or rewrite test files — not even to reconcile legacy assertions with the
+  current spec. Loosening an assertion to make it pass (exact match → `strings.Contains`)
+  is forbidden. A legacy test that contradicts the spec goes back to qa-lead, who owns
+  test files; implementers change production code, never tests.
 
 ## Contracts
 
