@@ -68,24 +68,32 @@ func (t *GrepTool) Name() string { return "grep" }
 
 func (t *GrepTool) Description() string {
 	return fmt.Sprintf(
-		"Recursively search file NAMES and text CONTENT across your own workspace and every folder "+
-			"mounted into it — never anywhere else; there is no workspace_id argument, so another "+
-			"agent's or workspace's files are never reachable. Literal substring matching by default, "+
+		"Recursively search file NAMES and text CONTENT. With no `path`, the search covers your "+
+			"workspace plus every folder mounted into it. `path` may be workspace-relative (e.g. \"src\"), "+
+			"a mount name optionally followed by a sub-path (e.g. \"my-mount/src\"), or an absolute path; "+
+			"it may name a folder or a single file, and it reaches exactly what read_file can read. "+
+			"Omnipus's protected files and other agents' and other workspaces' files are never reachable: "+
+			"a `path` naming one is refused, and a search never returns them. Agent metadata files "+
+			"(SOUL.md, HEARTBEAT.md, AGENT.md, MEMORY.md in an agent folder) and the skills registry's "+
+			"instruction files never appear as matches either; use the Skill tool for skills. Symbolic "+
+			"links met while searching are not followed. Match paths are workspace-relative for anything "+
+			"inside your workspace, in mount-name form (e.g. \"my-mount/src/a.go\") for a mount searched "+
+			"by name or by the default search, and absolute with forward slashes everywhere else; a "+
+			"workspace-relative or absolute match path can be passed to read_file unchanged. A `path` "+
+			"that does not exist returns an error naming it. Literal substring matching by default, "+
 			"with smart case (a lowercase `pattern` matches any case; any uppercase letter makes the "+
 			"match case-sensitive) — set `regex: true` for full RE2 syntax (no backreferences/lookaround). "+
 			"Every file's NAME is always checked; TEXT content is scanned too (binaries are name-matched "+
 			"only, skipped for content), up to a %d MiB cap per file, always skipping `.git`, `.library`, "+
-			"`.omnipus-vault`, and anything `.gitignore`d. Use `path` to narrow to one subdirectory or one "+
-			"mounted folder (by its mount name, optionally with a subpath, e.g. \"my-mount/src\") instead "+
-			"of searching everything; `include_globs`/`exclude_globs` filter by doublestar pattern "+
-			"(e.g. \"**/*.go\"). `context_lines` (0-5) adds surrounding lines to each content match. "+
-			"A search is capped at %d total matches and %d matches per file by default — `max_matches`/"+
-			"`max_matches_per_file` may only LOWER those caps, never raise them. The rendered result is "+
-			"capped at %d characters with an explicit marker if cut. If a search is truncated for any "+
-			"reason, the response says why and how to narrow it — narrower `path`/globs and lower caps "+
-			"both make the next call more likely to finish uncapped. At most two searches (from this "+
-			"tool and/or the Library search bar) run at once; a third waits briefly and then reports busy "+
-			"with a retry hint.",
+			"`.omnipus-vault`, and anything `.gitignore`d. `include_globs`/`exclude_globs` filter by "+
+			"doublestar pattern (e.g. \"**/*.go\"). `context_lines` adds surrounding lines to each content "+
+			"match. A search is capped at %d total matches and %d matches per file by default — "+
+			"`max_matches`/`max_matches_per_file` may only LOWER those caps, never raise them. The "+
+			"rendered result is capped at %d characters with an explicit marker if cut. If a search is "+
+			"truncated for any reason, the response says why and how to narrow it — a narrower `path`, "+
+			"globs and lower caps all make the next call more likely to finish uncapped. Searches from "+
+			"this tool and the Library search bar share a small number of slots; when all are in use, a "+
+			"call waits briefly and then reports busy with a retry hint.",
 		filegrep.PerFileContentCap>>20, filegrep.DefaultMaxMatches, filegrep.DefaultMatchesPerFile,
 		config.DefaultBuiltinSuccessCap,
 	)
@@ -118,10 +126,11 @@ func (t *GrepTool) Parameters() map[string]any {
 			},
 			"path": map[string]any{
 				"type": "string",
-				"description": "Narrow the search to one subdirectory of your workspace, one mounted folder by " +
-					"its mount name (optionally followed by a subpath, e.g. \"my-mount/src\"), or a single FILE " +
-					"(e.g. \"src/main.go\" or \"my-mount/notes.txt\") to search just that one file. Omit to " +
-					"search your whole workspace root plus every mount.",
+				"description": "Where to search: a workspace-relative folder or file (e.g. \"src\" or " +
+					"\"src/main.go\"), a mount name optionally followed by a sub-path (e.g. \"my-mount/src\" or " +
+					"\"my-mount/notes.txt\"), or an absolute path to any folder or file read_file can read. " +
+					"Naming a single FILE searches just that file. Omit to search your whole workspace plus " +
+					"every mount.",
 			},
 			"include_globs": map[string]any{
 				"type":  "array",
