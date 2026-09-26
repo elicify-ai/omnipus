@@ -946,7 +946,14 @@ test(
     await openSession(page, sessionId)
     await waitForReplayDone(page)
 
-    const badgeLocator = page.locator('[data-testid="tool-call-badge"]')
+    // Since chat-tool-ui-collapse, bash renders via BashOutputBlock on BOTH
+    // paths (replay included), whose toggle is data-testid="bash-output-toggle"
+    // — not the generic tool-call-badge. Accept either shape (both are real
+    // renderings of the same seeded call, same pattern as handoff.spec.ts's
+    // bash assertion); the data-tool read below resolves for both now that
+    // BashOutputBlock's outer wrapper carries data-tool (GenericToolCall/
+    // ToolCallBadge's existing convention).
+    const badgeLocator = page.locator('[data-testid="tool-call-badge"], [data-testid="bash-output-toggle"]')
     await expect(badgeLocator.first()).toBeVisible({ timeout: 15_000 })
     const firstOpenCount = await badgeLocator.count()
     expect(firstOpenCount).toBe(1)
@@ -967,7 +974,8 @@ test(
     await openSession(page, sessionId)
     await waitForReplayDone(page)
 
-    const replayedBadges = page.locator('[data-testid="tool-call-badge"]')
+    // Same either-shape locator as first open (see above).
+    const replayedBadges = page.locator('[data-testid="tool-call-badge"], [data-testid="bash-output-toggle"]')
     await expect(replayedBadges).toHaveCount(firstOpenCount, { timeout: 15_000 })
 
     const replayedToolNames = await replayedBadges.evaluateAll((els) =>
