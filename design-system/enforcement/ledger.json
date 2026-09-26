@@ -4736,6 +4736,11 @@
   ],
   "reviewedBoundaries": [
     {
+      "path": "src/components/chat/ChatScreen.agent-mention.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
       "path": "src/assets/brand-logos/brand-logos-sanitized.test.ts",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
@@ -5036,17 +5041,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.agent-mention.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.agent-picker-scoping.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.agents-command.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5056,72 +5051,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.browser-handover-notice.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.cap-footer.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.combobox-aria.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.composer-card.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.delegation-event-lines.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.delegation-events-wired.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.delegation-thread-visibility.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.empty-menu-shell.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.error-detail.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.f4-ghost-thinking-indicator.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.ghost-text.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.goal-aware-thinking-indicator.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.goal-outcome.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.goal-setup-failure-line.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5136,42 +5066,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.harmful-upload.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.issue-617-replay-outcome.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.judge-verdict-thread-card.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.mid-turn-send.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.no-hardcoded-commands.test.ts",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.outbound-queue.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.partitioned-menu.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.plain-list-parity.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5181,17 +5076,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.replay.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.rest-guard.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.send-button-intercept.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5201,62 +5086,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.skills-filter.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.slash-command-readiness.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.slash-commands-error.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.tab-ring.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.thinking-indicator-context.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.tool-order.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.tool-replay-parity.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.truncation-notice-live.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.truncation-notice.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.unknown-slash.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.virtualization.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5372,11 +5202,6 @@
     },
     {
       "path": "src/components/chat/UntrustedChildText.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/__tests__/goal-card-anchoring.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
