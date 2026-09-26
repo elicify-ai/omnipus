@@ -225,7 +225,16 @@ func TestTranscript_ProviderMessageSubtypePersisted_MAJ104(t *testing.T) {
 	assembled := templateWith("quota_billing", "openrouter")
 
 	t.Run("provider-stage entry persists provider_message=true", func(t *testing.T) {
-		ts.writeErrorTranscriptWithAbandonment("error", "provider", assembled, CodeQuotaBilling, false)
+		// Rewritten for gate finding F7: the flag no longer comes from the
+		// stage string; it is threaded from the caller's already-classified
+		// LLMError — exactly the shape loop_run_turn_response.go's LLM-failure
+		// write passes (TranslateTurnError sets ProviderMessage when identity
+		// was present and the Section-6 sentence was assembled).
+		ts.appendClassifiedError(EventKindError.String(), "provider", LLMError{
+			Code:            CodeQuotaBilling,
+			Message:         assembled,
+			ProviderMessage: true,
+		})
 
 		entries, err := store.ReadTranscript(meta.ID)
 		if err != nil {
@@ -310,6 +319,36 @@ func TestTranscript_ProviderMessageSubtypePersisted_MAJ104(t *testing.T) {
 		}
 		if roundTripped == 0 {
 			t.Fatal("no provider_message=true entry exercised the round-trip — the first subtest's entry is missing")
+		}
+	})
+
+	// Gate finding F7 negative: a provider-STAGE write whose LLMError never
+	// carried a provider sentence must NOT be flagged — the old
+	// `|| stage == "provider"` trust bit flagged these. Mirrors the pre-turn
+	// provider-gate refusal (loop_run_turn.go): stage "provider", but a
+	// local configuration verdict with no provider identity or sentence.
+	t.Run("provider-stage write without a provider sentence stays unflagged", func(t *testing.T) {
+		gateMsg := "the agent has no configured provider. Configure one in Settings."
+		ts.appendClassifiedError(EventKindError.String(), "provider", LLMError{
+			Code:            CodeNeedsProvider,
+			Message:         gateMsg,
+			ProviderMessage: false,
+		})
+		entries, err := store.ReadTranscript(meta.ID)
+		if err != nil {
+			t.Fatalf("ReadTranscript: %v", err)
+		}
+		found := false
+		for _, e := range entries {
+			if e.Type == session.EntryTypeSystem && e.Status == "error" && e.ErrorCode == string(CodeNeedsProvider) {
+				found = true
+				if e.ProviderMessage {
+					t.Fatalf("provider_message = true for a non-provider-sentence entry — the stage string must not flag it (gate finding F7)")
+				}
+			}
+		}
+		if !found {
+			t.Fatal("no persisted needs_provider entry found")
 		}
 	})
 }

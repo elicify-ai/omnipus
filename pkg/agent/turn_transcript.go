@@ -432,17 +432,43 @@ func (ts *turnState) appendErrorTranscript(kind, stage, message string, pe ...*P
 // catalogue sentence through TranslateLLMError stamps unknown — the live
 // fix then vanishes on reload. Pass the live LLMError instead.
 func (ts *turnState) appendClassifiedError(kind, stage string, llm LLMError) {
-	ts.writeErrorTranscript(kind, stage, llm.Message, llm.Code)
+	ts.writeErrorTranscriptFlagged(kind, stage, llm.Message, llm.Code, llm.ProviderMessage)
+}
+
+// writeErrorTranscriptFlagged persists an already-classified error whose
+// provider_message flag the CALLER computed with the full error chain in
+// hand. Gate finding F7: appendClassifiedError used to drop llm.ProviderMessage,
+// the write side re-derived the flag from the bare message with providerErr
+// nil (always false), and persistErrorTranscript papered over the hole with
+// the string-literal trust bit `stage == "provider"` — which flagged every
+// provider-stage entry, including ones that never carried a provider
+// sentence.
+func (ts *turnState) writeErrorTranscriptFlagged(kind, stage, message string, code LLMErrorCode, providerMessage bool) {
+	ts.writeErrorTranscriptCore(kind, stage, message, code, false, &providerMessage)
 }
 
 func (ts *turnState) writeErrorTranscript(kind, stage, message string, code LLMErrorCode, pe ...*ProviderError) {
-	ts.writeErrorTranscriptWithAbandonment(kind, stage, message, code, false, pe...)
+	ts.writeErrorTranscriptCore(kind, stage, message, code, false, nil, pe...)
 }
 
 func (ts *turnState) writeErrorTranscriptWithAbandonment(
 	kind, stage, message string,
 	code LLMErrorCode,
 	allowAbandoned bool,
+	pe ...*ProviderError,
+) {
+	ts.writeErrorTranscriptCore(kind, stage, message, code, allowAbandoned, nil, pe...)
+}
+
+// writeErrorTranscriptCore is the one error-transcript write engine.
+// providerMessageOverride nil derives the provider_message flag at write
+// time (TranslateLLMError's verdict for THIS write); non-nil is the
+// caller's already-computed flag and wins.
+func (ts *turnState) writeErrorTranscriptCore(
+	kind, stage, message string,
+	code LLMErrorCode,
+	allowAbandoned bool,
+	providerMessageOverride *bool,
 	pe ...*ProviderError,
 ) {
 	if !ts.canWriteErrorTranscript(kind, stage, message, allowAbandoned) {
@@ -512,7 +538,11 @@ func (ts *turnState) writeErrorTranscriptWithAbandonment(
 		}
 	}
 
-	ts.persistErrorTranscript(kind, stage, llm, written)
+	providerMessage := llm.ProviderMessage
+	if providerMessageOverride != nil {
+		providerMessage = *providerMessageOverride
+	}
+	ts.persistErrorTranscript(kind, stage, llm, written, providerMessage)
 }
 
 func (ts *turnState) canWriteErrorTranscript(kind, stage, message string, allowAbandoned bool) bool {
@@ -540,7 +570,7 @@ func (ts *turnState) canWriteErrorTranscript(kind, stage, message string, allowA
 	return true
 }
 
-func (ts *turnState) persistErrorTranscript(kind, stage string, llm LLMError, content string) {
+func (ts *turnState) persistErrorTranscript(kind, stage string, llm LLMError, content string, providerMessage bool) {
 	entry := session.TranscriptEntry{
 		ID:             uuid.New().String(),
 		Type:           session.EntryTypeSystem,
@@ -549,11 +579,13 @@ func (ts *turnState) persistErrorTranscript(kind, stage string, llm LLMError, co
 		Timestamp:      time.Now().UTC(),
 		ErrorCode:      string(llm.Code),
 		ErrorRetryable: llm.Retryable,
-		// MAJ-104/C-14: the persisted entry is flagged when the write
-		// side is the provider stage (the trusted entry above is the
-		// write-side marker) or the classifier already assembled the §6
-		// sentence — the replay path round-trips the flag.
-		ProviderMessage: llm.ProviderMessage || stage == "provider",
+		// MAJ-104/C-14: the persisted entry carries the provider_message
+		// flag exactly when the caller (or the write-side classifier, for
+		// raw provider errors) assembled the Section-6 sentence — the flag
+		// MEANS "this message is the assembled provider sentence", never
+		// "the write happened to use the provider stage". The replay path
+		// round-trips it.
+		ProviderMessage: providerMessage,
 		// Status="error" lets the replay path distinguish error entries from
 		// informational system entries (e.g. compaction summaries) without
 		// parsing the free-text Content.
