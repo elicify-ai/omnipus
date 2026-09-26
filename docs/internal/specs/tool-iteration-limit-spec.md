@@ -81,11 +81,13 @@ All shapes below are added to `contracts/` and regenerated with `scripts/gen-con
 | `ExecutorCommandPreviewRequest` | changed | `contracts/components/schemas/ExecutorCommandPreviewRequest.yaml` | `max_tool_iterations`: `minimum: 1`, `maximum: 1000`, optional; meaning becomes "the agent's own value being previewed (omit when none)". The server previews the resolver's effective value (min(global, value), or the global when omitted). Description loses the "(50)" fallback text. |
 | `PerformanceSettings` | changed | `contracts/components/schemas/PerformanceSettings.yaml` | Add `max_tool_iterations` (integer 1–1000, always present in responses): the global limit in force. Add `max_tool_iterations_saved_state` ($ref `MaxToolIterationsSavedState`, always present) and `max_tool_iterations_saved_raw` (integer, optional; present only for `below_min` / `above_max`, carrying the value found in `config.json`) — D13's Settings warning. Add `max_tool_iterations_lowered_agents` (array of `MaxToolIterationAgentChange`, optional; present only on a PUT response that lowered agents — D11). |
 | `MaxToolIterationsSavedState` | new | `contracts/components/schemas/MaxToolIterationsSavedState.yaml` | `enum: [ok, missing, below_min, above_max]`. `missing` = key absent; `below_min` = saved value < 1 (0 included); `above_max` = saved value > 1000. |
-| `PerformanceSettingsUpdate` | changed | `contracts/components/schemas/PerformanceSettingsUpdate.yaml` | Add `max_tool_iterations` (integer, `minimum: 1`, `maximum: 1000`). Add `lower_agent_limits` (boolean): must be `true` when the new global is below any agent's own stored value (D11 consent); otherwise the PUT is refused 409. |
+| `PerformanceSettingsUpdate` | changed | `contracts/components/schemas/PerformanceSettingsUpdate.yaml` | Add `max_tool_iterations` (integer, `minimum: 1`, `maximum: 1000`). Add `confirmed_lowering` (array of `MaxToolIterationsConfirmedAgent`, optional; absent = empty): the exact agent snapshot (id + old value) the admin saw in the preview and confirmed (D11, D16). Rule: the server recomputes, at write time, the set of agents whose own value is above the new global; the PUT succeeds only if that set equals `confirmed_lowering` exactly (same ids, same old values). Any difference — an extra agent, a missing agent, or a changed old value, including the case where the field is absent but agents would be lowered — is drift: nothing is written and the PUT answers 409 `MaxToolIterationsLoweringConflict`. Replaces the round-0 boolean `lower_agent_limits` (grill F2). |
+| `MaxToolIterationsConfirmedAgent` | new | `contracts/components/schemas/MaxToolIterationsConfirmedAgent.yaml` | `{agent_id: string, old_value: integer}`, both required, `additionalProperties: false`. The new value is implied by the PUT's `max_tool_iterations`. |
+| `MaxToolIterationsLoweringConflict` | new | `contracts/components/schemas/MaxToolIterationsLoweringConflict.yaml` | 409 body for D16 drift. Envelope-compatible with `ErrorResponse`: `error` (string, required), `code` (string, required, always `max_tool_iterations_lowering_drift`), `preview` (`MaxToolIterationsLoweringPreview`, required — the fresh list computed at refusal time, so the SPA can re-open the dialog without a second preview call). |
 | `MaxToolIterationAgentChange` | new | `contracts/components/schemas/MaxToolIterationAgentChange.yaml` | `{agent_id: string, agent_name: string, old_value: integer, new_value: integer}` all required, `additionalProperties: false`. |
 | `MaxToolIterationsLoweringPreview` | new | `contracts/components/schemas/MaxToolIterationsLoweringPreview.yaml` | `{value: integer 1–1000, agents: MaxToolIterationAgentChange[]}` both required; `agents` empty when nothing would change. |
 | `GET /performance/max-tool-iterations/preview` | new path | `contracts/openapi.yaml` | `operationId: previewMaxToolIterationsLowering`, query `value` (required integer 1–1000). 200 → `MaxToolIterationsLoweringPreview`; 400 → `ErrorResponse` (missing/out-of-range value); 401; 503 `503BypassActive`. Registered with `adminWrap`, the same gate as `GET /performance`. Read-only; **no step-up token** (the PUT consumes it — interview "Open points"). Tag `Settings`. |
-| `PUT /performance` | changed | `contracts/openapi.yaml` | Description gains the limit and the D11 consent rule; add a `409` response (`ErrorResponse`) for "would lower agents without `lower_agent_limits: true`". |
+| `PUT /performance` | changed | `contracts/openapi.yaml` | Description gains the limit, the D11 consent rule and the D16 drift rule; add a `409` response with schema `MaxToolIterationsLoweringConflict`. |
 
 Must not collide with: `ContextWindowSource` (separate ladder, untouched); `Agent.timeout_seconds` (untouched); `goal_max_rounds` (separate limit on the same screen, untouched). No WebSocket (`asyncapi.yaml`) change: no new frame carries the limit.
 
@@ -95,6 +97,8 @@ Must not collide with: `ContextWindowSource` (separate ladder, untouched); `Agen
 - **Resolver.** One function in `pkg/config` (placed beside `PlanningConfig.EffectiveGoalMaxRounds`, the precedent) returns, for (global config, agent config): effective value, source, own value (if any), override-ignored flag; and a companion returns the in-force global plus its saved-state (D13). `pkg/agent`, `pkg/gateway` and `pkg/sysagent/tools` all call it; no package re-implements the rule, and no literal other than the single shipped-default constant exists (FR-004).
 - **Env migration marker (D6).** The one-time copy writes `agents.defaults.max_tool_iterations_env_imported: true` alongside the copied value, through the load-time self-heal path (`SelfHealWriteHook`, precedent `migrateCLITokenOutOfUsers`). With the marker present the env var is never read again. The marker is config-file-only, not on the wire.
 - **Endpoints.** `GET/PUT /api/v1/performance` (extended), `GET /api/v1/performance/max-tool-iterations/preview` (new), `GET/PUT/POST /api/v1/agents…` (fields changed), `POST /api/v1/agents/executor-preview` (semantics changed). All described by the schemas above.
+- **Explicit `null` vs omitted on agent PUT (grill F1).** The generated `AgentUpdateRequest.MaxToolIterations` is a `*int` with `omitempty`, so "field omitted" and "field sent as `null`" both decode to `nil`. The handler MUST use the same raw-body peek that `pkg/gateway/rest_agents_update.go` already uses for `context_window_override` (the update flow's `windowPeek`: unmarshal `uf.rawBody` into `map[string]json.RawMessage` and treat a present key whose trimmed value is `null` as "clear"). Omitted = unchanged; `null` = clear the own value; a number = set (subject to the bound and D10). The RED test for the clear case MUST send raw JSON bytes (`{"max_tool_iterations":null}`), never a marshalled generated struct — a marshalled `nil` omits the key and would make an implementation that only checks `!= nil` pass for the wrong reason. The system-agent `update_agent` path gets the same distinction from its `map[string]any` args (key present with `nil` = clear).
+- **D11/D16 write order.** `PUT /performance` with a changed `max_tool_iterations`: (1) decode and bound-check the body; (2) **pre-check** drift against the live agent set *before* consuming the step-up token, so a stale dialog costs the admin no password re-entry — on drift, 409 with the fresh preview; (3) `requireReAuth`; (4) under the config write lock (`configMu`), recompute the set and compare again (authoritative check — closes the gap between pre-check and write); on drift, 409 and nothing written; (5) lower each confirmed agent via `agentstore` `MutateState` (revision-checked; a revision conflict here is drift → 409, never a silent retry onto an unseen value), auditing each; (6) write the global and audit it; (7) registry reload. The pre-check discloses nothing the preview endpoint does not already disclose under the same gate.
 - **Reload.** A successful PUT that changes the global, and the D11 lowering, end with a registry reload (`triggerReloadAndWait`, precedent `rest_context_settings.go`) so every agent's next turn uses the new limit.
 
 ---
@@ -116,6 +120,7 @@ An admin wants to change how many tool steps every agent may take per turn, from
 3. **Given** the admin types 0 or 1001, **When** they try to save, **Then** the save is refused with a message naming the bound ("must be between 1 and 1000") and the stored value is unchanged.
 4. **Given** the admin cancels the password prompt, **When** the save is abandoned, **Then** nothing is written and the field returns to the saved value.
 5. **Given** the gateway runs with dev-mode bypass on (or the request is unauthenticated), **When** the performance settings or the lowering preview are requested, **Then** the request is refused (503 / 401) exactly like the other Performance settings, and nothing is shown or changed.
+6. **Given** an agent turn is already running with limit 200, **When** the admin lowers the global to 100, **Then** that running turn may continue up to 200 tool steps, and the agent's next turn uses 100 (D18).
 
 ### User Story 2 — Operator lowers the limit for one agent (Priority: P0)
 
@@ -173,7 +178,7 @@ An operator upgrading an install whose agents were given values above the (defau
 
 **Acceptance Scenarios**:
 
-1. **Given** an agent stored at 500 and global 200, **When** the gateway starts, **Then** the agent's stored value remains 500, its effective limit is 200, and one warning log line at startup lists every such agent with stored and effective values.
+1. **Given** an agent stored at 500 and global 200, **When** the gateway starts, **Then** the agent's stored value remains 500, its effective limit is 200, and exactly one warning log line at startup lists every such agent with its stored value and the global (D19) — one line in total, however many agents are capped.
 2. **Given** that agent, **When** the operator opens its profile, **Then** it shows "Own value 500 is above the global limit (200) and has no effect" with a "Use global limit" action.
 3. **Given** that agent, **When** the admin later raises the global to 600, **Then** the agent's own 500 now applies (effective 500, source "agent") and the flag disappears.
 
@@ -192,6 +197,7 @@ An admin who lowers the global wants to know which agents will be changed before
 3. **Given** that dialog, **When** the admin confirms (and re-types their password), **Then** A's stored value becomes 200, the global becomes 200, one audit record per changed agent (old → new, actor) and one for the global are written, and a confirmation names the agents actually lowered.
 4. **Given** the admin lowers the global and no agent's own value is above it, **When** they save, **Then** no dialog appears and only the global changes.
 5. **Given** the global is later raised back to 300, **When** the admin saves, **Then** A stays at 200 (old values are not restored — founder informed, D11).
+6. **Given** the dialog lists "A: 250 → 200" and, before the admin confirms, agent B's own value is changed to 220 (or A's to 260), **When** the admin confirms, **Then** nothing is saved — neither the global nor any agent — and the dialog reloads with the new list for a fresh confirmation (D16).
 
 ### User Story 7 — Configuration outside the rules never causes an outage (Priority: P1)
 
@@ -208,6 +214,7 @@ An operator with an old environment variable, or a hand-edited `config.json`, wa
 3. **Given** the env var is 5000 (or 0) and not yet imported, **When** the gateway starts, **Then** 1000 (or 1) is saved, a warning names the original value, and the gateway starts.
 4. **Given** `config.json` holds a global of 5000, **When** the gateway starts, **Then** the effective global is 1000, the file still says 5000, a warning is logged, and Settings → Performance shows a warning naming 5000 and the 1000 in force.
 5. **Given** `config.json` holds a global of 0 or no key at all, **When** the gateway starts, **Then** the effective global is 200, the file is not rewritten, a warning is logged, and Settings shows the corresponding warning.
+6. **Given** the env var is not a whole number (e.g. `abc`), **When** the gateway starts, **Then** it is not imported, a warning names it, the file is untouched, and the gateway starts (D17).
 
 ### User Story 8 — The system agent obeys the same rules (Priority: P1)
 
@@ -240,13 +247,15 @@ A user whose turn hit the limit wants to be told where to change it — not to e
 
 - Own value equal to the global → accepted; source "agent"; effective unchanged.
 - Global lowered to exactly an agent's own value → that agent is **not** in the D11 list (not above).
-- Own value stored as 0 or negative (hand-edited) → treated as "no own value" (see Q1 in Clarifications — pending founder confirmation).
+- Own value stored as 0 or negative (hand-edited) → treated as "no own value"; the agent rides the global (D17).
 - Own value stored above 1000 (hand-edited) → capped at the global and flagged (D1); shown truthfully (e.g. 5000) with no upper bound in the response.
-- Global saved as a negative number → treated like 0 → 200 in memory, state `below_min` (Q1 pending).
-- Env var not a whole number (e.g. `abc`) → not copied, warning logged, marker written, gateway starts (Q1 pending).
+- Global saved as a negative number → treated like 0 → 200 in memory, file not rewritten, WARN, state `below_min` (D17).
+- Env var not a whole number (e.g. `abc`) → not imported, WARN logged, **no** marker and no file write, gateway starts (D17). The WARN repeats on each start while the variable is set.
 - Agent PUT races the D11 lowering → the lowering reads each agent's current revision and retries once on revision conflict; an agent that still conflicts is reported as not lowered (it is then in the D1 capped state — effective is still the new global, so the ceiling holds).
 - Reload fails after the global is written → 500 "written but the reload failed" (precedent `rest_context_settings.go`); on the next successful reload or restart the new value applies.
-- A turn already running when the limit changes → keeps the limit it started with (Q2 — pending founder confirmation; matches the `goal_max_rounds` precedent).
+- A turn already running when the limit changes → keeps the limit in force when it started; the new value applies from the next turn (D18, same rule as `goal_max_rounds`).
+- Several agents capped at startup → one WARN line listing all of them (D19).
+- Preview and confirm disagree (an agent's own value changed, an agent was created/deleted above the new global, or a D11 lowering from another tab landed first) → 409, nothing written, dialog reloads (D16).
 - Hard stop: the loop's internal ceiling (twice the effective limit) scales with the effective value, so at 1000 it is 2000 — no separate setting.
 
 ---
@@ -255,8 +264,8 @@ A user whose turn hit the limit wants to be told where to change it — not to e
 
 | Screen / Component | Loading | Empty | Error | Partial | Success |
 |---|---|---|---|---|---|
-| Settings → Performance: "Max tool calls per turn" | `Skeleton` row, same as the section's other controls | n/a (always present) | Inline `FormError` naming the bound for 1–1000 violations; query failure uses the section's existing error state; reload-failure message on 500 | D13 warning banner when `max_tool_iterations_saved_state ≠ ok`, naming the saved raw value (or "missing") and the value in force | `AutoSaveIndicator` "Saved"; after a D11 lowering, a toast "Lowered N agents: A 250 → 200, …" |
-| D11 confirm dialog (`ConfirmDialog`) | Preview fetch in flight: Save button shows busy state, no dialog yet | Preview returns no agents → no dialog, save proceeds | Preview fetch failure → inline error, nothing saved | n/a | Lists each agent old → new; Confirm / Cancel |
+| Settings → Performance: "Max tool calls per turn" | `Skeleton` row, same as the section's other controls | n/a (always present) | Inline `FormError` naming the bound for 1–1000 violations; query failure uses the section's existing error state; reload-failure message on 500 | D13 warning banner when `max_tool_iterations_saved_state ≠ ok`, naming the saved raw value (or "missing") and the value in force | `AutoSaveIndicator` "Saved"; after a D11 lowering, a toast "Lowered N agents: A 250 → 200, …" **and** a persistent inline summary under the field (same text) that stays until the admin next edits the field or leaves the page |
+| D11 confirm dialog (`ConfirmDialog`) | Preview fetch in flight: Save button shows busy state, no dialog yet | Preview returns no agents → no dialog, save proceeds | Preview fetch failure → inline error, nothing saved; on a 409 drift answer the dialog stays open (or re-opens), replaces its list with the 409's `preview`, shows the notice "The list of affected agents changed — review and confirm again." and requires a fresh Confirm (D16) | n/a | Lists each agent old → new; Confirm / Cancel |
 | Agent profile → Advanced tab: extracted `ToolIterationLimitField` (all agent types incl. subagent_3p) | Profile skeleton (existing) | No own value → empty input with placeholder "Global limit (200)" and source line "Using the global limit (200)" | Refusal message from the server shown inline via `FormError` (names global limit or bound); autosave indicator shows error | D1 flag: "Own value 500 is above the global limit (200) and has no effect" + "Use global limit" | Source line "Lowered for this agent: 50 (global limit 200)"; "Use global limit" visible only when an own value exists |
 | Create wizard → Advanced (`wizard/Advanced.tsx`, native and external variants) | n/a | Empty input, placeholder "Global limit (N)" from the performance/agent defaults the server returns | Server refusal on create shown by the wizard's existing create-error surface | n/a | Created agent opens with the server-returned source line |
 | Command preview (subagent_3p) | Existing preview loading | n/a | Existing preview error | n/a | Turn-cap argument equals the server-resolved effective value |
@@ -266,7 +275,7 @@ A user whose turn hit the limit wants to be told where to change it — not to e
 ## User Journey
 
 1. Admin opens **Settings → Performance**, sees "Max tool calls per turn: 200" beside "Tries per goal" (US-1 AS-1).
-2. Admin types 150 → on save the SPA first asks the preview endpoint which agents would be lowered (US-6 AS-1). None → password prompt → saved (US-1 AS-2). Some → confirm dialog → Cancel ends (US-6 AS-2) or Confirm → password prompt → saved, toast lists lowered agents (US-6 AS-3).
+2. Admin types 150 → on save the SPA first asks the preview endpoint which agents would be lowered (US-6 AS-1). None → password prompt → saved (US-1 AS-2). Some → confirm dialog → Cancel ends (US-6 AS-2) or Confirm → password prompt → saved, toast and inline summary list lowered agents (US-6 AS-3). If the list changed in between, the dialog reloads with the new list and asks again (US-6 AS-6).
 3. Operator opens an agent's profile → **Advanced** tab → sees the source line (US-2 AS-1 / US-5 AS-2). Types 50 → autosaves → source line updates. Clicks "Use global limit" → cleared (US-2 AS-2).
 4. Operator creates an agent; the Advanced step leaves the limit empty by default (US-3 AS-2).
 5. A user in chat hits the limit → the message names Settings (US-9).
@@ -276,6 +285,8 @@ A user whose turn hit the limit wants to be told where to change it — not to e
 - Both number inputs are real `<input type="number">` via `Input` inside `Field`, each with a visible `Label` and `aria-describedby` pointing at the caption/source line and at any `FormError` (error announced via the `FormError` live region).
 - "Use global limit" is a `Button` (variant ghost/secondary per the design system), reachable by Tab directly after the input; focus stays on the input after reset.
 - The D11 `ConfirmDialog` traps focus, opens with focus on Cancel (destructive-safe default), Escape cancels, and the agent list is a plain list readable by a screen reader ("A, 250 to 200").
+- The D11 result toast uses the existing toast container (`src/components/ui/toast-container.tsx`), which renders success toasts with `role="status"` (implicit `aria-live="polite"`), so it is announced without interrupting. Because toasts auto-dismiss (`src/store/ui.ts` `addToast`, default 4,000 ms), the SPA passes a longer `duration` for this toast (10,000 ms), and the same text is also rendered as the persistent inline summary under the field inside its own `role="status"` region — the list stays readable for as long as the admin needs (grill F4).
+- The D16 drift notice inside the dialog is announced via `role="alert"` and focus moves to the dialog's first list item so the changed list is read out.
 - The D13 warning is text, not colour alone; uses the design-system warning tone.
 - Focus-visible styling is owned by the primitives (`omnipus-design-system` skill) — no local focus styles. Touch targets per the design-system definition.
 
@@ -306,11 +317,12 @@ Primary flows:
 Error flows:
 - When a value outside 1–1000 is submitted anywhere (Settings, agent PUT/create, executor preview, system-agent tools), the system refuses it with a message naming the bound.
 - When a per-agent value above the current global is submitted, the system refuses it with a message naming the global limit.
-- When a global lowering would change agents and consent was not given, the system refuses with a conflict and changes nothing.
+- When a global lowering would change a set of agents (or old values) different from the set the admin confirmed — including no confirmation at all — the system refuses with a conflict, changes nothing, and returns the current list (D16).
 - When the reload after a global write fails, the system reports that the value was written but not yet applied.
 
 Boundary conditions:
 - When a stored own value is above the global (upgrade/hand edit), the system caps it at the global, keeps the stored value, flags it, and logs it once at startup.
+- When a turn is already running and the limit changes, that turn keeps the limit in force when it started; the next turn uses the new limit (D18).
 - When the saved global is missing, below 1 or above 1000, the system corrects it in memory only (missing/below 1 → 200; above 1000 → 1000), warns in the log and in Settings, and starts.
 - When the old env var is present and not yet imported, the system copies it once (clamped to 1–1000) and ignores it afterwards.
 
@@ -331,7 +343,7 @@ Boundary conditions:
 
 **Error codes / messages** (all bodies `ErrorResponse`):
 - Global out of range on `PUT /api/v1/performance` → **400**, message `max_tool_iterations must be between 1 and 1000`.
-- Lowering without consent → **409**, message `max_tool_iterations <N> would lower <K> agent(s) above it; confirm with lower_agent_limits: true`.
+- Lowering drift (D16) → **409** `MaxToolIterationsLoweringConflict`, `code: "max_tool_iterations_lowering_drift"`, `error: "the agents affected by lowering the limit to <N> changed since the preview; review the updated list and confirm again"`, `preview` = the fresh list. No file or agent record changes.
 - Preview `value` missing/out of range → **400**, message `value must be between 1 and 1000`.
 - Agent PUT/create out of range → **400**, `max_tool_iterations must be between 1 and 1000`.
 - Agent PUT/create above global → **400**, `max_tool_iterations <N> is above the global limit (<G>); lower it, or raise the global limit in Settings → Performance`.
@@ -347,7 +359,7 @@ Boundary conditions:
 ### Gateway ↔ SPA (REST)
 - **Data in / out**: Agent limit fields, Performance global, preview list.
 - **Contract**: the schemas in Contract Changes; generated types only.
-- **On failure**: 400/403/409/500 as above; SPA shows inline errors, never a false "saved".
+- **On failure**: 400/403/409/500 as above; SPA shows inline errors, never a false "saved"; on 409 drift the dialog reloads from the body's `preview`.
 - **Development**: real gateway in vitest via MSW-free handler tests on the Go side; SPA tests use generated types and fixtures from `src/test/factories.ts` updated with the new required fields.
 
 ### Gateway ↔ agent store / `config.json`
@@ -369,8 +381,8 @@ Boundary conditions:
 
 | # | What's Ambiguous | Likely Agent Assumption | Question to Resolve |
 |---|------------------|------------------------|---------------------|
-| 1 | D8 says "admin", but the code has no admin role (single-account model; `adminWrap` = auth + bypass guard). | Add a new role check to the preview endpoint. | Spec decision: reuse `adminWrap` exactly like the rest of `/performance`; a role check arrives with multi-user support, not here. Flagged to the founder as Q3 for awareness. |
-| 2 | "Log lists affected agents once per boot" (D1) — whether a later reload that creates new capped agents logs again. | Log on every reload. | Spec decision: log at startup only; the profile flag covers later cases. Accepted residual unless the founder objects. |
+| 1 | D8 says "admin", but the code has no admin role (single-account model; `adminWrap` = auth + bypass guard). | Add a new role check to the preview endpoint. | Spec decision: reuse `adminWrap` exactly like the rest of `/performance`; a role check arrives with multi-user support, not here. Founder informed (report of 2026-09-26). |
+| 2 | Whether a later reload (not a restart) that creates newly capped agents logs the D19 line again. | Log on every reload. | Spec decision: the D19 line is emitted at startup only; later cases are visible on the profile flag. Residual, not a founder decision. |
 
 ---
 
@@ -437,7 +449,7 @@ Boundary conditions:
 **Traces to**: User Story 2, Acceptance Scenario 2
 **Category**: Happy Path
 - **Given** agent A with own value 50 and global 200
-- **When** the operator clicks "Use global limit" (PUT `max_tool_iterations: null`)
+- **When** the operator clicks "Use global limit", which sends the raw body `{"max_tool_iterations":null}`
 - **Then** A's stored record has no `max_tool_iterations` key
 - **And** the response has `max_tool_iterations: 200`, `source: "global"`, no override
 
@@ -528,11 +540,11 @@ Boundary conditions:
 #### Scenario: Upgrade keeps a stored value above the global
 **Traces to**: User Story 5, Acceptance Scenario 1
 **Category**: Edge Case
-- **Given** agent A stored at 500 and global 200 on disk
+- **Given** agent A stored at 500, agent B stored at 300, agent C stored at 100, and global 200 on disk
 - **When** the gateway starts
-- **Then** A's stored record still says 500
-- **And** A's effective limit is 200
-- **And** exactly one startup WARN log line lists A with stored 500 and effective 200
+- **Then** A's stored record still says 500 and B's still says 300
+- **And** A's and B's effective limits are 200; C's is 100
+- **And** exactly one startup WARN log line is emitted for capped agents, naming A (stored 500) and B (stored 300) and the global 200, and not naming C (D19)
 
 #### Scenario: Profile flags an ignored own value
 **Traces to**: User Story 5, Acceptance Scenario 2
@@ -568,17 +580,36 @@ Boundary conditions:
 **Traces to**: User Story 6, Acceptance Scenario 3
 **Category**: Happy Path
 - **Given** global 300, A own 250, B own 100
-- **When** the admin PUTs `max_tool_iterations: 200, lower_agent_limits: true` with a step-up token
+- **When** the admin PUTs `max_tool_iterations: 200, confirmed_lowering: [{agent_id: A, old_value: 250}]` with a step-up token
 - **Then** A's stored value is 200, B's is 100, the global is 200
 - **And** the audit log has one `security_setting_change` record for A (old 250, new 200, actor = the admin) and one for the global (old 300, new 200)
 - **And** the response's `max_tool_iterations_lowered_agents` is exactly `[{A, 250, 200}]`
 
-#### Scenario: Lowering without consent is refused
-**Traces to**: User Story 6, Acceptance Scenario 3
+#### Scenario: Lowering without confirmation is refused
+**Traces to**: User Story 6, Acceptance Scenario 6
 **Category**: Error Path
 - **Given** global 300 and A own 250
-- **When** an API client PUTs `max_tool_iterations: 200` without `lower_agent_limits`
-- **Then** the response is 409 with the consent message and nothing is written
+- **When** an API client PUTs `max_tool_iterations: 200` without `confirmed_lowering`
+- **Then** the response is 409 with `code: "max_tool_iterations_lowering_drift"` and `preview.agents` = `[{A, 250 → 200}]`
+- **And** nothing is written and the step-up token is not consumed
+
+#### Scenario: Drift between preview and confirm refuses and returns the fresh list
+**Traces to**: User Story 6, Acceptance Scenario 6
+**Category**: Error Path
+- **Given** global 300, A own 250, B own 150; the admin previewed value 200 and saw only `[{A, 250 → 200}]`
+- **And** B's own value was then changed to 220
+- **When** the admin PUTs `max_tool_iterations: 200, confirmed_lowering: [{A, 250}]`
+- **Then** the response is 409 with `preview.agents` = `[{A, 250 → 200}, {B, 220 → 200}]`
+- **And** global 300, A 250 and B 220 are all unchanged, and no audit record is written
+- **And** the SPA dialog shows the new two-agent list with the "list changed" notice and requires a fresh Confirm
+
+#### Scenario: Changed old value is drift
+**Traces to**: User Story 6, Acceptance Scenario 6
+**Category**: Edge Case
+- **Given** global 300, A own 250; the admin previewed value 200 and confirmed `[{A, 250}]`
+- **And** A's own value was then changed to 260
+- **When** the PUT arrives
+- **Then** the response is 409 with `preview.agents` = `[{A, 260 → 200}]` and A is still 260
 
 #### Scenario: Lowering with no affected agents shows no dialog
 **Traces to**: User Story 6, Acceptance Scenario 4
@@ -653,6 +684,28 @@ Boundary conditions:
 - **When** `create_agent` is called with `max_tool_iterations: 0`
 - **Then** the tool returns an error naming the 1–1000 bound
 
+#### Scenario: Running turn keeps the limit it started with
+**Traces to**: User Story 1, Acceptance Scenario 6
+**Category**: Edge Case
+- **Given** global 200, agent A with no own value, and a turn of A in progress at tool step 150
+- **When** the admin lowers the global to 100 (no agent affected, so no dialog)
+- **Then** the in-progress turn is not stopped at step 100 and may continue up to 200 steps
+- **And** A's next turn stops after exactly 100 tool steps (D18)
+
+#### Scenario: Omitted field leaves the own value unchanged
+**Traces to**: User Story 2, Acceptance Scenario 6
+**Category**: Alternate Path
+- **Given** agent A with own value 50
+- **When** the operator PUTs the raw body `{"description":"x"}` (no `max_tool_iterations` key)
+- **Then** A's own value is still 50
+
+#### Scenario: Non-numeric env var is not imported
+**Traces to**: User Story 7, Acceptance Scenario 6
+**Category**: Edge Case
+- **Given** no import marker, global 200 in `config.json`, and the env var set to `abc`
+- **When** the gateway starts
+- **Then** the saved global is still 200, no marker is written, the file bytes are unchanged, a WARN names the value, and the gateway is serving (D17)
+
 #### Scenario: Tool-limit message points to Settings
 **Traces to**: User Story 9, Acceptance Scenario 1
 **Category**: Happy Path
@@ -689,7 +742,11 @@ Boundary conditions:
 | 10 | TestExecutorPreview_MatchesDispatch | Integration | Worker preview (both) | Preview argv turn cap == dispatch `RunOptions.MaxTurns` |
 | 11 | TestSysagentAgentTools_MaxToolIterations | Integration | System agent (four) | |
 | 12 | TestLoop_StopsAtEffectiveLimit / TestToolLimitResponse_Text | Integration | Admin raises (loop leg); Lower one (loop leg); Tool-limit message | Scripted provider |
-| 13 | TestUpgradeBootLog_ListsCappedAgents | Integration | Upgrade keeps stored value | One WARN line |
+| 13 | TestUpgradeBootLog_ListsCappedAgents | Integration | Upgrade keeps stored value | One WARN line for A and B, not C (D19) |
+| 13a | TestPerformancePut_LoweringDrift_* | Integration | Lowering without confirmation; Drift between preview and confirm; Changed old value is drift | 409 body, nothing written, token not consumed on pre-check drift |
+| 13b | TestAgentUpdate_MaxToolIterations_NullVsOmitted | Integration | Use global limit clears…; Omitted field leaves… | Raw JSON bodies only (F1) |
+| 13c | TestLoop_RunningTurnKeepsStartLimit | Integration | Running turn keeps the limit it started with | Scripted provider; reload mid-turn |
+| 13d | PerformanceSection.maxToolIterations drift/toast tests | Component | Drift… (SPA leg); Confirmed lowering (toast + inline summary roles) | |
 | 14 | ToolIterationLimitField.test.tsx | Component | Lower one (UI); Use global limit; Profile flags; Unrelated autosave | Asserts no literal 200 rendered without a server value |
 | 15 | PerformanceSection.maxToolIterations.test.tsx | Component | Fresh install shows; Cancel re-auth; Cancel dialog; No dialog when none affected; D13 warning | |
 | 16 | wizard Advanced / CreateAgentWizard tests | Component | Create without a value rides the global | Body has no key |
@@ -711,7 +768,7 @@ Boundary conditions:
 | 8 | G=1000, O=1000 | max | 1000, agent, 1000, false | Scenario: Per-agent value equal… | |
 | 9 | G=200, O=5000 (hand-edited) | above max | 200, global, 5000, true | Scenario: Profile flags… | override unbounded on the wire |
 | 10 | G=200, O=0 | zero stored | 200, global, absent, false | Scenario: Admin raises the global… | 0 = none |
-| 11 | G=200, O=-5 (hand-edited) | negative stored | 200, global, absent, false | Scenario: Admin raises the global… | Q1 pending |
+| 11 | G=200, O=-5 (hand-edited) | negative stored | 200, global, absent, false | Scenario: Admin raises the global… | D17 |
 
 #### Dataset: Global bounds (PUT /performance `max_tool_iterations`)
 
@@ -746,7 +803,7 @@ Boundary conditions:
 | 4 | 0 | below min | 1; WARN names 0 | Scenario: Out-of-range env var… | D7 nearest bound |
 | 5 | 5000 | above max | 1000; WARN names 5000 | Scenario: Out-of-range env var… | |
 | 6 | -7 | negative | 1; WARN names -7 | Scenario: Out-of-range env var… | |
-| 7 | abc | non-numeric | 200 unchanged; WARN; marker set | Scenario: Out-of-range env var… | Q1 pending |
+| 7 | abc | non-numeric | 200 unchanged; WARN; no marker; file unchanged | Scenario: Non-numeric env var is not imported | D17 |
 | 8 | unset | absent | 200 unchanged; no marker written | Scenario: Env var ignored after import | |
 
 #### Dataset: Saved global (file value → effective; saved_state; raw)
@@ -756,7 +813,7 @@ Boundary conditions:
 | 1 | 200 | valid | 200; ok; absent | Scenario: Saved global out of range… | |
 | 2 | key missing | missing | 200; missing; absent | Scenario: Saved global out of range… | D13 |
 | 3 | 0 | below min | 200; below_min; 0 | Scenario: Saved global out of range… | D13 |
-| 4 | -4 | negative | 200; below_min; -4 | Scenario: Saved global out of range… | Q1 pending |
+| 4 | -4 | negative | 200; below_min; -4 | Scenario: Saved global out of range… | D17 |
 | 5 | 1000 | max | 1000; ok | Scenario: Saved global out of range… | |
 | 6 | 1001 | just above | 1000; above_max; 1001 | Scenario: Saved global out of range… | |
 | 7 | 5000 | above | 1000; above_max; 5000 | Scenario: Saved global out of range… | |
@@ -782,9 +839,9 @@ Boundary conditions:
 - **FR-005**: A change of the global MUST reload agents so each agent's next turn uses the new effective value without a restart (Req 4).
 - **FR-006**: Every writable limit field MUST reject values outside 1–1000 with a message naming the bound (Req 5, D2).
 - **FR-007**: A per-agent save (REST create/update, system-agent tools) above the current global MUST be refused with a message naming the global (D10, D15).
-- **FR-008**: "Use global limit" MUST clear an agent's own value (`null` on update) (D9).
-- **FR-009**: A stored own value above the global MUST be kept, capped, flagged in the API and profile, and listed once in a startup WARN log (D1, D12).
-- **FR-010**: Lowering the global below agents' own values MUST require explicit consent (preview → confirm dialog → PUT with `lower_agent_limits: true`), MUST lower exactly those agents to the new global, MUST audit each agent change and the global change, and MUST NOT restore values later (D11).
+- **FR-008**: "Use global limit" MUST clear an agent's own value (explicit `null` on update, detected by the raw-body peek described in API and Data); an omitted field MUST leave the own value unchanged (D9, grill F1).
+- **FR-009**: A stored own value above the global MUST be kept, capped, flagged in the API and profile, and listed in exactly one startup WARN line that names every capped agent with its stored value and the global (D1, D12, D19).
+- **FR-010**: Lowering the global below agents' own values MUST require explicit consent (preview → confirm dialog → PUT carrying `confirmed_lowering`), MUST refuse with 409 and write nothing when the live affected set or any old value differs from `confirmed_lowering` (D16), MUST lower exactly the confirmed agents to the new global, MUST audit each agent change and the global change, and MUST NOT restore values later (D11).
 - **FR-011**: The env var MUST be imported once into the saved config (clamped to 1–1000, WARN when clamped), marked as imported, and never read again (D5, D6, D7).
 - **FR-012**: A saved global that is missing or below 1 MUST run as 200 and above 1000 as 1000, in memory only, with a WARN log and a Settings warning; startup MUST never be refused (D13).
 - **FR-013**: External-CLI workers MUST accept the per-agent field on create and update, show the same control and reset, and pass the effective value as their turn cap; the preview MUST show that same value (D4, D14).
@@ -792,6 +849,8 @@ Boundary conditions:
 - **FR-015**: The tool-limit message MUST point to Settings → Performance and the agent profile, not `config.json`.
 - **FR-016**: The per-agent control MUST be extracted from `AgentProfile.tsx` into its own component; `AgentProfile.tsx` MUST shrink (grandfathered budget may only shrink).
 - **FR-017**: The SPA MUST send `max_tool_iterations` on an agent PUT only when the operator changed it (or reset it).
+- **FR-019**: A turn already running when the limit changes MUST keep the limit in force when it started; the new effective limit MUST apply from that agent's next turn (D18).
+- **FR-020**: Below-range or non-numeric inputs MUST be treated as missing: saved global < 1 → 200 in memory with WARN and no file rewrite; non-numeric env var → not imported, WARN, no file write; stored per-agent value ≤ 0 → no own value (D17).
 - **FR-018**: The lowering preview MUST use the same gate as `GET /api/v1/performance` (authenticated, blocked under dev-mode bypass), and changing the global MUST additionally require the step-up token.
 
 ## Success Criteria
@@ -822,9 +881,9 @@ Boundary conditions:
 | FR-005 | US-1 | Admin raises the global and every non-overriding agent follows | TestPerformancePut_MaxToolIterations_Reload |
 | FR-006 | US-1, US-2, US-8 | Global out of range is refused; Per-agent value out of range is refused; System agent out of range | TestPerformancePut_*, TestAgentUpdate_* |
 | FR-007 | US-2, US-3, US-8 | Per-agent value above the global is refused; Create above the global is refused; System agent cannot exceed the global | TestAgentUpdate_*, TestAgentCreate_*, TestSysagentAgentTools_* |
-| FR-008 | US-2, US-8 | Use global limit clears the own value; System agent clears an own value | TestAgentUpdate_Clear, ToolIterationLimitField.test.tsx |
-| FR-009 | US-5 | Upgrade keeps a stored value above the global; Profile flags…; Raising the global activates… | TestUpgradeBootLog_ListsCappedAgents, TestResolveMaxToolIterations_Table |
-| FR-010 | US-6 | Lowering preview lists only…; Cancel in the confirm dialog…; Confirmed lowering rewrites and audits; Lowering without consent is refused; Lowering with no affected agents…; Raising again does not restore… | TestPerformancePreview_*, TestPerformancePut_Lowering_*, PerformanceSection.maxToolIterations.test.tsx, tool-iteration-limit.spec.ts |
+| FR-008 | US-2, US-8 | Use global limit clears the own value; Omitted field leaves the own value unchanged; System agent clears an own value | TestAgentUpdate_MaxToolIterations_NullVsOmitted, ToolIterationLimitField.test.tsx |
+| FR-009 | US-5 | Upgrade keeps a stored value above the global (D19 multi-agent line); Profile flags…; Raising the global activates… | TestUpgradeBootLog_ListsCappedAgents, TestResolveMaxToolIterations_Table |
+| FR-010 | US-6 | Lowering preview lists only…; Cancel in the confirm dialog…; Confirmed lowering rewrites and audits; Lowering without confirmation is refused; Drift between preview and confirm…; Changed old value is drift; Lowering with no affected agents…; Raising again does not restore… | TestPerformancePreview_*, TestPerformancePut_Lowering_*, TestPerformancePut_LoweringDrift_*, PerformanceSection.maxToolIterations.test.tsx, tool-iteration-limit.spec.ts |
 | FR-011 | US-7 | Env var imported once; Env var ignored after import; Out-of-range env var… | TestEnvImport_OnceAndClamp |
 | FR-012 | US-7 | Saved global out of range is corrected in memory only | TestEffectiveGlobal_SavedStates, PerformanceSection.maxToolIterations.test.tsx |
 | FR-013 | US-3, US-4 | External-CLI worker created with its own limit; Worker PUT of the limit is accepted; Worker preview (both) | TestAgentCreate_Worker, TestAgentUpdate_Worker, TestExecutorPreview_MatchesDispatch |
@@ -832,17 +891,17 @@ Boundary conditions:
 | FR-015 | US-9 | Tool-limit message points to Settings | TestToolLimitResponse_Text |
 | FR-016 | US-2 | Operator lowers one agent (UI leg) | budget gate `make lint-budgets`, ToolIterationLimitField.test.tsx |
 | FR-017 | US-2 | Unrelated autosave does not resend the limit | ToolIterationLimitField.test.tsx / AgentProfile autosave test |
+| FR-019 | US-1 | Running turn keeps the limit it started with | TestLoop_RunningTurnKeepsStartLimit |
+| FR-020 | US-5, US-7 | Non-numeric env var is not imported; Saved global out of range is corrected in memory only; Admin raises the global… (Resolver rows 10–11) | TestEnvImport_OnceAndClamp, TestEffectiveGlobal_SavedStates, TestResolveMaxToolIterations_Table |
 | FR-018 | US-1 | Preview is blocked under dev-mode bypass; PUT without step-up token is refused; Cancelling the password prompt writes nothing | TestPerformancePreview_Bypass, TestPerformancePut_NoStepUp, PerformanceSection.maxToolIterations.test.tsx |
 
-**Completeness check**: all 18 FRs have ≥1 scenario and ≥1 test; all 37 scenarios appear at least once (verified by the author's final self-check).
+**Completeness check**: all 20 FRs have ≥1 scenario and ≥1 test; all 42 scenarios appear at least once (verified by the author's final self-check).
 
 ---
 
 ## Assumptions
 
-- The agent store (`pkg/agentstore`) is the only persistence for per-agent values; `config.json` `agents.list` is not a second writer for this field (read on this branch; confirm in GREEN).
 - The registry reload used by `PUT /settings/context` is safe to call from `PUT /performance` (same mechanism, same handler family).
-- The `goal_max_rounds` precedent (a running goal keeps its snapshot) is the expected model for a running turn (Q2 pending).
 - Sections removed: none. Contract context is merged into "Contract Changes" (the template's order), not a separate section.
 
 ## Clarifications
@@ -854,8 +913,16 @@ Boundary conditions:
 - Q: Range? -> A: 1–1000 both layers (D2).
 - Q: External-CLI workers? -> A: Same global and same per-agent control; fix the 50 preview (D4, D14).
 - Q: Env var? -> A: Not a setting source; imported once, clamped to the nearest bound (D5–D7). Mechanism (spec decision): persisted marker `agents.defaults.max_tool_iterations_env_imported`.
-- Q: How does the SPA learn the D11 affected agents given the single-use step-up token? -> A: Separate read-only admin preview endpoint, then the confirmed PUT with `lower_agent_limits: true`; 409 guards API clients that skip the preview (spec decision — contract shape, architect).
+- Q: How does the SPA learn the D11 affected agents given the single-use step-up token? -> A: Separate read-only admin preview endpoint, then the confirmed PUT carrying the `confirmed_lowering` snapshot (revised after grill F2 / D16).
 - Q: Saved global outside 1–1000? -> A: In-memory correction, warn in log and Settings, never refuse (D13).
-- Q1 (**pending founder confirmation**): negative or non-numeric values — saved global < 0, env var not a whole number, stored per-agent 0/negative. Spec currently assumes: saved global < 1 → 200 (`below_min`); non-numeric env → not imported, WARN, marker set; per-agent ≤ 0 → "no own value".
-- Q2 (**pending founder confirmation**): a turn already running when the limit changes keeps the limit it started with (spec currently assumes yes).
-- Q3 (**for founder awareness**): D8's "admin" maps to today's single-account gate (authenticated + step-up); there is no separate admin role to check.
+- Q: D8's "admin" vs the code? -> A: Maps to today's single-account gate (authenticated + dev-bypass guard + step-up); no role check (verified `pkg/gateway/rest.go::adminWrap`; founder informed).
+- Q: Agent store the only per-agent persistence? -> A: Yes — verified: `pkg/config/config.go::AgentsConfig.List` is tagged `json:"-"` and `pkg/agentstore` persists `config.AgentConfig` (grill F5).
+
+### 2026-09-26 (after grill round 1)
+
+- Q: Preview/confirm drift? -> A: Refuse, save nothing, reload the dialog with the new list (D16). Contract: `confirmed_lowering` + 409 `MaxToolIterationsLoweringConflict`.
+- Q: Below-range and non-numeric values? -> A: Treat as missing (D17).
+- Q: Running turn when the limit changes? -> A: Keeps the limit in force when it started (D18).
+- Q: Startup warning for several capped agents? -> A: One WARN line listing all, with stored value and the global (D19).
+- Q: Explicit null vs omitted on agent PUT (grill F1)? -> A: Raw-body peek, same as `context_window_override`; RED test uses raw JSON.
+- Q: D11 result toast accessibility (grill F4)? -> A: `role="status"` toast with a 10 s duration plus a persistent inline summary.
