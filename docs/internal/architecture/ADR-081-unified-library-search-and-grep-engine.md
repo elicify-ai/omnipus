@@ -26,6 +26,17 @@
   single read decision that was never reconciled with ADR-062/ADR-063, and directed one
   boundary for all three tools. Full corrected decision: the new "D4 amendment" subsection
   immediately below D4.
+- **Correction round 2026-09-26 (#920, the one correction after the ADR-mode grill,
+  [`ADR-092-shell-permission-modes-review.md`](./ADR-092-shell-permission-modes-review.md);
+  founder decisions D8–D9 of the same interview):** corrections are inline, marked
+  *[corrected 2026-09-26, grill correction]*, original text kept. They cover MIN-001 (the
+  exact `resolveScopedRoot` call shape), MIN-002 (D11's "confined"), MIN-003 (which
+  skills-gate primitives the walk uses) and the grill's first unasked question (the handle
+  shape of the widened `ReadConfined` read branch). They also cover one defect the
+  correction round found in the D6 bullet itself: as first written, the D6 check would
+  have let the operator's allow-path regex axis reopen a read-confined turn. The CRIT-001
+  pin fix (D8), the required behavioural test (MIN-004) and the `send_file` answer live in
+  ADR-092's 2026-09-26 correction note.
 
 ---
 
@@ -134,6 +145,47 @@ Founder decisions (`read-boundary-consistency-interview.md`, cited by ID):
   lines below it in the same function. This is a shared `ResolvePath` change: it fixes
   `read_file`/`list_directory` for a read-confined turn at the same time it fixes `grep`,
   which is why the interview flags it for `security-lead` review.
+  *[corrected 2026-09-26, grill correction — three conditions the sentence above left
+  unstated, each verified against the code:]*
+  1. **Mounts only, never the regex grant.** "Check against `policy.AllowedRoots`" is
+     only safe for the `AllowedRoots` that `resolvepath.go::ResolveTurnFSPolicy` sets.
+     That value is `workspace.AllowedMountRoots` for the turn's workspace, so it is
+     exactly the mounts. But `resolvepath.go::ResolvePathAllowingPatterns` makes a
+     call-scoped copy and appends one extra entry to it: the resolved path of any
+     `rawPath` that matches an operator's AllowRead/WritePaths regex (`read_file` passes
+     those patterns). Its own doc comment says this axis "does NOT reopen a read-confined
+     turn". That is true today only because the `ReadConfined` branch never looks at
+     `AllowedRoots`. Widened naively, an AllowReadPaths pattern covering
+     `$OMNIPUS_HOME/sessions/` would hand the Judge every transcript again, which reopens
+     the hole JUDGE-FR-060 closed. So `ResolvePathAllowingPatterns` must skip the
+     `AllowedRoots` injection when `policy.ReadConfined` is true, and leave the policy
+     otherwise unchanged. The injection exists only for `FSOpWrite`/`FSOpServe` (its own
+     comment), and the only read-confined turn has no write tool. With that change,
+     `AllowedRoots` inside the `ReadConfined` branch means the workspace's mounts and
+     nothing else.
+  2. **Handle shape (grill unasked question 1).** The widened branch returns the
+     mount-anchored `os.Root` handle the write/serve branch already builds:
+     `matchedAllowedRoot(realAbs, rp.policy.AllowedRoots)` → `newMountRootHandle(root,
+     rp.rawPath, realAbs, rp.policy)`. It never returns the host-filesystem
+     `&PathHandle{abs: realAbs}` that the unconfined read branch returns. The code supports
+     this as it stands. `newMountRootHandle` is op-agnostic (it computes `rel` and opens
+     `os.OpenRoot` at the mount or nearest existing ancestor). `PathHandle.ReadFile`/`ReadDir`/
+     `Open` already serve `root != nil` handles, which is how every `WorkDir` read works.
+     This is required, not a nicety. JUDGE-FR-060a's threat is a reviewed worker that
+     controls the files it wrote. A mount can be written by that same worker, and a
+     host-filesystem handle re-checks only the secret set at I/O time, never containment
+     in the mount. So an ancestor swapped between resolve and read would escape the mount.
+  3. **`FSOpSend` keeps its current confinement (grill unasked question 2).** The case
+     arm is shared (`case FSOpRead, FSOpList, FSOpSend`). The mount exception applies to
+     `FSOpRead` and `FSOpList` only. A read-confined `FSOpSend` outside `WorkDir` is
+     refused exactly as today. Interview D6 names `grep`/`read_file`/`list_directory`,
+     never `send_file`, and the only production read-confined turn
+     (`pkg/agent/verifier_adjudication.go` dispatchTurn, `tools.WithReadConfined(callCtx,
+     true)`) belongs to the Judge. Its seed denies `send_file`
+     (`pkg/coreagent/seed_system.go::systemAgentSeed`, `denyAllThenOverride`). Widening
+     the send arm would therefore change nothing reachable today while silently widening
+     an exfiltration path for any future read-confined role. `send_file` is unaffected by
+     every part of #920.
 - **interview D7.** Search capacity is unchanged: the existing 2-walk-slot semaphore
   (`filegrep.TryAcquire`/`Release`, shared with the Library search bar) and the 10 s /
   50,000-file bounds (D4 above) apply identically to a widened `grep` call.
@@ -157,6 +209,31 @@ code rather than assumed:**
    widened `grep` must apply the equivalent per-visited-file check during the walk (both
    the name-match and the content-match hit) — reusing `classifySkillsGate`/
    `isSkillInstructionFile` against each candidate, not re-deriving the rule.
+   *[corrected 2026-09-26, grill correction (MIN-003) — the walk uses the SINGLE-spelling
+   primitives, not the two-spelling ones named above.]* Both exist in
+   `pkg/tools/resolvepath.go`: `isSkillInstructionFileLeaf(rawPath)` (a lookup of the leaf
+   in `skillInstructionFileLeaves`) and `classifySkillsGateCandidate(candidate, policy)`
+   (a `fspolicy.CoversForDeny` containment test against `registrySkillsRoot()`, plus the
+   project shelf under each mount). The per-visited-file rule is: build the candidate as
+   the carve-out wrapper's own realpath anchor (`carveOutFS.root`, set by
+   `guardCarveOuts` from `resolveRealpathUnderWorkDir`) joined with the walk-relative
+   name. Refuse it when `isSkillInstructionFileLeaf(candidate)` is true and
+   `classifySkillsGateCandidate` returns `skillShelfRegistry`. A project-shelf match is
+   never read-denied, which matches `ResolvePath`'s own D10.3 dispatch. Why single
+   spelling: `classifySkillsGate` checks a second spelling only to defend against a
+   caller-supplied path whose leaf or ancestor is a symlink. Inside the walk there is no
+   such spelling. The anchor is already symlink-resolved, and `filegrep` descends only
+   real directories. It content-scans only regular files: the `!e.Type().IsRegular()`
+   skip in `pkg/filegrep/filegrep.go`, whose comment reads "symlinks are entries the
+   confined FS refuses to traverse". So the as-written and resolved spellings coincide
+   for every file whose content is read. A symlink entry can still yield a NAME hit on its
+   own name; the leaf test covers a symlink named `SKILL.md`. A symlink with any other
+   name discloses only the name the agent itself gave it. The two-spelling form
+   would also cost a `resolveAncestorRealpath` syscall chain per visited file.
+   Order the leaf test first, so the containment test (which stats, via `CoversForDeny`)
+   runs only for files named `SKILL.md`/`AGENT.md`/`AGENTS.md`. The ROOT the caller names
+   (`path`) still goes through `ResolvePath`, which already applies the two-spelling
+   `classifySkillsGate` to it.
 3. **Metadata guard — currently MISSING from `grep` entirely (and not inside `ResolvePath`
    either), must be added.** `pkg/tools/metadata_guard.go::metadataFileMatch` /
    `filesystem.go::guardMetadataPath` run only inside `read_file`/`list_directory`'s own
@@ -219,6 +296,31 @@ read `RealPath()` — the one documented advisory-string exception in `resolvepa
    itself if it is a directory, at its PARENT if it names a regular file
    (`grep.go::resolveScopedRoot` already implements exactly this directory-vs-file
    dispatch for the mount case; reuse it, do not re-derive it).
+   *[corrected 2026-09-26, grill correction (MIN-001) — the exact call shape, verified
+   against `resolveScopedRoot`'s signature `(container *os.Root, containerHostPath,
+   subPath, namePrefix, label string, policy, opened *[]*os.Root)`.]* The function needs
+   an already-open container plus a `subPath` relative to it: it calls
+   `container.Stat(subPath)`, then either `container.OpenRoot(subPath)` for a directory
+   or the parent-plus-`singleEntryFS` path for a regular file. So:
+   `parent := filepath.Dir(realAbs)`, `container := os.OpenRoot(parent)` (appended to
+   `opened` so `grepRoots`' `closeAll` closes it), then
+   `resolveScopedRoot(container, parent, filepath.Base(realAbs), <namePrefix>, <label>,
+   policy, &opened)`. `filepath.Base` is one segment with no separator, which `os.Root`
+   accepts on every supported platform. `namePrefix` is `filepath.ToSlash(parent)`, so
+   every reported hit is an absolute path the agent can pass straight back to
+   `read_file`. The spec fixes the exact rendering. One edge case: when
+   `filepath.Dir(realAbs) == realAbs` (a volume root, `/` or `C:\`), there is no parent.
+   Open `os.OpenRoot(realAbs)` and wrap it in `guardCarveOuts` directly, the same shape
+   as `grepRoots`' mount branch with `rest == ""`. The D4 bounds keep that walk finite.
+   Two consequences to state rather than leave implied:
+   - Only the immediate parent's `.gitignore`/`.ignore` is preloaded as an ancestor
+     layer, because `LoadAncestorIgnore` walks within the container. A workspace-relative
+     scope preloads every layer up to the workspace root.
+   - The `realAbs` string is advisory (as it already is for `AutoWorkspacePath`), and
+     `carveOutFS` judges by string. So an ancestor of `realAbs` swapped for a symlink
+     between `ResolvePath` and `os.OpenRoot` is the same residual class existing mount
+     roots carry. security-lead confirms it within the gate's dedicated read-boundary
+     check (interview D9).
 4. Wrap the new root in `guardCarveOuts` (gate 1), the new skills-gate wrapper (gate 2) and
    the new metadata-guard wrapper (gate 3) — the same three wrappers every existing `grep`
    root already gets or must newly get, so the new root is never a second, more-permissive
@@ -292,7 +394,11 @@ satisfy all of it, none of which existed when this ADR was drafted:
   must not join the every-turn manifest. Add it to the tier pinning tests.
 - **ADR-077 two-layer policy:** add the tool to the static catalog
   (`pkg/coreagent/core.go::allStaticToolNames`), give it a shipped GLOBAL ceiling
-  default in `pkg/config/defaults.go` (recommended: `allow` — read-only, confined), and
+  default in `pkg/config/defaults.go` (recommended: `allow` — read-only, confined
+  *[amended 2026-09-26 (#920), grill correction (MIN-002): "confined" now describes only
+  the no-`path` default (workspace plus mounts, interview D5). With a `path`, the agent
+  `grep` reaches whatever `ResolvePath` admits for a read, the same reach as `read_file`
+  (see the D4 amendment). The `allow` recommendation itself is unchanged]*), and
   a posture in every core agent's seed. Update the load-bearing pin
   `pkg/coreagent/catalog_count_test.go::catalogSizeToday` (currently 101) following that
   test's own documented procedure, naming the tool in the commit message.

@@ -34,18 +34,103 @@ calls the metadata guard, neither does any other argument check. Dropping it rem
 nothing else, because there was nothing else in the classifier to keep. The secret set
 stays categorically unreachable regardless: `ResolvePath` refuses `fspolicy.IsCarveOut`
 unconditionally, on every call, independent of Auto, the classifier, or any pin — this
-amendment removes the LOCATION-based ask, never the carve-out refusal underneath it. A
+amendment removes the LOCATION-based ask, never the carve-out refusal underneath it.
+*[corrected 2026-09-26, grill correction (CRIT-001) — the next sentence is FALSE; kept
+struck as history, see the correction note immediately below:]* ~~A
 consequence, not a new gate: an `AutoRuns` call is never pinned (`AutoPinForVerdict` only
 ever runs for a call the loop actually dispatched via Auto with `Paths` set by a RUNS-IF
 classifier), so `RecheckAutoPin` — the mid-call re-check for a symlink swapped between
 classification and use — no longer applies to these two tools either, exactly as it never
-applied to `grep`. **Accepted residual risk named again, precisely (interview D4):**
+applied to `grep`.~~ **Accepted residual risk named again, precisely (interview D4):**
 personal secret folders outside `$OMNIPUS_HOME` (`~/.ssh`, `~/.aws`, `~/.gnupg`, browser
 profiles) are not in the secret set `fspolicy.IsCarveOut` protects, so under Auto an agent
 can now read and search them with no prompt exactly as it already could via `bash`. Out of
 scope for #920; tracked in
 [issue #921](https://github.com/elicify-ai/omnipus/issues/921), a separate high-priority
 issue covering every tool, not only these three.
+- **Correction note (2026-09-26, the one correction round after the ADR-mode grill
+  [`ADR-092-shell-permission-modes-review.md`](./ADR-092-shell-permission-modes-review.md),
+  verdict BLOCK on CRIT-001; founder decisions D8–D9 of the same interview):**
+  - **The real mechanism (CRIT-001), verified in the code.**
+    - `pkg/agent/loop_run_turn_tools.go` pins every call Auto ran under an `ask` policy.
+      The gate is `ex.autoPin.Run && ex.toctouPolicy == "ask"` followed by
+      `tools.WithAutoApproved(execCtx, tools.AutoPinForVerdict(ex.toolName, ex.autoPin))`,
+      with no class test.
+    - `pkg/tools/auto_approve.go::ClassifyAutoApprove`'s `case AutoRuns` returns
+      `AutoVerdict{Run: true, Class: AutoVerdictClassRuns}` with `Paths` nil. So an
+      `AutoRuns` call IS pinned, with an empty path list. `AutoPin` itself carries only
+      `Tool` and `Paths`, so the class is dropped at `AutoPinForVerdict`.
+    - `pkg/tools/filesystem.go` `ReadFileTool.Execute` (both its main resolve and its
+      `reauthorize` closure for image inspection) and `ListDirTool.Execute` resolve
+      through `auto_approve.go::resolveAutoCheckedPath`. That function calls
+      `RecheckAutoPin` whenever any pin is present.
+    - `RecheckAutoPin` ORs the access bits of `pin.Paths` (0 for an empty list). It then
+      refuses because `PathGrantAccessRead &^ 0 != 0`, with `ErrAutoPinMoved`.
+    - So moving `read_file`/`list_directory` to `AutoRuns` alone would make every
+      Auto-approved read on an `ask` policy fail, inside the workspace or outside it.
+      That is latent today only because `pkg/config/defaults.go` ships both tools as
+      `allow`. `grep` escapes it only because `grep.go` never calls
+      `resolveAutoCheckedPath` or `RecheckAutoPin`, not because it is unpinned.
+  - **The fix (founder decision D8, the general form).** A pin whose class is
+    `AutoVerdictClassRuns` is never re-checked. Exact change, all in
+    `pkg/tools/auto_approve.go`:
+    - (1) `AutoPin` gains a `Class string` field.
+    - (2) `AutoPinForVerdict` copies `verdict.Class` into it.
+    - (3) `RecheckAutoPin` returns nil, before its access and coverage tests, when
+      `pin.Class == AutoVerdictClassRuns`.
+
+    Putting the skip in `RecheckAutoPin` covers both entry points:
+    `resolveAutoCheckedPath` (every file tool) and `browser/tools.go`'s direct
+    `RecheckAutoPin` call. D8's rationale calls this "a one-function change". It is in
+    fact a struct field plus two functions in that one file. The decision itself (skip on
+    class `runs`) is honoured exactly. The skip is correct because a RUNS verdict made no
+    location claim for the re-check to re-verify. The secret-set refusal is not part of
+    the pin at all: `ResolvePath` applies `fspolicy.IsCarveOut` on every call.
+  - **What must NOT change.**
+    - The zero value `Class == ""` must still be re-checked (fail-closed). That keeps every
+      existing `AutoPin{Tool, Paths}` literal in `auto_approve_test.go` and
+      `browser/screenshot_autoapprove_test.go` meaning what it means today.
+    - `AutoVerdictClassRunsIfArgs` pins re-check byte-for-byte as now: `write_file`,
+      `edit_file`, `append_file` (FSOpWrite, access write), `send_file` (FSOpSend, access
+      read) and `browser_screenshot`'s destination. A RUNS-IF path swapped out of the
+      workspace between classification and use is still refused with `ErrAutoPinMoved`,
+      never re-prompted.
+    - `mcp_not_destructive` pins are untouched; MCP tools never resolve paths.
+  - **Dead code this leaves (for GREEN, stated so it is not missed).**
+    `ReadFileTool.AutoApproveVerdict`, `ListDirTool.AutoApproveVerdict` and their
+    `_ AutoApproveClassifier` assertions in `auto_approve.go` become unreachable, because
+    `ClassifyAutoApprove` calls `classifyWithInstance` only for `AutoRunsIfArgs`. Delete
+    them, since their doc comments state the retired J2 read rule.
+    `pkg/gateway/auto_approve_classification_test.go` check 4 (every RUNS-IF tool
+    implements the classifier) keeps passing without them.
+  - **Required behavioural test (MIN-004).** The golden-copy classification test locks
+    only the table's shape and could not have caught CRIT-001. The RED parity matrix must
+    therefore assert that the calls actually execute, through the real
+    loop-to-tool path (pin attached by the loop, not a hand-built context). With the tool
+    policy `ask` and Auto on:
+    - `read_file`, `list_directory` and `grep` each return success both on a path inside
+      the workspace and on an ordinary path outside the workspace and its mounts.
+    - A secret-set path is still refused.
+    - A RUNS-IF regression case still passes: `write_file` pinned inside, target swapped
+      outside, refused with `ErrAutoPinMoved`.
+
+    A classification-table assertion alone does not satisfy this.
+  - **`send_file` (grill unasked question 2): unaffected, verified.**
+    - It stays `AutoRunsIfArgs`. Its classifier (`send_file.go::SendFileTool.AutoApproveVerdict`
+      → `autoWorkspaceVerdict`, `FSOpSend`, access read) still pins
+      `runs_if_args` with a path, so the D8 skip never applies to it.
+    - The ADR-081 D4 amendment's `ReadConfined` mount exception deliberately excludes
+      `FSOpSend` (see that ADR's D6 correction), so a read-confined `send_file` keeps
+      today's refusal.
+    - The J2 row below mislabelled `send_file` as a write. It is corrected in place.
+  - **Bundling (founder decision D9).** The `ReadConfined` mount change (ADR-081 D4
+    amendment, interview D6) stays in the #920 branch; it is not split out. Within the
+    8-reviewer gate, security-lead gives it a dedicated check covering:
+    - mounts-only admission, with `ResolvePathAllowingPatterns` not injecting its regex
+      grant into `AllowedRoots` for a read-confined policy;
+    - the mount-anchored `os.Root` handle;
+    - `FSOpSend` staying confined;
+    - the widened-grep advisory-anchor residual.
 
 **Revision note (founder decision A, 2026-09-24, "like Claude Code's own default"):** the revision above still let a `bash` command run WHOLLY UNPROMPTED with no kernel sandbox whenever D7/D8's own text classifiers found nothing to flag — including, for example, a write via a RELATIVE path (`touch notes/x`, `echo hi > notes/y`, `rm -rf x`), since `ClassifyPathOperations`/`ClassifyNetworkNeed` are absolute-path/known-binary classifiers by construction and simply have no signature for those shapes at all — and a bare `cd`/`bash -c "…"`, which touches neither the filesystem-op nor network-op classifier's vocabulary. The founder judged this too permissive for a general-purpose coding agent with no kernel confinement at all and ruled: **with no kernel sandbox enforcing, Auto's `bash` no longer runs a command with no prompt just because D7/D8 found nothing to flag.** A command now runs unprompted ONLY when (a) it is entirely made of segments on a new, fixed, hand-reviewed read-only allowlist (`pkg/tools/shell_no_sandbox_gate.go::commandIsNoSandboxReadOnly` — reuses `shell_path_guard.go`'s own `readOnlyShellCommands`, `ADR-068`'s read-classifier, plus `echo`/`pwd`/`which` and git's four read-only subcommands `status`/`log`/`diff`/`show`), or (b) an operator D3 rule fully allows it (`shellrule.CommandVerdict.FullyAllowed()`, unchanged from D3/D4). Everything else asks — a new `adr092_kind: "no_sandbox_ask"` escalation (`ExecTool.requestNoSandboxApproval`), carrying the note *"No kernel sandbox is enforcing, so shell commands that could change files or reach the network ask first."* This new gate is MUTUALLY EXCLUSIVE with D7/D8's own escalations (`ExecTool.commandTriggersExistingPreflight` — a non-prompting dry run of both): when either would already ask (or refuse) on its own, this gate stays silent and lets that one, more specific prompt happen instead, so a qualifying command asks exactly once. With a kernel sandbox enforcing, none of this runs — behaviour there is byte-for-byte unchanged. The chat badge KEEPS its label, **"Auto — no sandbox"** — only its tooltip is reworded, to: "No kernel sandbox is enforcing. Safe tool calls still run without asking; shell commands ask first, except read-only ones and commands an operator rule allows." Unattended/scheduled runs: the SAME D-08/J1 rule applies — a call that would need a human here is auto-denied with `headlessShellDenyReason`, never stalled.
 
@@ -214,7 +299,7 @@ paragraph now governs the remaining 5 RUNS-IF file tools only; `read_file` and
 | # | Question | Ruling |
 |---|---|---|
 | J1 | Unattended (scheduled/headless) runs | **Same rule.** A call Auto would run in a chat also runs unattended; anything that needs a human is auto-denied with the existing `autoDenyHeadlessReason` error and audit rows. The loop reorder that implements this (the `AutoDenyAsk` block moves after the approval checks) also fixes `bash` under Auto, which was auto-denied before Auto was consulted |
-| J2 | File reads and writes | *[Amended 2026-09-26, #920]* Writes (`write_file`, `edit_file`, `append_file`, `send_file`, `browser_screenshot`'s destination) still run only inside the workspace or a mount; everything else still asks. Reads via `read_file`/`list_directory` are NO LONGER covered by this rule — see the 2026-09-26 revision note above: they now run unconditionally under Auto, like `grep`. Original ruling, superseded for reads: ~~Run only inside the workspace or a mount; everything else asks, reads included.~~ `bash` unchanged; asymmetry documented, now narrower (see the paragraph above) |
+| J2 | File reads and writes | *[Amended 2026-09-26, #920]* Writes (`write_file`, `edit_file`, `append_file`, `send_file`, `browser_screenshot`'s destination) *[corrected 2026-09-26, grill correction: `send_file` is not a write. It resolves `FSOpSend` with read access, and it keeps this rule on the file it SENDS (J5). So read "the 5 RUNS-IF tools: the three writes, `send_file`'s source file and `browser_screenshot`'s destination"]* still run only inside the workspace or a mount; everything else still asks. Reads via `read_file`/`list_directory` are NO LONGER covered by this rule — see the 2026-09-26 revision note above: they now run unconditionally under Auto, like `grep`. Original ruling, superseded for reads: ~~Run only inside the workspace or a mount; everything else asks, reads included.~~ `bash` unchanged; asymmetry documented, now narrower (see the paragraph above) |
 | J3 | `environment_setup` | Asks |
 | J4 | `serve_web` | Asks |
 | J5 | `send_file` | **Runs**, subject to the J2 read rule on the file it sends. A workspace file leaves the machine to a third-party channel with no prompt |
@@ -320,7 +405,13 @@ Mode resolution and tighten-only merge across all three levels; Auto pre-flight 
 
 ## Affected components
 
-- **Backend:** `pkg/tools/shell.go`, `shell_guard.go`, `shell_path_guard.go` (survives, mode-sensitive), `shell_subst_guard.go` (new caller), `pkg/policy/evaluator.go` (deleted), `auditor.go` (retargeted), `pkg/security/approvalgrants.go` (prefix/path-widening/network-widening record kinds), `execapproval.go`+test (deleted), `pkg/fspolicy/policy.go` (`PathGrants`), `pkg/sandbox/derive_from_fspolicy.go` (renders them), `pkg/sandbox/sandbox.go`/`sandbox_linux.go`/`seatbelt_profile.go` (bash-scoped empty-`ConnectPortRules` rendering, D8), `pkg/config/sandbox.go`/`config.go`, `pkg/gateway/sandbox_config_validation.go`/`rest_sandbox_config.go`/`rest_exec.go`, `pkg/gateway/rest_agents_update.go`/`rest_agents_create.go` (B-6/B-7), `pkg/sysagent/tools/agent_apply_args.go` (B-6), `pkg/migrate/sources/openclaw/openclaw_config.go` (B-6), `pkg/agent/loop_wire.go`/`loop_construct.go`/`loop_policy.go`. *[Added 2026-09-26, #920]* `pkg/tools/auto_approve.go` (`autoApproveClasses`: `read_file`/`list_directory` RUNS-IF → RUNS), `pkg/gateway/auto_approve_classification_test.go` (golden-copy tally update); the `ResolvePath` `ReadConfined`-branch mount fix (ADR-081's D4 amendment, interview D6) is shared code, not a second implementation.
+- **Backend:** `pkg/tools/shell.go`, `shell_guard.go`, `shell_path_guard.go` (survives, mode-sensitive), `shell_subst_guard.go` (new caller), `pkg/policy/evaluator.go` (deleted), `auditor.go` (retargeted), `pkg/security/approvalgrants.go` (prefix/path-widening/network-widening record kinds), `execapproval.go`+test (deleted), `pkg/fspolicy/policy.go` (`PathGrants`), `pkg/sandbox/derive_from_fspolicy.go` (renders them), `pkg/sandbox/sandbox.go`/`sandbox_linux.go`/`seatbelt_profile.go` (bash-scoped empty-`ConnectPortRules` rendering, D8), `pkg/config/sandbox.go`/`config.go`, `pkg/gateway/sandbox_config_validation.go`/`rest_sandbox_config.go`/`rest_exec.go`, `pkg/gateway/rest_agents_update.go`/`rest_agents_create.go` (B-6/B-7), `pkg/sysagent/tools/agent_apply_args.go` (B-6), `pkg/migrate/sources/openclaw/openclaw_config.go` (B-6), `pkg/agent/loop_wire.go`/`loop_construct.go`/`loop_policy.go`. *[Added 2026-09-26, #920]* `pkg/tools/auto_approve.go` (`autoApproveClasses`: `read_file`/`list_directory` RUNS-IF → RUNS), `pkg/gateway/auto_approve_classification_test.go` (golden-copy tally update); the `ResolvePath` `ReadConfined`-branch mount fix (ADR-081's D4 amendment, interview D6) is shared code, not a second implementation. *[Added 2026-09-26, grill correction]* The following are also affected:
+  - `pkg/tools/auto_approve.go::RecheckAutoPin` / `resolveAutoCheckedPath`, plus `AutoPin` and `AutoPinForVerdict` (the D8 class-`runs` skip; see the 2026-09-26 correction note).
+  - `pkg/tools/filesystem.go` (`ReadFileTool`/`ListDirTool` `AutoApproveVerdict` deleted as dead code).
+  - `pkg/tools/resolvepath.go::resolveValidatedPath` (the `ReadConfined` mount exception for `FSOpRead`/`FSOpList` via `matchedAllowedRoot` → `newMountRootHandle`) and `resolvepath.go::ResolvePathAllowingPatterns` (no `AllowedRoots` injection for a read-confined policy).
+  - The loop-level behavioural test of MIN-004.
+
+  `pkg/agent/loop_run_turn_tools.go` is NOT changed: it keeps pinning every Auto-run `ask` call.
 - **Frontend:** `ToolApprovalModal.tsx`, `BashApprovalPreview.tsx`, `ShellDenyPatternsEditor.tsx` (deleted), `ExecAllowlistSection.tsx` (deleted), `SecuritySection.tsx`, `GodModeControl.tsx` (banner relocated to `AppShell`), `ToolsAndPermissions.tsx`, chat composer/header.
 - **Contracts:** deletions (`AgentShellPolicy.yaml`, `ExecAllowlist.yaml`), edits (`SandboxConfig.yaml`, `SandboxConfigUpdate.yaml`, `AgentUpdateRequest.yaml`, `SandboxStatus.yaml` extended), additions (mode-selector shapes, `ToolApprovalActionRequest`/`ToolApprovalRequiredFrame` — the **`asyncapi.yaml` inline copy**, not only the standalone schema file, since that inline copy is what generates the SPA's types).
 - **Variants:** identical decision logic OSS/Desktop/SaaS; platform degradation asymmetry (Windows always Ask) is pre-existing and unchanged.
