@@ -2112,12 +2112,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   onEdit={markDirty}
                   onChange={setMaxToolIterationsEdit}
                   globalLimit={globalToolIterationLimit}
-                  server={agent ? {
+                  server={{
                     effective: agent.max_tool_iterations,
                     source: agent.max_tool_iterations_source,
                     overrideIgnored: agent.max_tool_iterations_override_ignored,
                     storedOverride: agent.max_tool_iterations_override,
-                  } : undefined}
+                  }}
                   serverError={toolIterationLimitError}
                   disabled={!isFieldEditable('max_tool_iterations')}
                 />
