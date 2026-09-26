@@ -92,6 +92,33 @@ func TestAuditRedactor_KeyPrefixNeedsBoundary(t *testing.T) {
 	assert.Equal(t, "OPENAI_API_KEY=[REDACTED]", r.Redact("OPENAI_API_KEY=sk-or-v1-0123456789abcdef0123456789"))
 	assert.Equal(t, "[REDACTED] x [REDACTED]",
 		r.Redact("sk-aaaaaaaaaaaaaaaaaaaaaaaa x sk-bbbbbbbbbbbbbbbbbbbbbbbb"))
+
+	// Encoded separators count as a boundary too (round-3 finding S1): a
+	// percent-encoded byte, a JSON \uXXXX escape, or a literal backslash
+	// escape before the key must not hide it. The encoded prefix is kept.
+	const key = "sk-or-v1-0123456789abcdef0123456789"
+	encoded := map[string]string{
+		"https://x.test/?q%3D" + key:     "https://x.test/?q%3D[REDACTED]",
+		"a%20" + key:                     "a%20[REDACTED]",
+		`\u0022` + key:                   `\u0022[REDACTED]`,
+		`line1\n` + key:                  `line1\n[REDACTED]`,
+		"Authorization: Bearer%20" + key: "Authorization: Bearer%20[REDACTED]",
+	}
+	for in, want := range encoded {
+		assert.Equal(t, want, r.Redact(in), "encoded boundary before the key: %q", in)
+	}
+}
+
+func TestAuditRedactor_BearerIsCaseInsensitive(t *testing.T) {
+	r := newAuditRedactorForTest(t)
+	for _, s := range []string{"bearer abcDEF123456.ghiJKL789", "BEARER abcDEF123456.ghiJKL789", "Bearer abcDEF123456.ghiJKL789"} {
+		assert.Equal(t, "authorization: [REDACTED]", r.Redact("authorization: "+s), "input %q", s)
+	}
+	// The shared default set is unchanged: NewRedactor stays case-sensitive
+	// for its other callers.
+	full, err := NewRedactor(nil)
+	require.NoError(t, err)
+	assert.Equal(t, "bearer abcDEF123456.ghiJKL789", full.Redact("bearer abcDEF123456.ghiJKL789"))
 }
 
 func TestAuditRedactor_URLUserinfoPassword(t *testing.T) {
@@ -99,6 +126,8 @@ func TestAuditRedactor_URLUserinfoPassword(t *testing.T) {
 	cases := map[string]string{
 		"psql postgres://admin:S3cretPass@db.internal:5432/app":            "psql postgres://admin:[REDACTED]@db.internal:5432/app",
 		"git clone https://oauth2:glpat-AbCdEf123456@gitlab.example/x.git": "git clone https://oauth2:[REDACTED]@gitlab.example/x.git",
+		// empty user, password only (round-3 finding S2)
+		"redis-cli -u redis://:S3cretPass@cache.internal:6379/0": "redis-cli -u redis://:[REDACTED]@cache.internal:6379/0",
 		// user only, no password: nothing to redact
 		"https://alice@example.test/path": "https://alice@example.test/path",
 	}
