@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"mime"
+	"mime/multipart"
+	"net/mail"
 	"strings"
 	"testing"
 
@@ -219,11 +223,20 @@ func TestSendEmailTool(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.ForLLM)
 	}
-	// The send now transmits composed RFC 5322 (markdown→MIME); the body
-	// text must survive into the transmitted message.
-	if len(ft.sent) != 1 || ft.sent[0].To != "dest@x.com" || !strings.Contains(ft.sent[0].Body, "Hello there") {
+	// Spec decision (MC-3 / US-2 / FR-004): the legacy exact Body equality
+	// is superseded. This fake exposes a sending identity
+	// (fakeTransport.AccountAddress), so the recorded body is the composed
+	// multipart/alternative message, not the Markdown argument. Date,
+	// Message-ID and the MIME boundary are generated and are not literals.
+	// "Hello there" has no Markdown syntax and this mailbox has no
+	// signature, so text/plain is that string (MC-3 adds the "--" separator
+	// only when a signature exists) and text/html is the CommonMark
+	// paragraph goldmark emits for it, which the MC-2 allowlist keeps.
+	if len(ft.sent) != 1 || ft.sent[0].To != "dest@x.com" {
 		t.Fatalf("send not recorded correctly: %+v", ft.sent)
 	}
+	assertComposedSend(t, ft.sent[0].Body, ft.AccountAddress(), "dest@x.com", "Hi",
+		"Hello there", "<p>Hello there</p>\n")
 }
 
 func TestSendEmailTool_MissingTo(t *testing.T) {
@@ -552,9 +565,11 @@ func TestSendEmailTool_Persistence(t *testing.T) {
 	if len(ft.sent) != 1 {
 		t.Fatalf("expected 1 recorded send, got %d", len(ft.sent))
 	}
-	if !strings.Contains(ft.sent[0].Body, "Verify me") {
-		t.Fatalf("send body not persisted: got %q", ft.sent[0].Body)
-	}
+	// Same decision as TestSendEmailTool (MC-3 / US-2 / FR-004): the
+	// persisted body is the composed message. "Verify me" is unmarked
+	// Markdown with no signature, so the two part bodies are exact.
+	assertComposedSend(t, ft.sent[0].Body, ft.AccountAddress(), "dest@x.com", "Test",
+		"Verify me", "<p>Verify me</p>\n")
 }
 
 // TestReplyTool_NoTransport verifies the nil-transport guard.
@@ -843,5 +858,81 @@ func TestEmailTransports_SendGoesToBoundWorkspaceMailbox(t *testing.T) {
 	}
 	if len(ftA.sent) != 1 || len(ftB.sent) != 0 {
 		t.Fatalf("send must use ONLY the bound workspace's transport (A=%d B=%d)", len(ftA.sent), len(ftB.sent))
+	}
+}
+
+// assertComposedSend checks one recorded send against MC-3 / US-2 / FR-004.
+// from/to/subject and the two part bodies are exact. Generated fields
+// (Date, Message-ID, boundary) are checked only for presence.
+func assertComposedSend(t *testing.T, raw, from, to, subject, plain, html string) {
+	t.Helper()
+	msg, err := mail.ReadMessage(strings.NewReader(raw))
+	if err != nil {
+		t.Fatalf("MC-3: recorded body is not RFC 5322: %v\n%s", err, raw)
+	}
+	if got := msg.Header.Get("From"); got != from {
+		t.Fatalf("MC-3: From = %q, want %q", got, from)
+	}
+	if got := msg.Header.Get("To"); got != to {
+		t.Fatalf("US-2: To = %q, want %q", got, to)
+	}
+	if got := msg.Header.Get("Subject"); got != subject {
+		t.Fatalf("US-2: Subject = %q, want %q", got, subject)
+	}
+	if got := msg.Header.Get("Bcc"); got != "" {
+		t.Fatalf("US-2: Bcc = %q, want absent", got)
+	}
+	if msg.Header.Get("Date") == "" || msg.Header.Get("Message-Id") == "" {
+		t.Fatalf("MC-3: composed message is missing Date or Message-ID:\n%s", raw)
+	}
+	mediaType, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatalf("MC-3: Content-Type: %v", err)
+	}
+	if mediaType != "multipart/alternative" {
+		t.Fatalf("MC-3: Content-Type = %q, want multipart/alternative", mediaType)
+	}
+	mr := multipart.NewReader(msg.Body, params["boundary"])
+	var gotPlain, gotHTML string
+	var nPlain, nHTML, n int
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("MC-3: read part: %v", err)
+		}
+		n++
+		body, err := io.ReadAll(part)
+		if err != nil {
+			t.Fatalf("MC-3: read part body: %v", err)
+		}
+		ctype, _, err := mime.ParseMediaType(part.Header.Get("Content-Type"))
+		if err != nil {
+			t.Fatalf("MC-3: part Content-Type: %v", err)
+		}
+		switch ctype {
+		case "text/plain":
+			nPlain++
+			gotPlain = string(body)
+		case "text/html":
+			nHTML++
+			gotHTML = string(body)
+		default:
+			t.Fatalf("MC-3: unexpected part %q", ctype)
+		}
+	}
+	if n != 2 || nPlain != 1 || nHTML != 1 {
+		t.Fatalf("MC-3: parts = %d (plain %d, html %d), want exactly one text/plain and one text/html", n, nPlain, nHTML)
+	}
+	if gotPlain != plain {
+		t.Fatalf("MC-3: text/plain = %q, want %q", gotPlain, plain)
+	}
+	if strings.Contains(gotPlain, "\n--\n") || strings.Contains(gotPlain, "\r\n--\r\n") {
+		t.Fatalf("MC-3: empty signature still produced a signature separator:\n%s", gotPlain)
+	}
+	if gotHTML != html {
+		t.Fatalf("MC-3: text/html = %q, want %q", gotHTML, html)
 	}
 }

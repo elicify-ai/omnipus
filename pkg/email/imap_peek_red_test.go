@@ -214,14 +214,68 @@ func clientCommands(log string) []string {
 	return cmds
 }
 
+func TestStoreCommands_CountsOnlyClientIssued(t *testing.T) {
+	// The debug transcript is raw IMAP in both directions. A tagged completion
+	// ("T4 OK STORE completed") contains the word STORE and is not a command.
+	// MC-36's counts are of client STORE commands only.
+	const oneStoreAndCompletion = "" +
+		"T2 UID FETCH 1 (BODY.PEEK[])\r\n" +
+		"* 1 FETCH (FLAGS (\\Seen))\r\n" +
+		"T2 OK FETCH completed\r\n" +
+		"T3 UID STORE 1 +FLAGS.SILENT (\\Seen $OmnipusAgentRead)\r\n" +
+		"T3 OK STORE completed\r\n"
+	got := storeCommands(oneStoreAndCompletion)
+	if len(got) != 1 || !strings.Contains(got[0], "UID STORE") {
+		t.Fatalf("one client UID STORE plus its OK completion counted as %d: %q", len(got), got)
+	}
+
+	const twoStoresAndCompletions = "" +
+		"T3 UID STORE 1 +FLAGS.SILENT (\\Seen $OmnipusAgentRead)\r\n" +
+		"T3 OK STORE completed\r\n" +
+		"T4 STORE 1 +FLAGS.SILENT (\\Seen)\r\n" +
+		"T4 OK STORE completed\r\n"
+	got = storeCommands(twoStoresAndCompletions)
+	if len(got) != 2 {
+		t.Fatalf("two client STOREs counted as %d, want 2: %q", len(got), got)
+	}
+	if !strings.Contains(got[0], "$OmnipusAgentRead") || strings.Contains(got[1], "OmnipusAgentRead") {
+		t.Fatalf("client STORE order = %q, want keyword attempt then \\Seen-only", got)
+	}
+
+	if n := len(storeCommands("T4 OK STORE completed\r\n")); n != 0 {
+		t.Fatalf("completion-only line counted as %d client STORE commands", n)
+	}
+}
+
 func storeCommands(log string) []string {
 	var stores []string
 	for _, line := range clientCommands(log) {
-		if strings.Contains(strings.ToUpper(line), " STORE ") {
+		if clientIssuedStore(line) {
 			stores = append(stores, line)
 		}
 	}
 	return stores
+}
+
+// clientIssuedStore reports a client STORE command. The transcript also
+// contains tagged completions ("T4 OK STORE completed"); those carry the
+// word STORE but their second token is a status, not a command verb.
+// A client command is "<tag> STORE ..." or "<tag> UID STORE ...".
+func clientIssuedStore(line string) bool {
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		return false
+	}
+	switch strings.ToUpper(fields[1]) {
+	case "OK", "NO", "BAD", "PREAUTH", "BYE":
+		return false
+	case "STORE":
+		return true
+	case "UID":
+		return len(fields) >= 3 && strings.EqualFold(fields[2], "STORE")
+	default:
+		return false
+	}
 }
 
 func flagPresent(flags []imap.Flag, want imap.Flag) bool {
