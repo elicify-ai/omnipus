@@ -1450,7 +1450,11 @@ not at workspace A. The rewrite MUST:
   unchanged (D5).
 - **FR-004**: Match paths MUST be workspace-relative when the searched location resolves inside
   the workspace; mount-name form for the shorthand; otherwise absolute with forward slashes on
-  every platform, and each MUST be accepted by `read_file` unchanged.
+  every platform. Workspace-relative and absolute match paths MUST be accepted by `read_file`
+  unchanged; mount-name-form match paths (the shorthand, and mounts reached by the default
+  search) are grep-only as today (D5, DS-1 rows 3 and 24) and are not a `read_file` input.
+  [corrected 2026-09-26, squad-lead: the original text "each MUST be accepted by `read_file`
+  unchanged" contradicted DS-1 rows 3 and 24; wording aligned to the datasets, no behaviour change]
 - **FR-005**: The secret set, other agents' homes and other workspaces MUST be refused as a
   `path` and withheld (name and content) from every walk, for every root type.
 - **FR-006**: Skills-registry instruction files (`SKILL.md`, `AGENT.md`, `AGENTS.md`) MUST be
