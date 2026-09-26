@@ -467,7 +467,18 @@ func (h *WSHandler) hubProviderRetry(evt agent.Event) {
 		logsafeError("ws: marshal provider_retry for hub failed", "session_id", sid, "error", err)
 		return
 	}
-	h.hubPublishAndDeliver(sid, string(generated.WsFrameTypeProviderRetry), data)
+	// Gate finding F3 / spec section 2 (MAJ-108): the retry frame registers
+	// as a projection item under a stable per-turn key - a newer retry for
+	// the same turn replaces the item's frame (the rebuild shows only the
+	// pending attempt), and the item leaves with the turn (forgetTurn at
+	// TurnEnd). Empty-meta publishing never registered the retry with the
+	// projection, so a mid-retry snapshot/rebuild showed a turn with no
+	// visible retry.
+	h.hubPublishMetaAlsoTo(sid, string(generated.WsFrameTypeProviderRetry), hubFrameMeta{
+		kind:   hubKindItem,
+		key:    "provider_retry:" + evt.Meta.TurnID,
+		turnID: evt.Meta.TurnID,
+	}, data, nil)
 }
 
 // providerRetryErrorCode maps the retry payload's reason to the frame's
@@ -513,7 +524,15 @@ func (h *WSHandler) hubProviderFallback(evt agent.Event) {
 		logsafeError("ws: marshal provider_fallback for hub failed", "session_id", sid, "error", err)
 		return
 	}
-	h.hubPublishAndDeliver(sid, string(generated.WsFrameTypeProviderFallback), data)
+	// Gate finding F3 / spec section 2 (MAJ-108): same registration as the
+	// retry - the fallback frame is a per-turn item under a stable key,
+	// replaced by a newer fallback for the same turn and cleared with the
+	// turn.
+	h.hubPublishMetaAlsoTo(sid, string(generated.WsFrameTypeProviderFallback), hubFrameMeta{
+		kind:   hubKindItem,
+		key:    "provider_fallback:" + turnID,
+		turnID: turnID,
+	}, data, nil)
 }
 
 // ---------------------------------------------------------------------
