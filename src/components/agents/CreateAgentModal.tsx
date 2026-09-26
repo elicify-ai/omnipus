@@ -133,6 +133,8 @@ function payloadToCreateRequest(
     if (payload.model.trim()) req.model = payload.model.trim()
     if (payload.provider?.trim()) req.provider = payload.provider.trim()
     if (payload.timeout_seconds !== undefined) req.timeout_seconds = payload.timeout_seconds
+    // #904 D14: the worker's own limit becomes the CLI's turn cap; omitted = global.
+    if (payload.max_tool_iterations !== undefined) req.max_tool_iterations = payload.max_tool_iterations
     return req
   }
 

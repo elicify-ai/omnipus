@@ -96,6 +96,8 @@ const mockCoreAgent: Agent = {
   soul: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
+  max_tool_iterations_source: 'global',
+  max_tool_iterations_override_ignored: false,
   rate_limits: { use_global_defaults: true },
   stats: { total_sessions: 5, total_tokens: 12000, total_cost: 0.05 },
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
@@ -116,6 +118,8 @@ const mockLockedCoreAgent: Agent = {
   soul: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
+  max_tool_iterations_source: 'global',
+  max_tool_iterations_override_ignored: false,
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
   memory_enabled: true,
   editable_fields: BUILTIN_EDITABLE_FIELDS,
@@ -178,6 +182,8 @@ const mockJudgeAgent: Agent = {
   soul: 'You are the Judge — an impartial acceptance-criteria evaluator.',
   timeout_seconds: 60,
   max_tool_iterations: 20,
+  max_tool_iterations_source: 'global',
+  max_tool_iterations_override_ignored: false,
   memory_enabled: false,
   editable_fields: COMMON_EDITABLE_FIELDS.map((field) => ({
     ...field,
