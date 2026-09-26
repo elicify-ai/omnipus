@@ -228,10 +228,24 @@ func defaultExemptPaths() []string {
 //     keeps full enforcement. The MINT endpoint, which is a real POST that
 //     issues a credential, lives at /api/v1/library/preview-token and is
 //     therefore NOT exempt.
+//
+//   - /mail-preview/ - the Mail HTML-preview token surface (spec 2.3a,
+//     MC-38/MC-43; gateway.registerMailPreviewRoutes). Same structure, same
+//     two reasons as /library-preview/ above, byte for byte: (a) the MC-10
+//     isolation header set must ride every response the prefix produces - a
+//     policy-free CSRF 403 in front of the router would void it for the
+//     cookie-less case; (b) the sandboxed iframe is an opaque origin, so
+//     every image subresource request is cross-site, the SameSite=Strict
+//     CSRF cookie never rides it, and the safe-method re-mint branch would
+//     otherwise stamp a fresh Set-Cookie onto every preview response and
+//     rotate the operator's live CSRF cookie. The route serves GET and HEAD
+//     only, never reads a body, mutates no state; the MINT endpoint is a
+//     real POST at /api/v1/mail/html-preview-token and is NOT exempt.
 var defaultExemptPrefixes = []string{
 	PreviewPathPrefix,
 	WebhookPathPrefix,
 	LibraryPreviewPathPrefix,
+	MailPreviewPathPrefix,
 }
 
 // LibraryPreviewPathPrefix is the bare, path-token-authenticated prefix the
@@ -244,6 +258,15 @@ var defaultExemptPrefixes = []string{
 // the middleware would keep exempting "/library-preview/" while the router
 // served something else.
 const LibraryPreviewPathPrefix = "/library-preview/"
+
+// MailPreviewPathPrefix is the bare, path-token-authenticated prefix the
+// Mail HTML preview serves from (email-mail-view-spec 2.3a, MC-38/MC-43). See
+// defaultExemptPrefixes for why it is CSRF-exempt for all methods.
+//
+// Defined HERE in the middleware package for the same reason
+// LibraryPreviewPathPrefix is: pkg/gateway imports this package, and two
+// independent spellings of a security-boundary prefix drift silently.
+const MailPreviewPathPrefix = "/mail-preview/"
 
 // WebhookPathPrefix is the path prefix under which platform-originated
 // webhook receivers are mounted (e.g. /webhook/google-chat, /webhook/line,

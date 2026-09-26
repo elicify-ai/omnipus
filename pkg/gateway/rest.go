@@ -198,6 +198,12 @@ type restAPI struct {
 	// previewTokenStore(), which is nil-safe.
 	previewTokens atomic.Pointer[PreviewTokenStore]
 
+	// mailPreviewTokens is the Mail HTML-preview token store (rest_mail_preview.go,
+	// MC-43), published by newMailPreviewRoutes at registration time and read by
+	// logout revocation. Nil until registered; readers go through
+	// mailPreviewTokenStoreOf(), which is nil-safe.
+	mailPreviewTokens atomic.Pointer[mailPreviewTokenStore]
+
 	// devServers is the gateway-wide Tier 3 dev-server registry. Shared with
 	// the web_serve tool (dev mode) and workspace.shell_bg tool via the agent
 	// instance. HandlePreview reads this to validate tokens and resolve the
@@ -634,6 +640,10 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	// so the two halves share one token store. The mint path is an EXACT
 	// pattern, so it outranks the "/api/v1/library/" subtree above.
 	rae.a.registerLibraryPreviewRoutes(rae.cm)
+	// Mail HTML preview (email-mail-view-spec 2.3a, MC-10): the session-auth
+	// mint endpoint and the token-only /mail-preview/ serve prefix, sharing
+	// one token store published on the restAPI for logout revocation.
+	rae.a.registerMailPreviewRoutes(rae.cm)
 	// GET/PUT /api/v1/providers/default-model (ADR-068 FR-018/FR-042,
 	// T068-11): its OWN route with the high-blast-radius adminWrap chain
 	// (withAuth → RequireNotBypass — 401 unauthenticated, 503 under

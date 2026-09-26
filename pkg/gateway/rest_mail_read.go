@@ -179,6 +179,11 @@ func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request
 		Seen:           mailFlagHas(v.Flags, "\\Seen"),
 		ReadByAgent:    mailFlagHas(v.Flags, "$OmnipusAgentRead"),
 	}
+	mid := v.MessageID
+	if mid != "" {
+		out.MessageId = &mid
+	}
+	out.IsDraft = mailFlagHas(v.Flags, "\\Draft")
 	if v.FromName != "" {
 		fn := v.FromName
 		out.FromName = &fn
