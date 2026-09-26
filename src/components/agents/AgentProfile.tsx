@@ -652,13 +652,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // tool-iteration limit (pending edit, else the stored own value) is sent
   // too; with none the key is omitted and the server previews the global
   // limit — the same effective value real dispatch passes.
-  const ownToolIterationLimit = maxToolIterationsEdit !== undefined
-    ? maxToolIterationsEdit
-    : (agent?.max_tool_iterations_override ?? null)
+  const storedOwnToolIterationLimit = agent?.max_tool_iterations_override ?? null
+  const ownToolIterationLimit = maxToolIterationsEdit !== undefined ? maxToolIterationsEdit : storedOwnToolIterationLimit
   // A pending edit the server has not yet accepted: a failed save while this
   // is true carries the server's refusal (D10 / bound), shown on the field.
-  const toolIterationLimitPending = maxToolIterationsEdit !== undefined
-    && maxToolIterationsEdit !== (agent?.max_tool_iterations_override ?? null)
+  const toolIterationLimitPending = maxToolIterationsEdit !== undefined && maxToolIterationsEdit !== storedOwnToolIterationLimit
   const globalToolIterationLimit = useGlobalToolIterationLimit()
   const commandPreviewRequest: ExecutorCommandPreviewRequest | undefined = executor?.cli
     ? buildExecutorPreviewRequest(executor.cli, model, executor.cli_path, executor.cli_args, ownToolIterationLimit ?? undefined)

@@ -49,6 +49,7 @@ import {
   MaxToolIterationsCard,
   MAX_TOOL_ITERATIONS_MIN,
   MAX_TOOL_ITERATIONS_MAX,
+  parseMaxToolIterations,
 } from './MaxToolIterationsCard'
 import { MaxToolIterationsLoweringDialog } from './MaxToolIterationsLoweringDialog'
 
@@ -131,13 +132,6 @@ const INVALID_MAX_TOOL_ITERATIONS_MESSAGE =
 // The F4 result toast stays up longer than the 4 s default so the list of
 // lowered agents can be read; the same text also stays inline under the field.
 const LOWERED_TOAST_DURATION_MS = 10_000
-
-function parseMaxToolIterations(raw: string): number | null {
-  const trimmed = raw.trim()
-  if (!/^\d+$/.test(trimmed)) return null
-  const n = parseInt(trimmed, 10)
-  return n >= MAX_TOOL_ITERATIONS_MIN && n <= MAX_TOOL_ITERATIONS_MAX ? n : null
-}
 
 function loweredSummaryText(agents: MaxToolIterationAgentChange[]): string {
   const list = agents.map((a) => `${a.agent_name} ${a.old_value} \u2192 ${a.new_value}`).join(', ')

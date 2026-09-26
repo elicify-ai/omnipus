@@ -18,13 +18,16 @@ import { useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import {
+  MAX_TOOL_ITERATIONS_MAX,
+  MAX_TOOL_ITERATIONS_MIN,
+  parseMaxToolIterations,
+} from '@/components/settings/MaxToolIterationsCard'
 import type { Agent } from '@/lib/api'
 
 // Contract bound for every writable limit field (AgentUpdateRequest /
 // AgentCreateRequest* `max_tool_iterations`: minimum 1, maximum 1000).
-const MIN_LIMIT = 1
-const MAX_LIMIT = 1000
-const BOUND_MESSAGE = `Enter a whole number from ${MIN_LIMIT} to ${MAX_LIMIT}.`
+const BOUND_MESSAGE = `Enter a whole number from ${MAX_TOOL_ITERATIONS_MIN} to ${MAX_TOOL_ITERATIONS_MAX}.`
 
 /** Server-computed state of an existing agent's limit (absent in the create wizard). */
 export interface ToolIterationLimitServerState {
@@ -56,12 +59,6 @@ export interface ToolIterationLimitFieldProps {
   emptyBehavior?: 'restore' | 'clear'
   disabled?: boolean
   testId?: string
-}
-
-function parseLimit(raw: string): number | null {
-  if (!/^\d+$/.test(raw.trim())) return null
-  const n = Number(raw)
-  return n >= MIN_LIMIT && n <= MAX_LIMIT ? n : null
 }
 
 function sourceLine(server: ToolIterationLimitServerState | undefined, globalLimit: number | undefined): string | null {
@@ -121,7 +118,7 @@ export function ToolIterationLimitField({
       if (emptyBehavior === 'clear') onChange(null)
       return
     }
-    const parsed = parseLimit(raw)
+    const parsed = parseMaxToolIterations(raw)
     if (parsed === null) {
       setBoundError(BOUND_MESSAGE)
       return
@@ -169,8 +166,8 @@ export function ToolIterationLimitField({
             ref={inputRef}
             type="number"
             inputMode="numeric"
-            min={MIN_LIMIT}
-            max={MAX_LIMIT}
+            min={MAX_TOOL_ITERATIONS_MIN}
+            max={MAX_TOOL_ITERATIONS_MAX}
             step={1}
             data-testid={testId}
             value={draft}

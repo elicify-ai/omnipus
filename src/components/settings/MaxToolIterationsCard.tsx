@@ -23,6 +23,14 @@ import type { MaxToolIterationsSavedState } from '@/lib/api/generated/openapi-ty
 export const MAX_TOOL_ITERATIONS_MIN = 1
 export const MAX_TOOL_ITERATIONS_MAX = 1000
 
+/** Parses a whole number within the 1–1000 bound; null for anything else. */
+export function parseMaxToolIterations(raw: string): number | null {
+  const trimmed = raw.trim()
+  if (!/^\d+$/.test(trimmed)) return null
+  const n = parseInt(trimmed, 10)
+  return n >= MAX_TOOL_ITERATIONS_MIN && n <= MAX_TOOL_ITERATIONS_MAX ? n : null
+}
+
 export interface MaxToolIterationsCardProps {
   value: string
   onChange: (value: string) => void
