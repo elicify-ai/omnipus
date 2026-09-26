@@ -38,7 +38,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
@@ -631,26 +633,201 @@ func TestPerformancePut_RaiseActivatesIgnoredOwnValue(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// FR-021 rollback (test plan row 13e) — BLOCKED on an unpinned seam
+// FR-021 rollback (test plan row 13e) — fault injection through the
+// restAPI.limitAgentStore seam (maxToolIterationsAgentStore)
 // ---------------------------------------------------------------------------
 
-// Scenario "Mid-write failure rolls back already-lowered agents".
-func TestPerformancePut_LoweringRollback_MidWriteFailure(t *testing.T) {
-	t.Fatal("BLOCKED: fault-injecting agent-store seam not specified — required by " +
-		"tool-iteration-limit-spec.md test plan row 13e / FR-021. The gateway builds " +
-		"agentstore.New(a.homePath) inline and agentstore.Store's stageFile/replaceFile " +
-		"hooks are unexported, so a test in pkg/gateway cannot make B's write fail after " +
-		"A's succeeded. Needs a named seam (e.g. an injectable store factory on restAPI). " +
-		"Expected once unblocked: 500 code max_tool_iterations_lowering_failed, A back to 250, " +
-		"B 280, global 300, audit = A lowering + A rollback, nothing for the global.")
+// mtiFaultStore wraps the REAL agent store and fails chosen MutateState
+// calls by their overall call number (1-based). Counting calls, not agent
+// ids, keeps the tests independent of the order the handler lowers agents
+// in: "the 2nd lowering write fails" always means "one agent was already
+// lowered", whichever it was.
+type mtiFaultStore struct {
+	*agentstore.Store
+	mu     sync.Mutex
+	failAt map[int]bool
+	calls  int
+	wrote  []string // ids of successful MutateState calls, in order
 }
 
-// Scenario "Failed rollback is reported, not silent".
+func (f *mtiFaultStore) MutateState(id, rev string, mutate func(*config.AgentConfig) error, soul *string) (agentstore.MutationResult, error) {
+	f.mu.Lock()
+	f.calls++
+	n := f.calls
+	f.mu.Unlock()
+	if f.failAt[n] {
+		return agentstore.MutationResult{}, fmt.Errorf("mti injected I/O failure on write %d (%s)", n, id)
+	}
+	res, err := f.Store.MutateState(id, rev, mutate, soul)
+	if err == nil {
+		f.mu.Lock()
+		f.wrote = append(f.wrote, id)
+		f.mu.Unlock()
+	}
+	return res, err
+}
+
+func (c *mtiLogCapture) errorLines() []string {
+	c.mu.Lock()
+	all := c.buf.String()
+	c.mu.Unlock()
+	if raw, err := os.ReadFile(c.file); err == nil {
+		all += "\n" + string(raw)
+	}
+	var out []string
+	for _, l := range strings.Split(all, "\n") {
+		if strings.Contains(l, "level=ERROR") || strings.Contains(l, `"level":"error"`) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+const mtiRollbackBody = `{"max_tool_iterations":200,"confirmed_lowering":` +
+	`[{"agent_id":"agent-a","old_value":250},{"agent_id":"agent-b","old_value":280}]}`
+
+// newMTIRollbackAPI: global 300, A own 250, B own 280 (spec scenario setup),
+// with the fault store installed and both audit sinks attached.
+func newMTIRollbackAPI(t *testing.T, failAt ...int) (*restAPI, *mtiFaultStore, string) {
+	t.Helper()
+	api := newMTIAPI(t, "300", mtiAgent{id: "agent-a", own: 250}, mtiAgent{id: "agent-b", own: 280})
+	fs := &mtiFaultStore{Store: agentstore.New(api.homePath), failAt: map[int]bool{}}
+	for _, n := range failAt {
+		fs.failAt[n] = true
+	}
+	api.limitAgentStore = fs
+	return api, fs, attachTestAuditor(t, api)
+}
+
+var mtiOld = map[string]int{"agent-a": 250, "agent-b": 280}
+
+// Scenario "Mid-write failure rolls back already-lowered agents" (US-6 AS-7,
+// FR-021): the 2nd lowering write fails with an I/O error after the 1st
+// succeeded → 500 max_tool_iterations_lowering_failed saying nothing was
+// changed; both agents back at their old values; global 300; audit = the
+// first agent's lowering + its rollback, nothing for the global.
+func TestPerformancePut_LoweringRollback_MidWriteFailure(t *testing.T) {
+	api, fs, extraAudit := newMTIRollbackAPI(t, 2)
+	w := mtiPutPerf(t, api, mtiRollbackBody)
+	require.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
+	m := mtiDecode(t, w.Body.Bytes())
+	assert.Equal(t, "max_tool_iterations_lowering_failed", m["code"])
+	msg, _ := m["error"].(string)
+	assert.Contains(t, msg, "nothing was changed")
+
+	require.GreaterOrEqual(t, len(fs.wrote), 1, "the first lowering write must have succeeded (fault is on write 2)")
+	first := fs.wrote[0]
+	failed := "agent-b"
+	if first == "agent-b" {
+		failed = "agent-a"
+	}
+	assert.True(t, strings.Contains(msg, failed) || strings.Contains(msg, "Agent "+failed),
+		"the error must name the failing agent %s: %q", failed, msg)
+
+	assert.EqualValues(t, 250, mtiStoredOwn(t, api, "agent-a"), "A restored / untouched")
+	assert.EqualValues(t, 280, mtiStoredOwn(t, api, "agent-b"), "B restored / untouched")
+	assert.EqualValues(t, 300, mtiDiskGlobal(t, api), "the global is written only after every agent succeeded")
+
+	recs := mtiSecurityChanges(t, api, extraAudit)
+	require.Len(t, recs, 2, "audit = %s lowering + %s rollback, nothing for the global; got %v", first, first, recs)
+	var lowering, rollback map[string]any
+	for _, r := range recs {
+		require.Contains(t, fmt.Sprint(r["resource"]), first, "every audit record is about the rolled-back agent: %v", r)
+		if fmt.Sprint(r["new_value"]) == "200" {
+			lowering = r
+		} else {
+			rollback = r
+		}
+	}
+	require.NotNil(t, lowering, "lowering record missing: %v", recs)
+	require.NotNil(t, rollback, "rollback record missing: %v", recs)
+	assert.EqualValues(t, mtiOld[first], lowering["old_value"])
+	assert.EqualValues(t, 200, rollback["old_value"], "rollback audit: old = the new global value")
+	assert.EqualValues(t, mtiOld[first], rollback["new_value"], "rollback audit: new = the restored old value")
+}
+
+// Scenario "Failed rollback is reported, not silent" (FR-021): write 2 fails
+// AND the rollback of the first agent (write 3) fails → 500
+// max_tool_iterations_rollback_incomplete naming that agent (now 200, was
+// old); global 300; the agent stays at 200; one ERROR line names it with old
+// and current value; its lowering audit stands and no rollback record exists.
 func TestPerformancePut_LoweringRollback_RollbackFails(t *testing.T) {
-	t.Fatal("BLOCKED: same unpinned fault-injection seam as " +
-		"TestPerformancePut_LoweringRollback_MidWriteFailure (spec row 13e / FR-021). " +
-		"Expected once unblocked: 500 code max_tool_iterations_rollback_incomplete naming A " +
-		"(now 200, was 250), global 300, A stored 200, one ERROR log line with old 250 / current 200.")
+	logs := captureMTILogs(t)
+	api, fs, extraAudit := newMTIRollbackAPI(t, 2, 3)
+	w := mtiPutPerf(t, api, mtiRollbackBody)
+	require.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
+	require.Len(t, fs.wrote, 1, "exactly one agent was lowered before the failures")
+	first := fs.wrote[0]
+	m := mtiDecode(t, w.Body.Bytes())
+	assert.Equal(t, "max_tool_iterations_rollback_incomplete", m["code"])
+	msg, _ := m["error"].(string)
+	// Spec text: `limit not changed; could not restore <agent> (now <new>, was <old>)[, …] —
+	// set their limits again on each agent's profile`. <agent> may be the id or display name.
+	okID := fmt.Sprintf("limit not changed; could not restore %s (now 200, was %d) — set their limits again on each agent's profile", first, mtiOld[first])
+	okName := fmt.Sprintf("limit not changed; could not restore Agent %s (now 200, was %d) — set their limits again on each agent's profile", first, mtiOld[first])
+	assert.True(t, msg == okID || msg == okName, "error = %q\nwant %q\n  or %q", msg, okID, okName)
+
+	assert.EqualValues(t, 200, mtiStoredOwn(t, api, first), "the unrestorable agent is left at the new value")
+	assert.EqualValues(t, 300, mtiDiskGlobal(t, api), "global unchanged")
+
+	var errLines []string
+	for _, l := range logs.errorLines() {
+		if strings.Contains(l, first) {
+			errLines = append(errLines, l)
+		}
+	}
+	require.Len(t, errLines, 1, "exactly one ERROR line for %s; ERROR lines: %v", first, logs.errorLines())
+	assert.Contains(t, errLines[0], fmt.Sprint(mtiOld[first]), "ERROR line names the old value")
+	assert.Contains(t, errLines[0], "200", "ERROR line names the current value")
+
+	recs := mtiSecurityChanges(t, api, extraAudit)
+	require.Len(t, recs, 1, "only the lowering audit record stands (no rollback record, nothing for the global): %v", recs)
+	assert.Contains(t, fmt.Sprint(recs[0]["resource"]), first)
+	assert.EqualValues(t, mtiOld[first], recs[0]["old_value"])
+	assert.EqualValues(t, 200, recs[0]["new_value"])
+}
+
+// TestUpgradeBootLog_ListsCappedAgents — test plan row 13, Scenario "Upgrade
+// keeps a stored value above the global" (D1/D19): the boot roster step
+// emits EXACTLY ONE WARN line naming every capped agent (A stored 500, B
+// stored 300) with the global 200, never naming C (100); stored values stay.
+func TestUpgradeBootLog_ListsCappedAgents(t *testing.T) {
+	mtiUnsetEnv(t)
+	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+	store := agentstore.New(home)
+	for _, a := range []mtiAgent{{"cap-alpha", 500}, {"cap-beta", 300}, {"cap-gamma", 100}} {
+		rec := config.AgentConfig{ID: a.id, Name: "Name " + a.id, Type: config.AgentTypeCustom,
+			Tools: coreagent.NewCustomAgentToolsCfg(), MaxToolIterations: a.own}
+		require.NoError(t, store.Create(a.id, &rec))
+	}
+	cfgPath := filepath.Join(home, "config.json")
+	require.NoError(t, os.WriteFile(cfgPath,
+		[]byte(`{"version":`+fmt.Sprint(config.CurrentVersion)+`,"agents":{"defaults":{"max_tool_iterations":200}},"providers":[]}`), 0o600))
+	cfg, err := config.LoadConfig(cfgPath)
+	require.NoError(t, err)
+
+	logs := captureMTILogs(t)
+	require.NoError(t, seedAndPersistAgentRoster(cfg, home, cfgPath))
+
+	var capped []string
+	for _, l := range logs.warnLines() {
+		if strings.Contains(l, "cap-alpha") || strings.Contains(l, "cap-beta") || strings.Contains(l, "cap-gamma") {
+			capped = append(capped, l)
+		}
+	}
+	require.Len(t, capped, 1, "exactly one startup WARN line for capped agents (D19); got %v", capped)
+	line := capped[0]
+	for _, want := range []string{"cap-alpha", "500", "cap-beta", "300", "200"} {
+		assert.Contains(t, line, want)
+	}
+	assert.NotContains(t, line, "cap-gamma", "an agent below the global is not capped and must not be listed")
+
+	for id, own := range map[string]int{"cap-alpha": 500, "cap-beta": 300, "cap-gamma": 100} {
+		got, getErr := store.Get(id)
+		require.NoError(t, getErr)
+		assert.Equal(t, own, got.MaxToolIterations, "boot must never rewrite a stored own value (D1)")
+	}
 }
 
 // TestMTILogCapture_Instrument proves captureMTILogs sees a WARN from both
@@ -662,15 +839,4 @@ func TestMTILogCapture_Instrument(t *testing.T) {
 	joined := strings.Join(logs.warnLines(), "\n")
 	assert.Contains(t, joined, "mti-probe-slog")
 	assert.Contains(t, joined, "mti-probe-zerolog")
-}
-
-// TestUpgradeBootLog_ListsCappedAgents — test plan row 13, Scenario "Upgrade
-// keeps a stored value above the global" (D19: exactly ONE startup WARN line
-// naming A (500) and B (300) with the global 200, not C (100)).
-func TestUpgradeBootLog_ListsCappedAgents(t *testing.T) {
-	t.Fatal("BLOCKED: the startup hook that emits the D19 capped-agents WARN is not named by " +
-		"tool-iteration-limit-spec.md (FR-009 says \"at startup\"; test plan row 13 names only the test). " +
-		"A test needs a callable boot step (function or seam) that runs over config + agent store. " +
-		"Stored-value/effective legs of this scenario are covered by TestAgentResponses_ResolverDataset rows 4/5 " +
-		"and TestNewAgentInstance_EffectiveLimit_ResolverDataset.")
 }

@@ -1345,7 +1345,7 @@ func TestCreateAgent_ValidateInbound_Subagent3pMaxToolIterationsAccepted(t *test
 	mtiUnsetEnv(t)
 	api := newTestRestAPIWithValidation(t)
 
-	body := `{"type":"subagent_3p","name":"Lim 3p","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"max_tool_iterations":50}`
+	body := `{"type":"subagent_3p","name":"Lim 3p","description":"external worker","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"max_tool_iterations":50}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body))
 	r.Header.Set("Content-Type", "application/json")
