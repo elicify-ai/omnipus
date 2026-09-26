@@ -1,6 +1,6 @@
 # Provider Messages — Specification (provider/LLM error presentation, #711)
 
-**Status:** Approved (final fix round applied — founder decisions D10–D15 recorded and applied; all 10 MAJOR / 6 MINOR / 3 OBSERVATION findings from `provider-messages-spec-review-round2.md` fixed or founder-decided; zero CRITICAL findings. One stated open refinement remains in §16 — the **resume-signal proposal** — which awaits the founder's next ruling and does not block this approval.)
+**Status:** Approved (final fix round applied — founder decisions D10–D16 recorded and applied; all 10 MAJOR / 6 MINOR / 3 OBSERVATION findings from `provider-messages-spec-review-round2.md` fixed or founder-decided; zero CRITICAL findings. The resume-signal proposal is resolved — D16, none of the three options: an unattended run that hits `quota_billing`/`model_retired` simply fails like any other failure, no persistent blocked state. Only FQ-8, a landing-order default, remains open and does not block this approval.)
 
 - **Source briefs:** `docs/internal/specs/spec-provider-messages.md` (founder decisions PM-1…PM-7, 2026-09-26 — the interview output); `docs/internal/specs/provider-messages-research.md` (OpenCode vs Omnipus, 2026-09-26); GitHub issue #711; governing ADR: [ADR-051 — Media handling and provider error translation](../architecture/ADR-051-media-handling-and-provider-error-translation.md).
 - **Discovery status:** Phase 1 is satisfied by the recorded founder decisions PM-1…PM-7 (interview output, confirmed 2026-09-26). PM-6's delegated point — the delivery mechanism for raw provider text — was settled by founder decision **D1** after grill round 1: the wire already carries `detail` (ADR-051 Rev 3 Q2 / RD7) and #711 is a **display** problem, not a wire problem. See §5. The remaining open points are listed in §16 — nothing else waits on the founder before grill round 2.
@@ -160,11 +160,21 @@ attribution — no placeholder is committed at contract-cut time** (resolves MIN
 **Still open — a proposal, not a decision; the spec states 2-3 options with a
 recommendation in §16 for the founder to rule on next:**
 
-- **NEW — the resume signal.** There is no lockout (D2) and no billing button (D6), so
-  once the operator fixes the account (or a retired model gets reassigned), how does
-  everyone learn it works again — the user waiting in a stalled chat, and any stopped
-  unattended work (a scheduled task ended `Failed` per D15, or a Judge-withheld
-  dispatch)? The spec proposes options; the founder picks one in the next round.
+**D16 — No resume signal; an out-of-credit or model-retired unattended run simply
+FAILS, like any other failure (resolves the resume-signal proposal, §16.1 — REMOVED,
+not a still-open item).** Founder: *"that means simply we do not block runs when the
+provider has no budget, we let it fail — please simplify."* There is no special
+"blocked" or "stopped, awaiting resume" state, no Resume button, no proactive probing
+or notification. A task or Judge run that hits `quota_billing` or `model_retired`
+(D15) transitions to the ordinary `LifecycleFailed` with the `operator_action_required`
+reason **exactly as any other operator-fixable failure already does** — this is not a
+new state machine state, just the existing Failed-with-reason pattern applied to two
+more codes. Recovery is exactly as unremarkable as any other failed run's: the next
+scheduled trigger or a manual rerun tries again normally, and it either succeeds (the
+operator fixed it) or fails again with the same clear message. §16.1's three proposed
+options (A/B/C) are withdrawn entirely — none of them is built, including option A's
+own "the failed run's record keeps the reason" framing, which is superseded by "it's
+just an ordinary failed run" (no distinct resume mechanics to reason about at all).
 
 **Fix-round clarifications (appended by the round-1 fix; the D1–D8 text above is
 unchanged — these only cross-reference where the fix landed each decision):**
@@ -1017,21 +1027,8 @@ Every FR appears; every scenario (A-1…A-11, B-1…B-4, AU-1…AU-3, DG-1…DG-
 **Only these remain open.** Everything else that round 0/round 1 raised is settled by the recorded founder decisions and appears in this spec as fact, not as a question.
 
 - **FQ-8 — landing order with the security branch (MAJ-013):** working assumption, pending confirmation: keep `c13c4d279` ("error frame detail stays off the wire") on `feature/gateway-security-fixes` until this feature lands; then this design replaces it — the leak is never reopened on `main`. Team-lead is defaulting to this absent a correction.
-- **Resume signal for stopped/failed turns — PROPOSAL, awaiting founder (§16.1 below).** Not decided; does not gate this approval.
 
-**Settled — recorded as decisions, no longer asked:** Q1/Q2 (delivery + `detail`) → D1; Q3 (retry numbers) → D3 (**3 attempts, 2-minute ceiling — CONFIRMED, not asked**); Q5 (billing URL) → D6; Q6 (note persistence) → D7; FQ-1 → D2; FQ-2 → D5; FQ-3 → D3 (the 2-minute figure is the ceiling); FQ-4 → D3 (retry-then-fallback); FQ-5 → D1 (ADR-051 stands — no amendment needed, MAJ-014 moot); FQ-6 → D1 (`detail` kept, so the six Verbose-promise sentences keep their content — MAJ-005 moot); FQ-9 → D6; FQ-10 → D4; FQ-7 → D9 (`model_retired`, added in the round-1 fix round); **Q4 → D15** (`quota_billing` attribution is `config`, final — the placeholder pending Q4 is retired everywhere in this spec); **FQ-101 → D11** (option B — "Pick a new model in the agent's settings."); **FQ-102 → D12** (option A — a retired primary falls back; 404 → `FailoverUnknown`); **FQ-103 → D13** (option A — SDK-internal retries disabled on both SDK transports); **FQ-104 → D14** (option A, at the founder's 10-minute figure — per-turn total-wait cap).
-
-### 16.1 Resume-signal proposal (NOT decided — awaiting founder; explicitly outside this fix round's landed scope)
-
-**Context.** With D15, a task or Judge turn that hits `quota_billing` or `model_retired` stops at once (`operator_action_required`). Once the operator fixes the key/quota/model, something must signal the run to continue. Verified today: `finishRunTurn` marks lifecycle `failed` + `operator_action_required`; the Board renders the failed state (`src/components/workspaces/taskStatusConfig.ts`) and offers a manual "Restart — re-runs from scratch" action (`TaskActionButton.tsx`); the Judge's attempt record carries the operator-fix reason (`judgeDispatchNeedsOperator`); **no proactive push/notification mechanism exists** (grep-verified — nothing notifies when conditions change).
-
-**Option A (recommended) — passive, the next trigger just tries again.** No new mechanism: the run stays stopped until its next scheduled trigger (calendar recurrence, heartbeat) or a manual run; since the operator already fixed the cause, that call succeeds, and success IS the resume signal. Additive change only: the failed run's record keeps the `operator_action_required` reason so the Board explains why it stopped. Zero new code paths, nothing to notify, nothing to leak; the cost is latency (waits for the next trigger) and a manual restart re-runs from scratch rather than mid-run.
-
-**Option B — visible stopped state with one-click resume (UI-only).** Board row keeps `failed`/`operator_action_required` + a "Resume" button that re-dispatches the run without re-running from scratch. Clear UX, but the mid-run resume path (which step to continue from) does not exist today and is a real design surface (state checkpointing); bigger than it looks.
-
-**Option C — active notification when a later call succeeds.** The system keeps probing (e.g. a cheap model ping) and pushes once the account/model works. Fastest operator feedback, but a probe is a background LLM call against the operator's money, needs a new probe component and a notification channel that does not exist today, and can false-positive (probe passes, real call still fails).
-
-**Recommendation: A**, with B as a later UI-only follow-up if the founder wants a visible Resume control; C is not worth its footprint. Decision explicitly deferred — nothing in §§1–18 implements any of the three.
+**Settled — recorded as decisions, no longer asked:** Q1/Q2 (delivery + `detail`) → D1; Q3 (retry numbers) → D3 (**3 attempts, 2-minute ceiling — CONFIRMED, not asked**); Q5 (billing URL) → D6; Q6 (note persistence) → D7; FQ-1 → D2; FQ-2 → D5; FQ-3 → D3 (the 2-minute figure is the ceiling); FQ-4 → D3 (retry-then-fallback); FQ-5 → D1 (ADR-051 stands — no amendment needed, MAJ-014 moot); FQ-6 → D1 (`detail` kept, so the six Verbose-promise sentences keep their content — MAJ-005 moot); FQ-9 → D6; FQ-10 → D4; FQ-7 → D9 (`model_retired`, added in the round-1 fix round); **Q4 → D15** (`quota_billing` attribution is `config`, final — the placeholder pending Q4 is retired everywhere in this spec); **FQ-101 → D11** (option B — "Pick a new model in the agent's settings."); **FQ-102 → D12** (option A — a retired primary falls back; 404 → `FailoverUnknown`); **FQ-103 → D13** (option A — SDK-internal retries disabled on both SDK transports); **FQ-104 → D14** (option A, at the founder's 10-minute figure — per-turn total-wait cap); **resume signal → D16** (none — an out-of-credit or model-retired unattended run simply fails like any other failure; no Resume button, no probing, no persistent blocked state; §16.1 removed).
 
 ## 17. Reachability (Definition of Done)
 
