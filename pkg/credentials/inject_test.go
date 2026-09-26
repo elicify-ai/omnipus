@@ -6,6 +6,7 @@ package credentials_test
 
 import (
 	"encoding/hex"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -345,6 +346,192 @@ func TestInjectFromConfig_ProviderMissingCredential_CollectedErrorDoesNotBlockOt
 	}
 	if got := os.Getenv(missingRef); got != "" {
 		t.Fatalf("missing ref must NOT have been injected into env, got %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Non-channel credential refs (voice, web-search providers, skill
+// marketplaces) — Lane H hotfix regression tests. Before the fix,
+// InjectFromConfig walked ONLY cfg.Providers and cfg.Mailboxes, so the refs
+// enumerated by the shared non-channel list (the same list ResolveAll
+// resolves for redaction) never reached the process environment: a fully
+// configured Tavily (enabled=true, api_key_ref set, credential in the vault)
+// still ran keyless and selection fell through to DuckDuckGo.
+// ---------------------------------------------------------------------------
+
+// TestInjectFromConfig_NonChannelRefs_VoiceWebMarketplace_Injected verifies
+// InjectFromConfig injects EVERY credential ref the shared non-channel
+// enumeration declares: voice (ElevenLabs, Groq), web search (Brave, Tavily,
+// Perplexity, GLM Search, Baidu Search) and skill marketplace (ClawHub
+// AuthTokenRef, GitHub TokenRef). Each ref gets a DISTINCT stored value so a
+// copy-paste/cross-wired injection (e.g. tavily receiving brave's key) is
+// caught, not just a missing one.
+func TestInjectFromConfig_NonChannelRefs_VoiceWebMarketplace_Injected(t *testing.T) {
+	store := newUnlockedTestStore(t)
+
+	refs := map[string]string{
+		"LANEH_TEST_ELEVENLABS_KEY": "laneh-elevenlabs-secret",
+		"LANEH_TEST_GROQ_KEY":       "laneh-groq-secret",
+		"LANEH_TEST_BRAVE_KEY":      "laneh-brave-secret",
+		"LANEH_TEST_TAVILY_KEY":     "laneh-tavily-secret",
+		"LANEH_TEST_PERPLEXITY_KEY": "laneh-perplexity-secret",
+		"LANEH_TEST_GLM_KEY":        "laneh-glm-secret",
+		"LANEH_TEST_BAIDU_KEY":      "laneh-baidu-secret",
+		"LANEH_TEST_CLAWHUB_TOKEN":  "laneh-clawhub-secret",
+		"LANEH_TEST_GITHUB_TOKEN":   "laneh-github-secret",
+	}
+	for ref, val := range refs {
+		if err := store.Set(ref, val); err != nil {
+			t.Fatalf("store.Set(%s): %v", ref, err)
+		}
+	}
+	t.Cleanup(func() {
+		for ref := range refs {
+			if unsetErr := os.Unsetenv(ref); unsetErr != nil {
+				_ = unsetErr
+			}
+		}
+	})
+
+	cfg := &config.Config{
+		Voice: config.VoiceConfig{
+			ElevenLabsAPIKeyRef: "LANEH_TEST_ELEVENLABS_KEY",
+			GroqAPIKeyRef:       "LANEH_TEST_GROQ_KEY",
+		},
+		Tools: config.ToolsConfig{
+			Web: config.WebToolsConfig{
+				Brave:       config.BraveConfig{APIKeyRef: "LANEH_TEST_BRAVE_KEY"},
+				Tavily:      config.TavilyConfig{APIKeyRef: "LANEH_TEST_TAVILY_KEY"},
+				Perplexity:  config.PerplexityConfig{APIKeyRef: "LANEH_TEST_PERPLEXITY_KEY"},
+				GLMSearch:   config.GLMSearchConfig{APIKeyRef: "LANEH_TEST_GLM_KEY"},
+				BaiduSearch: config.BaiduSearchConfig{APIKeyRef: "LANEH_TEST_BAIDU_KEY"},
+			},
+			Skills: config.SkillsToolsConfig{
+				Marketplaces: []config.MarketplaceConfig{
+					{Name: "clawhub", Type: "clawhub", AuthTokenRef: "LANEH_TEST_CLAWHUB_TOKEN", TokenRef: "LANEH_TEST_GITHUB_TOKEN"},
+				},
+			},
+		},
+	}
+
+	errs := credentials.InjectFromConfig(cfg, store)
+	if len(errs) != 0 {
+		t.Fatalf("expected no errors, got %v", errs)
+	}
+	for ref, want := range refs {
+		if got := os.Getenv(ref); got != want {
+			t.Fatalf("env %s = %q, want the value stored under that ref (non-channel refs must be injected at boot)", ref, got)
+		}
+	}
+}
+
+// TestInjectFromConfig_NonChannelMissingRef_IsScopedRefError verifies a
+// missing non-channel ref is reported per category: the collected error is a
+// *CredentialRefError whose Scope names the category (web search / voice /
+// marketplace) and whose cause still unwraps to *NotFoundError — the same
+// scoped-vs-store-wide contract the gateway's fatal-vs-degrade boot
+// classification relies on for providers and mailboxes.
+func TestInjectFromConfig_NonChannelMissingRef_IsScopedRefError(t *testing.T) {
+	store := newUnlockedTestStore(t)
+
+	cases := []struct {
+		name  string
+		cfg   *config.Config
+		ref   string
+		scope string
+	}{
+		{
+			name:  "web search (tavily)",
+			ref:   "LANEH_SCOPED_TEST_TAVILY_MISSING",
+			scope: credentials.ScopeWebSearch,
+			cfg: &config.Config{Tools: config.ToolsConfig{Web: config.WebToolsConfig{
+				Tavily: config.TavilyConfig{APIKeyRef: "LANEH_SCOPED_TEST_TAVILY_MISSING"},
+			}}},
+		},
+		{
+			name:  "voice (groq)",
+			ref:   "LANEH_SCOPED_TEST_GROQ_MISSING",
+			scope: credentials.ScopeVoice,
+			cfg: &config.Config{Voice: config.VoiceConfig{
+				GroqAPIKeyRef: "LANEH_SCOPED_TEST_GROQ_MISSING",
+			}},
+		},
+		{
+			name:  "marketplace (clawhub)",
+			ref:   "LANEH_SCOPED_TEST_CLAWHUB_MISSING",
+			scope: credentials.ScopeMarketplace,
+			cfg: &config.Config{Tools: config.ToolsConfig{Skills: config.SkillsToolsConfig{
+				Marketplaces: []config.MarketplaceConfig{
+					{Name: "clawhub", Type: "clawhub", AuthTokenRef: "LANEH_SCOPED_TEST_CLAWHUB_MISSING"},
+				},
+			}}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := credentials.InjectFromConfig(tc.cfg, store)
+			if len(errs) != 1 {
+				t.Fatalf("expected exactly 1 collected error, got %d: %v", len(errs), errs)
+			}
+			var refErr *credentials.CredentialRefError
+			if !errors.As(errs[0], &refErr) {
+				t.Fatalf("non-channel ref failure must be a *CredentialRefError (scoped, degradable); got %T: %v", errs[0], errs[0])
+			}
+			if refErr.Scope != tc.scope {
+				t.Errorf("Scope = %q, want %q", refErr.Scope, tc.scope)
+			}
+			if refErr.Ref != tc.ref {
+				t.Errorf("Ref = %q, want %q", refErr.Ref, tc.ref)
+			}
+			var notFound *credentials.NotFoundError
+			if !errors.As(errs[0], &notFound) {
+				t.Errorf("cause must still unwrap to *NotFoundError; got %v", errs[0])
+			}
+		})
+	}
+}
+
+// TestResolveAll_NonChannelRefs_StillResolves guards the shared-enumeration
+// refactor: ResolveAll's redaction bundle must still resolve voice, web
+// search and marketplace plaintexts after the enumeration moved into the
+// helper both functions now call.
+func TestResolveAll_NonChannelRefs_StillResolves(t *testing.T) {
+	store := newUnlockedTestStore(t)
+
+	stored := map[string]string{
+		"LANEH_RALL_TEST_ELEVENLABS_KEY": "rall-elevenlabs-secret",
+		"LANEH_RALL_TEST_TAVILY_KEY":     "rall-tavily-secret",
+		"LANEH_RALL_TEST_GITHUB_TOKEN":   "rall-github-secret",
+	}
+	for ref, val := range stored {
+		if err := store.Set(ref, val); err != nil {
+			t.Fatalf("store.Set(%s): %v", ref, err)
+		}
+	}
+
+	cfg := &config.Config{
+		Voice: config.VoiceConfig{ElevenLabsAPIKeyRef: "LANEH_RALL_TEST_ELEVENLABS_KEY"},
+		Tools: config.ToolsConfig{
+			Web: config.WebToolsConfig{
+				Tavily: config.TavilyConfig{APIKeyRef: "LANEH_RALL_TEST_TAVILY_KEY"},
+			},
+			Skills: config.SkillsToolsConfig{
+				Marketplaces: []config.MarketplaceConfig{
+					{Name: "github", Type: "github", TokenRef: "LANEH_RALL_TEST_GITHUB_TOKEN"},
+				},
+			},
+		},
+	}
+
+	bundle, errs := credentials.ResolveAll(cfg, store)
+	if len(errs) != 0 {
+		t.Fatalf("expected no errors, got %v", errs)
+	}
+	for ref, want := range stored {
+		if got := bundle[ref]; got != want {
+			t.Fatalf("bundle[%s] = %q, want %q (ResolveAll must keep resolving non-channel refs)", ref, got, want)
+		}
 	}
 }
 

@@ -11,7 +11,7 @@ separate-session squad leads. Loading is mandatory: preloaded at session start v
 not cite this skill is a review finding; the skills acknowledgement line (shared-skill
 rule 13) proves the load.
 
-Last reviewed: 2026-09-25
+Last reviewed: 2026-09-26
 Design source: `docs/internal/design/dev-team-setup-design-2026-09-25.md` (sections 5.6–5.9, 7.6, 7.7).
 
 ## Operating stance
@@ -42,8 +42,9 @@ Full procedure: `knowledge/parallel-planning.md`. The loop:
    independent units together, in one message, so they run concurrently.
 4. **Size every unit** — small / standard / feature (table in the knowledge file).
    Urgent is a queue priority (front of the queue), never a fourth size. Feature-size
-   units run as squads (own feature branch, worktree(s), squad lead); small and standard
-   run as direct dispatches on a short-lived work branch cut from the integration branch.
+   units run as squads — own feature branch, worktree(s), **their own squad-lead from
+   the first dispatch** (the full rule: §2); small and standard run as direct dispatches
+   on a short-lived work branch cut from the integration branch.
 5. **Capacity check** — run the monitor (§3) before dispatching the wave, and again
    before widening an existing wave.
 6. **Name the integration branch** — the founder names it when commissioning; confirm at
@@ -69,6 +70,34 @@ Formats and procedures: `knowledge/coordination-ledger.md`. The core rules:
   resolved issues citing the commit. The lock is taken at landing time, after the yes —
   never held across CI or across the wait for the founder's reply. Exact sequence and
   line formats: `knowledge/coordination-ledger.md`.
+- **Every feature-size squad runs under its own squad-lead from the first dispatch** —
+  team-lead never leads a squad itself; small and standard work stays a direct dispatch
+  with team-lead, and a squad row's `lead=<role>` is the squad's own `squad-lead`, never
+  `team-lead`. If starting a squad lead needs a model choice or any other trade-off,
+  team-lead asks the founder at squad start instead of silently leading the squad — the
+  silent absorption is the failure this rule exists to prevent.
+- **Every squad-lead dispatch opens with its GOAL and the goal loop** — the brief's first
+  lines state the end state (in-session: "gated branch handed back to team-lead with its
+  evidence table") and tell the squad lead to run as a goal loop until that goal is met
+  or it is blocked on a founder decision (the loop itself: `.claude/agents/squad-lead.md`
+  §4a). team-lead records that GOAL as the squad file's `GOAL` line (format:
+  `knowledge/coordination-ledger.md`) so it can re-read it after a compaction.
+- **team-lead is the goal judge for every squad lead it starts.** A squad lead that ends
+  its turn mid-lane is finished, not waiting. Every time one stops (its completion
+  notification arrives), team-lead reads the final reply against the squad's GOAL:
+  - **Goal met** — proceed: review the hand-back, then the landing ask.
+  - **BLOCKED on founder questions** — take the questions to the founder; resume the
+    squad lead with the answers.
+  - **Anything else** (a milestone, "waiting on X", "will pick up when notified") — the
+    lead went to sleep: resume it **immediately** with SendMessage, restating its GOAL
+    (re-read from the squad file) and the goal loop, and telling it where it stopped.
+
+  Never leave a stopped squad lead un-resumed mid-lane.
+- **team-lead's own job** is coordination (the ledger, chief alignment, cross-squad
+  overlaps), founder interviews and decisions, landing, and the final founder-facing
+  browser check — never per-specialist dispatch inside a squad; when more than one or
+  two squads' worth of specialist results sit unprocessed across squads, that is the
+  trigger to delegate, not to work faster.
 - **In-session squads never land themselves** — a squad-lead subagent finishes with a
   fully gated branch and hands it back to team-lead, which asks the founder (asks
   batched, §5) and lands. Separate-session squads land themselves under the lock.
@@ -130,6 +159,24 @@ silently deferring a gate (principle 3).
   branch awaiting a yes; the founder answers per branch in one reply. Urgent work may
   ask immediately without waiting for a batch.
 - While a failure is open, every status update carries a "who is on it" line.
+- Never hand the founder a URL or link that has not been verified reachable **and**
+  rendering in a browser at that moment — start the server, load the page, then report
+  the link (localhost:6006 was reported as ready before any server was started).
 - Reports up the chain: terse and technical, with evidence — files, commands with exit
   codes, certainty labels (shared-skill rule 14). Squad reports cap at ~40 lines plus
   the evidence table.
+
+## 6. Founder-facing demos — handover and dispatch hygiene
+
+- A founder-facing demo or prototype is handed over only after (a) its real-browser
+  interaction test has passed and (b) team-lead has re-checked it in a browser — the
+  build-side rules (interactive prototype, Playwright interaction test, static-snapshot
+  serving) live in `omnipus-frontend-rules` and are not restated here. "Renders without
+  errors" and screenshots are not "works".
+- Filling the plugin-reviewer dispatch template
+  (`.claude/templates/plugin-reviewer-dispatch.md`): fill the placeholders with a tool
+  that cannot misparse the text (e.g. Python `str.replace`), never `sed` with a
+  delimiter that can occur in the text — a `#` in an issue reference has broken a `sed`
+  fill and the reviewer ran without its rules. Verify the filled prompt contains the
+  discipline block (the `agent-discipline:shared-traits:start` marker) before
+  dispatching.
