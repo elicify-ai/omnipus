@@ -47,8 +47,13 @@ const (
 	// to have changed, the server simply could not tell.
 	maxToolIterationsAgentsReadFailedCode = "max_tool_iterations_agents_read_failed"
 	// performanceReloadFailedCode: the save is committed (config.json and
-	// any lowered agents are on disk) but the registry reload failed, so the
-	// running agents do not use the new limit yet.
+	// any lowered agents are on disk, nothing rolled back) but not in force.
+	// Two stages (PerformanceReloadFailedDetails.stage): refresh — the
+	// in-memory config refresh failed, the running config was NOT swapped
+	// and GET /performance still shows the old values; reload — the
+	// in-memory config was swapped but the agent registry reload failed, so
+	// agents' next turns keep the old limits. Either way the new values
+	// apply after the next reload or restart.
 	performanceReloadFailedCode           = "performance_reload_failed"
 	maxToolIterationsAgentsReadMessage    = "could not read the agents"
 	maxToolIterationsPreviewValueMessage  = "value must be between 1 and 1000"
