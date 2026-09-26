@@ -182,6 +182,15 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithTranscriptSessionID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID)
+	// Delegate-session-id carrier (ADR-053): the session's OWN durable id
+	// for a steered/delegated turn, sourced from
+	// processOptions.SteeredSessionID (steer_reconstruct.go::
+	// reconstructSteeredTurn sets it, gated on rec.SteeredBy != nil). The
+	// call is deliberately unconditional: tools.WithDelegateSessionID is a
+	// no-op on "" — every root, heartbeat, scheduled and task turn stays
+	// unstamped, and message_parent's structural refusal keeps firing for
+	// them.
+	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithDelegateSessionID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.opts.SteeredSessionID)
 	// ADR-085 BROWSER-FR-021: stamp the ROOT chat session id (ADR-057
 	// routingSessionID, inherited verbatim through a whole delegation
 	// subtree) so pkg/tools/browser/tools.go::controlledResult can evaluate
