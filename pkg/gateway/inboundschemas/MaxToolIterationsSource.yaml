@@ -1,0 +1,14 @@
+title: MaxToolIterationsSource
+description: >
+  Which rule produced an agent's effective tool-iteration limit (issue #904,
+  tool-iteration-limit spec D1). $ref'd by Agent.max_tool_iterations_source —
+  never an inline enum anywhere else (mirrors ContextWindowSource).
+  "global" = the effective value is the global limit
+  (agents.defaults.max_tool_iterations): the agent has no own value, or its
+  own value is above the global and therefore ignored
+  (Agent.max_tool_iterations_override_ignored is then true). "agent" = the
+  agent's own value, lower than or equal to the global, applies.
+type: string
+enum:
+  - global
+  - agent

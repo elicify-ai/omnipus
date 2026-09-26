@@ -1484,6 +1484,18 @@ components:
       $ref: ./components/schemas/PerformanceSettings.yaml
     PerformanceSettingsUpdate:
       $ref: ./components/schemas/PerformanceSettingsUpdate.yaml
+    MaxToolIterationsSource:
+      $ref: ./components/schemas/MaxToolIterationsSource.yaml
+    MaxToolIterationsSavedState:
+      $ref: ./components/schemas/MaxToolIterationsSavedState.yaml
+    MaxToolIterationAgentChange:
+      $ref: ./components/schemas/MaxToolIterationAgentChange.yaml
+    MaxToolIterationsLoweringPreview:
+      $ref: ./components/schemas/MaxToolIterationsLoweringPreview.yaml
+    MaxToolIterationsConfirmedAgent:
+      $ref: ./components/schemas/MaxToolIterationsConfirmedAgent.yaml
+    MaxToolIterationsLoweringConflict:
+      $ref: ./components/schemas/MaxToolIterationsLoweringConflict.yaml
     Provider:
       $ref: ./components/schemas/Provider.yaml
     ProviderDependent:
@@ -4132,6 +4144,23 @@ paths:
         (available memory / ~3.5 MB per agent, floored at 2, physically
         bounded around 2000). Requires a gateway restart to take effect
         (requires_restart: false — the semaphore is resized in-memory on PUT).
+
+        Also updates max_tool_iterations, the global tool-iteration limit
+        (issue #904, 1–1000; out of range → 400). Lowering it below some
+        agents' own values lowers those agents too, but only with consent
+        (D11): confirmed_lowering must equal — as a set keyed by agent_id,
+        order-independent — the agents whose own value is above the new
+        global at write time. Any difference (extra, missing or changed
+        agent, or confirmed_lowering absent while agents would be lowered) is
+        drift (D16): nothing is written and the response is 409
+        MaxToolIterationsLoweringConflict carrying the fresh preview. A
+        failure part-way through the writes rolls back the agents already
+        lowered and leaves the global unchanged (500 ErrorResponse, code
+        max_tool_iterations_lowering_failed, or
+        max_tool_iterations_rollback_incomplete if a rollback also failed).
+        A successful change reloads the agent registry so every agent's next
+        turn uses the new limit; the response lists the lowered agents in
+        max_tool_iterations_lowered_agents.
       tags:
         - Settings
       requestBody:
@@ -4149,6 +4178,58 @@ paths:
                 $ref: '#/components/schemas/PerformanceSettings'
         '400':
           description: Invalid value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >
+            Lowering drift (issue #904, D16) — the agents the new global limit
+            would lower differ from confirmed_lowering. Nothing was written;
+            the body carries the fresh preview.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaxToolIterationsLoweringConflict'
+        '503':
+          $ref: '#/components/responses/503BypassActive'
+  /performance/max-tool-iterations/preview:
+    get:
+      operationId: previewMaxToolIterationsLowering
+      summary: Preview which agents a lower global tool-iteration limit would lower
+      description: >
+        Read-only (issue #904, tool-iteration-limit spec D11). Lists the
+        agents whose own tool-iteration limit is strictly above `value` and
+        would therefore be lowered to it if the global limit were set to
+        `value`. Nothing is written and no step-up token is needed (the PUT
+        /performance that applies the change consumes it). Same access gate
+        as GET /performance.
+      tags:
+        - Settings
+      parameters:
+        - name: value
+          in: query
+          required: true
+          description: Candidate global tool-iteration limit (1–1000).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+      responses:
+        '200':
+          description: The agents that would be lowered (empty when none).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaxToolIterationsLoweringPreview'
+        '400':
+          description: Missing, non-integer or out-of-range value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid bearer token.
           content:
             application/json:
               schema:

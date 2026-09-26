@@ -4,9 +4,9 @@ description: >
   Create a subagent_3p — a delegation-only worker that runs on an external
   CLI (claude-code / codex / opencode). The runner manages its own isolation,
   auth, retries, and tool loop, so tools_cfg, skills, fallback_models,
-  model_params, shell_policy, voice, and
-  max_tool_iterations do not exist on this variant (additionalProperties:
-  false rejects them). timeout_seconds stays (process-level kill for a hung
+  model_params, shell_policy, and voice do not exist on this variant
+  (additionalProperties: false rejects them). max_tool_iterations does exist
+  (issue #904, D14): it becomes the CLI's turn cap. timeout_seconds stays (process-level kill for a hung
   CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the
   handler additionally rejects whitespace-only cli_path).
 required:
@@ -98,3 +98,12 @@ properties:
     minimum: 0
     description: Maximum seconds a single agent turn may run before being interrupted.
     example: 300
+  max_tool_iterations:
+    type: integer
+    minimum: 1
+    maximum: 1000
+    description: >
+      The new worker's own tool-iteration limit (issue #904, D14), passed to
+      the external CLI as its turn cap. Omitted = the worker rides the
+      global limit. Refused (400) if above the current global limit.
+    example: 50

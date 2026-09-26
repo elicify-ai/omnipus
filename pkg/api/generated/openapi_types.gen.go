@@ -4772,6 +4772,48 @@ func (e LibraryPreviewTokenResponseScope) Valid() bool {
 	}
 }
 
+// Defines values for MaxToolIterationsSavedState.
+const (
+	MaxToolIterationsSavedStateAboveMax MaxToolIterationsSavedState = "above_max"
+	MaxToolIterationsSavedStateBelowMin MaxToolIterationsSavedState = "below_min"
+	MaxToolIterationsSavedStateMissing  MaxToolIterationsSavedState = "missing"
+	MaxToolIterationsSavedStateOk       MaxToolIterationsSavedState = "ok"
+)
+
+// Valid indicates whether the value is a known member of the MaxToolIterationsSavedState enum.
+func (e MaxToolIterationsSavedState) Valid() bool {
+	switch e {
+	case MaxToolIterationsSavedStateAboveMax:
+		return true
+	case MaxToolIterationsSavedStateBelowMin:
+		return true
+	case MaxToolIterationsSavedStateMissing:
+		return true
+	case MaxToolIterationsSavedStateOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MaxToolIterationsSource.
+const (
+	MaxToolIterationsSourceAgent  MaxToolIterationsSource = "agent"
+	MaxToolIterationsSourceGlobal MaxToolIterationsSource = "global"
+)
+
+// Valid indicates whether the value is a known member of the MaxToolIterationsSource enum.
+func (e MaxToolIterationsSource) Valid() bool {
+	switch e {
+	case MaxToolIterationsSourceAgent:
+		return true
+	case MaxToolIterationsSourceGlobal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for McpServerStatus.
 const (
 	McpServerStatusConnected    McpServerStatus = "connected"
@@ -12539,8 +12581,17 @@ type Agent struct {
 	// Locked Identity is fixed on built-ins. Ordinary built-in souls are fixed; hidden Judge/Supervisor souls are editable. Use editable_fields for capability and runtime-specific editability.
 	Locked bool `json:"locked"`
 
-	// MaxToolIterations Maximum number of tool calls allowed per turn. Inherited from agents.defaults.max_tool_iterations when not overridden.
+	// MaxToolIterations The EFFECTIVE maximum number of tool calls allowed per turn (issue #904, tool-iteration-limit spec D1): the global limit (agents.defaults.max_tool_iterations) unless the agent has its own value lower than or equal to it, in which case the own value. An own value above the global never raises the limit — it is ignored (see max_tool_iterations_override_ignored). max_tool_iterations_source says which rule applied.
 	MaxToolIterations int `json:"max_tool_iterations"`
+
+	// MaxToolIterationsOverride The agent's own stored tool-iteration limit (issue #904). Absent when the agent has none (it rides the global). No maximum: a hand-edited stored value may exceed 1000 and is shown truthfully.
+	MaxToolIterationsOverride *int `json:"max_tool_iterations_override,omitempty"`
+
+	// MaxToolIterationsOverrideIgnored True when the agent's own stored value is above the global limit and therefore has no effect (issue #904, tool-iteration-limit spec D1); the effective value is then the global and max_tool_iterations_source is "global". False otherwise, including when the agent has no own value.
+	MaxToolIterationsOverrideIgnored bool `json:"max_tool_iterations_override_ignored"`
+
+	// MaxToolIterationsSource Which rule produced an agent's effective tool-iteration limit (issue #904, tool-iteration-limit spec D1). $ref'd by Agent.max_tool_iterations_source — never an inline enum anywhere else (mirrors ContextWindowSource). "global" = the effective value is the global limit (agents.defaults.max_tool_iterations): the agent has no own value, or its own value is above the global and therefore ignored (Agent.max_tool_iterations_override_ignored is then true). "agent" = the agent's own value, lower than or equal to the global, applies.
+	MaxToolIterationsSource MaxToolIterationsSource `json:"max_tool_iterations_source"`
 
 	// MemoryEnabled Gates ContextBuilder memory injection for this agent (ADR-052 FR-039). Defaults to true for ordinary agents. The seeded Judge (and, by extension, any verifier-role agent) is seeded false — memory OFF produces reproducible, impartial verdicts (same evidence -> same verdict) since injected memory would otherwise vary the outcome between runs.
 	MemoryEnabled *bool   `json:"memory_enabled,omitempty"`
@@ -12690,7 +12741,7 @@ type AgentCreateRequestMain struct {
 	// Icon Phosphor icon name for the agent avatar.
 	Icon *string `json:"icon,omitempty"`
 
-	// MaxToolIterations Maximum number of tool calls allowed per turn.
+	// MaxToolIterations The new agent's own tool-iteration limit (issue #904). Omitted = the agent rides the global limit. Refused (400) if above the current global limit.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
 	// McpServers Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected.
@@ -12780,7 +12831,7 @@ type AgentCreateRequestSubagent struct {
 	// Icon Phosphor icon name for the agent avatar.
 	Icon *string `json:"icon,omitempty"`
 
-	// MaxToolIterations Maximum number of tool calls allowed per turn.
+	// MaxToolIterations The new agent's own tool-iteration limit (issue #904). Omitted = the agent rides the global limit. Refused (400) if above the current global limit.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
 	// McpServers Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected.
@@ -12849,7 +12900,7 @@ type AgentCreateRequestSubagentToolsCfgBuiltinPolicies string
 // AgentCreateRequestSubagentType Discriminator. Must be exactly "Subagent" for this variant.
 type AgentCreateRequestSubagentType string
 
-// AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, voice, and max_tool_iterations do not exist on this variant (additionalProperties: false rejects them). timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+// AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
 type AgentCreateRequestSubagent3p struct {
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
@@ -12883,6 +12934,9 @@ type AgentCreateRequestSubagent3p struct {
 
 	// Icon Phosphor icon name for the agent avatar.
 	Icon *string `json:"icon,omitempty"`
+
+	// MaxToolIterations The new worker's own tool-iteration limit (issue #904, D14), passed to the external CLI as its turn cap. Omitted = the worker rides the global limit. Refused (400) if above the current global limit.
+	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
 	// Model Model slug for LLM calls. When omitted, the global agents.defaults.model_name is used. With the O3 two-field model this is the bare slug; pair it with `provider` for explicit routing.
 	Model *string `json:"model,omitempty"`
@@ -13245,7 +13299,7 @@ type AgentUpdateRequest struct {
 	// Icon Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
 	Icon *string `json:"icon,omitempty"`
 
-	// MaxToolIterations New maximum tool calls per turn. Allowed on all agents.
+	// MaxToolIterations The agent's own tool-iteration limit (issue #904, tool-iteration-limit spec D9/D10/D14). Omitted = unchanged; null = clear the own value (the agent rides the global limit — "Use global limit"); a number = set the own value, refused (400) if above the current global limit. Allowed on every agent type, including subagent_3p.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
 	// McpServers Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected.
@@ -15576,7 +15630,7 @@ type ExecutorCommandPreviewRequest struct {
 	// CliPath Optional executor.cli_path override to preview. Empty means "resolved via the OS $PATH at spawn time" and the response's binary field reflects that (the bare command name, not an absolute path).
 	CliPath *string `json:"cli_path,omitempty"`
 
-	// MaxToolIterations Optional turn cap to preview (mirrors AgentConfig.max_tool_iterations). Omitted or zero previews with the external-CLI dispatch default (50) — the same fallback runExternalCLISubTurn applies when an agent has no explicit cap.
+	// MaxToolIterations Optional: the agent's own tool-iteration limit being previewed (mirrors AgentConfig.max_tool_iterations); omit when the agent has none. The server previews the same effective value the runtime uses (issue #904): min(global limit, this value), or the global limit when omitted.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
 	// Model Model slug/shape to preview with. Omit or leave empty to preview the "no model configured" case (the --model/-m flag is simply absent from the resulting command for claude-code and codex; for opencode the flag is also absent when the value is not "provider/model"-shaped — see the response's model_dropped_reason for that case).
@@ -17508,6 +17562,57 @@ type MailboxListResponse struct {
 	} `json:"mailboxes"`
 }
 
+// MaxToolIterationAgentChange One agent whose own tool-iteration limit is (or would be) lowered to a new global limit (issue #904, tool-iteration-limit spec D11). Used by the lowering preview, the 409 drift body and the PUT /performance response.
+type MaxToolIterationAgentChange struct {
+	// AgentId ID of the affected agent.
+	AgentId string `json:"agent_id"`
+
+	// AgentName Display name of the affected agent.
+	AgentName string `json:"agent_name"`
+
+	// NewValue The agent's own value after lowering (the new global limit).
+	NewValue int `json:"new_value"`
+
+	// OldValue The agent's own value before lowering. No upper bound: a hand-edited stored value may exceed 1000 and is shown truthfully.
+	OldValue int `json:"old_value"`
+}
+
+// MaxToolIterationsConfirmedAgent One entry of PerformanceSettingsUpdate.confirmed_lowering: an agent the admin saw in the lowering preview and confirmed (issue #904, tool-iteration-limit spec D11/D16). The new value is implied by the PUT's max_tool_iterations.
+type MaxToolIterationsConfirmedAgent struct {
+	// AgentId ID of the agent whose own value will be lowered.
+	AgentId string `json:"agent_id"`
+
+	// OldValue The agent's own value as shown in the preview. Must still match the stored value at write time, or the PUT is refused as drift (409).
+	OldValue int `json:"old_value"`
+}
+
+// MaxToolIterationsLoweringConflict 409 body of PUT /performance when the set of agents that the new global tool-iteration limit would lower differs from confirmed_lowering (issue #904, tool-iteration-limit spec D16 drift). Nothing was written. Envelope-compatible with ErrorResponse (error + code) and additionally carries the fresh preview computed at refusal time, so the client can re-open the confirm dialog without a second preview call.
+type MaxToolIterationsLoweringConflict struct {
+	// Code Machine-readable error code; always "max_tool_iterations_lowering_drift".
+	Code string `json:"code"`
+
+	// Error Human-readable error message.
+	Error string `json:"error"`
+
+	// Preview Read-only preview of which agents' own tool-iteration limits would be lowered if the global limit were set to `value` (issue #904, tool-iteration-limit spec D11). Only agents whose own value is strictly above `value` are listed; agents equal to or below it, and agents with no own value, are excluded. Returned by GET /performance/max-tool-iterations/preview and embedded in the 409 MaxToolIterationsLoweringConflict body.
+	Preview MaxToolIterationsLoweringPreview `json:"preview"`
+}
+
+// MaxToolIterationsLoweringPreview Read-only preview of which agents' own tool-iteration limits would be lowered if the global limit were set to `value` (issue #904, tool-iteration-limit spec D11). Only agents whose own value is strictly above `value` are listed; agents equal to or below it, and agents with no own value, are excluded. Returned by GET /performance/max-tool-iterations/preview and embedded in the 409 MaxToolIterationsLoweringConflict body.
+type MaxToolIterationsLoweringPreview struct {
+	// Agents Agents that would be lowered; empty when nothing would change.
+	Agents []MaxToolIterationAgentChange `json:"agents"`
+
+	// Value The candidate global limit the preview was computed for.
+	Value int `json:"value"`
+}
+
+// MaxToolIterationsSavedState State of the global tool-iteration limit as saved in config.json (agents.defaults.max_tool_iterations), used for the Settings warning (issue #904, tool-iteration-limit spec D13). The file is never rewritten to correct it; the value in force is PerformanceSettings.max_tool_iterations. "ok" = saved value within 1–1000 and in force as saved; "missing" = key absent (the shipped default is in force); "below_min" = saved value below 1 (0 and negative included; the shipped default is in force); "above_max" = saved value above 1000 (1000 is in force).
+type MaxToolIterationsSavedState string
+
+// MaxToolIterationsSource Which rule produced an agent's effective tool-iteration limit (issue #904, tool-iteration-limit spec D1). $ref'd by Agent.max_tool_iterations_source — never an inline enum anywhere else (mirrors ContextWindowSource). "global" = the effective value is the global limit (agents.defaults.max_tool_iterations): the agent has no own value, or its own value is above the global and therefore ignored (Agent.max_tool_iterations_override_ignored is then true). "agent" = the agent's own value, lower than or equal to the global, applies.
+type MaxToolIterationsSource string
+
 // McpServer An MCP server entry as returned by GET /mcp-servers and POST /mcp-servers.
 type McpServer struct {
 	// Args Command-line args (stdio). For edit pre-fill.
@@ -18541,17 +18646,35 @@ type PerformanceSettings struct {
 	// MaxParallelAgentsConfigured Whether max_parallel_agents was actually set by an operator, in config.json or via the OMNIPUS_MAX_PARALLEL_AGENTS env var. false means nothing is configured and concurrency is bounded by live available memory; effective_max_parallel_agents then carries the physical backstop, which is not a number to show an operator as a recommendation. This field exists because the two cases are otherwise indistinguishable on the wire — max_parallel_agents substitutes the effective value whenever the configured value is below the schema floor, so an unconfigured host looks exactly like an explicitly configured one. Always present in responses; absent in requests.
 	MaxParallelAgentsConfigured *bool `json:"max_parallel_agents_configured,omitempty"`
 
+	// MaxToolIterations The global tool-iteration limit IN FORCE ("Max tool calls per turn", issue #904, tool-iteration-limit spec): the ceiling for every agent's turns. An agent's own value may only lower it. When the value saved in config.json is missing or out of range this is the value actually used, not the saved one (see max_tool_iterations_saved_state). Always present in responses.
+	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
+
+	// MaxToolIterationsLoweredAgents Agents whose own limit this request lowered to the new global (spec D11). Present only on a PUT response that lowered at least one agent; absent on GET and on every other PUT.
+	MaxToolIterationsLoweredAgents *[]MaxToolIterationAgentChange `json:"max_tool_iterations_lowered_agents,omitempty"`
+
+	// MaxToolIterationsSavedRaw The global limit exactly as found in config.json. Present only when max_tool_iterations_saved_state is below_min or above_max (spec D13 Settings warning); absent otherwise.
+	MaxToolIterationsSavedRaw *int `json:"max_tool_iterations_saved_raw,omitempty"`
+
+	// MaxToolIterationsSavedState State of the global tool-iteration limit as saved in config.json (agents.defaults.max_tool_iterations), used for the Settings warning (issue #904, tool-iteration-limit spec D13). The file is never rewritten to correct it; the value in force is PerformanceSettings.max_tool_iterations. "ok" = saved value within 1–1000 and in force as saved; "missing" = key absent (the shipped default is in force); "below_min" = saved value below 1 (0 and negative included; the shipped default is in force); "above_max" = saved value above 1000 (1000 is in force).
+	MaxToolIterationsSavedState *MaxToolIterationsSavedState `json:"max_tool_iterations_saved_state,omitempty"`
+
 	// ToolsOnDemand Tool-loading mode. true (default) — agents load tools on demand to keep each message small (the compressed tool manifest); a load step is required before a non-core tool is callable. false — every allowed tool is sent on every message with no loading step (more tokens per message). Maps to tools.manifest.compressed. Always present in responses.
 	ToolsOnDemand *bool `json:"tools_on_demand,omitempty"`
 }
 
 // PerformanceSettingsUpdate Request body for PUT /api/v1/performance. Partial update — only supplied fields are modified.
 type PerformanceSettingsUpdate struct {
+	// ConfirmedLowering The exact agent snapshot (id + old value) the admin saw in GET /performance/max-tool-iterations/preview and confirmed (spec D11, D16). Absent = empty. At write time the server recomputes the set of agents whose own value is above the new max_tool_iterations; the PUT succeeds only if that set equals this list compared as a set keyed by agent_id — order-independent (same ids, and for each id the same old value). Naming the same agent_id twice is malformed (400). Any difference — an extra agent, a missing agent, a changed old value, or this field absent while agents would be lowered — is drift: nothing is written and the PUT answers 409 MaxToolIterationsLoweringConflict.
+	ConfirmedLowering *[]MaxToolIterationsConfirmedAgent `json:"confirmed_lowering,omitempty"`
+
 	// GoalMaxRounds New value for the SINGLE, GLOBAL goal-adjudication-round ceiling (GOAL-FR-024/FR-045, D-D/D-E) — governs task goals and chat goals identically; there is no per-goal override anywhere (GOAL-FR-046/ US-8 retired). Rejected below 1. Omitted = unchanged (partial update).
 	GoalMaxRounds *int `json:"goal_max_rounds,omitempty"`
 
 	// MaxParallelAgents New value for the maximum concurrent task/subagent dispatch cap — the SINGLE authority for agent concurrency (concurrency-gate consolidation, 2026-08-04). Set to 0 to restore the auto-detected default (sized from available memory, floored so a small box still functions). Any other value is honored EXACTLY as given — there is no ceiling; a value is never silently lowered. (Fixed 2026-08-04: this field previously declared `minimum: 2`, which contradicted this very description's "set to 0" instruction and would have rejected 0 under schema validation — corrected alongside the ceiling removal since both are the same field.)
 	MaxParallelAgents *int `json:"max_parallel_agents,omitempty"`
+
+	// MaxToolIterations New global tool-iteration limit (issue #904). Omitted = unchanged (partial update). When the new value is below some agents' own values, confirmed_lowering must list exactly those agents (see below), or the PUT is refused with 409.
+	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
 	// ToolsOnDemand New tool-loading mode. true = load tools on demand (fewer tokens per message); false = all allowed tools sent every message (no loading step). Maps to tools.manifest.compressed. Omitted = unchanged (partial update).
 	ToolsOnDemand *bool `json:"tools_on_demand,omitempty"`
@@ -25605,6 +25728,12 @@ type UploadLibraryFilesMultipartBody struct {
 type UploadLibraryFilesParams struct {
 	// Path Workspace-relative directory to upload into. Empty or absent uploads into the work-tree root.
 	Path *string `form:"path,omitempty" json:"path,omitempty"`
+}
+
+// PreviewMaxToolIterationsLoweringParams defines parameters for PreviewMaxToolIterationsLowering.
+type PreviewMaxToolIterationsLoweringParams struct {
+	// Value Candidate global tool-iteration limit (1–1000).
+	Value int `form:"value" json:"value"`
 }
 
 // GetProvidersCatalogParams defines parameters for GetProvidersCatalog.

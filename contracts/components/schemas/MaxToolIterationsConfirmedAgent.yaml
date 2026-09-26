@@ -1,0 +1,22 @@
+title: MaxToolIterationsConfirmedAgent
+description: >
+  One entry of PerformanceSettingsUpdate.confirmed_lowering: an agent the
+  admin saw in the lowering preview and confirmed (issue #904,
+  tool-iteration-limit spec D11/D16). The new value is implied by the PUT's
+  max_tool_iterations.
+type: object
+additionalProperties: false
+required:
+  - agent_id
+  - old_value
+properties:
+  agent_id:
+    type: string
+    description: ID of the agent whose own value will be lowered.
+    example: "agent-a"
+  old_value:
+    type: integer
+    description: >
+      The agent's own value as shown in the preview. Must still match the
+      stored value at write time, or the PUT is refused as drift (409).
+    example: 250

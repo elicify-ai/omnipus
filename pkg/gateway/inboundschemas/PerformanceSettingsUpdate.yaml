@@ -36,3 +36,29 @@ properties:
       US-8 retired). Rejected below 1. Omitted = unchanged (partial
       update).
     example: 20
+  max_tool_iterations:
+    type: integer
+    minimum: 1
+    maximum: 1000
+    description: >
+      New global tool-iteration limit (issue #904). Omitted = unchanged
+      (partial update). When the new value is below some agents' own values,
+      confirmed_lowering must list exactly those agents (see below), or the
+      PUT is refused with 409.
+    example: 200
+  confirmed_lowering:
+    type: array
+    items:
+      $ref: './MaxToolIterationsConfirmedAgent.yaml'
+      x-go-type: MaxToolIterationsConfirmedAgent
+    description: >
+      The exact agent snapshot (id + old value) the admin saw in
+      GET /performance/max-tool-iterations/preview and confirmed (spec D11,
+      D16). Absent = empty. At write time the server recomputes the set of
+      agents whose own value is above the new max_tool_iterations; the PUT
+      succeeds only if that set equals this list compared as a set keyed by
+      agent_id — order-independent (same ids, and for each id the same old
+      value). Naming the same agent_id twice is malformed (400). Any
+      difference — an extra agent, a missing agent, a changed old value, or
+      this field absent while agents would be lowered — is drift: nothing is
+      written and the PUT answers 409 MaxToolIterationsLoweringConflict.
