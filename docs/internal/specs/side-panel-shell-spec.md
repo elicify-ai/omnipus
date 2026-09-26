@@ -18,6 +18,18 @@ post-grill interview — decisions SP-25..SP-31 — and every remaining finding 
 stated default, applied as recommended. No blocking finding remains open; nothing is
 escalated. Round-2 dispositions are in §19b.
 
+**Post-approval units correction (2026-09-27, no behaviour change)**: building the wave-0
+demo (commit `4861e3196`, fixed at `77d6c0aa6`) surfaced that the compact-dropdown
+breakpoint was specified as a plain pixel number (1152px) but is implemented — correctly
+— as a container query at `72rem` (Tailwind's `@6xl`), per this app's existing
+container-query convention. This app clamps its root font-size to 14px, so `72rem`
+resolves to **1008px**, not 1152px (`1152px` assumed the browser default of 16px/rem,
+which this app does not use). The three spec mentions of "1152px" below (§4 US-5, §11's
+compact-dropdown scenario, §15 reachability) are corrected to state the rule in rem with
+the effective pixel value at this app's actual root, so the written number matches what a
+user's browser does. The collapse behaviour itself is unchanged — this is a units/label
+fix, not a new decision or a behaviour change, and needs no further grill round.
+
 ---
 
 ## 1. Context and scope
@@ -359,8 +371,10 @@ model (MAJ-007): **the strip stops being a `role="tablist"` of all entries; Chat
 workspace-name entry keep tab/link semantics (`aria-current="page"` on Chat while it is
 the underlying page), and panel entries become toggle buttons with `aria-pressed`**
 (the existing `role="tablist"` + `aria-selected` on `WorkspaceTabBar.tsx` cannot express
-independent toggle states). The compact view-switcher dropdown (container <1152px,
-`WorkspaceTabContainer.tsx`'s `@container`) carries the same toggle semantics: panel
+independent toggle states). The compact view-switcher dropdown (container query at
+`72rem` — **1008px** at this app's clamped 14px root, corrected from the earlier
+1152px/16px-root figure, 2026-09-27, units only — via `WorkspaceTabContainer.tsx`'s
+`@container`) carries the same toggle semantics: panel
 entries show a pressed/checked state while their panel is open, and the trigger keeps
 its "Active ▾" label showing the underlying page's label ("Chat") — the trigger label
 does NOT change to the panel's name, because Chat stays the page underneath.
@@ -1515,7 +1529,9 @@ ANSWERED (SP-20, SP-21) — nothing blocks wave 1 pending §14.
 
 #### Scenario: Compact dropdown mirrors the strip's toggle semantics
 **Traces to**: US-5, AS-5 · **Category**: Alternate Path
-- **Given** a container <1152px (compact dropdown)
+- **Given** a container narrower than `72rem` (**1008px** at this app's 14px root — units
+  corrected 2026-09-27 from 1152px; the rule and its behaviour are unchanged, compact
+  dropdown)
 - **When** the operator toggles the Library entry in the dropdown
 - **Then** the panel opens/closes exactly as on the full strip, the entry shows the same pressed state, and the trigger label stays "Chat"
 
@@ -2068,7 +2084,9 @@ mandatory two-line delivery rule.
 **How a real user reaches this feature** (all paths verified against the entry-point
 inventory in §2.1):
 
-1. Workspace tab strip (≥1152px) and the compact view-switcher dropdown (<1152px):
+1. Workspace tab strip (container ≥ `72rem`, **1008px** at this app's 14px root) and the
+   compact view-switcher dropdown (below that — units corrected 2026-09-27 from the
+   earlier 1152px/16px-root figure, no behaviour change):
    Tasks / Calendar / Library / Team entries toggle panels (Mail joins in wave 2).
 2. Sidebar "Library" (virtual root), top-bar "Open library" / "Open browser", chat
    "Watch live" on browser tool-calls — all keep working through the new single-panel
