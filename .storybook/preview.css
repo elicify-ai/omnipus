@@ -2,3 +2,8 @@
 
 /* Story fixtures may use layout utilities that are deliberately absent from the public CSS scan. */
 @source '../src/**/*.stories.*';
+
+/* D35 mail prototype: application-level components hosted in stories.
+   library.css's @source list is locked to the catalog (public-api test), so
+   story-hosted application components declare their sources here. */
+@source '../src/components/mail/';
