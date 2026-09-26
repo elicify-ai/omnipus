@@ -302,7 +302,7 @@ export function MessageItem({ message }: MessageItemProps) {
                     ['Provider', message.errorFacts.provider],
                     ['Model', message.errorFacts.model],
                     ['Request id', message.errorFacts.request_id],
-                  ] as const
+                  ] as ReadonlyArray<readonly [label: string, value: string | undefined]>
                 )
                   .filter((entry): entry is readonly [string, string] => typeof entry[1] === 'string' && entry[1].length > 0)
                   .map(([label, value]) => (
