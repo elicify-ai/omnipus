@@ -89,15 +89,65 @@ an operator/config action — choose another model — the same pattern as
 `model_unassigned` ("Pick one in the agent's settings."); nothing user-side and no
 retry fixes a retired model.
 
-**Still open — do not block the fix round on these; team-lead brings them to the
-founder next round:**
+**FQ-8 (round 1, resolved by default)** — landing order with `gateway-security`'s
+`c13c4d279`: team-lead's recommended default stands (keep it on that branch until this
+feature lands, then this design replaces it) — no founder correction received.
 
-- **Q4** — `quota_billing` attribution (`config` vs `provider`) — now that the lockout
-  (D2) and the billing button (D6) are both gone, is this attribution still
-  meaningful, or is there nothing left for it to gate?
-- **FQ-8** — landing order with `gateway-security`'s `c13c4d279`: team-lead is
-  defaulting to the review's recommendation (keep it on that branch until this feature
-  lands, then this design replaces it) absent a correction.
+## Founder decisions — round 2 (resolves grill round 2's Questions for the founder)
+
+Recorded verbatim-in-meaning from the founder's answers, 2026-09-26. These decisions
+supersede §16 round-2 open points and `provider-messages-spec-review-round2.md`'s
+"Questions for the founder"; the final fix round below applies them.
+
+**D10 — Visual format: Option C ("Console strip"), but flat — no card border, no box
+(resolves D8's demo deliverable).** Founder: *"our normal tool calls also do not have
+card-style borders — minimalistic and flat."* Keep Option C's muted mono metadata line
++ one kind-colored dot + collapsible "Technical details", but strip the bordered/boxed
+treatment entirely so it matches the flat, borderless style of the existing tool-call
+rows. The demo Storybook stories are updated to this flat variant before the founder's
+re-check in Chrome.
+
+**D11 — `model_retired` wording (resolves FQ-101; was MAJ-103).** Reword away from
+D9's original "choose another model" (which collides with the existing copy-rule test
+banning that phrase for `config`-attributed codes) to: *"This model is no longer
+offered by {provider}. Pick a new model in the agent's settings."* Attribution stays
+`config` (unchanged from D9) — only the wording changes.
+
+**D12 — A retired primary model falls back (resolves FQ-102; was MAJ-109).** When the
+primary model is `model_retired`, the turn falls back to the configured Fallback
+model, exactly as any other retriable failure would, and the fallback note fires
+naming both — plus the "pick a new model" hint for the retired one. No fallback
+configured → end the turn with the `model_retired` line, unchanged.
+
+**D13 — Turn off the Anthropic SDK's own internal 429 retries (resolves FQ-103; was
+MAJ-110).** So the visible countdown (D3's 3 attempts) is the only retry a user's turn
+makes — no hidden SDK-level retries multiplying the real call count. Audit every other
+SDK-backed adapter for the same default-retry behavior and disable it there too if
+found, so "3 attempts" means 3 attempts everywhere, not just on the HTTP-adapter
+family.
+
+**D14 — Total per-turn retry-wait cap: 10 minutes (resolves FQ-104; was OBS-101).**
+Across every candidate in a multi-model retry-then-fallback chain, the sum of all
+honored retry-after waits in one turn is capped at 10 minutes (founder's number, not
+the review's suggested 5). Once the cap is reached, the turn ends with the terminal
+`rate_limited` line — no further candidate is tried even if one remains unattempted.
+
+**D15 — `quota_billing` attribution: `config`; joins the operator-only set (resolves
+Q4; was MAJ-107).** Out-of-credit is the operator's setup to fix, not the provider's
+fault and not something a wait clears. `quota_billing` is attributed `config` (same as
+`model_retired`, D9/D11) and is added to `classifyOperatorOnlyTurnError`'s membership
+alongside `model_retired`: a scheduled task or the Judge stops the unattended run **at
+once** on either code — no retries burned against an account that is not going to
+un-empty itself mid-turn.
+
+**Still open — a proposal, not a decision; the spec states 2-3 options with a
+recommendation in §16 for the founder to rule on next:**
+
+- **NEW — the resume signal.** There is no lockout (D2) and no billing button (D6), so
+  once the operator fixes the account (or a retired model gets reassigned), how does
+  everyone learn it works again — the user waiting in a stalled chat, and any stopped
+  unattended work (a scheduled task ended `Failed` per D15, or a Judge-withheld
+  dispatch)? The spec proposes options; the founder picks one in the next round.
 
 **Fix-round clarifications (appended by the round-1 fix; the D1–D8 text above is
 unchanged — these only cross-reference where the fix landed each decision):**
