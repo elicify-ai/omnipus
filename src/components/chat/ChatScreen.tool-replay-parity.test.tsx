@@ -539,6 +539,60 @@ describe('ChatScreen replay parity — ctui-gate fix 3c: failed read_file', () =
   })
 })
 
+describe('ChatScreen replay parity — the persisted { text } success envelope (finishCall default shape)', () => {
+  it('a reloaded read_file whose result is the persisted { text } envelope shows the REAL line count and content, not "0 lines"', async () => {
+    seedAssistantWithToolCall(
+      'tc_read_env',
+      'read_file',
+      { path: '/ws/pkg/tools/web.go' },
+      { text: 'package tools\n\nfunc Name() string { return "search_web" }\n' },
+      'success',
+    )
+    await renderScreen()
+
+    const toggle = screen.getByTestId('file-read-toggle')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(toggle.textContent).toContain('web.go')
+    expect(toggle.textContent).toContain('4 lines')
+    expect(toggle.textContent).not.toContain('0 lines')
+
+    fireEvent.click(toggle)
+    const bodyPre = screen.getByTestId('file-read-toggle').closest('div')!.parentElement!.querySelector('pre')
+    expect(bodyPre?.textContent).toContain('search_web')
+  })
+
+  it('a reloaded list_directory with an envelope result shows "2 entries" and the real entries on expand', async () => {
+    seedAssistantWithToolCall('tc_ls_env', 'list_directory', { path: '/ws/pkg/tools' }, { text: 'web.go\nfilesystem.go\n' }, 'success')
+    await renderScreen()
+
+    const toggle = screen.getByTestId('file-tree-toggle')
+    expect(toggle.textContent).toContain('2 entries')
+    expect(toggle.textContent).not.toContain('0 entries')
+
+    fireEvent.click(toggle)
+    expect(screen.getByTestId('file-tree-panel').textContent).toContain('web.go')
+  })
+
+  it('a reloaded search_web with an envelope result shows "2 results" and the real hits on expand', async () => {
+    seedAssistantWithToolCall(
+      'tc_search_env',
+      'search_web',
+      { query: 'go embed spa' },
+      { text: '1. Omnipus agentic core\n   https://omnipus.ai\n   single Go binary, kernel sandbox\n2. Second result\\n   https://example.com\n   another snippet' },
+      'success',
+    )
+    await renderScreen()
+
+    const toggle = screen.getByTestId('web-search-toggle')
+    expect(toggle.textContent).toContain('2 results')
+    expect(toggle.textContent).not.toContain('0 results')
+
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Omnipus agentic core')).toBeInTheDocument()
+  })
+})
+
 // Helper: does the ROW containing this toggle render any <pre>? The toggle
 // button itself never contains a <pre> — the command/output bodies are its
 // SIBLINGS inside the row div — so the query goes one level up from the

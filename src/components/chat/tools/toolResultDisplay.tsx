@@ -20,6 +20,17 @@
  * the sentinels module's own F1 history (toolResultSentinels.ts header) is
  * the evidence that a second copy of this job silently drifts. GenericToolCall
  * imports them from here now.
+ *
+ * Follow-up fix (2026-09-26, code-reviewer + silent-failure-hunter finding on
+ * this gate fix): 893c45f2c resolved the "[object Object]" bug but left the
+ * single MOST COMMON persisted shape on the generic 'json' kind — the
+ * `{ "text": <string> }` envelope finishCall persists for every successful
+ * plain-text result. Four of the five blocks read body content only from the
+ * 'text' kind, so a normal successful reload showed a FALSE "0 lines" /
+ * "0 entries" / "0 results" next to a green success dot — worse than the
+ * literal "[object Object]": it looks correct while being wrong.
+ * isTextEnvelopeResult unwraps that envelope to the 'text' kind; genuinely
+ * structured objects stay on 'json'.
  */
 
 import { useState } from 'react'
@@ -65,6 +76,27 @@ export function isMarshalErrorResult(value: unknown): value is MarshalErrorResul
     typeof value === 'object' &&
     value !== null &&
     typeof (value as Record<string, unknown>)['_marshal_error'] === 'string'
+  )
+}
+
+/**
+ * True when the result is the single-key `{ text: <string> }` success
+ * envelope pkg/agent/loop_run_turn_tools.go::finishCall persists for every
+ * successful plain-text result — its "nothing richer" default for
+ * read_file / list_directory / search_web / fetch_url / bash. Nothing in the
+ * replay chain unwraps it (pkg/gateway/replay.go::truncateResult returns it
+ * unchanged inline), so the SPA is where it gets unwrapped — to the same
+ * 'text' kind a plain-string result already produces (live/reload parity).
+ * The key must be the ONLY one: a multi-key object that happens to carry a
+ * `text` field is genuinely structured data and stays on the 'json' kind —
+ * unwrapping it would silently drop the other keys.
+ */
+export function isTextEnvelopeResult(value: unknown): value is { text: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    Object.keys(value).length === 1 &&
+    typeof (value as Record<string, unknown>).text === 'string'
   )
 }
 
@@ -125,10 +157,10 @@ export function isSentinelResolution(
  * Detection order mirrors GenericToolCall's own render chain: the three
  * structured-failure sentinels first, then the transport sentinels (ref >
  * server-truncated > client-truncated > marshal-error), then the plain
- * string, then the JSON fallback for every other value. `JSON.stringify` —
- * never `String()` — is the fallback for a non-string object, so a
- * `{ text }` envelope renders as formatted JSON instead of
- * "[object Object]".
+ * string, then the finishCall `{ text }` success envelope (isTextEnvelopeResult),
+ * then the JSON fallback for every other, genuinely structured object.
+ * `JSON.stringify` — never `String()` — is the fallback for a non-string
+ * object.
  */
 export function resolveToolResult(result: unknown): ResolvedToolResult {
   if (result === undefined || result === null || result === '') {
@@ -153,6 +185,7 @@ export function resolveToolResult(result: unknown): ResolvedToolResult {
     return { kind: 'marshalError', sentinel: result }
   }
   if (typeof result === 'string') return { kind: 'text', text: result }
+  if (isTextEnvelopeResult(result)) return { kind: 'text', text: result.text }
   try {
     return { kind: 'json', text: JSON.stringify(result, null, 2) }
   } catch {
