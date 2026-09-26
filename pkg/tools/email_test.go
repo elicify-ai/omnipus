@@ -219,7 +219,9 @@ func TestSendEmailTool(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.ForLLM)
 	}
-	if len(ft.sent) != 1 || ft.sent[0].To != "dest@x.com" || ft.sent[0].Body != "Hello there" {
+	// The send now transmits composed RFC 5322 (markdown→MIME); the body
+	// text must survive into the transmitted message.
+	if len(ft.sent) != 1 || ft.sent[0].To != "dest@x.com" || !strings.Contains(ft.sent[0].Body, "Hello there") {
 		t.Fatalf("send not recorded correctly: %+v", ft.sent)
 	}
 }
@@ -339,7 +341,7 @@ func TestEmailToolset_NamesAndScope(t *testing.T) {
 	set := EmailToolset(EmailTransports{"ws_test": newFakeTransport()})
 	want := map[string]bool{
 		"read_inbox": false, "search_email": false, "read_message": false,
-		"send_email": false, "reply": false,
+		"send_email": false, "reply": false, "create_email_draft": false,
 	}
 	for _, tool := range set {
 		if _, ok := want[tool.Name()]; !ok {
@@ -550,7 +552,7 @@ func TestSendEmailTool_Persistence(t *testing.T) {
 	if len(ft.sent) != 1 {
 		t.Fatalf("expected 1 recorded send, got %d", len(ft.sent))
 	}
-	if ft.sent[0].Body != "Verify me" {
+	if !strings.Contains(ft.sent[0].Body, "Verify me") {
 		t.Fatalf("send body not persisted: got %q", ft.sent[0].Body)
 	}
 }

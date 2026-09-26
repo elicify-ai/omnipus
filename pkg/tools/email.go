@@ -378,12 +378,17 @@ func (t *SendEmailTool) Execute(ctx context.Context, args map[string]any) *ToolR
 		if cerr != nil {
 			return ErrorResult(cerr.Error())
 		}
+		// Body carries the composed message too: the transmitted bytes are
+		// what every Transport implementation and test double observe. The
+		// real client transmits Raw verbatim; Body is the same bytes.
 		req.Raw = out.Transmitted
+		req.Body = string(out.Transmitted)
 		sentCopy = out.SentCopy
 	}
 	if err := tp.Send(ctx, req); err != nil {
 		return ErrorResult(fmt.Sprintf("send_email failed: %v", err))
 	}
+
 	sentSaved, saveWarning := saveSentCopy(ctx, tp, sentCopy)
 	return NewToolResult(fmt.Sprintf(`{"sent":true,"to":%q,"sent_saved":%t,"save_warning":%q}`,
 		envelope, sentSaved, saveWarning))
@@ -522,6 +527,8 @@ func (t *ReplyTool) Execute(ctx context.Context, args map[string]any) *ToolResul
 			return ErrorResult(cerr.Error())
 		}
 		req.Raw = out.Transmitted
+		// Body carries the composed message too (same reasoning as send).
+		req.Body = string(out.Transmitted)
 		sentCopy = out.SentCopy
 	}
 	if err := tp.Send(ctx, req); err != nil {
