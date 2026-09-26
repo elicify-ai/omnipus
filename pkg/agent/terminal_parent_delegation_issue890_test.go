@@ -47,15 +47,17 @@ const issue890WorkspaceID = "ws-issue-890"
 const issue890FailedReason = "interrupted"
 
 // issue890ForbiddenUserText is internal machinery wording that must never
-// reach the model or the user, per issue #890 and ADR-093 D5: no store
-// invariant, no revival recipe (follow_up / Play / resumed_from), no
-// generation arithmetic, no session id, and — F890-1 — never the "new chat"
-// workaround.
+// reach the model or the user, per issue #890 and ADR-093 D5 / the ADR test
+// plan's re-pin item 2: no store invariant, no revival recipe (follow_up /
+// Play / resumed_from), no generation arithmetic, no session id, and —
+// F890-1 — never the "new chat" workaround. "generation" is named in that
+// re-pin item and must be on this list.
 var issue890ForbiddenUserText = []string{
 	"terminal record is immutable",
 	"resumed_from",
 	"follow_up",
 	"play",
+	"generation",
 	"new chat",
 }
 
