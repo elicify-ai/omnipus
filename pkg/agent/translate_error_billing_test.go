@@ -218,7 +218,7 @@ func TestModelRetired_TruePositives_C24(t *testing.T) {
 				t.Fatal("retryable = true, want false (MR-1)")
 			}
 			if got := AttributionForCode(CodeModelRetired); got != generated.LLMErrorAttributionConfig {
-				t.Fatalf("attribution = %q, want config (D9/D11)", got, generated.LLMErrorAttributionConfig)
+				t.Fatalf("attribution = %q, want %q (D9/D11)", got, generated.LLMErrorAttributionConfig)
 			}
 		})
 	}

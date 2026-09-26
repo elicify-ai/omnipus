@@ -480,25 +480,160 @@ func TestModelRetired404_FallsBack_D12(t *testing.T) {
 	}
 }
 
-// ── Row 24 / D14: the 10-minute total-wait cap — BLOCKED-pattern test ──────
+// ── Row 24 / D14: the 10-minute per-turn total-wait cap — the real test ─────
 //
-// A real test cannot be written against a named symbol today: C-9/D14's
-// "waits never truncated, total wait ≤ 10 min per turn" needs an injectable
-// clock or wait function on FallbackChain so a test can prove the cap
-// without literally sleeping 10+ minutes. No such seam exists (§2's symbols
-// table names none). Per the RED rule this is a LOUD placeholder, not a
-// skip: it fails the moment GREEN touches it, with the full oracle table
-// GREEN must satisfy.
-//
-// Oracle table (from C-9/D14, spec-derived — GREEN implements against THIS):
-//
-//	| # | scenario                                          | expected                                    |
-//	|---|---------------------------------------------------|---------------------------------------------|
-//	| 1 | consecutive honored waits 90 s + 90 s             | both waited in full (never truncated)       |
-//	| 2 | cumulative wait reaches 10 min; another 429 with  | no further wait; skip-to-fallback           |
-//	|   | retry-after 30 s arrives                          | immediately, no cooldown mark for the skip  |
-//	| 3 | backoff steps 2+4+8+…+30 s accumulate to > 10 min | cap fires at 10 min; fallback answers       |
-//	| 4 | a single honored wait of 120 s (at the ceiling)   | waited in full (120 ≤ 600 cap)              |
-func TestD14_TotalWaitCap_SeamMissing(t *testing.T) {
-	t.Fatal("BLOCKED: D14 10-minute total-wait cap is untestable — no injectable clock/wait seam on FallbackChain (required by C-9/D14); GREEN must add the seam and satisfy the oracle table in this test's comment")
+// GREEN's seam: WaitBudget rides the turn's ctx (WithWaitBudget); the chain
+// reserves the FULL wait before scheduling it (all-or-nothing Reserve), a
+// refused wait skips the candidate WITHOUT a cooldown mark (same rule as the
+// C-9 ceiling skip, A-4), and a refused wait emits no RetryInfo (the
+// provider_retry frame exists only for a wait that actually happens).
+// fc.waitFunc — the same-package test seam GREEN documented on FallbackChain
+// — stands in for the wall-clock sleep so this table runs in milliseconds;
+// the Reserve arithmetic stays real, so truncation, mark-leakage and
+// refusal-skip behaviour are all pinned against the real chain.
+
+func TestD14_TotalWaitCap_PerTurnBudget(t *testing.T) {
+	t.Run("the cap constant is the spec's 10 minutes", func(t *testing.T) {
+		if MaxWaitBudgetPerTurn != 10*time.Minute {
+			t.Fatalf("MaxWaitBudgetPerTurn = %v, want 10m (D14/C-9)", MaxWaitBudgetPerTurn)
+		}
+	})
+
+	t.Run("honored waits within the budget are waited in full, never truncated", func(t *testing.T) {
+		fc, _ := newChainForTest()
+		var waits []time.Duration
+		fc.waitFunc = func(ctx context.Context, d time.Duration) error {
+			waits = append(waits, d)
+			return nil
+		}
+		run := flakyPrimaryRun("openrouter", 2,
+			func() error { return rateLimited(t, "90") },
+			"answered on call 3")
+
+		budget := NewWaitBudget(200 * time.Second)
+		res, err := fc.Execute(WithWaitBudget(context.Background(), budget),
+			[]FallbackCandidate{{Provider: "openrouter", Model: "m-a"}},
+			run)
+
+		if err != nil {
+			t.Fatalf("Execute returned %v, want success on call 3", err)
+		}
+		if res.Provider != "openrouter" {
+			t.Fatalf("result.Provider = %q, want the primary", res.Provider)
+		}
+		want := []time.Duration{90 * time.Second, 90 * time.Second}
+		if len(waits) != len(want) || waits[0] != want[0] || waits[1] != want[1] {
+			t.Fatalf("waits = %v, want exactly %v — D14: a wait is waited in full or never started, never truncated", waits, want)
+		}
+		if got := budget.Remaining(); got != 20*time.Second {
+			t.Fatalf("budget remaining = %v, want 20s (both waits deducted in full)", got)
+		}
+	})
+
+	t.Run("a wait the remaining budget cannot cover is refused: skip-to-fallback, no mark, no retry frame", func(t *testing.T) {
+		fc, ct := newChainForTest()
+		var waits []time.Duration
+		fc.waitFunc = func(ctx context.Context, d time.Duration) error {
+			waits = append(waits, d)
+			return nil
+		}
+		var observed []int
+		run := flakyPrimaryRun("openrouter", 999,
+			func() error { return rateLimited(t, "90") },
+			"never reached for the primary")
+
+		budget := NewWaitBudget(100 * time.Second)
+		ctx := WithWaitBudget(WithRetryObserver(context.Background(),
+			func(RetryInfo) { observed = append(observed, 1) }), budget)
+		res, err := fc.Execute(ctx,
+			[]FallbackCandidate{{Provider: "openrouter", Model: "m-a"}, {Provider: "anthropic", Model: "claude-x"}},
+			run)
+
+		if err != nil {
+			t.Fatalf("Execute returned %v, want the Fallback model to answer", err)
+		}
+		if res.Provider != "anthropic" {
+			t.Fatalf("result.Provider = %q, want the Fallback model (the refused wait skips to fallback)", res.Provider)
+		}
+		if len(waits) != 1 || waits[0] != 90*time.Second {
+			t.Fatalf("waits = %v, want exactly [90s] — the second 90s wait exceeds the remaining 10s and must be refused", waits)
+		}
+		if key := ModelKey("openrouter", "m-a"); !ct.IsAvailable(key) {
+			t.Fatal("the budget-refused candidate was marked failed; D14 skips WITHOUT a cooldown mark (same rule as the C-9 ceiling skip)")
+		}
+		if len(observed) != 1 {
+			t.Fatalf("retry observer fired %d times, want exactly 1 — a refused wait never emits a retry frame (nothing to observe)", len(observed))
+		}
+	})
+
+	t.Run("the cap fires across a turn's shared budget: fallback answers after it is spent", func(t *testing.T) {
+		fc, ct := newChainForTest()
+		var waits []time.Duration
+		fc.waitFunc = func(ctx context.Context, d time.Duration) error {
+			waits = append(waits, d)
+			return nil
+		}
+
+		// One turn: ONE budget shared by every chain call of the turn.
+		budget := NewWaitBudget(240 * time.Second)
+		ctx := WithWaitBudget(context.Background(), budget)
+
+		// First call of the turn: the primary 429s twice with retry-after 120
+		// and answers on call 3 — both waits honored in full, budget spent.
+		first := flakyPrimaryRun("openrouter", 2,
+			func() error { return rateLimited(t, "120") },
+			"first call answered")
+		res1, err := fc.Execute(ctx, []FallbackCandidate{{Provider: "openrouter", Model: "m-a"}}, first)
+		if err != nil || res1.Provider != "openrouter" {
+			t.Fatalf("first call: err=%v provider=%q, want the primary to answer on call 3", err, res1.Provider)
+		}
+
+		// Second call of the same turn: the budget is spent; another 429 with
+		// a 30 s retry-after must NOT wait — skip to the Fallback model.
+		second := flakyPrimaryRun("openrouter", 999,
+			func() error { return rateLimited(t, "30") },
+			"never reached for the primary")
+		res2, err := fc.Execute(ctx,
+			[]FallbackCandidate{{Provider: "openrouter", Model: "m-a"}, {Provider: "anthropic", Model: "claude-x"}},
+			second)
+		if err != nil {
+			t.Fatalf("second call returned %v, want the Fallback model to answer", err)
+		}
+		if res2.Provider != "anthropic" {
+			t.Fatalf("second call answered by %q, want the Fallback model — the per-turn cap must refuse further waits", res2.Provider)
+		}
+		if key := ModelKey("openrouter", "m-a"); !ct.IsAvailable(key) {
+			t.Fatal("cap-skipped candidate was marked failed — D14 skips without a mark")
+		}
+		want := []time.Duration{120 * time.Second, 120 * time.Second}
+		if len(waits) != 2 || waits[0] != want[0] || waits[1] != want[1] {
+			t.Fatalf("waits = %v, want exactly %v (two honored waits spent the turn's budget; the third was refused)", waits, want)
+		}
+	})
+
+	t.Run("a single honored wait at the 120 s ceiling is within budget and waited in full", func(t *testing.T) {
+		fc, _ := newChainForTest()
+		var waits []time.Duration
+		fc.waitFunc = func(ctx context.Context, d time.Duration) error {
+			waits = append(waits, d)
+			return nil
+		}
+		run := flakyPrimaryRun("openrouter", 1,
+			func() error { return rateLimited(t, "120") },
+			"answered on call 2")
+
+		res, err := fc.Execute(WithWaitBudget(context.Background(), NewWaitBudget(MaxWaitBudgetPerTurn)),
+			[]FallbackCandidate{{Provider: "openrouter", Model: "m-a"}},
+			run)
+
+		if err != nil {
+			t.Fatalf("Execute returned %v, want success on call 2", err)
+		}
+		if res.Provider != "openrouter" {
+			t.Fatalf("result.Provider = %q, want the primary", res.Provider)
+		}
+		if len(waits) != 1 || waits[0] != 120*time.Second {
+			t.Fatalf("waits = %v, want exactly [120s] — 120 <= 600, the ceiling wait is honored in full", waits)
+		}
+	})
 }

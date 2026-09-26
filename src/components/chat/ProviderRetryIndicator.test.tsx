@@ -190,9 +190,12 @@ describe('ProviderRetryIndicator — mid-wait attach and skew (row 25, C-11/MAJ-
   it('with the client clock 30 s fast the remaining time is still ~20 s (±2 s)', () => {
     vi.useFakeTimers()
     // True elapsed 100 s; the fast client clock reads sent_at + 130 s. The
-    // elapsed derivation (clientNow − receivedAt) cancels the skew.
+    // client clock was ALREADY 30 s fast at receipt, so the receipt reading is
+    // sent_at + 30 s (the fast clock's own reading), not sent_at — the elapsed
+    // derivation (clientNow − receivedAt) then cancels the skew exactly:
+    // serverNow = sent_at + (130 s − 30 s) = sent_at + 100 s → 0:20.
     vi.setSystemTime(new Date(SENT_AT.getTime() + 130_000))
-    const { container } = renderIndicator({ receivedAt: SENT_AT.toISOString() })
+    const { container } = renderIndicator({ receivedAt: new Date(SENT_AT.getTime() + 30_000).toISOString() })
     expect(container.textContent).toContain('0:20')
     expect(container.textContent).not.toContain('2:00')
   })

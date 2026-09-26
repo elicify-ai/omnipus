@@ -50,6 +50,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // pmSentinel is the #711 sentinel (MAJ-105): a provider-body substring that
@@ -228,22 +229,94 @@ func TestHubError_CuratedErrorPassesThroughUntouched(t *testing.T) {
 	require.Contains(t, detail, "status=401", "detail keeps the status=… body=… shape (D1: detail unchanged)")
 }
 
-// ── Row 14, facts half — LOUD placeholder (no carrier exists yet) ───────────
+// ── Row 14, facts half (C-16/OBS-103) — the real carrier ────────────────────
 //
-// The spec adds provider/model identity + facts to the error frame, but the
-// event payload that would carry them (agent.ErrorPayload) has no such
-// fields today, and the spec names no field names for them (§4 C-16's
-// "additive" grant leaves names to GREEN). A LOUD t.Fatal placeholder, not a
-// skip: GREEN adds the carrier and rewrites this placeholder into the real
-// wire assertions.
+// GREEN's carrier: agent.ErrorPayload.ProviderError carries the failing
+// attempt's identity (Provider/Model/RequestID, MAJ-110), and agent.
+// WireLLMError threads it into generated.LLMError.Facts; the hub forwards
+// untouched. The spec pins the SEMANTICS, not the seam names: identity
+// present → facts on the wire; identity absent → facts absent; the facts
+// key set is CLOSED — no retry facts (OBS-103); detail untouched (D1, pinned
+// by the pass-through test above).
 
-func TestHubError_ErrorFrameFacts_CarrierMissing(t *testing.T) {
-	t.Fatal("BLOCKED: agent.ErrorPayload has no provider/model identity or facts carrier — required by §7.2/§4 C-16 " +
-		"(the error frame's payload.llm_error.facts = {provider, model, request_id}, all optional; request_id is " +
-		"Verbose-render-only; NO retry facts — OBS-103; Detail untouched — D1). GREEN adds the carrier additively " +
-		"(field names GREEN's choice per §4) and satisfies: identity present → facts carries the failing attempt's " +
-		"provider/model and the captured request_id; identity absent → facts absent; and no retry_after_seconds/" +
-		"retry_at/attempts/max_attempts keys under facts.")
+// pmLLMErrorOf pulls payload.llm_error out of a decoded error frame.
+func pmLLMErrorOf(t *testing.T, m map[string]any) map[string]any {
+	t.Helper()
+	payload, ok := m["payload"].(map[string]any)
+	require.True(t, ok, "error frame must carry a payload object")
+	le, ok := payload["llm_error"].(map[string]any)
+	require.True(t, ok, "error frame payload must carry llm_error")
+	return le
+}
+
+func TestHubError_ErrorFrameFacts_C16(t *testing.T) {
+	t.Run("identity present → facts carries the failing attempt's identity and the captured request_id", func(t *testing.T) {
+		h, ch := pmHub(t)
+
+		h.hubSyncTap(agent.Event{
+			Kind: agent.EventKindError,
+			Meta: agent.EventMeta{TurnID: "turn-pm-facts-1"},
+			Payload: agent.ErrorPayload{
+				Stage:   "provider",
+				Code:    "provider_auth_failed",
+				Message: "Anthropic rejected the API key. Check the key in Settings → Providers.",
+				ProviderError: &agent.ProviderError{
+					Status:    401,
+					Body:      `{"error":{"message":"Incorrect API key provided: sk-proj-****abcd"}}`,
+					Provider:  "anthropic",
+					Model:     "claude-x",
+					RequestID: "req-7q4z-1",
+				},
+				SessionID: pmSessionID,
+			},
+		})
+
+		require.Len(t, ch, 1)
+		raw := <-ch
+
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(raw, &m))
+		le := pmLLMErrorOf(t, m)
+
+		facts, ok := le["facts"].(map[string]any)
+		require.True(t, ok, "identity present → payload.llm_error.facts must be on the wire (C-16)")
+		require.Equal(t, map[string]any{
+			"provider":   "anthropic",
+			"model":      "claude-x",
+			"request_id": "req-7q4z-1",
+		}, facts, "facts carries exactly the failing attempt's identity + captured request_id — the key set is CLOSED (C-16/OBS-103)")
+
+		// OBS-103, structural: no retry facts under facts — retry timing lives
+		// on the provider_retry frame alone (the row-14 retry half pins it).
+		for _, banned := range []string{"retry_after_seconds", "retry_at", "attempts", "max_attempts"} {
+			require.NotContains(t, facts, banned, "facts carries %q — OBS-103 forbids retry facts on the error frame", banned)
+		}
+	})
+
+	t.Run("identity absent → facts absent", func(t *testing.T) {
+		h, ch := pmHub(t)
+
+		h.hubSyncTap(agent.Event{
+			Kind: agent.EventKindError,
+			Meta: agent.EventMeta{TurnID: "turn-pm-facts-2"},
+			Payload: agent.ErrorPayload{
+				Stage:         "provider",
+				Code:          "provider_auth_failed",
+				Message:       "Anthropic rejected the API key. Check the key in Settings → Providers.",
+				ProviderError: nil,
+				SessionID:     pmSessionID,
+			},
+		})
+
+		require.Len(t, ch, 1)
+		raw := <-ch
+
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(raw, &m))
+		le := pmLLMErrorOf(t, m)
+
+		require.NotContains(t, le, "facts", "identity absent → facts must be absent — the catalogue sentence renders (AU-2)")
+	})
 }
 
 // ── Row 15, scans 1 + 3 (C-1, C-2, DG-1, DG-2; MAJ-105) ─────────────────────
@@ -331,19 +404,128 @@ func TestLLMRetry_OtherReasonsAndDelegatedRateLimit_NeverForwarded(t *testing.T)
 	pmAssertNoFrame(t, ch)
 }
 
-// ── Row 16, frame half — LOUD placeholder (event kind unnamed) ──────────────
+// ── Row 16, frame half (C-2/C-17/C-18/MIN-103) — the named event kind ───────
 //
-// The spec names the provider_fallback frame's wire shape (§7.1 item 3) and
-// its once-per-pair persistence (C-18/MIN-103) but deliberately names no
-// event kind or payload shape for it — the row cannot be spelled against a
-// named symbol. A LOUD t.Fatal placeholder, not a skip.
+// GREEN named the emitter: agent.EventKindProviderFallback carrying
+// agent.ProviderFallbackPayload; the hub forwards it as the §7.1 item-3
+// provider_fallback frame. Oracle per §7.1 item 3 + C-2: exactly one frame
+// per event, named fields only, unavailable_code in {rate_limited,
+// model_retired}, no raw error text anywhere on the wire (the sentinel scan
+// covers it), and the once-per-pair persistence is the pkg/agent half
+// (assemble_provider_message_test.go) + the replay carrier (below).
 
-func TestHubSyncTap_ProviderFallbackFrame_UnnamedEventKind(t *testing.T) {
-	t.Fatal("BLOCKED: the spec names the provider_fallback frame (§7.1 item 3: type provider_fallback; session_id, " +
-		"turn_id, answered_model, unavailable_model, unavailable_code enum rate_limited|model_retired; +seq per the " +
-		"#823 pattern; no raw error text — C-2) and its once-per-pair persistence (C-18/MIN-103), but names no event " +
-		"kind or payload shape for the fallback note. GREEN names the emitter and satisfies: the hub forwards it to a " +
-		"provider_fallback frame carrying named fields only (sentinel scan 1 covers it), unavailable_code ∈ " +
-		"{rate_limited, model_retired}, and the once-per-pair note is transcript-persisted so replay carries it " +
-		"(C-17/MAJ-104). The persisted-entry half of row 16 is the pkg/agent placeholder's business.")
+func TestHubSyncTap_ProviderFallbackFrame_NamedFieldsOnly(t *testing.T) {
+	h, ch := pmHub(t)
+
+	h.hubSyncTap(agent.Event{
+		Kind: agent.EventKindProviderFallback,
+		Meta: agent.EventMeta{TurnID: "turn-pm-fb-1", SessionKey: "chat-pm-1"},
+		Payload: agent.ProviderFallbackPayload{
+			SessionID:        pmSessionID,
+			TurnID:           "turn-pm-fb-1",
+			AnsweredModel:    "model-fallback",
+			UnavailableModel: "model-a",
+			UnavailableCode:  "rate_limited",
+		},
+	})
+
+	require.Len(t, ch, 1, "EventKindProviderFallback must be forwarded as exactly one provider_fallback frame")
+	raw := <-ch
+
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+
+	require.Equal(t, "provider_fallback", m["type"])
+	require.Equal(t, pmSessionID, m["session_id"])
+	require.Equal(t, "turn-pm-fb-1", m["turn_id"])
+	require.Equal(t, "model-fallback", m["answered_model"])
+	require.Equal(t, "model-a", m["unavailable_model"])
+	require.Equal(t, "rate_limited", m["unavailable_code"])
+
+	// C-2 named-fields-only: the frame's key set is closed — every key is one
+	// the contract names (seq optional per #823); no `error`, no `reason`, no
+	// raw provider text of any kind.
+	for k := range m {
+		require.Contains(t, []string{"type", "session_id", "turn_id",
+			"answered_model", "unavailable_model", "unavailable_code", "seq"}, k,
+			"provider_fallback frame carries unexpected field %q — C-2 named-fields-only", k)
+	}
+	require.NotContains(t, string(raw), pmSentinel, "raw error text leaked into the provider_fallback frame (C-2)")
+
+	// The enum's second value forwards the same way.
+	h.hubSyncTap(agent.Event{
+		Kind: agent.EventKindProviderFallback,
+		Meta: agent.EventMeta{TurnID: "turn-pm-fb-2", SessionKey: "chat-pm-1"},
+		Payload: agent.ProviderFallbackPayload{
+			SessionID:        pmSessionID,
+			TurnID:           "turn-pm-fb-2",
+			AnsweredModel:    "model-fallback",
+			UnavailableModel: "model-a",
+			UnavailableCode:  "model_retired",
+		},
+	})
+	raw2 := <-ch
+	var m2 map[string]any
+	require.NoError(t, json.Unmarshal(raw2, &m2))
+	require.Equal(t, "model_retired", m2["unavailable_code"],
+		"unavailable_code forwards verbatim — enum value model_retired (D12 hint gate input)")
+}
+
+// ── Row 16/30 replay carriers (C-13/C-17/MAJ-104) ───────────────────────────
+//
+// The persisted flag and the persisted note must survive the reload path:
+// buildReplayErrorFrame round-trips TranscriptEntry.ProviderMessage into
+// LLMErrorReplay.ProviderMessage; buildReplayFallbackNote turns a persisted
+// EntryTypeProviderFallback entry into the replay_provider_fallback carrier
+// with the pair facts intact (the SPA dedups it against the live
+// announcement on entry_id, FB-2).
+
+func TestReplayErrorFrame_ProviderMessageFlagRoundTrips_MAJ104(t *testing.T) {
+	flagged := session.TranscriptEntry{
+		ID: "entry-flag-1", Type: session.EntryTypeSystem, Status: "error",
+		Content:         "OpenRouter rejected the API key. Check the key in Settings → Providers.",
+		ErrorCode:       "provider_auth_failed",
+		ProviderMessage: true,
+	}
+	f := buildReplayErrorFrame(pmSessionID, flagged)
+	require.NotNil(t, f.Payload, "flagged entry must carry an llm_error replay payload")
+	require.NotNil(t, f.Payload.LlmError.ProviderMessage,
+		"provider_message=true must round-trip onto the replay carrier (MAJ-104/C-14)")
+	require.True(t, *f.Payload.LlmError.ProviderMessage)
+	require.Equal(t, "provider_auth_failed", f.Payload.LlmError.Code)
+	require.Equal(t, flagged.Content, f.Payload.LlmError.Message)
+
+	unflagged := session.TranscriptEntry{
+		ID: "entry-plain-1", Type: session.EntryTypeSystem, Status: "error",
+		Content:   "rate_limit: policyRule (retry after 30s)",
+		ErrorCode: "rate_limited",
+	}
+	f2 := buildReplayErrorFrame(pmSessionID, unflagged)
+	require.NotNil(t, f2.Payload)
+	require.Nil(t, f2.Payload.LlmError.ProviderMessage,
+		"own-limiter row persists provider_message=false → the replay carrier must OMIT the flag (RG-2: catalogue copy)")
+}
+
+func TestReplayFallbackNote_CarrierRoundTrips_C17(t *testing.T) {
+	entry := session.TranscriptEntry{
+		ID: "entry-fbnote-1", Type: session.EntryTypeProviderFallback, Role: "system",
+		Content:          "Answered by the Fallback model (model-fallback) because model-a was unavailable.",
+		Timestamp:        time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC),
+		Model:            "model-fallback",
+		UnavailableModel: "model-a",
+		UnavailableCode:  "rate_limited",
+	}
+	note := buildReplayFallbackNote(pmSessionID, entry)
+
+	require.Equal(t, "replay_provider_fallback", note.Type)
+	require.Equal(t, pmSessionID, note.SessionId)
+	require.Equal(t, "entry-fbnote-1", note.EntryId)
+	require.Equal(t, entry.Content, note.Message)
+	require.NotNil(t, note.AnsweredModel)
+	require.Equal(t, "model-fallback", *note.AnsweredModel)
+	require.NotNil(t, note.UnavailableModel)
+	require.Equal(t, "model-a", *note.UnavailableModel)
+	require.NotNil(t, note.UnavailableCode)
+	require.Equal(t, "rate_limited", *note.UnavailableCode)
+	require.NotContains(t, note.Message, pmSentinel, "the note carrier never carries raw provider text (C-2)")
 }

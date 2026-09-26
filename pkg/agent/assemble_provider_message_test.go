@@ -30,6 +30,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -197,11 +198,118 @@ func TestTranscript_KeepsAssembledSentence_C13(t *testing.T) {
 	}
 }
 
-// The persisted subtype flag (MAJ-104's persistence half) has no field to
-// assert yet — a LOUD placeholder, not a skip: GREEN adds the field to the
-// persisted entry and rewrites this placeholder into the real assertions
-// (flag set on provider-assembled entries; absent on own-limiter rows; replay
-// carrier round-trips it).
+// ── MAJ-104's persistence half — the real assertions ────────────────────────
+//
+// GREEN's seam: session.TranscriptEntry.ProviderMessage (daypartition.go) is
+// the persisted marker; persistErrorTranscript sets it (the stage=="provider"
+// belt, or the re-derived llm.ProviderMessage), and the replay path
+// (pkg/gateway/replay.go::buildReplayErrorFrame) round-trips it — the
+// gateway half of the round-trip is asserted in provider_messages_frames_test.go.
 func TestTranscript_ProviderMessageSubtypePersisted_MAJ104(t *testing.T) {
-	t.Fatal("BLOCKED: the persisted transcript entry has no provider_message subtype field — required by MAJ-104/C-14 (replay must carry the flag); GREEN adds the field and satisfies: flagged entries persist provider_message=true, own-limiter rate_limited rows persist false, and the replay carrier round-trips it")
+	store, err := session.NewUnifiedStore(t.TempDir() + "/sessions")
+	if err != nil {
+		t.Fatalf("NewUnifiedStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	ts := &turnState{
+		turnID:              "turn-pm-2",
+		agentID:             "main",
+		transcriptSessionID: meta.ID,
+		transcriptStore:     store,
+	}
+
+	assembled := templateWith("quota_billing", "openrouter")
+
+	t.Run("provider-stage entry persists provider_message=true", func(t *testing.T) {
+		ts.writeErrorTranscriptWithAbandonment("error", "provider", assembled, CodeQuotaBilling, false)
+
+		entries, err := store.ReadTranscript(meta.ID)
+		if err != nil {
+			t.Fatalf("ReadTranscript: %v", err)
+		}
+		found := false
+		for _, e := range entries {
+			if e.Type == session.EntryTypeSystem && e.Status == "error" && e.ErrorCode == string(CodeQuotaBilling) {
+				found = true
+				if e.Content != assembled {
+					t.Fatalf("content = %q, want %q (MAJ-001)", e.Content, assembled)
+				}
+				if !e.ProviderMessage {
+					t.Fatal("persisted provider_message = false, want true — the assembled-sentence marker must survive persistence (MAJ-104/C-14)")
+				}
+			}
+		}
+		if !found {
+			t.Fatal("no persisted quota_billing error entry found")
+		}
+	})
+
+	t.Run("own-limiter rate_limited row persists provider_message=false", func(t *testing.T) {
+		// Mirrors loop.go's own-limiter write: appendClassifiedError with
+		// kind=rate_limit, stage=rate_limit — the trusted path whose content
+		// is the friendly own-limiter copy, never an assembled sentence.
+		limiterMsg := "rate_limit: policyRule (retry after 30s)"
+		ts.appendClassifiedError(EventKindRateLimit.String(), "rate_limit", LLMError{
+			Code:    CodeRateLimited,
+			Message: limiterMsg,
+		})
+
+		entries, err := store.ReadTranscript(meta.ID)
+		if err != nil {
+			t.Fatalf("ReadTranscript: %v", err)
+		}
+		found := false
+		for _, e := range entries {
+			if e.Type == session.EntryTypeSystem && e.Status == "error" && e.ErrorCode == string(CodeRateLimited) {
+				found = true
+				if e.Content != limiterMsg {
+					t.Fatalf("content = %q, want %q (RG-2 oracle)", e.Content, limiterMsg)
+				}
+				if e.ProviderMessage {
+					t.Fatal("own-limiter row persisted provider_message=true — the SPA would render it through the trust gate instead of catalogue copy (RG-2/MAJ-104)")
+				}
+			}
+		}
+		if !found {
+			t.Fatal("no persisted rate_limited entry found")
+		}
+	})
+
+	t.Run("persistence round-trips the flag through the transcript JSON", func(t *testing.T) {
+		entries, err := store.ReadTranscript(meta.ID)
+		if err != nil {
+			t.Fatalf("ReadTranscript: %v", err)
+		}
+		// The JSONL is the persisted truth: marshal/unmarshal the entry the
+		// replay path reads and confirm the marker survives the storage
+		// format itself.
+		roundTripped := 0
+		for _, e := range entries {
+			if e.Type != session.EntryTypeSystem || e.Status != "error" {
+				continue
+			}
+			b, err := json.Marshal(e)
+			if err != nil {
+				t.Fatalf("Marshal entry: %v", err)
+			}
+			var back session.TranscriptEntry
+			if err := json.Unmarshal(b, &back); err != nil {
+				t.Fatalf("Unmarshal entry: %v", err)
+			}
+			if back.ProviderMessage != e.ProviderMessage {
+				t.Fatalf("flag did not survive the persistence round-trip: wrote %v, read %v (wire key provider_message)",
+					e.ProviderMessage, back.ProviderMessage)
+			}
+			if e.ProviderMessage {
+				roundTripped++
+			}
+		}
+		if roundTripped == 0 {
+			t.Fatal("no provider_message=true entry exercised the round-trip — the first subtest's entry is missing")
+		}
+	})
 }

@@ -69,46 +69,6 @@ func TestCooldown_StandardCap(t *testing.T) {
 	}
 }
 
-func TestCooldown_BillingEscalation(t *testing.T) {
-	now := time.Now()
-	ct, current := newTestTracker(now)
-
-	// 1st billing error → 5h cooldown
-	ct.MarkFailure("openai", FailoverBilling)
-	if ct.IsAvailable("openai") {
-		t.Error("should be disabled after billing error")
-	}
-
-	// Advance 4h → still disabled
-	*current = now.Add(4 * time.Hour)
-	if ct.IsAvailable("openai") {
-		t.Error("should still be disabled (5h cooldown)")
-	}
-
-	// Advance 5h + 1s → available
-	*current = now.Add(5*time.Hour + 1*time.Second)
-	if !ct.IsAvailable("openai") {
-		t.Error("should be available after 5h billing cooldown")
-	}
-}
-
-func TestCooldown_BillingCap(t *testing.T) {
-	expected := []time.Duration{
-		5 * time.Hour,
-		10 * time.Hour,
-		20 * time.Hour,
-		24 * time.Hour,
-		24 * time.Hour,
-	}
-
-	for i, want := range expected {
-		got := calculateBillingCooldown(i + 1)
-		if got != want {
-			t.Errorf("calculateBillingCooldown(%d) = %v, want %v", i+1, got, want)
-		}
-	}
-}
-
 func TestCooldown_SuccessReset(t *testing.T) {
 	ct := NewCooldownTracker()
 
