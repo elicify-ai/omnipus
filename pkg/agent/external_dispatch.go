@@ -430,9 +430,17 @@ func (ed *runExternalCLISubTurnState) prepareRunOptions() {
 	if ed.timeoutSecs <= 0 {
 		ed.timeoutSecs = int(defaultSubTurnTimeout.Seconds())
 	}
+	// Turn cap = the agent's effective tool-iteration limit (#904 D4/D14),
+	// already resolved onto MaxIterations by NewAgentInstance. An instance
+	// built without that constructor (MaxIterations <= 0) resolves the same
+	// way from the live config — never a separate literal.
 	ed.maxTurns = ed.agent.MaxIterations
 	if ed.maxTurns <= 0 {
-		ed.maxTurns = DefaultExternalMaxTurns
+		var defaults *config.AgentDefaults
+		if cfg := ed.al.GetConfig(); cfg != nil {
+			defaults = &cfg.Agents.Defaults
+		}
+		ed.maxTurns = config.ResolveMaxToolIterations(defaults, nil).Effective
 	}
 
 	// FIX 5: hoist the repeated strings.TrimSpace(agent.Model) computation
@@ -775,13 +783,17 @@ func recordExternalToolResultUpdateInPlace(
 	)
 }
 
-// DefaultExternalMaxTurns bounds an external run when the agent declares no
-// MaxIterations (FR-5.4 turn cap). Exported (not just package-internal) so
-// pkg/gateway's POST /api/v1/agents/executor-preview endpoint
-// (rest_executor_preview.go) can default its own previewed --max-turns to
-// the IDENTICAL value real dispatch applies when max_tool_iterations is
-// omitted — referencing this constant directly rather than a second
-// hardcoded "50" means the two can never drift apart.
+// DefaultExternalMaxTurns is DEAD for the runtime: prepareRunOptions no
+// longer reads it (#904 FR-004 — the turn cap is the resolver's effective
+// value, config.ResolveMaxToolIterations).
+//
+// TODO(#904 wave 2): delete this constant. Its last users are
+// pkg/gateway/rest_executor_preview.go::postAgentsExecutorPreview (must
+// preview config.ResolveMaxToolIterations(&cfg.Agents.Defaults,
+// &config.AgentConfig{MaxToolIterations: req value}).Effective instead) and
+// the legacy tests rest_executor_preview_test.go and
+// external_dispatch_test.go::TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir
+// (qa-lead's regression rows). Kept only so those still compile.
 const DefaultExternalMaxTurns = 50
 
 // transcriptModelFor returns the model string to stamp on transcript entries

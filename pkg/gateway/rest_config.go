@@ -91,6 +91,13 @@ func sanitizeConfigForWire(m map[string]any) {
 	for _, k := range wireExcludedConfigFields {
 		delete(m, k)
 	}
+	// #904 D6: the one-time env-import marker is nested under
+	// agents.defaults — config-file-only bookkeeping, never on the wire.
+	if agents, ok := m["agents"].(map[string]any); ok {
+		if defaults, ok := agents["defaults"].(map[string]any); ok {
+			delete(defaults, "max_tool_iterations_env_imported")
+		}
+	}
 }
 
 // redactSensitiveFields recursively redacts map values whose keys contain
