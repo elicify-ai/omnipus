@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // TestClaudeDriver_DecideDeny_Cancels verifies the CRITICAL fix: a DENY decision
@@ -127,7 +129,7 @@ exit 0
 	defer cancel()
 
 	// First run: drain to completion (channel closes).
-	ch1, err := d.Run(ctx, RunOptions{Input: "first"})
+	ch1, err := d.Run(ctx, RunOptions{Input: "first", MaxTurns: config.DefaultMaxToolIterations})
 	if err != nil {
 		t.Fatalf("first Run() error = %v", err)
 	}
@@ -175,7 +177,7 @@ exit 0
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	ch1, err := d.Run(ctx, RunOptions{Input: "first"})
+	ch1, err := d.Run(ctx, RunOptions{Input: "first", MaxTurns: config.DefaultMaxToolIterations})
 	if err != nil {
 		t.Fatalf("first Run() error = %v", err)
 	}
@@ -213,7 +215,7 @@ exit 0
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	ch1, err := d.Run(ctx, RunOptions{Input: "first"})
+	ch1, err := d.Run(ctx, RunOptions{Input: "first", MaxTurns: config.DefaultMaxToolIterations})
 	if err != nil {
 		t.Fatalf("first Run() error = %v", err)
 	}

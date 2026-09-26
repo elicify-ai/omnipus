@@ -39,6 +39,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // u22GrandchildSleepSeconds is the lifetime of the orphan-prone grandchild
@@ -145,7 +147,7 @@ func TestU22ClaudeDriver_CancelKillsProcessGroup(t *testing.T) {
 	t.Cleanup(func() { claudeBinName = orig })
 
 	d := NewClaudeDriver(nil)
-	ch, err := d.Run(context.Background(), RunOptions{Input: "task"})
+	ch, err := d.Run(context.Background(), RunOptions{Input: "task", MaxTurns: config.DefaultMaxToolIterations})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -168,7 +170,7 @@ func TestU22CodexDriver_CancelKillsProcessGroup(t *testing.T) {
 	t.Cleanup(func() { codexBinName = orig })
 
 	d := NewCodexDriver(nil)
-	ch, err := d.Run(context.Background(), RunOptions{Input: "task"})
+	ch, err := d.Run(context.Background(), RunOptions{Input: "task", MaxTurns: config.DefaultMaxToolIterations})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -191,7 +193,7 @@ func TestU22OpencodeDriver_CancelKillsProcessGroup(t *testing.T) {
 	t.Cleanup(func() { opencodeBinName = orig })
 
 	d := NewOpencodeDriver(nil)
-	ch, err := d.Run(context.Background(), RunOptions{Input: "task"})
+	ch, err := d.Run(context.Background(), RunOptions{Input: "task", MaxTurns: config.DefaultMaxToolIterations})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

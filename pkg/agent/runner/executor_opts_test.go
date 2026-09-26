@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 func TestResolveCLIBinary(t *testing.T) {
@@ -239,6 +241,7 @@ func TestExternalCLI_SpawnsWithExecutorConfig(t *testing.T) {
 
 	ch, err := d.Run(ctx, RunOptions{
 		Input:        "do the thing",
+		MaxTurns:     config.DefaultMaxToolIterations,
 		Env:          baseEnv,
 		CLIPath:      stub, // cli_path: the binary that must actually run
 		CLIArgs:      parseCLIArgs("--custom-flag value-x", "run"),

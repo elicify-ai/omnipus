@@ -18,6 +18,8 @@ package runner
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 )
 
@@ -179,7 +181,10 @@ type RunOptions struct {
 	// Zero means the driver's built-in default applies.
 	TimeoutSeconds int
 	// MaxTurns is the maximum number of agentic turns the external agent may
-	// take. Zero means the driver's built-in default applies.
+	// take — the agent's resolved tool-iteration limit (1-1000), passed by the
+	// dispatch site (#904 D4). It is REQUIRED: there is no built-in default
+	// (FR-004, no hidden default), so Run refuses a value <= 0 with
+	// ErrMaxTurnsRequired instead of silently substituting a cap.
 	MaxTurns int
 
 	// CLIPath is the filesystem path to the CLI binary to exec (MAJ-5 /
@@ -274,4 +279,19 @@ type ExternalAgentRunner interface {
 	// It checks: (1) the CLI binary is present on PATH; (2) it is authenticated;
 	// (3) a minimal JSON handshake succeeds.
 	Test(ctx context.Context) ConnectionTestResult
+}
+
+// ErrMaxTurnsRequired is returned by a driver's Run when RunOptions.MaxTurns is
+// not a positive turn cap. The dispatch site always passes the agent's resolved
+// tool-iteration limit (#904 D4), so a missing cap is a programming error; the
+// run is refused rather than given a hidden default (#904 FR-004).
+var ErrMaxTurnsRequired = errors.New(
+	"RunOptions.MaxTurns must be a positive turn cap (the agent's resolved tool-iteration limit); there is no built-in default")
+
+// validateMaxTurns rejects a non-positive turn cap for the named driver.
+func validateMaxTurns(driver string, maxTurns int) error {
+	if maxTurns <= 0 {
+		return fmt.Errorf("%s driver: %w (got %d)", driver, ErrMaxTurnsRequired, maxTurns)
+	}
+	return nil
 }
