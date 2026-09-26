@@ -942,6 +942,12 @@ type WebSearchToolOptions struct {
 	BaiduSearchBaseURL    string
 	BaiduSearchMaxResults int
 	BaiduSearchEnabled    bool
+	// ADR-094: Exa registers in the keyless-warning list and carries its
+	// wiring in options like every keyed provider. The selection ladder
+	// itself is another lane's surface — only the warning list changes here.
+	ExaAPIKey    string
+	ExaAPIKeyRef string
+	ExaEnabled   bool
 
 	// Per-provider credential ref NAMES for the misconfiguration WARN — the
 	// warning names the configured ref so the operator knows which vault
@@ -1010,6 +1016,8 @@ func enabledButKeylessSearchProviders(opts WebSearchToolOptions) []misconfigured
 	addIfKeyless(opts.TavilyEnabled, len(opts.TavilyAPIKeys) > 0, "tavily", opts.TavilyAPIKeyRef)
 	addIfKeyless(opts.GLMSearchEnabled, opts.GLMSearchAPIKey != "", "glm_search", opts.GLMSearchAPIKeyRef)
 	addIfKeyless(opts.BaiduSearchEnabled, opts.BaiduSearchAPIKey != "", "baidu_search", opts.BaiduSearchAPIKeyRef)
+	// ADR-094: exa joins the enabled-but-keyless warning list.
+	addIfKeyless(opts.ExaEnabled, opts.ExaAPIKey != "", "exa", opts.ExaAPIKeyRef)
 	return out
 }
 
