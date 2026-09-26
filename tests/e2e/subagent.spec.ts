@@ -14,9 +14,15 @@
 // test.slow()'s 270s; each burning real, paid LLM time) for a box that can never
 // appear, then fail. Re-pointed at the surfaces that replaced SubagentBlock (same
 // pattern as replay-fidelity.spec.ts's test (b) and delegation-hidden.spec.ts):
-//   - THREAD: the `delegate` tool-call chip (`[data-testid="tool-call-badge"]
-//     [data-tool="delegate"]`) — the parent's now-only delegation surface,
-//     visible unconditionally (shouldRenderToolCall, ADR-091 D7/AC-7).
+//   UPDATE 2026-09-27: fe1e2406a (delegation-chat-surface spec D2) made the
+//   delegate tool-call badge VERBOSE-ONLY — shouldRenderToolCall's `delegate`
+//   case returns false in the default non-verbose thread, so every
+//   `[data-testid="tool-call-badge"][data-tool="delegate"]` wait added by the
+//   rewrite below was a dead locator. The parent-level assertions are
+//   re-pointed at the surface that replaced the chip in the default thread:
+//   - THREAD: the delegated event line (`[data-testid="delegation-event-line"]`,
+//     DelegationEventLine.tsx) — the parent's default-thread delegation
+//     surface (delegation-chat-surface spec D2).
 //   - THREAD: zero `[data-testid="subagent-collapsed"]`, ever — the guard pinning
 //     the deletion so the surface cannot quietly come back.
 //   - PANEL: the Activity panel row (`[data-testid="activity-row"]`) and its open
@@ -31,8 +37,9 @@
 // below for why no replacement preserves an equivalent guarantee.
 //
 // data-testid cross-reference (current, post-rewrite):
-//   - [data-testid="tool-call-badge"][data-tool="delegate"] — the parent's delegation chip
-//   - [data-testid="tool-call-toggle"]       — ToolCallBadge.tsx's own collapse/expand control
+//   - [data-testid="delegation-event-line"]  — DelegationEventLine.tsx (the parent's default-thread
+//                                              delegation surface; the delegate tool-call badge is
+//                                              verbose-only post-fe1e2406a)
 //   - [data-testid="activity-bar"]           — ActivityBar.tsx
 //   - [data-testid="activity-row"]           — ActivityPanel.tsx (one per child)
 //   - [data-testid="activity-row-open"]      — ActivityPanel.tsx (open control into the child's session)
@@ -181,8 +188,8 @@ test(
     // The refusal itself is fast (a policy check, not a second real LLM
     // round-trip past the tool call) — this is narrower than the old 420s
     // because that budget was sized for "wait for a box that needed both
-    // round-trips AND client-side rendering to settle"; here the parent
-    // delegate badge and the panel row resolve independently and early.
+    // round-trips AND client-side rendering to settle"; here the parent's
+    // delegated event line and the panel row resolve independently and early.
     test.setTimeout(300_000);
 
     await startFreshChat(page);
@@ -196,7 +203,7 @@ test(
     // a page-load-time reconnect blip can leave the composer looking usable
     // while the very first message (the one that triggers `delegate`) lands
     // in the outbound queue instead of the wire, and this test then hangs to
-    // its full timeout waiting on a chip that will never appear.
+    // its full timeout waiting on a delegated line that will never appear.
     await expect(input).toBeEnabled({ timeout: 15_000 });
     await waitForConnected(page, { timeout: 15_000 });
 
@@ -221,10 +228,24 @@ test(
     );
     await input.press('Enter');
 
-    // (1) THREAD — the parent's delegate chip, and the guard: zero
-    // subagent-collapsed elements ever, at any verbosity.
-    const delegateBadges = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]');
-    await expect(delegateBadges.first()).toBeVisible({ timeout: 60_000 });
+    // (1) THREAD — the parent's own delegate call on its CURRENT default-thread
+    // surface: the grey DelegationEventLine. fe1e2406a (delegation-chat-surface
+    // spec D2) hid the delegate tool-call badge from the non-verbose thread —
+    // shouldRenderToolCall's `delegate` case returns false — so the old
+    // `[data-testid="tool-call-badge"][data-tool="delegate"]` locator could
+    // never match here and the test burned its budget on a dead locator. Both
+    // birth kinds are accepted — "delegated" (immediate dispatch) and
+    // "started" (queued past the concurrency cap, then ran;
+    // delegationEvents.ts::birthKind) — and the unique per-run label pins the
+    // line to THIS test's delegation. The terminal "… finished · <label>" line
+    // also carries the label, so the kind list is what keeps this a birth-line
+    // ("the call happened") assertion rather than a completion one.
+    const delegateLine = page
+      .locator(
+        '[data-testid="delegation-event-line"][data-event-kind="delegated"], [data-testid="delegation-event-line"][data-event-kind="started"]',
+      )
+      .filter({ hasText: label });
+    await expect(delegateLine.first()).toBeVisible({ timeout: 60_000 });
     await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
 
     // (2) PANEL — exactly one row at the PARENT level (the direct analog of
@@ -342,7 +363,7 @@ test(
     // a page-load-time reconnect blip can leave the composer looking usable
     // while the very first message (the one that triggers `delegate`) lands
     // in the outbound queue instead of the wire, and this test then hangs to
-    // its full timeout waiting on a chip that will never appear.
+    // its full timeout waiting on a delegated line that will never appear.
     await expect(input).toBeEnabled({ timeout: 15_000 });
     await waitForConnected(page, { timeout: 15_000 });
 
@@ -383,13 +404,24 @@ test(
     // (2) THREAD — the guard: zero subagent-collapsed elements, ever.
     await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
 
-    // (3) THREAD — at least 2 sibling delegate chips.
+    // (3) THREAD — at least 2 sibling delegated lines (one birth line per
+    // delegate call: "delegated" for an immediate dispatch, "started" for one
+    // that queued past the concurrency cap and then ran — both accepted, since
+    // sibling TWO can legitimately queue behind sibling ONE under the cap).
+    // Deliberately NOT label-filtered: this locator's whole job is the settled
+    // COUNT below, and each of the two unique labels appears on exactly one
+    // birth line, so an unfiltered birth-kind count is the like-for-like
+    // replacement for the old delegate-chip count (one call = one chip = one
+    // line). The terminal "… finished · <label>" lines are excluded by kind so
+    // they can never inflate the count.
     // Traces to: BDD Scenario 13 — "two distinct SubagentBlock elements".
-    const delegateBadges = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]');
-    await expect(delegateBadges.first()).toBeVisible({ timeout: 60_000 });
+    const delegateLines = page.locator(
+      '[data-testid="delegation-event-line"][data-event-kind="delegated"], [data-testid="delegation-event-line"][data-event-kind="started"]',
+    );
+    await expect(delegateLines.first()).toBeVisible({ timeout: 60_000 });
 
     // (4) PANEL — open the panel at the FIRST in-flight moment: the first
-    // chip renders the instant the parent emits the call; the child's
+    // delegated line renders the moment the child's span lands; the child's
     // subagent_start arrives ~immediately after, putting an agent item in
     // `running` — ActivityBar.tsx's shouldMount (= hasOpenAgentChildren ||
     // panelOpen || hasFailedRecent, ActivityBar.tsx:94) is satisfied and the
@@ -403,7 +435,7 @@ test(
     await openActivityPanel(page);
 
     // (5) THREAD — with the panel open (which does not touch the thread),
-    // require both sibling chips. toHaveCount polls until the count EQUALS 2
+    // require both sibling delegated lines. toHaveCount polls until the count EQUALS 2
     // and returns the moment it does — it does not promise the model is
     // finished. The prompt asks for exactly two delegate calls, and a real
     // model usually complies, but "usually" is the whole problem: a third
@@ -416,17 +448,17 @@ test(
     // that sibling children are independent: each has its own row and its
     // own distinct session. So: settle, snapshot the count, and hold that
     // snapshot as the INVARIANT.
-    await expect(delegateBadges).toHaveCount(2, { timeout: 60_000 });
-    let stableCount = await delegateBadges.count();
+    await expect(delegateLines).toHaveCount(2, { timeout: 60_000 });
+    let stableCount = await delegateLines.count();
     for (let i = 0; i < 6; i++) {
       await page.waitForTimeout(500);
-      const now = await delegateBadges.count();
+      const now = await delegateLines.count();
       if (now === stableCount) break;
       stableCount = now;
     }
     expect(
       stableCount,
-      'at least 2 sibling delegate chips are required to test independent children',
+      'at least 2 sibling delegated lines are required to test independent children',
     ).toBeGreaterThanOrEqual(2);
 
     // (6) PANEL — one row per sibling, matching the settled thread count.
@@ -435,6 +467,9 @@ test(
     // child's subagent_start (running) and is RETAINED after completion —
     // useRunningActivity's recentlyFinished keeps finished items (successes
     // included, cap 8), so an early-finishing child still has its row here.
+    // The 1:1 mapping is why the settled delegated-line count is the right
+    // oracle for it: one delegate call produces exactly one birth line and
+    // exactly one panel row.
     const rowOne = page.locator('[data-testid="activity-row"]', { hasText: labelOne });
     const rowTwo = page.locator('[data-testid="activity-row"]', { hasText: labelTwo });
     await expect(rowOne).toBeVisible({ timeout: 30_000 });
@@ -579,7 +614,7 @@ test(
 // delegation turn, not a wager on the model's tool choice.
 // ────────────────────────────────────────────────────────────────────────────────
 test(
-  '(d) real-LLM smoke: a live delegate turn renders a delegate chip and Activity panel row with no console errors',
+  '(d) real-LLM smoke: a live delegate turn renders a delegated event line and Activity panel row with no console errors',
   async ({ page, consoleErrors }) => {
     // T0.1: OPENROUTER_API_KEY_CI soft-skip removed. The key is required in CI.
     requireApiKey();
@@ -609,7 +644,7 @@ test(
     // a page-load-time reconnect blip can leave the composer looking usable
     // while the very first message (the one that triggers `delegate`) lands
     // in the outbound queue instead of the wire, and this test then hangs to
-    // its full timeout waiting on a chip that will never appear.
+    // its full timeout waiting on a delegated line that will never appear.
     await expect(input).toBeEnabled({ timeout: 15_000 });
     await waitForConnected(page, { timeout: 15_000 });
 
@@ -627,21 +662,31 @@ test(
     );
     await input.press('Enter');
 
-    // The delegate chip is the FIRST thing to appear — it renders as soon as
-    // the parent's own turn emits the tool call, well before the parent's
-    // final prose. Assert it before the completed-message count so a turn
-    // that never delegates fails HERE, naming the missing chip, instead of
-    // 300s later as a bare "expected 1, received 0" on the assistant-message
-    // count (which was how the RC6 failure presented and why it read as a
-    // timeout).
+    // The delegated event line is the FIRST thing to appear on the default
+    // (non-verbose) thread — it renders as soon as the child's span lands
+    // (subagent_start arrives ~immediately after the parent's own turn emits
+    // the delegate call), well before the parent's final prose. fe1e2406a hid
+    // the delegate tool-call badge in this thread, so the line is the surface
+    // that proves "the call happened" now. Assert it before the
+    // completed-message count so a turn that never delegates fails HERE,
+    // naming the missing line, instead of 300s later as a bare "expected 1,
+    // received 0" on the assistant-message count (which was how the RC6
+    // failure presented and why it read as a timeout).
     //
     // Use .first(): glm-5.2 occasionally fans out to more than one subagent,
-    // which would make a bare locator strict-mode-fail. We only need >=1.
-    const delegateBadge = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]').first();
+    // which would make a bare locator strict-mode-fail. We only need >=1. No
+    // label filter: this prompt sets no label, and a fresh chat has no other
+    // delegation whose line could match. Both birth kinds accepted
+    // (delegationEvents.ts::birthKind — queued launches render "started").
+    const delegateLine = page
+      .locator(
+        '[data-testid="delegation-event-line"][data-event-kind="delegated"], [data-testid="delegation-event-line"][data-event-kind="started"]',
+      )
+      .first();
     await expect(
-      delegateBadge,
+      delegateLine,
       'the prompt names `delegate` explicitly, so a sub-turn must start and ' +
-        'render its delegate chip. No chip means the model either took the ' +
+        'render its delegated event line. No line means the model either took the ' +
         'create_task/run_task route instead (RC6) or delegation is broken — ' +
         'check the gateway log for the actual tool calls before touching this ' +
         'timeout.',
@@ -681,11 +726,14 @@ test(
     await expect(row.locator('[data-testid="activity-row-open"]')).toBeVisible({ timeout: 10_000 });
 
     // a11y check covering both surfaces that replaced SubagentBlock's
-    // collapsed/expanded states: the thread's delegate chip and the open
-    // Activity panel's row.
+    // collapsed/expanded states: the thread's delegated event line and the
+    // open Activity panel's row. (The old include scanned the delegate
+    // tool-call badge — verbose-only since fe1e2406a, so in this default
+    // non-verbose thread it matches nothing and axe passes silently over an
+    // empty selection. The event line keeps this scan real.)
     // Traces to: sprint-h-subagent-block-spec.md Scenario 11, line 316
     await expectA11yClean(page, {
-      include: ['[data-testid="tool-call-badge"]', '[data-testid="activity-row"]'],
+      include: ['[data-testid="delegation-event-line"]', '[data-testid="activity-row"]'],
     });
 
     // Zero unexpected JS console errors (captured by the consoleErrors fixture,
@@ -700,28 +748,33 @@ test(
 // Tests both collapsed and expanded states to satisfy US-5 / BDD Scenario 11.
 // Traces to: sprint-h-subagent-block-spec.md TDD row 17 (component) + SC-H-006 (E2E layer)
 //
-// REWRITTEN 2026-09-24 (lane sq-gwfix): SubagentBlock had ONE collapse/expand
-// affordance carrying both states. ADR-091 D7/D10 split that into TWO real
-// surfaces — the delegate chip's own toggle (ToolCallBadge.tsx) and the
-// Activity panel row (ActivityPanel.tsx) — so this test now covers three
-// checks instead of two: the delegate chip collapsed, the delegate chip
-// expanded (its own params/result disclosure — the same KIND of affordance
-// SubagentBlock used to have, just on a different component), and the
-// Activity panel row (the surface that replaced "expand to see the child's
-// status"). Strictly more coverage than the two states this test used to
-// check, not less.
+// REWRITTEN 2026-09-27: SubagentBlock had ONE collapse/expand affordance
+// carrying both states. ADR-091 D7/D10 split that into TWO real surfaces —
+// the delegated event line (thread) and the Activity panel row (panel) —
+// and fe1e2406a then made the delegate tool-call badge VERBOSE-ONLY, so the
+// 2026-09-24 rewrite's chip-based axe pair (scan the chip collapsed, expand
+// its own toggle, scan again) had no subject left in the default thread:
+// axe scanning a selector that matches nothing PASSES silently (the exact
+// false green handoff.spec.ts (b)'s include comment warns about). This test
+// now scans the chip's actual replacement surfaces: the delegated event line
+// (with its own [open] control — scanned, never clicked; clicking navigates
+// away) and the Activity panel row. The badge's collapsed/expanded axe pair
+// has no non-verbose subject any more; its verbose-only coverage is
+// deliberately NOT recreated here — this file has no verbose-chat opt-in by
+// design (see beforeEach), so re-adding one to scan a badge would test a
+// surface this file's default-view charter does not cover.
 // ────────────────────────────────────────────────────────────────────────────────
 test(
-  '(e) axe baseline: the delegate chip and Activity panel row are WCAG 2.1 AA clean',
+  '(e) axe baseline: the delegated event line and Activity panel row are WCAG 2.1 AA clean',
   async ({ page }) => {
     requireApiKey();
-    // 300s, replacing the inherited test.slow() (270s): unlike the old
-    // two-state check, expanding the delegate chip's OWN toggle needs the
-    // delegate call to reach a TERMINAL status first (ToolCallBadge.tsx
-    // disables tool-call-toggle while `isRunning` — "while running, there
-    // is nothing to expand"), i.e. the child must actually finish its bash
-    // echo, not just start. Budgeted like the other child-completion waits
-    // in this shard (subagent.spec.ts test (a), handoff.spec.ts test (b)).
+    // 300s: one live delegate round-trip (parent delegate + child bash echo)
+    // plus the in-flight panel open and both axe scans. Budgeted like the
+    // other child-completion waits in this shard (subagent.spec.ts test (a),
+    // handoff.spec.ts test (b)). (The old rationale — the delegate chip's
+    // toggle unlock waiting on a TERMINAL call status — is gone with the
+    // chip: fe1e2406a made it verbose-only, and the event line renders at
+    // birth, not at completion.)
     test.setTimeout(300_000);
 
     await startFreshChat(page);
@@ -735,7 +788,7 @@ test(
     // a page-load-time reconnect blip can leave the composer looking usable
     // while the very first message (the one that triggers `delegate`) lands
     // in the outbound queue instead of the wire, and this test then hangs to
-    // its full timeout waiting on a chip that will never appear.
+    // its full timeout waiting on a delegated line that will never appear.
     await expect(input).toBeEnabled({ timeout: 15_000 });
     await waitForConnected(page, { timeout: 15_000 });
 
@@ -755,10 +808,18 @@ test(
     );
     await input.press('Enter');
 
-    // Structural assertion: wait for the delegate chip to appear.
+    // Structural assertion: wait for the delegated event line to appear.
     // With temperature=0+seed=42 the LLM must comply — test fails honestly if it doesn't.
-    const delegateBadge = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]').first();
-    await expect(delegateBadge).toBeVisible({ timeout: 60_000 });
+    // Birth-kind locator + label filter, for the same reasons test (a) states:
+    // fe1e2406a hid the badge in the default thread, queued launches render
+    // "started", and the terminal "finished" line also carries the label.
+    const delegateLine = page
+      .locator(
+        '[data-testid="delegation-event-line"][data-event-kind="delegated"], [data-testid="delegation-event-line"][data-event-kind="started"]',
+      )
+      .filter({ hasText: label })
+      .first();
+    await expect(delegateLine).toBeVisible({ timeout: 60_000 });
 
     // Guard: zero subagent-collapsed elements, ever.
     await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
@@ -804,22 +865,23 @@ test(
     await page.keyboard.press('Escape');
     await expect(row).not.toBeVisible();
 
-    // Test 1: axe against the delegate chip's COLLAPSED state.
-    // Traces to: sprint-h-subagent-block-spec.md Scenario 11 — "collapsed SubagentBlock"
+    // Tests 1/2 (rewritten 2026-09-27): the old pair axe-scanned the delegate
+    // tool-call chip collapsed, then expanded its own toggle and scanned
+    // again. fe1e2406a made that chip verbose-only, so in this default
+    // non-verbose thread BOTH scans would select zero elements — and axe
+    // passes silently over an empty selection (the exact false green
+    // handoff.spec.ts (b)'s include comment warns about). Re-pointed at the
+    // chip's replacement surface: the delegated event line, its [open]
+    // control scanned with it (scanned, never clicked — clicking navigates
+    // away). The badge's collapsed/expanded axe pair has no non-verbose
+    // subject any more; its verbose-only coverage is deliberately NOT
+    // recreated here (no verbose-chat opt-in in this file — see beforeEach).
+    // Coverage delta, stated rather than papered over: the badge's own WCAG
+    // scan now has no test anywhere in this file.
+    // Traces to: sprint-h-subagent-block-spec.md Scenario 11 — the current
+    // delegation surfaces' a11y baseline.
     await expectA11yClean(page, {
-      include: ['[data-testid="tool-call-badge"]'],
-    });
-
-    // Test 2: expand the delegate chip's own disclosure (ToolCallBadge.tsx's
-    // tool-call-toggle) and run axe again — this is the delegate chip's own
-    // params/result panel, the same KIND of collapse/expand SubagentBlock
-    // used to carry, now on the surface that actually renders it.
-    // Traces to: sprint-h-subagent-block-spec.md Scenario 11 — "expanded SubagentBlock"
-    const delegateToggle = delegateBadge.locator('[data-testid="tool-call-toggle"]');
-    await expect(delegateToggle).toBeEnabled({ timeout: 150_000 });
-    await delegateToggle.click();
-    await expectA11yClean(page, {
-      include: ['[data-testid="tool-call-badge"]'],
+      include: ['[data-testid="delegation-event-line"]'],
     });
   },
 );
