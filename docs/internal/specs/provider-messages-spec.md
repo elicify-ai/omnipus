@@ -71,11 +71,27 @@ visual options as a clickable static demo (static Storybook build or static HTML
 snapshot — never a live dev server) covering all four cases; squad-lead real-browser-
 checks it before hand-off. Runs in parallel with the spec fix round, not gating it.
 
+**D9 — PM-1's fourth example ships now, as its own code `model_retired` (resolves
+FQ-7; was MAJ-011).** Founder's exact wording for the message: *"This model is no
+longer offered by <provider> — choose another model."* The template and its
+classification are added in this fix round, not deferred to a tracked issue. It is
+deliberately a NEW code that must never share or collide with the existing
+`model_unavailable` — that code already means something different: a mid-session
+model switch that failed, with the turn continuing on the previous model
+(`pkg/agent/translate_error.go::CodeModelUnavailable`; the
+`contracts/components/schemas/LLMError.yaml` `model_unavailable` entry, attribution
+`config`). PM-1's fourth example is a different scenario: the provider refuses or
+retires the requested model during an actual provider call (e.g. a 404 "model not
+found" / "decommissioned" / "no longer supported" response). Classification is
+deliberately narrow (C-24) so the residual-4xx `CodeUnknown` media strip-retry gate
+(§2 load-bearing constraint) is not re-pointed. Attribution **`config`**: the fix is
+an operator/config action — choose another model — the same pattern as
+`model_unassigned` ("Pick one in the agent's settings."); nothing user-side and no
+retry fixes a retired model.
+
 **Still open — do not block the fix round on these; team-lead brings them to the
 founder next round:**
 
-- **FQ-7** — add the "model no longer offered" template now, or defer to a tracked
-  issue.
 - **Q4** — `quota_billing` attribution (`config` vs `provider`) — now that the lockout
   (D2) and the billing button (D6) are both gone, is this attribution still
   meaningful, or is there nothing left for it to gate?
@@ -171,7 +187,7 @@ unchanged — these only cross-reference where the fix landed each decision):**
 | PM-6 | Verbose = facts + accordion with raw provider JSON, reusing the tool-call accordion pattern; delivery mechanism = spec's to settle, founder confirms | Settled by **D1**: the existing `detail` display path IS the delivery — §5; the one reuse target is the `MessageItem.tsx` native `<details>` disclosure (MIN-010) |
 | PM-7 | #711 closes by this design; the blunt drop-detail commit is removed from the security branch | Header, US-4; landing order as the FQ-8 working assumption (§16, MAJ-013) |
 
-PM-1's fourth example ("OpenRouter no longer offers z-ai/glm-4…") has **no template and no classification in this spec** — deferred pending FQ-7 (§16). It ships as today's generic sentence until the founder rules.
+PM-1's fourth example ("OpenRouter no longer offers z-ai/glm-4…") is settled by **D9** (FQ-7 resolved): template `model_retired` in §6, classification C-24 / FR-016, scenarios MR-1/MR-2. It no longer ships as today's generic sentence.
 
 ## 4. Behavioral contract
 
@@ -228,6 +244,7 @@ Machine-verifiable (constraint IDs used by tests):
 | C-21 | The Verbose disclosure renders `detail` as inert text — never HTML-rendered, never markdown-rendered — pretty-printed only when it parses as JSON; `detail` is not always JSON (`WrapHTMLResponseError` case) (MAJ-018). |
 | C-22 | Rate-limit wait capture parses ONLY `retry-after` (integer seconds or HTTP-date) and `retry-after-ms`; no `x-ratelimit-reset*` parsing exists (MAJ-008, simpler option — see §7.2 for why). |
 | C-23 | Context-length errors keep today's code, copy, and behaviour (PM-5) — regression-guarded. |
+| C-24 | The `model_retired` detector fires ONLY on HTTP 404 AND a body that names the requested model id verbatim, or matches one of the explicit retirement phrases "model not found", "does not exist", "has been decommissioned", "no longer supported" (structured/unambiguous signal, CRIT-001's lesson — no loose prose matching). A generic 404 with neither marker stays `CodeUnknown` — the residual path and the media strip-retry gate (`media_downgrade.go::outcomeFallbackEligible`, §2) are NOT re-pointed. A non-404 status never classifies `model_retired` (D9, MR-1, MR-2). |
 
 ## 5. Delivery: one frame, two displays (PM-6, D1)
 
@@ -261,11 +278,12 @@ What this feature adds on top:
 | `rate_limited` — terminal | `{provider} is busy right now. You can retry the turn.` | Retries exhausted, or no auto-retry path (wait above the ceiling with no fallback) |
 | `quota_billing` (new) | `{provider} says your account is out of credit.` | Always (facts present). No button, no link — D6. Retry advice governed by Q4 (§16) |
 | `provider_auth_failed` | `{provider} rejected the API key. Check the key in Settings → Providers.` | Facts present |
+| `model_retired` (new, D9) | `This model is no longer offered by {provider} — choose another model.` | A provider refuses/retires the requested model during a real call, per the C-24 trigger (404 + model-identifying or explicit-retirement body). Never fired for the mid-session switch-failure case — that stays `model_unavailable`'s meaning |
 | fallback note | `Answered by the Fallback model ({answered_model}) because {unavailable_model} was unavailable.` | Fallback success, including cooldown-skip-produced fallbacks at the C-18 rate (frame + persisted note; D7) |
 
-All other codes keep today's catalogue copy unchanged (generic, no provider naming in this feature). Context length stays exactly as is (PM-5, C-23). The four PM-1 example sentences are covered by the first four rows; the fourth founder example (model no longer offered) is **not** templated — FQ-7 deferred (§16).
+All other codes keep today's catalogue copy unchanged (generic, no provider naming in this feature). Context length stays exactly as is (PM-5, C-23). All four PM-1 example sentences are now covered: the first three by the rows above; the fourth founder example (model no longer offered) by the `model_retired` row — added by D9 (FQ-7 resolved).
 
-**Copy rules carried over:** a `config` message never advises retry; whether `quota_billing` is attributed `config` (and therefore copy-rule-bound to avoid retry advice) is **Q4** — still open (§16).
+**Copy rules carried over:** a `config` message never advises retry; `model_retired` is `config` (D9), so its template advises a config change ("choose another model") and never retry advice; whether `quota_billing` is attributed `config` (and therefore copy-rule-bound to avoid retry advice) is **Q4** — still open (§16).
 
 **Contract mechanics for templates (simplified per OBS-002).** The round-0 design — a separate `x-user-message-templates` YAML block, a closed slot-vocabulary grammar and generator extensions in two generators — was overbuilt for four server-side sentences with one or two slots each. Simplified: each relevant `x-user-messages` entry gains an optional sibling `provider_message` string (the templated variant); the generator enforces only (a) the existing code↔message bijection extended to entries carrying `provider_message` (C-3/C-4) and (b) that slots used are from the closed set `{provider}`, `{answered_model}`, `{unavailable_model}` — a simple token check, not a template engine. The Go translator substitutes `{provider}` (failing attempt) when facts are present and falls back to the static catalogue sentence otherwise. The live-retry line is **not** a server template: the countdown is inherently client-rendered and the frame carries only structured facts, so the line is assembled client-side from those facts and pinned by component tests (C-15).
 
@@ -277,7 +295,7 @@ Order is contract-first (Hard Constraint #8): §7.1 lands as one atomic commit w
 
 ### 7.1 Contract wave (first)
 
-1. `contracts/components/schemas/LLMError.yaml`: add `quota_billing` to the enum + `x-user-messages` entry (attribution per Q4 — placeholder `provider` until ruled); add the optional `provider_message` templated variants to the relevant `x-user-messages` entries (§6, OBS-002 simplification); add the optional `facts` object (`provider`, `model`, `retry_after_seconds`, `retry_at`, `attempts`, `max_attempts`, `request_id` — all optional, `request_id` flagged Verbose-render-only, no `billing_url`, no `error_id`). **`detail` stays exactly as it is** (D1 — the round-0 removal plan is withdrawn; the field is optional today so nothing breaks).
+1. `contracts/components/schemas/LLMError.yaml`: add `quota_billing` to the enum + `x-user-messages` entry (attribution per Q4 — placeholder `provider` until ruled); add `model_retired` to the enum + `x-user-messages` entry (attribution `config`, D9) with its `provider_message` variant (§6); add the optional `provider_message` templated variants to the relevant `x-user-messages` entries (§6, OBS-002 simplification); add the optional `facts` object (`provider`, `model`, `retry_after_seconds`, `retry_at`, `attempts`, `max_attempts`, `request_id` — all optional, `request_id` flagged Verbose-render-only, no `billing_url`, no `error_id`). **`detail` stays exactly as it is** (D1 — the round-0 removal plan is withdrawn; the field is optional today so nothing breaks).
 2. `contracts/asyncapi.yaml`: keep the inline `LLMError` / `LLMErrorReplay` copies in lockstep (the file's own comment requires it); add the two new messages (`provider_retry`, `provider_fallback`) on the chat channel; add the fallback-note **replay carrier** (a `ProviderFallbackNote` replay entry/shape on the session channel) so the persisted note is not a live-only orphan (MAJ-010, C-17).
 3. `contracts/components/schemas/`: new `ProviderRetryFrame.yaml` — `type: provider_retry`; `session_id`, `turn_id`, `provider`, `model`, `retry_at` (RFC 3339), `retry_after_seconds`, `attempt`, `max_attempts`, `error_code`; + `seq` per the #823 pattern; **no `error` field of any kind** (C-2). New `ProviderFallbackFrame.yaml` — `type: provider_fallback`; `session_id`, `turn_id`, `answered_model`, `unavailable_model`, `reason` (enum: `failed` | `cooldown_skip`); + `seq`; no raw error text. `ReplayErrorFrame` and `LLMErrorReplay` unchanged (no facts object on replay — the message itself carries the provider naming; C-13).
 4. `contracts/openapi.yaml`: **unchanged** — no new route (§5).
@@ -296,6 +314,7 @@ Order is contract-first (Hard Constraint #8): §7.1 lands as one atomic commit w
 - **User side** (`translate_error.go`): new `CodeQuotaBilling` (`quota_billing`); new billing detector with the C-5 vocabulary checked **before** `rateLimitSubstrings` on body-bearing paths, and read on the 429 path before the 429 short-circuit declares rate-limit — 429 + a C-5 marker lands `quota_billing`; 429 with prose-only quota wording ("exceeded your current quota", "usage limit reached") stays `rate_limited` (those phrases are NOT in the vocabulary, C-5/C-6). `isRetryable` returns false for it. The residual-4xx → `CodeUnknown` verdict is untouched (media strip-retry gate).
 - **No billing lockout (D2):** a `quota_billing` verdict takes the standard failure path — `calculateStandardCooldown` at most, exactly like any other failure. `pkg/providers/cooldown.go::calculateBillingCooldown` is **deleted** (unreachable after this change; delete-superseded-code ruling). A test pins the curve chosen for every D2 dataset row (C-7).
 - **Providers side** (`error_classifier.go`): HTTP 402, or 429 with a structured C-5 marker (`insufficient_quota` on the JSON `code`/`type` field) → `FailoverBilling`; the C-5 phrases are evaluated before the rate-limit patterns in `classifyByMessage`. Routing behaviour is otherwise preserved (`shouldRetryDelegatedRateLimit` keeps its rate-limit semantics; billing was never in its retry set).
+- **New `model_retired` detector (D9, C-24):** user-side only (`translate_error.go`), checked at the residual-4xx fallback BEFORE the residual path declares `CodeUnknown`: a 404 whose body names the requested model id verbatim or matches one of the C-24 retirement phrases ("model not found", "does not exist", "has been decommissioned", "no longer supported") classifies `model_retired` (`CodeModelRetired`, a new constant — never a re-use of `CodeModelUnavailable`, whose mid-session switch-failure meaning is different); `isRetryable` returns false for it; attribution `config`. A 404 with neither marker falls through to the residual `CodeUnknown` verdict exactly as today — the media strip-retry gate (`media_downgrade.go::outcomeFallbackEligible`) is not re-pointed (MR-2 pins it). Non-404 statuses never reach this detector. The providers-side classifier (`error_classifier.go`) is unchanged by D9 — its 404 routing stays as today; `model_retired` is a user-side presentation classification.
 - **Facts threading:** `TranslateLLMError`'s verdicts gain facts from `pe` (the new header fields, the stamped provider id + model) via an additive variant (no signature break at the two choke points' existing callers).
 - **Assembly (the MAJ-001 fix — the sentence must actually reach the user):**
   1. **Agent emit sites** assemble the templated sentence into `ErrorPayload.Message` when facts (provider/model of the failing attempt) are present; catalogue fallback otherwise. `hubError`'s existing `p.Message` pass-through then carries the assembled sentence — no gateway-side assembly.
@@ -399,9 +418,20 @@ Order is contract-first (Hard Constraint #8): §7.1 lands as one atomic commit w
 
 1. **Given** a context-overflow error, **When** classified and rendered, **Then** code, copy, and attribution are byte-identical to today (C-23); no countdown, no compaction, no token counts.
 
+### US-8 — A retired model says so (P1; PM-1 fourth example, D9)
+
+**Narrative.** A provider that no longer offers the configured model says so plainly — the line names the provider and points at the config fix (choose another model) instead of today's generic `unknown` sentence; and a generic 404 does **not** get this treatment.
+
+**Why this priority:** P1 — real but rarer than rate-limit or billing; added in this fix round by founder decision D9 (FQ-7 resolved).
+
+**Independent test:** inject a 404 whose body names the requested model; assert code `model_retired`, the exact D9 sentence, `retryable: false`; inject a generic 404 and assert it stays `unknown`.
+
+1. **Given** a provider 404 whose body names the requested model id or uses an explicit retirement phrase (C-24), **When** classified, **Then** the code is `model_retired`, `retryable` is false, and the line is exactly "This model is no longer offered by {provider} — choose another model."
+2. **Given** a generic 404 with no model-identifying text and no retirement phrase, **When** classified, **Then** the code stays `unknown` (residual path) — the media strip-retry gate is untouched (MR-2).
+
 ## 10. BDD scenarios (spec-derived oracles)
 
-Oracles come from this spec: exact template sentences (§6), constraint IDs (§4), frame field lists (§7.1), and the copy-rule tests that already exist. Scenario IDs use set prefixes (A, B, AU, DG, FB, RG) that do not collide with constraint IDs (C-N) or datasets (D1–D3).
+Oracles come from this spec: exact template sentences (§6), constraint IDs (§4), frame field lists (§7.1), and the copy-rule tests that already exist. Scenario IDs use set prefixes (A, B, AU, DG, FB, RG, MR) that do not collide with constraint IDs (C-N) or datasets (D1–D3).
 
 ### Set A — rate-limited retry (US-1)
 
@@ -645,6 +675,27 @@ Scenario: RG-3 — Other codes keep catalogue copy (allow-list negative)
   Traces to: §13 / 1   [C-14]
 ```
 
+### Set MR — model retired (US-8)
+
+```gherkin
+Scenario: MR-1 — A 404 naming the model classifies model_retired
+  Given a provider adapter that answers 404 with a body that names the requested model id
+    (dataset D2 wording is Inferred — GREEN must pin real provider wording before shipping, D9)
+  And a turn with model M on provider P (catalog display name "OpenRouter")
+  When the agent loop classifies the response
+  Then the code is model_retired, retryable false, attribution config
+  And the message is "This model is no longer offered by OpenRouter — choose another model."
+  Traces to: US-8 / 1   [C-24, D9]
+
+Scenario: MR-2 — A generic 404 stays unknown; the residual gate is not re-pointed
+  Given a provider adapter that answers 404 with a body carrying neither the model id
+    nor any retirement phrase
+  When the agent loop classifies the response
+  Then the code is unknown — the residual path, unchanged
+  And the media strip-retry gate (media_downgrade.go::outcomeFallbackEligible) is unaffected
+  Traces to: US-8 / 2   [C-24]
+```
+
 ## 11. TDD plan
 
 | Order | Test | Level | Traces to | Notes |
@@ -669,8 +720,10 @@ Scenario: RG-3 — Other codes keep catalogue copy (allow-list negative)
 | 18 | Verbose disclosure: facts + raw detail, no fetch; inert rendering (`<img src=x onerror=…>` renders as text); JSON pretty-print; Verbose-off → disclosure absent | Component | DG-4, DG-5, DG-6, DG-1; C-21 | MAJ-018 |
 | 19 | design-system publication for `ProviderRetryIndicator`: manifest entry, Story, lock-script run (blocking `design-system` CI gate) | Build gate | MIN-010 | new component — publication contract required |
 | 20 | E2E: injected 429 (`retry-after: 3` for suite speed; 120 s formatting proven at component level) → countdown → terminal line; sentinel scan over the whole WS log | E2E | A-1, A-5, DG-1, DG-2 | Playwright, mock provider; MIN-005 applied |
+| 21 | `model_retired` detector true-positive: 404 + model-id-naming body and each C-24 retirement phrase → `model_retired`, `retryable` false, attribution `config`, exact D9 sentence | Unit | MR-1; C-24 | dataset D2 model-retired rows (Inferred — GREEN pins real provider wording before shipping, D9) |
+| 22 | `model_retired` near-miss: generic 404 (no model id, no phrase) and non-404 + retirement prose never classify `model_retired`; the residual `CodeUnknown` verdict is byte-identical | Unit | MR-2; C-24 | media strip-retry gate regression (§2 load-bearing constraint) |
 
-**Existing tests that must keep passing (extended, not replaced):** the copy-rule tests — extended to 24 codes with existing assertions unchanged (MIN-004); replay-strips-detail tests (unchanged — detail stays); media strip-retry gate tests (`CodeUnknown` residual); delegated retry tests; own-limiter indicator tests (MIN-007); `verify-contracts`; `lint-guards`.
+**Existing tests that must keep passing (extended, not replaced):** the copy-rule tests — extended to 25 codes with existing assertions unchanged (MIN-004); replay-strips-detail tests (unchanged — detail stays); media strip-retry gate tests (`CodeUnknown` residual); delegated retry tests; own-limiter indicator tests (MIN-007); `verify-contracts`; `lint-guards`.
 
 ## 12. Test datasets
 
@@ -691,7 +744,7 @@ Scenario: RG-3 — Other codes keep catalogue copy (allow-list negative)
 
 (No `x-ratelimit-reset*` rows — that family is out of parsing scope, C-22.)
 
-**D2 — billing vs rate-limit (traces to B-1, B-2, B-4; C-5, C-6, C-7)**
+**D2 — billing vs rate-limit, plus the `model_retired` classifier rows (traces to B-1, B-2, B-4; C-5, C-6, C-7; MR-1, MR-2; C-24)**
 
 | status | body / marker | expected code |
 |---|---|---|
@@ -706,6 +759,9 @@ Scenario: RG-3 — Other codes keep catalogue copy (allow-list negative)
 | 400 | "Your account is out of credit" (no 402, phrase not in C-5) | unknown — residual path; strip-retry gate intact; catalogue sentence applies |
 | 400 | Unsupported MIME type: image/svg+xml | unknown (residual — strip-retry gate intact) |
 | 401 | "Incorrect API key provided: sk-proj-****abcd" | provider_auth_failed |
+| 404 | body names the requested model id (e.g. "Model gpt-4o-2024-08-06 not found") — C-24 trigger met | `model_retired` (new, D9) — Inferred (provider wording not verified against a live call in this task); GREEN must pin real provider wording before shipping |
+| 404 | generic "Not Found" — no model id, no retirement phrase (near-miss) | unknown — residual path; strip-retry gate intact (C-24); Inferred (same pin-before-ship note) |
+| 410 | "This model has been decommissioned" — explicit non-match: a non-404 status never classifies `model_retired` | unknown — non-404 statuses stay on existing paths; revisit only when real 410 wording is pinned (C-24); Inferred (same pin-before-ship note) |
 
 Note the deliberate consequence of the narrowed vocabulary: billing-shaped **prose on a non-402 status** ("out of credit") no longer classifies `quota_billing` — the 402 status and the structured `insufficient_quota` field are the account-state signals; unrecognised prose gets the catalogue sentence rather than a wrong confident claim (D2's simplify ruling).
 
@@ -726,7 +782,7 @@ Note the deliberate consequence of the narrowed vocabulary: billing-shaped **pro
 
 The feature **modifies existing behaviour**: error lines for three code families gain provider naming; two new frame types appear; the billing cooldown curve is deleted. Guarded by:
 
-1. All existing codes' copy unchanged except the three template families — copy-rule tests **extended to 24 codes, existing assertions unchanged** (MIN-004).
+1. All existing codes' copy unchanged except the three template families — copy-rule tests **extended to 25 codes, existing assertions unchanged** (MIN-004).
 2. `context_too_long` byte-identical (PM-5, C-23).
 3. Residual-4xx → `CodeUnknown` unchanged (media strip-retry).
 4. Replay shape unchanged (no facts object on replay; the existing detail-strip unchanged — D1).
@@ -735,6 +791,7 @@ The feature **modifies existing behaviour**: error lines for three code families
 7. Scrubber behaviour unchanged for logs and for the `detail` preview.
 8. **Cooldown regression (CRIT-001's consequence, fixed at the root):** `calculateBillingCooldown` is deleted; the D2 dataset pins the standard curve for every billing-shaped row (B-4).
 9. **Verbose-promise regression: none.** Because `detail` stays (D1), the six catalogue sentences that promise Verbose details (`provider_stalled`, `tool_args`, `schema`, `turn_timed_out`, `context_unrecoverable`, `unknown`) keep their Verbose content — the round-0 finding MAJ-005 is moot.
+10. **Model-retired classifier addition:** the new detector fires only inside the 404 gate (C-24); a non-404 status and a marker-less 404 both keep today's residual `CodeUnknown` verdict byte-identical, so the media strip-retry gate is not re-pointed (MR-2; §2 load-bearing constraint).
 
 ## 14. Requirements & success criteria
 
@@ -755,6 +812,7 @@ The feature **modifies existing behaviour**: error lines for three code families
 - **FR-013:** The system MUST keep context-length classification, copy, and behaviour unchanged (C-23).
 - **FR-014:** The system MUST keep the scrubber in place for logs and for the `detail` preview, unchanged.
 - **FR-015:** Contract changes MUST land first (Constraint #8): schemas → regenerate → commit atomically → consumers.
+- **FR-016:** The system MUST classify a provider's refusal/retirement of the requested model during a real call as its own code `model_retired` (D9) — HTTP 404 plus a body that names the requested model id or matches a C-24 retirement phrase, and nothing else — distinct from `model_unavailable` (the mid-session switch-failure code; never shared or re-used), not retryable, attributed `config`, rendered with the §6 `model_retired` template, reaching all four surfaces per FR-007/C-13.
 
 ### Success criteria
 
@@ -763,7 +821,7 @@ The feature **modifies existing behaviour**: error lines for three code families
 - **SC-3:** All dataset D2 rows produce the expected code AND the pinned standard cooldown — 100%.
 - **SC-4:** A Verbose viewer sees facts + the raw detail (inert-rendered) on a live error with no fetch; a non-Verbose viewer sees neither; a replayed error mounts no disclosure and fetches nothing. All verified in Playwright/vitest.
 - **SC-5:** All dataset D1 parsing rows produce the expected fact or absence.
-- **SC-6:** `verify-contracts` and the copy-rule tests are green with `quota_billing` + the templated variants present (bijection holds, 24 codes).
+- **SC-6:** `verify-contracts` and the copy-rule tests are green with `quota_billing`, `model_retired` + the templated variants present (bijection holds, 25 codes).
 - **SC-7:** Stop during a retry wait ends the turn within 1 s with no further attempt — unit-proven on the sleep's context cancellation and observed once end-to-end.
 - **SC-8:** The fallback note appears live and on replay, and the once-per-(unavailable, answered)-pair rate holds under repeated turns.
 
@@ -786,18 +844,18 @@ The feature **modifies existing behaviour**: error lines for three code families
 | FR-013 | US-7 | RG-1 | copy-rule + regression suite |
 | FR-014 | §13 | AU-3, RG-2 | existing scrubber tests |
 | FR-015 | all | (process) | `verify-contracts`, CI |
+| FR-016 | US-8 | MR-1, MR-2 | 21, 22; dataset D2 model-retired rows |
 
-Every FR appears; every scenario (A-1…A-8, B-1…B-4, AU-1…AU-3, DG-1…DG-8, FB-1…FB-4, RG-1…RG-3) traces to ≥ 1 FR; every TDD row cites only IDs defined in §4, §9, §10, or §12.
+Every FR appears; every scenario (A-1…A-8, B-1…B-4, AU-1…AU-3, DG-1…DG-8, FB-1…FB-4, RG-1…RG-3, MR-1…MR-2) traces to ≥ 1 FR; every TDD row cites only IDs defined in §4, §9, §10, or §12.
 
 ## 16. Questions for the founder
 
 **Only these remain open.** Everything else that round 0/round 1 raised is settled by the recorded founder decisions and appears in this spec as fact, not as a question.
 
-- **FQ-7 — "Model no longer offered" (was MAJ-011):** PM-1's fourth example sentence ("OpenRouter no longer offers z-ai/glm-4…") has no template and no classification in this spec. **A:** add it now (a 404 / "model not found" body → a new code or template, with a check that the residual-4xx `CodeUnknown` media gate is not re-pointed) or **B:** defer to a tracked issue. Recommendation: B — it is a distinct classification problem and ships today as the generic sentence.
 - **Q4 — `quota_billing` attribution:** the lockout (D2) and the billing button (D6) are both gone, so attribution now gates only copy rules. **A:** `config` — then the copy-rule tests forbid retry advice in the sentence; **B:** `provider` — attribution-pure, but its copy rules would then PERMIT retry advice, which reads wrong for an empty account; **C:** drop the attribution distinction for this code entirely. Recommendation: A (the sentence should not tell an empty-account user to "retry the turn"), but C is defensible now that nothing else hangs on it.
 - **FQ-8 — landing order with the security branch (MAJ-013):** working assumption, pending confirmation: keep `c13c4d279` ("error frame detail stays off the wire") on `feature/gateway-security-fixes` until this feature lands; then this design replaces it — the leak is never reopened on `main`. Team-lead is defaulting to this absent a correction.
 
-**Settled — recorded as decisions, no longer asked:** Q1/Q2 (delivery + `detail`) → D1; Q3 (retry numbers) → D3 (**3 attempts, 2-minute ceiling — CONFIRMED, not asked**); Q5 (billing URL) → D6; Q6 (note persistence) → D7; FQ-1 → D2; FQ-2 → D5; FQ-3 → D3 (the 2-minute figure is the ceiling); FQ-4 → D3 (retry-then-fallback); FQ-5 → D1 (ADR-051 stands — no amendment needed, MAJ-014 moot); FQ-6 → D1 (`detail` kept, so the six Verbose-promise sentences keep their content — MAJ-005 moot); FQ-9 → D6; FQ-10 → D4.
+**Settled — recorded as decisions, no longer asked:** Q1/Q2 (delivery + `detail`) → D1; Q3 (retry numbers) → D3 (**3 attempts, 2-minute ceiling — CONFIRMED, not asked**); Q5 (billing URL) → D6; Q6 (note persistence) → D7; FQ-1 → D2; FQ-2 → D5; FQ-3 → D3 (the 2-minute figure is the ceiling); FQ-4 → D3 (retry-then-fallback); FQ-5 → D1 (ADR-051 stands — no amendment needed, MAJ-014 moot); FQ-6 → D1 (`detail` kept, so the six Verbose-promise sentences keep their content — MAJ-005 moot); FQ-9 → D6; FQ-10 → D4; FQ-7 → D9 (`model_retired`, added in this fix round).
 
 ## 17. Reachability (Definition of Done)
 
@@ -842,6 +900,8 @@ Edge:
 | Cooldown curves as stated | Read `pkg/providers/cooldown.go::calculateStandardCooldown` (min 60 s, cap 1 h), `calculateBillingCooldown` (5 h base → 24 h cap) | Verified |
 | `WrapHTMLResponseError` exists (detail not always JSON) | Read `pkg/providers/common/common.go` (`WrapHTMLResponseError` defined and called) | Verified |
 | 23-code catalogue, attributions, generator hard-fail, `detail` optional 2048 | Read `contracts/components/schemas/LLMError.yaml` (whole file, round-0 task; unchanged at `de5a0cef3`) | Verified |
+| `model_unavailable` already exists as the mid-session switch-failure code (D9's distinctness claim) | Read `pkg/agent/translate_error.go::CodeModelUnavailable` ("the caller asked for a different model and the switch failed. The turn continues on the previous model"); `contracts/components/schemas/LLMError.yaml` `model_unavailable` entry (attribution `config`) | Verified |
+| `model_retired` name collision-free | `grep -rn "model_retired" pkg/ src/ contracts/` → exit 1, zero matches (this task, @ `2bf53c988`) | Verified |
 | `ProviderError` captures no response headers today | Read `pkg/providers/common/common.go::HandleErrorResponse`, `WrapHTMLResponseError` (only `Content-Type` read; 8 KiB cap, 512 B preview) | Verified |
 | "quota exceeded" → `CodeRateLimited` today; no billing code user-side | Read `pkg/agent/translate_error.go::rateLimitSubstrings`, `classifyByHTTPStatus` (round-0 task) | Verified |
 | Providers-side: 429 → `FailoverRateLimit` before body check; rate-limit patterns before billing | Read `pkg/providers/error_classifier.go` (round-0 task) | Verified |
@@ -851,6 +911,7 @@ Edge:
 | GitNexus unavailable in this session | Tool list has no gitnexus tools; exploration done by Read/Grep (shared rule 9) | Verified |
 | Impact rows | Grep sweep for callers (choke points, retry gates, catalogues, trusted-stage set) | Inferred (graph not available) |
 | Gemini/Codex/OpenAI provider wordings in D2 | Known provider behaviour (review CRIT-001, Inferred high confidence); pinned as dataset rows so CI proves the classifier against them | Inferred (not probed live) |
-| **Self-check** | Re-read the finished spec against the dispatch's done-criteria and cross-checked every ID: all 23 constraints (C-1…C-23) defined once in §4 and cited only where defined; 15 FRs; 30 numbered BDD scenarios across six sets; every TDD row and every matrix cell cites existing IDs (scripted ID cross-check run, exit 0); every D1–D8 decision applied (D1→§5 rewrite, D2→§7.3+dataset, D3→§7.4 precise, D4→A-7+row 9, D5→C-19/FR-009 reworded, D6→§7.6/button/C-10-old/FR-007-old/Q5 removed, D7→§7.4 note+carrier+naming, D8→untouched parallel track); every non-moot review finding fixed or explicitly in §16 (MAJ-001,2,3,4,6,7,8,10,13,15,16,17,18 + CRIT-001-half, MIN-001,3,4,5,6-rewritten,7,10, OBS-002,003 + all structural gaps); moot findings declared with reasons (CRIT-002→D5, MAJ-005, MAJ-009→MIN-008, MAJ-012, MAJ-014, MIN-002, MIN-008, MIN-009, OBS-001); §16 holds only FQ-7/Q4/FQ-8; commit scoped to the spec file, author verified human, no co-author trailer; pushed and re-verified | Verified |
+| **Self-check (round-1 fix)** | Re-read the finished spec against the dispatch's done-criteria and cross-checked every ID: all 23 constraints (C-1…C-23) defined once in §4 and cited only where defined; 15 FRs; 30 numbered BDD scenarios across six sets; every TDD row and every matrix cell cites existing IDs (scripted ID cross-check run, exit 0); every D1–D8 decision applied (D1→§5 rewrite, D2→§7.3+dataset, D3→§7.4 precise, D4→A-7+row 9, D5→C-19/FR-009 reworded, D6→§7.6/button/C-10-old/FR-007-old/Q5 removed, D7→§7.4 note+carrier+naming, D8→untouched parallel track); every non-moot review finding fixed or explicitly in §16 (MAJ-001,2,3,4,6,7,8,10,13,15,16,17,18 + CRIT-001-half, MIN-001,3,4,5,6-rewritten,7,10, OBS-002,003 + all structural gaps); moot findings declared with reasons (CRIT-002→D5, MAJ-005, MAJ-009→MIN-008, MAJ-012, MAJ-014, MIN-002, MIN-008, MIN-009, OBS-001); §16 holds only FQ-7/Q4/FQ-8; commit scoped to the spec file, author verified human, no co-author trailer; pushed and re-verified | Verified |
+| **Self-check (D9 follow-up, 2026-09-26)** | Re-read the spec after the FQ-7/D9 fix against this dispatch's done-criteria: C-24 is the only new constraint ID (no existing C/FR/US/BDD/TDD/SC number was renumbered); FR-016 and US-8 added; Set MR added (MR-1, MR-2) with the §10 preamble and §15 enumeration updated; TDD rows 21-22 added; D2 title extended and 3 rows added (true positive, near-miss, explicit non-match), each flagged Inferred with the pin-before-ship note; the "24 codes" count updated to 25 in the §11 note, §13 item 1 and SC-6; §7.1 item 1 and §7.3 gained the `model_retired` work; D9 recorded in the founder-decisions section; FQ-7 removed from both open lists (founder-decisions section and §16) — only Q4/FQ-8 remain; the residual-4xx `CodeUnknown` media strip-retry gate is cited as NOT re-pointed in C-24, §7.3, §13 item 10 and MR-2; `model_retired` never shares `model_unavailable`'s meaning (collision-free by grep, exit 1); D1–D8 text and all other prior fix-round content untouched (git diff reviewed hunk by hunk); commit scoped to the spec file only | Verified |
 
 *Skills: omnipus-shared-rules, plan-spec.*
