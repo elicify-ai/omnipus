@@ -11,6 +11,7 @@ import { Switch } from '@/components/ui/switch'
 import { fetchMemorySettings, updateMemorySettings, fetchProviders, getErrorMessage } from '@/lib/api'
 import type { MemorySettings, FallbackModel } from '@/lib/api'
 import { useModelToProvider } from '@/lib/agents/modelToProvider'
+import { isProviderUsable } from '@/lib/providerStatus'
 import { useUiStore } from '@/store/ui'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
 
@@ -145,13 +146,15 @@ export function MemorySection(): React.ReactElement {
     queryFn: fetchProviders,
   })
 
-  const connectedProviders = providers.filter((p) => p.status === 'connected')
-  const availableModels = connectedProviders.flatMap((p) => p.models ?? [])
-  const providerGroups = connectedProviders
+  // Usability, not key-connection (see providerStatus.ts): a subscription
+  // provider is signed_in, never connected, and its models must list too.
+  const usableProviders = providers.filter((p) => isProviderUsable(p.status))
+  const availableModels = usableProviders.flatMap((p) => p.models ?? [])
+  const providerGroups = usableProviders
     .filter((p) => (p.models ?? []).length > 0)
     .map((p) => ({ providerName: p.display_name ?? p.name ?? p.id, providerId: p.id, models: p.models ?? [] }))
 
-  const { lookup: modelToProvider } = useModelToProvider(connectedProviders)
+  const { lookup: modelToProvider } = useModelToProvider(usableProviders)
 
   const [form, setForm] = useState<FormState>(DEFAULT_SETTINGS)
 
@@ -439,8 +442,8 @@ export function MemorySection(): React.ReactElement {
                   const providerMissing = !entry.provider
                   const providerLabel = providerMissing
                     ? '—'
-                    : (connectedProviders.find((p) => p.id === entry.provider)?.display_name
-                        ?? connectedProviders.find((p) => p.id === entry.provider)?.name
+                    : (usableProviders.find((p) => p.id === entry.provider)?.display_name
+                        ?? usableProviders.find((p) => p.id === entry.provider)?.name
                         ?? entry.provider)
 
                   return (

@@ -38,6 +38,7 @@ import type {
   RegistryTool,
 } from '@/lib/api'
 import { findOrphanedPresetOverrideKeys, resolveToolsCfg } from '@/lib/toolPolicyPresets'
+import { isProviderUsable } from '@/lib/providerStatus'
 
 import {
   CreateAgentWizard,
@@ -259,9 +260,11 @@ export function CreateAgentModal({
   // that would contradict a global deny/ask (no contradicting configs).
   const globalPoliciesQuery = useQuery({ queryKey: ['global-tool-policies'], queryFn: fetchGlobalToolPolicies })
 
-  const connectedProviders = (providersQuery.data ?? []).filter(
-    (p) => p.status === 'connected',
-  )
+  // Usability, not key-connection (see providerStatus.ts): a subscription
+  // provider is signed_in, never connected, and its models must list in the
+  // wizard's Step 1 picker too. (The wizard's `connectedProviders` PROP keeps
+  // its name — renaming it is a cross-file churn this hotfix doesn't need.)
+  const usableProviders = (providersQuery.data ?? []).filter((p) => isProviderUsable(p.status))
   const registryTools = toolsQuery.data ?? []
   const skills = skillsQuery.data ?? []
   const globalPolicies = globalPoliciesQuery.data
@@ -327,7 +330,7 @@ export function CreateAgentModal({
       {...(effectiveCli ? { initialCli: effectiveCli } : {})}
       onSubmit={handleSubmit}
       onClose={handleClose}
-      connectedProviders={connectedProviders}
+      connectedProviders={usableProviders}
       registryTools={registryTools}
       skills={skills}
       globalPolicies={globalPolicies}
