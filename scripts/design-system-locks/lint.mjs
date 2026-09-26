@@ -23,14 +23,35 @@ import { summarizeAuditErrors } from './print-audit-errors.mjs'
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const defaultRoot = resolve(scriptDir, '../..')
 
-function spawnStep(file, args) {
-  const result = spawnSync(process.execPath, [file, ...args], { encoding: 'utf8' })
+export function spawnStep(file, args, { stderr = process.stderr, spawnSyncImpl = spawnSync } = {}) {
+  const result = spawnSyncImpl(process.execPath, [file, ...args], { encoding: 'utf8' })
   if (result.error) {
-    process.stderr.write(`lint:design-system-locks: cannot spawn ${file}: ${result.error.message}\n`)
+    stderr.write(`lint:design-system-locks: cannot spawn ${file}: ${result.error.message}\n`)
     return { status: 1, failed: true }
   }
-  if (result.stderr) process.stderr.write(result.stderr)
+  if (result.stderr) stderr.write(result.stderr)
+  if (result.status === null && result.signal) {
+    // A killed child (OOM SIGKILL, timeout SIGTERM) is a broken run, not an
+    // audit finding: surface it loudly and fail the step non-zero.
+    stderr.write(`lint:design-system-locks: ${file} was killed by signal ${result.signal} — the step did not complete; this is not an audit finding\n`)
+    return { status: 1, failed: true, stdout: result.stdout, signal: result.signal }
+  }
   return { status: result.status ?? 1, failed: result.status !== 0, stdout: result.stdout }
+}
+
+// A report is summarizable only if it parsed to an object carrying an errors
+// array; anything else (missing file, invalid JSON, array root, no errors
+// array) yields null so the caller reports the report itself as malformed
+// instead of printing a false "0 error(s)" count.
+function readAuditReport(reportPath) {
+  if (!existsSync(reportPath)) return null
+  try {
+    const report = JSON.parse(readFileSync(reportPath, 'utf8'))
+    if (report === null || typeof report !== 'object' || Array.isArray(report) || !Array.isArray(report.errors)) return null
+    return report
+  } catch {
+    return null
+  }
 }
 
 export function runLint({
@@ -45,6 +66,7 @@ export function runLint({
   mkdirSync(resolve(root, 'test-results'), { recursive: true })
 
   const policy = spawn(resolve(root, 'scripts/design-system-locks/policy.mjs'), [], { stderr })
+  if (policy.signal) return policy.status || 1
   if (policy.failed) {
     stderr.write(`lint:design-system-locks: policy.mjs failed (exit ${policy.status})\n`)
     return policy.status || 1
@@ -67,16 +89,15 @@ export function runLint({
     '--report', reportPath,
   ], { stderr })
 
+  if (audit.signal) return audit.status || 1
   if (audit.failed) {
     stderr.write(`lint:design-system-locks: audit.mjs failed (exit ${audit.status})\n`)
-    if (existsSync(reportPath)) {
-      try {
-        const report = JSON.parse(readFileSync(reportPath, 'utf8'))
-        for (const line of summarizeAuditErrors(report)) stdout.write(`${line}\n`)
-      } catch (error) {
-        stderr.write(`lint:design-system-locks: cannot summarize report ${reportPath}: ${error.message}\n`)
-      }
+    const report = readAuditReport(reportPath)
+    if (report === null) {
+      stderr.write(`lint:design-system-locks: audit failed but its report is missing or malformed (${reportPath}) — showing no error list\n`)
+      return audit.status || 1
     }
+    for (const line of summarizeAuditErrors(report)) stdout.write(`${line}\n`)
     return audit.status || 1
   }
   return 0
