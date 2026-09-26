@@ -33,6 +33,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -348,4 +349,24 @@ func TestFallbackNote_NewTurnSamePair_NoSecondNote_D17(t *testing.T) {
 		"a NEW turn in the same chat for the SAME pair must not re-note (D17/C-17/C-18/FB-4); got %d notes", len(notes))
 	require.Equal(t, "Answered by the Fallback model (final-x2) because primary-y was unavailable.",
 		notes[0].Content, "the single note names the original pair")
+}
+
+// ── Gate finding F6 ─────────────────────────────────────────────────────────
+//
+// queueProviderFallbackNote's nil-transcript-wiring guard used to return
+// silently — the live fallback note (and its provider_fallback frame)
+// vanished with zero trace. The fix counts (fallbackNoteSuppressed) and
+// WARN-logs every drop; this test pins the counter so a vanishing note can
+// never go unseen again.
+func TestFallbackNote_NilTranscriptWiring_SuppressedAndCounted_F6(t *testing.T) {
+	ts := &turnState{} // no transcript store wired
+	before := fallbackNoteSuppressed.Load()
+	ts.queueProviderFallbackNote(fbNoteFinal, []providers.FallbackAttempt{{
+		Provider: "prov",
+		Model:    fbNotePrimary,
+		Error:    errors.New("rate limit exceeded for tenant"),
+		Reason:   providers.FailoverRateLimit,
+	}})
+	require.Equal(t, before+1, fallbackNoteSuppressed.Load(),
+		"a fallback note dropped for nil transcript wiring must be counted (gate finding F6)")
 }

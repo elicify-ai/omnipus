@@ -13,6 +13,7 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -22,11 +23,17 @@ import (
 	"github.com/google/uuid"
 )
 
+// fallbackNoteSuppressed counts every queueProviderFallbackNote call dropped
+// because no transcript store/session is wired — without it a live fallback
+// note (and its provider_fallback frame) vanishes with zero trace (gate
+// finding F6). Mirrors turn_transcript.go::transcriptSuppressedErrors.
+var fallbackNoteSuppressed atomic.Uint64
+
 // fallbackNoteText — the §6 fallback-note sentence. Never "backup". The D12
 // hint appears ONLY when unavailable_code is model_retired.
 func fallbackNoteText(answeredModel, unavailableModel, unavailableCode string) string {
 	text := fmt.Sprintf("Answered by the Fallback model (%s) because %s was unavailable.", answeredModel, unavailableModel)
-	if unavailableCode == "model_retired" {
+	if unavailableCode == string(CodeModelRetired) {
 		text += " Pick a new model in the agent's settings."
 	}
 	return text
@@ -42,9 +49,9 @@ func fallbackNoteText(answeredModel, unavailableModel, unavailableCode string) s
 func fallbackUnavailableCode(attemptErr error) string {
 	var pe *common.ProviderError
 	if errors.As(attemptErr, &pe) && isModelRetiredBody(pe.Body, pe.Status) {
-		return "model_retired"
+		return string(CodeModelRetired)
 	}
-	return "rate_limited"
+	return string(CodeRateLimited)
 }
 
 // fallbackAttemptPair returns the note's pair facts from the chain's FIRST
@@ -66,6 +73,9 @@ func fallbackAttemptPair(attempts []providers.FallbackAttempt) (unavailableProvi
 // (restart-safe once-per-pair, C-17/C-18).
 func (ts *turnState) queueProviderFallbackNote(answeredModel string, attempts []providers.FallbackAttempt) {
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
+		fallbackNoteSuppressed.Add(1)
+		logger.WarnCF("agent", "provider_fallback note suppressed (no transcript store wired) — the fallback note and frame will NOT appear in replay",
+			map[string]any{"session_id": ts.transcriptSessionID, "answered_model": answeredModel})
 		return
 	}
 	unavailableProvider, unavailableModel, attemptErr := fallbackAttemptPair(attempts)
