@@ -262,7 +262,7 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 		}
 		if status == 400 {
 			// Check message patterns before default to FailoverFormat for 400.
-			if reason := classifyByMessage(body); reason != "" {
+			if reason := classifyByMessage(body, status); reason != "" {
 				return &FailoverError{
 					Reason:   reason,
 					Provider: provider,
@@ -284,7 +284,7 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	}
 
 	// Message pattern matching (priority order from OpenClaw).
-	if reason := classifyByMessage(msg); reason != "" {
+	if reason := classifyByMessage(msg, status); reason != "" {
 		return &FailoverError{
 			Reason:   reason,
 			Provider: provider,
@@ -326,8 +326,14 @@ func classifyByStatus(status int) FailoverReason {
 // §7.3 the C-5 billing check precedes the rate-limit patterns: a quota
 // EXHAUSTION must never be misread as a rate limit just because the same
 // sentence also says "quota".
-func classifyByMessage(msg string) FailoverReason {
-	if matchesBilling(msg, 0) {
+func classifyByMessage(msg string, status int) FailoverReason {
+	// status threads the real boundary status (0 when the error never
+	// crossed an HTTP boundary) into the C-5 gate — matchesBilling's ≥500
+	// veto is only correct when it sees the TRUE status. Gate finding F4:
+	// the catch-all used to pass 0, so billing vocabulary riding a 504/501
+	// body misclassified as billing; the "never on ≥500" invariant is the
+	// point of the veto.
+	if matchesBilling(msg, status) {
 		return FailoverBilling
 	}
 	if matchesAny(msg, rateLimitPatterns) {
@@ -336,9 +342,11 @@ func classifyByMessage(msg string) FailoverReason {
 	if matchesAny(msg, overloadedPatterns) {
 		return FailoverRateLimit // Overloaded treated as rate_limit
 	}
-	if matchesAny(msg, billingPatterns) {
-		return FailoverBilling
-	}
+	// NO second billingPatterns check here. It used to sit un-gated after
+	// matchesBilling and re-match the C-5 vocabulary regardless of status —
+	// the exact hole gate finding F4 closed (billing on a 504/501/505 body).
+	// matchesBilling above owns the billing verdict, veto included; the C-5
+	// invariant is billing vocabulary on 4xx only, never 5xx.
 	if matchesAny(msg, timeoutPatterns) {
 		return FailoverTimeout
 	}

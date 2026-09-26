@@ -109,6 +109,27 @@ func TestClassifyError_D2Routing(t *testing.T) {
 
 // MR-4 mechanics: FailoverUnknown must be RETRIABLE so a retired primary
 // falls back instead of aborting the chain (D12).
+// TestClassifyError_C5NeverOn5xx_F4 — gate finding F4. The catch-all used
+// to classify billing vocabulary riding a 5xx body as BILLING
+// (matchesBilling got a hardcoded status 0, and an un-gated second
+// billingPatterns check re-matched it afterwards). C-5's invariant is
+// billing vocabulary on 4xx ONLY, never 5xx. 504/501/505 are the statuses
+// classifyByStatus does not own, so they reached the catch-all.
+func TestClassifyError_C5NeverOn5xx_F4(t *testing.T) {
+	body := `{"error":{"message":"payment required"}}`
+	for _, status := range []int{504, 501, 505} {
+		fe := ClassifyError(d2PE(status, body), "openai", "gpt-4o")
+		if fe != nil && fe.Reason == FailoverBilling {
+			t.Fatalf("ClassifyError(status=%d) = billing — C-5 forbids billing on ≥500 (gate finding F4)", status)
+		}
+	}
+	// Positive control: the same vocabulary on a 4xx MUST still read as
+	// billing — proves this test could have seen the failure it guards.
+	if fe := ClassifyError(d2PE(400, body), "openai", "gpt-4o"); fe == nil || fe.Reason != FailoverBilling {
+		t.Fatalf("ClassifyError(status=400, payment required) = %v, want billing (C-5 positive control)", fe)
+	}
+}
+
 func TestIsRetriable_FailoverUnknown_RetriableForD12(t *testing.T) {
 	fe := &FailoverError{Reason: FailoverUnknown}
 	if !fe.IsRetriable() {
