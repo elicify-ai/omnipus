@@ -35,7 +35,14 @@ describe('preview-isolation-webserve.spec.ts E2E wiring (order 29, MAJ-007)', ()
       /const ISOLATION_SPEC_FILES[^=]*=\s*\[([^\]]*)\]/,
     )
     expect(match, 'ISOLATION_SPEC_FILES literal must exist in playwright.config.ts').not.toBeNull()
+    // The array literal carries line comments between its entries, so strip
+    // `//`-comments BEFORE splitting on commas — otherwise comment fragments
+    // masquerade as list members (found when the row was re-run after the
+    // spec file landed; the naive parse produced 10 phantom entries).
     const listed = (match![1] ?? '')
+      .split('\n')
+      .map((line) => line.replace(/\/\/.*$/, ''))
+      .join('\n')
       .split(',')
       .map((s) => s.trim().replace(/^['"]|['"]$/g, ''))
       .filter(Boolean)
