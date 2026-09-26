@@ -223,9 +223,10 @@ type Transport interface {
 	ReadMessage(ctx context.Context, uid uint32) (*Message, error)
 	// Send delivers an outbound message via SMTP.
 	Send(ctx context.Context, req SendRequest) error
-	// MarkSeen sets the \Seen flag on the message with the given UID. The heartbeat
-	// drainer calls this after a message has been turned into a Board task so the
-	// next unseen scan does not re-enqueue it.
+	// MarkSeen sets the \Seen flag on the message with the given UID. It has
+	// no production caller since the mailbox drainer was removed (#631): the
+	// panel's seen action goes through Client.MarkSeenIn, and the agent's
+	// read path sets \Seen together with the read-by-agent keyword.
 	MarkSeen(ctx context.Context, uid uint32) error
 }
 
