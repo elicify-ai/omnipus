@@ -93,6 +93,10 @@ func newExternalTestLoop(t *testing.T, cli, workspace string) (*AgentLoop, *turn
 	return al, ts
 }
 
+// extTestEffectiveLimit is an in-range (1–1000) effective limit the external
+// dispatch must pass through unchanged as RunOptions.MaxTurns (#904 D4).
+const extTestEffectiveLimit = 30
+
 // withFakeDriver swaps the external driver factory for the test, returning a
 // restore func and the FakeRunner instance the factory will hand out.
 func withFakeDriver(t *testing.T) (*runner.FakeRunner, func()) {
@@ -116,6 +120,7 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 	t.Setenv(config.EnvHome, home)
 
 	al, ts := newExternalTestLoop(t, "claude-code", "")
+	ts.agent.MaxIterations = extTestEffectiveLimit
 	fr, restore := withFakeDriver(t)
 	defer restore()
 
@@ -161,8 +166,11 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 	if opts[0].TimeoutSeconds != 30 {
 		t.Errorf("driver TimeoutSeconds = %d, want 30", opts[0].TimeoutSeconds)
 	}
-	if opts[0].MaxTurns != DefaultExternalMaxTurns {
-		t.Errorf("driver MaxTurns = %d, want %d", opts[0].MaxTurns, DefaultExternalMaxTurns)
+	// #904 (FR-004, D4): the turn cap is the agent's EFFECTIVE limit — the
+	// instance's MaxIterations, set below from the resolver's output — with
+	// no hidden 50 fallback (DefaultExternalMaxTurns is removed).
+	if opts[0].MaxTurns != extTestEffectiveLimit {
+		t.Errorf("driver MaxTurns = %d, want %d (the agent's effective limit)", opts[0].MaxTurns, extTestEffectiveLimit)
 	}
 
 	// ADR-032: the workspace dir is a PERSISTENT tree — it must NOT be torn
