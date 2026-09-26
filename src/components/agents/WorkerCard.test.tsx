@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { WorkerCard } from './WorkerCard'
 import type { Agent } from '@/lib/api'
 
 // Wave 2 — sub-agent worker tier. WorkerCard shows the executor badge; it OMITS
 // the chat entry, heartbeat indicator, the default-★ control (workers are never
 // chat targets / heartbeat / default) and — since issue #915 — any "Test run"
-// control on the tile (the runner check lives in the worker's profile).
+// control on the tile (an external worker's runner check runs automatically
+// before its profile saves).
 
 const mockNavigate = vi.fn()
 
@@ -37,12 +37,7 @@ function makeWorker(overrides: Partial<Agent> = {}): Agent {
 }
 
 function renderCard(agent: Agent) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
-    <QueryClientProvider client={qc}>
-      <WorkerCard agent={agent} />
-    </QueryClientProvider>,
-  )
+  return render(<WorkerCard agent={agent} />)
 }
 
 beforeEach(() => {

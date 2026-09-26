@@ -14,8 +14,9 @@ interface WorkerCardProps {
 // point at work, not a colleague". They differ from base AgentCards:
 //   SHOW : executor/runner badge.
 //   OMIT : chat/open-conversation entry, heartbeat indicator, default-★ control,
-//          and any "Test run" control (removed, issue #915 — the runner check
-//          lives in the worker's profile and runs before an external worker saves).
+//          and any "Test run" control (removed, issue #915 — for an external
+//          worker the runner check now runs only automatically, before its
+//          profile saves; the profile has no manual button for it).
 // Clicking the card still navigates to the agent profile (workers have a detail
 // page); the card simply never surfaces the colleague affordances.
 
@@ -49,6 +50,7 @@ export function WorkerCard({ agent }: WorkerCardProps) {
   const isExternalCli = kind === 'external-cli'
 
   return (
+    // Wrapper kept as the grid cell: AgentListScreen.test.tsx anchors on `.closest('div.relative')`.
     <div className="relative group/card">
       <Button
         type="button"
