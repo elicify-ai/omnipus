@@ -942,7 +942,18 @@ type WebSearchToolOptions struct {
 	BaiduSearchBaseURL    string
 	BaiduSearchMaxResults int
 	BaiduSearchEnabled    bool
-	Proxy                 string
+
+	// Per-provider credential ref NAMES for the misconfiguration WARN — the
+	// warning names the configured ref so the operator knows which vault
+	// entry to check. Names only: a ref is a label, never a key value, and
+	// an empty ref simply means the wiring has not supplied one.
+	PerplexityAPIKeyRef  string
+	BraveAPIKeyRef       string
+	TavilyAPIKeyRef      string
+	GLMSearchAPIKeyRef   string
+	BaiduSearchAPIKeyRef string
+
+	Proxy string
 
 	// SSRFChecker enforces SSRF protection (SEC-24) on all outbound HTTP
 	// connections made by the search provider. When non-nil, SafeClient()
@@ -971,10 +982,67 @@ func makeSearchClient(ssrf *security.SSRFChecker, proxy string, timeout time.Dur
 	return client, nil
 }
 
+// misconfiguredSearchProvider is one keyed search provider that is enabled in
+// config but has no resolved key at tool construction — unusable as
+// configured, so selection will skip it.
+type misconfiguredSearchProvider struct {
+	// name is the provider id ("tavily", "brave", …).
+	name string
+	// ref is the configured credential ref NAME (never a key value); ""
+	// when the wiring did not supply one.
+	ref string
+}
+
+// enabledButKeylessSearchProviders returns the keyed providers that are
+// enabled but carry no key at tool construction. DuckDuckGo is never included
+// (keyless by design) and SearXNG is never included (self-hosted: it has an
+// optional base URL but no credential ref), so "enabled" here means exactly
+// the five providers whose keys come from the credential vault.
+func enabledButKeylessSearchProviders(opts WebSearchToolOptions) []misconfiguredSearchProvider {
+	var out []misconfiguredSearchProvider
+	addIfKeyless := func(enabled bool, hasKey bool, name, ref string) {
+		if enabled && !hasKey {
+			out = append(out, misconfiguredSearchProvider{name: name, ref: ref})
+		}
+	}
+	addIfKeyless(opts.PerplexityEnabled, len(opts.PerplexityAPIKeys) > 0, "perplexity", opts.PerplexityAPIKeyRef)
+	addIfKeyless(opts.BraveEnabled, len(opts.BraveAPIKeys) > 0, "brave", opts.BraveAPIKeyRef)
+	addIfKeyless(opts.TavilyEnabled, len(opts.TavilyAPIKeys) > 0, "tavily", opts.TavilyAPIKeyRef)
+	addIfKeyless(opts.GLMSearchEnabled, opts.GLMSearchAPIKey != "", "glm_search", opts.GLMSearchAPIKeyRef)
+	addIfKeyless(opts.BaiduSearchEnabled, opts.BaiduSearchAPIKey != "", "baidu_search", opts.BaiduSearchAPIKeyRef)
+	return out
+}
+
 func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 	var provider SearchProvider
 	maxResults := 10
 	ingestBound := effectiveIngestBound(int64(opts.IngestBoundBytes))
+
+	// A keyed provider that is enabled but has no resolved key is a
+	// misconfiguration the operator must see. Previously this WARN lived only
+	// in the final-fallback branch, so it could not fire while
+	// tools.web.duckduckgo.enabled ships true — a fully configured Tavily
+	// silently degraded to DuckDuckGo for two months with zero WARNs in the
+	// log. It now fires BEFORE selection, regardless of which branch wins,
+	// naming the affected providers and their configured credential refs
+	// (names only, never key values).
+	if misconfigured := enabledButKeylessSearchProviders(opts); len(misconfigured) > 0 {
+		names := make([]string, 0, len(misconfigured))
+		refs := make([]string, 0, len(misconfigured))
+		for _, m := range misconfigured {
+			names = append(names, m.name)
+			if m.ref != "" {
+				refs = append(refs, m.name+"="+m.ref)
+			}
+		}
+		logger.WarnCF("tool", "search provider enabled but no resolved key; selection will skip it",
+			map[string]any{
+				"providers": strings.Join(names, ","),
+				"refs":      strings.Join(refs, ","),
+				"hint":      "the credential ref is configured but its key did not reach the process environment — check the vault entry and boot credential-injection logs",
+			})
+	}
+
 	// Priority: Perplexity > Brave > SearXNG > Tavily > DuckDuckGo > Baidu Search > GLM Search
 	if opts.PerplexityEnabled && len(opts.PerplexityAPIKeys) > 0 {
 		client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, perplexityTimeout)
