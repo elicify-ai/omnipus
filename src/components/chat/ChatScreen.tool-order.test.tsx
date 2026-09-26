@@ -219,10 +219,32 @@ function expectBefore(a: Element, b: Element): void {
   ).toBe(true)
 }
 
-/** All interleaved text/tool-call parts for the rendered message, in DOM order. */
+/**
+ * All interleaved text/tool-call parts for the rendered message, in DOM order.
+ *
+ * The selector covers BOTH render shapes a tool call can take since the
+ * chat-tool-ui-collapse landing: the generic badge (tool-call-badge — mock
+ * stubs + the real GenericToolCall fallthrough) and the five dedicated
+ * blocks' toggles (bash-output-toggle, file-read-toggle, file-tree-toggle,
+ * web-search-toggle, web-fetch-toggle — real BashOutputBlock/FileReadBlock/
+ * FileTreeBlock/WebSearchBlock/WebFetchBlock). A tool with a dedicated block
+ * renders its own toggle, which the old selector never matched — that is why
+ * a live web_search call was invisible to this net and the core case saw 2
+ * nodes instead of 3.
+ */
 function orderedPartNodes(container: HTMLElement): Element[] {
   return Array.from(
-    container.querySelectorAll('[data-testid="historical-markdown"], [data-testid="tool-call-badge"]'),
+    container.querySelectorAll(
+      [
+        '[data-testid="historical-markdown"]',
+        '[data-testid="tool-call-badge"]',
+        '[data-testid="bash-output-toggle"]',
+        '[data-testid="file-read-toggle"]',
+        '[data-testid="file-tree-toggle"]',
+        '[data-testid="web-search-toggle"]',
+        '[data-testid="web-fetch-toggle"]',
+      ].join(', '),
+    ),
   )
 }
 
@@ -332,13 +354,67 @@ describe('ChatScreen — tool-call/text DOM ordering (interleaving regression ne
     expect(nodes).toHaveLength(3)
     expect(nodes[0]).toHaveAttribute('data-testid', 'historical-markdown')
     expect(nodes[0].textContent).toContain('Let me check.')
-    expect(nodes[1]).toHaveAttribute('data-testid', 'tool-call-badge')
-    expect(nodes[1]).toHaveAttribute('data-tool', 'web_search')
+    // web_search has a dedicated block since chat-tool-ui-collapse: it renders
+    // WebSearchBlock's toggle (web-search-toggle), not the generic badge. The
+    // toggle carries the tool name as visible text — that plus the dedicated
+    // testid is the identity check; there is no data-tool attribute on this
+    // shape.
+    expect(nodes[1]).toHaveAttribute('data-testid', 'web-search-toggle')
+    expect(nodes[1].textContent).toContain('web_search')
     expect(nodes[2]).toHaveAttribute('data-testid', 'historical-markdown')
     expect(nodes[2].textContent).toContain('The answer is 42.')
 
     // Explicit compareDocumentPosition check per the load-bearing assertion
     // this suite exists to pin.
+    expectBefore(nodes[0], nodes[1])
+    expectBefore(nodes[1], nodes[2])
+  })
+
+  it('interleaves a delegate tool call (no dedicated block — generic badge shape) between two streamed text segments', async () => {
+    // Same interleave contract as the core case above, but via the OTHER
+    // render shape: delegate has no dedicated block on either path (absent
+    // from VirtualAssistantMessageRow's replay dispatch and from
+    // OmnipusRuntimeProvider's live registrations), so it renders through
+    // GenericToolCall — the original tool-call-badge + data-tool shape. This
+    // pins that the ordering net covers the generic-badge path too, not just
+    // the dedicated-block path.
+    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Delegating now. ', session_id: SID }) })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_start',
+        call_id: 'tc_delegate',
+        tool: 'delegate',
+        params: { task: 'summarize the log' },
+        session_id: SID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'tool_call_result',
+        call_id: 'tc_delegate',
+        tool: 'delegate',
+        result: { text: 'done' },
+        status: 'success',
+        session_id: SID,
+      })
+    })
+    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Delegation finished.', session_id: SID }) })
+    act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+
+    const nodes = orderedPartNodes(container)
+    expect(nodes).toHaveLength(3)
+    expect(nodes[0]).toHaveAttribute('data-testid', 'historical-markdown')
+    expect(nodes[0].textContent).toContain('Delegating now.')
+    expect(nodes[1]).toHaveAttribute('data-testid', 'tool-call-badge')
+    expect(nodes[1]).toHaveAttribute('data-tool', 'delegate')
+    expect(nodes[2]).toHaveAttribute('data-testid', 'historical-markdown')
+    expect(nodes[2].textContent).toContain('Delegation finished.')
     expectBefore(nodes[0], nodes[1])
     expectBefore(nodes[1], nodes[2])
   })
