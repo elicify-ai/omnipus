@@ -82,30 +82,23 @@ func TestMailServeRoutes_TokenOnly404Only(t *testing.T) {
 }
 
 func TestMailPreview_NoRedirect(t *testing.T) {
-	// MC-10(1) / T62: nothing under /mail-preview/ redirects, and a dot-segment
-	// path must not be sent to /api/. Non-vacuous only once the prefix exists.
-	env := newMailRedEnv(t)
-	token := strings.Repeat("c", 43)
-	live := "/mail-preview/html/" + token
-	requireMailLive(t, env.mux, http.MethodGet, live, "MC-10(1) / T62")
-
-	var apiHits atomic.Int32
-	outer := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			apiHits.Add(1)
-		}
-		env.mux.ServeHTTP(w, r)
-	})
-	srv := httptest.NewServer(outer)
-	t.Cleanup(srv.Close)
+	// MC-10(1) / T62 / §2.3a: nothing under /mail-preview/ redirects, and a
+	// dot-segment path is not dispatched to /api/. The router is the production
+	// composition. http.ServeMux is the wrong router for this oracle: it cleans
+	// /mail-preview/html/{token}/../../api/v1/state to /mail-preview/api/v1/state
+	// and answers 307 before any handler. Seeing that 307 does not test the
+	// product. The control that proves the harness can see a redirect out to
+	// /api/v1/state is TestMailPreview_StdlibMuxRedirectsADotSegmentToTheAPI.
+	_, _, token, srv, apiHits := newProductionMailPreviewChain(t)
 	addr := srv.Listener.Addr().String()
+	p := mailPreviewPathPrefix
 	targets := []string{
-		live,
-		"/mail-preview/html/" + token + "/../../api/v1/state",
-		"/mail-preview/part/" + token + "/0",
-		"/mail-preview/img/" + token + "/0",
-		"/mail-preview/html/" + token + "/./index.html",
-		"/mail-preview//html//" + token,
+		p + "html/" + token,
+		p + "html/" + token + "/../../api/v1/state",
+		p + "part/" + token + "/0",
+		p + "img/" + token + "/0",
+		p + "html/" + token + "/./index.html",
+		p + "html//" + token,
 	}
 	for _, target := range targets {
 		for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPost} {
@@ -121,13 +114,20 @@ func TestMailPreview_NoRedirect(t *testing.T) {
 	if apiHits.Load() != 0 {
 		t.Fatalf("MC-10(1): a /mail-preview/ request was dispatched to /api/ (%d hits)", apiHits.Load())
 	}
+	live := sendRawPreviewRequest(t, addr, http.MethodGet, p+"html/"+token, nil)
+	if live.status != http.StatusOK {
+		t.Fatalf("MC-10(1): live html token = %d, want 200 — a corpus of only refusals would not prove the prefix is served", live.status)
+	}
 }
 
-func TestMailPreview_NoRedirectHarnessSeesAStdlibMuxRedirect(t *testing.T) {
-	// Positive control for the tripwire above, mirroring
-	// TestLibraryPreview_NoRedirectHarnessSeesAStdlibMuxRedirect. The standard
-	// library mux cleans a dot-segment path and redirects. If this test cannot
-	// see that redirect, "nothing redirected" above proves nothing.
+func TestMailPreview_StdlibMuxRedirectsADotSegmentToTheAPI(t *testing.T) {
+	// T62 positive control, same oracle as
+	// TestMailPreview_NoRedirectHarnessSeesAStdlibMuxRedirect (the library
+	// mirror). That name cannot be declared twice. This copy uses the
+	// two-segment shape /mail-preview/tok/../../api/v1/state; the mirror uses
+	// three segments under html/{token}. Both must 3xx to /api/v1/state.
+	// The standard library mux cleans a dot-segment path and redirects. If
+	// this test cannot see that redirect, "nothing redirected" proves nothing.
 	std := http.NewServeMux()
 	std.HandleFunc("/mail-preview/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -148,9 +148,17 @@ func TestMailPreview_NoRedirectHarnessSeesAStdlibMuxRedirect(t *testing.T) {
 }
 
 func TestMailPreviewHTML_NormativeHeaders(t *testing.T) {
-	// MC-10 verbatim header set, once a token can be served. Mint is the only
-	// IMAP fetch; the serve route must answer from the store.
+	// MC-10 verbatim header set on GET /mail-preview/html/{token}. Mint is the
+	// only IMAP fetch (§2.3a); the serve route answers from the store. The
+	// mailbox in newMailRedEnv points at 127.0.0.1:59991 with nothing listening,
+	// and MC-8 requires that dial to be 502 connect_refused — a 200 from that
+	// dial would be a fake grant. This test therefore stages one HTML message
+	// on a loopback server the way TestMailDraftSend_StaleUIDValidityIs409 does,
+	// then checks the header block against the spec, not against a builder.
 	env := newMailRedEnv(t)
+	imapPort, cl := startPlainIMAP(t)
+	pointMailboxAt(t, env, imapPort, 1)
+	appendRaw(t, cl, "INBOX", []byte(mailPreviewHTMLRaw), nil)
 	mintPath := "/api/v1/mail/html-preview-token"
 	requireMailLive(t, env.mux, http.MethodPost, mintPath, "MC-10 / spec §2.3a")
 	body := fmt.Sprintf(`{"workspace_id":%q,"agent_id":%q,"folder":"inbox","message_ref":"uid:1:1","load_remote":false}`, mailRedWS, mailRedAgent)
@@ -168,6 +176,9 @@ func TestMailPreviewHTML_NormativeHeaders(t *testing.T) {
 	srv := mailDo(env.mux, http.MethodGet, "/mail-preview/html/"+minted.Token, nextMailIP(), false, "")
 	if srv.Code != http.StatusOK {
 		t.Fatalf("MC-10: serve = %d, want 200. body=%s", srv.Code, srv.Body.String())
+	}
+	if !strings.Contains(srv.Body.String(), "<p>Hello there</p>") {
+		t.Fatalf("MC-10: served HTML = %q, want the sanitized paragraph from the staged message", srv.Body.String())
 	}
 	if got := srv.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
 		t.Fatalf("MC-10: Content-Type = %q, want text/html; charset=utf-8", got)
@@ -272,3 +283,10 @@ func TestMailImageProxy_RefusesLoopbackAtDial(t *testing.T) {
 		t.Fatalf("MC-41: an unknown token still dialed %s (%d accepts)", ln.Addr(), hits.Load())
 	}
 }
+
+// mailPreviewHTMLRaw is one inbox message whose HTML part is a CommonMark
+// paragraph. MC-2 keeps <p>; the header test serves this exact paragraph.
+const mailPreviewHTMLRaw = "From: a@b.test\r\nTo: mailbox@test.local\r\nSubject: preview\r\n" +
+	"Date: Mon, 02 Jan 2006 15:04:05 +0000\r\nMessage-ID: <preview@b.test>\r\n" +
+	"MIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" +
+	"<p>Hello there</p>\r\n"
