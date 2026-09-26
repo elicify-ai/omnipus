@@ -209,6 +209,46 @@ describe('AgentProfile — Max tool calls per turn (#904)', () => {
     expect(lastPayload().max_tool_iterations).toBe(30)
   })
 
+  it('D4: the worker command preview omits max_tool_iterations when the agent has no own value (never 0)', async () => {
+    const worker: Agent = {
+      ...baseAgent,
+      id: 'ext',
+      name: 'External Worker',
+      type: 'subagent_3p',
+      executor: { kind: 'external-cli', cli: 'claude-code', cli_path: '/usr/bin/claude' },
+    }
+    renderProfile(worker)
+    await screen.findByText(worker.name)
+    const runtime = screen.getByTestId('tab-runtime')
+    runtime.focus()
+    fireEvent.keyDown(runtime, { key: 'Enter' })
+    fireEvent.click(runtime)
+    await waitFor(() => expect(fetchExecutorPreview).toHaveBeenCalled(), { timeout: 3000 })
+    const body = vi.mocked(fetchExecutorPreview).mock.calls.at(-1)![0] as Record<string, unknown>
+    expect('max_tool_iterations' in body).toBe(false)
+    expect(JSON.stringify(body)).not.toContain('max_tool_iterations')
+  })
+
+  it('D4: the worker command preview carries the stored own value', async () => {
+    const worker: Agent = {
+      ...loweredAgent,
+      max_tool_iterations: 30,
+      max_tool_iterations_override: 30,
+      id: 'ext',
+      name: 'External Worker',
+      type: 'subagent_3p',
+      executor: { kind: 'external-cli', cli: 'claude-code', cli_path: '/usr/bin/claude' },
+    }
+    renderProfile(worker)
+    await screen.findByText(worker.name)
+    const runtime = screen.getByTestId('tab-runtime')
+    runtime.focus()
+    fireEvent.keyDown(runtime, { key: 'Enter' })
+    fireEvent.click(runtime)
+    await waitFor(() => expect(fetchExecutorPreview).toHaveBeenCalled(), { timeout: 3000 })
+    expect((vi.mocked(fetchExecutorPreview).mock.calls.at(-1)![0] as Record<string, unknown>).max_tool_iterations).toBe(30)
+  })
+
   it('FR-004: with GET /performance failing, no global number is invented', async () => {
     vi.mocked(fetchPerformanceSettings).mockRejectedValue(new Error('503'))
     const input = await openAdvanced(loweredAgent)
