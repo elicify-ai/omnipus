@@ -312,10 +312,10 @@ func TestMAJ101_ChainRow_ExactlyOneMarkFailure(t *testing.T) {
 
 // ── Row 8 / B row: billing never retries in place (pin) ────────────────────
 //
-// PIN, labelled per the file header: the in-chain retry loop does not exist
-// yet, so "no in-chain retry" is trivially true today. The assertion becomes
-// live the moment the loop lands — it exists so GREEN cannot teach the loop
-// to retry billing (C-7/D2: billing is not a wait-it-out condition).
+// PIN (FINDING 4 comment fix, flagged for CHECK): the in-chain retry loop
+// now EXISTS, so this pin is LIVE — it guards that the loop retries
+// rate-limits only and never billing (C-7/D2: billing is not a wait-it-out
+// condition; the pre-loop wording "trivially true today" no longer holds).
 
 func TestFallbackRetryLoop_BillingAnswersByFallbackAtOnce(t *testing.T) {
 	fc, ct := newChainForTest()

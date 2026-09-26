@@ -134,6 +134,14 @@ func (ct *CooldownTracker) CooldownRemaining(provider string) time.Duration {
 		}
 	}
 
+	// Report at whole-second granularity, rounded UP: the observable
+	// remaining reads as the exact curve step the mark set (60 s reads as
+	// 60 s, not 59.999…s), whatever the microsecond drift between the mark
+	// and the read. Internal availability checks read CooldownEnd directly
+	// and are unaffected.
+	if remaining > 0 {
+		remaining = ((remaining + time.Second - 1) / time.Second) * time.Second
+	}
 	return remaining
 }
 
@@ -186,5 +194,3 @@ func calculateStandardCooldown(errorCount int) time.Duration {
 	ms = min(3_600_000, ms) // cap at 1 hour
 	return time.Duration(ms) * time.Millisecond
 }
-
-
