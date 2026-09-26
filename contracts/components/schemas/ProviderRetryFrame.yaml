@@ -1,0 +1,84 @@
+title: ProviderRetryFrame
+description: >
+  Server → client (provider-messages spec §7.1 item 3). Announces an automatic
+  provider rate-limit retry inside the turn's fallback-chain execution: the
+  candidate about to be re-called, when it will be called (retry_at), and which
+  attempt of max_attempts this is (C-8). The SPA keys a per-turn projection item
+  on turn_id — each newer retry indicator replaces the previous one and the
+  turn-end frame clears it (MAJ-108), so a freshly attached tab's snapshot shows
+  the live countdown (§7.4).
+type: object
+required:
+  - type
+  - session_id
+  - turn_id
+  - provider
+  - model
+  - retry_at
+  - retry_after_seconds
+  - sent_at
+  - attempt
+  - max_attempts
+  - error_code
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: provider_retry
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Session whose turn is retrying.
+  turn_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Turn the retry belongs to; keys the per-turn projection item (MAJ-108).
+  provider:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: Catalog display name of the provider of the candidate ABOUT TO BE CALLED (C-16) — never unconditionally the primary.
+  model:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: Model id of the candidate about to be re-called.
+  retry_at:
+    type: string
+    format: date-time
+    description: RFC 3339 server wall clock — when the next provider call is scheduled; drives the countdown (C-11).
+  retry_after_seconds:
+    type: integer
+    minimum: 1
+    description: The honored wait in whole seconds (provider retry-after capped at 120 s, or the applied backoff step). Never 0 — a frame is emitted only when a wait is scheduled (C-9/MIN-101).
+  sent_at:
+    type: string
+    format: date-time
+    description: RFC 3339 server wall clock at frame publication. The client estimates server time as the max over received frames of (sent_at + client-elapsed-since-receipt) and renders max(0, retry_at − serverNow) — skew-immune by construction (C-11, MAJ-108).
+  attempt:
+    minimum: 2
+    type: integer
+    description: The number of the call ABOUT TO BE MADE (2..max_attempts) — 3 total calls including the first (C-8).
+  max_attempts:
+    type: integer
+    minimum: 1
+    description: Total provider calls including the first. The indicator's "of N" reads this field — never hard-coded (MIN-104).
+  error_code:
+    type: string
+    maxLength: 64
+    description: The classified provider condition that triggered the retry (today always rate_limited — C-9 retries only rate-limited candidates). Plain string, not an enum — the spec pins an explicit enum only for unavailable_code, and a renderer must never turn this frame's copy into display text (C-2).
+  seq:
+    type: integer
+    format: int64
+    minimum: 1
+    description: >-
+      Per-session sequence number of this frame (#823 catch-up redesign). Strictly
+      increasing and gap-free within the session, assigned by the gateway's per-session
+      hub as the single chokepoint through which every session-scoped frame is published.
+      Optional: absent on an unsequenced copy of this frame (for example a broadcast
+      delivered to a tab that is not bound to this session) — the client only advances its
+      per-session cursor for frames that carry seq. The client stores the highest seq it
+      has applied per session and sends it back as since_seq on attach_session; frames at
+      or below that cursor are ignored, which makes re-delivery idempotent.

@@ -49,6 +49,17 @@ x-user-message-attributions:
 # There is deliberately NO blanket "From the model:" prefix: attribution is
 # written into each sentence instead, so the copy stays readable and each
 # message names the real owner of the fault.
+#
+# ── Templated provider variants (provider-messages spec §6, OBS-002) ──────────
+# An entry MAY carry an optional sibling `provider_message` string: the
+# templated sentence the agent assembles at the emit site when the failing
+# attempt's facts (provider/model) are present (C-16); when facts are absent
+# the plain `message` above is the fallback — never a blank. Slots come from
+# the CLOSED vocabulary {provider} {model} {attempt} {max} {countdown}
+# {answered_model} {unavailable_model}; both generators hard-fail on any other
+# slot and on a template with unbalanced braces. The templates are emitted
+# into BOTH catalogues (LLMErrorProviderMessages in Go, llmErrorProviderMessages
+# in TS) — never hand-written in consumer code.
 x-user-messages:
   media_unsupported:
     message: "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it."
@@ -62,9 +73,25 @@ x-user-messages:
   provider_auth_failed:
     message: "The model provider rejected our credentials. Check this provider’s API key in Settings."
     attribution: config
+    # provider-messages spec §6: templated variant names the failing attempt's
+    # provider (C-16); the plain message above is the facts-absent fallback.
+    provider_message: "{provider} rejected the API key. Check the key in Settings → Providers."
   rate_limited:
     message: "The model provider is temporarily overloaded. Wait a moment, then retry."
     attribution: provider
+    # provider-messages spec §6 (terminal row): the server-assembled line for the
+    # facts-present turn-end display. The LIVE retry/countdown line is assembled
+    # client-side from the provider_retry frame and is deliberately NOT a server
+    # template (§6 mechanics, C-15).
+    provider_message: "{provider} is busy right now. You can retry the turn."
+  quota_billing:
+    # provider-messages spec §7.1/D15: attribution config is FINAL (no placeholder).
+    # Facts-absent sentence follows the house "The model provider…" pattern; the
+    # templated variant substitutes the failing attempt's provider (C-16). Copy
+    # carries no button, no link (D6).
+    message: "The model provider says your account is out of credit."
+    attribution: config
+    provider_message: "{provider} says your account is out of credit."
   network:
     message: "We couldn’t reach the model provider. Check your internet connection and retry."
     attribution: ambiguous
@@ -98,6 +125,15 @@ x-user-messages:
   model_unavailable:
     message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
     attribution: config
+  model_retired:
+    # provider-messages spec D9/D11: a provider retired or refused the configured
+    # model DURING a real call (C-24 trigger). Never shares model_unavailable's
+    # mid-session switch-failure meaning. attribution config (D15) — the
+    # facts-absent sentence replaces {provider} with "its provider" (the exact
+    # text §6 requires the catalogue to carry for facts-absent renders).
+    message: "This model is no longer offered by its provider. Pick a new model in the agent's settings."
+    attribution: config
+    provider_message: "This model is no longer offered by {provider}. Pick a new model in the agent's settings."
   needs_provider:
     # ADR-068 FR-046 (2026-08-23 §8b, T068-32): the first real producer of
     # this code is a device-code provider (openai-chatgpt, xai) whose stored
@@ -141,6 +177,7 @@ properties:
       - request_too_large
       - provider_auth_failed
       - rate_limited
+      - quota_billing
       - network
       - provider_stalled
       - content_policy
@@ -151,6 +188,7 @@ properties:
       - agent_not_configured
       - workspace_unavailable
       - model_unavailable
+      - model_retired
       - needs_provider
       - model_unassigned
       - turn_canceled
@@ -169,3 +207,40 @@ properties:
     type: string
     maxLength: 2048
     description: Live-only technical detail; never persisted or replayed.
+  facts:
+    type: object
+    additionalProperties: false
+    description: >-
+      Structured facts about the FAILING attempt, assembled server-side
+      (provider-messages spec §7.1 item 1). All fields optional — facts absent
+      means the catalogue sentence renders. Deliberately closed to
+      provider/model/request_id ONLY: no retry_after_seconds, no retry_at, no
+      attempts, no max_attempts (OBS-103 — the SPA has no consumer for retry
+      facts on the error frame; retry timing lives on the provider_retry frame,
+      whose consumer is the indicator), no billing_url (D6), no error_id (no
+      fetch path — §5/D1).
+    properties:
+      provider:
+        type: string
+        maxLength: 256
+        description: Catalog display name of the provider of the FAILING attempt (C-16) — never unconditionally the primary.
+      model:
+        type: string
+        maxLength: 256
+        description: Model id of the failing attempt (C-16).
+      request_id:
+        type: string
+        maxLength: 256
+        description: >-
+          Provider request id (x-request-id / request-id / x-amzn-requestid /
+          cf-ray as labelled last resort, OBS-003). VERBOSE-RENDER-ONLY (C-20,
+          PM-2): renders only under Verbose chat, never to a non-Verbose viewer.
+  provider_message:
+    type: boolean
+    description: >-
+      Server-authored subtype/trust flag (MAJ-104, C-14): when true, `message`
+      carries the server-assembled provider-message sentence and the SPA renders
+      it; when absent or false, the SPA keeps today's catalogue-copy rendering
+      keyed on `code` (e.g. the own-limiter's internal rate_limited text — RG-2).
+      Set at write time by the agent's assembly path; the replay shape carries
+      the same flag so a reloaded session renders identically.

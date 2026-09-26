@@ -1,0 +1,58 @@
+title: ProviderFallbackNote
+description: >
+  Server → client. Replay carrier for a persisted fallback-model note
+  (provider-messages spec §7.1 item 2, MAJ-010/C-17). The note is persisted to
+  the session transcript after the assistant answer (MIN-103/FB-2) and must not
+  be a live-only orphan — on session reload the replay path emits this frame so
+  the reloaded session renders the same note. The LIVE announcement is the
+  separate provider_fallback frame. The note text says "Fallback model", never
+  "backup" (D7) — that naming is baked into the persisted message at write
+  time. Replay carriers carry no seq (ReplayErrorFrame/ReplayMessageFrame
+  pattern).
+type: object
+required:
+  - type
+  - session_id
+  - entry_id
+  - timestamp
+  - message
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: replay_provider_fallback
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Session being replayed.
+  entry_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Session-transcript entry id of the persisted note, for dedup against the live provider_fallback announcement (FB-2 — the note must not render twice).
+  timestamp:
+    type: string
+    format: date-time
+    description: RFC 3339 time the note was persisted (ReplayErrorFrame pattern).
+  answered_model:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: Model id of the fallback candidate that answered.
+  unavailable_model:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: Model id of the unavailable candidate (the primary in a multi-hop chain, MIN-103).
+  unavailable_code:
+    type: string
+    enum:
+      - rate_limited
+      - model_retired
+    description: The classified provider condition that made the unavailable candidate miss the turn; gates the D12 pick-a-new-model hint in the rendered note.
+  message:
+    type: string
+    minLength: 1
+    maxLength: 4096
+    description: The persisted note text, verbatim — the ONLY free-text field on any provider frame (the SPA's trust gate for it is the session transcript itself, not a live flag).

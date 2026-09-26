@@ -17,10 +17,11 @@
 // drift because neither is written by hand.
 //
 // Every validation below is FATAL. A missing message, a stray catalogue entry
-// for a code that is not in the enum, an empty message, or an attribution that
-// is not in the declared vocabulary aborts codegen with a precise error rather
-// than emitting a catalogue with a hole in it. That is what makes "every code
-// has a message and an attribution" true by construction.
+// for a code that is not in the enum, an empty message, an attribution that
+// is not in the declared vocabulary, or a provider_message template that uses
+// a slot outside the closed vocabulary aborts codegen with a precise error
+// rather than emitting a catalogue with a hole in it. That is what makes
+// "every code has a message and an attribution" true by construction.
 package main
 
 import (
@@ -32,11 +33,14 @@ import (
 )
 
 // userMessageEntry is one row of the LLMError copy catalogue: a wire code, the
-// user-facing sentence shown for it, and the tag naming who owns the fault.
+// user-facing sentence shown for it, the tag naming who owns the fault, and
+// (optionally) the templated provider variant assembled when the failing
+// attempt's facts are present.
 type userMessageEntry struct {
-	code        string
-	message     string
-	attribution string
+	code            string
+	message         string
+	attribution     string
+	providerMessage string
 }
 
 // userMessageCatalogue is the validated catalogue extracted from the contract.
@@ -52,7 +56,24 @@ const (
 	// carrying the catalogue on components.schemas.LLMError.
 	userMessagesKey = "x-user-messages"
 	attributionsKey = "x-user-message-attributions"
+
+	// providerMessageKey is the optional per-entry key carrying the templated
+	// provider variant of the sentence (provider-messages spec §6, OBS-002).
+	providerMessageKey = "provider_message"
 )
+
+// providerMessageSlots is the CLOSED slot vocabulary for provider_message
+// templates (provider-messages spec §6). Both generators hard-fail on any
+// other slot, so a template can never silently render a raw "{oops}".
+var providerMessageSlots = map[string]bool{
+	"{provider}":         true,
+	"{model}":            true,
+	"{attempt}":          true,
+	"{max}":              true,
+	"{countdown}":        true,
+	"{answered_model}":   true,
+	"{unavailable_model}": true,
+}
 
 // extractUserMessageCatalogue reads the copy catalogue off
 // components.schemas.<schemaName> in the parsed AsyncAPI document and validates
@@ -126,7 +147,15 @@ func extractUserMessageCatalogue(doc map[string]any, schemaName string) (*userMe
 				schemaName, userMessagesKey, code, attribution, attributionsKey,
 				strings.Join(attributions, ", "))
 		}
-		entries = append(entries, userMessageEntry{code: code, message: message, attribution: attribution})
+		providerMessage, _ := rawEntry[providerMessageKey].(string)
+		if rawEntry[providerMessageKey] != nil && strings.TrimSpace(providerMessage) == "" {
+			return nil, fmt.Errorf("%s.%s.%s: provider_message must be a non-empty string when present",
+				schemaName, userMessagesKey, code)
+		}
+		if err := validateTemplateSlots(providerMessage); err != nil {
+			return nil, fmt.Errorf("%s.%s.%s: %w", schemaName, userMessagesKey, code, err)
+		}
+		entries = append(entries, userMessageEntry{code: code, message: message, attribution: attribution, providerMessage: providerMessage})
 		seen[code] = true
 	}
 
@@ -145,6 +174,56 @@ func extractUserMessageCatalogue(doc map[string]any, schemaName string) (*userMe
 	}
 
 	return &userMessageCatalogue{attributions: attributions, entries: entries}, nil
+}
+
+// validateTemplateSlots enforces the closed slot vocabulary on a
+// provider_message template: balanced braces and every {slot} drawn from
+// providerMessageSlots. An empty template passes (the entry simply has no
+// templated variant).
+func validateTemplateSlots(t string) error {
+	if t == "" {
+		return nil
+	}
+	if strings.Count(t, "{") != strings.Count(t, "}") {
+		return fmt.Errorf("provider_message has unbalanced braces (%d open, %d close)",
+			strings.Count(t, "{"), strings.Count(t, "}"))
+	}
+	for _, slot := range templateSlots(t) {
+		if !providerMessageSlots[slot] {
+			return fmt.Errorf(
+				"provider_message uses slot %q — not in the closed slot vocabulary (%s)",
+				slot, slotVocabularyList())
+		}
+	}
+	return nil
+}
+
+// templateSlots returns every {slot} token in a template, in order.
+func templateSlots(t string) []string {
+	var slots []string
+	for i := 0; i < len(t); {
+		start := strings.IndexByte(t[i:], '{')
+		if start < 0 {
+			break
+		}
+		rel := strings.IndexByte(t[i+start:], '}')
+		if rel < 0 {
+			break
+		}
+		slots = append(slots, t[i+start:i+start+rel+1])
+		i += start + rel + 1
+	}
+	return slots
+}
+
+// slotVocabularyList renders the closed vocabulary for messages, sorted.
+func slotVocabularyList() string {
+	keys := make([]string, 0, len(providerMessageSlots))
+	for k := range providerMessageSlots {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, " ")
 }
 
 // codeEnumOf returns the `properties.code.enum` values of a raw schema map.
@@ -245,6 +324,19 @@ func generateUserMessages(cat *userMessageCatalogue) ([]byte, error) {
 	buf.WriteString("var LLMErrorUserAttributions = map[string]LLMErrorAttribution{\n")
 	for _, e := range cat.entries {
 		fmt.Fprintf(&buf, "\t%q: LLMErrorAttribution%s,\n", e.code, toPascalCase(e.attribution))
+	}
+	buf.WriteString("}\n\n")
+
+	buf.WriteString("// LLMErrorProviderMessages maps the codes that carry a templated variant to\n")
+	buf.WriteString("// that variant (provider-messages spec §6, OBS-002). A code absent from this\n")
+	buf.WriteString("// map has no template — the catalogue message is the only copy. Slots come\n")
+	buf.WriteString("// from the closed vocabulary enforced above; the TypeScript half is\n")
+	buf.WriteString("// llmErrorProviderMessages in src/lib/api/generated/llm-error-messages.ts.\n")
+	buf.WriteString("var LLMErrorProviderMessages = map[string]string{\n")
+	for _, e := range cat.entries {
+		if e.providerMessage != "" {
+			fmt.Fprintf(&buf, "\t%q: %q,\n", e.code, e.providerMessage)
+		}
 	}
 	buf.WriteString("}\n")
 
