@@ -2309,6 +2309,12 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// (here, before the turn even starts), not when the deferred call
 	// actually runs at function exit — a bare form would always capture
 	// false and reproduce the exact bug this fixes.
+	// provider-messages §7.4 fallback note (MIN-103/FB-2): registered BEFORE
+	// the Finish and finalizeStreamer defers below, so LIFO runs it AFTER
+	// them — the queued fallback-note entries land in transcript.jsonl after
+	// the assistant answer entry, on the streaming path (finalizeStreamer
+	// writes the answer) and the non-streaming path alike.
+	defer rz.rc.rx.rr.rq.ri.rf.rt.ts.writePendingFallbackNotes()
 	defer func() { rz.rc.rx.rr.rq.ri.rf.rt.ts.Finish(rz.rc.rx.rr.rq.ri.rf.rt.ts.hardAbortRequested()) }()
 	defer rz.rc.rx.rr.rq.ri.rf.rt.ts.finalizeStreamer(rz.rc.rx.ctx)
 	// ADR-087 D6.8, the ONE choke point (see preserveTruncatedAccumulator's

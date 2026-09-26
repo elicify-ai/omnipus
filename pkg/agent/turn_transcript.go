@@ -376,7 +376,7 @@ var trustedInternalStageSet = map[internalStage]struct{}{
 	// bypass — a sentence assembled from a §6 template with the failing
 	// attempt's identity is agent-authored copy, and re-running the
 	// classifier over it would clobber it with catalogue copy.
-	{"provider", "error"}:          {},
+	{"provider", "error"}: {},
 	// ADR-058 §10.A3: FR-084 (the retired synthetic-error-floor feature) was
 	// deleted in full — no producer calls appendErrorTranscript with that
 	// stage name anymore, so a trust-set entry for it does not belong here.

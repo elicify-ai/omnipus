@@ -35,10 +35,10 @@ const (
 	retryBackoffBase = 2 * time.Second
 	retryBackoffCap  = 30 * time.Second
 
-	// maxWaitBudgetPerTurn is the D14 per-turn total-wait cap. It is
+	// MaxWaitBudgetPerTurn is the D14 per-turn total-wait cap. It is
 	// checked BEFORE each wait is scheduled (all-or-nothing Reserve) so a
 	// wait is either waited in full or never started — never truncated.
-	maxWaitBudgetPerTurn = 10 * time.Minute
+	MaxWaitBudgetPerTurn = 10 * time.Minute
 )
 
 // RetryInfo carries one "about to re-call this candidate" decision from the
@@ -158,7 +158,7 @@ func (b *WaitBudget) Reserve(d time.Duration) bool {
 // Remaining reports the unused budget (diagnostics/tests).
 func (b *WaitBudget) Remaining() time.Duration {
 	if b == nil {
-		return maxWaitBudgetPerTurn
+		return MaxWaitBudgetPerTurn
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
