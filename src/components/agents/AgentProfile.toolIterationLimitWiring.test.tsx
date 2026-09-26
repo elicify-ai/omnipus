@@ -166,7 +166,7 @@ describe('AgentProfile — Max tool calls per turn (#904)', () => {
 
   it('FR-017 / US-2 AS-6: an unrelated autosave of a capped agent does not re-send the limit', async () => {
     await openAdvanced(cappedAgent)
-    expect(screen.getByText('Own value 500 is above the global limit (200) and has no effect.')).toBeInTheDocument()
+    expect(screen.getByText('Own value 500 is above the global limit (200) and has no effect')).toBeInTheDocument()
     expect(screen.getByTestId('tool-iteration-limit-reset')).toBeInTheDocument()
 
     const trigger = screen.getByTestId('tab-basics')

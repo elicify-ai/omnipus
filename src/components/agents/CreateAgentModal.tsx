@@ -39,7 +39,6 @@ import type {
 } from '@/lib/api'
 import { findOrphanedPresetOverrideKeys, resolveToolsCfg } from '@/lib/toolPolicyPresets'
 import { isProviderUsable } from '@/lib/providerStatus'
-import { useGlobalToolIterationLimit } from '@/hooks/useGlobalToolIterationLimit'
 
 import {
   CreateAgentWizard,
@@ -273,8 +272,6 @@ export function CreateAgentModal({
   const globalPolicies = globalPoliciesQuery.data
     ? { policies: globalPoliciesQuery.data.policies ?? {} }
     : undefined
-  // #904: global tool-iteration limit for the Advanced step's placeholder.
-  const globalToolIterationLimit = useGlobalToolIterationLimit()
 
   // Bug: the model picker collapsed four distinct provider-catalog states
   // (query loading / query failed / provider connected but its model
@@ -339,7 +336,6 @@ export function CreateAgentModal({
       registryTools={registryTools}
       skills={skills}
       globalPolicies={globalPolicies}
-      globalToolIterationLimit={globalToolIterationLimit}
       providersLoading={providersLoading}
       providersError={providersError}
       onRetryProviders={handleRetryProviders}

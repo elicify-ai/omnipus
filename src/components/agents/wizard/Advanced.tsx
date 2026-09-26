@@ -27,13 +27,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { ToolIterationLimitField } from '../ToolIterationLimitField'
+import { useGlobalToolIterationLimit } from '@/hooks/useGlobalToolIterationLimit'
 import type { AdvancedProps } from './types'
 
 export function Advanced({
   payload,
   setField,
   initialType,
-  globalToolIterationLimit,
 }: AdvancedProps) {
   const isExternal = initialType === 'subagent_3p'
 
@@ -44,7 +44,7 @@ export function Advanced({
         summary="Timeout, tool-call limit and rate limits"
       >
         <div className="space-y-[var(--space-3)]">
-          <ExternalAdvancedFields payload={payload} setField={setField} globalToolIterationLimit={globalToolIterationLimit} />
+          <ExternalAdvancedFields payload={payload} setField={setField} />
         </div>
       </AdvancedDisclosure>
     )
@@ -59,7 +59,6 @@ export function Advanced({
         <MainAdvancedFields
           payload={payload}
           setField={setField}
-          globalToolIterationLimit={globalToolIterationLimit}
         />
       </div>
     </AdvancedDisclosure>
@@ -83,16 +82,15 @@ export function Advanced({
 interface ExternalAdvancedFieldsProps {
   payload: AdvancedProps['payload']
   setField: AdvancedProps['setField']
-  globalToolIterationLimit?: number
 }
 
-function ExternalAdvancedFields({ payload, setField, globalToolIterationLimit }: ExternalAdvancedFieldsProps) {
+function ExternalAdvancedFields({ payload, setField }: ExternalAdvancedFieldsProps) {
   return (
     <>
       <div className="space-y-[var(--space-2)]">
         <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Runtime</p>
         <TimeoutField payload={payload} setField={setField} />
-        <WizardToolIterationLimit payload={payload} setField={setField} globalToolIterationLimit={globalToolIterationLimit} />
+        <WizardToolIterationLimit payload={payload} setField={setField} />
       </div>
       <RateLimitsFields payload={payload} setField={setField} />
     </>
@@ -104,10 +102,9 @@ function ExternalAdvancedFields({ payload, setField, globalToolIterationLimit }:
 interface MainAdvancedFieldsProps {
   payload: AdvancedProps['payload']
   setField: AdvancedProps['setField']
-  globalToolIterationLimit?: number
 }
 
-function MainAdvancedFields({ payload, setField, globalToolIterationLimit }: MainAdvancedFieldsProps) {
+function MainAdvancedFields({ payload, setField }: MainAdvancedFieldsProps) {
   const modelParams = payload.model_params ?? {}
 
   function setModelParam<K extends 'temperature' | 'max_tokens'>(
@@ -157,7 +154,7 @@ function MainAdvancedFields({ payload, setField, globalToolIterationLimit }: Mai
         <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Runtime</p>
         <div className="space-y-[var(--space-1)]">
           <TimeoutField payload={payload} setField={setField} />
-          <WizardToolIterationLimit payload={payload} setField={setField} globalToolIterationLimit={globalToolIterationLimit} />
+          <WizardToolIterationLimit payload={payload} setField={setField} />
         </div>
       </div>
     </>
@@ -194,17 +191,18 @@ function TimeoutField({ payload, setField }: TimeoutFieldProps) {
 // rides the global limit, so the create request omits the key (US-3 AS-2);
 // a value above the global is refused by the server and surfaces on the
 // wizard's existing create-error surface — the rule is never checked here.
+// The global for the placeholder comes from GET /performance; the hook is
+// provider-tolerant so this step still renders query-client-free.
 
 interface WizardToolIterationLimitProps {
   payload: AdvancedProps['payload']
   setField: AdvancedProps['setField']
-  globalToolIterationLimit?: number
 }
 
-function WizardToolIterationLimit({ payload, setField, globalToolIterationLimit }: WizardToolIterationLimitProps) {
+function WizardToolIterationLimit({ payload, setField }: WizardToolIterationLimitProps) {
+  const globalToolIterationLimit = useGlobalToolIterationLimit()
   return (
     <ToolIterationLimitField
-      id="wizard-max-tool-calls-input"
       testId="wizard-max-tool-calls-input"
       value={payload.max_tool_iterations ?? null}
       onChange={(next) => setField('max_tool_iterations', next ?? undefined)}

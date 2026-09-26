@@ -54,7 +54,7 @@ describe('ToolIterationLimitField — server-computed state (FR-003)', () => {
     )
     expect(input().value).toBe('500')
     expect(screen.getByTestId('tool-iteration-limit-source').textContent)
-      .toBe('Own value 500 is above the global limit (200) and has no effect.')
+      .toBe('Own value 500 is above the global limit (200) and has no effect')
     expect(screen.getByTestId('tool-iteration-limit-reset')).toBeInTheDocument()
   })
 
@@ -154,28 +154,25 @@ describe('ToolIterationLimitField — editing', () => {
 })
 
 describe('wizard Advanced — Max tool calls per turn (US-3 AS-2, D14)', () => {
-  function renderAdvanced(initialType: WizardSubmitPayload['type'], globalToolIterationLimit?: number) {
+  // Placeholder-from-server is covered by qa-lead's
+  // wizard/Advanced.toolIterationLimit.test.tsx; this covers the payload
+  // edits and the query-client-free render the wizard steps rely on.
+  function renderAdvanced(initialType: WizardSubmitPayload['type']) {
     const setField = vi.fn()
     const payload = { type: initialType, name: '', description: '', color: '#000', icon: 'Robot', model: '', soul: '' } as WizardSubmitPayload
-    render(<Advanced payload={payload} setField={setField} initialType={initialType} globalToolIterationLimit={globalToolIterationLimit} />)
+    render(<Advanced payload={payload} setField={setField} initialType={initialType} />)
     fireEvent.click(screen.getByTestId('advanced-disclosure-trigger'))
     return setField
   }
 
-  it.each(['Main', 'Subagent', 'subagent_3p'] as const)('%s: empty field with the global in the placeholder; a value is set, clearing unsets it', (type) => {
-    const setField = renderAdvanced(type, 200)
+  it.each(['Main', 'Subagent', 'subagent_3p'] as const)('%s: renders without a QueryClientProvider; a value is set, clearing unsets it', (type) => {
+    const setField = renderAdvanced(type)
     const field = input('wizard-max-tool-calls-input')
     expect(field.value).toBe('')
-    expect(field.placeholder).toBe('Global limit (200)')
+    expect(field.placeholder).toBe('Global limit')
     fireEvent.change(field, { target: { value: '30' } })
     expect(setField).toHaveBeenLastCalledWith('max_tool_iterations', 30)
     fireEvent.change(field, { target: { value: '' } })
     expect(setField).toHaveBeenLastCalledWith('max_tool_iterations', undefined)
-  })
-
-  it('without a known global the wizard prints no number (FR-004)', () => {
-    renderAdvanced('Main')
-    expect(input('wizard-max-tool-calls-input').placeholder).toBe('Global limit')
-    expect(screen.queryByText(/Default 200/)).toBeNull()
   })
 })

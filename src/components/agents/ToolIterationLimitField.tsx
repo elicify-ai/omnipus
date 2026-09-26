@@ -55,7 +55,6 @@ export interface ToolIterationLimitFieldProps {
    */
   emptyBehavior?: 'restore' | 'clear'
   disabled?: boolean
-  id?: string
   testId?: string
 }
 
@@ -68,12 +67,12 @@ function parseLimit(raw: string): number | null {
 function sourceLine(server: ToolIterationLimitServerState | undefined, globalLimit: number | undefined): string | null {
   if (!server) {
     return globalLimit !== undefined
-      ? `Empty uses the global limit (${globalLimit}).`
-      : 'Empty uses the global limit.'
+      ? `Empty uses the global limit (${globalLimit})`
+      : 'Empty uses the global limit'
   }
   if (server.overrideIgnored) {
     // source is "global" here, so the server's effective value IS the global.
-    return `Own value ${server.storedOverride} is above the global limit (${server.effective}) and has no effect.`
+    return `Own value ${server.storedOverride} is above the global limit (${server.effective}) and has no effect`
   }
   if (server.source === 'agent') {
     return globalLimit !== undefined
@@ -99,7 +98,6 @@ export function ToolIterationLimitField({
   serverError,
   emptyBehavior = 'restore',
   disabled = false,
-  id = 'agent-max-tool-calls-input',
   testId = 'agent-max-tool-calls-input',
 }: ToolIterationLimitFieldProps) {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -168,7 +166,6 @@ export function ToolIterationLimitField({
         <div className="flex items-center gap-[var(--space-2)]">
           <Input
             {...controlProps}
-            id={id}
             ref={inputRef}
             type="number"
             inputMode="numeric"

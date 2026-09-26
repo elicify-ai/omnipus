@@ -50,13 +50,6 @@ export interface StepProps {
    */
   globalPolicies?: import('@/components/shared/ToolPolicyEditor').ToolPolicyValue
   /**
-   * #904: the global tool-iteration limit in force (GET /performance), for
-   * the Advanced step's "Max tool calls per turn" placeholder. Undefined
-   * while unknown — the field then shows no number (never a literal default).
-   * Provided by the parent (CreateAgentModal) so the step stays query-client-free.
-   */
-  globalToolIterationLimit?: number
-  /**
    * True while the parent's `providers` query is still in flight (no data
    * yet). Step 1's model picker must render a distinct "loading" state
    * here — collapsing this into the empty-catalogue "connect a provider"

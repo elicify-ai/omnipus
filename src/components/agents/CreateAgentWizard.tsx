@@ -130,8 +130,6 @@ interface WizardProps {
   skills?: ReadonlyArray<Skill>
   /** Global (Settings → Security) tool policy — locks contradicting Step 3 controls. */
   globalPolicies?: import('@/components/shared/ToolPolicyEditor').ToolPolicyValue
-  /** #904: global tool-iteration limit in force, for the Advanced step placeholder. */
-  globalToolIterationLimit?: number
   /**
    * providers-query loading/error state, forwarded to Step 1 so the model
    * picker can tell "still fetching" and "fetch failed" apart from
@@ -218,7 +216,6 @@ export function CreateAgentWizard({
   registryTools = [],
   skills = [],
   globalPolicies,
-  globalToolIterationLimit,
   providersLoading = false,
   providersError,
   onRetryProviders,
@@ -374,7 +371,6 @@ export function CreateAgentWizard({
     registryTools,
     skills,
     globalPolicies,
-    globalToolIterationLimit,
     providersLoading,
     providersError,
     onRetryProviders,

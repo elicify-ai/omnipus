@@ -86,7 +86,7 @@ export function useCommandPreview(req: ExecutorCommandPreviewRequest | undefined
         model: req.model ?? '',
         cli_path: req.cli_path ?? '',
         cli_args: req.cli_args ?? '',
-        max_tool_iterations: req.max_tool_iterations ?? 0,
+        max_tool_iterations: req.max_tool_iterations ?? null,
       })
     : null
 

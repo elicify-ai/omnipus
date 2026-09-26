@@ -2088,6 +2088,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     </div>
   )
 
+  // #904 D10: a failed save while the limit edit is pending carries the
+  // server's refusal of that value — shown on the limit field.
+  const toolIterationLimitError = toolIterationLimitPending && saveStatus === 'error' ? (saveError ?? null) : null
+
   // advanced panel
   const advancedPanel = (
     <div className="space-y-[var(--space-4)]">
@@ -2114,7 +2118,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     overrideIgnored: agent.max_tool_iterations_override_ignored,
                     storedOverride: agent.max_tool_iterations_override,
                   } : undefined}
-                  serverError={toolIterationLimitPending && saveStatus === 'error' ? saveError : null}
+                  serverError={toolIterationLimitError}
                   disabled={!isFieldEditable('max_tool_iterations')}
                 />
                 {/* ADR-066 D9 (T068-30): per-agent context window override
@@ -2707,7 +2711,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       <div className="px-[var(--space-5)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0 flex items-center justify-between gap-[var(--space-2-5)]">
         <div className="flex flex-col gap-[var(--space-0-5)] min-w-0">
           <div data-testid="last-saved-indicator">
-            <AutoSaveIndicator status={saveStatus} error={saveError} lastSavedAt={saveLastSavedAt} />
+            {/* #904: a refused limit is explained on the limit field itself;
+                the indicator then shows its generic "Save failed". */}
+            <AutoSaveIndicator status={saveStatus} error={toolIterationLimitError ? undefined : saveError} lastSavedAt={saveLastSavedAt} />
           </div>
           {/* UAT 4b: make the autosave scope explicit — edits to a shared agent
               take effect in every chat / workspace / delegation it is used in. */}
