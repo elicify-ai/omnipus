@@ -403,6 +403,66 @@ func findLiteralMCPServerHeaderValue(v any) string {
 	return ""
 }
 
+// findLiteralMCPServerHeaderDotPath is the flattened-shape companion to
+// findLiteralMCPServerHeaderValue (issue #638, round-2 review F2): the same
+// literal header value also reaches this endpoint as a dot-path key —
+// {"tools.mcp.servers.<name>.headers.Authorization": "Bearer …"} — which the
+// nested walk never sees (its value type is a string, not the servers map)
+// and which the mutator persists verbatim into config.json. It walks the
+// decoded body accumulating dotted paths exactly as
+// blocked_paths.go::collectPaths does — a key that itself contains dots is
+// one already-joined path merged verbatim with its ancestor prefix — so every
+// mix of nested objects and dot-path keys lands on the same accumulated path,
+// and returns the first path of the header-value shape
+// tools.mcp.servers.<name>.headers.<H>… holding a literal, or "" when there
+// is none.
+func findLiteralMCPServerHeaderDotPath(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	var walk func(prefix string, val any) string
+	walk = func(prefix string, val any) string {
+		if isLiteralMCPServerHeaderDotPath(prefix, val) {
+			return prefix
+		}
+		child, ok := val.(map[string]any)
+		if !ok {
+			return ""
+		}
+		for k, sub := range child {
+			next := k
+			if prefix != "" {
+				next = prefix + "." + k
+			}
+			if hit := walk(next, sub); hit != "" {
+				return hit
+			}
+		}
+		return ""
+	}
+	return walk("", m)
+}
+
+// isLiteralMCPServerHeaderDotPath reports whether the accumulated dotted path
+// p names an MCP server header value — segments tools, mcp, servers, a server
+// name, "headers", and at least one segment after it — and val is a literal
+// for it: a non-empty string other than the redactedHeaderValue round-trip
+// placeholder. The shape is matched positionally after splitting the
+// accumulated path, so mixing nesting with dot-path keys cannot escape it
+// (their concatenation IS the path), and a server literally named "headers"
+// does not match — the position decides, not a substring search.
+func isLiteralMCPServerHeaderDotPath(p string, val any) bool {
+	s, ok := val.(string)
+	if !ok || s == "" || s == redactedHeaderValue {
+		return false
+	}
+	segs := strings.Split(p, ".")
+	return len(segs) >= 6 &&
+		segs[0] == "tools" && segs[1] == "mcp" && segs[2] == "servers" &&
+		segs[4] == "headers"
+}
+
 // dropRedactedMCPServerHeaderValues removes placeholder header entries
 // (exactly redactedHeaderValue) from tools.mcp.servers.<name>.headers in a
 // decoded PUT /api/v1/config body, deleting the headers key once empty. The
@@ -816,6 +876,19 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 	// stripped from the write below, so Settings-style whole-config saves
 	// keep working.
 	if badPath := findLiteralMCPServerHeaderValue(typedBody); badPath != "" {
+		jsonErr(
+			w,
+			http.StatusForbidden,
+			fmt.Sprintf("%s holds a literal MCP header value — header values are credentials; set them via POST/PATCH /api/v1/mcp-servers, which store them encrypted (only ref names land in config.json)", badPath),
+		)
+		return
+	}
+	// Same guard, flattened shapes (issue #638, round-2 review F2): a literal
+	// header value arriving as a dot-path key — top-level or partially nested —
+	// is invisible to the nested walk above and would be persisted verbatim
+	// into config.json. Rejected requests persist NOTHING, like both guards
+	// above.
+	if badPath := findLiteralMCPServerHeaderDotPath(typedBody); badPath != "" {
 		jsonErr(
 			w,
 			http.StatusForbidden,
