@@ -953,8 +953,8 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		// in this PATCH, and any pre-existing EnvRefs entries for other keys,
 		// are left untouched.
 		if req.Env != nil && len(*req.Env) > 0 {
-			if err := a.routeEnvCredentialsThroughStore(id, &current, *req.Env); err != nil {
-				return err
+			if envErr := a.routeEnvCredentialsThroughStore(id, &current, *req.Env); envErr != nil {
+				return envErr
 			}
 		}
 
