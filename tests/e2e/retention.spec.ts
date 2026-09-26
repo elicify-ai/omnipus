@@ -94,6 +94,29 @@ async function authHeaders(page: import('@playwright/test').Page): Promise<Recor
   };
 }
 
+/**
+ * Mint a fresh admin bearer via a real login and return the Authorization
+ * header value for it. The /reload endpoint on the health server accepts ONLY
+ * a bearer that matches a Gateway.Users account or Gateway.CLIToken (issues
+ * #276/#640) — never the omnipus-session cookie, never dev_mode_bypass — so
+ * every /reload call in this spec must carry a login-minted token (the same
+ * credential shape rest_retention_reload_integration_test.go pins in Go).
+ */
+async function loginBearer(page: import('@playwright/test').Page): Promise<string> {
+  const loginResp = await page.request.post(`${BASE_URL}/api/v1/auth/login`, {
+    data: { username: 'admin', password: 'admin123' },
+    failOnStatusCode: false,
+  });
+  expect(
+    loginResp.ok(),
+    `POST /api/v1/auth/login (bearer mint for /reload) returned ${loginResp.status()} ` +
+      `${await loginResp.text()}`,
+  ).toBeTruthy();
+  const minted = (await loginResp.json()) as { token?: string };
+  expect(minted.token, 'login must mint a bearer token for the account').toBeTruthy();
+  return `Bearer ${minted.token}`;
+}
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
@@ -292,8 +315,11 @@ test('session_past_retention_threshold_is_swept', async ({ page }) => {
   // §"Defense-in-depth contract") which returns 503 when dev_mode_bypass=true.
   // The global test gateway boots with bypass=true; we flip it off for this
   // test only, run the sweep, then restore so the rest of the suite is
-  // unaffected. The /reload endpoint on the health server requires no auth
-  // and triggers an in-place config reload via the health-server reload hook.
+  // unaffected. The /reload endpoint requires a login-minted admin bearer
+  // (issues #276/#640 — it accepts no cookie and no bypass), so each /reload
+  // below mints one fresh via loginBearer(); the authorizer reads the config
+  // that is current at request time, which is exactly the state the mint is
+  // valid against.
   const configPath = path.join(OMNIPUS_HOME, 'config.json');
   // config.json may not exist when the gateway was started with in-memory defaults
   // (e.g., started via env-only config without a persistent config file).
@@ -326,6 +352,7 @@ test('session_past_retention_threshold_is_swept', async ({ page }) => {
     cfgObj.gateway.dev_mode_bypass = false;
     fs.writeFileSync(configPath, JSON.stringify(cfgObj, null, 2));
     const reloadResp = await page.request.post(`${BASE_URL}/reload`, {
+      headers: { Authorization: await loginBearer(page) },
       failOnStatusCode: false,
     });
     expect(
@@ -430,6 +457,7 @@ test('session_past_retention_threshold_is_swept', async ({ page }) => {
         fs.writeFileSync(configPath, originalRaw);
       }
       const reloadResp = await page.request.post(`${BASE_URL}/reload`, {
+        headers: { Authorization: await loginBearer(page) },
         failOnStatusCode: false,
       });
       // Best-effort restore: if reload fails here, surface a warning but do
