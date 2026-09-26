@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -57,7 +58,7 @@ func credentialStoreHolds(t *testing.T, store *credentials.Store, secret string)
 		if err != nil {
 			continue
 		}
-		if val == secret || bytes.Contains([]byte(val), []byte(secret)) {
+		if val == secret || strings.Contains(val, secret) {
 			return true
 		}
 	}

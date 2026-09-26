@@ -70,7 +70,7 @@ func TestResolveServerHeaderRefs(t *testing.T) {
 	t.Run("resolves refs into Headers, overriding a same-named literal", func(t *testing.T) {
 		cfg := config.MCPServerConfig{
 			Headers: map[string]string{
-				"Keep":         "literal-value",
+				"Keep":          "literal-value",
 				"Authorization": "Bearer stale-literal",
 			},
 			HeaderRefs: map[string]string{
