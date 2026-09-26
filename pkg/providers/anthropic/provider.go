@@ -53,6 +53,13 @@ func NewProviderWithBaseURL(token, apiBase string) *Provider {
 	client := anthropic.NewClient(
 		option.WithAuthToken(token),
 		option.WithBaseURL(baseURL),
+		// D13: the chain owns every retry decision (§7.4's in-chain
+		// rate-limit loop reads the provider's own retry-after fact). An
+		// SDK-internal retry would double-attack a rate-limited candidate
+		// and hide the boundary error whose headers carry the retry-after
+		// fact — so the SDK's default 2 retries are disabled here and the
+		// boundary error reaches the chain verbatim.
+		option.WithMaxRetries(0),
 	)
 	return &Provider{
 		client:  &client,
