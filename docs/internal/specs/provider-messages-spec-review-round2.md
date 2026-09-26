@@ -369,6 +369,37 @@ This is the last grill round. Per the feature flow, the fix round runs next. MAJ
 
 ---
 
+## Questions for the founder
+
+New open points from this round only (D1–D9 are settled and not repeated; Q4 is repeated only because this round changes its framing). A question here is not a finding; team-lead turns this list into the founder interview before the fix round.
+
+- **FQ-101 (from MAJ-103) — `model_retired` wording vs the existing copy rule.** D9's "choose another model" fails `pkg/agent/translate_error_test.go::TestUserMessages_OurFaultsDoNotSendUsersModelShopping`, which bans "another model" in any `config`-attributed message. Options: **A** keep D9's words and add a named exception to the test; **B (recommended)** reword to "Pick a new model in the agent's settings." (names the property that helps, matches the test's intent); **C** attribute `model_retired` to `provider` instead of `config`.
+- **FQ-102 (from MAJ-109) — does a retired primary model fall back?** Today a 404 aborts the chain (`pkg/providers/error_classifier.go::classifyByStatus` has no 404 case), so the configured Fallback model is never tried. Options: **A (recommended)** fall back to the Fallback model and show the retired line in the fallback note; **B** end the turn with the retired line.
+- **FQ-103 (from MAJ-110) — the Anthropic SDK's own automatic retries.** The SDK likely retries 429s itself (Inferred), so "3 attempts" could become up to 9 hidden ones. Options: **A (recommended)** turn SDK retries off so the visible countdown is the only retry; **B** keep them and count only Omnipus-level attempts.
+- **FQ-104 (from OBS-101) — the longest a user may watch countdowns in one turn.** 3 attempts × 2-minute ceiling per model, times each Fallback model, has no stated total cap. Options: **A (recommended)** one per-turn retry-wait cap (e.g. 5 minutes total), after which the turn ends with the rate-limit line; **B** no total cap (per-model ceiling only).
+- **Q4 (reframed, still open)** — `quota_billing` attribution (`config` vs `provider`) now also decides whether it joins the operator-only set (MAJ-107), i.e. whether task runs and the Judge fail at once or keep retrying an out-of-credit account. Recommendation unchanged from round 1's framing, but the founder should rule knowing it has this second effect.
+
+## Escalation to the founder
+
+None. This round found **no CRITICAL finding**. The ten MAJOR findings go to the one fix round; any that remain blocking after that fix go to the founder for disposition — there is no third grill round.
+
+## Next action
+
+```
+Verdict: REVISE
+
+Review written to: docs/internal/specs/provider-messages-spec-review-round2.md
+
+This was grill round 2 of 2 (fixed, final). Next: team-lead interviews
+the founder on "Questions for the founder", then the spec author fixes
+round-2 findings. Any CRITICAL finding still open after that fix is
+listed under "Escalation to the founder" above for the founder to
+decide — do not run a third grill round. Once resolved, team-lead plans
+the implementation (RED / GREEN / CHECK, the 8-reviewer gate).
+```
+
+---
+
 ## Evidence (this review)
 
 | Claim | Evidence | Certainty |
@@ -391,3 +422,4 @@ This is the last grill round. Per the feature flow, the fix round runs next. MAJ
 | Anthropic / OpenAI / Ollama / Gemini wordings | Known provider behaviour, not probed live | Inferred (medium-high) |
 | anthropic-sdk-go retries 429 by default | Known SDK default; no `WithMaxRetries` in the adapter (grep) | Inferred (medium) |
 | Traceability gaps | grep of the spec for AU-3, RG-1, RG-2, "US-5 / 2", "US-4 / 3" | Verified |
+| Self-check (addendum) | Re-read the review against grill-spec Output: file path correct, verdict stated, CRITICAL/MAJOR listed, separate "Questions for the founder", "Escalation to the founder" and the round-2 next-action block now present; MAJ-101 re-verified (`pkg/providers/fallback.go::defaultPerCandidateTimeout` = 120 s, `MarkFailure` after `IsRetriable`), MAJ-103 re-verified (`bannedSwitch` contains "another model"; spec §6 row uses "choose another model") | Verified |
