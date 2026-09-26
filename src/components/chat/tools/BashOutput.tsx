@@ -21,8 +21,14 @@ import { makeAssistantToolUI } from '@assistant-ui/react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { useSessionStore } from '@/store/session'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
+import {
+  ToolResultSentinelBody,
+  isSentinelResolution,
+  resolveToolResult,
+} from './toolResultDisplay'
 
 // ── Args shape ────────────────────────────────────────────────────────────────
 //
@@ -110,6 +116,8 @@ export function BashOutputBlock({
   isRunning,
   isError,
   isCancelled,
+  error,
+  sessionId,
 }: {
   toolName: string
   args: BashArgs
@@ -117,11 +125,19 @@ export function BashOutputBlock({
   isRunning: boolean
   isError?: boolean
   isCancelled?: boolean
+  /** Failed call's reason (frame.error via replay.go::applyPersistedFailureReason). Rendered in the expanded body when there is no output text. */
+  error?: string
+  /** Session this call belongs to — required to fetch a ToolResultRef sentinel's full body session-scoped. The live path falls back to the active session. */
+  sessionId?: string
 }) {
   // Collapsed by default (ticket "chat tool-UI collapse", 2026-09-26): the
   // header alone carries "bash · first ~60 chars of the command · Done/Failed";
   // the full command and the output panel live inside the expandable body.
   const [expanded, setExpanded] = useState(false)
+  // ctui-gate fix 1: the LIVE path (makeBashUI's render) passes no sessionId
+  // prop — fall back to the active session so a ToolResultRef sentinel's
+  // full-body fetch still resolves. Replay passes the explicit prop.
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
 
   // Client-side render gate (verbose-chat off by default): hides noisy
   // background `bash` dispatches (run_in_background) and poll/read calls
@@ -161,7 +177,13 @@ export function BashOutputBlock({
     toolName === 'workspace_shell_bg' ||
     toolName === 'workspace.shell_bg'
   const label = actionLabel(action, isBackground)
-  const output = result != null ? String(result) : ''
+  // ctui-gate fix 1: resolve the persisted result through the shared module —
+  // a `{ text }` envelope, an offload/truncation/marshal-error sentinel, or a
+  // structured failure now renders through its dedicated display instead of
+  // `String(result)`'s "[object Object]". Counts and bodies derive only from
+  // `text` kinds (the JSON fallback's text is never counted as content).
+  const resolved = resolveToolResult(result)
+  const output = resolved.kind === 'text' || resolved.kind === 'json' ? resolved.text : ''
 
   // Flat text-line redesign (ticket "Tool components in chat", P2): no
   // rounded-md/border/overflow-hidden card, no status-tinted border, no
@@ -215,18 +237,31 @@ export function BashOutputBlock({
               {command}
             </pre>
           )}
-          <div className="bg-[var(--color-code-surface)] rounded-sm">
-            {isRunning && !output ? (
-              <div className="flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] italic text-[var(--color-muted)]">
-                <ArrowsClockwise size={11} className="animate-spin" />
-                {isBackground ? 'Running in background...' : 'Executing...'}
-              </div>
-            ) : (
-              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)]">
-                {output || <span className="italic text-[var(--color-muted)]">(no output)</span>}
-              </pre>
-            )}
-          </div>
+          {isSentinelResolution(resolved) ? (
+            <ToolResultSentinelBody
+              resolved={resolved}
+              sessionId={sessionId ?? activeSessionId ?? ''}
+            />
+          ) : (
+            <div className="bg-[var(--color-code-surface)] rounded-sm">
+              {isRunning && !output ? (
+                <div className="flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] italic text-[var(--color-muted)]">
+                  <ArrowsClockwise size={11} className="animate-spin" />
+                  {isBackground ? 'Running in background...' : 'Executing...'}
+                </div>
+              ) : (
+                <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)]">
+                  {output ? (
+                    output
+                  ) : error ? (
+                    <span className="italic text-[var(--color-error)] break-words">{error}</span>
+                  ) : (
+                    <span className="italic text-[var(--color-muted)]">(no output)</span>
+                  )}
+                </pre>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

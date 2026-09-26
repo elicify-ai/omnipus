@@ -4,8 +4,14 @@ import { Folder, File, CaretDown, CaretUp } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { useSessionStore } from '@/store/session'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
+import {
+  ToolResultSentinelBody,
+  isSentinelResolution,
+  resolveToolResult,
+} from './toolResultDisplay'
 
 interface ListDirArgs {
   path?: string
@@ -49,6 +55,8 @@ export function FileTreeBlock({
   isRunning,
   isError,
   isCancelled,
+  error,
+  sessionId,
 }: {
   toolName: string
   args: ListDirArgs
@@ -56,8 +64,15 @@ export function FileTreeBlock({
   isRunning: boolean
   isError?: boolean
   isCancelled?: boolean
+  /** Failed call's reason (frame.error via replay.go::applyPersistedFailureReason). Rendered in the expanded panel when there is no listing. */
+  error?: string
+  /** Session this call belongs to — required to fetch a ToolResultRef sentinel's full body session-scoped. The live path falls back to the active session. */
+  sessionId?: string
 }) {
   const [expanded, setExpanded] = useState(false)
+  // ctui-gate fix 1: live path has no sessionId prop — fall back to the
+  // active session (same fallback BashOutputBlock uses).
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
 
   // Client-side render gate (issue #494): mirrors BashOutput.tsx's gate —
   // hides this row when shouldRenderToolCall says so, unless verbose chat is
@@ -70,7 +85,13 @@ export function FileTreeBlock({
   }
 
   const path = args.path ?? '.'
-  const content = result != null ? String(result) : ''
+  // ctui-gate fix 1: resolve through the shared module — a `{ text }`
+  // envelope, an offload/truncation/marshal-error sentinel, or a structured
+  // failure renders its dedicated display instead of `String(result)`'s
+  // "[object Object]". Entries derive ONLY from a plain-string listing
+  // (honest 0 for any other shape) — never from a stringified object.
+  const resolved = resolveToolResult(result)
+  const content = resolved.kind === 'text' ? resolved.text : ''
   const entries = content ? parseTree(content) : []
 
   // Always resolves to a real config — a completed listing with zero entries
@@ -129,7 +150,12 @@ export function FileTreeBlock({
           data-testid="file-tree-panel"
           className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] max-h-64 overflow-auto py-[var(--space-1)] pl-[var(--space-2-5)] space-y-[var(--space-0-5)]"
         >
-          {entries.length > 0 ? (
+          {isSentinelResolution(resolved) ? (
+            <ToolResultSentinelBody
+              resolved={resolved}
+              sessionId={sessionId ?? activeSessionId ?? ''}
+            />
+          ) : entries.length > 0 ? (
             entries.map((entry, i) => (
               <div
                 key={i}
@@ -145,7 +171,9 @@ export function FileTreeBlock({
             ))
           ) : (
             <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all">
-              {content}
+              {content || (error ? (
+                <span className="italic text-[var(--color-error)] break-words">{error}</span>
+              ) : null)}
             </pre>
           )}
         </div>

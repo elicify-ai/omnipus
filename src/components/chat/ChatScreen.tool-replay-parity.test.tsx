@@ -25,6 +25,15 @@ import { useChatStore, makeBucketMessages } from '@/store/chat'
 import type { ChatMessage, PositionedToolCall } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
+import { BASH_TOOL_NAMES } from './tools/BashOutput'
+
+// ctui-gate sev-7: every toolName makeAssistantToolUI was called with at
+// module import. vi.hoisted runs before the file's imports, so the array is
+// already initialized when BashOutput.tsx's module-scope makeBashUI calls
+// fire during import.
+const mockRegisteredToolUIs = vi.hoisted(() => [] as string[])
 
 vi.mock('@assistant-ui/react', () => {
   return {
@@ -102,7 +111,10 @@ vi.mock('@assistant-ui/react', () => {
       status: { type: 'complete' },
       content: [],
     })),
-    makeAssistantToolUI: () => () => null,
+    makeAssistantToolUI: (opts: { toolName: string }) => {
+      mockRegisteredToolUIs.push(opts.toolName)
+      return () => null
+    },
   }
 })
 
@@ -225,6 +237,7 @@ function seedAssistantWithToolCall(
   params: Record<string, unknown>,
   result: unknown,
   status: 'success' | 'error' | 'cancelled' = 'success',
+  error?: string,
 ): void {
   const now = new Date().toISOString()
   const assistantMsg: ChatMessage = {
@@ -234,7 +247,14 @@ function seedAssistantWithToolCall(
     timestamp: now,
     status: 'done',
     tool_calls: [
-      { id: callId, tool, params, status, result } as PositionedToolCall,
+      {
+        id: callId,
+        tool,
+        params,
+        status,
+        result,
+        ...(error !== undefined ? { error } : {}),
+      } as PositionedToolCall,
     ],
   }
   seedBucket([assistantMsg])
@@ -373,8 +393,160 @@ describe('ChatScreen replay parity — item 4: search_web / fetch_url', () => {
   })
 })
 
-// Helper: does this element contain a <pre> descendant? (collapsed blocks
-// render no <pre> at all)
+/** ctui-gate fix 3c: seeds a failed read_file alongside an ACTIVE goal whose
+ * record is empty (the GoalSetupFailureLine override's exact precondition),
+ * proving the dedicated read_file branch pre-empts that override on replay. */
+function seedReadFileFailureWithActiveGoal(): void {
+  const goalFrame: GoalStatusFrame = {
+    type: 'goal_status',
+    session_id: SID,
+    goal_id: 'goal_read_fail_test',
+    condition: 'ship the release notes',
+    round: 0,
+    max_rounds: 20,
+    latest_reason: '',
+    active_loops: 1,
+    cap: 16,
+    state: 'active',
+  }
+  const messages: ChatMessage[] = [
+    {
+      id: 'u_goal',
+      role: 'user',
+      content: '/goal ship the release notes',
+      timestamp: new Date().toISOString(),
+      status: 'done',
+    },
+    {
+      id: 'a_goal',
+      role: 'assistant',
+      content: '',
+      timestamp: new Date().toISOString(),
+      status: 'done',
+      tool_calls: [
+        {
+          id: 'tc_read_goal',
+          tool: 'read_file',
+          params: { path: '/etc/hosts' },
+          status: 'error',
+          error: 'permission denied: /etc/hosts',
+        },
+      ],
+    },
+  ]
+  const bucket = makeBucketMessages(messages)
+  useChatStore.setState((s) => ({
+    ...s,
+    sessionsById: {
+      [SID]: {
+        ...((s.sessionsById ?? {})[SID] ?? {}),
+        ...bucket,
+        isStreaming: false,
+        isReplaying: false,
+        replayCompletedForSession: SID,
+        toolCalls: {},
+        toolCallOrder: [],
+        textAtToolCallStart: {},
+        sessionTokens: 0,
+        sessionCost: 0,
+        rateLimitEvent: null,
+        lastUserMessageAt: null,
+        cancelStage: null,
+        lastReceivedEventTime: null,
+        trimmedCount: 0,
+        goalStatus: goalFrame,
+      },
+    },
+    messages,
+    isStreaming: false,
+    isReplaying: false,
+    replayCompletedForSession: SID,
+    goalStatus: goalFrame,
+  }))
+}
+
+describe('ChatScreen replay parity — ctui-gate fix 3b: remaining aliases', () => {
+  const ALIAS_CASES: Array<{
+    callId: string
+    tool: string
+    params: Record<string, unknown>
+    result: string
+    toggleTestId: string
+    headerText: string
+  }> = [
+    { callId: 'tc_dot_read', tool: 'file.read', params: { path: '/ws/a.go' }, result: 'package a\n', toggleTestId: 'file-read-toggle', headerText: 'a.go' },
+    { callId: 'tc_dot_list', tool: 'file.list', params: { path: '/ws' }, result: 'x.go\n', toggleTestId: 'file-tree-toggle', headerText: '/ws' },
+    { callId: 'tc_web_fetch', tool: 'web_fetch', params: { url: 'https://example.com/x' }, result: '<html>x</html>', toggleTestId: 'web-fetch-toggle', headerText: 'example.com' },
+    { callId: 'tc_exec', tool: 'exec', params: { command: 'echo hi' }, result: 'hi\n', toggleTestId: 'bash-output-toggle', headerText: 'echo hi' },
+    { callId: 'tc_dot_shell', tool: 'workspace.shell', params: { command: 'echo dot' }, result: 'dot\n', toggleTestId: 'bash-output-toggle', headerText: 'echo dot' },
+    { callId: 'tc_shell_bg', tool: 'workspace_shell_bg', params: { command: 'sleep 1' }, result: '', toggleTestId: 'bash-output-toggle', headerText: 'sleep 1' },
+    { callId: 'tc_dot_shell_bg', tool: 'workspace.shell_bg', params: { command: 'sleep 2' }, result: '', toggleTestId: 'bash-output-toggle', headerText: 'sleep 2' },
+  ]
+  for (const c of ALIAS_CASES) {
+    it(`a replayed "${c.tool}" call renders its dedicated collapsed toggle, not the generic badge`, async () => {
+      seedAssistantWithToolCall(c.callId, c.tool, c.params, c.result)
+      await renderScreen()
+      const toggle = screen.getByTestId(c.toggleTestId)
+      expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      expect(toggle.textContent).toContain(c.headerText)
+      expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+    })
+  }
+
+  it('BASH_TOOL_NAMES equals exactly the six names registered via makeBashUI (ctui-gate sev-7)', () => {
+    const LITERAL = [
+      'bash',
+      'exec',
+      'workspace_shell',
+      'workspace.shell',
+      'workspace_shell_bg',
+      'workspace.shell_bg',
+    ]
+    expect([...BASH_TOOL_NAMES].sort()).toEqual([...LITERAL].sort())
+    // Each array entry was really handed to makeAssistantToolUI (makeBashUI's
+    // registrations run at module import) — and exactly once each.
+    for (const name of LITERAL) {
+      expect(mockRegisteredToolUIs).toContain(name)
+      expect(mockRegisteredToolUIs.filter((n) => n === name).length).toBe(1)
+    }
+  })
+})
+
+describe('ChatScreen replay parity — ctui-gate fix 3c: failed read_file', () => {
+  it('a reloaded FAILED read_file shows Failed collapsed and the reason on expand', async () => {
+    seedAssistantWithToolCall('tc_read_fail', 'read_file', { path: '/etc/hosts' }, undefined, 'error', 'permission denied: /etc/hosts')
+    await renderScreen()
+
+    const toggle = screen.getByTestId('file-read-toggle')
+    expect(toggle.textContent).toContain('Failed')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    // Collapsed: no body — container_has_pre now checks the ROW container
+    // (the toggle's pres are its siblings), the ctui-gate 3d fix.
+    expect(container_has_pre(toggle)).toBe(false)
+
+    fireEvent.click(toggle)
+    const row = screen.getByTestId('file-read-toggle').closest('div')!.parentElement!
+    expect(row.querySelector('pre')?.textContent).toContain('permission denied')
+  })
+
+  it('a reloaded FAILED read_file keeps its dedicated toggle while a goal is active with an empty record — never GoalSetupFailureLine', async () => {
+    useChatPreferencesStore.setState({ verboseChatEnabled: false })
+    seedReadFileFailureWithActiveGoal()
+    await renderScreen()
+
+    expect(screen.getByTestId('file-read-toggle')).toBeInTheDocument()
+    expect(screen.queryByTestId('goal-setup-failure-line')).toBeNull()
+  })
+})
+
+// Helper: does the ROW containing this toggle render any <pre>? The toggle
+// button itself never contains a <pre> — the command/output bodies are its
+// SIBLINGS inside the row div — so the query goes one level up from the
+// toggle to the row container (ctui-gate finding 3d: the old version queried
+// inside the toggle and could never see a body, so its "false" proved
+// nothing).
 function container_has_pre(el: HTMLElement): boolean {
-  return el.querySelectorAll('pre').length > 0
+  const row = el.closest('div')?.parentElement
+  if (!row) return false
+  return row.querySelectorAll('pre').length > 0
 }

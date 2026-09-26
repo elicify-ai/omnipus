@@ -4,8 +4,14 @@ import { ArrowSquareOut } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { useSessionStore } from '@/store/session'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
+import {
+  ToolResultSentinelBody,
+  isSentinelResolution,
+  resolveToolResult,
+} from './toolResultDisplay'
 
 interface WebSearchArgs {
   query?: string
@@ -60,6 +66,8 @@ export function WebSearchBlock({
   isRunning,
   isError,
   isCancelled,
+  error,
+  sessionId,
 }: {
   /** The wire tool name this row renders — `search_web` (canonical) or the `web_search` legacy alias. */
   toolName: string
@@ -68,8 +76,15 @@ export function WebSearchBlock({
   isRunning: boolean
   isError?: boolean
   isCancelled?: boolean
+  /** Failed call's reason (frame.error via replay.go::applyPersistedFailureReason). Rendered in the expanded panel when there is no result text. */
+  error?: string
+  /** Session this call belongs to — required to fetch a ToolResultRef sentinel's full body session-scoped. The live path falls back to the active session. */
+  sessionId?: string
 }) {
   const [expanded, setExpanded] = useState(false)
+  // ctui-gate fix 1: live path has no sessionId prop — fall back to the
+  // active session (same fallback BashOutputBlock uses).
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
 
   // Client-side render gate (issue #494): mirrors BashOutput.tsx's gate —
   // hides this row when shouldRenderToolCall says so, unless verbose chat is
@@ -82,12 +97,19 @@ export function WebSearchBlock({
   }
 
   const query = args.query ?? '(search query)'
-  const content = result != null ? String(result) : ''
+  // ctui-gate fix 1: resolve through the shared module — a `{ text }`
+  // envelope, an offload/truncation/marshal-error sentinel, or a structured
+  // failure renders its dedicated display instead of `String(result)`'s
+  // "[object Object]". The hit count derives ONLY from a plain-string
+  // listing (honest 0 for any other shape) — never from a stringified object.
+  const resolved = resolveToolResult(result)
+  const content = resolved.kind === 'text' ? resolved.text : ''
   const parsed = content ? parseSearchResults(content) : []
   const hasStructured = parsed.length > 0
-  // Nothing to expand until the call finishes with actual content — mirrors
+  // Nothing to expand until the call finishes with actual content (a result,
+  // the failure reason, or a structured sentinel) — mirrors
   // GenericToolCall.tsx's `hasDetail` gate.
-  const hasDetail = !isRunning && !!content
+  const hasDetail = !isRunning && (!!content || !!error || isSentinelResolution(resolved))
 
   // Always resolves to a real config (running/cancelled/error/success) so
   // every terminal state gets a status dot — a failed search previously
@@ -130,7 +152,12 @@ export function WebSearchBlock({
           old divide-y row dividers are gone; spacing carries the separation. */}
       {expanded && hasDetail && (
         <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
-          {hasStructured ? (
+          {isSentinelResolution(resolved) ? (
+            <ToolResultSentinelBody
+              resolved={resolved}
+              sessionId={sessionId ?? activeSessionId ?? ''}
+            />
+          ) : hasStructured ? (
             <div className="space-y-[var(--space-2)]">
               {parsed.map((item) => (
                 <div key={item.index} className="flex items-start gap-[var(--space-1)]">
@@ -156,7 +183,9 @@ export function WebSearchBlock({
             </div>
           ) : (
             <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
-              {content}
+              {content || (error ? (
+                <span className="italic text-[var(--color-error)] break-words">{error}</span>
+              ) : null)}
             </pre>
           )}
         </div>

@@ -1480,8 +1480,8 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   args={(tc.params ?? {}) as { command?: string; description?: string; action?: string }}
                   result={tc.result}
                   isRunning={false}
-                  isError={tc.status === 'error'}
-                  isCancelled={tc.status === 'cancelled'}
+                  isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
+                  error={tc.error} sessionId={activeSessionId ?? ''}
                 />
               ))
             }
@@ -1493,8 +1493,8 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   args={(tc.params ?? {}) as { path?: string }}
                   result={tc.result}
                   isRunning={false}
-                  isError={tc.status === 'error'}
-                  isCancelled={tc.status === 'cancelled'}
+                  isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
+                  error={tc.error} sessionId={activeSessionId ?? ''}
                 />
               ))
             }
@@ -1506,8 +1506,8 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   args={(tc.params ?? {}) as { path?: string }}
                   result={tc.result}
                   isRunning={false}
-                  isError={tc.status === 'error'}
-                  isCancelled={tc.status === 'cancelled'}
+                  isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
+                  error={tc.error} sessionId={activeSessionId ?? ''}
                 />
               ))
             }
@@ -1519,8 +1519,8 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   args={(tc.params ?? {}) as { query?: string }}
                   result={tc.result}
                   isRunning={false}
-                  isError={tc.status === 'error'}
-                  isCancelled={tc.status === 'cancelled'}
+                  isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
+                  error={tc.error} sessionId={activeSessionId ?? ''}
                 />
               ))
             }
@@ -1532,8 +1532,8 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                   args={(tc.params ?? {}) as { url?: string }}
                   result={tc.result}
                   isRunning={false}
-                  isError={tc.status === 'error'}
-                  isCancelled={tc.status === 'cancelled'}
+                  isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
+                  error={tc.error} sessionId={activeSessionId ?? ''}
                 />
               ))
             }
