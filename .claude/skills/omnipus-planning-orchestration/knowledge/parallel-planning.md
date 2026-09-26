@@ -52,7 +52,7 @@ units (no path between them in either direction) can share a wave.
 | **Small** | A typo, a one-line follow-up, a mechanical edit with no design choice. Carries no RED step and is exempt from red-before-green evidence | One code-reviewer pass on the work branch | Minutes to an hour |
 | **Standard** | Real implementation work that is not structural: build with tests in the same step, then review | The 3 fixed reviewers: code-reviewer, silent-failure-hunter, pr-test-analyzer | A few hours to a day |
 | **Feature** | Structural, security-relevant, cross-tree, or anything needing a spec — the size that runs as a squad | Full RED/GREEN/CHECK plus the 8-reviewer gate (6 plugin reviewers + architect + security-lead) | Days |
-| **Hotfix** | Fix-only repair of a red integration branch or a founder-marked live bug — the fourth delivery path, with its own entry test (§4a) | Reproduction first, the whole affected-area test set locally, reviews **after** the merge (§4a) | Minutes to hours |
+| **Hotfix** | Fix-only repair of a red integration branch or a founder-marked live bug — the fourth delivery path, with its own entry test (§4a) | Reproduction first, the affected-area test set locally, reviews **after** the merge (§4a) | Minutes to hours |
 
 - **Urgent is not a size and not the hotfix lane**: urgent work is small or standard and
   moves to the front of the dispatch queue. Only the hotfix lane's entry test (§4a)
@@ -88,10 +88,11 @@ and a per-branch founder yes (design 7.1).
    current integration-branch tip. A test edit is allowed only with proof the check did
    not weaken (the coverage moved, or a mutation still fails it); test files stay
    qa-lead's to edit.
-3. **Run the whole test set of each affected area locally** — for example every vitest
-   file under the touched `src/components/<area>/`, or the one touched Go package —
-   never a hand-picked subset; still one test process at a time (shared rule 2). No Fly
-   CI run: the GitHub run on the integration branch after the merge is the CI check.
+3. **Run the affected-area test set locally** — frontend the whole vitest set of the
+   affected directory, Go a wide named set covering the changed functions' callers
+   (never a whole package): exact rule in `knowledge/coordination-ledger.md`, landing
+   step 3. No Fly CI run: the GitHub run on the integration branch after the merge is
+   the CI check.
 4. **PR, then merge at once.** team-lead opens the PR against the integration branch
    (reproduction record and closing keywords in the body) and merges it immediately
    under the landing lock, through the branch's normal protection (0 approvals, no

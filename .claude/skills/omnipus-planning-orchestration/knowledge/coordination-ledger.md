@@ -195,10 +195,18 @@ not held across CI or across the wait for the founder's reply. Finish your check
    touched) plus a review of the conflict resolution (the merge's conflict hunks,
    escalating to architect only where a resolution changes a design decision). The full
    size gate is NOT re-run. This is where a parallel-merge-later overlap's conflict is
-   resolved and re-checked. **Every landing runs the whole test set of each affected
-   area** (locally is fine, one process at a time) — never a hand-picked subset;
-   skipping Fly CI never means skipping tests (a squad that ran 12 hand-picked files
-   landed five red checks).
+   resolved and re-checked. **The local test set for every landing (hotfix lane
+   included)** — skipping Fly CI never means skipping tests (a squad that ran 12
+   hand-picked files landed five red checks):
+   - **Frontend:** the whole vitest set of each affected directory (e.g. all of
+     `src/components/chat/`), one test process at a time (shared rule 2).
+   - **Go:** a wide **named** set covering every changed function's callers — one
+     tagged `-run '<pattern>' -p 1` process at a time, never a whole-package or
+     full-suite run (root `CLAUDE.md`, "Build, test, and quality gates"; the machine
+     also runs parallel squads). GitHub CI on the integration branch, right after the
+     merge, is the authority for Go.
+   - Either stack: a hand-picked subset that skips the changed paths' callers is never
+     enough.
 4. **Push** the merge to the integration branch, setting both required variables in the
    same command so neither is ever forgotten in an unrelated shell:
    ```sh
