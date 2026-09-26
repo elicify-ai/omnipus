@@ -260,6 +260,13 @@ export class BrowserInputWebRTCSession {
 
   fail(reason: string): void {
     if (this.currentState === 'failed' && !this.pc && this.awaitingRetirement) return
+    // Mirror every fail() latch to the console so Playwright trace.zip and
+    // the SPA devtools capture the exact reason the input state machine
+    // transitioned to 'failed'. The change('failed', reason) below carries
+    // the same string to the gate attribute, but that is only visible to
+    // a DOM probe; an investigator reading the console otherwise sees
+    // nothing here and cannot tell which silent path fired.
+    console.error('[browser-input] state machine failed:', reason)
     this.cancelAutomaticRecovery()
     this.failedControl = this.control
     this.failedReleaseControl = null

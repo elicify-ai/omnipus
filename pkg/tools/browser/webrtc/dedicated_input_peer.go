@@ -179,6 +179,14 @@ func (p *DedicatedInputPeer) Answer(caller context.Context, sdp string) (string,
 		return answer, nil, nil
 	})
 	if err != nil {
+		// Silent Answer() failures made every input-peer defect on the
+		// ui-browser shard indistinguishable: the peer closed and the
+		// SPA-pushed state: 'failed' reached the operator without naming
+		// whether buildPeerConnection, SetRemoteDescription, CreateAnswer,
+		// the gatherTimeout ctx, or the peer.ctx cancel fired. Log the
+		// session id and the actual error before Close so the next run
+		// surfaces which silent path failed.
+		slog.Warn("browser dedicated input peer setup failed", "input_id", p.queue.peer, "error", err)
 		p.Close()
 	}
 	return answer, err

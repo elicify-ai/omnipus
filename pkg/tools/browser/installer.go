@@ -28,6 +28,38 @@ const (
 	cftManifestURL = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
 	cftChannel     = "Stable"
 
+	// cftPinnedVersion is the Chrome-for-Testing version the managed
+	// installer (and every test fixture that exercises the install
+	// mechanism) MUST serve. Pinned per ADR-047 (the prescribed
+	// mitigation that was never implemented before square 12 / round 12)
+	// because the Stable channel floats to whatever CfT publishes as
+	// newest, and a silently-bumped major is exactly the kind of
+	// regression that broke the July D2 spike receipt and the Sep
+	// e2e run alike: every probe in the round-1..10 set ran against a
+	// different CfT than the e2e gate actually shipped, so the runtime
+	// evidence never lined up with the regression under test.
+	//
+	// Source of the pin: SQUAD-REPORT-K.md §(i) — the Sep e2e run that
+	// actually produced working video on ci-omnipus. Pin target =
+	// 153.0.8010.52 (CfT Stable at that time; also the version
+	// K's e2e install receipt captured at
+	// /tmp/omnipus-e2e/browser/chromium/153.0.8010.52/chrome-linux64/chrome
+	// with full chrome.sha256 alongside). The worker's Playwright
+	// harness chromium is 151.0.7922.77, but that is the Playwright
+	// bundle — NOT the managed CfT install — so the pin and the
+	// harness are different artifacts by design.
+	//
+	// Behavior: EnsureChromiumBuild reads the manifest's Stable channel
+	// and rejects (with an explicit error naming the manifest's
+	// observed version + the pinned target) any version mismatch.
+	// This is stricter than the prior floating behavior: an operator
+	// can still set tools.browser.exec_path to a local binary outside
+	// the managed path; the pin only governs the managed download.
+	// ADR-047's secondary prescription (a CI capture smoke gate that
+	// fails the build if the smoke can't run against the pinned
+	// version) is out of scope for this commit and remains follow-up.
+	cftPinnedVersion = "153.0.8010.52"
+
 	// cftDownloadID is the CfT manifest key + zip/binary basename for the
 	// chrome-headless-shell build (the graceful-degradation fallback build,
 	// and the default on non-video-capable platforms). Kept as the original
@@ -174,6 +206,28 @@ func EnsureChromiumBuild(ctx context.Context, installRoot string, build chromium
 	channel, ok := manifest.Channels[cftChannel]
 	if !ok {
 		return "", fmt.Errorf("browser: chrome-for-testing manifest missing %q channel", cftChannel)
+	}
+
+	// Square 12 / round-12 version pin (ADR-047 prescribed, never
+	// implemented before this commit). The Stable channel FLOATS to
+	// whatever CfT publishes as newest, and a silently-bumped major is
+	// the exact failure mode that broke both the July D2 spike receipt
+	// and the Sep e2e run: every probe in the round-1..10 set ran
+	// against a different CfT than the e2e gate actually shipped, so
+	// the runtime evidence never lined up with the regression under
+	// test. Refuse the mismatch loudly so the operator sees the version
+	// delta at install time, not via a downstream symptom. An operator
+	// can still set tools.browser.exec_path to a local binary outside
+	// the managed path; the pin only governs the managed download
+	// route this function implements. To bump the pin: change
+	// cftPinnedVersion and update the test fixtures' manifestFor calls
+	// in the same commit — the test for this exact rejection is
+	// TestInstaller_PinnedVersionMismatch_Errors in installer_test.go.
+	if channel.Version != cftPinnedVersion {
+		return "", fmt.Errorf(
+			"browser: chrome-for-testing %q channel version %q does not match the pinned version %q; either update cftPinnedVersion (after verifying the new build's tabCapture invocation gate on the worker) or pin a local browser via tools.browser.exec_path",
+			cftChannel, channel.Version, cftPinnedVersion,
+		)
 	}
 
 	downloads, ok := channel.Downloads[build.downloadID]
