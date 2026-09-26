@@ -50,6 +50,7 @@ import { OmnipusComposer } from './ChatScreen'
 // ChatScreen.tsx's own onClick prop did.
 const mockComposerSend = vi.fn()
 
+import { MockButton, MockTextarea } from '@/test/assistantUiMock'
 vi.mock('@assistant-ui/react', () => {
   return {
     useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
@@ -74,11 +75,10 @@ vi.mock('@assistant-ui/react', () => {
         onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
         onBlur?: () => void;
       }) =>
-        React.createElement('textarea', {
+        MockTextarea({
           disabled, placeholder, className,
           onChange, onKeyDown, onBlur,
-          'data-testid': 'composer-input',
-        }),
+          'data-testid': 'composer-input',}),
       // Reproduces assistant-ui's real createActionButton +
       // composeEventHandlers(primitiveProps.onClick, callback) contract
       // (checkForDefaultPrevented=true): the caller's `onClick` (ChatScreen.
@@ -89,7 +89,7 @@ vi.mock('@assistant-ui/react', () => {
         disabled?: boolean; children?: React.ReactNode; className?: string;
         'data-testid'?: string; 'aria-label'?: string; onClick?: (e: React.MouseEvent) => void
       }) =>
-        React.createElement('button', {
+        MockButton({
           type: 'button', disabled, className,
           'data-testid': testId ?? 'chat-send',
           'aria-label': ariaLabel,
@@ -98,12 +98,11 @@ vi.mock('@assistant-ui/react', () => {
             if (!e.defaultPrevented) {
               mockComposerSend()
             }
-          },
-        }, children),
+          }, children: children}),
       AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
         disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
       }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment' }, children),
+        MockButton({ type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment', children: children}),
       Attachments: () => null,
     },
     AttachmentPrimitive: {
@@ -111,7 +110,7 @@ vi.mock('@assistant-ui/react', () => {
         React.createElement('div', { className }, children),
       Name: () => null,
       Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
-        React.createElement('button', { type: 'button', className, 'aria-label': ariaLabel }, children),
+        MockButton({ type: 'button', className, 'aria-label': ariaLabel, children: children}),
       Thumb: () => null,
     },
     MessagePartPrimitive: { InProgress: () => null },

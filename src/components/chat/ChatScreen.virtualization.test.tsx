@@ -31,6 +31,7 @@ let lastViewportAutoScroll: boolean | undefined
 // files (e.g. useRunningActivity.test.ts / ActivityBar.test.tsx) run in the same
 // batch. vi.mock factories may reference top-level `import` bindings safely —
 // only same-file local `const`/`let` declarations have the hoisting restriction.
+import { MockButton, MockTextarea } from '@/test/assistantUiMock'
 vi.mock('@assistant-ui/react', () => {
   return {
     useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
@@ -74,16 +75,15 @@ vi.mock('@assistant-ui/react', () => {
         onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
         onBlur?: () => void;
       }) =>
-        React.createElement('textarea', {
+        MockTextarea({
           disabled, placeholder, className, onChange, onKeyDown, onBlur,
-          'data-testid': 'composer-input',
-        }),
+          'data-testid': 'composer-input',}),
       Send: ({ disabled, children, className, 'data-testid': testId }: {
         disabled?: boolean; children?: React.ReactNode; className?: string; 'data-testid'?: string
       }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'data-testid': testId ?? 'chat-send' }, children),
+        MockButton({ type: 'button', disabled, className, 'data-testid': testId ?? 'chat-send', children: children}),
       AddAttachment: ({ disabled, children, className }: { disabled?: boolean; children?: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'data-testid': 'add-attachment' }, children),
+        MockButton({ type: 'button', disabled, className, 'data-testid': 'add-attachment', children: children}),
       Attachments: () => null,
     },
     AttachmentPrimitive: {
@@ -91,7 +91,7 @@ vi.mock('@assistant-ui/react', () => {
         React.createElement('div', { className }, children),
       Name: () => null,
       Remove: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', className }, children),
+        MockButton({ type: 'button', className, children: children}),
       Thumb: () => null,
     },
     MessagePartPrimitive: { InProgress: () => null },

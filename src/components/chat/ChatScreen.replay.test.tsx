@@ -19,6 +19,7 @@ import { OmnipusComposer } from './ChatScreen'
 
 // Mock AssistantUI primitives — ChatScreen uses ThreadPrimitive, ComposerPrimitive, etc.
 // We only care about ComposerPrimitive.Send's disabled state, so render it as a real button.
+import { MockButton, MockTextarea } from '@/test/assistantUiMock'
 vi.mock('@assistant-ui/react', () => {
   return {
     useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
@@ -38,21 +39,20 @@ vi.mock('@assistant-ui/react', () => {
       Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
         React.createElement('div', { className }, children),
       Input: ({ disabled, placeholder, className }: { disabled?: boolean; placeholder?: string; className?: string }) =>
-        React.createElement('textarea', { disabled, placeholder, className, 'data-testid': 'composer-input' }),
+        MockTextarea({ disabled, placeholder, className, 'data-testid': 'composer-input'}),
       Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel, 'aria-disabled': ariaDisabled }: {
         disabled?: boolean; children?: React.ReactNode; className?: string;
         'data-testid'?: string; 'aria-label'?: string; 'aria-disabled'?: boolean | string
       }) =>
-        React.createElement('button', {
+        MockButton({
           type: 'button',
           disabled,
           className,
           'data-testid': testId ?? 'chat-send',
           'aria-label': ariaLabel,
-          'aria-disabled': ariaDisabled,
-        }, children),
+          'aria-disabled': ariaDisabled, children: children}),
       AddAttachment: ({ disabled, children, className }: { disabled?: boolean; children?: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'data-testid': 'add-attachment' }, children),
+        MockButton({ type: 'button', disabled, className, 'data-testid': 'add-attachment', children: children}),
       Attachments: () => null,
     },
     AttachmentPrimitive: {
@@ -60,7 +60,7 @@ vi.mock('@assistant-ui/react', () => {
         React.createElement('div', { className }, children),
       Name: () => null,
       Remove: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', className }, children),
+        MockButton({ type: 'button', className, children: children}),
       Thumb: () => null,
     },
     MessagePartPrimitive: {

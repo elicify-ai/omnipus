@@ -15,6 +15,7 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 
+import { MockButton, MockTextarea } from '@/test/assistantUiMock'
 vi.mock('@assistant-ui/react', () => {
   return {
     useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
@@ -43,17 +44,17 @@ vi.mock('@assistant-ui/react', () => {
       Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
         React.createElement('div', { className }, children),
       Input: (props: Record<string, unknown>) =>
-        React.createElement('textarea', { ...props, 'data-testid': 'composer-input' }),
+        MockTextarea({ ...props, 'data-testid': 'composer-input'}),
       Send: ({ children, className, 'data-testid': testId }: { children?: React.ReactNode; className?: string; 'data-testid'?: string }) =>
-        React.createElement('button', { type: 'button', className, 'data-testid': testId ?? 'chat-send' }, children),
+        MockButton({ type: 'button', className, 'data-testid': testId ?? 'chat-send', children: children}),
       AddAttachment: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', className, 'data-testid': 'add-attachment' }, children),
+        MockButton({ type: 'button', className, 'data-testid': 'add-attachment', children: children}),
       Attachments: () => null,
     },
     AttachmentPrimitive: {
       Root: ({ children }: { children?: React.ReactNode }) => React.createElement('div', {}, children),
       Name: () => null,
-      Remove: ({ children }: { children?: React.ReactNode }) => React.createElement('button', { type: 'button' }, children),
+      Remove: ({ children }: { children?: React.ReactNode }) => MockButton({ type: 'button', children: children}),
       Thumb: () => null,
     },
     MessagePartPrimitive: { InProgress: () => null },

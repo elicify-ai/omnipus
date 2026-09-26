@@ -38,6 +38,7 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 
 import { OmnipusComposer } from './ChatScreen'
 
+import { MockButton, MockTextarea } from '@/test/assistantUiMock'
 vi.mock('@assistant-ui/react', () => {
   return {
     useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
@@ -69,24 +70,22 @@ vi.mock('@assistant-ui/react', () => {
         onBlur?: () => void;
         [key: string]: unknown;
       }) =>
-        React.createElement('textarea', {
+        MockTextarea({
           ...rest,
           onChange, onKeyDown, onBlur,
-          'data-testid': 'chat-input',
-        }),
+          'data-testid': 'chat-input',}),
       Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel }: {
         disabled?: boolean; children?: React.ReactNode; className?: string;
         'data-testid'?: string; 'aria-label'?: string;
       }) =>
-        React.createElement('button', {
+        MockButton({
           type: 'button', disabled, className,
           'data-testid': testId ?? 'chat-send',
-          'aria-label': ariaLabel,
-        }, children),
+          'aria-label': ariaLabel, children: children}),
       AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
         disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
       }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment' }, children),
+        MockButton({ type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment', children: children}),
       Attachments: () => null,
     },
     AttachmentPrimitive: {
@@ -94,7 +93,7 @@ vi.mock('@assistant-ui/react', () => {
         React.createElement('div', { className }, children),
       Name: () => null,
       Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
-        React.createElement('button', { type: 'button', className, 'aria-label': ariaLabel }, children),
+        MockButton({ type: 'button', className, 'aria-label': ariaLabel, children: children}),
       Thumb: () => null,
     },
     MessagePartPrimitive: { InProgress: () => null },

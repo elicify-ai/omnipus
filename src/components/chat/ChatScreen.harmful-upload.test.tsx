@@ -23,6 +23,7 @@ const addAttachment = vi.fn(() => Promise.resolve())
 // sharing a reused worker process (`pool: 'forks'` in vite.config.ts), causing an
 // intermittent `ReferenceError: useRef is not defined` in unrelated sibling test
 // files run in the same batch.
+import { MockButton, MockTextarea } from '@/test/assistantUiMock'
 vi.mock('@assistant-ui/react', () => {
   return {
     useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
@@ -47,22 +48,20 @@ vi.mock('@assistant-ui/react', () => {
         onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
         onBlur?: () => void;
       }) =>
-        React.createElement('textarea', {
+        MockTextarea({
           disabled, placeholder, className, onChange, onKeyDown, onBlur,
-          'data-testid': 'composer-input',
-        }),
+          'data-testid': 'composer-input',}),
       Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel }: {
         disabled?: boolean; children?: React.ReactNode; className?: string;
         'data-testid'?: string; 'aria-label'?: string
       }) =>
-        React.createElement('button', {
+        MockButton({
           type: 'button', disabled, className,
-          'data-testid': testId ?? 'chat-send', 'aria-label': ariaLabel,
-        }, children),
+          'data-testid': testId ?? 'chat-send', 'aria-label': ariaLabel, children: children}),
       AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
         disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
       }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment' }, children),
+        MockButton({ type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment', children: children}),
       Attachments: () => null,
     },
     AttachmentPrimitive: {
