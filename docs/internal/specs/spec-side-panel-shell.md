@@ -43,6 +43,7 @@
 | SP-12 | Open in new tab (O2) | "Open in new tab" opens the panel's full-page view in a new browser tab and CLOSES the panel in the original tab (chat regains full width) | Founder chose recommended | Founder | 2026-09-26 |
 | SP-13 | Width memory (O3) | Remembered width is per panel AND per workspace | Founder (not the recommendation) | Founder | 2026-09-26 |
 | SP-14 | Deep links (O4) | The open panel is part of the page address (e.g. `…/chat?panel=team`); reload and shared links restore it | Founder chose recommended | Founder | 2026-09-26 |
+| SP-15 | Stories for touched panels | Every panel the shell work touches gets Storybook stories with sample data: Library, Browser live panel, Mail, Team, Tasks, Calendar, plus the shared shell itself; remaining surfaces tracked in issue #899 | Founder | 2026-09-26 |
 
 ## Open points — resolved (SP-11..SP-14); plan-spec raises any NEW unclear point as a founder question
 
