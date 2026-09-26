@@ -32,7 +32,7 @@
  * follow-up — every (agent, workspace) pair may own a mailbox, not just one
  * system-wide):
  *   - IMAP/SMTP host+port, username, password (secret)
- *   - No inbox UI (v0.2); unhandled mail surfaces as Board tasks in that workspace
+ *   - No inbox UI yet (Mail tab tracked #42); unhandled mail surfaces as Board tasks in that workspace
  */
 
 import { useState, useEffect, useRef } from 'react'
@@ -560,7 +560,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
             <Info size={13} className="text-[var(--color-accent)] shrink-0 mt-[var(--space-0-5)]" />
             <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
               The agent works this inbox on heartbeat. Mail it cannot fully handle
-              becomes a Board task. A dedicated Email tab (inbox view) arrives in v0.2.
+              becomes a Board task. A dedicated Email tab (inbox view) is planned.
             </p>
           </div>
 

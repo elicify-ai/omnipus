@@ -37,8 +37,8 @@ func TestOmnipusSandboxConfig_ResolvedMode_Precedence(t *testing.T) {
 	}
 }
 
-// TestOmnipusSandboxConfig_EgressAllowCIDRs_RoundTrip pins the v0.2
-// (#155 item 4) field shape: cfg.Sandbox.EgressAllowCIDRs is a []string
+// TestOmnipusSandboxConfig_EgressAllowCIDRs_RoundTrip pins the
+// #155 (item 4) field shape: cfg.Sandbox.EgressAllowCIDRs is a []string
 // of CIDR ranges marshaled under "egress_allow_cidrs". The field is the
 // operator's escape hatch for the default-deny outbound posture — entries
 // here are merged into the SSRFChecker's allow-list at boot so internal
@@ -54,7 +54,7 @@ func TestOmnipusSandboxConfig_EgressAllowCIDRs_RoundTrip(t *testing.T) {
 	rt := reflect.TypeOf((*OmnipusSandboxConfig)(nil)).Elem()
 	field, ok := rt.FieldByName("EgressAllowCIDRs")
 	if !ok {
-		t.Fatalf("OmnipusSandboxConfig.EgressAllowCIDRs field missing — v0.2 #155 regression")
+		t.Fatalf("OmnipusSandboxConfig.EgressAllowCIDRs field missing — #155 regression")
 	}
 	if got := field.Type.String(); got != "[]string" {
 		t.Fatalf("EgressAllowCIDRs type = %q, want %q", got, "[]string")

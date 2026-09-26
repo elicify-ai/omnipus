@@ -18,7 +18,7 @@ import (
 
 // $OMNIPUS_HOME/system/ was not in any part of the secret set — adversarial
 // review finding #1. It holds audit.jsonl (pkg/audit), that log's rotated
-// audit-YYYY-MM-DD.jsonl siblings and audit-chain-checkpoint.json (the v0.2
+// audit-YYYY-MM-DD.jsonl siblings and audit-chain-checkpoint.json (the #155
 // HMAC tamper-evidence chain's own anchor), and state.json. The HMAC chain
 // detects a sandboxed child MODIFYING a logged entry; it does nothing to stop the child from truncating or deleting the
 // file outright — neither operation needs a read, and a deleted file has no

@@ -7,7 +7,7 @@
 //
 // Pattern cloned from pkg/audit/rotation_race_test.go.
 //
-// Traces to: v0.2 #155 final review (test-analyzer rated 8 — must close
+// Traces to: the #155 final review (test-analyzer rated 8 — must close
 // before merging the issue).
 
 package tools_test

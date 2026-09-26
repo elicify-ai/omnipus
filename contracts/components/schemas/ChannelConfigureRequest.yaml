@@ -11,9 +11,9 @@ properties:
   instance_id:
     type: string
     description: >
-      Optional: the instance map key to configure. In v0.1 (cap-1/type) this
-      equals the channel type and can be omitted. Reserved for v0.3 multi-instance
-      support — the backend ignores this field today (the URL {id} is the key).
+      Optional. The backend ignores this field: the URL {id} is the instance
+      key, including when more than one instance of a channel type exists.
+      It is not persisted.
   identity:
     $ref: './ChannelIdentity.yaml'
     description: >

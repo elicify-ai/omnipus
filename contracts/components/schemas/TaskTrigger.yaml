@@ -1,7 +1,8 @@
 title: TaskTrigger
 description: >
   When (and how) a Task fires (Detail #3). Modelled as an extensible
-  `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can
+  `{type, config}` shape so the future multi-trigger / boolean-composition growth
+  path can
   grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
 
   ## Tier 2 (now)
@@ -28,7 +29,7 @@ description: >
   semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this
   type rather than `ScheduleTrigger`.
 
-  ## v0.3 growth path (design intent — DO NOT build in Tier 2)
+  ## Future growth path (design intent — DO NOT build in this release)
   The discriminated `type` enum grows additively with event kinds:
   `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the
   autonomous-loop primitive), `on_message` (channel match), `webhook`, and
@@ -53,7 +54,7 @@ properties:
       - every
       - recurring
     description: >
-      The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds
+      The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds
       event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`)
       additively.
     example: "recurring"
@@ -65,7 +66,7 @@ properties:
       `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` →
       exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and
       `tz`). Validated server-side against `type`. This object is the open
-      growth surface — v0.3 event kinds add their own keys here without changing
+      growth surface — future event kinds add their own keys here without changing
       the outer shape.
     properties:
       at_ms:

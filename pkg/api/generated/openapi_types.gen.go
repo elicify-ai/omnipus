@@ -12636,7 +12636,7 @@ type Agent struct {
 	// UpdatedAt ISO 8601 timestamp of the last successful PUT /agents/{id} update. Returned in list and detail responses.
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 
-	// Voice Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured. Main only.
+	// Voice Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT yet active (TTS delivery, tracked #306 — no release scheduled). Absent when not configured. Main only.
 	Voice *string `json:"voice,omitempty"`
 
 	// Warning Non-fatal advisory (e.g. config reload failed after create/update).
@@ -12749,7 +12749,7 @@ type AgentCreateRequestMain struct {
 	// Type Discriminator. Must be exactly "Main" for this variant.
 	Type AgentCreateRequestMainType `json:"type"`
 
-	// Voice Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
+	// Voice Per-agent persona voice identifier (Main only). Schema-pinned; not yet active (TTS, tracked #306).
 	Voice *string `json:"voice,omitempty"`
 }
 
@@ -13307,7 +13307,7 @@ type AgentUpdateRequest struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Voice Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear. Main only.
+	// Voice Per-agent persona voice identifier. Schema-pinned; not yet active (TTS, tracked #306). Send null to clear. Main only.
 	Voice *string `json:"voice,omitempty"`
 }
 
@@ -13495,7 +13495,7 @@ type AuditEntry struct {
 // AuditEntryDecision Outcome of the event evaluation. One of: allow, deny, error. May be absent for informational events.
 type AuditEntryDecision string
 
-// AuditLogResponse Response from GET /api/v1/audit-log. Wraps the recent audit entries with the result of verifying the HMAC tamper-evident chain (v0.2 #155). The chain is recomputed server-side over the on-disk audit files; chain_status reports whether it is intact, broken (tampered/reordered/truncated), or could not be checked (e.g. audit logging disabled or no chain key).
+// AuditLogResponse Response from GET /api/v1/audit-log. Wraps the recent audit entries with the result of verifying the HMAC tamper-evident chain (the #155 security wave). The chain is recomputed server-side over the on-disk audit files; chain_status reports whether it is intact, broken (tampered/reordered/truncated), or could not be checked (e.g. audit logging disabled or no chain key).
 type AuditLogResponse struct {
 	// ChainBrokenIndex 1-based index of the first entry where the chain break was detected. Present only when chain_status is "broken".
 	ChainBrokenIndex *int `json:"chain_broken_index,omitempty"`
@@ -13868,7 +13868,7 @@ type ChannelConfigureRequest struct {
 	// ImapPort IMAP server port (email channel). Defaults to 993 (IMAPS).
 	ImapPort *int `json:"imap_port,omitempty"`
 
-	// InstanceId Optional: the instance map key to configure. In v0.1 (cap-1/type) this equals the channel type and can be omitted. Reserved for v0.3 multi-instance support — the backend ignores this field today (the URL {id} is the key).
+	// InstanceId Optional. The backend ignores this field: the URL {id} is the instance key, including when more than one instance of a channel type exists. It is not persisted.
 	InstanceId *string `json:"instance_id,omitempty"`
 
 	// Password Login password for IMAP and SMTP authentication (email channel). Stored encrypted in the credential store — never returned in GET responses.
@@ -21127,7 +21127,7 @@ type Session struct {
 	// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
 	UpdatedAt time.Time `json:"updated_at"`
 
-	// WorkspaceId Associated workspace ID (optional, future v0.3 feature).
+	// WorkspaceId Associated workspace ID when the session is bound to a workspace. Absent when the session has none.
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
@@ -21601,7 +21601,7 @@ type SessionDetail struct {
 		// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
 		UpdatedAt time.Time `json:"updated_at"`
 
-		// WorkspaceId Associated workspace ID (optional, future v0.3 feature).
+		// WorkspaceId Associated workspace ID when the session is bound to a workspace. Absent when the session has none.
 		WorkspaceId *string `json:"workspace_id,omitempty"`
 	} `json:"session"`
 }
@@ -22646,7 +22646,7 @@ type StorageStats struct {
 // Task The unified Task entity (Sprint 2, Tier 2) — one record that replaces both the legacy workflow `Task` and the GTD `BoardTask` schemas outright. There is no back-compat: per remediation Detail #7 there is no migration, no compat shim, and no dual status/title vocabulary. Every task belongs to a workspace (`workspace_id` is required-scoped) and may be a top-level task (no `parent_task_id`) or a subtask (delegation / decomposition child). Maps to the `task.Task` Go struct (the new `pkg/task` store) on the backend.
 // Returned by GET /tasks, GET /tasks/{id}, GET /tasks/{id}/subtasks, POST /tasks, and PATCH /tasks/{id}.
 type Task struct {
-	// Action What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for v0.3 action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
+	// Action What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for future action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
 	Action TaskAction `json:"action"`
 
 	// AgentId ID of the agent assigned to this task. Optional — human-only tasks have none.
@@ -22892,7 +22892,7 @@ type Task struct {
 		Text string `json:"text"`
 	} `json:"todos,omitempty"`
 
-	// Trigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+	// Trigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the future multi-trigger / boolean-composition growth path can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
 	// ## Tier 2 (now) `type` is one of:
 	//   - `manual`    — no automatic trigger. The task starts when a human drags its
 	//                   card into `in_progress`, or via Run / Create & Run. For an
@@ -22910,12 +22910,12 @@ type Task struct {
 	//                   Each fire spawns a FRESH run.
 	//
 	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
-	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
+	// ## Future growth path (design intent — DO NOT build in this release) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
-		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 		Config Task_Trigger_Config `json:"config"`
 
-		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 		Type TaskTriggerType `json:"type"`
 	} `json:"trigger,omitempty"`
 
@@ -22929,7 +22929,7 @@ type Task struct {
 	WriteSet *[]string `json:"write_set,omitempty"`
 }
 
-// TaskAction What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for v0.3 action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
+// TaskAction What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for future action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
 type TaskAction string
 
 // TaskAssigneeWarningField The task field the warning is about, so a form can show it next to that control.
@@ -22986,7 +22986,7 @@ type TaskSurface string
 // TaskTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TaskTodosStatus string
 
-// Task_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// Task_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 type Task_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
@@ -23008,14 +23008,14 @@ type Task_Trigger_Config struct {
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
-// TaskTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+// TaskTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskTriggerType string
 
 // TaskCreateRequest Request body for POST /tasks — the ONE unified create form (Detail #8) that replaces the two legacy create bodies (`TaskCreateRequest` and `BoardTaskCreateRequest`). No back-compat aliases.
 // Landing rule (Detail #8): every created task lands in `inbox`. Nothing auto-lands in `next`; only a fully-captured task can be manually triaged to `next` via PATCH. `status` is therefore NOT a create-time field — the server always seeds `inbox`.
 // Start semantics (Detail #8): a task with no trigger (`manual`) starts when dragged to `in_progress` / Run; a task with a time trigger fires itself. The "Create & Run now" UX (create + start immediately) is a client action layered on top of this create + a subsequent start, not a distinct request field.
 type TaskCreateRequest struct {
-	// Action Task action type. Tier 2 accepts `llm` only; the enum grows additively in v0.3.
+	// Action Task action type. Tier 2 accepts `llm` only; the enum grows additively (future growth path — design intent, do not build in this release).
 	Action TaskCreateRequestAction `json:"action"`
 
 	// AgentId Optional agent to assign the task to.
@@ -23189,7 +23189,7 @@ type TaskCreateRequest struct {
 		Text string `json:"text"`
 	} `json:"todos,omitempty"`
 
-	// Trigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+	// Trigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the future multi-trigger / boolean-composition growth path can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
 	// ## Tier 2 (now) `type` is one of:
 	//   - `manual`    — no automatic trigger. The task starts when a human drags its
 	//                   card into `in_progress`, or via Run / Create & Run. For an
@@ -23207,12 +23207,12 @@ type TaskCreateRequest struct {
 	//                   Each fire spawns a FRESH run.
 	//
 	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
-	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
+	// ## Future growth path (design intent — DO NOT build in this release) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
-		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 		Config TaskCreateRequest_Trigger_Config `json:"config"`
 
-		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 		Type TaskCreateRequestTriggerType `json:"type"`
 	} `json:"trigger,omitempty"`
 
@@ -23223,7 +23223,7 @@ type TaskCreateRequest struct {
 	WriteSet *[]string `json:"write_set,omitempty"`
 }
 
-// TaskCreateRequestAction Task action type. Tier 2 accepts `llm` only; the enum grows additively in v0.3.
+// TaskCreateRequestAction Task action type. Tier 2 accepts `llm` only; the enum grows additively (future growth path — design intent, do not build in this release).
 type TaskCreateRequestAction string
 
 // TaskCreateRequestCriteriaAuthorKind Whether this criterion was authored by an agent or a human user.
@@ -23268,7 +23268,7 @@ type TaskCreateRequestSurface string
 // TaskCreateRequestTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TaskCreateRequestTodosStatus string
 
-// TaskCreateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// TaskCreateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 type TaskCreateRequest_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
@@ -23290,7 +23290,7 @@ type TaskCreateRequest_Trigger_Config struct {
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
-// TaskCreateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+// TaskCreateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskCreateRequestTriggerType string
 
 // TaskOccurrenceSet The server-expanded occurrence set of one recurring-capable task within the queried range, returned by `GET /api/v1/tasks/occurrences`. Covers all trigger flavors that can recur (`rrule` via rrule-go, legacy `cron_expr` via gronx in the server zone, and `every_ms` as a forward-only projection off the live job's next-run instant — FR-008a). Only tasks the scheduler would actually arm are expanded (non-terminal, non-`heartbeat`-surface); tasks with zero occurrences in range are omitted from the response array entirely — an empty result is `[]`, never null.
@@ -23393,7 +23393,7 @@ type TaskRunKind string
 // TaskRunStatus Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
 type TaskRunStatus string
 
-// TaskTrigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+// TaskTrigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the future multi-trigger / boolean-composition growth path can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
 // ## Tier 2 (now) `type` is one of:
 //   - `manual`    — no automatic trigger. The task starts when a human drags its
 //     card into `in_progress`, or via Run / Create & Run. For an
@@ -23411,16 +23411,16 @@ type TaskRunStatus string
 //     Each fire spawns a FRESH run.
 //
 // `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
-// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
+// ## Future growth path (design intent — DO NOT build in this release) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 type TaskTrigger struct {
-	// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+	// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 	Config TaskTrigger_Config `json:"config"`
 
-	// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+	// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 	Type TaskTriggerType `json:"type"`
 }
 
-// TaskTrigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// TaskTrigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 type TaskTrigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
@@ -23625,7 +23625,7 @@ type TaskUpdateRequest struct {
 		Text string `json:"text"`
 	} `json:"todos,omitempty"`
 
-	// Trigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the v0.3 multi-trigger / boolean-composition future can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
+	// Trigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the future multi-trigger / boolean-composition growth path can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
 	// ## Tier 2 (now) `type` is one of:
 	//   - `manual`    — no automatic trigger. The task starts when a human drags its
 	//                   card into `in_progress`, or via Run / Create & Run. For an
@@ -23643,12 +23643,12 @@ type TaskUpdateRequest struct {
 	//                   Each fire spawns a FRESH run.
 	//
 	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
-	// ## v0.3 growth path (design intent — DO NOT build in Tier 2) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
+	// ## Future growth path (design intent — DO NOT build in this release) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
-		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 		Config TaskUpdateRequest_Trigger_Config `json:"config"`
 
-		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 		Type TaskUpdateRequestTriggerType `json:"type"`
 	} `json:"trigger,omitempty"`
 
@@ -23701,7 +23701,7 @@ type TaskUpdateRequestSurface string
 // TaskUpdateRequestTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TaskUpdateRequestTodosStatus string
 
-// TaskUpdateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — v0.3 event kinds add their own keys here without changing the outer shape.
+// TaskUpdateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 type TaskUpdateRequest_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
@@ -23723,7 +23723,7 @@ type TaskUpdateRequest_Trigger_Config struct {
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
-// TaskUpdateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; v0.3 adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
+// TaskUpdateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskUpdateRequestTriggerType string
 
 // Todo A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent, no trigger, and no ID — it is a `{text, status}` pair. Use a subtask (a full child Task with `parent_task_id`) when you need an independent agent/trigger. The `status` tri-state (`pending`/`in_progress`/`completed`) replaces the legacy boolean `done` so a checklist can express work-in-progress (§3 tasks-system refactor — the `set_todos` agent scratchpad rides this same array).

@@ -621,7 +621,7 @@ type AgentConfig struct {
 	FallbackModels FallbackModelSlice `json:"fallback_models,omitempty"`
 	// Voice is the per-agent persona voice identifier (e.g. TTS voice name).
 	// Distinct from the global VoiceConfig engine settings.
-	// Schema-pinned; not active until v0.2.0 TTS delivery.
+	// Schema-pinned; not yet active (TTS delivery, tracked #306).
 	Voice string `json:"voice,omitempty"`
 	// Color is the hex color code for this agent's avatar in the UI (e.g. "#22C55E").
 	Color string `json:"color,omitempty"`
@@ -2491,7 +2491,7 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	if cfg.Channels == nil {
 		cfg.Channels = make(map[string]ChannelInstanceConfig)
 	}
-	// ADR-029 (v0.3): validate channel instance keys, effective types, and
+	// ADR-029: validate channel instance keys, effective types, and
 	// workspace binding completeness (half-bound instances are rejected).
 	// Run on the RAW map BEFORE normalizeChannelMap so malformed keys are
 	// caught before normalization silently discards them.
@@ -2665,7 +2665,7 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 
 func (c *Config) migrateChannelConfigs() {
 	// Discord: mention_only -> group_trigger.mention_only (preserved from the typed singleton era).
-	// The map may have zero, one, or (after v0.3) more discord instances. Walk the
+	// The map may have zero, one, or more discord instances. Walk the
 	// map and normalise any instance of type "discord" that has the legacy flag set
 	// without the group_trigger equivalent.
 	for id, inst := range c.Channels {

@@ -640,7 +640,7 @@ The standard-size reviewers are fixed by founder decision (Round 8): always code
 Founder request
       |
       v
-team-lead: route to phase (v0.1 / v0.2 / v0.3 per root CLAUDE.md);
+team-lead: route per the current routing rule (root CLAUDE.md; the v0.2/v0.3 release labels were retired 2026-09-25);
            name/confirm the current integration branch (5.7)
       |
       v

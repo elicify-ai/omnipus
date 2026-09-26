@@ -1,9 +1,11 @@
 # ADR-062 — Reads and execute default open; writes stay confined
 
+> **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
+
 - **Status:** Accepted (2026-08-12) — every open question the draft carried has been decided by the operator; see §4.0 (secret set), §7.1 (residual risk accepted), and the spec's FR-1 (default) and FR-6 (redaction dropped).
 - **Date:** 2026-08-12
 - **Deciders:** founder (decided the axis), lead (mechanism)
-- **Related:** [ADR-052 Phase-3 AC-6](ADR-052-phase3-AC6-macos-seatbelt.md) (introduced `sandbox.allowed_exec_paths`, which this narrows); pentest items **C1/C2** (v0.2 #155 item 8) which this **reverses on Linux and Windows** — see §7; egress control, **not yet an ADR** — see §8.
+- **Related:** [ADR-052 Phase-3 AC-6](ADR-052-phase3-AC6-macos-seatbelt.md) (introduced `sandbox.allowed_exec_paths`, which this narrows); pentest items **C1/C2** (#155, item 8 — shipped) which this **reverses on Linux and Windows** — see §7; egress control, **not yet an ADR** — see §8.
 - **Evidence level:** claims marked **[VERIFIED]** were executed on this host (macOS 26.5.2 / Darwin 25.5.0, x86_64) or read from code at commit `e6a80ccf`. Claims marked **[INFERRED]** are reasoned, not run — chiefly everything about Linux, which has no host available.
 - **Supersedes in part:** the read half of `readOnlySystem` in `pkg/sandbox/sandbox.go::DefaultPolicy`, and `sandbox.allowed_exec_paths` as an enumeration mechanism.
 

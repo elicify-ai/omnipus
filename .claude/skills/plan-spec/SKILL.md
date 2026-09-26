@@ -60,8 +60,8 @@ seen and accepted, not for an unanswered question.
   facts; code wins over docs.
 - every `ADR-*.md` file under `docs/internal/architecture/` — existing decisions, cited
   by title, not number alone (numbers have review-round siblings).
-- `docs/internal/_archive/preview-doc-v03-concept/` — the v0.3 direction, for anything
-  that touches it.
+- `docs/internal/_archive/preview-doc-v03-concept/` — the pre-ADR workspaces-redesign
+  concept (version labels retired), for anything that touches it.
 - `contracts/openapi.yaml`, `contracts/asyncapi.yaml`, `contracts/components/schemas/` —
   contract-first wire types (Hard Constraint #8). Every new data exchange starts here;
   the generated types in `pkg/api/generated/` and `src/lib/api/generated/` are the only

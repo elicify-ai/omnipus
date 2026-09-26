@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Tests for the v0.2 #155 audit log HMAC chain. Covers:
+// Tests for the #155 audit log HMAC chain. Covers:
 //
 //   - Genesis seed determinism
 //   - End-to-end write + verify on intact log
