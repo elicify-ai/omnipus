@@ -206,3 +206,69 @@ describe('AuditLogViewer — security_setting_change rendering (D20)', () => {
     expect(screen.getAllByText('browser.live.control_taken').length).toBeGreaterThanOrEqual(1)
   })
 })
+
+// #920 read-boundary (docs/internal/specs/read-boundary-consistency-spec.md,
+// test 23, S-5.7, FR-023): grep's new `path.search_roots` audit row renders
+// through the EXISTING components — the fallback event badge, the live
+// event-filter vocabulary, and the details block showing `roots` and
+// `path_arg`. The spec's Assumptions predict no SPA change is needed; if this
+// block passes on the unchanged viewer, that prediction is confirmed.
+describe('AuditLogViewer — path.search_roots row (#920 S-5.7)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const searchRootsEntry = {
+    timestamp: '2026-09-26T10:00:00Z',
+    event: 'path.search_roots',
+    decision: 'allow',
+    agent_id: 'mia',
+    tool: 'grep',
+    details: { roots: ['/srv/app', '/home/me/notes'], path_arg: '/srv/app' },
+  }
+
+  it('renders the entry with its event name on the fallback badge', async () => {
+    vi.mocked(fetchAuditLog).mockResolvedValue({ entries: [searchRootsEntry], chain_status: 'unknown' } as never)
+    renderViewer()
+    const badge = await screen.findByText('path.search_roots')
+    // BADGE_FALLBACK (AuditLogViewer.tsx) — the spec's "existing fallback
+    // event badge"; a dedicated colour is out of scope.
+    expect(badge.className).toContain('bg-zinc-800')
+  })
+
+  it('offers path.search_roots in the event filter and isolates the entry', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchAuditLog).mockResolvedValue({
+      entries: [
+        { timestamp: '2026-09-26T09:59:00Z', event: 'tool_call', decision: 'allow', tool: 'bash' },
+        searchRootsEntry,
+      ],
+      chain_status: 'unknown',
+    } as never)
+    renderViewer()
+    await waitFor(() => screen.getByText('tool_call'))
+
+    await user.click(screen.getByRole('combobox', { name: 'Event type filter' }))
+    await user.click(await screen.findByRole('option', { name: 'path.search_roots' }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('tool_call')).not.toBeInTheDocument()
+    })
+    expect(screen.getAllByText('path.search_roots').length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('expands to show roots and path_arg (and nothing that looks like a search term)', async () => {
+    vi.mocked(fetchAuditLog).mockResolvedValue({ entries: [searchRootsEntry], chain_status: 'unknown' } as never)
+    renderViewer()
+    await screen.findByText('path.search_roots')
+
+    fireEvent.click(screen.getByRole('button', { name: /show details for this path\.search_roots entry/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Details')).toBeInTheDocument()
+    })
+    expect(screen.getByText(/"roots": \[/)).toBeInTheDocument()
+    expect(screen.getByText(/"\/home\/me\/notes"/)).toBeInTheDocument()
+    expect(screen.getByText(/"path_arg": "\/srv\/app"/)).toBeInTheDocument()
+  })
+})
