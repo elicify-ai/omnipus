@@ -50,12 +50,18 @@ type CapturedRenderFn = (props: {
 const capturedToolUIs = vi.hoisted((): Record<string, CapturedRenderFn> => ({}))
 
 vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
+  // Captures every registered tool UI's render config by toolName —
+  // `SetGoalToolUI` (src/components/chat/tools/SetGoalToolUI.tsx) calls
+  // this at module load time (triggered transitively the moment
+  // ChatScreen.tsx imports `SetGoalCardBlock` from the same file), so
+  // `capturedToolUIs['set_goal']` is populated before any test body runs
+  // — see (a) below.
   makeAssistantToolUI: (config: { toolName?: string; render?: CapturedRenderFn }) => {
-          if (typeof config.toolName === 'string' && config.render) {
-            capturedToolUIs[config.toolName] = config.render
-          }
-          return () => null
-        },
+    if (typeof config.toolName === 'string' && config.render) {
+      capturedToolUIs[config.toolName] = config.render
+    }
+    return () => null
+  },
 }))
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
