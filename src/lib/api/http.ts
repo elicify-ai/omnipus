@@ -4,6 +4,7 @@ import { ApiError, isApiError as isApiErrorFn } from '../api-error'
 import { maybeDevToast } from '../dev-toast'
 import { logError } from '../telemetry'
 import type { ZodType } from 'zod'
+import { useUiStore } from '@/store/ui'
 
 // ── Schema validation error ────────────────────────────────────────────────────
 //
@@ -195,7 +196,100 @@ export async function withCsrfRetry<T>(attempt: () => Promise<T>): Promise<T> {
   }
 }
 
+// ── Planted-cookie recovery (ADR-094 FR-015(4) / S-4.2, order 27) ────────────
+//
+// When the gateway clears cookies a preview planted, it answers with a typed
+// envelope on the failed call:
+//   { code: 'planted_cookie_cleared',
+//     error: 'planted_cookie_cleared',
+//     message: 'Omnipus cleared cookies set by a preview — please retry' }
+// — 403 on a state-changing call, 401 on a GET. The SPA's ONE user-facing
+// recovery affordance is a single error toast whose Retry action re-issues
+// the EXACT same request once. Rules the spec's UI-states table and order 27
+// pin:
+//   • exactly ONE toast per event — a parallel burst of planted failures (a
+//     query-cache refetch storm) collapses into one toast via a 5 s dedup
+//     window (the same pattern as _schemaErrorLastToast in queryClient.ts);
+//   • the re-issue is USER-initiated (the Retry action) — request() itself
+//     never auto-retries a planted failure (a state-changing call must not
+//     be re-run without the user's click);
+//   • a FAILED retry never stacks a second toast — the retry goes through
+//     requestOnce directly, so no recursive toast raise (S-4.2: duplicate
+//     toasts fail the test).
+const PLANTED_COOKIE_CODE = 'planted_cookie_cleared'
+const PLANTED_COOKIE_FALLBACK_MESSAGE =
+  'Omnipus cleared cookies set by a preview — please retry'
+const PLANTED_COOKIE_TOAST_DEDUP_MS = 5_000
+let _plantedCookieToastAt = 0
+
+/**
+ * Raises the ONE planted-cookie recovery toast for the current event window.
+ *
+ * The toast message is the server's VERBATIM `message` recovered from
+ * `err.body` — ApiError.userMessage is NOT usable here: for known statuses
+ * (401/403) `ApiError.fromResponse` deliberately substitutes
+ * `defaultUserMessage(status)`, so the server's human text only survives on
+ * `body`. Falls back to the spec's verbatim recovery line when the body is
+ * missing or unparseable.
+ */
+function raisePlantedCookieToast(err: ApiError, retry: () => Promise<unknown>): void {
+  if (typeof window === 'undefined') return
+  const now = Date.now()
+  if (now - _plantedCookieToastAt < PLANTED_COOKIE_TOAST_DEDUP_MS) return
+  _plantedCookieToastAt = now
+
+  let message = PLANTED_COOKIE_FALLBACK_MESSAGE
+  if (err.body) {
+    try {
+      const parsed = JSON.parse(err.body) as { message?: unknown; error?: unknown }
+      if (typeof parsed.message === 'string' && parsed.message.trim().length > 0) {
+        message = parsed.message
+      } else if (typeof parsed.error === 'string' && parsed.error.trim().length > 0) {
+        message = parsed.error
+      }
+    } catch {
+      // Body wasn't JSON — keep the fallback recovery text.
+    }
+  }
+
+  // Static import (not the lazy dynamic import queryClient.ts uses): the
+  // toast must be observable synchronously in the same tick the rejection
+  // propagates — a dynamic import would race a test-visibility window.
+  useUiStore.getState().addToast({
+    message,
+    variant: 'error',
+    action: {
+      label: 'Retry',
+      onClick: () => {
+        void retry().catch((retryErr) => {
+          // A failed user-initiated retry never re-toasts (S-4.2) and never
+          // recurses into request()'s catch (requestOnce is called directly).
+          console.warn('[api] planted-cookie retry failed', retryErr)
+        })
+      },
+    },
+  })
+}
+
+/**
+ * The SPA-wide JSON transport entry point. Identical to `requestOnce` (the
+ * CSRF gate + the single CSRF-recovery retry) plus the ONE ADR-094 planted-
+ * cookie behaviour: a typed `planted_cookie_cleared` failure raises the
+ * single recovery toast (with its Retry re-issue) while the error still
+ * propagates to the caller unchanged.
+ */
 export async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>): Promise<T> {
+  try {
+    return await requestOnce(path, init, schema)
+  } catch (err) {
+    if (isApiErrorFn(err) && err.code === PLANTED_COOKIE_CODE) {
+      raisePlantedCookieToast(err, () => requestOnce<T>(path, init, schema))
+    }
+    throw err
+  }
+}
+
+async function requestOnce<T>(path: string, init?: RequestInit, schema?: ZodType<T>): Promise<T> {
   // Client-side CSRF gate: reject state-changing calls that would be
   // guaranteed to 403 at the server. This gives a clear error immediately
   // instead of a cryptic "403 csrf cookie missing" from the network tab
