@@ -230,7 +230,11 @@ describe('IframePreview warmup target (order 23, FR-025 / S-8.4)', () => {
       expect(fetchSpy).toHaveBeenCalled()
     })
     const probed = fetchSpy.mock.calls.map((c) =>
-      typeof c[0] === 'string' ? c[0] : c[0].url,
+      typeof c[0] === 'string'
+        ? c[0]
+        : c[0] instanceof URL
+          ? c[0].href
+          : c[0].url,
     )
     const mode2Probe = probed.find((u) => u === MODE2_URL)
     // S-8.4: the probe targets the Mode 2 URL (same-origin, permitted by the
@@ -241,7 +245,12 @@ describe('IframePreview warmup target (order 23, FR-025 / S-8.4)', () => {
       'no probe may target the cross-origin label host (FR-025)',
     ).toBe(false)
     const mode2ProbeCall = fetchSpy.mock.calls.find(
-      (c) => (typeof c[0] === 'string' ? c[0] : c[0].url) === MODE2_URL,
+      (c) =>
+        (typeof c[0] === 'string'
+          ? c[0]
+          : c[0] instanceof URL
+            ? c[0].href
+            : c[0].url) === MODE2_URL,
     )
     expect(mode2ProbeCall?.[1]?.method).toBe('HEAD')
     fetchSpy.mockRestore()

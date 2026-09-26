@@ -103,7 +103,7 @@ afterEach(() => {
 
 const SPA_ORIGIN = 'http://localhost:5000'
 const SPA_HOSTNAME = 'localhost'
-const SPA_PORT = '5000'
+const SPA_PORT = 5000
 const MODE2_PATH = '/preview/mia/tok-abc123/'
 const MODE2_URL = `${SPA_ORIGIN}${MODE2_PATH}`
 

@@ -78,16 +78,27 @@ describe('planted-cookie typed error => ONE retry toast (order 27, S-4.2)', () =
     expect(toast.message).toContain(
       'Omnipus cleared cookies set by a preview — please retry',
     )
-    expect(toast.action, 'S-4.2: the toast carries a Retry action').toBeDefined()
-    expect(toast.action.label).toMatch(/retry/i)
+    const action = toast.action
+    expect(action, 'S-4.2: the toast carries a Retry action').toBeDefined()
+    if (!action) throw new Error('unreachable: action asserted defined')
+    expect(action.label).toMatch(/retry/i)
 
-    // Invoke the Retry action — it must re-issue THE SAME request once.
-    await toast.action.onClick()
-    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    // Invoke the Retry action — it must re-issue THE SAME request exactly
+    // once: the wire saw the original call plus ONE identical re-issue.
+    await action.onClick()
+    expect(
+      fetchSpy,
+      'S-4.2: Retry re-issues the request ONCE (original + one re-issue)',
+    ).toHaveBeenCalledTimes(2)
     const calls = fetchSpy.mock.calls
-    expect(calls).toHaveLength(1)
-    const [input, init] = calls[0]
-    const url = typeof input === 'string' ? input : input.url
+    expect(calls).toHaveLength(2)
+    const [input, init] = calls[1]
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url
     expect(url).toBe('/api/v1' + PATH)
     expect(init?.method).toBe('POST')
     expect(init?.body).toBe(JSON.stringify({ path: 'attack-evidence-dir' }))

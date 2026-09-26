@@ -25,8 +25,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { handleAuthError } from './queryClient'
 import { ApiError } from './api-error'
-import { forceLogout } from './authLogout'
-import { checkTokenValidity } from '@/routes/authValidation'
 
 vi.mock('@/lib/authLogout', () => ({ forceLogout: vi.fn() }))
 vi.mock('@/routes/authValidation', () => ({
