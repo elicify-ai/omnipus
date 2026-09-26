@@ -2,7 +2,8 @@
 // (D8/D12: View + Edit + Send + Discard; D23: To/subject/body editable;
 // D24: foreign drafts fully editable with the formatting-loss statement).
 // Panel Send IS the approval (D12); Discard deletes the draft (US-7).
-// PROTOTYPE (D35): actions are presentational; no endpoint is called.
+// PROTOTYPE (D35): Edit, Discard and Send stay local (handlers when the
+// demo supplies them). No endpoint is called.
 import { useState } from 'react'
 import {
   ChatCircleDots,
@@ -22,21 +23,37 @@ import { MailHtmlFrame } from './MailHtmlFrame'
 import { formatMailBytes } from './sampleMail'
 import type { DraftSample } from './sampleMail'
 
+/** The draft panel's field values, as passed to `onSend`/`onDiscard`. */
+export interface DraftValues {
+  to: string[]
+  cc: string[]
+  bcc: string[]
+  subject: string
+  body: string
+}
+
 export interface MailDraftPanelProps {
   draft: DraftSample
   /** Start in edit mode (the foreign-draft edit story). */
   initialMode?: 'view' | 'edit'
   onClose?: () => void
+  /** Interactive demo/feature hook: Discard removes the draft. */
+  onDiscard?: (values: DraftValues) => void
+  /** Interactive demo/feature hook: Send approves and sends the draft. */
+  onSend?: (values: DraftValues) => void
   className?: string
 }
 
-export function MailDraftPanel({ draft, initialMode = 'view', onClose, className }: MailDraftPanelProps) {
+export function MailDraftPanel({ draft, initialMode = 'view', onClose, onDiscard, onSend, className }: MailDraftPanelProps) {
   const [mode, setMode] = useState<'view' | 'edit'>(initialMode)
   const [to, setTo] = useState(draft.to.join(', '))
   const [cc, setCc] = useState(draft.cc.join(', '))
   const [bcc, setBcc] = useState(draft.bcc.join(', '))
   const [subject, setSubject] = useState(draft.subject)
   const [body, setBody] = useState(draft.markdownBody)
+  const splitList = (value: string): string[] =>
+    value.split(',').map((entry) => entry.trim()).filter(Boolean)
+  const values: DraftValues = { to: splitList(to), cc: splitList(cc), bcc: splitList(bcc), subject, body }
   return (
     <aside
       data-testid="mail-draft-panel"
@@ -67,7 +84,12 @@ export function MailDraftPanel({ draft, initialMode = 'view', onClose, className
         </p>
       )}
       {mode === 'view' ? (
-        <DraftView draft={draft} onEdit={() => setMode('edit')} />
+        <DraftView
+          draft={draft}
+          onEdit={() => setMode('edit')}
+          onDiscard={() => onDiscard?.(values)}
+          onSend={() => onSend?.(values)}
+        />
       ) : (
         <DraftEdit
           draft={draft}
@@ -76,6 +98,8 @@ export function MailDraftPanel({ draft, initialMode = 'view', onClose, className
           onTo={setTo} onCc={setCc} onBcc={setBcc}
           onSubject={setSubject} onBody={setBody}
           onCancel={() => setMode('view')}
+          onDiscard={() => onDiscard?.(values)}
+          onSend={() => onSend?.(values)}
         />
       )}
     </aside>
@@ -85,9 +109,11 @@ export function MailDraftPanel({ draft, initialMode = 'view', onClose, className
 interface DraftViewProps {
   draft: DraftSample
   onEdit: () => void
+  onDiscard: () => void
+  onSend: () => void
 }
 
-function DraftView({ draft, onEdit }: DraftViewProps) {
+function DraftView({ draft, onEdit, onDiscard, onSend }: DraftViewProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2-5)]">
@@ -104,11 +130,11 @@ function DraftView({ draft, onEdit }: DraftViewProps) {
             Edit
           </Button>
           <div className="min-w-0 flex-1" />
-          <Button variant="ghost" size="sm" className="gap-[var(--space-1)] text-[var(--color-error)]">
+          <Button variant="ghost" size="sm" onClick={onDiscard} className="gap-[var(--space-1)] text-[var(--color-error)]">
             <Trash size={14} aria-hidden="true" />
             Discard
           </Button>
-          <Button size="sm" className="gap-[var(--space-1)]">
+          <Button size="sm" onClick={onSend} className="gap-[var(--space-1)]">
             <PaperPlaneTilt size={14} aria-hidden="true" />
             Send
           </Button>
@@ -158,6 +184,8 @@ interface DraftEditProps {
   onSubject: (v: string) => void
   onBody: (v: string) => void
   onCancel: () => void
+  onDiscard: () => void
+  onSend: () => void
 }
 
 /**
@@ -167,7 +195,7 @@ interface DraftEditProps {
  * (nothing disappears silently, FR-035/US-8).
  */
 function DraftEdit(props: DraftEditProps) {
-  const { draft, to, cc, bcc, subject, body, onTo, onCc, onBcc, onSubject, onBody, onCancel } = props
+  const { draft, to, cc, bcc, subject, body, onTo, onCc, onBcc, onSubject, onBody, onCancel, onDiscard, onSend } = props
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <div className="flex flex-col gap-[var(--space-3)] p-[var(--space-3)]">
@@ -229,11 +257,11 @@ function DraftEdit(props: DraftEditProps) {
             Back to preview
           </Button>
           <div className="min-w-0 flex-1" />
-          <Button variant="ghost" size="sm" className="gap-[var(--space-1)] text-[var(--color-error)]">
+          <Button variant="ghost" size="sm" onClick={onDiscard} className="gap-[var(--space-1)] text-[var(--color-error)]">
             <Trash size={14} aria-hidden="true" />
             Discard
           </Button>
-          <Button size="sm" className="gap-[var(--space-1)]">
+          <Button size="sm" onClick={onSend} className="gap-[var(--space-1)]">
             <PaperPlaneTilt size={14} aria-hidden="true" />
             Send
           </Button>

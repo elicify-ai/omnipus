@@ -21,10 +21,17 @@ export interface MailReadingPaneProps {
   message: MessageDetail
   onReply: () => void
   onClose?: () => void
+  /**
+   * Fired when the human clears the D17 image block (Load images). The
+   * parent owns the body swap — the prototype re-mints the sample body
+   * client-side (see composeSampleBodyHtml), the real feature re-mints its
+   * token server-side (FR-019).
+   */
+  onLoadImages?: () => void
   className?: string
 }
 
-export function MailReadingPane({ message, onReply, onClose, className }: MailReadingPaneProps) {
+export function MailReadingPane({ message, onReply, onClose, onLoadImages, className }: MailReadingPaneProps) {
   // D17: remote images ship blocked; loading them is an explicit,
   // per-message human action. Prototype: local swap of the sample body.
   const [imagesLoaded, setImagesLoaded] = useState(false)
@@ -69,7 +76,15 @@ export function MailReadingPane({ message, onReply, onClose, className }: MailRe
             <p className="min-w-0 flex-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
               Images from outside Omnipus are blocked.
             </p>
-            <Button variant="outline" size="sm" onClick={() => setImagesLoaded(true)} className="shrink-0">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setImagesLoaded(true)
+                onLoadImages?.()
+              }}
+              className="shrink-0"
+            >
               Load images
             </Button>
           </div>

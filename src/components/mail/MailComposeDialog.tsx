@@ -1,7 +1,9 @@
 // MailComposeDialog — manual send from the Mail panel (D9, US-5): To/CC/BCC
 // (D26), Markdown-labeled body (A3), attachments (D28, MC-32 caps shown),
 // field-level validation. The signature is appended server-side; it is not
-// part of the composer. PROTOTYPE (D35): no send is wired.
+// part of the composer. PROTOTYPE (D35): Send closes the dialog and, when
+// the demo supplies onSend, hands it the field values. No endpoint is called.
+import { useEffect, useState } from 'react'
 import {
   File,
   PaperPlaneTilt,
@@ -17,18 +19,40 @@ import { Textarea } from '@/components/ui/textarea'
 import { formatMailBytes } from './sampleMail'
 import type { MailboxSample } from './sampleMail'
 
+/** The compose dialog's field values, as passed to `onSend`. */
+export interface MailComposeValues {
+  to: string
+  cc: string
+  bcc: string
+  subject: string
+  body: string
+}
+
 export interface MailComposeDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   mailbox?: MailboxSample
   /** Presentational validation errors (the real build validates on send). */
   errors?: { to?: string; body?: string }
+  /**
+   * Interactive demo/feature hook: fired on Send with the current field
+   * values; the dialog then closes. Absent (prototype stories): Send only
+   * closes the dialog.
+   */
+  onSend?: (values: MailComposeValues) => void
 }
 
-export function MailComposeDialog({ open, onOpenChange, mailbox, errors }: MailComposeDialogProps) {
+export function MailComposeDialog({ open, onOpenChange, mailbox, errors, onSend }: MailComposeDialogProps) {
   const attachments = [
     { id: 'c1', name: 'pricing-update.pdf', sizeBytes: 262_144 },
   ]
+  const [values, setValues] = useState<MailComposeValues>({ to: '', cc: '', bcc: '', subject: '', body: '' })
+  // Fresh fields on every open — the dialog is one-shot per open.
+  useEffect(() => {
+    if (open) setValues({ to: '', cc: '', bcc: '', subject: '', body: '' })
+  }, [open])
+  const set = (key: keyof MailComposeValues) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    setValues((prev) => ({ ...prev, [key]: e.target.value }))
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[85vh] flex-col gap-[var(--space-3)] overflow-y-auto">
@@ -41,22 +65,22 @@ export function MailComposeDialog({ open, onOpenChange, mailbox, errors }: MailC
           </DialogDescription>
         </DialogHeader>
         <Field label="To" error={errors?.to} required>
-          <Input placeholder="name@example.com" />
+          <Input value={values.to} onChange={set('to')} placeholder="name@example.com" />
         </Field>
         <Field label="Cc">
-          <Input placeholder="name@example.com" />
+          <Input value={values.cc} onChange={set('cc')} placeholder="name@example.com" />
         </Field>
         <Field label="Bcc">
-          <Input placeholder="name@example.com" />
+          <Input value={values.bcc} onChange={set('bcc')} placeholder="name@example.com" />
         </Field>
         <Field label="Subject">
-          <Input placeholder="Subject" />
+          <Input value={values.subject} onChange={set('subject')} placeholder="Subject" />
         </Field>
         <Field
           label="Message (Markdown)"
           description="Sent as formatted HTML plus a plain-text copy, with the mailbox signature appended."
         >
-          <Textarea rows={7} placeholder="Write your message in Markdown" />
+          <Textarea rows={7} value={values.body} onChange={set('body')} placeholder="Write your message in Markdown" />
         </Field>
         <div>
           <p className="text-[length:var(--type-caption-size)] font-[var(--font-weight-medium)] text-[var(--color-muted)]">
@@ -90,7 +114,13 @@ export function MailComposeDialog({ open, onOpenChange, mailbox, errors }: MailC
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button className="gap-[var(--space-1)]">
+          <Button
+            className="gap-[var(--space-1)]"
+            onClick={() => {
+              onSend?.(values)
+              onOpenChange(false)
+            }}
+          >
             <PaperPlaneTilt size={14} aria-hidden="true" />
             Send
           </Button>

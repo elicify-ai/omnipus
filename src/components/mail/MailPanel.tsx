@@ -116,7 +116,7 @@ interface MailboxPickerProps {
 }
 
 /** FR-010: workspace mailbox picker, shown when a workspace has mailboxes. */
-function MailboxPicker({ mailboxes, value, onChange }: MailboxPickerProps) {
+export function MailboxPicker({ mailboxes, value, onChange }: MailboxPickerProps) {
   return (
     <Select value={value} onValueChange={onChange}>
       <SelectTrigger
