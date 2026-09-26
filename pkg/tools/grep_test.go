@@ -392,3 +392,94 @@ func TestGrepTool_ScopedSearchHonorsAncestorIgnore(t *testing.T) {
 			"the ancestor layer above the scope was dropped. got:\n%s", scoped.ForLLM)
 	}
 }
+
+// rbExitPathCase is one of FR-032's four exit paths of GrepTool.Execute for
+// an ABSOLUTE root (the new root type of ADR-081 D4), shared by test 32a
+// (outcomes, every platform) and test 32 (descriptor closure, Linux only,
+// grep_fd_linux_test.go).
+type rbExitPathCase struct {
+	name string
+	// run performs the call against f and returns its result; it must leave
+	// the walk semaphore as it found it.
+	run func(t *testing.T, f *rbFixture) *ToolResult
+	// check asserts the specified outcome (read-boundary spec S-5.6, S-1.14).
+	check func(t *testing.T, f *rbFixture, res *ToolResult)
+}
+
+func rbExitPathCases() []rbExitPathCase {
+	return []rbExitPathCase{
+		{
+			name: "busy",
+			run: func(t *testing.T, f *rbFixture) *ToolResult {
+				held := 0
+				for held < 16 && filegrep.TryAcquireNow() {
+					held++
+				}
+				defer func() {
+					for i := 0; i < held; i++ {
+						filegrep.Release()
+					}
+				}()
+				return f.grepCall("needle", rbStr(f.ext))
+			},
+			check: func(t *testing.T, _ *rbFixture, res *ToolResult) {
+				if !res.IsError || !strings.Contains(res.ForLLM, "search engine is busy") {
+					t.Fatalf("busy exit path: want the structured busy error for an absolute root, got: %s", res.ForLLM)
+				}
+			},
+		},
+		{
+			name: "invalid pattern",
+			run: func(t *testing.T, f *rbFixture) *ToolResult {
+				return f.grep.Execute(f.ctx, map[string]any{"pattern": "(", "regex": true, "path": f.ext})
+			},
+			check: func(t *testing.T, _ *rbFixture, res *ToolResult) {
+				if !res.IsError || !strings.Contains(res.ForLLM, "invalid pattern") {
+					t.Fatalf("invalid-pattern exit path: want an invalid-pattern error for an absolute root, got: %s", res.ForLLM)
+				}
+			},
+		},
+		{
+			name: "completed",
+			run: func(t *testing.T, f *rbFixture) *ToolResult {
+				return f.grepCall("needle", rbStr(f.ext))
+			},
+			check: func(t *testing.T, f *rbFixture, res *ToolResult) {
+				want := []string{rbSlash(filepath.Join(f.ext, "ext", "notes.txt"))}
+				if res.IsError || !rbSameSet(rbHitPaths(res.ForLLM), want) {
+					t.Fatalf("completed exit path: want exactly %q, got IsError=%v:\n%s", want, res.IsError, res.ForLLM)
+				}
+			},
+		},
+		{
+			name: "lost root",
+			run: func(t *testing.T, f *rbFixture) *ToolResult {
+				gone := filepath.Join(f.ext, "gone")
+				rbWrite(t, filepath.Join(gone, "n.txt"), "needle\n")
+				installGrepScopeLostHook(t, gone)
+				return f.grepCall("needle", rbStr(gone))
+			},
+			check: func(t *testing.T, _ *rbFixture, res *ToolResult) {
+				if res.IsError || rbTruncation(res.ForLLM) != "root_lost" {
+					t.Fatalf("lost-root exit path: want a truncated root_lost result, got IsError=%v:\n%s", res.IsError, res.ForLLM)
+				}
+			},
+		},
+	}
+}
+
+// TestGrepTool_NewRootExitPaths is test 32a of read-boundary-consistency-
+// spec.md: the four exit paths of GrepTool.Execute for an absolute root
+// return their specified outcomes (busy error, invalid-pattern error,
+// completed result, truncated root_lost). Portable companion to test 32,
+// which alone observes descriptor closure.
+//
+// Traces: S-5.6, S-1.14; FR-032, FR-010.
+func TestGrepTool_NewRootExitPaths(t *testing.T) {
+	for _, c := range rbExitPathCases() {
+		t.Run(c.name, func(t *testing.T) {
+			f := newRBFixture(t)
+			c.check(t, f, c.run(t, f))
+		})
+	}
+}
