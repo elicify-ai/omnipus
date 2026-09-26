@@ -783,18 +783,6 @@ func recordExternalToolResultUpdateInPlace(
 	)
 }
 
-// DefaultExternalMaxTurns has NO production reader left (#904 FR-004): the
-// runtime turn cap (prepareRunOptions) and the executor preview
-// (pkg/gateway/rest_executor_preview.go::postAgentsExecutorPreview) both use
-// config.ResolveMaxToolIterations.
-//
-// TODO(#904): delete this constant. Its only remaining references are legacy
-// test assertions (pkg/gateway/rest_executor_preview_test.go,
-// external_dispatch_test.go::TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir)
-// that the RED pack's regression rows replace; implementers do not edit test
-// files, so it stays only to keep those compiling until then.
-const DefaultExternalMaxTurns = 50
-
 // transcriptModelFor returns the model string to stamp on transcript entries
 // produced by an external-CLI sub-turn. It mirrors the trim applied in
 // setLastProducedModel so the variadic and the single-slot stamp agree
