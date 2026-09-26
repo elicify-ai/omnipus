@@ -168,7 +168,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"type":        "integer",
 				"minimum":     1,
 				"maximum":     1000,
-				"description": "Max tool calls per turn (0 = inherit the system default)",
+				"description": "Max tool calls per turn for this agent, 1-1000. Must not exceed the global limit set in Settings → Performance (a higher value is refused). Omit to use the global limit.",
 			},
 			"skills":              skillsParameters(false),
 			"mcp_servers":         mcpServersParameters(),
@@ -645,7 +645,7 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 			// limit"), so the schema admits null; 1..1000 bound structurally.
 			"max_tool_iterations": map[string]any{
 				"type": []string{"integer", "null"}, "minimum": 1, "maximum": 1000,
-				"description": "New max tool calls per turn (0 = inherit the system default)",
+				"description": "New max tool calls per turn for this agent, 1-1000. Must not exceed the global limit set in Settings → Performance (a higher value is refused). Pass null to clear the agent's own value and use the global limit; omit to leave it unchanged.",
 			},
 			"skills":              skillsParameters(true),
 			"mcp_servers":         mcpServersParameters(),
