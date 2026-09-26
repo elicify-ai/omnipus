@@ -36,11 +36,17 @@ const revivedTurnHandoffBudget = 5 * time.Second
 // Run stores its own runCtx here at startup, so a resumed turn is cancelled
 // by the same Stop that ends the dispatch loop and is drained by
 // WaitForActiveRequests like every other in-flight request (architect CC-2).
-// The fallback is context.Background() only before Run has stored one —
-// test loops that never call Run.
+// Before Run has stored one, the fallback is the loop-lifetime context
+// (loopCtx — cancelled by Stop and Close), so a revival racing boot is still
+// cancelled by the same Stop instead of running detached on
+// context.Background(); the plain Background fallback remains only for
+// zero-value loops built without NewAgentLoop.
 func (al *AgentLoop) inboundRunContext() context.Context {
 	if p := al.inboundCtx.Load(); p != nil {
 		return *p
+	}
+	if al.loopCtx != nil {
+		return al.loopCtx
 	}
 	return context.Background()
 }

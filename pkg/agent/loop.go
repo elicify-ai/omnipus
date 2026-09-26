@@ -501,9 +501,21 @@ type AgentLoop struct {
 	// not context.Background() — so the same Stop that ends the dispatch
 	// loop cancels it and shutdown's WaitForActiveRequests drains it like
 	// every other in-flight request (ADR-093 gate fix, architect CC-2).
-	// The accessor falls back to context.Background() only before Run has
-	// stored a context (test loops that never call Run).
+	// The accessor falls back to loopCtx when Run has not stored a context
+	// yet, and to context.Background() only on a zero-value loop built
+	// without NewAgentLoop.
 	inboundCtx atomic.Pointer[context.Context]
+
+	// loopCtx is the loop-lifetime context, created at construction and
+	// cancelled by Stop() and Close(). It is the fallback a revived
+	// ordinary-root turn runs under when Run has not stored inboundCtx yet
+	// (a revival racing boot) — a turn started before Run must still be
+	// cancellable by the same Stop, not detached on context.Background().
+	// Written once by NewAgentLoop; read-only afterwards.
+	loopCtx context.Context
+
+	// loopCancel cancels loopCtx. Called by Stop() and Close(); idempotent.
+	loopCancel context.CancelFunc
 
 	// revivalFailures remembers the most recent failed revive attempt per
 	// session id (revive_support.go::revivalFailure). The D2 launch backstop
@@ -1184,6 +1196,13 @@ func (al *AgentLoop) Stop() {
 	if fn := al.stopCancel.Load(); fn != nil {
 		(*fn)()
 	}
+	// Cancel the loop-lifetime context too, so a revived ordinary-root turn
+	// started before Run stored its run-scoped context (loopCtx is
+	// inboundRunContext's fallback) is cancelled by the same Stop — never
+	// left detached (architect CC-2's cancellation half).
+	if al.loopCancel != nil {
+		al.loopCancel()
+	}
 }
 
 func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, ag *AgentInstance, channel, chatID, response string) {
@@ -1238,6 +1257,12 @@ func (al *AgentLoop) WaitForActiveRequests() {
 
 // Close releases resources held by agent session stores. Call after Stop.
 func (al *AgentLoop) Close() {
+	// Cancel the loop-lifetime context FIRST, so a revived ordinary-root turn
+	// running on it stops writing through the stores the teardown below
+	// closes (same class as the recap/task/steered-turn drains that follow).
+	if al.loopCancel != nil {
+		al.loopCancel()
+	}
 	// #265: stop scheduling new recaps, then drain the in-flight ones FIRST —
 	// while the registry, session stores, memory stores, and audit logger they
 	// write through are all still live (the teardown below closes them). A recap

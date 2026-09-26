@@ -265,7 +265,7 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 	// would otherwise be enqueued into a steering queue whose consumer is
 	// about to disappear for good, the false-success Finding 1 closes for the
 	// delegate tool's own steer/respond. Only a newer instruction revives it.
-	handled, herr := al.reviveInactiveInbound(msg)
+	handled, herr := al.reviveInactiveInbound(route, msg)
 	if herr != nil {
 		return herr
 	}
@@ -295,7 +295,7 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 // and legacy rows (nil classify error, not an ordinary root) keep the
 // pre-ADR-093 revive-and-redispatch; a classify ERROR — including unreadable
 // metadata — fails the enqueue and does NOT revive.
-func (al *AgentLoop) reviveInactiveInbound(msg bus.InboundMessage) (bool, error) {
+func (al *AgentLoop) reviveInactiveInbound(route routing.ResolvedRoute, msg bus.InboundMessage) (bool, error) {
 	sessionID := strings.TrimSpace(msg.SessionID)
 	if sessionID == "" {
 		return false, nil
@@ -336,7 +336,16 @@ func (al *AgentLoop) reviveInactiveInbound(msg bus.InboundMessage) (bool, error)
 		if rerr := al.reviveRecordForHumanTurn(al.inboundRunContext(), sessionID, by); rerr != nil {
 			return false, fmt.Errorf("enqueueSteeringFromMessage: revive ordinary root %q: %w", sessionID, rerr)
 		}
-		al.runRevivedOrdinaryTurn(msg, sessionID)
+		// The handoff wait inside runRevivedOrdinaryTurn looks the replaced
+		// turn up in activeTurnStates under the key runTurn registers it
+		// under — resolveScopeKey's output, the same expression processMessage
+		// evaluates for THIS message (loop.go). The bare lifecycle id is a
+		// different string ("agent:<id>:session:<sid>" vs "<sid>"), and a
+		// lookup with it always misses, so the wait never ran and the resumed
+		// turn overlapped the turn it replaces while that turn was still
+		// appending its final history writes (rev2 review, gate CC-2's
+		// overlap half).
+		al.runRevivedOrdinaryTurn(msg, resolveScopeKey(route, msg.SessionKey))
 		return true, nil
 	}
 	revived, rerr := al.ReviveStoppedSession(context.Background(), sessionID, by, msg.Content)
