@@ -88,6 +88,11 @@ func TestClassifierAgreement_D2(t *testing.T) {
 		{name: "402 any body", status: 402, body: `{"error":{"message":"neutral gateway text"}}`, wantUser: CodeQuotaBilling, wantRouting: providers.FailoverBilling},
 		{name: "429 structured insufficient_quota", status: 429, body: `{"error":{"code":"insufficient_quota","message":"You exceeded your current quota"}}`, wantUser: CodeQuotaBilling, wantRouting: providers.FailoverBilling},
 		{name: "429 prose insufficient credits", status: 429, body: `{"error":{"message":"You have insufficient credits for this request"}}`, wantUser: CodeQuotaBilling, wantRouting: providers.FailoverBilling},
+		// Gate finding F5: a mixed-case structured code used to split the
+		// two classifiers — the routing side lowercases the body before
+		// StructuredErrorCode, the user side did not. Normalization now
+		// lives inside common.StructuredErrorCode, so both agree.
+		{name: "429 structured Insufficient_Quota (mixed case)", status: 429, body: `{"error":{"code":"Insufficient_Quota","message":"You exceeded your current quota"}}`, wantUser: CodeQuotaBilling, wantRouting: providers.FailoverBilling},
 		{name: "400 Anthropic credit balance is too low", status: 400, body: `{"type":"error","error":{"message":"Your credit balance is too low to access the Anthropic API"}}`, wantUser: CodeQuotaBilling, wantRouting: providers.FailoverBilling},
 
 		// ── B-2 negatives: rate-limit look-alikes stay rate_limited on BOTH ─
