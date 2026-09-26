@@ -183,7 +183,7 @@ describe('AgentProfile — Max tool calls per turn (#904)', () => {
 
   it('D10: a server refusal of the limit is shown on the field', async () => {
     const refusal = 'max_tool_iterations 300 is above the global limit (200); lower it, or raise the global limit in Settings → Performance'
-    vi.mocked(updateAgent).mockRejectedValue(new ApiError(400, refusal))
+    vi.mocked(updateAgent).mockRejectedValue(new ApiError(400, refusal, { field: 'max_tool_iterations' }))
     const input = await openAdvanced(baseAgent)
     fireEvent.change(input, { target: { value: '300' } })
     await waitFor(() => expect(updateAgent).toHaveBeenCalled(), { timeout: 6000 })

@@ -119,7 +119,7 @@ function indicator() {
 // accepts everything else — the server's real behaviour for an above-global value.
 function refuseLimitOnly() {
   vi.mocked(updateAgent).mockImplementation(async (_id, payload) => {
-    if ((payload as Record<string, unknown>).max_tool_iterations !== undefined) throw new ApiError(400, D10)
+    if ((payload as Record<string, unknown>).max_tool_iterations !== undefined) throw new ApiError(400, D10, { field: 'max_tool_iterations' })
     return { ...baseAgent, ...(payload as Partial<Agent>), revision: '1'.repeat(64) } as Agent
   })
 }
@@ -234,7 +234,7 @@ describe('AgentProfile — executor preview with a pre-#904 out-of-range own val
   it('omits the out-of-range value so the server previews the resolved limit, and the preview is ready, not in error', async () => {
     vi.mocked(fetchExecutorPreview).mockImplementation(async (req) => {
       const n = (req as { max_tool_iterations?: number }).max_tool_iterations
-      if (n !== undefined && (n < 1 || n > 1000)) throw new ApiError(400, 'max_tool_iterations must be between 1 and 1000')
+      if (n !== undefined && (n < 1 || n > 1000)) throw new ApiError(400, 'max_tool_iterations must be between 1 and 1000', { field: 'max_tool_iterations' })
       return { binary: 'claude', argv: ['-p', '--max-turns', '200'], command_line: 'claude -p --max-turns 200', prompt_delivery: 'stdin', dropped_args: [] }
     })
     renderProfile(worker)
