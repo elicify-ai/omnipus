@@ -9,6 +9,10 @@ import {
   MemorySettings as MemorySettingsSchema,
   // ADR-066 D9 — global context-budget settings (Settings → Models):
   ContextSettings as ContextSettingsSchema,
+  // #904 tool-iteration limit — D11 lowering preview + D16 drift 409:
+  MaxToolIterationsLoweringPreview as MaxToolIterationsLoweringPreviewSchema,
+  MaxToolIterationsLoweringConflict as MaxToolIterationsLoweringConflictSchema,
+  ErrorResponse as ErrorResponseSchema,
 } from '@/lib/api/generated/schemas'
 import type {
   RetentionConfig,
@@ -20,7 +24,12 @@ import type {
   PerformanceSettingsUpdate,
   // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
   MemorySettings,
+  // #904 tool-iteration limit (tool-iteration-limit-spec.md D11/D16):
+  MaxToolIterationsLoweringPreview,
+  MaxToolIterationsLoweringConflict,
+  ErrorResponse,
 } from '@/lib/api/generated/openapi-types'
+import { ApiError, isApiError } from '../api-error'
 import { REAUTH_HEADER } from './auth'
 import { request } from './http'
 
@@ -354,15 +363,97 @@ export function fetchPerformanceSettings(): Promise<PerformanceSettings> {
 // It is re-auth gated (Spec-6 FR-12.2 / Spec-3 FR-6.6): the server rejects the PUT
 // with 403 unless a single-use consent token (from reAuth) is replayed in the
 // X-Reauth-Token header.
-export function updatePerformanceSettings(
+//
+// #904: a PUT that changes max_tool_iterations can answer 409
+// MaxToolIterationsLoweringConflict (D16 drift — the set of agents that would
+// be lowered differs from the body's confirmed_lowering). That refusal is
+// re-thrown as the typed MaxToolIterationsLoweringConflictError so the screen
+// can re-open its confirm dialog with the fresh list. The two lowering-failure
+// 500s (max_tool_iterations_lowering_failed / _rollback_incomplete) carry a
+// server message the admin must read verbatim — it names the agents and says
+// nothing was changed — so their userMessage is the server's `error` text
+// rather than the generic 5xx default.
+export async function updatePerformanceSettings(
   body: PerformanceSettingsUpdate,
   reAuthToken?: string,
 ): Promise<PerformanceSettings> {
-  return request<PerformanceSettings>('/performance', {
-    method: 'PUT',
-    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
-    body: JSON.stringify(body),
-  }, PerformanceSettingsSchema)
+  try {
+    return await request<PerformanceSettings>('/performance', {
+      method: 'PUT',
+      headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
+      body: JSON.stringify(body),
+    }, PerformanceSettingsSchema)
+  } catch (err) {
+    throw performanceWriteError(err)
+  }
+}
+
+// fetchMaxToolIterationsLoweringPreview asks, read-only, which agents' own
+// limits would be lowered if the global were set to `value` (spec D11). No
+// step-up token: the PUT consumes it, not the preview.
+export function fetchMaxToolIterationsLoweringPreview(
+  value: number,
+): Promise<MaxToolIterationsLoweringPreview> {
+  return request<MaxToolIterationsLoweringPreview>(
+    `/performance/max-tool-iterations/preview?value=${encodeURIComponent(String(value))}`,
+    undefined,
+    MaxToolIterationsLoweringPreviewSchema as ZodType<MaxToolIterationsLoweringPreview>,
+  )
+}
+
+/**
+ * MaxToolIterationsLoweringConflictError is PUT /performance's 409 (spec D16):
+ * nothing was written because the agents that would be lowered changed since
+ * the admin's preview. `preview` is the fresh list computed at refusal time —
+ * the dialog reloads from it without a second preview call. Extends ApiError
+ * so every existing `isApiError`/`getErrorMessage` call site still works.
+ * Mirrors src/lib/api/library.ts::LibraryVersionConflictError.
+ */
+export class MaxToolIterationsLoweringConflictError extends ApiError {
+  readonly preview: MaxToolIterationsLoweringPreview
+
+  constructor(conflict: MaxToolIterationsLoweringConflict, bodyText: string) {
+    super(409, conflict.error, { code: conflict.code, body: bodyText })
+    this.name = 'MaxToolIterationsLoweringConflictError'
+    this.preview = conflict.preview
+    Object.setPrototypeOf(this, MaxToolIterationsLoweringConflictError.prototype)
+  }
+}
+
+export function isMaxToolIterationsLoweringConflict(
+  err: unknown,
+): err is MaxToolIterationsLoweringConflictError {
+  return err instanceof MaxToolIterationsLoweringConflictError
+}
+
+const LOWERING_FAILURE_CODES = new Set([
+  'max_tool_iterations_lowering_failed',
+  'max_tool_iterations_rollback_incomplete',
+])
+
+// performanceWriteError re-parses a PUT /performance failure body against the
+// generated Zod schemas. A 409 that does not match the conflict envelope stays
+// a plain 409 ApiError (never misreported as a different status), exactly as
+// library.ts::libraryConflictErrorFromResponse does.
+function performanceWriteError(err: unknown): unknown {
+  if (!isApiError(err) || err.body === undefined) return err
+  let raw: unknown
+  try {
+    raw = JSON.parse(err.body) as unknown
+  } catch {
+    return err
+  }
+  if (err.status === 409) {
+    const parsed = (MaxToolIterationsLoweringConflictSchema as ZodType<MaxToolIterationsLoweringConflict>).safeParse(raw)
+    return parsed.success ? new MaxToolIterationsLoweringConflictError(parsed.data, err.body) : err
+  }
+  if (err.status >= 500 && err.code !== undefined && LOWERING_FAILURE_CODES.has(err.code)) {
+    const parsed = (ErrorResponseSchema as ZodType<ErrorResponse>).safeParse(raw)
+    if (parsed.success) {
+      return new ApiError(err.status, parsed.data.error, { code: err.code, body: err.body, cause: err })
+    }
+  }
+  return err
 }
 
 // ── Memory Settings ───────────────────────────────────────────────────────────
