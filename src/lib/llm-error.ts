@@ -127,12 +127,10 @@ export function getLLMErrorDisplay(
   // exception is unchanged (controller-authored, always user-facing).
   const providerMessageTrusted =
     le.provider_message === true && delegatedLimitMessage.length > 0
+  const delegatedLimitTrusted =
+    le.code === 'delegated_task_limit' && delegatedLimitMessage.length > 0
   const message =
-    providerMessageTrusted
-      ? le.message
-      : le.code === 'delegated_task_limit' && delegatedLimitMessage.length > 0
-        ? le.message
-        : codeToMessage(le.code)
+    providerMessageTrusted || delegatedLimitTrusted ? le.message : codeToMessage(le.code)
   // Trim before the emptiness check — a whitespace-only detail carries no
   // information and would render as a blank "Technical details" disclosure.
   // Mirrors the renderer's own trim guard on `message.errorDetail`.

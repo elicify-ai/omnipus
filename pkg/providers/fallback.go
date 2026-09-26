@@ -488,7 +488,7 @@ func (fc *FallbackChain) Execute(
 				// D14: reserve the FULL wait before scheduling it — a wait
 				// the budget cannot cover in full is never started, and
 				// this candidate moves on unmarked (never truncated).
-				if !waitBudgetFrom(ctx).Reserve(wait.duration) {
+				if !waitBudgetFrom(ctx).Reserve(wait) {
 					skipWithoutMark = true
 					break
 				}
@@ -501,10 +501,10 @@ func (fc *FallbackChain) Execute(
 						MaxAttempts: maxAttemptsPerCandidate,
 						Reason:      string(failErr.Reason),
 						SentAt:      sentAt,
-						RetryAt:     sentAt.Add(wait.duration),
+						RetryAt:     sentAt.Add(wait),
 					})
 				}
-				if werr := fc.sleepCtx(ctx, wait.duration); werr != nil {
+				if werr := fc.sleepCtx(ctx, wait); werr != nil {
 					// C-12: Stop ends the wait promptly; no further attempt
 					// is made and the candidate is not marked (exhaustion
 					// was never concluded).

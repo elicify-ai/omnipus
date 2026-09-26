@@ -179,6 +179,10 @@ export function MessageItem({ message }: MessageItemProps) {
   // FR-21 / ADR-087 D1: "(interrupted)" or a max_output_tokens cutoff
   // notice — getMessageStatusSuffix owns the precedence.
   const statusSuffix = getMessageStatusSuffix(message)
+  // provider-messages spec DG-4: the facts disclosure (provider/model/
+  // request_id) mounts whenever at least one fact is present — computed
+  // once and reused by both the disclosure's mount gate and its own render.
+  const hasErrorFacts = !!message.errorFacts && Object.keys(message.errorFacts).length > 0
 
   return (
     <div
@@ -280,8 +284,7 @@ export function MessageItem({ message }: MessageItemProps) {
         {message.status === 'error'
           && message.errorCode
           && verboseChatEnabled
-          && ((message.errorDetail && message.errorDetail.trim().length > 0)
-            || (message.errorFacts && Object.keys(message.errorFacts).length > 0)) && (
+          && ((message.errorDetail && message.errorDetail.trim().length > 0) || hasErrorFacts) && (
           <details className="px-[var(--space-1)] mt-[var(--space-1)] group/error-detail" data-testid="error-detail-disclosure">
             <summary
               tabIndex={0}
@@ -292,16 +295,16 @@ export function MessageItem({ message }: MessageItemProps) {
             >
               Technical details
             </summary>
-            {message.errorFacts && Object.keys(message.errorFacts).length > 0 && (
+            {hasErrorFacts && (
               <div
                 data-testid="error-facts"
                 className="mt-[var(--space-1)] px-[var(--space-2)] font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)] flex flex-col gap-[var(--space-0-5)]"
               >
                 {(
                   [
-                    ['Provider', message.errorFacts.provider],
-                    ['Model', message.errorFacts.model],
-                    ['Request id', message.errorFacts.request_id],
+                    ['Provider', message.errorFacts?.provider],
+                    ['Model', message.errorFacts?.model],
+                    ['Request id', message.errorFacts?.request_id],
                   ] as ReadonlyArray<readonly [label: string, value: string | undefined]>
                 )
                   .filter((entry): entry is readonly [string, string] => typeof entry[1] === 'string' && entry[1].length > 0)

@@ -77,6 +77,19 @@ function buildWaitingLine(props: ProviderRetryIndicatorProps, remainingSecondsVa
   return `${displayName} is busy. Retrying automatically in ${formatRetryCountdown(remainingSecondsValue)} (attempt ${attempt} of ${maxAttempts}).`
 }
 
+// MAJ-016 — one {key, text} pair for the frozen announcement: the key
+// identifies the attempt (so the effect below can tell "still this attempt"
+// from "a new attempt started"), the text is the line at THIS computation's
+// now(). Shared by the initial state and the attempt-change effect so the
+// two never drift.
+function computeAnnouncement(props: ProviderRetryIndicatorProps): { key: string; text: string } {
+  const { provider, model, retryAt, sentAt, receivedAt, attempt, maxAttempts } = props
+  return {
+    key: `${provider}|${model}|${retryAt}|${attempt}|${maxAttempts}`,
+    text: buildWaitingLine(props, remainingRetrySeconds(retryAt, sentAt, receivedAt, Date.now())),
+  }
+}
+
 export function ProviderRetryIndicator(props: ProviderRetryIndicatorProps) {
   const { provider, model, retryAt, sentAt, receivedAt, attempt, maxAttempts, previousProvider, previousModel } = props
   const [nowMs, setNowMs] = useState(() => Date.now())
@@ -100,14 +113,11 @@ export function ProviderRetryIndicator(props: ProviderRetryIndicatorProps) {
   // candidate/attempt change, never recomputed by the 1-second tick. A
   // mid-wait attach announces the CURRENT line once (its attempt start, for
   // this client).
-  const [announcement, setAnnouncement] = useState<{ key: string; text: string }>(() => ({
-    key: `${provider}|${model}|${retryAt}|${attempt}|${maxAttempts}`,
-    text: buildWaitingLine(props, remainingRetrySeconds(retryAt, sentAt, receivedAt, Date.now())),
-  }))
+  const [announcement, setAnnouncement] = useState(() => computeAnnouncement(props))
   useEffect(() => {
-    const key = `${provider}|${model}|${retryAt}|${attempt}|${maxAttempts}`
-    if (announcement.key === key) return
-    setAnnouncement({ key, text: buildWaitingLine(props, remainingRetrySeconds(retryAt, sentAt, receivedAt, Date.now())) })
+    const next = computeAnnouncement(props)
+    if (announcement.key === next.key) return
+    setAnnouncement(next)
   }, [provider, model, retryAt, sentAt, receivedAt, attempt, maxAttempts, previousProvider, previousModel, announcement.key, props])
 
   const announcementText = waiting ? announcement.text : 'Retrying now…'

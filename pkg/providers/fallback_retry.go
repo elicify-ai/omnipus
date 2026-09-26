@@ -60,12 +60,6 @@ type RetryInfo struct {
 // skipped by the C-9 ceiling (no retry will happen; nothing to observe).
 type RetryObserver func(RetryInfo)
 
-// retryWait is one decided wait: duration plus kind.
-type retryWait struct {
-	duration time.Duration
-	honored  bool // true = the provider's Retry-After, waited exactly
-}
-
 // nextRetryWait decides the wait after a rate-limit-class failure.
 // retryAfterSeconds is the boundary-parsed value (0 = absent/malformed/
 // past): in [1,120] it is honored exactly (no jitter); 0 takes the
@@ -73,9 +67,9 @@ type retryWait struct {
 // jitter. attemptNo is the number of the call that JUST failed (1-based).
 // Values above the ceiling never reach here — the caller skips to
 // fallback (A-4) without a wait.
-func nextRetryWait(attemptNo int, retryAfterSeconds int, jitter float64) retryWait {
+func nextRetryWait(attemptNo int, retryAfterSeconds int, jitter float64) time.Duration {
 	if retryAfterSeconds > 0 {
-		return retryWait{duration: time.Duration(retryAfterSeconds) * time.Second, honored: true}
+		return time.Duration(retryAfterSeconds) * time.Second
 	}
 	base := retryBackoffBase << (attemptNo - 1)
 	if base > retryBackoffCap || base <= 0 {
@@ -85,7 +79,7 @@ func nextRetryWait(attemptNo int, retryAfterSeconds int, jitter float64) retryWa
 	if wait < 0 {
 		wait = 0
 	}
-	return retryWait{duration: wait, honored: false}
+	return wait
 }
 
 // retryAfterOf reads the Retry-After seconds the parse layer (§7.2)

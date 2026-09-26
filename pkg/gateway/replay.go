@@ -1651,20 +1651,11 @@ func buildReplayFallbackNote(sessionID string, entry session.TranscriptEntry) ge
 		// Format as RFC 3339 (matches AsyncAPI format: date-time);
 		// TranscriptEntry.Timestamp is a time.Time and JSON-marshals to
 		// RFC 3339 by default.
-		Timestamp: entry.Timestamp.UTC().Format(time.RFC3339Nano),
-		Message:   entry.Content,
-	}
-	if entry.Model != "" {
-		answered := entry.Model
-		note.AnsweredModel = &answered
-	}
-	if entry.UnavailableModel != "" {
-		unavailable := entry.UnavailableModel
-		note.UnavailableModel = &unavailable
-	}
-	if entry.UnavailableCode != "" {
-		code := entry.UnavailableCode
-		note.UnavailableCode = &code
+		Timestamp:        entry.Timestamp.UTC().Format(time.RFC3339Nano),
+		Message:          entry.Content,
+		AnsweredModel:    strPtr(entry.Model),
+		UnavailableModel: strPtr(entry.UnavailableModel),
+		UnavailableCode:  strPtr(entry.UnavailableCode),
 	}
 	return note
 }
