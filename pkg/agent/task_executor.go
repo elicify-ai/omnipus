@@ -1308,6 +1308,8 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 						// task never starts. Fail the task with the real error
 						// instead (the mapper below keeps the surface
 						// sentence-only for refusals; this is a plain error).
+						logger.ErrorCF("agent", "adr093: task start could not read the creator's lifecycle record",
+							map[string]any{"task_id": t.ID, "session_id": t.OriginSessionID, "error": lerr.Error()})
 						return "", fmt.Errorf("task_executor: StartTaskNow: load creator record %q: %w", t.OriginSessionID, lerr)
 					}
 					if lerr == nil && (rec.Terminal() || rec.Stopped()) {
