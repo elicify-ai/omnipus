@@ -12,6 +12,7 @@ import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { fetchAgents } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { splitMessageParts } from '@/lib/messageParts'
+import { formatErrorDetail } from '@/lib/llm-error'
 import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalOutcomeRow } from './GoalOutcomeRow'
 
@@ -265,20 +266,22 @@ export function MessageItem({ message }: MessageItemProps) {
         </div>
 
         {/* ADR-051 — verbose-only "Technical details" disclosure for typed
-            LLM errors. Mounted ONLY when all four conditions hold: the
-            bubble is in error status, a typed errorCode was stamped on it
-            (live ErrorFrame with payload.llm_error), verbose chat is on,
-            AND a non-empty errorDetail was carried (legacy frames and replay
-            frames — which strip detail before persisting — never mount this).
-            When verbose is off the disclosure is ABSENT from the DOM, not
-            merely hidden — the user cannot open what isn't there, and the
-            DOM stays clean for screen readers. Native <details> keeps this
-            zero-dependency and keyboard-accessible out of the box. */}
+            LLM errors. Mounted when: the bubble is in error status, a typed
+            errorCode was stamped on it (live ErrorFrame with
+            payload.llm_error), verbose chat is on, AND a non-empty
+            errorDetail OR non-empty errorFacts was carried (provider-messages
+            spec DG-4: facts mount the disclosure even without detail; legacy
+            frames and replay frames — which strip detail and facts before
+            persisting — never mount this). When verbose is off the
+            disclosure is ABSENT from the DOM, not merely hidden — the user
+            cannot open what isn't there, and the DOM stays clean for screen
+            readers. Native <details> keeps this zero-dependency and
+            keyboard-accessible out of the box. */}
         {message.status === 'error'
           && message.errorCode
           && verboseChatEnabled
-          && message.errorDetail
-          && message.errorDetail.length > 0 && (
+          && ((message.errorDetail && message.errorDetail.trim().length > 0)
+            || (message.errorFacts && Object.keys(message.errorFacts).length > 0)) && (
           <details className="px-[var(--space-1)] mt-[var(--space-1)] group/error-detail" data-testid="error-detail-disclosure">
             <summary
               tabIndex={0}
@@ -289,6 +292,24 @@ export function MessageItem({ message }: MessageItemProps) {
             >
               Technical details
             </summary>
+            {message.errorFacts && Object.keys(message.errorFacts).length > 0 && (
+              <div
+                data-testid="error-facts"
+                className="mt-[var(--space-1)] px-[var(--space-2)] font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)] flex flex-col gap-[var(--space-0-5)]"
+              >
+                {(
+                  [
+                    ['Provider', message.errorFacts.provider],
+                    ['Model', message.errorFacts.model],
+                    ['Request id', message.errorFacts.request_id],
+                  ] as ReadonlyArray<readonly [label: string, value: string | undefined]>
+                )
+                  .filter((entry): entry is readonly [string, string] => typeof entry[1] === 'string' && entry[1].length > 0)
+                  .map(([label, value]) => (
+                    <div key={label}>{label}: {value}</div>
+                  ))}
+              </div>
+            )}
             <pre
               className={cn(
                 'mt-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded-md',
@@ -297,7 +318,9 @@ export function MessageItem({ message }: MessageItemProps) {
                 'max-h-40 overflow-y-auto',
               )}
             >
-              {message.errorDetail.slice(0, ERROR_DETAIL_MAX_CHARS)}
+              {message.errorDetail
+                ? formatErrorDetail(message.errorDetail).slice(0, ERROR_DETAIL_MAX_CHARS)
+                : null}
             </pre>
           </details>
         )}

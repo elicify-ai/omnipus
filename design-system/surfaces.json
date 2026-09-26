@@ -6350,6 +6350,14 @@
       "lane": 6
     },
     {
+      "source": "src/components/chat/ProviderFallbackNoteLine.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ProviderRetryIndicator.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/RateLimitIndicator.tsx",
       "lane": 3
     },

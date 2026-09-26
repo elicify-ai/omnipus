@@ -34,7 +34,10 @@ import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { WebServeBlock } from './tools/WebServeUI'
 import { SetGoalCardBlock, classifySetGoalCall } from './tools/SetGoalToolUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './tools/BrowserTool'
+import { formatErrorDetail } from '@/lib/llm-error'
 import { RateLimitIndicator } from './RateLimitIndicator'
+import { ProviderRetryIndicator } from './ProviderRetryIndicator'
+import { ProviderFallbackNoteLine } from './ProviderFallbackNoteLine'
 import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
@@ -284,6 +287,21 @@ function SystemMessage() {
     return (
       <MessagePrimitive.Root className="flex justify-center px-[var(--space-3)] py-[var(--space-2)]">
         <GoalOutcomeRow outcome={storeMsg.goalOutcome} />
+      </MessagePrimitive.Root>
+    )
+  }
+  // Provider-messages spec §6 (US-5): the failover note is the same kind of
+  // synthetic `role: 'system'` ChatMessage (provider-frames.ts
+  // buildFallbackNoteMessage) carrying the `providerFallbackNote`
+  // discriminator — the third member of the shipped isGoalAck /
+  // isBrowserHandoverNotice pattern above.
+  if (storeMsg?.providerFallbackNote) {
+    return (
+      <MessagePrimitive.Root>
+        <ProviderFallbackNoteLine
+          message={storeMsg.providerFallbackNote.message}
+          pickNewModelHint={storeMsg.providerFallbackNote.pickNewModelHint}
+        />
       </MessagePrimitive.Root>
     )
   }
@@ -1084,6 +1102,19 @@ function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
       </div>
     )
   }
+  // Provider-messages spec §6 (US-5): same providerFallbackNote branch as the
+  // live SystemMessage above — the virtualizer path must render the note
+  // identically.
+  if (message.providerFallbackNote) {
+    return (
+      <div data-message-role="system" data-message-id={message.id}>
+        <ProviderFallbackNoteLine
+          message={message.providerFallbackNote.message}
+          pickNewModelHint={message.providerFallbackNote.pickNewModelHint}
+        />
+      </div>
+    )
+  }
   return (
     <div
       data-message-role="system"
@@ -1549,7 +1580,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                 'max-h-40 overflow-y-auto',
               )}
             >
-              {message.errorDetail.slice(0, ERROR_DETAIL_MAX_CHARS)}
+              {formatErrorDetail(message.errorDetail).slice(0, ERROR_DETAIL_MAX_CHARS)}
             </pre>
           </details>
         )}
@@ -3235,6 +3266,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const rateLimitEvent = useChatStore((s) => s.rateLimitEvent)
   const clearRateLimitEvent = useChatStore((s) => s.clearRateLimitEvent)
+  const providerRetryEvent = useChatStore((s) => s.providerRetryEvent)
+  const isStreaming = useChatStore((s) => s.isStreaming)
   // ADR-049 D6/US-12/SD-C9: loop indicator state, same session-scoped
   // foreground field as rateLimitEvent above. (Goal pill state is read
   // directly by GoalPillTray via its own useChatStore subscription — FE-1.)
@@ -3464,6 +3497,26 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
                 retryAfterSeconds={rateLimitEvent.retryAfterSeconds}
                 tool={rateLimitEvent.tool}
                 onDismiss={clearRateLimitEvent}
+              />
+            </div>
+          )}
+
+          {/* Provider failover-chain indicator — provider-messages spec §8:
+              the chain's provider_retry countdown, above the composer next to
+              the own-limiter indicator. Parent-level removal only — no
+              dismiss control; Stop is the chain's only early exit. */}
+          {providerRetryEvent && isStreaming && (
+            <div className="px-[var(--space-3)] pb-[var(--space-2)]">
+              <ProviderRetryIndicator
+                provider={providerRetryEvent.provider}
+                model={providerRetryEvent.model}
+                retryAt={providerRetryEvent.retryAt}
+                sentAt={providerRetryEvent.sentAt}
+                receivedAt={providerRetryEvent.receivedAt}
+                attempt={providerRetryEvent.attempt}
+                maxAttempts={providerRetryEvent.maxAttempts}
+                previousProvider={providerRetryEvent.previousProvider}
+                previousModel={providerRetryEvent.previousModel}
               />
             </div>
           )}

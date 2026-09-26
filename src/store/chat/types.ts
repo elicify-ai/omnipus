@@ -8,6 +8,7 @@ import type {
   AskUserQuestionCard,
   AskUserAnswerFrame,
   SubagentStateFrame,
+  LLMError as GeneratedLLMError,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
 
@@ -254,6 +255,16 @@ export type ChatMessage = Message & {
    */
   errorEntryId?: string
   /**
+   * provider-messages spec (MAJ-103/DG-4) — the optional `facts` object from
+   * a live `ErrorFrame`'s `payload.llm_error.facts` (provider, model,
+   * request_id — nothing else). Display-only (never serialized): rendered as
+   * the verbose-only facts lines inside the "Technical details" disclosure
+   * (`MessageItem.tsx`); request_id is surfaced ONLY under Verbose chat.
+   * Replay frames carry no facts (the `LLMErrorReplay` wire type omits the
+   * field), so this is set only on live error bubbles.
+   */
+  errorFacts?: GeneratedLLMError['facts']
+  /**
    * ADR-070 §2.4 — true when this assistant bubble was closed because a
    * mid-turn steer (a follow-up sent while it was still streaming) landed
    * after it, rather than because the reply/turn fully finished. Debugging/
@@ -299,6 +310,26 @@ export type ChatMessage = Message & {
    * the de-dup key, there is no separate domain id to carry.
    */
   browserHandoverNoticeId?: string
+  /**
+   * provider-messages spec US-6/FB-1…FB-4 — set ONLY on the synthetic
+   * `role: 'system'` ChatMessage the provider-frames handler inserts for a
+   * `provider_fallback` frame (live) or a `replay_provider_fallback` note
+   * (persisted transcript carrier). Purely a render-time discriminator
+   * (mirrors `goalAckGoalId`/`browserHandoverNoticeId`'s identical role) so
+   * ChatScreen's two system-row renderers can draw the grey event line with
+   * the exact §6 copy. The message id is the transcript entry's own id on
+   * the replay path (stable dedup across replays); on the live path it is
+   * SPA-generated — a reconnect wipes history (session_snapshot) and the
+   * replay carrier re-inserts the persisted note, so no duplicate survives.
+   * Never serialized to the wire — this field is SPA bookkeeping; the note
+   * itself comes off the wire in both directions.
+   */
+  providerFallbackNote?: {
+    /** The exact §6 one-liner — SPA-assembled from the live frame's models, server-assembled on the replay carrier. */
+    message: string
+    /** D12 — true when `unavailable_code` is `model_retired`; adds the pick-a-new-model hint line. */
+    pickNewModelHint?: boolean
+  }
 }
 
 export interface QueuedOutboundMessage {
@@ -324,6 +355,31 @@ export interface RateLimitEventData {
   retryAfterSeconds: number
   agentId?: string
   tool?: string
+}
+
+/**
+ * provider-messages spec §8 — the render state of one live `provider_retry`
+ * frame, stored per session in its OWN slot (`SessionChatState
+ * .providerRetryEvent`) — deliberately separate from the own-limiter's
+ * `rateLimitEvent` slot, which it never reads or writes. `receivedAt` is the
+ * client-clock time the frame was received, captured at reducer entry so the
+ * indicator can derive a skew-corrected countdown (C-11) without ever
+ * comparing clocks directly. `previousProvider`/`previousModel` carry the
+ * chain's PREVIOUS candidate when this frame's candidate moved within the
+ * SAME provider (MIN-104's model-switch qualifier); they are absent for the
+ * turn's first frame or a cross-provider move.
+ */
+export interface ProviderRetryEventData {
+  turnId: string
+  provider: string
+  model: string
+  retryAt: string
+  sentAt: string
+  receivedAt: string
+  attempt: number
+  maxAttempts: number
+  previousProvider?: string
+  previousModel?: string
 }
 
 /** All per-session chat state for one concurrent session. */
@@ -400,6 +456,17 @@ export interface SessionChatState {
   sessionTokens: number
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
+  /**
+   * provider-messages spec §8 — the session's latest `provider_retry` frame
+   * (failover chain), or null. Deliberately a SEPARATE slot from the
+   * own-limiter's `rateLimitEvent` — this slot is written only by the
+   * `provider_retry`/`provider_fallback` handler
+   * (slices/provider-frames.ts::handleProviderFrame) and cleared on the
+   * fallback note; the parent (ChatScreen) removes the indicator at the
+   * terminal line / on user stop by gating on the turn's streaming state.
+   * Optional — see the fixture-compat note on goalStatus.
+   */
+  providerRetryEvent?: ProviderRetryEventData | null
   /**
    * H1-FE: Unix timestamp (ms) when the most recent user message was sent for
    * this session. Used to guard against force-clearing isStreaming on the active
@@ -733,6 +800,8 @@ export interface ChatStore {
   sessionTokens: number
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
+  /** provider-messages spec §8 — foreground projection of the session's `provider_retry` slot. Optional — see the SessionChatState field's doc comment. */
+  providerRetryEvent?: ProviderRetryEventData | null
   /** ADR-049 D6/US-12: active session's latest `goal_status` frame, or null/undefined. Drives `GoalIndicator`. Optional — see SessionChatState.goalStatus's doc comment (fixture-compat). */
   goalStatus?: GoalStatusFrame | null
   /**

@@ -22,6 +22,7 @@ export function emptySessionState(): SessionChatState {
     sessionTokens: 0,
     sessionCost: 0,
     rateLimitEvent: null,
+    providerRetryEvent: null,
     lastUserMessageAt: null,
     cancelStage: null,
     autoApproveEffective: null,
