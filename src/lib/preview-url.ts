@@ -295,6 +295,80 @@ export function resolveEffectivePreview(
   return null
 }
 
+// ── ADR-094 Mode 1: per-preview `*.localhost` isolated URL (FR-005/FR-023) ────
+//
+// Mode 1 serves each preview under its own loopback subdomain —
+// `http://<label>.localhost:<spa port>/` — so the previewed app's cookies can
+// never cross the SPA's own origin. The SPA only ever RENDERS such a URL
+// after (a) validating it against the exact grammar the gateway is allowed
+// to mint (FR-023 — defence against a tampered transcript re-rendering an
+// attacker host, S-8.5 / DS-8 rows 1–6) and (b) FR-024's engine rule says
+// this browser resolves `*.localhost` at all. Any failure falls back to the
+// Mode 2 same-origin `/preview/` path URL.
+//
+// Validation runs on the RAW string, not a `new URL()` parse: the WHATWG URL
+// constructor LOWER-CASES hostnames, so a tampered `http://MyApp.localhost/`
+// would parse to `myapp.localhost` and silently pass a parsed-hostname
+// lower-case check. FR-023 rejects non-lower-case labels outright.
+const ISOLATED_URL_REGEX = /^http:\/\/([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.localhost(?::(\d{1,5}))?(?:[\/?#].*)?$/
+
+/**
+ * Validates a tool result's `isolated_url` against FR-005/FR-023 before the
+ * SPA may render it (the DS-8 table). The URL must be:
+ *   • scheme `http:` — Mode 1 is HTTP-only (the gateway mints no TLS certs
+ *     for `*.localhost`; `https:` is a foreign origin, never rendered);
+ *   • host exactly ONE grammar-valid label + `.localhost` — letters/digits/
+ *     hyphens, 1–63 chars, no leading/trailing hyphen, LOWER-CASE (the
+ *     label-group character class excludes `.` and uppercase, which rejects
+ *     the second-dot row `myapp.evil.localhost` and the case row
+ *     `MyApp.localhost` in one stroke, on the raw string);
+ *   • NOT some other suffix — `.localhost` must terminate the host, so
+ *     `myapp.localhost.evil.com` never matches;
+ *   • port equal to the SPA's own effective port (a portless URL only when
+ *     the SPA itself rides http's implicit port 80) — a foreign-port
+ *     `isolated_url` would not be the preview the gateway minted.
+ *
+ * Not exported: callers reach it only through `resolvePreviewHref`, which
+ * additionally applies the FR-024 engine gate.
+ */
+function validateIsolatedUrl(raw: string, spaPort: number): boolean {
+  const match = ISOLATED_URL_REGEX.exec(raw)
+  if (!match) return false
+  const urlPort = match[2]
+  if (urlPort === undefined) return spaPort === 80
+  return urlPort === String(spaPort)
+}
+
+/**
+ * FR-024 engine rule: does THIS browser resolve `*.localhost` subdomains to
+ * loopback? Chromium and Firefox do; WebKit (Safari) does not.
+ *
+ * Detection order is deliberate:
+ *   1. Feature detection — `navigator.userAgentData` exists only in the
+ *      Chromium family. The check is on the VALUE's truthiness, never
+ *      `'userAgentData' in navigator`: the property can be present yet
+ *      undefined, and an undefined value off a secure context (where the API
+ *      is hidden) is CORRECT and must fail safe to Mode 2 (round-2 OBS-001).
+ *   2. Firefox hides userAgentData (it is a secure-context-only API), so the
+ *      UA token `Firefox/` is the necessary secondary signal here — the UA
+ *      sniff is unavoidable and is stated in FR-024's own rule text.
+ *   3. Everything else — WebKit, unknown engines, detection failure — is NOT
+ *      proven to resolve `*.localhost` and falls safe to Mode 2.
+ *
+ * Read at CALL time (never cached at module load): jsdom- and test-based
+ * stubs swap the navigator fields per test, and a real browser can change
+ * UA-reporting state across a session's lifetime.
+ */
+function browserResolvesLocalhostSubdomains(): boolean {
+  if (typeof navigator === 'undefined') return false
+  const uad = (navigator as unknown as { userAgentData?: unknown }).userAgentData
+  if (uad) return true
+  if (typeof navigator.userAgent === 'string' && navigator.userAgent.includes('Firefox/')) {
+    return true
+  }
+  return false
+}
+
 /**
  * Resolves the href to render for a `web_serve` tool result (dev or static
  * mode), or the legacy `serve_workspace` / `run_in_workspace` shapes kept
@@ -354,15 +428,58 @@ export function resolveEffectivePreview(
  *   port: 5000,
  * })
  * // => { error: 'invalid-path' }
+ *
+ * @example
+ * // ADR-094 Mode 1 — a VALID isolated_url on a Chromium/Firefox engine is
+ * // returned verbatim (DS-8 row 1): the exact label host the gateway minted.
+ * resolvePreviewHref({
+ *   path: '/preview/mia/tok-abc123/',
+ *   url: 'http://localhost:5000/preview/mia/tok-abc123/',
+ *   isolated_url: 'http://myapp.localhost:5000/',
+ *   origin: 'http://localhost:5000',
+ *   hostname: 'localhost',
+ *   port: 5000,
+ * })
+ * // => { href: 'http://myapp.localhost:5000/' }
+ *
+ * @example
+ * // ADR-094 — a tampered/foreign isolated_url (or an engine without
+ * // `*.localhost` support) falls back to the Mode 2 path URL (S-8.5).
+ * resolvePreviewHref({
+ *   path: '/preview/mia/tok-abc123/',
+ *   url: 'http://localhost:5000/preview/mia/tok-abc123/',
+ *   isolated_url: 'http://myapp.evil.localhost:5000/',
+ *   origin: 'http://localhost:5000',
+ *   hostname: 'localhost',
+ *   port: 5000,
+ * })
+ * // => { href: 'http://localhost:5000/preview/mia/tok-abc123/' }
  */
 export function resolvePreviewHref(args: {
   path?: string
+  /**
+   * ADR-094 FR-023: the per-preview `*.localhost` URL the gateway minted.
+   * Rendered ONLY when it validates AND FR-024's engine rule selects Mode 1;
+   * every failure falls back to the Mode 2 path/url resolution below.
+   * Optional so old transcripts (predating ADR-094) resolve as before.
+   */
+  isolated_url?: string
   url?: string
   origin: string
   hostname: string
   port: number
 }): { href: string } | { error: 'invalid-path' } {
-  const { path, url, origin, hostname, port } = args
+  const { path, url, isolated_url, origin, hostname, port } = args
+
+  // ── ADR-094 FR-023/FR-024: Mode 1 candidate, validated + engine-gated ──
+  if (
+    isolated_url &&
+    isolated_url.length > 0 &&
+    browserResolvesLocalhostSubdomains() &&
+    validateIsolatedUrl(isolated_url, port)
+  ) {
+    return { href: isolated_url }
+  }
 
   if (url && url.length > 0) {
     if (url.startsWith('/')) {
