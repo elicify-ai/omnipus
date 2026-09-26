@@ -1,10 +1,10 @@
 # ADR-094: Preview isolation with full capability — two serving modes (issue #798)
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-09-26 — every founder question answered: F794-1…6 plus F794-7, option A, §10)
 - **Date:** 2026-09-26 (correction round 1 applied same day — this ADR gets exactly one grill and one correction round, per the feature-flow rule)
 - **Author:** architect (gateway-security squad)
-- **Deciders:** founder decided F794-1 … F794-6 on 2026-09-26 (`ADR-094-founder-decisions.md`, authoritative); **FQ-794-7 (§10) is open**; team-lead grill round complete (review of 2026-09-26, `ADR-094-preview-isolation-model-review.md`)
-- **Evidence level:** highest used — 1 (user-input: issue #798 acceptance + founder decisions F794-1…6) + 3 (documented pattern: the ADR-067 Library policy and its measured defects; the review's browser measurement) + 5 (code read this session, `file::symbol` cited) + external browser-platform facts cited in §7 with sources
+- **Deciders:** founder decided F794-1 … F794-7 on 2026-09-26 (`ADR-094-founder-decisions.md`, authoritative — F794-7 accepts §10's option A); team-lead grill round complete (review of 2026-09-26, `ADR-094-preview-isolation-model-review.md`)
+- **Evidence level:** highest used — 1 (user-input: issue #798 acceptance + founder decisions F794-1…7) + 3 (documented pattern: the ADR-067 Library policy and its measured defects; the review's browser measurement) + 5 (code read this session, `file::symbol` cited) + external browser-platform facts cited in §7 with sources
 - **Builds on:** "ADR-067 — Omnipus knowledge base and render-first preview" §10.3 and its dated amendments (2026-08-23, 2026-09-09, 2026-09-14); "ADR-044 — Serve /preview/ on the main gateway listener (path approach)"; the email spec's MC-10/MC-37 (`docs/internal/specs/email-mail-view-spec.md`, branch `feature/email-mail`)
 - **Supersedes-in-part:** "ADR-044 — Serve /preview/ on the main gateway listener (path approach)" FR-3's residual-risk text (previewed-app login), re-based on F794-1/F794-2: FR-3 is now guaranteed by design, not accepted as a residual
 
@@ -71,7 +71,7 @@ The residual round 1 accepted is now founder-rejected, and issue #798 (`security
 **web_serve previews run full web apps in two serving modes.** No CSP `sandbox` directive exists anywhere in the web_serve model; storage, cookies, login, forms, popups and downloads are intact (F794-1, F794-2).
 
 - **Mode 1 — self-generated per-preview subdomain of the gateway host** (`<label>.localhost:<port>`), served by Host dispatch inside the single Go binary. Primary wherever the browser can resolve it with zero environment setup (F794-5's second option). Issue #798 is **structurally dead** here: the session and CSRF cookies are host-only, so the preview origin holds no gateway credential and is cross-origin to the API.
-- **Mode 2 — the `/preview/` path, same origin, full capability, plus a server-side control stack.** The fallback wherever Mode 1 cannot resolve. #798 is closed for every direct path (fetch, form, redirect, service worker, navigation, iframe); one residual — same-origin popup scripting of the SPA — cannot be closed by any header stack and is **FQ-794-7 (§10), the one open founder question**.
+- **Mode 2 — the `/preview/` path, same origin, full capability, plus a server-side control stack.** The fallback wherever Mode 1 cannot resolve. #798 is closed for every direct path (fetch, form, redirect, service worker, navigation, iframe); one residual — same-origin popup scripting of the SPA — cannot be closed by any header stack and is **accepted as a documented residual (F794-7, §10)**.
 
 ### 2.1 The capability contract (what "full web app" means here)
 
@@ -147,7 +147,7 @@ Notes: `script-src` gains `'unsafe-eval'` — dev-server bundles commonly need i
 | 4 | Service-worker registration from the preview (a SW could outlive the page and re-request) | Server refuses any `/preview/` request carrying `Service-Worker: script` (and `Sec-Fetch-Dest: serviceworker`) — the header is spec-mandated on SW script fetches | All SW-capable engines |
 | 5 | Iframing the SPA and scripting the frame | SPA responses already carry `frame-ancestors 'none'` (absorbed into the single SPA CSP header, `pkg/gateway/embed.go`, ADR-067 FR-006b) — **already closed, verified this session** | All engines |
 | 6 | `window.opener` access to the opening SPA | Already severed: every preview link carries `rel="noopener noreferrer"` (`src/components/chat/IframePreview.tsx`) — **already closed, verified this session** | All engines |
-| 7 | **Popup scripting of the SPA**: `window.open('/')` then same-origin DOM automation of the real UI (clicking the app's own buttons makes its own authenticated, CSRF-correct calls) | **None exists.** The popup is same-origin, so SOP permits full DOM access; COOP only severs *cross*-origin openers; the SPA's `script-src 'self'` (`pkg/gateway/embed.go::spaBaseContentSecurityPolicy`, no `unsafe-inline`/`unsafe-eval`) blocks *injected script* but not DOM automation; `window.open` is user-gesture-gated and a spoofed click supplies one. **This is FQ-794-7** | — |
+| 7 | **Popup scripting of the SPA**: `window.open('/')` then same-origin DOM automation of the real UI (clicking the app's own buttons makes its own authenticated, CSRF-correct calls) | **None exists.** The popup is same-origin, so SOP permits full DOM access; COOP only severs *cross*-origin openers; the SPA's `script-src 'self'` (`pkg/gateway/embed.go::spaBaseContentSecurityPolicy`, no `unsafe-inline`/`unsafe-eval`) blocks *injected script* but not DOM automation; `window.open` is user-gesture-gated and a spoofed click supplies one. **Residual accepted — F794-7** | — |
 | 8 | Redirect pivots (upstream 302 bounces a subresource or fetch to `/api/v1`; CSP3 §6.7.2.9 discards a source's path after redirect) | The one normative redirect rule (below) | All engines |
 | 9 | Upstream-supplied CSP/XFO weakening the policy | Already stripped (`pkg/gateway/rest_preview.go` FR-007d, verified); a `<meta http-equiv="Content-Security-Policy">` can only tighten — multiple policies intersect | All engines |
 | 10 | Session/CSRF fixation via upstream `Set-Cookie` | Already neutralized for reserved gateway cookie names (`rest_preview.go::neutralizeReservedSetCookies`, verified) | All engines |
@@ -163,7 +163,7 @@ Notes: `script-src` gains `'unsafe-eval'` — dev-server bundles commonly need i
 
 A `Location` header on any non-redirect status is deleted. `304 Not Modified` is allowed untouched (dev servers send it routinely). The tripwire fails on any redirect whose `Location` resolves outside the token prefix, and must include the dot-segment, `%2e`, protocol-relative (`//host/…`), backslash (`/\host`) and absolute-same-origin (`http://127.0.0.1:5000/api/v1/x` — the Director does not rewrite `Host`, so dev servers can emit the gateway host) cases. Mode 1 needs no equivalent rule: the app owns the whole host, so any same-origin redirect is in-scope by definition; only a cross-origin redirect to the *gateway* origin would matter, and the host mux does not route it.
 
-**What Mode 2 cannot stop (named):** row 7's popup scripting (FQ-794-7); navigation-based egress is bounded but real — a navigation cannot read the response back, and reads require the fetch class row 1 blocks; the fake-login residual (F794-4, document it); and SPA deep links that mutate state from URL parameters on load (review OBS-002) — an invariant, not a control: "no SPA route performs a state change from URL parameters on load", audited by security-lead before this lands.
+**What Mode 2 cannot stop (named):** row 7's popup scripting (accepted, F794-7); navigation-based egress is bounded but real — a navigation cannot read the response back, and reads require the fetch class row 1 blocks; the fake-login residual (F794-4, document it); and SPA deep links that mutate state from URL parameters on load (review OBS-002) — an invariant, not a control: "no SPA route performs a state change from URL parameters on load", audited by security-lead before this lands.
 
 ### 2.4 Mode selection and fail-closed rules (F794-6)
 
@@ -222,7 +222,7 @@ One neutral helper derives the origin list for all three surfaces: rename `pkg/g
 ### Negative
 
 1. **Mode 1's applicability is narrow**: `http://localhost` + Chromium/Firefox/Edge + HTTP only. WebKit/Safari users, IP-literal browsing, LAN/real-domain/Tailscale deployments, HTTPS ingress and second devices all land in Mode 2.
-2. **Mode 2 keeps the popup residual** (§2.3 row 7): a determined agent-built page can popup-script the SPA and drive its UI as the user. Not closable by any header stack without the sandbox the founder rejected. FQ-794-7 asks the founder to accept this on the fallback path.
+2. **Mode 2 keeps the popup residual** (§2.3 row 7): a determined agent-built page can popup-script the SPA and drive its UI as the user. Not closable by any header stack without the sandbox the founder rejected. F794-7 accepts this on the fallback path and requires it documented; the hosted version must not rely on the fallback (tracked in elicify-ai/omnipus-ai#1177).
 3. **Two code paths** to build and test (host-dispatch mux + label registry; CSP builder + control stack), roughly doubling the preview test matrix.
 4. **Cookie tossing** from a Mode 1 preview into the `Domain=localhost` namespace is possible (bounded, §2.2) and gets one hardening check (duplicate-cookie rejection on state-changing requests).
 5. Test churn: `pkg/gateway/preview_iframe_test.go` frame-ancestors assertions change to `'none'`; the old wide-CSP string tests change.
@@ -324,7 +324,7 @@ One table row per finding in `ADR-094-preview-isolation-model-review.md` (1 CRIT
 
 The review's founder-question set is answered by F794-1…6 (`ADR-094-founder-decisions.md`): Q1′ → F794-1; Q2′ → F794-6; Q3 → F794-3; Q4 → F794-2; Q5 → F794-4. The review's unasked questions 1–7 are answered by §2.3's template (1, 2), §2.6 (3), §2.4 (4), §10 (5), §5's audit actions (6), and §7 + §2.1 (7).
 
-## 10. Question for the founder (the one open decision)
+## 10. Question for the founder — answered (F794-7)
 
 **FQ-794-7 — On the Mode 2 fallback path, a determined preview page can still popup-script the SPA and act as the user. Accept that residual, or fail Mode 2 closed?**
 
@@ -334,7 +334,7 @@ The review's founder-question set is answered by F794-1…6 (`ADR-094-founder-de
 
 *Options.* **(A) Accept the residual on the Mode 2 fallback with the documented hardening stack (recommended)** — it is the same trust boundary as F794-4's accepted phishing residual (the user opened a page their own agent built), it cannot reach Mode 1 users, and (B) removes the feature for most non-default deployments. (B) Fail Mode 2 closed — previews exist only where Mode 1 works. (C) (A) with an operator opt-in required for non-loopback fallback serving.
 
-*Answer:* *(pending — the ADR stays Proposed until this is answered)*
+*Answer:* **Decided — F794-7 (2026-09-26): option A.** "Accept and document the `/preview/` fallback residual (same-origin popup scripting); the hosted version must not rely on the fallback" — tracked in elicify-ai/omnipus-ai#1177. (B) and (C) not taken. The hosted-version clause is a constraint on the hosted deployment, not on this codebase's fallback path: every self-hosted install keeps the Mode 2 fallback working, while the hosted product must not depend on it — that follow-up is tracked in the hosted-product repo, outside this ADR's implementation scope (`ADR-094-founder-decisions.md`, F794-7).
 
 ## 11. Affected components
 
