@@ -54,6 +54,16 @@ table above, for humans to read, not what you write to disk).
   LANDING-ANNOUNCEMENT squad=<squad-id> branch=<branch-name> announced-at=<ISO8601> by=<who>
   ```
 
+  The squad's GOAL (SKILL.md §2, the goal judge) is its own line below the row — never
+  a row field: goal text is free prose that may contain `|`. Written by whoever starts
+  the squad (team-lead, for an in-session squad), kept until the squad is `landed` or
+  `released`. Neither parser reads it — the capacity monitor matches only lines starting
+  `squad=`, and the pre-push hook never reads squad files:
+
+  ```
+  GOAL squad=<squad-id> set-at=<ISO8601> by=<who> :: <end state, one line>
+  ```
+
 - **`HOLDS.md` line** (template: `HOLDS.md.template`) — parsed by the pre-push hook:
 
   ```
