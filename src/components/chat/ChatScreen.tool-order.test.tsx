@@ -282,6 +282,65 @@ function seedBucket(messages: ChatMessage[]): void {
   }))
 }
 
+// ── Shared render helper ─────────────────────────────────────────────────────
+// Every test renders the same way: full ChatScreen through the PlainMessageList
+// fallback, then collect the ordered part nodes. One shared helper keeps the
+// describe blocks under their grandfathered function budgets
+// (scripts/budgets/functions.txt) — pure extraction, no assertion changed.
+
+async function renderAndCollectNodes(): Promise<Element[]> {
+  let container!: HTMLElement
+  await act(async () => {
+    const result = render(<ChatScreen />)
+    container = result.container
+  })
+  return orderedPartNodes(container)
+}
+
+// ── Shared frame helpers ─────────────────────────────────────────────────────
+// Each dispatches ONE handleFrame payload through act(), byte-identical to the
+// inline calls they replaced (`extra` carries the replay/agent fields only some
+// frames set).
+
+function sendToken(content: string): void {
+  act(() => {
+    useChatStore.getState().handleFrame({ type: 'token', content, session_id: SID })
+  })
+}
+
+function sendDone(): void {
+  act(() => {
+    useChatStore.getState().handleFrame({ type: 'done', session_id: SID })
+  })
+}
+
+function startToolCall(callId: string, tool: string, params: Record<string, unknown>, extra: Record<string, unknown> = {}): void {
+  act(() => {
+    useChatStore.getState().handleFrame({
+      type: 'tool_call_start',
+      call_id: callId,
+      tool,
+      params,
+      session_id: SID,
+      ...extra,
+    })
+  })
+}
+
+function resolveToolCall(callId: string, tool: string, result: unknown, extra: Record<string, unknown> = {}): void {
+  act(() => {
+    useChatStore.getState().handleFrame({
+      type: 'tool_call_result',
+      call_id: callId,
+      tool,
+      result,
+      status: 'success',
+      session_id: SID,
+      ...extra,
+    })
+  })
+}
+
 beforeEach(() => {
   useConnectionStore.setState({
     isConnected: true,
@@ -315,42 +374,13 @@ describe('ChatScreen — tool-call/text DOM ordering (interleaving regression ne
     // tool_call_result -> token -> done. Before the fix, the finished
     // bubble would show "Let me check. The answer is 42." as ONE block
     // with the badge stranded after it.
-    act(() => {
-      useChatStore.getState().handleFrame({ type: 'token', content: 'Let me check. ', session_id: SID })
-    })
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_start',
-        call_id: 'tc1',
-        tool: 'web_search',
-        params: { query: 'the answer' },
-        session_id: SID,
-      })
-    })
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_result',
-        call_id: 'tc1',
-        tool: 'web_search',
-        result: { hits: [] },
-        status: 'success',
-        session_id: SID,
-      })
-    })
-    act(() => {
-      useChatStore.getState().handleFrame({ type: 'token', content: 'The answer is 42.', session_id: SID })
-    })
-    act(() => {
-      useChatStore.getState().handleFrame({ type: 'done', session_id: SID })
-    })
+    sendToken('Let me check. ')
+    startToolCall('tc1', 'web_search', { query: 'the answer' })
+    resolveToolCall('tc1', 'web_search', { hits: [] })
+    sendToken('The answer is 42.')
+    sendDone()
 
-    let container!: HTMLElement
-    await act(async () => {
-      const result = render(<ChatScreen />)
-      container = result.container
-    })
-
-    const nodes = orderedPartNodes(container)
+    const nodes = await renderAndCollectNodes()
     expect(nodes).toHaveLength(3)
     expect(nodes[0]).toHaveAttribute('data-testid', 'historical-markdown')
     expect(nodes[0].textContent).toContain('Let me check.')
@@ -378,36 +408,13 @@ describe('ChatScreen — tool-call/text DOM ordering (interleaving regression ne
     // GenericToolCall — the original tool-call-badge + data-tool shape. This
     // pins that the ordering net covers the generic-badge path too, not just
     // the dedicated-block path.
-    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Delegating now. ', session_id: SID }) })
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_start',
-        call_id: 'tc_delegate',
-        tool: 'delegate',
-        params: { task: 'summarize the log' },
-        session_id: SID,
-      })
-    })
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_result',
-        call_id: 'tc_delegate',
-        tool: 'delegate',
-        result: { text: 'done' },
-        status: 'success',
-        session_id: SID,
-      })
-    })
-    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Delegation finished.', session_id: SID }) })
-    act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
+    sendToken('Delegating now. ')
+    startToolCall('tc_delegate', 'delegate', { task: 'summarize the log' })
+    resolveToolCall('tc_delegate', 'delegate', { text: 'done' })
+    sendToken('Delegation finished.')
+    sendDone()
 
-    let container!: HTMLElement
-    await act(async () => {
-      const result = render(<ChatScreen />)
-      container = result.container
-    })
-
-    const nodes = orderedPartNodes(container)
+    const nodes = await renderAndCollectNodes()
     expect(nodes).toHaveLength(3)
     expect(nodes[0]).toHaveAttribute('data-testid', 'historical-markdown')
     expect(nodes[0].textContent).toContain('Delegating now.')
@@ -420,30 +427,16 @@ describe('ChatScreen — tool-call/text DOM ordering (interleaving regression ne
   })
 
   it('interleaves two tool calls with three distinct text segments, in true stream order', async () => {
-    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'A', session_id: SID }) })
-    act(() => {
-      useChatStore.getState().handleFrame({ type: 'tool_call_start', call_id: 'tc1', tool: 'tool_a', params: {}, session_id: SID })
-    })
-    act(() => {
-      useChatStore.getState().handleFrame({ type: 'tool_call_result', call_id: 'tc1', tool: 'tool_a', result: 1, status: 'success', session_id: SID })
-    })
-    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'B', session_id: SID }) })
-    act(() => {
-      useChatStore.getState().handleFrame({ type: 'tool_call_start', call_id: 'tc2', tool: 'tool_b', params: {}, session_id: SID })
-    })
-    act(() => {
-      useChatStore.getState().handleFrame({ type: 'tool_call_result', call_id: 'tc2', tool: 'tool_b', result: 2, status: 'success', session_id: SID })
-    })
-    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'C', session_id: SID }) })
-    act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
+    sendToken('A')
+    startToolCall('tc1', 'tool_a', {})
+    resolveToolCall('tc1', 'tool_a', 1)
+    sendToken('B')
+    startToolCall('tc2', 'tool_b', {})
+    resolveToolCall('tc2', 'tool_b', 2)
+    sendToken('C')
+    sendDone()
 
-    let container!: HTMLElement
-    await act(async () => {
-      const result = render(<ChatScreen />)
-      container = result.container
-    })
-
-    const nodes = orderedPartNodes(container)
+    const nodes = await renderAndCollectNodes()
     expect(nodes).toHaveLength(5)
     expect(nodes[0].textContent).toBe('A')
     expect(nodes[1]).toHaveAttribute('data-tool', 'tool_a')
@@ -471,13 +464,7 @@ describe('ChatScreen — tool-call/text DOM ordering (interleaving regression ne
     }
     seedBucket([assistantMsg])
 
-    let container!: HTMLElement
-    await act(async () => {
-      const result = render(<ChatScreen />)
-      container = result.container
-    })
-
-    const nodes = orderedPartNodes(container)
+    const nodes = await renderAndCollectNodes()
     expect(nodes).toHaveLength(2)
     expect(nodes[0]).toHaveAttribute('data-testid', 'historical-markdown')
     expect(nodes[0].textContent).toContain('reconnected text')
@@ -501,27 +488,8 @@ describe('ChatScreen — tool-call/text DOM ordering (interleaving regression ne
         session_id: SID,
       })
     })
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_start',
-        call_id: 'tc_shell',
-        tool: 'shell',
-        params: { cmd: 'echo hi' },
-        agent_id: 'agent-ray',
-        session_id: SID,
-      })
-    })
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_result',
-        call_id: 'tc_shell',
-        tool: 'shell',
-        result: { stdout: 'hi\n' },
-        status: 'success',
-        duration_ms: 42,
-        session_id: SID,
-      })
-    })
+    startToolCall('tc_shell', 'shell', { cmd: 'echo hi' }, { agent_id: 'agent-ray' })
+    resolveToolCall('tc_shell', 'shell', { stdout: 'hi\n' }, { duration_ms: 42 })
     act(() => {
       useChatStore.getState().handleFrame({
         type: 'replay_message',
@@ -538,13 +506,7 @@ describe('ChatScreen — tool-call/text DOM ordering (interleaving regression ne
     expect(assistantMsgs).toHaveLength(1)
     expect(assistantMsgs[0].content).toBe('A\n\nB')
 
-    let container!: HTMLElement
-    await act(async () => {
-      const result = render(<ChatScreen />)
-      container = result.container
-    })
-
-    const nodes = orderedPartNodes(container)
+    const nodes = await renderAndCollectNodes()
     expect(nodes).toHaveLength(3)
     expect(nodes[0].textContent).toBe('A')
     expect(nodes[1]).toHaveAttribute('data-tool', 'shell')
@@ -562,36 +524,13 @@ describe('ChatScreen — tool-call/text DOM ordering (interleaving regression ne
   // other tests in this file all use plain/unregistered tool names, which
   // only ever hit the GenericToolCall branch.
   it('interleaves a browser.click tool call (BrowserToolReplayBlock branch) between two streamed text segments', async () => {
-    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Let me click. ', session_id: SID }) })
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_start',
-        call_id: 'tc_browser',
-        tool: 'browser.click',
-        params: { selector: '#submit' },
-        session_id: SID,
-      })
-    })
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_result',
-        call_id: 'tc_browser',
-        tool: 'browser.click',
-        result: { ok: true },
-        status: 'success',
-        session_id: SID,
-      })
-    })
-    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Clicked it.', session_id: SID }) })
-    act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
+    sendToken('Let me click. ')
+    startToolCall('tc_browser', 'browser.click', { selector: '#submit' })
+    resolveToolCall('tc_browser', 'browser.click', { ok: true })
+    sendToken('Clicked it.')
+    sendDone()
 
-    let container!: HTMLElement
-    await act(async () => {
-      const result = render(<ChatScreen />)
-      container = result.container
-    })
-
-    const nodes = orderedPartNodes(container)
+    const nodes = await renderAndCollectNodes()
     expect(nodes).toHaveLength(3)
     expect(nodes[0]).toHaveAttribute('data-testid', 'historical-markdown')
     expect(nodes[0].textContent).toContain('Let me click.')
@@ -604,36 +543,13 @@ describe('ChatScreen — tool-call/text DOM ordering (interleaving regression ne
   })
 
   it('interleaves a web_serve tool call (WebServeBlock branch) between two streamed text segments', async () => {
-    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Starting the preview. ', session_id: SID }) })
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_start',
-        call_id: 'tc_serve',
-        tool: 'web_serve',
-        params: { path: '/app', port: 5173 },
-        session_id: SID,
-      })
-    })
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_result',
-        call_id: 'tc_serve',
-        tool: 'web_serve',
-        result: { url: '/preview/agent/token/' },
-        status: 'success',
-        session_id: SID,
-      })
-    })
-    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'It is live now.', session_id: SID }) })
-    act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
+    sendToken('Starting the preview. ')
+    startToolCall('tc_serve', 'web_serve', { path: '/app', port: 5173 })
+    resolveToolCall('tc_serve', 'web_serve', { url: '/preview/agent/token/' })
+    sendToken('It is live now.')
+    sendDone()
 
-    let container!: HTMLElement
-    await act(async () => {
-      const result = render(<ChatScreen />)
-      container = result.container
-    })
-
-    const nodes = orderedPartNodes(container)
+    const nodes = await renderAndCollectNodes()
     expect(nodes).toHaveLength(3)
     expect(nodes[0]).toHaveAttribute('data-testid', 'historical-markdown')
     expect(nodes[0].textContent).toContain('Starting the preview.')
@@ -682,13 +598,7 @@ describe('ChatScreen — REST cold-load ordering (F4)', () => {
       ])
     })
 
-    let container!: HTMLElement
-    await act(async () => {
-      const result = render(<ChatScreen />)
-      container = result.container
-    })
-
-    const nodes = orderedPartNodes(container)
+    const nodes = await renderAndCollectNodes()
     expect(nodes).toHaveLength(3)
     expect(nodes[0]).toHaveAttribute('data-testid', 'historical-markdown')
     expect(nodes[0].textContent).toContain('Restored answer part A.')
