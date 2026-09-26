@@ -39,8 +39,12 @@
 | SP-8 | Sequencing | Shell with Library + Browser first → Mail adopts it → Team/Tasks/Calendar | Founder (D42) | Founder | 2026-09-26 |
 | SP-9 | Already-open tab | If a panel is already open in a separate browser tab and the user clicks it again, switch to that tab instead of reopening the panel. Constraint to specify honestly: browsers only let a page re-focus a tab it opened itself under a stable window name; a manually opened tab can be detected (e.g. BroadcastChannel) and the user told it is already open | Founder (D43); feasibility note by team-lead (inferred) | Founder | 2026-09-26 |
 | SP-10 | Demo before build | A clickable demo of the shell (all panels with sample content; resize, expand/new tab, close, one-at-a-time switching, already-open-tab behaviour, phone width) is reviewed by the founder in a real browser before the build; it must pass a real-browser click test and team-lead's own browser check first | Founder process instruction + team rule (demos are interactive, browser-verified, static snapshot) | Founder | 2026-09-26 |
+| SP-11 | Tab strip (O1) | Chat stays the page underneath; Tasks/Team/Calendar/Library/Mail tab-strip entries are panel toggles — highlighted while their panel is open, a second click closes it | Founder chose recommended | Founder | 2026-09-26 |
+| SP-12 | Open in new tab (O2) | "Open in new tab" opens the panel's full-page view in a new browser tab and CLOSES the panel in the original tab (chat regains full width) | Founder chose recommended | Founder | 2026-09-26 |
+| SP-13 | Width memory (O3) | Remembered width is per panel AND per workspace | Founder (not the recommendation) | Founder | 2026-09-26 |
+| SP-14 | Deep links (O4) | The open panel is part of the page address (e.g. `…/chat?panel=team`); reload and shared links restore it | Founder chose recommended | Founder | 2026-09-26 |
 
-## Open points — plan-spec must ask, not guess
+## Open points — resolved (SP-11..SP-14); plan-spec raises any NEW unclear point as a founder question
 
 | # | Question |
 |---|---|
