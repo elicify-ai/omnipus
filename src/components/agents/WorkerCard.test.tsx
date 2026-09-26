@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { WorkerCard } from './WorkerCard'
 import type { Agent } from '@/lib/api'
 
-// Wave 2 — sub-agent worker tier. WorkerCard shows the executor badge and a
-// "Test run" affordance; it OMITS the chat entry, heartbeat indicator, and the
-// default-★ control (workers are never chat targets / heartbeat / default).
+// Wave 2 — sub-agent worker tier. WorkerCard shows the executor badge; it OMITS
+// the chat entry, heartbeat indicator, the default-★ control (workers are never
+// chat targets / heartbeat / default) and — since issue #915 — any "Test run"
+// control on the tile (the runner check lives in the worker's profile).
 
 const mockNavigate = vi.fn()
 
@@ -14,13 +15,6 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-router')>()
   return { ...actual, useNavigate: () => mockNavigate }
 })
-
-vi.mock('@/lib/api', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, testAgentRunner: vi.fn() }
-})
-
-import { testAgentRunner } from '@/lib/api'
 
 function makeWorker(overrides: Partial<Agent> = {}): Agent {
   return {
@@ -53,7 +47,6 @@ function renderCard(agent: Agent) {
 
 beforeEach(() => {
   mockNavigate.mockClear()
-  vi.mocked(testAgentRunner).mockReset()
 })
 
 describe('WorkerCard — content', () => {
@@ -103,81 +96,23 @@ describe('WorkerCard — omitted colleague affordances', () => {
   })
 })
 
-describe('WorkerCard — Test run affordance', () => {
-  it('disables Test run for a native worker (no external runner to probe)', () => {
-    renderCard(makeWorker({ executor: { kind: 'native' } }))
-    const btn = screen.getByTestId('worker-test-run-worker-1')
-    expect(btn).toBeDisabled()
-  })
-
-  it('enables and wires Test run for an external-cli worker', async () => {
-    vi.mocked(testAgentRunner).mockResolvedValue({
-      ok: true,
-      reason: '',
-      message: 'claude-code found and authenticated',
-      cli: 'claude-code',
-      cli_version: '1.2.3',
-    })
-    renderCard(makeWorker({ executor: { kind: 'external-cli', cli: 'claude-code' } }))
-    const btn = screen.getByTestId('worker-test-run-worker-1')
-    expect(btn).not.toBeDisabled()
-    fireEvent.click(btn)
-    await waitFor(() => expect(testAgentRunner).toHaveBeenCalledWith('worker-1'))
-    await waitFor(() =>
-      expect(screen.getByText(/claude-code found and authenticated/i)).toBeInTheDocument(),
-    )
-  })
-})
-
-describe('WorkerCard — test-result pill keys off result.ok', () => {
-  // The success/fail tone must come from the authoritative `ok` boolean, not an
-  // inference from reason === ''. We assert via the success-coloured icon class
-  // and the visible message; reason still drives the data-reason attribute.
-  it('renders a success pill when ok:true', async () => {
-    vi.mocked(testAgentRunner).mockResolvedValue({
-      ok: true,
-      reason: '',
-      message: 'ready',
-      cli: 'claude-code',
-      cli_version: '1.2.3',
-    })
-    renderCard(makeWorker({ executor: { kind: 'external-cli', cli: 'claude-code' } }))
-    fireEvent.click(screen.getByTestId('worker-test-run-worker-1'))
-    const pill = await screen.findByTestId('worker-test-result-claude-code')
-    // Success tone (success token) lives on the pill span — not the error/warn tones.
-    expect(pill).toHaveClass('text-[var(--color-success)]')
-    expect(pill).toHaveTextContent('ready')
-    expect(pill).toHaveAttribute('data-reason', 'ok')
-  })
-
-  it('renders a failure pill when ok:false even if a reason is present', async () => {
-    vi.mocked(testAgentRunner).mockResolvedValue({
-      ok: false,
-      reason: 'missing-binary',
-      message: 'claude-code not on PATH',
-      cli: 'claude-code',
-    })
-    renderCard(makeWorker({ executor: { kind: 'external-cli', cli: 'claude-code' } }))
-    fireEvent.click(screen.getByTestId('worker-test-run-worker-1'))
-    const pill = await screen.findByTestId('worker-test-result-claude-code')
-    // Not the success tone — keyed off ok:false.
-    expect(pill).not.toHaveClass('text-[var(--color-success)]')
-    expect(pill).toHaveTextContent('claude-code not on PATH')
-    expect(pill).toHaveAttribute('data-reason', 'missing-binary')
-  })
-
-  it('renders a warning pill when ok:false and reason is unauthenticated', async () => {
-    vi.mocked(testAgentRunner).mockResolvedValue({
-      ok: false,
-      reason: 'unauthenticated',
-      message: 'present but not logged in',
-      cli: 'claude-code',
-    })
-    renderCard(makeWorker({ executor: { kind: 'external-cli', cli: 'claude-code' } }))
-    fireEvent.click(screen.getByTestId('worker-test-run-worker-1'))
-    const pill = await screen.findByTestId('worker-test-result-claude-code')
-    expect(pill).toHaveClass('text-[var(--color-warning)]')
-    expect(pill).toHaveTextContent('present but not logged in')
+describe('WorkerCard — no Test run control on the tile (issue #915)', () => {
+  // Oracle: issue #915's expected behaviour — a worker tile shows no Test run
+  // control, whatever its runtime. Checked for both a native and an external-CLI
+  // worker, by test id, by accessible name and by visible text.
+  it.each([
+    ['native', { kind: 'native' } as const],
+    ['external-cli', { kind: 'external-cli', cli: 'claude-code' } as const],
+  ])('renders no Test run control for a worker on the %s runtime', (_label, executor) => {
+    const { container } = renderCard(makeWorker({ executor }))
+    expect(container.querySelector('[data-testid^="worker-test-run-"]')).toBeNull()
+    expect(container.querySelector('[data-testid^="worker-test-result-"]')).toBeNull()
+    expect(screen.queryByRole('button', { name: /test run/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/test run/i)).not.toBeInTheDocument()
+    // The only control on the tile is the card itself (opens the profile).
+    const buttons = screen.getAllByRole('button')
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0]).toHaveAccessibleName('View worker General Worker')
   })
 })
 

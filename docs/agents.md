@@ -92,7 +92,7 @@ The exact caps on all of this — how deep a chain may go, how many may run at o
 
 A worker has its own settings — its model, its tools, its limits. The delegating agent hands over the task; the worker supplies everything else. Delegation itself is a per-workspace decision: which agent may delegate to which is set on that [workspace](workspaces.md) **Team** tab, and that rule applies only there.
 
-An **external worker** runs on a command-line tool installed on the same machine as Omnipus: Claude Code, Codex, or OpenCode. Its model is a free-text name passed straight to that tool. The **Test run** button on its card checks the connection — that the tool's program is present and answers.
+An **external worker** runs on a command-line tool installed on the same machine as Omnipus: Claude Code, Codex, or OpenCode. Its model is a free-text name passed straight to that tool. Omnipus checks the connection — that the tool's program is present and answers — automatically before it saves changes to an external worker, and refuses the save if the check fails. To try the worker by hand, open it and use **Send a test message** on its **Runtime** tab; this runs a real request through the tool, so it spends a small amount of usage.
 
 Two things to watch with external workers:
 

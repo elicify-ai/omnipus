@@ -1,11 +1,9 @@
-import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { CheckCircle, Circle, Lightning, WarningCircle, XCircle } from '@phosphor-icons/react'
+import { Circle, Lightning } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { IconRenderer } from '@/components/shared/IconRenderer'
-import { testAgentRunner, isApiError } from '@/lib/api'
-import type { Agent, ExecutorConfig, RunnerTestResponse } from '@/lib/api'
+import type { Agent, ExecutorConfig } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 interface WorkerCardProps {
@@ -14,8 +12,10 @@ interface WorkerCardProps {
 
 // Sub-agent worker card. Workers are delegation-only labour agents — "a tool you
 // point at work, not a colleague". They differ from base AgentCards:
-//   SHOW : executor/runner badge, a "Test run" affordance.
-//   OMIT : chat/open-conversation entry, heartbeat indicator, default-★ control.
+//   SHOW : executor/runner badge.
+//   OMIT : chat/open-conversation entry, heartbeat indicator, default-★ control,
+//          and any "Test run" control (removed, issue #915 — the runner check
+//          lives in the worker's profile and runs before an external worker saves).
 // Clicking the card still navigates to the agent profile (workers have a detail
 // page); the card simply never surfaces the colleague affordances.
 
@@ -108,11 +108,10 @@ export function WorkerCard({ agent }: WorkerCardProps) {
                 {executorLabel(agent.executor)}
               </Badge>
               {agent.model && (
-                // UAT 4d: keep the model slug from overflowing into the
-                // "Test run" affordance. min-w-0 + shrink lets it give way in
-                // the flex row, and the max-width cap truncates the remainder.
+                // min-w-0 + shrink lets a long model slug give way in the
+                // flex row and truncate instead of overflowing the card.
                 <span
-                  className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-muted)] truncate min-w-0 shrink max-w-[140px]"
+                  className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-muted)] truncate min-w-0 shrink"
                   title={agent.model}
                 >
                   {agent.model.includes('/') ? agent.model.split('/').slice(1).join('/') : agent.model}
@@ -122,88 +121,6 @@ export function WorkerCard({ agent }: WorkerCardProps) {
           </div>
         </div>
       </Button>
-
-      {/* Test run — sits outside the card button to avoid nested-button HTML. */}
-      <WorkerTestRun agentId={agent.id} agentName={agent.name} isExternalCli={isExternalCli} />
     </div>
-  )
-}
-
-// WorkerTestRun wires the "Test run" affordance to the existing Spec-4 runner-test
-// endpoint (POST /api/v1/agents/{id}/runner/test). The endpoint only validates an
-// EXTERNAL CLI runner (binary present + handshake + auth), so the button is enabled
-// only when the worker's executor is external-cli. A native worker has no external
-// runner to probe → the button is disabled with an explanatory tooltip.
-function WorkerTestRun({ agentId, agentName, isExternalCli }: { agentId: string; agentName: string; isExternalCli: boolean }) {
-  const { mutate, data, error, isPending, reset } = useMutation<RunnerTestResponse, Error>({
-    mutationFn: () => testAgentRunner(agentId),
-  })
-
-  if (!isExternalCli) {
-    return (
-      <Button
-        type="button"
-        variant="ghost"
-        disabled
-        data-testid={`worker-test-run-${agentId}`}
-        title="Native runners have no external connection to test."
-        className="absolute bottom-3 right-4 h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]/50 hover:bg-transparent disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-100"
-        aria-label={`Test run for ${agentName} (unavailable for native runtime)`}
-      >
-        <Lightning size={12} />
-        Test run
-      </Button>
-    )
-  }
-
-  return (
-    <div className="absolute bottom-3 right-4 flex flex-col items-end gap-[var(--space-1)]">
-      <Button
-        type="button"
-        variant="ghost"
-        actionState={isPending ? 'pending' : 'idle'}
-        data-testid={`worker-test-run-${agentId}`}
-        onClick={() => {
-          reset()
-          mutate()
-        }}
-        className="h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-accent)] disabled:opacity-60"
-        aria-label={`Test run for ${agentName}`}
-      >
-        {!isPending && <Lightning size={12} />}
-        {isPending ? 'Testing…' : 'Test run'}
-      </Button>
-      {error && (
-        <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] max-w-[180px] truncate" title={isApiError(error) ? error.userMessage : error.message}>
-          Test failed
-        </span>
-      )}
-      {data && <WorkerTestResultPill result={data} />}
-    </div>
-  )
-}
-
-function WorkerTestResultPill({ result }: { result: RunnerTestResponse }) {
-  // Key success off the authoritative `ok` boolean the backend returns, not an
-  // inference from reason === '' — reason carries the failure classifier and is
-  // kept for the tooltip/data-reason attribute below.
-  const ok = result.ok
-  const warn = !ok && result.reason === 'unauthenticated'
-  const Icon = ok ? CheckCircle : warn ? WarningCircle : XCircle
-  const tone = ok
-    ? 'text-[var(--color-success)]'
-    : warn
-      ? 'text-[var(--color-warning)]'
-      : 'text-[var(--color-error)]'
-  return (
-    <span
-      className={`flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] ${tone} max-w-[200px]`}
-      data-testid={`worker-test-result-${result.cli || 'cli'}`}
-      data-reason={result.reason || 'ok'}
-      title={result.message}
-    >
-      <Icon size={12} weight="fill" className="shrink-0" />
-      <span className="truncate">{result.message}</span>
-    </span>
   )
 }
