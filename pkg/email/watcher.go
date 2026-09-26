@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
@@ -261,7 +262,10 @@ func (w *Watcher) save() error {
 
 // classifyMailError maps a mail transport error to the spec's closed error
 // class enum (MC-8): timeout | dns | connect_refused | auth_failed | tls |
-// folder_missing | server_error.
+// folder_missing | server_error. Refusal is detected structurally first
+// (errors.Is on ECONNREFUSED) and before the substring sweep: the dial
+// wrapper's "dial TLS" text must not turn a refused connection into the
+// tls class.
 func classifyMailError(err error) string {
 	if err == nil {
 		return ""
@@ -269,16 +273,19 @@ func classifyMailError(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return "timeout"
 	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return "connect_refused"
+	}
 	msg := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(msg, "dns"), strings.Contains(msg, "resolve"), strings.Contains(msg, "no such host"):
 		return "dns"
 	case strings.Contains(msg, "auth"), strings.Contains(msg, "invalid credentials"), strings.Contains(msg, "login failed"):
 		return "auth_failed"
-	case strings.Contains(msg, "tls"), strings.Contains(msg, "x509"), strings.Contains(msg, "certificate"):
-		return "tls"
 	case strings.Contains(msg, "connection refused"), strings.Contains(msg, "connect:"):
 		return "connect_refused"
+	case strings.Contains(msg, "tls"), strings.Contains(msg, "x509"), strings.Contains(msg, "certificate"):
+		return "tls"
 	case strings.Contains(msg, "folder"), strings.Contains(msg, "mailbox"):
 		return "folder_missing"
 	default:

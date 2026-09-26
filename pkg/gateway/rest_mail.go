@@ -40,55 +40,57 @@ func (a *restAPI) handleWorkspaceMail(w http.ResponseWriter, r *http.Request, re
 	}
 	switch {
 	case len(tail) == 1 && tail[0] == "summary":
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		a.handleMailSummary(w, r, workspaceID)
-	case len(tail) == 2 && tail[0] == "folders":
+	case len(tail) == 2 && tail[1] == "folders":
 		if r.Method != http.MethodGet {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		a.handleMailFolders(w, r, workspaceID, tail[1])
-	case len(tail) == 2 && tail[1] == "messages":
-		if r.Method != http.MethodPost {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
+		a.handleMailFolders(w, r, workspaceID, tail[0])
+	case len(tail) == 2 && tail[1] == "messages" && r.Method == http.MethodPost:
 		a.handleMailSend(w, r, workspaceID, tail[0])
-	// Draft actions shadow the generic folder-message read for folder
+	case len(tail) == 2 && tail[1] == "messages":
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+	// Draft cases shadow the generic folder-message cases for folder
 	// "drafts": the switch takes the FIRST matching case, so the drafts
-	// cases must precede the generic one below.
-	case len(tail) == 4 && tail[0] == "folders" && tail[1] == "drafts" && tail[2] == "messages":
-		a.handleMailDraftAction(w, r, workspaceID, tail[0], tail[3])
-	case len(tail) == 5 && tail[0] == "folders" && tail[1] == "drafts" && tail[2] == "messages" && tail[4] == "send":
+	// cases must precede the generic ones below.
+	case len(tail) == 5 && tail[1] == "folders" && tail[2] == "drafts" && tail[3] == "messages":
+		a.handleMailDraftAction(w, r, workspaceID, tail[0], tail[4])
+	case len(tail) == 6 && tail[1] == "folders" && tail[2] == "drafts" && tail[3] == "messages" && tail[5] == "send":
 		if r.Method != http.MethodPost {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		a.handleMailDraftSend(w, r, workspaceID, tail[0], tail[3])
-	case len(tail) == 3 && tail[0] == "folders" && tail[2] == "messages":
+		a.handleMailDraftSend(w, r, workspaceID, tail[0], tail[4])
+	case len(tail) == 4 && tail[1] == "folders" && tail[3] == "messages":
 		if r.Method != http.MethodGet {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		a.handleMailList(w, r, workspaceID, tail[0], tail[1])
-	case len(tail) == 4 && tail[0] == "folders" && tail[2] == "messages":
-		a.handleMailFolderMessage(w, r, workspaceID, tail[0], tail[1], tail[3])
-	case len(tail) == 5 && tail[0] == "folders" && tail[2] == "messages" && tail[4] == "seen":
+		a.handleMailList(w, r, workspaceID, tail[0], tail[2])
+	case len(tail) == 5 && tail[1] == "folders" && tail[3] == "messages":
+		a.handleMailFolderMessage(w, r, workspaceID, tail[0], tail[2], tail[4])
+	case len(tail) == 6 && tail[1] == "folders" && tail[3] == "messages" && tail[5] == "seen":
 		if r.Method != http.MethodPost {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		a.handleMailSeen(w, r, workspaceID, tail[0], tail[1], tail[3])
-	case len(tail) == 6 && tail[0] == "folders" && tail[2] == "messages" && tail[4] == "attachments":
+		a.handleMailSeen(w, r, workspaceID, tail[0], tail[2], tail[4])
+	case len(tail) == 7 && tail[1] == "folders" && tail[3] == "messages" && tail[5] == "attachments":
 		if r.Method != http.MethodGet {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		idx, ierr := strconv.Atoi(tail[5])
+		idx, ierr := strconv.Atoi(tail[6])
 		if ierr != nil || idx < 0 {
 			jsonErr(w, http.StatusBadRequest, "malformed part index")
 			return
 		}
-		a.handleMailAttachment(w, r, workspaceID, tail[0], tail[1], tail[3], idx)
+		a.handleMailAttachment(w, r, workspaceID, tail[0], tail[2], tail[4], idx)
 	default:
 		jsonErr(w, http.StatusNotFound, "not found")
 	}
@@ -169,8 +171,10 @@ func auditMail(a *restAPI, event audit.EventName, decision audit.Decision, detai
 }
 
 // mailErr502 writes the MC-8 error envelope: the closed error class is the
-// only thing that crosses the wire.
+// only thing that crosses the wire - `error` carries the class string,
+// `code` its machine-readable duplicate.
 func mailErr502(w http.ResponseWriter, err error) {
-	slog.Error("rest: mail upstream failure", "class", email.ClassifyMailError(err), "error", err)
-	jsonErr(w, http.StatusBadGateway, "mail server error: "+email.ClassifyMailError(err))
+	class := email.ClassifyMailError(err)
+	slog.Error("rest: mail upstream failure", "class", class, "error", err)
+	jsonErrCode(w, http.StatusBadGateway, "mail server error: "+class, class)
 }

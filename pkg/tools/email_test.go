@@ -223,15 +223,13 @@ func TestSendEmailTool(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("unexpected error: %s", res.ForLLM)
 	}
-	// Spec decision (MC-3 / US-2 / FR-004): the legacy exact Body equality
-	// is superseded. This fake exposes a sending identity
-	// (fakeTransport.AccountAddress), so the recorded body is the composed
+	// D3, US-2, FR-004, MC-3: the recorded body is the composed
 	// multipart/alternative message, not the Markdown argument. Date,
 	// Message-ID and the MIME boundary are generated and are not literals.
 	// "Hello there" has no Markdown syntax and this mailbox has no
 	// signature, so text/plain is that string (MC-3 adds the "--" separator
 	// only when a signature exists) and text/html is the CommonMark
-	// paragraph goldmark emits for it, which the MC-2 allowlist keeps.
+	// paragraph, which the MC-2 allowlist keeps.
 	if len(ft.sent) != 1 || ft.sent[0].To != "dest@x.com" {
 		t.Fatalf("send not recorded correctly: %+v", ft.sent)
 	}
@@ -565,7 +563,7 @@ func TestSendEmailTool_Persistence(t *testing.T) {
 	if len(ft.sent) != 1 {
 		t.Fatalf("expected 1 recorded send, got %d", len(ft.sent))
 	}
-	// Same decision as TestSendEmailTool (MC-3 / US-2 / FR-004): the
+	// Same decision as TestSendEmailTool (D3, US-2, FR-004, MC-3): the
 	// persisted body is the composed message. "Verify me" is unmarked
 	// Markdown with no signature, so the two part bodies are exact.
 	assertComposedSend(t, ft.sent[0].Body, ft.AccountAddress(), "dest@x.com", "Test",

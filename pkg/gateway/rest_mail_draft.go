@@ -71,6 +71,7 @@ func bracketMessageID(id string) string {
 }
 
 func (a *restAPI) handleMailDraftAction(w http.ResponseWriter, r *http.Request, workspaceID, agentID, ref string) {
+	// MC-20: the closure is INVOKED - the limiter wraps the method dispatch.
 	withRateLimit(mailMutationLimiter, func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPut:
@@ -80,12 +81,16 @@ func (a *restAPI) handleMailDraftAction(w http.ResponseWriter, r *http.Request, 
 		default:
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
-	})
+	})(w, r)
 }
 
 func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, workspaceID, agentID, ref string) {
 	var req gen.MailDraftUpdateRequest
 	if !decodeMailJSON(a, w, r, "MailDraftUpdateRequest", &req) {
+		return
+	}
+	if msg, ok := mailDraftRefBodyAgreement(ref, req.Uid, req.Uidvalidity); !ok {
+		jsonErr(w, http.StatusBadRequest, msg)
 		return
 	}
 	client := a.mailPairClient(w, agentID, workspaceID)
@@ -101,8 +106,12 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 		}
 		return
 	}
-	if code, serr := mailDraftStaleness(ref, req.Uid, req.Uidvalidity, cur); serr != "" {
-		jsonErr(w, code, serr)
+	if status, code, msg := mailDraftStaleness(cur, req.Uid, req.Uidvalidity); status != 0 {
+		if code != "" {
+			jsonErrCode(w, status, msg, code)
+		} else {
+			jsonErr(w, status, msg)
+		}
 		return
 	}
 	mb, mbOK := a.mailComposeConfig(agentID, workspaceID)
@@ -221,42 +230,57 @@ func (a *restAPI) handleMailDraftDiscard(w http.ResponseWriter, r *http.Request,
 // imapDraftFlag is the IMAP \Draft flag.
 const imapDraftFlag = "\\Draft"
 
-// mailDraftStaleness enforces the round-2 MAJ-008 preconditions: a uid-form
-// ref whose parts disagree with the body is malformed input (400); a body
-// describing anything other than the CURRENT copy is stale (409).
-func mailDraftStaleness(ref string, bodyUID, bodyUV int, cur *email.MailView) (int, string) {
-	if strings.HasPrefix(ref, "uid:") {
-		parts := strings.Split(ref, ":")
-		if len(parts) == 3 {
-			ruv, e1 := strconv.Atoi(parts[1])
-			ruid, e2 := strconv.Atoi(parts[2])
-			if e1 == nil && ruv != bodyUV {
-				return http.StatusBadRequest, "uid precondition does not match the addressed draft"
-			}
-			if e2 == nil && ruid != bodyUID {
-				return http.StatusBadRequest, "uid precondition does not match the addressed draft"
-			}
-		}
+// mailDraftRefBodyAgreement is the MAJ-008 PRE-DIAL check: a uid-form path
+// ref whose parts disagree with the request body is malformed input (400)
+// before any IMAP work. Non-uid refs (mid:) have no path parts to agree on.
+// Returns ("", true) when the request may proceed.
+func mailDraftRefBodyAgreement(ref string, bodyUID, bodyUV int) (string, bool) {
+	if !strings.HasPrefix(ref, "uid:") {
+		return "", true
 	}
+	parts := strings.Split(ref, ":")
+	if len(parts) != 3 {
+		return "", true
+	}
+	ru, e1 := strconv.Atoi(parts[1])
+	ui, e2 := strconv.Atoi(parts[2])
+	if e1 == nil && ru != bodyUV {
+		return "uid precondition does not match the addressed draft", false
+	}
+	if e2 == nil && ui != bodyUID {
+		return "uid precondition does not match the addressed draft", false
+	}
+	return "", true
+}
+
+// mailDraftStaleness is the MC-16 POST-READ check: a body describing
+// anything other than the CURRENT copy is stale. Returns (409,
+// "stale_draft", ...) so callers emit the closed code on the wire.
+func mailDraftStaleness(cur *email.MailView, bodyUID, bodyUV int) (int, string, string) {
 	if bodyUV != int(cur.UIDValidity) || bodyUID != int(cur.UID) {
-		return http.StatusConflict, "stale_draft"
+		return http.StatusConflict, "stale_draft", "stale draft"
 	}
-	return 0, ""
+	return 0, "", ""
 }
 
 func (a *restAPI) handleMailDraftSend(w http.ResponseWriter, r *http.Request, workspaceID, agentID, ref string) {
+	// MC-20: the closure is INVOKED - the limiter wraps the method guard.
 	withRateLimit(mailMutationLimiter, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 		a.handleMailDraftSendInner(w, r, workspaceID, agentID, ref)
-	})
+	})(w, r)
 }
 
 func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Request, workspaceID, agentID, ref string) {
 	var req gen.MailDraftSendRequest
 	if !decodeMailJSON(a, w, r, "MailDraftSendRequest", &req) {
+		return
+	}
+	if msg, ok := mailDraftRefBodyAgreement(ref, req.Uid, req.Uidvalidity); !ok {
+		jsonErr(w, http.StatusBadRequest, msg)
 		return
 	}
 	client := a.mailPairClient(w, agentID, workspaceID)
@@ -269,6 +293,14 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 			jsonErr(w, http.StatusBadRequest, err.Error())
 		} else {
 			mailErr502(w, err)
+		}
+		return
+	}
+	if status, code, msg := mailDraftStaleness(cur, req.Uid, req.Uidvalidity); status != 0 {
+		if code != "" {
+			jsonErrCode(w, status, msg, code)
+		} else {
+			jsonErr(w, status, msg)
 		}
 		return
 	}

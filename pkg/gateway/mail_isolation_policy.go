@@ -31,14 +31,22 @@ const (
 // mirrors the iframe attribute token-for-token (MC-10(3)).
 func mailIsolationPolicy(origin string) string {
 	var b strings.Builder
-	b.WriteString("default-src 'none'; script-src 'none'; object-src 'none'; base-uri 'none'; connect-src 'none'; form-action 'none'; ")
+	b.WriteString("sandbox allow-popups allow-popups-to-escape-sandbox; ")
+	b.WriteString("default-src 'none'; ")
+	b.WriteString("script-src 'none'; ")
 	b.WriteString("style-src 'unsafe-inline'; ")
-	b.WriteString("sandbox allow-popups allow-popups-to-escape-sandbox")
 	if origin == "" {
 		slog.Warn("mail preview: no canonical gateway origin; CSP host sources omitted (MC-38)")
-		b.WriteString("; img-src data:")
+		b.WriteString("img-src data:; ")
 	} else {
-		b.WriteString("; img-src data: " + origin + mailPreviewPartPrefix + " " + origin + mailPreviewImgPrefix)
+		b.WriteString("img-src " + origin + mailPreviewPathPrefix + " data:; ")
 	}
+	b.WriteString("font-src data:; ")
+	b.WriteString("media-src data:; ")
+	b.WriteString("connect-src 'none'; ")
+	b.WriteString("form-action 'none'; ")
+	b.WriteString("frame-src 'none'; ")
+	b.WriteString("object-src 'none'; ")
+	b.WriteString("base-uri 'none'")
 	return b.String()
 }
