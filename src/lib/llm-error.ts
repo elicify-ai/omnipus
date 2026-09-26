@@ -107,14 +107,32 @@ export function codeToMessage(code: string | undefined): string {
  * internals).
  */
 export function getLLMErrorDisplay(
-  le: { code: string; message: string; retryable: boolean; detail?: string },
+  le: {
+    code: string
+    message: string
+    retryable: boolean
+    detail?: string
+    /** MAJ-104 — the server's explicit "this message text is user-facing" flag. */
+    provider_message?: boolean
+  },
   verboseChatEnabled: boolean,
 ): { message: string; detail?: string } {
   const delegatedLimitMessage = le.message.trim()
+  // MAJ-104/C-14 — subtype trust gate: the SPA renders the server-assembled
+  // `le.message` ONLY when the entry carries the explicit `provider_message`
+  // subtype flag — never keyed on error code alone. The own-limiter persists
+  // `rate_limited` rows with its internal text ("rate limit:
+  // llm_calls_per_minute (retry after Ns)") and NO flag, so that text can
+  // never reach a bubble — live or replayed. The kept `delegated_task_limit`
+  // exception is unchanged (controller-authored, always user-facing).
+  const providerMessageTrusted =
+    le.provider_message === true && delegatedLimitMessage.length > 0
   const message =
-    le.code === 'delegated_task_limit' && delegatedLimitMessage.length > 0
+    providerMessageTrusted
       ? le.message
-      : codeToMessage(le.code)
+      : le.code === 'delegated_task_limit' && delegatedLimitMessage.length > 0
+        ? le.message
+        : codeToMessage(le.code)
   // Trim before the emptiness check — a whitespace-only detail carries no
   // information and would render as a blank "Technical details" disclosure.
   // Mirrors the renderer's own trim guard on `message.errorDetail`.
@@ -136,7 +154,14 @@ export function getLLMErrorDisplay(
 // they only exist to confirm a typed payload is present, not to validate
 // its full contract — Zod already did that at the WS boundary.
 
-function isTypedLLMError(value: unknown): value is { code: string; message: string; retryable: boolean; detail?: string } {
+function isTypedLLMError(value: unknown): value is {
+  code: string
+  message: string
+  retryable: boolean
+  detail?: string
+  provider_message?: boolean
+  facts?: GeneratedLLMError['facts']
+} {
   if (typeof value !== 'object' || value === null) return false
   const v = value as Record<string, unknown>
   return typeof v.code === 'string' && typeof v.message === 'string' && typeof v.retryable === 'boolean'
@@ -155,13 +180,17 @@ export function readLLMErrorFromFrame(frame: unknown): LLMError | undefined {
   if (typeof payload !== 'object' || payload === null) return undefined
   const p = payload as { llm_error?: unknown }
   if (!isTypedLLMError(p.llm_error)) return undefined
-  // `detail` is optional on the wire; only copy it through if it's a string.
+  // `detail` / `provider_message` / `facts` are optional on the wire; copy
+  // each through only when present (provider_message only when true —
+  // MAJ-104's trust flag is meaningful only in its affirmative form).
   const le = p.llm_error
   return {
     code: le.code as LLMErrorCode,
     message: le.message,
     retryable: le.retryable,
     ...(typeof le.detail === 'string' ? { detail: le.detail } : {}),
+    ...(le.provider_message === true ? { provider_message: true as const } : {}),
+    ...(le.facts ? { facts: le.facts } : {}),
   }
 }
 
@@ -182,6 +211,7 @@ export function readLLMErrorFromReplayFrame(frame: unknown): LLMErrorReplay | un
     code: le.code as LLMErrorCode,
     message: le.message,
     retryable: le.retryable,
+    ...(le.provider_message === true ? { provider_message: true as const } : {}),
   }
 }
 
