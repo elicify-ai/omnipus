@@ -584,7 +584,7 @@ test(
     // T0.1: OPENROUTER_API_KEY_CI soft-skip removed. The key is required in CI.
     requireApiKey();
     // 360s budget, matching cancel-cross-channel.spec.ts's T24a/T24b precedent:
-    // glm-5.2 (the standard e2e model, swapped in for the old gemini-2.5-flash
+    // deepseek-v4.1-flash (the standard e2e model, swapped in for the old gemini-2.5-flash
     // pick — see tests/e2e/fixtures/onboard-via-api.ts) can genuinely take a
     // couple of minutes for a delegate round-trip under suite load. A too-tight
     // budget here doesn't just fail this assertion — this repo's
@@ -635,7 +635,7 @@ test(
     // count (which was how the RC6 failure presented and why it read as a
     // timeout).
     //
-    // Use .first(): glm-5.2 occasionally fans out to more than one subagent,
+    // Use .first(): deepseek-v4.1-flash occasionally fans out to more than one subagent,
     // which would make a bare locator strict-mode-fail. We only need >=1.
     const delegateBadge = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]').first();
     await expect(

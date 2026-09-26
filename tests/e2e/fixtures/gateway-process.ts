@@ -40,7 +40,7 @@ import * as path from 'path';
 import { request, type APIRequestContext } from '@playwright/test';
 import { getFreePort, waitForHealth, DEFAULT_OMNIPUS_BINARY } from '../setup.js';
 
-const DEFAULT_MODEL = 'z-ai/glm-5.2';
+const DEFAULT_MODEL = 'deepseek/deepseek-v4.1-flash';
 
 export interface ApiResult<T> {
   ok: boolean;
