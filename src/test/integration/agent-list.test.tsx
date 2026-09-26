@@ -41,6 +41,8 @@ const agentDefaults = {
   heartbeat: '',
   timeout_seconds: 60,
   max_tool_iterations: 20,
+  max_tool_iterations_source: 'global' as const,
+  max_tool_iterations_override_ignored: false,
   heartbeat_enabled: false,
   heartbeat_interval: 300,
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
