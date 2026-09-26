@@ -5,16 +5,16 @@ Status: Decisions captured 2026-09-27. This file is interview-me-shaped input fo
 Do not hand-edit the spec's Decisions Log once plan-spec has copied it forward — this
 file is the source of record for *why*; the spec is the source of record for *how*.
 
-> **Correction (architect, ADR-094, 2026-09-27):** CF6 below said "Reasoning is not
+> **Correction (architect, ADR-095, 2026-09-27):** CF6 below said "Reasoning is not
 > persisted anywhere" — wrong. `context.jsonl` (the LLM-context store) already carries
 > raw `reasoning_content` when populated: `pkg/memory/jsonl.go::addMsg` marshals
 > `ArchivedMessage{Message: msg}` wholesale, and `pkg/agent/loop_run_turn_response.go::recordToolCalls`
 > sets `ReasoningContent` on the stored assistant message. Correct statement: reasoning is
 > not persisted in `transcript.jsonl` or any wire frame, but it IS persisted, unredacted,
 > in `context.jsonl` — and a restart-rebuild (`session_recovery.go::RecoverOrphanedToolCalls`
-> → `store.GetHistory`) re-sends it today, which conflicts with D13. See ADR-094 D8, which
+> → `store.GetHistory`) re-sends it today, which conflicts with D13. See ADR-095 D8, which
 > rules this a deliberate strip-on-write change so D13 holds by construction (founder
-> ratification pending — ADR-094 Q1).
+> ratification pending — ADR-095 Q1).
 
 ## 0. Scope — issues this feature closes or edits
 
