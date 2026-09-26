@@ -8,3 +8,4 @@
 | F794-4 | 2026-09-26 | Q5: accept and document the residual that an agent-built page could imitate an Omnipus login screen. |
 | F794-5 | 2026-09-26 | Path: "separate address is not an option, they need to run under the preview path as it is now, or we can dynamically generate a subdomain within the Omnipus app alone without dependencies on the environment." A separately configured origin/port that needs environment setup is rejected. |
 | F794-6 | 2026-09-26 | Q2′ default taken by team-lead (stated to founder, not objected): misconfigured origins (wildcard public_url, unparseable origin) fail closed. |
+| F794-7 | 2026-09-26 | FQ-794-7: accept and document the /preview/ fallback residual (same-origin popup scripting); the hosted version must not rely on the fallback — tracked in elicify-ai/omnipus-ai#1177. |
