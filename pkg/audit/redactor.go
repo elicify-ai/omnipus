@@ -32,7 +32,7 @@ var defaultPatterns = []string{
 var defaultPatternLabels = []string{
 	"OpenAI/OpenRouter API key (sk-…)",
 	"generic API key (key-…)",
-	"HTTP Bearer token",
+	bearerPatternLabel,
 	"GitHub personal access token (ghp_…)",
 	"GitHub OAuth token (gho_…)",
 	"Slack bot token (xoxb-…)",
@@ -47,6 +47,10 @@ var defaultPatternLabels = []string{
 // emailPatternLabel is the defaultPatternLabels entry of the email-address
 // pattern. newAuditRedactor drops the pattern carrying this label.
 const emailPatternLabel = "email address"
+
+// bearerPatternLabel is the defaultPatternLabels entry of the Bearer-token
+// pattern. The audit set makes that one pattern case-insensitive.
+const bearerPatternLabel = "HTTP Bearer token"
 
 const redactedValue = "[REDACTED]"
 
@@ -111,19 +115,25 @@ func NewRedactor(customPatterns []string) (*Redactor, error) {
 }
 
 // auditKeyBoundaryPrefix makes a credential pattern match only when the
-// credential starts the string or follows a character that is not an ASCII
-// letter or digit, so "project-task-management" or "risk-assessment" is not
-// read as an "sk-" key. RE2 has no lookbehind, so the preceding character is
-// captured as group 1 and written back by the replacement template.
-const auditKeyBoundaryPrefix = `(^|[^A-Za-z0-9])(?:`
+// credential starts the string or follows a separator, so
+// "project-task-management" or "risk-assessment" is not read as an "sk-"
+// key. A separator is a character that is not an ASCII letter or digit, or
+// an encoded one whose last character is alphanumeric: a percent-encoded
+// byte ("%3D", "%20"), a JSON/Go "\uXXXX" escape, or a literal "\n", "\r",
+// "\t". Without those, "?q%3Dsk-…" or "\u0022sk-…" would read as a letter
+// before the key and slip through. RE2 has no lookbehind, so the separator
+// is captured as group 1 and written back by the replacement template.
+const auditKeyBoundaryPrefix = `(^|%[0-9A-Fa-f]{2}|\\u[0-9A-Fa-f]{4}|\\[nrt]|[^A-Za-z0-9])(?:`
 
 // auditUserinfoPattern matches the password in a URL's userinfo
-// (scheme://user:PASSWORD@host). Group 1 keeps "scheme://user:" and the
-// trailing "@" is re-emitted, so only the password becomes [REDACTED]. It
-// needs "://" and a ":" before the "@", so a plain email address or a
-// Message-ID never matches. This replaces the incidental cover the email
-// pattern used to give such URLs, which the audit set drops.
-const auditUserinfoPattern = `([A-Za-z][A-Za-z0-9+.\-]*://[^\s:/@]+:)[^\s@/]+@`
+// (scheme://user:PASSWORD@host, user may be empty as in redis://:pw@host).
+// Group 1 keeps "scheme://user:" and the trailing "@" is re-emitted, so only
+// the password becomes [REDACTED]. It needs "://" and a ":" before the "@",
+// so a plain email address or a Message-ID never matches. Known limits: a
+// raw "/" or "@" inside the password, and scheme-less DSNs such as
+// user:pw@tcp(host), are not matched. This replaces the incidental cover the
+// email pattern used to give such URLs, which the audit set drops.
+const auditUserinfoPattern = `([A-Za-z][A-Za-z0-9+.\-]*://[^\s:/@]*:)[^\s@/]+@`
 
 // newAuditRedactor creates the Redactor the audit Logger uses (issue #914):
 // see auditCredentialPatterns for the set. customPatterns are appended as
@@ -154,6 +164,11 @@ func auditCredentialPatterns() []string {
 		if defaultPatternLabels[i] == emailPatternLabel {
 			dropped++
 			continue
+		}
+		if defaultPatternLabels[i] == bearerPatternLabel {
+			// "authorization: bearer …" is common; match any case here
+			// only — the shared default stays case-sensitive.
+			p = `(?i)` + p
 		}
 		patterns = append(patterns, auditKeyBoundaryPrefix+p+`)`)
 	}
