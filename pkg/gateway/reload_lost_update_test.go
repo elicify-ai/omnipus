@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -78,6 +79,9 @@ func TestExecuteReload_KeepsConfigWriteCommittedBetweenLoadAndSwap(t *testing.T)
 	api := rs.restAPIRef
 	require.NotNil(t, api, "setupAndStartServices must wire the restAPI the reload shares configMu with")
 	require.Equal(t, configPath, api.configPath(), "setup: the REST writer and the reload must share config.json")
+	// serveReloadLoop's wiring: every reload reads config.json through this
+	// loader, including handleConfigReload's swap-time re-read.
+	rs.loadConfigForSwap = newReloadConfigLoader(configPath, tmpDir, credStore, rs)
 
 	// 1. The reload loads its snapshot (what loadReloadConfig / the watcher do).
 	reloadSnapshot, err := config.LoadConfigWithStore(configPath, credStore)
@@ -87,9 +91,19 @@ func TestExecuteReload_KeepsConfigWriteCommittedBetweenLoadAndSwap(t *testing.T)
 	sessionToken, sessionHash, err := middleware.MintSessionToken()
 	require.NoError(t, err)
 	require.NoError(t, api.safeUpdateConfigJSON(func(m map[string]any) error {
-		gw := m["gateway"].(map[string]any)
-		users := gw["users"].([]any)
-		users[0].(map[string]any)["session_token_hash"] = string(sessionHash)
+		gw, ok := m["gateway"].(map[string]any)
+		if !ok {
+			return errors.New("gateway is not an object")
+		}
+		users, ok := gw["users"].([]any)
+		if !ok || len(users) == 0 {
+			return errors.New("gateway.users is not a non-empty array")
+		}
+		admin, ok := users[0].(map[string]any)
+		if !ok {
+			return errors.New("gateway.users[0] is not an object")
+		}
+		admin["session_token_hash"] = string(sessionHash)
 		return nil
 	}))
 	require.True(t, sessionCookieResolves(t, al.GetConfig(), sessionToken),
