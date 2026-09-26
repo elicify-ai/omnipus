@@ -31,6 +31,16 @@
 //   - TestMessageParentTaskOriginContextKeepsTaskRefusal              — GREEN today by design; a labeled
 //     CHARACTERIZATION test (see its own comment) pinning the Flag-2 boundary:
 //     a steered task-origin session keeps its task-specific refusal.
+//   - TestRevivedSteeredChildTurnCtxCarriesSameDelegateSessionID  — GREEN by design; a coverage-gap
+//     closer for pr-test-analyzer's standard-gate finding on cde5b4d9b
+//     (severity 6): no test drove a REVIVED steered child (ADR-093 D4's
+//     redispatch-as-steered-turn) through the delegate-session-id wiring. It
+//     drives the REAL child revive path (executeSteer's widened terminal
+//     predicate → Reviver.ReviveStoppedSession → steered redispatch) and
+//     asserts the revived generation's turn context carries the SAME own
+//     session id under the delegate key — the revival mints a generation,
+//     never a session id (ADR-093 D4). A FAIL here is a production
+//     regression to report, never a test to adjust.
 //
 // GREEN is backend-lead adding the processOptions.SteeredSessionID field, the
 // gated set in reconstructSteeredTurn, and the WithDelegateSessionID stamp in
@@ -41,6 +51,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -333,4 +344,119 @@ func TestMessageParentTaskOriginContextKeepsTaskRefusal(t *testing.T) {
 		!strings.Contains(res.ForLLM, "goal_claim") {
 		t.Fatalf("refusal = %q, want the task-specific refusal routing to goal_claim (Flag 2 / ADR-053's division)", res.ForLLM)
 	}
+}
+
+// TestRevivedSteeredChildTurnCtxCarriesSameDelegateSessionID closes the
+// coverage gap pr-test-analyzer found in the standard-gate review of commit
+// cde5b4d9b (severity 6): none of the tests above drive a REVIVED steered
+// child — ADR-093 D4's redispatch-as-steered-turn — through the
+// delegate-session-id wiring. Only a first-run steered child
+// (TestSteeredChildTurnCtxCarriesOwnSessionIDAsDelegateSessionID) and a
+// revived ORDINARY root (TestRevivedOrdinaryRootTurnCtxCarriesNoDelegate
+// SessionID) reach the context level, and D4's own record-level test
+// (adr093_open_conversation_test.go::
+// TestAdr093FollowUpToTerminalChild_RevivesAndRedispatches) never builds a
+// turn context — so the combination "SteeredBy != nil AND a revived
+// generation (not the first run)" had zero context-level coverage.
+//
+// Oracle (ADR-093 D4, docs/internal/architecture/
+// ADR-093-open-conversation-must-keep-delegation.md, not the implementation):
+// the revival is "generation + 1, ResumedFrom = this session id" — the
+// session CONTINUES, its LifecycleRecord.SessionID is unchanged across the
+// revival, and the delegate-session-id wiring must carry that same own id on
+// the revived generation's turn context, exactly as it does on the first
+// run's. The revive-and-redispatch path below is the REAL production path D4
+// names for a terminal child: executeSteer's widened terminal predicate
+// (delegate_followup.go) → Reviver.ReviveStoppedSession → steered
+// redispatch — never a hand-built record or a hand-stamped context.
+//
+// GREEN by design at authoring: the wiring is already in place and the
+// standard gate itself found no defect in it — the gap was coverage, not
+// code. A FAIL here is a real production regression this suite would
+// otherwise have missed; never adjust the test to fit.
+func TestRevivedSteeredChildTurnCtxCarriesSameDelegateSessionID(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	steererID := newTestSteeringSession(t, al, "ws-1")
+	childID, childGen := launchSteeredChild(t, al, steererID, "call-revived-delegate-id", "first phase of the work")
+
+	// The child's record goes terminal the way the boot sweep leaves a child
+	// mid-flight at restart: failed(interrupted), no Stop marker — D4's
+	// F890-1 terminal-WITHOUT-Stop shape (the same terminalisation the
+	// precedent TestAdr093FollowUpToTerminalChild_RevivesAndRedispatches
+	// uses, which its comment cites).
+	preRec, err := al.GetSessionLifecycleStore().Load(childID)
+	if err != nil {
+		t.Fatalf("Load child lifecycle (pre-revival): %v", err)
+	}
+	if preRec.SteeredBy == nil {
+		t.Fatal("precondition failed: launched child record has no SteeredBy edge")
+	}
+	if preRec.Stop != nil {
+		t.Fatalf("precondition failed: child unexpectedly carries a Stop marker (%+v) — this test drives the terminal-WITHOUT-Stop revival, not the stopped one", preRec.Stop)
+	}
+	term := *preRec
+	term.State = session.LifecycleFailed
+	term.FailedReason = failedReasonInterrupted
+	if err := al.GetSessionLifecycleStore().Persist(&term); err != nil {
+		t.Fatalf("persist terminalised child: %v", err)
+	}
+
+	// Park the provider so the redispatched (revived) turn waits mid-flight
+	// and the record stays running while the context below is built.
+	pp, release := installParkedProvider(t, al)
+	defer release()
+
+	result := runDelegateSteer(t, al, steererID, childID, "Continue with phase two")
+	if result == nil {
+		t.Fatal("delegate(steer) returned nil")
+	}
+	if result.IsError {
+		t.Fatalf("delegate(steer) to a terminal-without-Stop child was refused — ADR-093 D4: a parent's follow-up must revive and redispatch it:\n%s", result.ForLLM)
+	}
+
+	// The revival really happened — the precondition for the combination
+	// under test: next generation, resumed_from = the child's own id,
+	// running, failed reason cleared, and the SteeredBy edge survived (the
+	// revived generation must reconstruct as a steered turn).
+	revivedRec, err := al.GetSessionLifecycleStore().Load(childID)
+	if err != nil {
+		t.Fatalf("Load child lifecycle (revived): %v", err)
+	}
+	if revivedRec.Generation != childGen+1 {
+		t.Fatalf("child generation after revival = %d, want %d (ADR-093 D4: the revival mints the next generation)", revivedRec.Generation, childGen+1)
+	}
+	if revivedRec.ResumedFrom != childID {
+		t.Fatalf("child resumed_from after revival = %q, want %q (ADR-093 D4)", revivedRec.ResumedFrom, childID)
+	}
+	if revivedRec.State != session.LifecycleRunning || revivedRec.FailedReason != "" {
+		t.Fatalf("child state after revival = %q/%q, want running with the failed reason cleared (ADR-093 D4)", revivedRec.State, revivedRec.FailedReason)
+	}
+	if revivedRec.SteeredBy == nil {
+		t.Fatal("revived record lost its SteeredBy edge — the revived generation would not reconstruct as a steered turn")
+	}
+
+	// THE assertion: the revived generation's turn context — built by the
+	// real production construction pipeline (reconstructSteeredTurn +
+	// createTurnContext + registerTurnContext, the same functions the
+	// redispatched turn itself runs) — carries the child's OWN session id
+	// under the delegate key, the SAME id the first run carried: the revival
+	// mints a generation, never a new session id (ADR-093 D4's "generation +
+	// 1, ResumedFrom = this session id").
+	ts, err := al.reconstructSteeredTurn(revivedRec, nil)
+	if err != nil {
+		t.Fatalf("reconstructSteeredTurn(revived): %v", err)
+	}
+	turnCtx := mpwRegisteredTurnContext(t, al, ts)
+	if got := tools.ToolDelegateSessionID(turnCtx); got != preRec.SessionID {
+		t.Fatalf("delegate session id on the revived generation's turn context = %q, want the SAME own id the first run carried %q (ADR-093 D4: generation changes, session id does not)", got, preRec.SessionID)
+	}
+	if preRec.SessionID != childID {
+		t.Fatalf("one-id invariant broken: pre-revival rec.SessionID %q != launched session id %q", preRec.SessionID, childID)
+	}
+
+	// The real redispatch reached the actual turn pipeline on this record —
+	// the parked provider holds the revived turn (not merely a record the
+	// test reconstructed at will).
+	adr093WaitForEntered(t, pp, 30*time.Second)
 }
