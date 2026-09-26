@@ -117,10 +117,11 @@ interface WizardProps {
    */
   onClose?: () => void
   /**
-   * Connected providers (status === 'connected') for the Step 1 model
-   * picker and the Step 3 fallback editor. Lifted from CreateAgentModal
-   * so the wizard itself stays query-client-free (and unit-testable
-   * without a QueryClientProvider wrapper).
+   * Usable providers (connected OR signed_in, via
+   * providerStatus.isProviderUsable) for the Step 1 model picker and the
+   * Step 3 fallback editor. Lifted from CreateAgentModal so the wizard
+   * itself stays query-client-free (and unit-testable without a
+   * QueryClientProvider wrapper).
    */
   connectedProviders?: ReadonlyArray<Provider>
   /** Registry tools for the Step 3 ToolPolicyEditor. */
