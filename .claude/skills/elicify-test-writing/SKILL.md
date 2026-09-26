@@ -181,6 +181,11 @@ The rules that matter most:
   assertions, a failure tells you nothing about which. Add messages or split.
 - **No magic numbers.** Every literal either derives visibly from the spec or
   carries a comment saying where it came from.
+- **Seed the real stored shape.** A replay, reload or persistence test seeds
+  its fixture with the exact shape the system actually stores, copied from a
+  real artifact (a saved transcript, a stored record) — never a simplified
+  stand-in. A fixture of plain strings where the store holds `{text: ...}`
+  objects passed while the real reload path showed "0 lines".
 
 Mocking is where good-looking tests go to die — full rules in
 `knowledge/mocking-and-isolation.md`. The single decisive rule:

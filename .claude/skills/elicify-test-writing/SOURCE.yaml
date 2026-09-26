@@ -23,3 +23,9 @@ local_clone: /Users/danielpiatkowski/AI-Agent-Workspace/elicify-Skills
 # the example was illustrative, not a citation into this or any real
 # repo, so the fix keeps the example's meaning and removes the false
 # dead-path match instead of suppressing the check.
+#
+# Local edit (applied 2026-09-26, dev-team learnings item 6): SKILL.md
+# step 3's rule list gained the "Seed the real stored shape" bullet — a
+# replay/persistence fixture built from simplified plain strings instead of
+# the real persisted `{text: ...}` shape let a reload bug ("0 lines") pass.
+# Candidate for upstreaming to elicify-Skills.

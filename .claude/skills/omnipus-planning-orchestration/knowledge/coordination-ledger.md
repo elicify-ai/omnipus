@@ -40,6 +40,9 @@ squad row undercounts the capacity monitor to zero (this broke exactly this way 
 T5 — never write a ledger line as free-form prose with `·` separators; that is this
 table above, for humans to read, not what you write to disk).
 
+**Every `<ISO8601>` below is UTC, written only with `date -u +%FT%TZ`** — never local
+time with a `Z` suffix (squads have written exactly that, hours off).
+
 - **`squads/<squad-id>.md` row** (template: `squads/SQUAD-ID.md.template`) — the field
   name `status` and its exact value `in-flight` are what the capacity monitor greps for:
 
@@ -64,6 +67,17 @@ table above, for humans to read, not what you write to disk).
   GOAL squad=<squad-id> set-at=<ISO8601> by=<who> :: <end state, one line>
   ```
 
+  Before a squad starts a run on a Fly CI machine, it names that machine on its own
+  line below the row, and removes the line when the run is over. Two squads have run on
+  one machine at once, so check the other squad files for the machine first. After
+  stopping or cancelling a run, check the machine's state (`fly machines list -a
+  ci-omnipus-1`) and stop it if it is still running — a cancelled run has left one
+  running. Neither parser reads this line:
+
+  ```
+  CI-MACHINE squad=<squad-id> machine=<fly-machine-id> since=<ISO8601> by=<who>
+  ```
+
 - **`HOLDS.md` line** (template: `HOLDS.md.template`) — parsed by the pre-push hook:
 
   ```
@@ -78,6 +92,11 @@ table above, for humans to read, not what you write to disk).
   ```
   squad=<squad-id> branch=<branch-name> taken-at=<ISO8601>
   ```
+
+  **Here `branch=` is the branch being pushed TO — the integration branch — never your
+  work branch.** The pre-push hook compares it with `OMNIPUS_INTEGRATION_BRANCH`; a lock
+  naming the work branch blocks the landing push (it has, twice). The squad row's
+  `branch=` is the opposite: your own work branch.
 
 - **`CHIEF.md`** (template: `CHIEF.md.template`) — one content line, overwritten, never
   appended:
@@ -166,7 +185,7 @@ not held across CI or across the wait for the founder's reply. Finish your check
    announcer wins even under a race:
    ```sh
    ( set -o noclobber; printf 'squad=%s branch=%s taken-at=%s\n' \
-       "$OMNIPUS_SQUAD_ID" "$BRANCH" "$(date -u +%FT%TZ)" > "$COORD_DIR/LANDING-LOCK" )
+       "$OMNIPUS_SQUAD_ID" "$OMNIPUS_INTEGRATION_BRANCH" "$(date -u +%FT%TZ)" > "$COORD_DIR/LANDING-LOCK" )
    ```
    A non-zero exit means the lock is already taken — someone else is landing; wait and
    retry, do not overwrite. The lock is held for minutes, not for the founder's reply
@@ -176,7 +195,10 @@ not held across CI or across the wait for the founder's reply. Finish your check
    touched) plus a review of the conflict resolution (the merge's conflict hunks,
    escalating to architect only where a resolution changes a design decision). The full
    size gate is NOT re-run. This is where a parallel-merge-later overlap's conflict is
-   resolved and re-checked.
+   resolved and re-checked. **Every landing runs the whole test set of each affected
+   area** (locally is fine, one process at a time) — never a hand-picked subset;
+   skipping Fly CI never means skipping tests (a squad that ran 12 hand-picked files
+   landed five red checks).
 4. **Push** the merge to the integration branch, setting both required variables in the
    same command so neither is ever forgotten in an unrelated shell:
    ```sh
@@ -187,15 +209,44 @@ not held across CI or across the wait for the founder's reply. Finish your check
    enforces when both variables are set (A2) — **a WARNING about an unset integration
    branch means the hook checked nothing at all: that push is not a landing, stop and
    fix the command before retrying**, never treat the warning as a pass.
-5. **Release the lock**, post the landed commit to `LANDING-LOG.md` and to the other
-   sessions, and close every resolved issue with a comment citing the commit. A landing
-   is not done at "pushed" — the issue comments, the landing-log entry and the two-line
-   report ("code correct and tested" / "reachable by a user or agent") close it.
+   Where the integration branch is PR-protected, the landing act is instead the merge
+   of the work branch's PR through that protection (`gh pr merge <pr> --merge`) —
+   never an admin or auto merge. The pre-push hook does not see a PR merge, so the lock
+   is then the only guard.
+5. **Log only after the landing succeeded.** A landing script that logged "landed" and
+   released the lock after a failed push has happened; wrap both in the success branch:
+   ```sh
+   if OMNIPUS_INTEGRATION_BRANCH=<integration-branch> OMNIPUS_SQUAD_ID=<your-squad-id> \
+        git push origin <integration-branch>; then   # or: if gh pr merge <pr> --merge; then
+     printf 'squad=%s | branch=%s | commit=%s | checks=%s | founder-yes=%s | landed-at=%s\n' \
+       "$OMNIPUS_SQUAD_ID" "<work-branch>" "$(git rev-parse --short HEAD)" "<checks>" \
+       "<founder-yes-note>" "$(date -u +%FT%TZ)" >> "$COORD_DIR/LANDING-LOG.md"
+     rm -f "$COORD_DIR/LANDING-LOCK"
+   else
+     echo "LANDING FAILED - lock kept, nothing logged; fix and retry, or release the lock deliberately"
+   fi
+   ```
+   For a PR merge, record the merge commit (`gh pr view <pr> --json mergeCommit`) rather
+   than the local `HEAD`. Then post the landed commit to the other sessions and close
+   every resolved issue with a comment citing the commit.
+6. **Own the landing's CI.** The lander watches the GitHub run that the landing starts
+   on the integration branch until it finishes green (`gh run list --branch
+   <integration-branch>` for the run id, then `gh run view <run-id> --json
+   status,conclusion` in bounded waits — `omnipus-shared-rules`, "Headless dispatches
+   and long gates") — an unwatched post-merge run is
+   how reds went unseen for 12 attempts. **Space landings:** the integration branch's CI
+   cancels an in-progress run when the next push arrives (`cancel-in-progress` in
+   `.github/workflows/pr.yml`), and branch protection does not prevent that — let the
+   previous landing's run start and finish, or batch the fixes into one PR, rather than
+   stacking merges minutes apart. A landing is not done at "pushed": the green run, the
+   issue comments, the landing-log entry and the two-line report ("code correct and
+   tested" / "reachable by a user or agent") close it.
 
 **Red integration branch:** nobody lands until it is green again — landing onto red
-hides the culprit. The single exception: a **fix-only landing** may land, takes the
-lock like any landing, and says so in its announcement; the fix itself is dispatched
-immediately, one dispatch per red check.
+hides the culprit. The single exception is the **hotfix lane**
+(`knowledge/parallel-planning.md` §4a): a fix-only landing takes the lock like any
+landing and says so in its announcement; the fix is dispatched immediately, one
+dispatch per red check.
 
 **Stuck lock:** a lock held past the stale window (2 hours) is treated like a stale row
 — the chief asks the founder before force-releasing.

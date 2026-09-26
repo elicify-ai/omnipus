@@ -29,6 +29,12 @@
 #
 #   GOAL squad=<squad-id> set-at=<ISO8601> by=<who> :: <end state, one line>
 #
+# Before a run on a Fly CI machine, name the machine on its own line below
+# the row and remove the line when the run is over (procedure: the planning
+# skill's knowledge/coordination-ledger.md); no parser reads it:
+#
+#   CI-MACHINE squad=<squad-id> machine=<fly-machine-id> since=<ISO8601> by=<who>
+#
 # A row untouched for 2 hours with no live session behind it is "stale"
 # (G3) — the chief asks the founder before releasing or re-assigning it.
 #

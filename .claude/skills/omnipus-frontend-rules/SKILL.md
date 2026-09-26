@@ -5,7 +5,7 @@ description: TypeScript/React-specific operational detail for frontend-lead only
 
 # Omnipus Frontend Rules
 
-Last reviewed: 2026-09-26
+Last reviewed: 2026-09-26 — testid sweep, demo build staleness, long-gate waits
 
 Frontend-lead only. Read `omnipus-shared-rules` first — this skill adds
 TypeScript/React-specific detail on top of it, never repeats it. Root `CLAUDE.md` stays
@@ -19,7 +19,8 @@ authoritative on the facts this restates.
   exits 0 (`docs/internal/false-green-patterns.md` section 9).
 - Local test runs are capped by shared rule 2: one `npx vitest run <file>` or
   `npx playwright test <x>.spec.ts` at a time; never bare `npm test`, `vitest` or
-  `playwright test`.
+  `playwright test`. A long run (an e2e area, the node tier) waits in bounded slices:
+  `omnipus-shared-rules`, "Headless dispatches and long gates".
 - Vite builds to `dist/spa/`, copied to `pkg/gateway/spa/` and embedded via `go:embed` (`CLAUDE.md`, "Tech stack and platforms"). # agent-guard: allow
   `pkg/gateway/spa/` is gitignored and absent until the first SPA build. # agent-guard: allow
   A missing `pkg/gateway/spa/` in a fresh worktree is backend-lead's stub trap, not a frontend defect — do not "fix" it by editing frontend build config. # agent-guard: allow
@@ -30,6 +31,11 @@ authoritative on the facts this restates.
   current spec. Loosening an assertion to make it pass (e.g. `toEqual` → `toContain`) is
   forbidden. A legacy test that contradicts the spec goes back to qa-lead, who owns test
   files; implementers change production code, never tests.
+- **Changing a testid or markup a test reads? Sweep for the old value in the same
+  change.** When you rename or remove a `data-testid`, a `data-*` attribute, or the
+  markup a selector targets, `grep -rn '<old-value>' src tests/e2e` before you report;
+  every hit goes to qa-lead in the same change, before landing. Tests pinned to an old
+  testid (`tool-call-badge`) rotted silently and caused four of five red release checks.
 
 ## Founder demos and prototypes
 
@@ -42,6 +48,10 @@ authoritative on the facts this restates.
 - Served from a static build of a fixed snapshot in its own worktree — never a live dev
   server inside a worktree where a worker is active (HMR churn has produced
   "connection lost" with no components rendered).
+- Before any check or link, confirm the build is not older than the commit it claims to
+  show: the build output's time (e.g. its `index.html` modification time) must be later
+  than the snapshot's last commit time (`git log -1 --format=%cI`). A demo was served
+  from a build older than its claimed commit.
 
 ## Design system (load before touching any of these trees)
 

@@ -5,7 +5,7 @@ description: Baseline procedure for every Omnipus dev-team role — the fifteen 
 
 # Omnipus Shared Rules
 
-Last reviewed: 2026-09-26
+Last reviewed: 2026-09-26 — bounded waits for long gates; hotfix-lane carve-out
 
 Root `CLAUDE.md` is the authority on project facts and hard constraints — the *what*.
 This skill is the *how*: the working procedure every dev-team role shares. It never
@@ -135,13 +135,23 @@ to the section instead of copying it, so there is one source per fact.
 - The evidence table itself, certainty labels, and the final self-check are defined in
   your own file's discipline block (rule 12), not here.
 
-## Headless dispatches
+## Headless dispatches and long gates
 
 - A headless worker (`claude -p`, `claudez`, `claudeg`) ends when its turn ends — no
-  completion notification resumes it. Finish inside the one turn: run long gates in the
-  foreground with a timeout, never backgrounded while waiting for their completion
-  notification, and commit and push your work branch before ending the turn. A turn
-  that ends with uncommitted work is not done.
+  completion notification resumes it. Finish inside the one turn and commit and push
+  your work branch before ending it. A turn that ends with uncommitted work is not done.
+- **Long gates use bounded waits** (every role, headless or subagent). A single
+  foreground command running past about 10 minutes is moved to the background by the
+  harness, and an agent that then waits for its notification stops. So a gate that can
+  run longer (a CI-cluster tier, a long e2e or vitest area run) starts once, writing its
+  own exit line to a log, and you wait on that log in foreground slices of about 9
+  minutes, with the Bash timeout set to its 10-minute maximum:
+  ```bash
+  ( <gate command> > <log> 2>&1; echo "GATE-EXIT=$?" >> <log> ) &   # start once
+  for i in $(seq 27); do grep -q '^GATE-EXIT=' <log> && break; sleep 20; done; grep '^GATE-EXIT=' <log> || echo "no result yet"
+  ```
+  "no result yet" means run the same wait again, in the same turn — never end the turn
+  on it, never rely on a background-task notification to wake you.
 
 ## Retired surfaces
 
@@ -153,8 +163,10 @@ to the section instead of copying it, so there is one source per fact.
 
 - Point a worktree at the working branch and verify a known-recent file exists before
   starting — worktree branches have been found 1650+ commits behind.
-- No hotfix branches: a feature ships together on its one branch, urgency is P0
-  ordering within it, not a separate branch.
+- No hotfix branches for feature work: a feature ships together on its one branch,
+  urgency is P0 ordering within it, not a separate branch. The hotfix lane is a
+  different thing — only for a red integration branch or a founder-marked live bug, run
+  by team-lead (`omnipus-planning-orchestration`).
 - One worktree per writing agent (rule 8); never bare `git stash` — commit a WIP instead. # agent-guard: allow
   Or use a plain file copy; never force-push, never reset to a remote ref (roll back to a
   captured SHA — origin can be behind).

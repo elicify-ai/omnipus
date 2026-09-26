@@ -1,6 +1,6 @@
 ---
 name: omnipus-planning-orchestration
-description: Planning and orchestration procedure for team-lead and squad-lead — the dependency-graph planning loop with safely-parallel waves and the three change sizes, the cross-session coordination ledger (claims, holds, landing lock, landing announcements, chief naming and vacancy), the machine-capacity check before every dispatch wave, the idle-time playbook, and event-driven status reporting with batched landing asks. MANDATORY at session start and re-opened before creating every new plan.
+description: Planning and orchestration procedure for team-lead and squad-lead — the dependency-graph planning loop with safely-parallel waves, the three change sizes and the hotfix lane, the cross-session coordination ledger (claims, holds, landing lock, landing announcements, chief naming and vacancy), the machine-capacity check before every dispatch wave, the idle-time playbook, and event-driven status reporting with batched landing asks. MANDATORY at session start and re-opened before creating every new plan.
 ---
 
 # Omnipus planning and orchestration
@@ -11,7 +11,7 @@ separate-session squad leads. Loading is mandatory: preloaded at session start v
 not cite this skill is a review finding; the skills acknowledgement line (shared-skill
 rule 13) proves the load.
 
-Last reviewed: 2026-09-26
+Last reviewed: 2026-09-26 — hotfix lane and the 2026-09-26 learnings
 Design source: `docs/internal/design/dev-team-setup-design-2026-09-25.md` (sections 5.6–5.9, 7.6, 7.7).
 
 ## Operating stance
@@ -40,8 +40,10 @@ Full procedure: `knowledge/parallel-planning.md`. The loop:
    Never two writers in one working copy.
 3. **Waves** — cut the graph into waves of safely-parallel units; dispatch each wave's
    independent units together, in one message, so they run concurrently.
-4. **Size every unit** — small / standard / feature (table in the knowledge file).
-   Urgent is a queue priority (front of the queue), never a fourth size. Feature-size
+4. **Size every unit** — small / standard / feature, or the **hotfix lane** for a red
+   integration branch or a founder-marked live bug (table and the lane's full rules:
+   `knowledge/parallel-planning.md` §4 and §4a). Urgent is a queue priority (front of
+   the queue), never a size and never the hotfix lane. Feature-size
    units run as squads — own feature branch, worktree(s), **their own squad-lead from
    the first dispatch** (the full rule: §2); small and standard run as direct dispatches
    on a short-lived work branch cut from the integration branch.
@@ -80,7 +82,8 @@ Formats and procedures: `knowledge/coordination-ledger.md`. The core rules:
   lines state the end state (in-session: "gated branch handed back to team-lead with its
   evidence table") and tell the squad lead to run as a goal loop until that goal is met
   or it is blocked on a founder decision (the loop itself: `.claude/agents/squad-lead.md`
-  §4a). team-lead records that GOAL as the squad file's `GOAL` line (format:
+  §4a), and that GitHub posts (comments, issues, PRs) go through team-lead, never the
+  squad. team-lead records that GOAL as the squad file's `GOAL` line (format:
   `knowledge/coordination-ledger.md`) so it can re-read it after a compaction.
 - **team-lead is the goal judge for every squad lead it starts.** A squad lead that ends
   its turn mid-lane is finished, not waiting. Every time one stops (its completion
@@ -88,6 +91,9 @@ Formats and procedures: `knowledge/coordination-ledger.md`. The core rules:
   - **Goal met** — proceed: review the hand-back, then the landing ask.
   - **BLOCKED on founder questions** — take the questions to the founder; resume the
     squad lead with the answers.
+  - **Waiting on a named Agent-tool dispatch it cannot poll** (the one other allowed
+    stop, squad-lead §4a) — resume it with SendMessage, restating its GOAL, so it checks
+    that dispatch's result and carries on.
   - **Anything else** (a milestone, "waiting on X", "will pick up when notified") — the
     lead went to sleep: resume it **immediately** with SendMessage, restating its GOAL
     (re-read from the squad file) and the goal loop, and telling it where it stopped.
@@ -101,9 +107,12 @@ Formats and procedures: `knowledge/coordination-ledger.md`. The core rules:
 - **In-session squads never land themselves** — a squad-lead subagent finishes with a
   fully gated branch and hands it back to team-lead, which asks the founder (asks
   batched, §5) and lands. Separate-session squads land themselves under the lock.
-- **A red integration branch stops all landings** — with one exception: a landing that
-  only fixes the red integration branch may land (it takes the lock like any landing and
-  says so in its announcement).
+- **A red integration branch stops all landings** — except the hotfix lane
+  (`knowledge/parallel-planning.md` §4a), which exists to turn it green.
+- **Claude Code's `/goal`** — a sub-agent inherits the parent session's goal, and only a
+  human sets one. Recorded as a fact, not a mechanism this procedure relies on (the goal
+  loop above is). Test a capability before recommending against it: `/goal` was once
+  advised against untested, while the founder had seen it work.
 - **Stale rows**: a squad row is stale after 2 hours with no update and no live session
   behind it. A live session refreshes its row when it passes the 2-hour mark. Releasing
   or re-assigning a stale claim needs the founder's agreement, asked by the chief.
@@ -162,6 +171,9 @@ silently deferring a gate (principle 3).
 - Never hand the founder a URL or link that has not been verified reachable **and**
   rendering in a browser at that moment — start the server, load the page, then report
   the link (localhost:6006 was reported as ready before any server was started).
+- **"Verified" only for what the reporter checked itself.** A worker's claim that you
+  did not independently re-check is labelled **worker-reported**, never Verified —
+  whoever relays it, to team-lead or to the founder.
 - Reports up the chain: terse and technical, with evidence — files, commands with exit
   codes, certainty labels (shared-skill rule 14). Squad reports cap at ~40 lines plus
   the evidence table.
@@ -171,7 +183,9 @@ silently deferring a gate (principle 3).
 - A founder-facing demo or prototype is handed over only after (a) its real-browser
   interaction test has passed and (b) team-lead has re-checked it in a browser — the
   build-side rules (interactive prototype, Playwright interaction test, static-snapshot
-  serving) live in `omnipus-frontend-rules` and are not restated here. "Renders without
+  serving, the build-not-older-than-its-commit check) live in `omnipus-frontend-rules`
+  and are not restated here — team-lead's re-check repeats that staleness comparison
+  before the link goes out. "Renders without
   errors" and screenshots are not "works".
 - Filling the plugin-reviewer dispatch template
   (`.claude/templates/plugin-reviewer-dispatch.md`): fill the placeholders with a tool

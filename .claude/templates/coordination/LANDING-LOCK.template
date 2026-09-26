@@ -12,6 +12,11 @@
 # to that script):
 #
 #   squad=<squad-id> branch=<branch-name> taken-at=<ISO8601>
+
+#
+# branch= is the branch being pushed TO — the integration branch, never the
+# landing squad's work branch; the hook compares it with
+# OMNIPUS_INTEGRATION_BRANCH. taken-at is UTC from `date -u +%FT%TZ` only.
 #
 # Example (illustration only — do not leave this file present with content
 # when nothing is actually landing):

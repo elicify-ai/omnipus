@@ -5,7 +5,7 @@ description: Go-specific operational detail for backend-lead only — build/test
 
 # Omnipus Backend Rules
 
-Last reviewed: 2026-09-26
+Last reviewed: 2026-09-26 — long-gate waits
 
 Backend-lead only. Read `omnipus-shared-rules` first — this skill adds Go-specific
 detail on top of it, never repeats it. Root `CLAUDE.md` stays authoritative on the facts
@@ -32,6 +32,8 @@ this restates.
   (`docs/internal/false-green-patterns.md` section 1 — errcheck read 64, was 253).
 - A green under one flag set is not a pass: race bugs need `-race`; a cross-platform
   break needs `GOOS=<target> go vet`.
+- A CI-cluster tier runs far past 10 minutes (the `go` tier about 43): wait on it in
+  bounded slices — `omnipus-shared-rules`, "Headless dispatches and long gates".
 
 ## Tests
 
