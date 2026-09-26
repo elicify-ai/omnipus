@@ -51,7 +51,7 @@ UI; inherits `agents.defaults`.
 | `shell_policy` | defaults-only in UI | O | O | — (runner manages its own isolation) |
 | `executor` (cli, cli_path, args, env) | — | — | — (native) | **R** (`cli` **R**, `cli_path` **R**, validated on blur; `args`/`env` O) |
 | `timeout_seconds` | O (editable; Execution knobs exposed for locked, decided 2026-07-03) | O | O | O — kept (operator-decided 2026-07-03; process-level kill for a hung CLI) |
-| `max_tool_iterations` (per-turn cap) | O (editable; Execution knobs exposed for locked, decided 2026-07-03) | O (default 200/turn) | O (default 200/turn) | — excluded (operator-decided 2026-07-03; the external CLI runs its own loop; schema-rejected on create, 400 on update) |
+| `max_tool_iterations` (per-turn cap) | O (editable; Execution knobs exposed for locked, decided 2026-07-03) | O (1–1000; may only lower the global limit — #904) | O (1–1000; may only lower the global limit — #904) | O (1–1000; may only lower the global limit; handed to the CLI as its turn cap — #904 D14, supersedes the 2026-07-03 exclusion) |
 | `steering_mode` | O (Main-surface concept) | O (**Main-only** among user types; workers forced `one-at-a-time` server-side) | — | — |
 | `rate_limits` | O | O | O | O (calls still metered at the gateway) |
 | ~~`delegation_policy` / `can_delegate_to`~~ — **removed by [ADR-037]** (delegation is workspace-scoped; edit via the workspace Team tab, `pkg/workspace/delegation.go`) | — | — | — | — |
@@ -84,8 +84,16 @@ UI; inherits `agents.defaults`.
 
 ## Decisions (resolved 2026-07-03, operator-approved)
 
-1. `max_tool_iterations` on `subagent_3p`: **excluded** — schema-rejected on
-   create (discriminated-union variant), 400 on update, hidden in UI.
+1. ~~`max_tool_iterations` on `subagent_3p`: **excluded** — schema-rejected on
+   create (discriminated-union variant), 400 on update, hidden in UI.~~ —
+   **superseded 2026-09-26 by #904 D14** (`docs/internal/specs/tool-iteration-limit-spec.md`):
+   external-CLI workers carry the same per-agent limit as every other type
+   (create form + profile, "Use global limit" reset). For every type the
+   value is 1–1000 and may only LOWER the global limit
+   (`agents.defaults.max_tool_iterations`, Settings → Performance); the
+   effective value is `min(global, own)`, resolved by
+   `pkg/config/max_tool_iterations.go::ResolveMaxToolIterations`. The shipped
+   global default (200) lives only in `config.DefaultMaxToolIterations`.
 2. `timeout_seconds` on `subagent_3p`: **kept** — process-level kill for a
    hung CLI; settable at create (slim Advanced) and edit.
 3. ~~`delegation_policy` on `subagent_3p` create: **allowed** (matrix +

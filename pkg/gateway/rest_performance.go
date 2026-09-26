@@ -203,6 +203,10 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 		if limitUpd != nil {
 			defaults := ensureMap(m, "agents", "defaults")
 			defaults["max_tool_iterations"] = limitUpd.value
+			// D6: an admin-set global ends the one-time env import for
+			// good — the retired env var must never overwrite it on a
+			// later boot, even when the import itself never ran.
+			defaults["max_tool_iterations_env_imported"] = true
 		}
 		return nil
 	})
@@ -226,9 +230,7 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 	// keeps the limit it started with (D18).
 	if outcome.globalChanged || len(outcome.lowered) > 0 {
 		if err := a.triggerReloadAndWait(); err != nil {
-			slog.Error("rest: PUT /performance: reload failed", "error", err)
-			jsonErr(w, http.StatusInternalServerError,
-				"performance settings written but the reload failed; the new tool-iteration limit applies after the next reload or restart")
+			writePerformanceReloadFailed(w, outcome, err)
 			return
 		}
 	}
@@ -239,4 +241,27 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 		resp.MaxToolIterationsLoweredAgents = &lowered
 	}
 	jsonOK(w, resp)
+}
+
+// writePerformanceReloadFailed answers a PUT whose writes are COMMITTED
+// (config.json and any lowered agents are on disk and audited) but whose
+// registry reload failed: 500 with code performance_reload_failed, so the
+// client can say "saved, not applied yet" instead of "failed". The lowered
+// agents, if any, travel in details.lowered_agents — GET /performance does
+// not carry them (PerformanceSettings.max_tool_iterations_lowered_agents is
+// PUT-only), so this response is the only place the summary survives.
+func writePerformanceReloadFailed(w http.ResponseWriter, outcome performanceWriteOutcome, err error) {
+	slog.Error("rest: PUT /performance: settings saved but the reload failed",
+		"error", err, "lowered_agents", len(outcome.lowered))
+	code := performanceReloadFailedCode
+	body := gen.ErrorResponse{
+		Error: "performance settings saved but the reload failed; the new tool-iteration limit " +
+			"applies after the next reload or restart",
+		Code: &code,
+	}
+	if len(outcome.lowered) > 0 {
+		details := map[string]any{"lowered_agents": outcome.lowered}
+		body.Details = &details
+	}
+	writeJSON(w, http.StatusInternalServerError, body)
 }

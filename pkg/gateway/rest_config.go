@@ -623,6 +623,12 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 	// Deep merge nested objects so partial updates don't wipe sibling keys
 	// (e.g., updating gateway.port must not delete gateway.users).
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+		// #904: the merge below is ONE level deep, so a body carrying
+		// {"agents":{"defaults":{…}}} replaces the whole agents.defaults
+		// map. The global tool-iteration limit and its env-import marker
+		// cannot be written here (blockedPaths), so they must survive such a
+		// write unchanged — see preserveProtectedAgentDefaults.
+		protected := snapshotProtectedAgentDefaults(m)
 		for k, v := range updates {
 			var parsed any
 			if err := json.Unmarshal(v, &parsed); err != nil {
@@ -639,8 +645,13 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			m[k] = parsed
 		}
-		return nil
+		return preserveProtectedAgentDefaults(m, protected)
 	}); err != nil {
+		var refusal *requestRefusalError
+		if errors.As(err, &refusal) {
+			jsonErr(w, http.StatusBadRequest, refusal.Error())
+			return
+		}
 		slog.Error("rest: save config", "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return

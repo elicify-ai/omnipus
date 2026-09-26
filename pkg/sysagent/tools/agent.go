@@ -406,6 +406,18 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 		}
 	}
 	ac.finalID = ac.id
+	// #904 D10/D15: re-check the agent's own limit against a FRESH read of
+	// the global immediately before the write — prepareConfig checked it
+	// against the config current at call start. Residual window: this path
+	// does not hold the gateway's configMu, so a PUT /performance lowering
+	// that commits between this read and CreateState does not see the new
+	// agent; it then sits above the new global, which the resolver caps and
+	// flags (D1). Never unbounded, and visible on the profile.
+	if ac.newAgent.MaxToolIterations > 0 {
+		if err := config.ValidateAgentMaxToolIterations(ac.newAgent.MaxToolIterations, ac.t.deps.agentDefaults()); err != nil {
+			return fieldErrorResult(fieldErr("max_tool_iterations", err.Error())), true
+		}
+	}
 	mutation, err := agentstore.New(omnipusHome).CreateState(ac.id, &ac.newAgent, ac.soul)
 	ac.mutation = mutation
 	if err != nil {

@@ -432,15 +432,13 @@ func (ed *runExternalCLISubTurnState) prepareRunOptions() {
 	}
 	// Turn cap = the agent's effective tool-iteration limit (#904 D4/D14),
 	// already resolved onto MaxIterations by NewAgentInstance. An instance
-	// built without that constructor (MaxIterations <= 0) resolves the same
-	// way from the live config — never a separate literal.
+	// built without that constructor (MaxIterations <= 0) resolves through
+	// the same resolver from the live config, WITH the agent's own stored
+	// value when its record is in the live roster (so an own lower value
+	// still applies) — never a separate literal.
 	ed.maxTurns = ed.agent.MaxIterations
 	if ed.maxTurns <= 0 {
-		var defaults *config.AgentDefaults
-		if cfg := ed.al.GetConfig(); cfg != nil {
-			defaults = &cfg.Agents.Defaults
-		}
-		ed.maxTurns = config.ResolveMaxToolIterations(defaults, nil).Effective
+		ed.maxTurns = resolveExternalMaxTurns(ed.al.GetConfig(), ed.agent.ID)
 	}
 
 	// FIX 5: hoist the repeated strings.TrimSpace(agent.Model) computation
@@ -781,6 +779,23 @@ func recordExternalToolResultUpdateInPlace(
 			tc.Result = result
 		},
 	)
+}
+
+// resolveExternalMaxTurns resolves agentID's effective tool-iteration limit
+// from cfg: the global in force (cfg may be nil — the shipped default) and the
+// agent's own value when cfg.Agents.List carries its record.
+func resolveExternalMaxTurns(cfg *config.Config, agentID string) int {
+	if cfg == nil {
+		return config.ResolveMaxToolIterations(nil, nil).Effective
+	}
+	var own *config.AgentConfig
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID == agentID {
+			own = &cfg.Agents.List[i]
+			break
+		}
+	}
+	return config.ResolveMaxToolIterations(&cfg.Agents.Defaults, own).Effective
 }
 
 // transcriptModelFor returns the model string to stamp on transcript entries

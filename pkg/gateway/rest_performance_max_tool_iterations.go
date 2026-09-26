@@ -39,9 +39,19 @@ import (
 // Error codes and texts of the D11/D16 write path (spec, Machine-Verifiable
 // Constraints and "D11/D16 write order").
 const (
-	maxToolIterationsDriftCode            = "max_tool_iterations_lowering_drift"
-	maxToolIterationsLoweringFailedCode   = "max_tool_iterations_lowering_failed"
-	maxToolIterationsRollbackIncomplete   = "max_tool_iterations_rollback_incomplete"
+	maxToolIterationsDriftCode          = "max_tool_iterations_lowering_drift"
+	maxToolIterationsLoweringFailedCode = "max_tool_iterations_lowering_failed"
+	maxToolIterationsRollbackIncomplete = "max_tool_iterations_rollback_incomplete"
+	// maxToolIterationsAgentsReadFailedCode: the agent store could not be
+	// listed or an agent record could not be read while computing or
+	// checking the affected set. Distinct from drift (409): nothing is known
+	// to have changed, the server simply could not tell.
+	maxToolIterationsAgentsReadFailedCode = "max_tool_iterations_agents_read_failed"
+	// performanceReloadFailedCode: the save is committed (config.json and
+	// any lowered agents are on disk) but the registry reload failed, so the
+	// running agents do not use the new limit yet.
+	performanceReloadFailedCode           = "performance_reload_failed"
+	maxToolIterationsAgentsReadMessage    = "could not read the agents"
 	maxToolIterationsPreviewValueMessage  = "value must be between 1 and 1000"
 	maxToolIterationsGlobalAuditResource  = "agents.defaults.max_tool_iterations"
 	maxToolIterationsAgentAuditResourceFm = "agents.%s.max_tool_iterations"
@@ -107,6 +117,40 @@ func maxToolIterationsLoweringSet(store maxToolIterationsAgentStore, value int) 
 	return out, nil
 }
 
+// maxToolIterationsAffectedSet is the set a PUT to value would lower (D11),
+// restricted by D20: only a value BELOW the global currently in force can
+// lower anyone. A raise, or an unchanged value, affects no agent — capped
+// agents (D1) keep their stored value — so it returns an empty list without
+// reading the store. defaults may be nil (resolves like a missing global).
+func maxToolIterationsAffectedSet(store maxToolIterationsAgentStore, defaults *config.AgentDefaults, value int) ([]gen.MaxToolIterationAgentChange, error) {
+	if value >= defaults.EffectiveGlobalMaxToolIterations().Value {
+		return []gen.MaxToolIterationAgentChange{}, nil
+	}
+	return maxToolIterationsLoweringSet(store, value)
+}
+
+// liveAgentDefaults returns the in-memory agents.defaults, or nil when no
+// config is loaded.
+func (a *restAPI) liveAgentDefaults() *config.AgentDefaults {
+	if a.agentLoop == nil {
+		return nil
+	}
+	cfg := a.agentLoop.GetConfig()
+	if cfg == nil {
+		return nil
+	}
+	return &cfg.Agents.Defaults
+}
+
+// agentsReadFailure is the 500 for a failed agent-store read on the lowering
+// path; the cause is logged, not sent.
+func agentsReadFailure(stage string, err error) *performanceWriteError {
+	slog.Error("rest: PUT /performance: could not read the agents", "stage", stage, "error", err)
+	code := maxToolIterationsAgentsReadFailedCode
+	return &performanceWriteError{status: http.StatusInternalServerError,
+		body: gen.ErrorResponse{Error: maxToolIterationsAgentsReadMessage, Code: &code}}
+}
+
 // HandleMaxToolIterationsPreview handles GET
 // /api/v1/performance/max-tool-iterations/preview (operationId
 // previewMaxToolIterationsLowering). Read-only; registered with adminWrap —
@@ -122,10 +166,12 @@ func (a *restAPI) HandleMaxToolIterationsPreview(w http.ResponseWriter, r *http.
 		jsonErr(w, http.StatusBadRequest, maxToolIterationsPreviewValueMessage)
 		return
 	}
-	agents, err := maxToolIterationsLoweringSet(a.maxToolIterationsStore(), value)
+	// D20: a raise (or the current value) previews an empty list.
+	agents, err := maxToolIterationsAffectedSet(a.maxToolIterationsStore(), a.liveAgentDefaults(), value)
 	if err != nil {
 		logsafeError("rest: max-tool-iterations preview: list agents", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not read the agents")
+		code := maxToolIterationsAgentsReadFailedCode
+		writeJSON(w, http.StatusInternalServerError, gen.ErrorResponse{Error: maxToolIterationsAgentsReadMessage, Code: &code})
 		return
 	}
 	jsonOK(w, gen.MaxToolIterationsLoweringPreview{Value: value, Agents: agents})
@@ -187,10 +233,10 @@ func (u *maxToolIterationsGlobalUpdate) matchesConfirmation(live []gen.MaxToolIt
 // the step-up token is consumed, so a stale dialog costs no password re-entry.
 // Returns false after writing the response.
 func (a *restAPI) preCheckMaxToolIterationsDrift(w http.ResponseWriter, upd *maxToolIterationsGlobalUpdate) bool {
-	live, err := maxToolIterationsLoweringSet(a.maxToolIterationsStore(), upd.value)
+	live, err := maxToolIterationsAffectedSet(a.maxToolIterationsStore(), a.liveAgentDefaults(), upd.value)
 	if err != nil {
-		logsafeError("rest: PUT /performance: list agents for the lowering check", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not read the agents")
+		werr := agentsReadFailure("pre-check", err)
+		writeJSON(w, werr.status, werr.body)
 		return false
 	}
 	if !upd.matchesConfirmation(live) {
@@ -233,14 +279,17 @@ type performanceWriteError struct {
 }
 
 // decideMaxToolIterationsLowering is step 4, run under configMu before the
-// first write: recompute the affected set, compare it with the confirmation,
-// and read each confirmed agent's revision and own value from the store. Any
-// mismatch → 409 with the fresh list and nothing written (D16).
-func decideMaxToolIterationsLowering(store maxToolIterationsAgentStore, upd *maxToolIterationsGlobalUpdate) ([]loweringTarget, *performanceWriteError) {
-	live, err := maxToolIterationsLoweringSet(store, upd.value)
+// first write: recompute the affected set (empty on a raise, D20), compare it
+// with the confirmation, and read each confirmed agent's revision and own
+// value from the store. A mismatch → 409 with the fresh list and nothing
+// written (D16). A store read that FAILS is not drift: it is logged and
+// answered 500 max_tool_iterations_agents_read_failed, nothing written.
+func decideMaxToolIterationsLowering(store maxToolIterationsAgentStore, defaults *config.AgentDefaults,
+	upd *maxToolIterationsGlobalUpdate,
+) ([]loweringTarget, *performanceWriteError) {
+	live, err := maxToolIterationsAffectedSet(store, defaults, upd.value)
 	if err != nil {
-		return nil, &performanceWriteError{status: http.StatusInternalServerError,
-			body: gen.ErrorResponse{Error: "could not read the agents: " + err.Error()}}
+		return nil, agentsReadFailure("deciding check: list", err)
 	}
 	if !upd.matchesConfirmation(live) {
 		return nil, driftError(upd.value, live)
@@ -248,13 +297,25 @@ func decideMaxToolIterationsLowering(store maxToolIterationsAgentStore, upd *max
 	targets := make([]loweringTarget, 0, len(live))
 	for _, c := range live {
 		state, readErr := store.ReadState(c.AgentId)
-		if readErr != nil || state == nil || state.Agent == nil || state.Agent.MaxToolIterations != c.OldValue {
-			fresh, _ := maxToolIterationsLoweringSet(store, upd.value)
-			return nil, driftError(upd.value, fresh)
+		if readErr != nil {
+			return nil, agentsReadFailure("deciding check: read agent "+c.AgentId, readErr)
+		}
+		if state == nil || state.Agent == nil || state.Agent.MaxToolIterations != c.OldValue {
+			return nil, freshDriftError(store, defaults, upd.value)
 		}
 		targets = append(targets, loweringTarget{change: c, revision: state.Revision})
 	}
 	return targets, nil
+}
+
+// freshDriftError recomputes the affected set and returns the 409 carrying
+// it; a failed recomputation is a 500, never a 409 with an empty list.
+func freshDriftError(store maxToolIterationsAgentStore, defaults *config.AgentDefaults, value int) *performanceWriteError {
+	fresh, err := maxToolIterationsAffectedSet(store, defaults, value)
+	if err != nil {
+		return agentsReadFailure("drift: recompute the list", err)
+	}
+	return driftError(value, fresh)
 }
 
 func driftError(value int, live []gen.MaxToolIterationAgentChange) *performanceWriteError {
@@ -330,28 +391,37 @@ func (a *restAPI) rollbackLoweredAgents(ctx context.Context, store maxToolIterat
 // loweringFailure builds the response for a failure after writes began
 // (step 5 or 6): roll back, then 500 rollback_incomplete if any restore
 // failed; else 409 (conflict, fresh list) or 500 lowering_failed (I/O).
-func (a *restAPI) loweringFailure(ctx context.Context, store maxToolIterationsAgentStore, upd *maxToolIterationsGlobalUpdate,
-	done []loweredAgent, failingAgent string, cause error,
+// cause is always logged at ERROR; on rollback_incomplete it is also sent in
+// details.cause.
+func (a *restAPI) loweringFailure(ctx context.Context, store maxToolIterationsAgentStore, defaults *config.AgentDefaults,
+	upd *maxToolIterationsGlobalUpdate, done []loweredAgent, failingAgent string, cause error,
 ) *performanceWriteError {
+	target := "the global limit"
+	if failingAgent != "" {
+		target = "agent " + failingAgent
+	}
+	slog.Error("rest: PUT /performance: tool-iteration lowering failed; rolling back the agents already lowered",
+		"failed_at", target, "lowered_before_failure", len(done), "value", upd.value, "error", cause)
 	if stuck := a.rollbackLoweredAgents(ctx, store, done); len(stuck) > 0 {
 		parts := make([]string, 0, len(stuck))
 		for _, s := range stuck {
 			parts = append(parts, fmt.Sprintf("%s (now %d, was %d)", s.AgentName, s.NewValue, s.OldValue))
 		}
+		// Each unrestored agent already has its own ERROR line
+		// (rollbackLoweredAgents); this one ties them to the original cause.
+		slog.Error("rest: PUT /performance: rollback incomplete after a failed tool-iteration lowering",
+			"failed_at", target, "not_restored_count", len(stuck), "cause", cause)
 		code := maxToolIterationsRollbackIncomplete
+		details := map[string]any{"cause": cause.Error()}
 		return &performanceWriteError{status: http.StatusInternalServerError, body: gen.ErrorResponse{
 			Error: "limit not changed; could not restore " + strings.Join(parts, ", ") +
 				" — set their limits again on each agent's profile",
-			Code: &code,
+			Code:    &code,
+			Details: &details,
 		}}
 	}
 	if isLoweringConflict(cause) {
-		fresh, _ := maxToolIterationsLoweringSet(store, upd.value)
-		return driftError(upd.value, fresh)
-	}
-	target := "the global limit"
-	if failingAgent != "" {
-		target = "agent " + failingAgent
+		return freshDriftError(store, defaults, upd.value)
 	}
 	code := maxToolIterationsLoweringFailedCode
 	return &performanceWriteError{status: http.StatusInternalServerError, body: gen.ErrorResponse{
@@ -382,14 +452,15 @@ func (a *restAPI) writePerformanceLocked(ctx context.Context, upd *maxToolIterat
 
 	var out performanceWriteOutcome
 	store := a.maxToolIterationsStore()
+	defaults := a.liveAgentDefaults()
 	var targets []loweringTarget
 	oldGlobal := 0
 	if upd != nil {
 		var werr *performanceWriteError
-		if targets, werr = decideMaxToolIterationsLowering(store, upd); werr != nil {
+		if targets, werr = decideMaxToolIterationsLowering(store, defaults, upd); werr != nil {
 			return out, werr
 		}
-		g := a.agentLoop.GetConfig().Agents.Defaults.EffectiveGlobalMaxToolIterations()
+		g := defaults.EffectiveGlobalMaxToolIterations()
 		oldGlobal = g.Value
 		if g.HasSavedRaw {
 			oldGlobal = g.SavedRaw
@@ -399,12 +470,13 @@ func (a *restAPI) writePerformanceLocked(ctx context.Context, upd *maxToolIterat
 
 	done, failing, err := a.lowerAgents(ctx, store, targets)
 	if err != nil {
-		return out, a.loweringFailure(ctx, store, upd, done, failing, err)
+		return out, a.loweringFailure(ctx, store, defaults, upd, done, failing, err)
 	}
 	if writeErr := a.updateConfigJSONLocked(mutate); writeErr != nil {
 		if len(done) > 0 {
-			return out, a.loweringFailure(ctx, store, upd, done, "", writeErr)
+			return out, a.loweringFailure(ctx, store, defaults, upd, done, "", writeErr)
 		}
+		slog.Error("rest: PUT /performance: could not write config.json", "error", writeErr)
 		return out, &performanceWriteError{status: http.StatusInternalServerError,
 			body: gen.ErrorResponse{Error: fmt.Sprintf("could not update performance settings: %v", writeErr)}}
 	}
