@@ -98,8 +98,12 @@ You deliver your lane end to end. Your brief opens with a **GOAL** — the end s
 
 | Part of the loop | How |
 |---|---|
-| Waiting on a headless worker | A foreground-blocking Bash until-loop on the worker's log: `until grep -q '"type":"result"' <log>; do sleep 20; done`, then read that result line's `is_error` — `true` is a failed dispatch, not a finished one. If the Bash call hits its tool timeout, re-run the same loop. A worker that has exited without writing a result line is a failed dispatch too, never something to keep looping on. Never wait through Monitor streams or background tasks and then end your turn |
+| Waiting on a headless worker | A **bounded** foreground Bash wait on the worker's log (below, about 9 minutes), with the Bash tool's timeout set to its 10-minute maximum. It returns before the harness auto-backgrounds a long foreground command, which is what puts a squad lead to sleep. It prints `false` (done), `true` (a failed dispatch, not a finished one) or nothing (no result yet — run the same bounded wait again, in the same turn). A worker that has exited without writing a result line is a failed dispatch too, never something to keep waiting on. Never wait through Monitor streams or background tasks, and never rely on a background-task notification to wake you |
 | Milestone updates | `SendMessage` to `"main"` (team-lead), then carry on looping — an update never ends your turn |
+
+```bash
+for i in $(seq 27); do grep -q '"type":"result"' <log> && break; sleep 20; done; grep '"type":"result"' <log> | tail -1 | jq -r .is_error
+```
 
 **End your turn only when** (a) the goal your brief names is met — in-session, the gated branch handed back (section 6); or (b) you are **BLOCKED** on a founder decision — your reply states `BLOCKED` plus the exact questions, at most four, in the founder's question format (context and impact, options, your recommendation, a one-line answer label). A milestone, a running CI job, or a worker still in flight is a step inside the loop, never a reason to stop. If you do stop mid-lane, `team-lead` will resume you with your goal — that is the safety net, not permission to stop.
 

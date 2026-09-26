@@ -19,7 +19,7 @@ of this prose.
 | File | Contents (one line per record) | Write rule |
 |---|---|---|
 | `CHIEF.md` | current chief session · named by · named-at — or `VACANT since <ts>` | Overwritten on handover or when a vacancy is noticed |
-| `squads/<squad-id>.md` | owning session (or "in-session") · lead · worktree (absolute path) · branch · claim (trees/files) · status · last-updated (timestamp + who). The row also carries the squad's landing announcement when one is pending | The squad's own file; updated on every status change |
+| `squads/<squad-id>.md` | owning session (or "in-session") · lead · worktree (absolute path) · branch · claim (trees/files) · status · last-updated (timestamp + who). The row also carries the squad's GOAL line, and its landing announcement when one is pending | The squad's own file; updated on every status change |
 | `HOLDS.md` | what (branch or tree) · held by · why · since · released-at | Append on hold; edit the line on release |
 | `LANDING-LOCK` | squad · branch · taken-at (absent or empty = free) | Created atomically (one writer wins); released right after the push |
 | `LANDING-LOG.md` | squad · branch · commit · checks evidence · founder-yes note · landed-at | Append only — never edited |
