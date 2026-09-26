@@ -296,7 +296,7 @@ describe('PerformanceSection — global max tool iterations (#904)', () => {
   it.each([
     ['above_max', 5000, 1000, 'The limit saved in config.json (5000) is above 1000, so Omnipus is using 1000 instead.'],
     ['below_min', -3, 200, 'The limit saved in config.json (-3) is below 1, so Omnipus is using 200 instead.'],
-    ['missing', undefined, 200, 'No limit is saved in config.json, so Omnipus is using 200.'],
+    ['missing', undefined, 200, 'The limit is missing from config.json, so Omnipus is using 200.'],
   ] as const)('warns when the saved value is %s, naming the saved and in-force values (D13, D17)', async (state, raw, inForce, text) => {
     vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
       ...SETTINGS,

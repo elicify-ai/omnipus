@@ -46,7 +46,7 @@ export function savedStateWarning(
   const using = inForce === undefined ? 'the default limit' : String(inForce)
   switch (state) {
     case 'missing':
-      return `No limit is saved in config.json, so Omnipus is using ${using}. Saving a value here stores it.`
+      return `The limit is missing from config.json, so Omnipus is using ${using}. Saving a value here stores it.`
     case 'below_min':
       return `The limit saved in config.json (${raw ?? 'unknown'}) is below ${MAX_TOOL_ITERATIONS_MIN}, so Omnipus is using ${using} instead. The file has not been changed; saving a value here replaces it.`
     case 'above_max':
