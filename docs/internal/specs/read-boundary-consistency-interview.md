@@ -36,6 +36,8 @@ they rest on. It is not the spec.
 | D5 | Default search area when no `path` is given | Workspace plus its mounted folders (unchanged) | No accidental machine-wide walks | Interview | 2026-09-26 |
 | D6 | Read-confined agents (Judge, Plan Supervisor) | Workspace plus its mounted folders, for both `grep` and `read_file`/`list_directory` | The reviewed work can live in a mount (ADR-090 "reviewed workspace under existing path/mount policy"); security-lead reviews the `ReadConfined` change | Interview | 2026-09-26 |
 | D7 | Search capacity (2 walk slots shared with the Library search bar; 10 s / 50k files) | Keep current limits; revisit only on measured contention | No evidence of contention yet | Interview | 2026-09-26 |
+| D8 | Auto-pin re-check for `AutoRuns` tools (ADR grill CRIT-001) | General fix: `RecheckAutoPin` / `resolveAutoCheckedPath` is skipped for any pin whose class is `AutoVerdictClassRuns`, so read_file/list_directory (and any future RUNS-IF to RUNS move) run under Auto instead of failing on an empty pin | Founder chose the general fix over a per-tool bypass so the trap cannot recur; a one-function change in `pkg/tools/auto_approve.go` | ADR grill follow-up interview | 2026-09-26 |
+| D9 | Bundling of the D6 `ReadConfined` mount change | Stays in the #920 branch (no separate branch); security-lead gives this part a dedicated check within the 8-reviewer gate | One gate and one landing; security-lead is a mandatory gate member anyway | ADR grill follow-up interview | 2026-09-26 |
 
 ## Security notes (must appear in the spec's Security section)
 
