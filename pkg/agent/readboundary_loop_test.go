@@ -20,10 +20,10 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
