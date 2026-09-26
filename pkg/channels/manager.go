@@ -866,14 +866,16 @@ func (m *Manager) SetupHTTPServer(addr string, healthServer *health.Server) {
 }
 
 // reloadBearerAuthorizer returns the POST /reload authorization gate
-// (issues #276/#640). It accepts exactly the credentials the ordinary
-// mutating REST routes accept — a bearer matching any Gateway.Users account
-// or the machine-only Gateway.CLIToken — and nothing else. The boolean
-// semantics deliberately mirror gateway's resolveBearerIdentity (pkg/gateway/auth.go)
-// without its identity detail: the ID-tagged-first ordering there is a
-// bcrypt-count optimization only, so "any user match OR CLI match" is the
-// same accept/reject decision. gateway cannot be imported from here (it
-// imports this package), hence the local re-check.
+// (issues #276/#640). It accepts ONLY a bearer: an Authorization: Bearer
+// header matching a Gateway.Users account or the machine-only
+// Gateway.CLIToken. It is STRICTER than the ordinary mutating REST routes,
+// which also accept the omnipus-session cookie, the OMNIPUS_BEARER_TOKEN
+// env fallback, and dev_mode_bypass — this gate accepts none of those. The
+// bearer checks deliberately mirror gateway's resolveBearerIdentity
+// (pkg/gateway/auth.go) without its identity detail: the ID-tagged-first
+// ordering there is a bcrypt-count optimization only, so "any user match OR
+// CLI match" is the same accept/reject decision. gateway cannot be imported
+// from here (it imports this package), hence the local re-check.
 //
 // The config is read from the request context FIRST (the same
 // ctxkey.ConfigContextKey snapshot configSnapshotMiddleware injects in
@@ -886,8 +888,7 @@ func (m *Manager) SetupHTTPServer(addr string, healthServer *health.Server) {
 // Fail-closed by construction: a nil config, a missing/non-Bearer
 // Authorization header, and an empty raw token all reject; with zero
 // configured credentials every VerifyToken call errs, so an install with
-// no accounts and no CLI token rejects all /reload traffic — consistent
-// with the same install being unable to authenticate any mutating route.
+// no accounts and no CLI token rejects all /reload traffic.
 func (m *Manager) reloadBearerAuthorizer() func(*http.Request) bool {
 	return func(r *http.Request) bool {
 		cfg := m.config
