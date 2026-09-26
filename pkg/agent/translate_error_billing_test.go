@@ -229,6 +229,31 @@ func TestModelRetired_TruePositives_C24(t *testing.T) {
 	}
 }
 
+// Row 21's exact-sentence half, via the C-16 identity path (the same
+// discipline row 20 applies in TestQuotaBilling_Templated_Sentence_C16):
+// with the chain's FailoverError wrapper carrying provider identity, the
+// model_retired message is the EXACT D11 template with {provider} filled —
+// not just a code match. (Identity-absent, the catalogue copy renders by
+// design; the loop above pins the code, retryability, attribution.)
+func TestModelRetired_Templated_Sentence_C16(t *testing.T) {
+	_, commonErr := boundaryPair(t, 404, nil, `{"error":{"message":"This model has been decommissioned"}}`)
+	fe := &providers.FailoverError{
+		Reason:   providers.FailoverUnknown, // D2: routing never reads model_retired; 404 routes unknown
+		Provider: "openrouter",
+		Model:    "model-a",
+		Status:   404,
+		Wrapped:  commonErr,
+	}
+	llm := TranslateTurnError(fe)
+	if llm.Code != CodeModelRetired {
+		t.Fatalf("code = %q, want %q (C-24 trigger)", llm.Code, CodeModelRetired)
+	}
+	want := templateWith("model_retired", "openrouter")
+	if llm.Message != want {
+		t.Fatalf("message = %q, want the exact D11 template with the provider: %q", llm.Message, want)
+	}
+}
+
 // ── Row 22 (MR-2/MR-3): near-misses never classify model_retired ───────────
 
 func TestModelRetired_NearMisses_StayUnknown_C24(t *testing.T) {
