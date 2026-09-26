@@ -457,16 +457,20 @@ func (mt *messageParentToolExecute) validateContext() (*ToolResult, bool) {
 		return ErrorResult("kind is required: one of progress, checkpoint, artifact, blocker, question, handback"), true
 	}
 
-	// The durable LifecycleRecord is persisted keyed by the child's OWN
+	// The durable LifecycleRecord is persisted keyed by the session's OWN
 	// ADR-053 durable session_id (ToolDelegateSessionID — see
 	// WithDelegateSessionID / ToolDelegateSessionID in pkg/tools/delegate.go,
-	// the canonical helpers for the child's own durable identity),
-	// which is distinct from the shared parent/child transcript session id
-	// (ToolTranscriptSessionID, deliberately inherited by the child per
-	// pkg/agent/subturn.go's FR-6a cascade-cancel matching). Looking this up
-	// under the transcript id was a 100%-reproducible miss: a freshly minted
-	// UUID delegate session id can never coincidentally equal the parent's
-	// transcript id.
+	// the canonical helpers for the session's own durable identity): the
+	// session's own LifecycleRecord.SessionID, the same id prepareMessage
+	// loads the record by. For a steered turn this is the SAME value
+	// ToolTranscriptSessionID carries — the semantic KEY (not the value) is
+	// what distinguishes a steered/delegated turn from a root: the delegate
+	// key is stamped by pkg/agent/loop_run_turn.go::registerTurnContext from
+	// processOptions.SteeredSessionID (set by steer_reconstruct.go::
+	// reconstructSteeredTurn, gated on rec.SteeredBy != nil), while a root's
+	// delegate key stays "" so the structural refusal below keeps firing.
+	// (ADR-057/ADR-091 retired the old "shared parent/child transcript
+	// session id" framing this comment used to describe.)
 	mt.childSessionID = strings.TrimSpace(ToolDelegateSessionID(mt.ctx))
 	if mt.childSessionID == "" {
 		// A native task run's root turn carries tools.WithRunningTaskID on ctx
