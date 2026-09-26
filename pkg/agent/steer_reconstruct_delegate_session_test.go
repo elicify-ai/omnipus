@@ -398,7 +398,7 @@ func TestRevivedSteeredChildTurnCtxCarriesSameDelegateSessionID(t *testing.T) {
 	term := *preRec
 	term.State = session.LifecycleFailed
 	term.FailedReason = failedReasonInterrupted
-	if err := al.GetSessionLifecycleStore().Persist(&term); err != nil {
+	if err = al.GetSessionLifecycleStore().Persist(&term); err != nil {
 		t.Fatalf("persist terminalised child: %v", err)
 	}
 
