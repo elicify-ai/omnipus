@@ -42,8 +42,9 @@ Full procedure: `knowledge/parallel-planning.md`. The loop:
    independent units together, in one message, so they run concurrently.
 4. **Size every unit** — small / standard / feature (table in the knowledge file).
    Urgent is a queue priority (front of the queue), never a fourth size. Feature-size
-   units run as squads (own feature branch, worktree(s), squad lead); small and standard
-   run as direct dispatches on a short-lived work branch cut from the integration branch.
+   units run as squads — own feature branch, worktree(s), **their own squad-lead from
+   the first dispatch** (the full rule: §2); small and standard run as direct dispatches
+   on a short-lived work branch cut from the integration branch.
 5. **Capacity check** — run the monitor (§3) before dispatching the wave, and again
    before widening an existing wave.
 6. **Name the integration branch** — the founder names it when commissioning; confirm at
@@ -69,6 +70,17 @@ Formats and procedures: `knowledge/coordination-ledger.md`. The core rules:
   resolved issues citing the commit. The lock is taken at landing time, after the yes —
   never held across CI or across the wait for the founder's reply. Exact sequence and
   line formats: `knowledge/coordination-ledger.md`.
+- **Every feature-size squad runs under its own squad-lead from the first dispatch** —
+  team-lead never leads a squad itself; small and standard work stays a direct dispatch
+  with team-lead, and a squad row's `lead=<role>` is the squad's own `squad-lead`, never
+  `team-lead`. If starting a squad lead needs a model choice or any other trade-off,
+  team-lead asks the founder at squad start instead of silently leading the squad — the
+  silent absorption is the failure this rule exists to prevent.
+- **team-lead's own job** is coordination (the ledger, chief alignment, cross-squad
+  overlaps), founder interviews and decisions, landing, and the final founder-facing
+  browser check — never per-specialist dispatch inside a squad; when more than one or
+  two squads' worth of specialist results sit unprocessed across squads, that is the
+  trigger to delegate, not to work faster.
 - **In-session squads never land themselves** — a squad-lead subagent finishes with a
   fully gated branch and hands it back to team-lead, which asks the founder (asks
   batched, §5) and lands. Separate-session squads land themselves under the lock.
