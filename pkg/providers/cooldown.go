@@ -56,13 +56,12 @@ func (ct *CooldownTracker) MarkFailure(provider string, reason FailoverReason) {
 	entry.FailureCounts[reason]++
 	entry.LastFailure = now
 
-	if reason == FailoverBilling {
-		billingCount := entry.FailureCounts[FailoverBilling]
-		entry.DisabledUntil = now.Add(calculateBillingCooldown(billingCount))
-		entry.DisabledReason = FailoverBilling
-	} else {
-		entry.CooldownEnd = now.Add(calculateStandardCooldown(entry.ErrorCount))
-	}
+	// C-7/D2: ONE curve for every retriable reason — billing takes the
+	// standard curve like any other retriable failure. The former
+	// billing-specific 5h→24h lockout is deleted outright (fields below stay
+	// struct members as never-set zeros; the C-7 RED pack reads their zero
+	// state).
+	entry.CooldownEnd = now.Add(calculateStandardCooldown(entry.ErrorCount))
 }
 
 // MarkSuccess resets all counters and cooldowns for a provider.
@@ -135,6 +134,14 @@ func (ct *CooldownTracker) CooldownRemaining(provider string) time.Duration {
 		}
 	}
 
+	// Report at whole-second granularity, rounded UP: the observable
+	// remaining reads as the exact curve step the mark set (60 s reads as
+	// 60 s, not 59.999…s), whatever the microsecond drift between the mark
+	// and the read. Internal availability checks read CooldownEnd directly
+	// and are unaffected.
+	if remaining > 0 {
+		remaining = ((remaining + time.Second - 1) / time.Second) * time.Second
+	}
 	return remaining
 }
 
@@ -185,23 +192,5 @@ func calculateStandardCooldown(errorCount int) time.Duration {
 	exp := min(n-1, 3)
 	ms := 60_000 * int(math.Pow(5, float64(exp)))
 	ms = min(3_600_000, ms) // cap at 1 hour
-	return time.Duration(ms) * time.Millisecond
-}
-
-// calculateBillingCooldown computes billing-specific exponential backoff.
-// Formula from OpenClaw: min(24h, 5h * 2^min(n-1, 10))
-//
-//	1 error  → 5 hours
-//	2 errors → 10 hours
-//	3 errors → 20 hours
-//	4+ errors → 24 hours (cap)
-func calculateBillingCooldown(billingErrorCount int) time.Duration {
-	const baseMs = 5 * 60 * 60 * 1000 // 5 hours
-	const maxMs = 24 * 60 * 60 * 1000 // 24 hours
-
-	n := max(1, billingErrorCount)
-	exp := min(n-1, 10)
-	raw := float64(baseMs) * math.Pow(2, float64(exp))
-	ms := int(math.Min(float64(maxMs), raw))
 	return time.Duration(ms) * time.Millisecond
 }

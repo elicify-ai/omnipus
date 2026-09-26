@@ -91,13 +91,19 @@ var (
 		substr("read: connection timed out"),
 	}
 
+	// C-5 billing vocabulary (dataset D2) — exactly these four phrases.
+	// Deliberately NOT here: `\b402\b` (status detection is classifyByStatus's
+	// job — a "402" substring in unrelated text must not read as billing),
+	// "credit balance" alone (matches rate-limit-adjacent prose), and
+	// "plans & billing" (a substring of OpenAI's rate-limit quota prose:
+	// "check your plan and billing details" is a RATE LIMIT, dataset D2's
+	// B-2 negative row).
 	billingPatterns = []errorPattern{
-		rxp(`\b402\b`),
 		substr("payment required"),
 		substr("insufficient credits"),
-		substr("credit balance"),
-		substr("plans & billing"),
 		substr("insufficient balance"),
+		substr("credit balance is too low"),
+		substr("credit balance too low"),
 	}
 
 	authPatterns = []errorPattern{
@@ -221,13 +227,42 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 		}
 	}
 
-	// Try HTTP status code extraction first.
+	// §7.3: the routing classifier sees the REAL boundary status + body — a
+	// *common.ProviderError in the chain carries them as FIELDS (dataset D2
+	// drives errors through the real HandleErrorResponse boundary), with the
+	// rendered message's "status=NNN" text as the lossy fallback for errors
+	// that never crossed an HTTP boundary.
+	status := 0
+	body := msg
+	var cpe *common.ProviderError
+	if errors.As(err, &cpe) && cpe.Status > 0 {
+		status = cpe.Status
+		body = strings.ToLower(cpe.Body)
+	} else {
+		status = extractHTTPStatus(msg)
+	}
+
+	// Try HTTP status classification.
 	// For status 400, message patterns take priority because 400 can represent
 	// both "bad request format" and "context overflow" depending on the provider.
-	if status := extractHTTPStatus(msg); status > 0 {
+	if status > 0 {
+		// C-5 on the 429 path, BEFORE the rate-limit short-circuit: a
+		// structured insufficient_quota / C-5-phrase quota exhaustion is
+		// BILLING even on a 429 (dataset D2 row "429 structured
+		// insufficient_quota"), while rate-limit quota prose must stay
+		// rate_limit. Never on ≥500.
+		if status == 429 && matchesBilling(body, status) {
+			return &FailoverError{
+				Reason:   FailoverBilling,
+				Provider: provider,
+				Model:    model,
+				Status:   status,
+				Wrapped:  err,
+			}
+		}
 		if status == 400 {
-			// Check message patterns before defaulting to FailoverFormat for 400.
-			if reason := classifyByMessage(msg); reason != "" {
+			// Check message patterns before default to FailoverFormat for 400.
+			if reason := classifyByMessage(body); reason != "" {
 				return &FailoverError{
 					Reason:   reason,
 					Provider: provider,
@@ -274,6 +309,12 @@ func classifyByStatus(status int) FailoverReason {
 		return FailoverRateLimit
 	case status == 400:
 		return FailoverFormat
+	case status == 404:
+		// D12: a 404 (a retired model, a not-found model) routes FailoverUnknown —
+		// retriable, so the configured Fallback model answers (dataset D2: the
+		// routing side never reads a model_retired verdict; retirement is a
+		// user-side copy concern only).
+		return FailoverUnknown
 	case transientStatusCodes[status]:
 		return FailoverTimeout
 	}
@@ -281,8 +322,14 @@ func classifyByStatus(status int) FailoverReason {
 }
 
 // classifyByMessage matches error messages against patterns.
-// Priority order matters (from OpenClaw classifyFailoverReason).
+// Priority order matters (from OpenClaw classifyFailoverReason) — and per
+// §7.3 the C-5 billing check precedes the rate-limit patterns: a quota
+// EXHAUSTION must never be misread as a rate limit just because the same
+// sentence also says "quota".
 func classifyByMessage(msg string) FailoverReason {
+	if matchesBilling(msg, 0) {
+		return FailoverBilling
+	}
 	if matchesAny(msg, rateLimitPatterns) {
 		return FailoverRateLimit
 	}
@@ -327,6 +374,22 @@ func extractHTTPStatus(msg string) int {
 		}
 	}
 	return 0
+}
+
+// matchesBilling reports the C-5 billing verdict (dataset D2): an explicit
+// 402 status, the structured insufficient_quota error code, or a C-5
+// vocabulary phrase in the body — 4xx-only, never on a ≥500 status.
+func matchesBilling(body string, status int) bool {
+	if status >= 500 {
+		return false
+	}
+	if status == 402 {
+		return true
+	}
+	if common.StructuredErrorCode(body) == "insufficient_quota" {
+		return true
+	}
+	return matchesAny(body, billingPatterns)
 }
 
 // IsImageDimensionError returns true if the message indicates an image dimension error.

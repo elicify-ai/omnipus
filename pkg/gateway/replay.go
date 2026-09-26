@@ -506,6 +506,18 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 		return streamReplayStateContinue, nil
 	}
 
+	// provider-messages §7.1 item 2 / MAJ-010/C-17: a persisted fallback
+	// note replays as the SAME carrier the spec names (replay_provider_fallback)
+	// so the reloaded session renders the note — never a live-only orphan.
+	// The live announcement is the separate provider_fallback frame; the
+	// SPA dedups live vs replay on entry_id (FB-2).
+	if entry.Type == session.EntryTypeProviderFallback {
+		if err2 := emitFrame(buildReplayFallbackNote(sr.sessionID, entry)); err2 != nil {
+			return streamReplayStateReturn, err2
+		}
+		return streamReplayStateContinue, nil
+	}
+
 	// A canceled turn replays as role:"turn_canceled". The frame build
 	// lives in dispatchTurnCancelled so this function stays under the
 	// size budget. Same frame, same position, as before the extraction.
@@ -1611,15 +1623,61 @@ func buildReplayErrorFrame(sessionID string, entry session.TranscriptEntry) gene
 		frame.AgentId = &agentIDCopy
 	}
 	if entry.ErrorCode != "" {
+		replay := generated.LLMErrorReplay{
+			Code:      entry.ErrorCode,
+			Message:   entry.Content,
+			Retryable: entry.ErrorRetryable,
+			// MAJ-104/C-14: round-trip the persisted assembled-sentence
+			// marker so the SPA renders the reloaded error exactly like
+			// the live frame did.
+			ProviderMessage: llmErrorReplayFlag(entry.ProviderMessage),
+		}
 		frame.Payload = &generated.ReplayErrorPayload{
-			LlmError: generated.LLMErrorReplay{
-				Code:      entry.ErrorCode,
-				Message:   entry.Content,
-				Retryable: entry.ErrorRetryable,
-			},
+			LlmError: replay,
 		}
 	}
 	return frame
+}
+
+// buildReplayFallbackNote constructs the replay_provider_fallback carrier
+// (provider-messages §7.1 item 2, MAJ-010/C-17) from a persisted
+// EntryTypeProviderFallback transcript entry. The SPA dedups it against the
+// live provider_fallback announcement on entry_id (FB-2).
+func buildReplayFallbackNote(sessionID string, entry session.TranscriptEntry) generated.ProviderFallbackNote {
+	note := generated.ProviderFallbackNote{
+		Type:      string(generated.WsFrameTypeReplayProviderFallback),
+		SessionId: sessionID,
+		EntryId:   entry.ID,
+		// Format as RFC 3339 (matches AsyncAPI format: date-time);
+		// TranscriptEntry.Timestamp is a time.Time and JSON-marshals to
+		// RFC 3339 by default.
+		Timestamp: entry.Timestamp.UTC().Format(time.RFC3339Nano),
+		Message:   entry.Content,
+	}
+	if entry.Model != "" {
+		answered := entry.Model
+		note.AnsweredModel = &answered
+	}
+	if entry.UnavailableModel != "" {
+		unavailable := entry.UnavailableModel
+		note.UnavailableModel = &unavailable
+	}
+	if entry.UnavailableCode != "" {
+		code := entry.UnavailableCode
+		note.UnavailableCode = &code
+	}
+	return note
+}
+
+// llmErrorReplayFlag returns nil for false (omitted from the wire) and a
+// pointer to true when the persisted entry carries the provider-messages
+// assembled-sentence marker.
+func llmErrorReplayFlag(v bool) *bool {
+	if !v {
+		return nil
+	}
+	f := true
+	return &f
 }
 
 // toJudgeVerdictFrame converts an internal task.JudgeVerdict into the

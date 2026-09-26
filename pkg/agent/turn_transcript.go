@@ -371,6 +371,12 @@ var trustedInternalStageSet = map[internalStage]struct{}{
 	{"llm_call", "error"}:          {},
 	{"llm_retry_backoff", "error"}: {},
 	{"turn_loop", "error"}:         {},
+	// Provider-messages spec §7.3/MAJ-104/C-14: the agent's provider-error
+	// handler persists the ASSEMBLED §6 sentence through the trusted
+	// bypass — a sentence assembled from a §6 template with the failing
+	// attempt's identity is agent-authored copy, and re-running the
+	// classifier over it would clobber it with catalogue copy.
+	{"provider", "error"}: {},
 	// ADR-058 §10.A3: FR-084 (the retired synthetic-error-floor feature) was
 	// deleted in full — no producer calls appendErrorTranscript with that
 	// stage name anymore, so a trust-set entry for it does not belong here.
@@ -543,6 +549,11 @@ func (ts *turnState) persistErrorTranscript(kind, stage string, llm LLMError, co
 		Timestamp:      time.Now().UTC(),
 		ErrorCode:      string(llm.Code),
 		ErrorRetryable: llm.Retryable,
+		// MAJ-104/C-14: the persisted entry is flagged when the write
+		// side is the provider stage (the trusted entry above is the
+		// write-side marker) or the classifier already assembled the §6
+		// sentence — the replay path round-trips the flag.
+		ProviderMessage: llm.ProviderMessage || stage == "provider",
 		// Status="error" lets the replay path distinguish error entries from
 		// informational system entries (e.g. compaction summaries) without
 		// parsing the free-text Content.

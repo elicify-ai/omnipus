@@ -27,6 +27,44 @@ const minCandidateBudget = 5 * time.Second
 type FallbackChain struct {
 	cooldown            *CooldownTracker
 	perCandidateTimeout time.Duration // 0 means pass parent ctx unchanged (legacy behavior, NewFallbackChain)
+
+	// nowFunc and waitFunc are the §7.4 test seams (same-package tests
+	// set them directly): nowFunc pins the wall clock for durations;
+	// waitFunc replaces the context-cancellable retry wait. Both nil in
+	// production (time.Now / select-on-ctx).
+	nowFunc  func() time.Time
+	waitFunc func(ctx context.Context, d time.Duration) error
+}
+
+func (fc *FallbackChain) now() time.Time {
+	if fc.nowFunc != nil {
+		return fc.nowFunc()
+	}
+	return time.Now()
+}
+
+func (fc *FallbackChain) since(t time.Time) time.Duration {
+	if fc.nowFunc != nil {
+		return fc.nowFunc().Sub(t)
+	}
+	return time.Since(t)
+}
+
+// sleepCtx waits d, cancellable through ctx (C-12: Stop ends the wait
+// within ~1 s and no further attempt is made). Returns ctx.Err() on
+// cancellation, nil when the full wait elapsed.
+func (fc *FallbackChain) sleepCtx(ctx context.Context, d time.Duration) error {
+	if fc.waitFunc != nil {
+		return fc.waitFunc(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // FallbackCandidate represents one model/provider to try.
@@ -364,77 +402,153 @@ func (fc *FallbackChain) Execute(
 			continue
 		}
 
-		// Give each candidate its own budget so an exhausted parent deadline does
-		// not cause fallback candidates to return DeadlineExceeded in ~1ms.
-		left := uncooledLeft
-		if left < 1 {
-			left = 1
-		}
-		attemptCtx, attemptCancel := fc.candidateBudget(ctx, left)
-		uncooledLeft--
+		// §7.4 per-candidate retry loop (C-8/MAJ-101): a rate-limit-class
+		// failure retries THIS candidate in place up to 3 TOTAL calls
+		// (attempt numbers 2..3); every other retriable reason — billing
+		// included (C-7/D2: billing never waits it out) — goes straight to
+		// the mark+fallback path exactly as before. The candidate is
+		// marked failed at most ONCE, after its last failure (never per
+		// attempt), and a candidate skipped by the C-9 ceiling or the D14
+		// cap is never marked (A-4).
+		candStart := fc.now()
+		var lastErr error
+		skipWithoutMark := false
 
-		// Execute the run function with the per-candidate context.
-		start := time.Now()
-		resp, err := run(attemptCtx, candidate.Provider, candidate.Model)
-		elapsed := time.Since(start)
-		attemptCancel() // release resources immediately; do not defer inside the loop
+		for attemptNo := 1; ; attemptNo++ {
+			// Fresh per-candidate budget per CALL — a retry is a new call
+			// with its own fair slice, not a share of the first call's.
+			left := uncooledLeft
+			if left < 1 {
+				left = 1
+			}
+			attemptCtx, attemptCancel := fc.candidateBudget(ctx, left)
+			resp, err := run(attemptCtx, candidate.Provider, candidate.Model)
+			attemptCancel() // release resources immediately; do not defer inside the loop
 
-		if err == nil {
-			// Success.
-			fc.cooldown.MarkSuccess(cooldownKey)
-			result.Response = resp
-			result.Provider = candidate.Provider
-			result.Model = candidate.Model
-			return result, nil
-		}
+			if err == nil {
+				// Success.
+				fc.cooldown.MarkSuccess(cooldownKey)
+				result.Response = resp
+				result.Provider = candidate.Provider
+				result.Model = candidate.Model
+				return result, nil
+			}
 
-		// User abort on the ORIGINAL ctx: abort immediately, no fallback.
-		if errors.Is(ctx.Err(), context.Canceled) {
-			result.Attempts = append(result.Attempts, FallbackAttempt{
-				Provider: candidate.Provider,
-				Model:    candidate.Model,
-				Error:    err,
-				Duration: elapsed,
-			})
-			return nil, context.Canceled
-		}
+			// User abort on the ORIGINAL ctx: abort immediately, no fallback.
+			if errors.Is(ctx.Err(), context.Canceled) {
+				result.Attempts = append(result.Attempts, FallbackAttempt{
+					Provider: candidate.Provider,
+					Model:    candidate.Model,
+					Error:    err,
+					Duration: fc.since(candStart),
+				})
+				return nil, context.Canceled
+			}
 
-		// Classify the error.
-		failErr := ClassifyError(err, candidate.Provider, candidate.Model)
+			// Classify the error.
+			failErr := ClassifyError(err, candidate.Provider, candidate.Model)
 
-		if failErr == nil {
-			// Unclassifiable error: do not fallback, return immediately.
-			result.Attempts = append(result.Attempts, FallbackAttempt{
-				Provider: candidate.Provider,
-				Model:    candidate.Model,
-				Error:    err,
-				Duration: elapsed,
-			})
-			return nil, fmt.Errorf("fallback: unclassified error from %s/%s: %w",
-				candidate.Provider, candidate.Model, err)
-		}
+			if failErr == nil {
+				// Unclassifiable error: do not fallback, return immediately.
+				result.Attempts = append(result.Attempts, FallbackAttempt{
+					Provider: candidate.Provider,
+					Model:    candidate.Model,
+					Error:    err,
+					Duration: fc.since(candStart),
+				})
+				return nil, fmt.Errorf("fallback: unclassified error from %s/%s: %w",
+					candidate.Provider, candidate.Model, err)
+			}
 
-		// Non-retriable error: abort immediately.
-		if !failErr.IsRetriable() {
+			// Non-retriable error: abort immediately.
+			if !failErr.IsRetriable() {
+				result.Attempts = append(result.Attempts, FallbackAttempt{
+					Provider: candidate.Provider,
+					Model:    candidate.Model,
+					Error:    failErr,
+					Reason:   failErr.Reason,
+					Duration: fc.since(candStart),
+				})
+				return nil, failErr
+			}
+
+			// Retriable error.
+			lastErr = err
+
+			// §7.4: only rate-limit-class failures retry in place.
+			if failErr.Reason == FailoverRateLimit && attemptNo < maxAttemptsPerCandidate {
+				ras := retryAfterOf(err)
+				if ras > int(retryAfterCeiling.Seconds()) {
+					// A-4: over-ceiling — skip the retries AND the mark;
+					// the next candidate answers now.
+					skipWithoutMark = true
+					break
+				}
+				wait := nextRetryWait(attemptNo, ras, retryJitter())
+				// D14: reserve the FULL wait before scheduling it — a wait
+				// the budget cannot cover in full is never started, and
+				// this candidate moves on unmarked (never truncated).
+				if !waitBudgetFrom(ctx).Reserve(wait.duration) {
+					skipWithoutMark = true
+					break
+				}
+				if obs := retryObserverFrom(ctx); obs != nil {
+					sentAt := fc.now()
+					obs(RetryInfo{
+						Provider:    candidate.Provider,
+						Model:       candidate.Model,
+						Attempt:     attemptNo + 1,
+						MaxAttempts: maxAttemptsPerCandidate,
+						Reason:      string(failErr.Reason),
+						SentAt:      sentAt,
+						RetryAt:     sentAt.Add(wait.duration),
+					})
+				}
+				if werr := fc.sleepCtx(ctx, wait.duration); werr != nil {
+					// C-12: Stop ends the wait promptly; no further attempt
+					// is made and the candidate is not marked (exhaustion
+					// was never concluded).
+					result.Attempts = append(result.Attempts, FallbackAttempt{
+						Provider: candidate.Provider,
+						Model:    candidate.Model,
+						Error:    err,
+						Reason:   failErr.Reason,
+						Duration: fc.since(candStart),
+					})
+					return nil, context.Canceled
+				}
+				continue
+			}
+
+			// Cap reached (or a non-rate-limit retriable reason): mark the
+			// candidate failed ONCE and move to the next candidate.
+			fc.cooldown.MarkFailure(cooldownKey, failErr.Reason)
 			result.Attempts = append(result.Attempts, FallbackAttempt{
 				Provider: candidate.Provider,
 				Model:    candidate.Model,
 				Error:    failErr,
 				Reason:   failErr.Reason,
-				Duration: elapsed,
+				Duration: fc.since(candStart),
 			})
-			return nil, failErr
+			break
 		}
 
-		// Retriable error: mark failure and continue to next candidate.
-		fc.cooldown.MarkFailure(cooldownKey, failErr.Reason)
-		result.Attempts = append(result.Attempts, FallbackAttempt{
-			Provider: candidate.Provider,
-			Model:    candidate.Model,
-			Error:    failErr,
-			Reason:   failErr.Reason,
-			Duration: elapsed,
-		})
+		if skipWithoutMark {
+			// A-4/D14 skip: recorded for observability, never marked.
+			result.Attempts = append(result.Attempts, FallbackAttempt{
+				Provider: candidate.Provider,
+				Model:    candidate.Model,
+				Error:    lastErr,
+				Reason:   FailoverRateLimit,
+				Skipped:  true,
+				Duration: fc.since(candStart),
+			})
+		}
+
+		// Every candidate that reached the attempt loop consumes one slot
+		// of the fair budget split — marked, skipped-without-mark or not
+		// (cooldown skips decrement earlier, before the loop).
+		uncooledLeft--
 
 		// If this was the last candidate, return aggregate error.
 		if i == len(candidates)-1 {

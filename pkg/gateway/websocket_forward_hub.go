@@ -19,6 +19,7 @@ package gateway
 import (
 	"encoding/json"
 	"strconv"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -63,6 +64,10 @@ func (h *WSHandler) hubSyncTap(evt agent.Event) {
 		h.hubJudgeVerdict(evt)
 	case agent.EventKindLoopStatusChanged:
 		h.hubLoopStatusChanged(evt)
+	case agent.EventKindProviderRetry:
+		h.hubProviderRetry(evt)
+	case agent.EventKindProviderFallback:
+		h.hubProviderFallback(evt)
 	}
 }
 
@@ -395,29 +400,17 @@ func (h *WSHandler) hubError(evt agent.Event) {
 	if errSID == "" {
 		return
 	}
-	translated := agent.TranslateLLMError(p.ProviderError, p.Message)
-	code := translated.Code
-	message := translated.Message
-	retryable := translated.Retryable
-	detail := translated.Detail
-	if p.Code != "" {
-		code = agent.LLMErrorCode(p.Code)
-		message = p.Message
-		retryable = agent.IsRetryableCode(code)
-		detail = agent.BuildDetail(p.ProviderError, message)
-	}
+	// MAJ-001: the agent assembles sentence + facts + flag at WireLLMError;
+	// the hub is a thin translator and forwards them untouched (D1: the
+	// detail stays the BuildDetail residual).
+	wire := agent.WireLLMError(p)
 	errF := generated.ErrorFrame{
 		Type:      string(generated.WsFrameTypeError),
 		SessionId: &errSID,
-		Message:   message,
+		Message:   wire.Message,
 	}
 	errF.Payload = &generated.ErrorPayload{
-		LlmError: generated.LLMError{
-			Code:      string(code),
-			Message:   message,
-			Retryable: retryable,
-			Detail:    &detail,
-		},
+		LlmError: wire,
 	}
 	data, err := json.Marshal(errF)
 	if err != nil {
@@ -432,6 +425,95 @@ func (h *WSHandler) hubError(evt agent.Event) {
 			turnID: evt.Meta.TurnID,
 		},
 		data, nil)
+}
+
+// hubProviderRetry forwards the fallback chain's per-candidate retry as one
+// provider_retry frame (provider-messages spec §7.4, C-8/MAJ-102). C-2/
+// MAJ-015: built from the payload's NAMED fields only — LLMRetryPayload.Error
+// is log-only and never read here (the sentinel-scan test proves the raw
+// error text reaches no field). Finding 3 (round 0): error_code is set to
+// the ACTUAL classified code — reason "rate_limit" maps to "rate_limited",
+// anything else passes through as-is.
+func (h *WSHandler) hubProviderRetry(evt agent.Event) {
+	p, ok := evt.Payload.(agent.LLMRetryPayload)
+	if !ok {
+		return
+	}
+	sid := p.SessionID
+	if sid == "" {
+		sid = h.hubResolveSessionIDForChat(evt.Meta.SessionKey)
+	}
+	if sid == "" {
+		return
+	}
+	frame := generated.ProviderRetryFrame{
+		Type:      string(generated.WsFrameTypeProviderRetry),
+		SessionId: sid,
+		TurnId:    evt.Meta.TurnID,
+		Provider:  p.Provider,
+		Model:     p.Model,
+		// json.Marshal renders time.Time as RFC3339Nano in the time's own
+		// location — Format(RFC3339Nano) is byte-identical to that, so the
+		// frame strings match what a decoder of the marshaled payload sees.
+		SentAt:            p.SentAt.Format(time.RFC3339Nano),
+		RetryAt:           p.RetryAt.Format(time.RFC3339Nano),
+		RetryAfterSeconds: int(p.RetryAt.Sub(p.SentAt).Seconds()),
+		Attempt:           p.Attempt,
+		MaxAttempts:       p.MaxAttempts,
+		ErrorCode:         providerRetryErrorCode(p.Reason),
+	}
+	data, err := json.Marshal(frame)
+	if err != nil {
+		logsafeError("ws: marshal provider_retry for hub failed", "session_id", sid, "error", err)
+		return
+	}
+	h.hubPublishAndDeliver(sid, string(generated.WsFrameTypeProviderRetry), data)
+}
+
+// providerRetryErrorCode maps the retry payload's reason to the frame's
+// error_code (Finding 3): "rate_limit" → "rate_limited"; any other reason
+// passes through unchanged (presence-only oracle — no other mapping pinned).
+func providerRetryErrorCode(reason string) string {
+	if reason == "rate_limit" {
+		return "rate_limited"
+	}
+	return reason
+}
+
+// hubProviderFallback forwards the fallback-answered event as one
+// provider_fallback frame (provider-messages spec §7.4, MIN-102/MIN-103).
+// C-18: the cooldown-skip fallback path emits the same event, so the frame
+// and the transcript note cover both paths.
+func (h *WSHandler) hubProviderFallback(evt agent.Event) {
+	p, ok := evt.Payload.(agent.ProviderFallbackPayload)
+	if !ok {
+		return
+	}
+	sid := p.SessionID
+	if sid == "" {
+		sid = h.hubResolveSessionIDForChat(evt.Meta.SessionKey)
+	}
+	if sid == "" {
+		return
+	}
+	turnID := evt.Meta.TurnID
+	if p.TurnID != "" {
+		turnID = p.TurnID
+	}
+	frame := generated.ProviderFallbackFrame{
+		Type:             string(generated.WsFrameTypeProviderFallback),
+		SessionId:        sid,
+		TurnId:           turnID,
+		AnsweredModel:    p.AnsweredModel,
+		UnavailableModel: p.UnavailableModel,
+		UnavailableCode:  p.UnavailableCode,
+	}
+	data, err := json.Marshal(frame)
+	if err != nil {
+		logsafeError("ws: marshal provider_fallback for hub failed", "session_id", sid, "error", err)
+		return
+	}
+	h.hubPublishAndDeliver(sid, string(generated.WsFrameTypeProviderFallback), data)
 }
 
 // ---------------------------------------------------------------------

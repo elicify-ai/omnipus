@@ -1385,8 +1385,32 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 	defer rt.al.activeRequests.Done()
 
 	if len(rt.activeCandidates) > 1 && rt.al.fallback != nil {
+		// §7.4: carry the D14 per-turn wait budget and the C-11 retry
+		// observer on the provider ctx for this chain call. The budget is
+		// per TURN (lazily created on turnState, shared across iterations —
+		// a per-call budget would multiply the 10-minute cap by the
+		// iteration count); the observer forwards each DECIDED in-place
+		// retry as one provider_retry frame from named fields only
+		// (C-2 — never an error string).
+		retryCtx := providers.WithWaitBudget(providerCtx, rt.ts.turnWaitBudgetForChain())
+		retryCtx = providers.WithRetryObserver(retryCtx, func(info providers.RetryInfo) {
+			rt.al.emitEvent(
+				EventKindProviderRetry,
+				rt.ts.eventMeta("runTurn", "turn.llm.retry"),
+				LLMRetryPayload{
+					Attempt:     info.Attempt,
+					Reason:      info.Reason,
+					Provider:    info.Provider,
+					Model:       info.Model,
+					RetryAt:     info.RetryAt,
+					SentAt:      info.SentAt,
+					MaxAttempts: info.MaxAttempts,
+					SessionID:   string(rt.ts.routingSessionID),
+				},
+			)
+		})
 		fbResult, fbErr := rt.al.fallback.Execute(
-			providerCtx,
+			retryCtx,
 			rt.activeCandidates,
 			func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
 				cat := rt.al.getCapabilityCatalog()
@@ -1419,6 +1443,10 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 					fbResult.Provider, fbResult.Model, len(fbResult.Attempts)+1),
 				map[string]any{"agent_id": rt.ts.agent.ID, "iteration": rt.iteration},
 			)
+			// §7.4 fallback note: emit the provider_fallback frame and
+			// queue the once-per-(session, pair) transcript note (written
+			// at turn end, after the assistant answer — MIN-103).
+			rt.ts.queueProviderFallbackNote(fbResult.Model, fbResult.Attempts)
 		}
 		// Phase 1B FR-013: record the model that actually produced
 		// the response (may differ from the agent's primary model
