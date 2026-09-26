@@ -31,6 +31,18 @@ authoritative on the facts this restates.
   forbidden. A legacy test that contradicts the spec goes back to qa-lead, who owns test
   files; implementers change production code, never tests.
 
+## Founder demos and prototypes
+
+- A prototype or demo for founder review is interactive: the main flows are clickable
+  with local state. Frozen state stories alone (e.g. Storybook) are not a demo — 11
+  frozen stories were handed over where clicking a message or Compose did nothing.
+- Before handover, a real-browser interaction test has passed: Playwright drives every
+  advertised interaction and asserts a visible outcome, and the run fails on any
+  console or page error. "Renders without errors" and screenshots are not "works".
+- Served from a static build of a fixed snapshot in its own worktree — never a live dev
+  server inside a worktree where a worker is active (HMR churn has produced
+  "connection lost" with no components rendered).
+
 ## Design system (load before touching any of these trees)
 
 - Before touching anything under `src/components/`, `src/styles/`, `design-system/`, or
