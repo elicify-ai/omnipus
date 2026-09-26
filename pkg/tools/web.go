@@ -1013,6 +1013,194 @@ func enabledButKeylessSearchProviders(opts WebSearchToolOptions) []misconfigured
 	return out
 }
 
+// newPerplexitySearchProvider builds the Perplexity search provider from
+// opts. It returns the provider and the configured maxResults override
+// (0 = leave maxResults at the default).
+func newPerplexitySearchProvider(opts WebSearchToolOptions, ingestBound int64) (SearchProvider, int, error) {
+	client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, perplexityTimeout)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create HTTP client for Perplexity: %w", err)
+	}
+	provider := &PerplexitySearchProvider{
+		keyPool:     NewAPIKeyPool(opts.PerplexityAPIKeys),
+		proxy:       opts.Proxy,
+		client:      client,
+		ingestBound: ingestBound,
+	}
+	if opts.PerplexityMaxResults > 0 {
+		return provider, min(opts.PerplexityMaxResults, 10), nil
+	}
+	return provider, 0, nil
+}
+
+// newBraveSearchProvider builds the Brave search provider from opts. It
+// returns the provider and the configured maxResults override (0 = leave
+// maxResults at the default).
+func newBraveSearchProvider(opts WebSearchToolOptions, ingestBound int64) (SearchProvider, int, error) {
+	client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create HTTP client for Brave: %w", err)
+	}
+	provider := &BraveSearchProvider{
+		keyPool:     NewAPIKeyPool(opts.BraveAPIKeys),
+		proxy:       opts.Proxy,
+		client:      client,
+		ingestBound: ingestBound,
+	}
+	if opts.BraveMaxResults > 0 {
+		return provider, min(opts.BraveMaxResults, 10), nil
+	}
+	return provider, 0, nil
+}
+
+// newSearXNGSearchProvider builds the SearXNG search provider from opts. It
+// cannot fail (self-hosted: no credential, no proxy client to construct), so
+// it returns no error; it takes no ingestBound because SearXNGSearchProvider
+// carries no ingestBound field.
+func newSearXNGSearchProvider(opts WebSearchToolOptions) (SearchProvider, int) {
+	// SearXNG: when SSRFChecker is present use its safe client; otherwise
+	// use a minimal stock client (SearXNG is self-hosted so no proxy needed).
+	var searXNGClient *http.Client
+	if opts.SSRFChecker != nil {
+		searXNGClient = opts.SSRFChecker.SafeClient()
+	} else {
+		searXNGClient = &http.Client{Timeout: 10 * time.Second}
+	}
+	provider := &SearXNGSearchProvider{
+		baseURL: opts.SearXNGBaseURL,
+		client:  searXNGClient,
+	}
+	if opts.SearXNGMaxResults > 0 {
+		return provider, min(opts.SearXNGMaxResults, 10)
+	}
+	return provider, 0
+}
+
+// newTavilySearchProvider builds the Tavily search provider from opts. It
+// returns the provider and the configured maxResults override (0 = leave
+// maxResults at the default).
+func newTavilySearchProvider(opts WebSearchToolOptions, ingestBound int64) (SearchProvider, int, error) {
+	client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create HTTP client for Tavily: %w", err)
+	}
+	provider := &TavilySearchProvider{
+		keyPool:     NewAPIKeyPool(opts.TavilyAPIKeys),
+		baseURL:     opts.TavilyBaseURL,
+		proxy:       opts.Proxy,
+		client:      client,
+		ingestBound: ingestBound,
+	}
+	if opts.TavilyMaxResults > 0 {
+		return provider, min(opts.TavilyMaxResults, 10), nil
+	}
+	return provider, 0, nil
+}
+
+// newDuckDuckGoSearchProvider builds the DuckDuckGo search provider from
+// opts. It returns the provider and the configured maxResults override
+// (0 = leave maxResults at the default).
+func newDuckDuckGoSearchProvider(opts WebSearchToolOptions, ingestBound int64) (SearchProvider, int, error) {
+	client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create HTTP client for DuckDuckGo: %w", err)
+	}
+	provider := &DuckDuckGoSearchProvider{proxy: opts.Proxy, client: client, ingestBound: ingestBound}
+	if opts.DuckDuckGoMaxResults > 0 {
+		return provider, min(opts.DuckDuckGoMaxResults, 10), nil
+	}
+	return provider, 0, nil
+}
+
+// newBaiduSearchProvider builds the Baidu Search provider from opts. It
+// returns the provider and the configured maxResults override (0 = leave
+// maxResults at the default).
+func newBaiduSearchProvider(opts WebSearchToolOptions, ingestBound int64) (SearchProvider, int, error) {
+	client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, perplexityTimeout)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create HTTP client for Baidu Search: %w", err)
+	}
+	provider := &BaiduSearchProvider{
+		apiKey:      opts.BaiduSearchAPIKey,
+		baseURL:     opts.BaiduSearchBaseURL,
+		proxy:       opts.Proxy,
+		client:      client,
+		ingestBound: ingestBound,
+	}
+	if opts.BaiduSearchMaxResults > 0 {
+		return provider, min(opts.BaiduSearchMaxResults, 10), nil
+	}
+	return provider, 0, nil
+}
+
+// newGLMSearchProvider builds the GLM Search provider from opts. It returns
+// the provider and the configured maxResults override (0 = leave maxResults
+// at the default).
+func newGLMSearchProvider(opts WebSearchToolOptions, ingestBound int64) (SearchProvider, int, error) {
+	client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create HTTP client for GLM Search: %w", err)
+	}
+	searchEngine := opts.GLMSearchEngine
+	if searchEngine == "" {
+		searchEngine = "search_std"
+	}
+	provider := &GLMSearchProvider{
+		apiKey:       opts.GLMSearchAPIKey,
+		baseURL:      opts.GLMSearchBaseURL,
+		searchEngine: searchEngine,
+		proxy:        opts.Proxy,
+		client:       client,
+		ingestBound:  ingestBound,
+	}
+	if opts.GLMSearchMaxResults > 0 {
+		return provider, min(opts.GLMSearchMaxResults, 10), nil
+	}
+	return provider, 0, nil
+}
+
+// newDuckDuckGoFallbackSearchProvider builds the keyless DuckDuckGo provider
+// that NewWebSearchTool falls back to when no selection branch matched, and
+// carries the fallback branch's WARN/INFO distinction verbatim.
+func newDuckDuckGoFallbackSearchProvider(opts WebSearchToolOptions, ingestBound int64) (SearchProvider, int, error) {
+	// No keyed or explicitly-enabled provider was selected — fall back to
+	// DuckDuckGo, the built-in keyless provider. DuckDuckGo is the default
+	// whenever no other provider is available: it needs no API key, so web
+	// search must never be unavailable for lack of one. This guarantees
+	// search_web always registers and works — including for a config that
+	// never wrote a tools.web section (a minimal or v0->v1-migrated config,
+	// where DuckDuckGoEnabled defaults to false) — instead of silently
+	// dropping the tool and leaving research agents (Ray) with no search.
+	//
+	// Distinguish two cases so operators can spot misconfiguration:
+	//   • "enabled but unusable" (a provider was switched on but lost its key)
+	//     → WARN, because this almost certainly means a config migration issue.
+	//   • "nothing configured" (fresh/minimal config, no provider section at all)
+	//     → INFO, because DuckDuckGo-as-default is the expected initial state.
+	anyEnabled := opts.PerplexityEnabled || opts.BraveEnabled || opts.SearXNGEnabled ||
+		opts.TavilyEnabled || opts.DuckDuckGoEnabled || opts.BaiduSearchEnabled || opts.GLMSearchEnabled
+	if anyEnabled {
+		logger.WarnCF("tool", "no search provider configured; defaulting to keyless DuckDuckGo",
+			map[string]any{
+				"hint": "a provider was enabled but its key or base URL is missing — check tools.web config",
+			})
+	} else {
+		logger.InfoCF("tool", "no search provider configured; defaulting to keyless DuckDuckGo",
+			map[string]any{
+				"hint": "set tools.web in config to use a keyed provider",
+			})
+	}
+	client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create HTTP client for DuckDuckGo fallback: %w", err)
+	}
+	provider := &DuckDuckGoSearchProvider{proxy: opts.Proxy, client: client, ingestBound: ingestBound}
+	if opts.DuckDuckGoMaxResults > 0 {
+		return provider, min(opts.DuckDuckGoMaxResults, 10), nil
+	}
+	return provider, 0, nil
+}
+
 func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 	var provider SearchProvider
 	maxResults := 10
@@ -1045,143 +1233,73 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 
 	// Priority: Perplexity > Brave > SearXNG > Tavily > DuckDuckGo > Baidu Search > GLM Search
 	if opts.PerplexityEnabled && len(opts.PerplexityAPIKeys) > 0 {
-		client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, perplexityTimeout)
+		prov, override, err := newPerplexitySearchProvider(opts, ingestBound)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create HTTP client for Perplexity: %w", err)
+			return nil, err
 		}
-		provider = &PerplexitySearchProvider{
-			keyPool:     NewAPIKeyPool(opts.PerplexityAPIKeys),
-			proxy:       opts.Proxy,
-			client:      client,
-			ingestBound: ingestBound,
-		}
-		if opts.PerplexityMaxResults > 0 {
-			maxResults = min(opts.PerplexityMaxResults, 10)
+		provider = prov
+		if override > 0 {
+			maxResults = override
 		}
 	} else if opts.BraveEnabled && len(opts.BraveAPIKeys) > 0 {
-		client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
+		prov, override, err := newBraveSearchProvider(opts, ingestBound)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create HTTP client for Brave: %w", err)
+			return nil, err
 		}
-		provider = &BraveSearchProvider{
-			keyPool:     NewAPIKeyPool(opts.BraveAPIKeys),
-			proxy:       opts.Proxy,
-			client:      client,
-			ingestBound: ingestBound,
-		}
-		if opts.BraveMaxResults > 0 {
-			maxResults = min(opts.BraveMaxResults, 10)
+		provider = prov
+		if override > 0 {
+			maxResults = override
 		}
 	} else if opts.SearXNGEnabled && opts.SearXNGBaseURL != "" {
-		// SearXNG: when SSRFChecker is present use its safe client; otherwise
-		// use a minimal stock client (SearXNG is self-hosted so no proxy needed).
-		var searXNGClient *http.Client
-		if opts.SSRFChecker != nil {
-			searXNGClient = opts.SSRFChecker.SafeClient()
-		} else {
-			searXNGClient = &http.Client{Timeout: 10 * time.Second}
-		}
-		provider = &SearXNGSearchProvider{
-			baseURL: opts.SearXNGBaseURL,
-			client:  searXNGClient,
-		}
-		if opts.SearXNGMaxResults > 0 {
-			maxResults = min(opts.SearXNGMaxResults, 10)
+		prov, override := newSearXNGSearchProvider(opts)
+		provider = prov
+		if override > 0 {
+			maxResults = override
 		}
 	} else if opts.TavilyEnabled && len(opts.TavilyAPIKeys) > 0 {
-		client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
+		prov, override, err := newTavilySearchProvider(opts, ingestBound)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create HTTP client for Tavily: %w", err)
+			return nil, err
 		}
-		provider = &TavilySearchProvider{
-			keyPool:     NewAPIKeyPool(opts.TavilyAPIKeys),
-			baseURL:     opts.TavilyBaseURL,
-			proxy:       opts.Proxy,
-			client:      client,
-			ingestBound: ingestBound,
-		}
-		if opts.TavilyMaxResults > 0 {
-			maxResults = min(opts.TavilyMaxResults, 10)
+		provider = prov
+		if override > 0 {
+			maxResults = override
 		}
 	} else if opts.DuckDuckGoEnabled {
-		client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
+		prov, override, err := newDuckDuckGoSearchProvider(opts, ingestBound)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create HTTP client for DuckDuckGo: %w", err)
+			return nil, err
 		}
-		provider = &DuckDuckGoSearchProvider{proxy: opts.Proxy, client: client, ingestBound: ingestBound}
-		if opts.DuckDuckGoMaxResults > 0 {
-			maxResults = min(opts.DuckDuckGoMaxResults, 10)
+		provider = prov
+		if override > 0 {
+			maxResults = override
 		}
 	} else if opts.BaiduSearchEnabled && opts.BaiduSearchAPIKey != "" {
-		client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, perplexityTimeout)
+		prov, override, err := newBaiduSearchProvider(opts, ingestBound)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create HTTP client for Baidu Search: %w", err)
+			return nil, err
 		}
-		provider = &BaiduSearchProvider{
-			apiKey:      opts.BaiduSearchAPIKey,
-			baseURL:     opts.BaiduSearchBaseURL,
-			proxy:       opts.Proxy,
-			client:      client,
-			ingestBound: ingestBound,
-		}
-		if opts.BaiduSearchMaxResults > 0 {
-			maxResults = min(opts.BaiduSearchMaxResults, 10)
+		provider = prov
+		if override > 0 {
+			maxResults = override
 		}
 	} else if opts.GLMSearchEnabled && opts.GLMSearchAPIKey != "" {
-		client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
+		prov, override, err := newGLMSearchProvider(opts, ingestBound)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create HTTP client for GLM Search: %w", err)
+			return nil, err
 		}
-		searchEngine := opts.GLMSearchEngine
-		if searchEngine == "" {
-			searchEngine = "search_std"
-		}
-		provider = &GLMSearchProvider{
-			apiKey:       opts.GLMSearchAPIKey,
-			baseURL:      opts.GLMSearchBaseURL,
-			searchEngine: searchEngine,
-			proxy:        opts.Proxy,
-			client:       client,
-			ingestBound:  ingestBound,
-		}
-		if opts.GLMSearchMaxResults > 0 {
-			maxResults = min(opts.GLMSearchMaxResults, 10)
+		provider = prov
+		if override > 0 {
+			maxResults = override
 		}
 	} else {
-		// No keyed or explicitly-enabled provider was selected — fall back to
-		// DuckDuckGo, the built-in keyless provider. DuckDuckGo is the default
-		// whenever no other provider is available: it needs no API key, so web
-		// search must never be unavailable for lack of one. This guarantees
-		// search_web always registers and works — including for a config that
-		// never wrote a tools.web section (a minimal or v0->v1-migrated config,
-		// where DuckDuckGoEnabled defaults to false) — instead of silently
-		// dropping the tool and leaving research agents (Ray) with no search.
-		//
-		// Distinguish two cases so operators can spot misconfiguration:
-		//   • "enabled but unusable" (a provider was switched on but lost its key)
-		//     → WARN, because this almost certainly means a config migration issue.
-		//   • "nothing configured" (fresh/minimal config, no provider section at all)
-		//     → INFO, because DuckDuckGo-as-default is the expected initial state.
-		anyEnabled := opts.PerplexityEnabled || opts.BraveEnabled || opts.SearXNGEnabled ||
-			opts.TavilyEnabled || opts.DuckDuckGoEnabled || opts.BaiduSearchEnabled || opts.GLMSearchEnabled
-		if anyEnabled {
-			logger.WarnCF("tool", "no search provider configured; defaulting to keyless DuckDuckGo",
-				map[string]any{
-					"hint": "a provider was enabled but its key or base URL is missing — check tools.web config",
-				})
-		} else {
-			logger.InfoCF("tool", "no search provider configured; defaulting to keyless DuckDuckGo",
-				map[string]any{
-					"hint": "set tools.web in config to use a keyed provider",
-				})
-		}
-		client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
+		prov, override, err := newDuckDuckGoFallbackSearchProvider(opts, ingestBound)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create HTTP client for DuckDuckGo fallback: %w", err)
+			return nil, err
 		}
-		provider = &DuckDuckGoSearchProvider{proxy: opts.Proxy, client: client, ingestBound: ingestBound}
-		if opts.DuckDuckGoMaxResults > 0 {
-			maxResults = min(opts.DuckDuckGoMaxResults, 10)
+		provider = prov
+		if override > 0 {
+			maxResults = override
 		}
 	}
 

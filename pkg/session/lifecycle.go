@@ -615,11 +615,23 @@ func (s *LifecycleStore) Mutate(sessionID string, fn func(*LifecycleRecord) erro
 // fn receives a pointer to a COPY of parentID's current tail record
 // (existed=true) or a fresh record with only SessionID set (existed=false
 // — "no record yet", which fn must populate, e.g. to mint an ordinary_root
-// record for a steering session delegating for the first time). fn mutates
-// the parent record in place and returns the child record to publish (or
-// nil for a parent-only write — e.g. nothing to launch this call). Both
-// writes happen while parentID's lock is held; a non-nil error aborts
-// both.
+// record for a steering session delegating for the first time), and returns
+// the child record to publish (or nil for no launch — e.g. nothing to
+// delegate this call).
+//
+// THE PARENT CONTRACT (ADR-093 D1 — stated explicitly, gate type-design #2):
+// fn's mutations of the parent copy take effect ONLY in the mint case
+// (existed=false), where the populated parent record is persisted together
+// with the child. An EXISTING parent is never rewritten by this call:
+// mutations of the copy are silently dropped, the parent file does not
+// change, and the caller is not told. A parent update goes through Mutate
+// instead. All writes happen while parentID's lock is held; a non-nil error
+// aborts them.
+//
+// (The parent callback parameter is a pointer because it must be populated
+// in the mint case; callers that mutate an existing parent's copy get no
+// error — see the contract above. Passing the parent by value would not
+// change the contract, only the syntax.)
 //
 // Deadlock analysis (why the child is NEVER separately locked, not even
 // when its shard differs from the parent's): an earlier version of this
@@ -687,8 +699,16 @@ func (s *LifecycleStore) PublishChildUnderParentLock(
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("session: lifecycle: stat parent %q before child publication: %w", parentID, statErr)
 	}
-	if err := s.persistLocked(parentRec); err != nil {
-		return err
+	// ADR-093 D1: the parent line is appended ONLY in the mint case
+	// (existed == false — the steering session's first delegation). An
+	// existing parent is not rewritten: the unchanged duplicate this store
+	// used to append on every publication was the write issue #890 surfaced,
+	// and a callback that needs to change an existing parent is out of
+	// contract for this primitive (it must go through Mutate).
+	if !found {
+		if err := s.persistLocked(parentRec); err != nil {
+			return err
+		}
 	}
 	if childRec == nil {
 		return nil
@@ -704,20 +724,24 @@ func (s *LifecycleStore) PublishChildUnderParentLock(
 		_ = os.Remove(s.path(childRec.SessionID))
 		s.parentIndex.remove(childRec.SteeringSessionID(), childRec.SessionID)
 
+		// ADR-093 D1: the truncate-branch runs only in the mint case, where
+		// it removes a parent file this publication created — with no parent
+		// append (an existing parent) there is nothing on the parent to undo,
+		// and the parent's file stays byte-for-byte unchanged.
 		var rollbackErr error
-		if parentExistedOnDisk {
-			rollbackErr = os.Truncate(parentPath, parentSize)
-		} else {
-			rollbackErr = os.Remove(parentPath)
-			if errors.Is(rollbackErr, os.ErrNotExist) {
-				rollbackErr = nil
-			}
-		}
 		if !found {
+			if parentExistedOnDisk {
+				rollbackErr = os.Truncate(parentPath, parentSize)
+			} else {
+				rollbackErr = os.Remove(parentPath)
+				if errors.Is(rollbackErr, os.ErrNotExist) {
+					rollbackErr = nil
+				}
+			}
+			if rollbackErr != nil {
+				return errors.Join(err, fmt.Errorf("session: lifecycle: rollback parent %q: %w", parentID, rollbackErr))
+			}
 			s.parentIndex.remove(parentRec.SteeringSessionID(), parentRec.SessionID)
-		}
-		if rollbackErr != nil {
-			return errors.Join(err, fmt.Errorf("session: lifecycle: rollback parent %q: %w", parentID, rollbackErr))
 		}
 		return err
 	}

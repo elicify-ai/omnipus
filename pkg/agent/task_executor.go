@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1231,6 +1232,31 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	return taskSessionID, nil
 }
 
+// steeringRefusalError is the task path's ADR-093 D5 surface: Error() is the
+// plain sentence, Unwrap() the original typed refusal — the plain-error
+// equivalent of the delegate tool's ErrorResult(sentence).WithError(cause).
+// It keeps the real refusal cause machine-readable (errors.Is reaches
+// ErrSteeringStopped, ErrSteeringRevivalFailed and the dispatch sentinels)
+// while the string a caller stores as the task's failure reason carries no
+// machinery text (gate SFH#7).
+type steeringRefusalError struct {
+	sentence string
+	cause    error
+}
+
+func (e *steeringRefusalError) Error() string { return e.sentence }
+func (e *steeringRefusalError) Unwrap() error { return e.cause }
+
+// newSteeringRefusalError maps a typed steering refusal to the task surface's
+// plain sentence, keeping the original error identifiable (gate SFH#7).
+func newSteeringRefusalError(err error) error {
+	sentence := steer.SteeringUnavailableMessage
+	if errors.Is(err, steer.ErrSteeringRevivalFailed) {
+		sentence = steer.SteeringRevivalFailedMessage
+	}
+	return &steeringRefusalError{sentence: sentence, cause: err}
+}
+
 // startTaskNowViaLauncher is FR-A-010's single task front: Launch+Dispatch
 // for a task without a session and Dispatch alone for an existing session.
 func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Task) (string, error) {
@@ -1242,16 +1268,54 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 			}
 		}
 		if _, err := te.launcher.Dispatch(ctx, t.SessionID, generation); err != nil {
+			// Gate SFH#7: map a dispatch refusal for an existing task session
+			// the same way as the launch refusal — sentence surface, cause
+			// kept identifiable, logged before mapping.
+			if steer.IsSteeringUnavailable(err) {
+				logger.ErrorCF("agent", "adr093: task dispatch refused (session not dispatchable — cancelled, terminal, or stale generation)",
+					map[string]any{"task_id": t.ID, "session_id": t.SessionID, "error": err.Error()})
+				return "", newSteeringRefusalError(err)
+			}
 			return "", fmt.Errorf("task_executor: StartTaskNow: dispatch existing session: %w", err)
 		}
 		return t.SessionID, nil
 	}
 
 	steeringSessionID := ""
+	var creatorMeta *session.UnifiedMeta
 	if t.OriginSessionID != "" {
 		if sessions := te.agentLoop.GetSessionStore(); sessions != nil {
-			if _, err := sessions.GetMeta(t.OriginSessionID); err == nil {
+			if meta, err := sessions.GetMeta(t.OriginSessionID); err == nil {
+				creatorMeta = meta
 				steeringSessionID = t.OriginSessionID
+				// ADR-093 D6: a task from a stopped or finished chat runs as
+				// an ordinary root - the task's start never revives the
+				// creating conversation (only a human message or a parent
+				// follow-up revives). Emptying the steering id here drops the
+				// launch to launchOrdinaryRoot, so the task runs against the
+				// task's own workspace/owner instead of the inactive chat.
+				// The loop's own lifecycle store, not te.lifecycleStore: the
+				// loop's store is always wired (it is the store the revival
+				// paths read), while the executor's optional injection may be
+				// nil.
+				if lifecycle := te.agentLoop.GetSessionLifecycleStore(); lifecycle != nil {
+					rec, lerr := lifecycle.Load(t.OriginSessionID)
+					if lerr != nil && !errors.Is(lerr, session.ErrLifecycleNotFound) {
+						// Gate SFH#3: a creator-record read failure is not
+						// "the creator is active" — leaving the steering id
+						// set aims the launch at the broken chat, where it is
+						// refused with the send-a-new-message sentence and the
+						// task never starts. Fail the task with the real error
+						// instead (the mapper below keeps the surface
+						// sentence-only for refusals; this is a plain error).
+						logger.ErrorCF("agent", "adr093: task start could not read the creator's lifecycle record",
+							map[string]any{"task_id": t.ID, "session_id": t.OriginSessionID, "error": lerr.Error()})
+						return "", fmt.Errorf("task_executor: StartTaskNow: load creator record %q: %w", t.OriginSessionID, lerr)
+					}
+					if lerr == nil && (rec.Terminal() || rec.Stopped()) {
+						steeringSessionID = ""
+					}
+				}
 			}
 		}
 	}
@@ -1273,7 +1337,31 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 	}
 	launched, err := te.launcher.Launch(ctx, req)
 	if err != nil {
+		// ADR-093 D5: the same plain sentence as the delegate tool when
+		// the launch is refused because the conversation is not active
+		// (e.g. the creator stopped between the gate above and Launch).
+		if steer.IsSteeringUnavailable(err) {
+			// Gate SFH#7: log the underlying refusal at error level and wrap
+			// it (Unwrap) rather than replace it — the old errors.New deleted
+			// the real cause; the surface string is still sentence-only.
+			logger.ErrorCF("agent", "adr093: task launch refused (creating conversation not active)",
+				map[string]any{"task_id": t.ID, "origin_session_id": t.OriginSessionID, "error": err.Error()})
+			return "", newSteeringRefusalError(err)
+		}
 		return "", fmt.Errorf("task_executor: StartTaskNow: launch: %w", err)
+	}
+	// Per-chat approval inheritance (gate security-lead #2): a task that
+	// dropped to the ordinary-root path because its creating chat is
+	// stopped/terminal must still inherit that chat's approval grants and
+	// session mode. The steered path gets this inside launchSteered
+	// (inheritDelegatePermissions); the D6 drop bypassed it, so the task
+	// would start with NO grants where an identical task from an active chat
+	// starts with them — and a per-chat "never auto-approve" would silently
+	// stop applying. Same helper, same components, active/inactive parity.
+	if t.OriginSessionID != "" && steeringSessionID == "" && creatorMeta != nil {
+		if parentAgentID := strings.TrimSpace(creatorMeta.ActiveAgentID); parentAgentID != "" {
+			te.agentLoop.inheritSessionPermissions(t.OriginSessionID, parentAgentID, launched.SessionID, t.AgentID)
+		}
 	}
 	updated, err := te.store.Update(t.ID, task.Patch{SessionID: &launched.SessionID})
 	if err != nil {
@@ -1281,6 +1369,15 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 	}
 	_ = te.activateTaskGoal(updated, launched.SessionID)
 	if _, err := te.launcher.Dispatch(ctx, launched.SessionID, launched.Generation); err != nil {
+		// Gate SFH#7: map a dispatch refusal the same way as the launch
+		// refusal — same sentence surface, cause kept identifiable, logged
+		// before mapping (silent-failure-hunter #7: raw steer text on the
+		// task surface was still possible here).
+		if steer.IsSteeringUnavailable(err) {
+			logger.ErrorCF("agent", "adr093: task dispatch refused (session not dispatchable — cancelled, terminal, or stale generation)",
+				map[string]any{"task_id": t.ID, "session_id": launched.SessionID, "error": err.Error()})
+			return "", newSteeringRefusalError(err)
+		}
 		return "", fmt.Errorf("task_executor: StartTaskNow: dispatch: %w", err)
 	}
 	return launched.SessionID, nil

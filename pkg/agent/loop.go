@@ -495,6 +495,38 @@ type AgentLoop struct {
 	// atomically via the atomic.Pointer so Stop() can be called before Run.
 	stopCancel atomic.Pointer[context.CancelFunc]
 
+	// inboundCtx is the run-scoped context Run executes under, stored at
+	// startup alongside stopCancel. A revived ordinary-root turn
+	// (revive_support.go::runRevivedOrdinaryTurn) runs under THIS context —
+	// not context.Background() — so the same Stop that ends the dispatch
+	// loop cancels it and shutdown's WaitForActiveRequests drains it like
+	// every other in-flight request (ADR-093 gate fix, architect CC-2).
+	// The accessor falls back to loopCtx when Run has not stored a context
+	// yet, and to context.Background() only on a zero-value loop built
+	// without NewAgentLoop.
+	inboundCtx atomic.Pointer[context.Context]
+
+	// loopCtx is the loop-lifetime context, created at construction and
+	// cancelled by Stop() and Close(). It is the fallback a revived
+	// ordinary-root turn runs under when Run has not stored inboundCtx yet
+	// (a revival racing boot) — a turn started before Run must still be
+	// cancellable by the same Stop, not detached on context.Background().
+	// Written once by NewAgentLoop; read-only afterwards.
+	loopCtx context.Context
+
+	// loopCancel cancels loopCtx. Called by Stop() and Close(); idempotent.
+	loopCancel context.CancelFunc
+
+	// revivalFailures remembers the most recent failed revive attempt per
+	// session id (revive_support.go::revivalFailure). The D2 launch backstop
+	// (steer_launcher.go::launchSteered) consults it so a refusal for a
+	// session whose resume attempt is itself failing tells the truth
+	// ("resuming this conversation failed: <plain cause>") instead of the
+	// send-a-new-message sentence that just failed (ADR-093 gate fix,
+	// silent-failure-hunter #6). Entries are cleared on the next successful
+	// revive; nothing here is authoritative — the lifecycle record is.
+	revivalFailures sync.Map
+
 	// cancelAbuse is the shared abuse detector used by RequestCancel across all
 	// four cancel entry points (web, Tier A /cancel, Tier B text-parsing, CLI).
 	// Initialized in NewAgentLoop; always non-nil after construction.
@@ -887,6 +919,11 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 	runCtx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 	al.stopCancel.Store(&runCancel)
+	// Revived inbound turns (revive_support.go) run under the same run-scoped
+	// context as the dispatch loop itself (architect CC-2: a resumed turn is
+	// cancelled by the same Stop that ends the loop and drained by
+	// WaitForActiveRequests — no context.Background()).
+	al.inboundCtx.Store(&runCtx)
 
 	if err := al.ensureHooksInitialized(runCtx); err != nil {
 		return err
@@ -992,116 +1029,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				// channels with no configured agent still get an error reply.
 				// Tracked in activeRequests so shutdown drains it (#265).
 				al.activeRequests.Add(1)
-				go func() {
-					defer al.activeRequests.Done()
-
-					var response string
-					var ag *AgentInstance
-					published := false
-
-					// Outer recover — preserved from before this fix. This is the
-					// only supervising recover for this bare dispatcher goroutine
-					// (unlike session_worker.go's runLoop→processTurn split, there
-					// is no outer layer above it), so it must keep swallowing the
-					// panic (log-and-exit-goroutine) rather than re-panicking again
-					// — doing so would crash the whole gateway process, not just
-					// this one message.
-					defer func() {
-						if r := recover(); r != nil {
-							logger.ErrorCF("agent", "Panic in unroutable-message goroutine",
-								map[string]any{
-									"panic":   r,
-									"channel": msg.Channel,
-									"chat_id": msg.ChatID,
-									"stack":   string(debug.Stack()),
-								})
-						}
-					}()
-
-					// C8 (chat-stream-hang): guarantee a terminal frame on EVERY
-					// exit path, including panic-recover — mirrors the per-session
-					// pattern in session_worker.go's processTurn defer. processMessage
-					// can panic (e.g. a provider/tool nil-deref that escapes the inner
-					// recovers); when it does, response is still "" and nothing is
-					// ever published, leaving the SPA stuck "thinking" forever for
-					// unroutable-path messages too.
-					//
-					// Registered AFTER the outer recover above so that — defers
-					// being LIFO — THIS recover runs FIRST during unwinding: it
-					// synthesizes an error response and force-publishes it via a
-					// fresh bounded-timeout context (runCtx may be canceled during
-					// panic unwinding), then re-panics so the outer recover above
-					// still logs the "Panic in unroutable-message goroutine" event
-					// exactly as before this fix.
-					defer func() {
-						if r := recover(); r != nil {
-							// Log the ORIGINAL panic (with stack) BEFORE attempting the
-							// force-publish below. If publishResponseIfNeeded (or anything
-							// else in this block) itself panics, that new panic — not this
-							// log call — is what would otherwise reach the outer recover's
-							// log line, silently discarding the true root cause (the real
-							// panic from processMessage) behind a confusing secondary
-							// symptom. Logging first guarantees the root cause is always
-							// on record, no matter what happens next.
-							logger.ErrorCF("agent", "Panic in processMessage — emitting terminal error frame",
-								map[string]any{
-									"panic":   r,
-									"channel": msg.Channel,
-									"chat_id": msg.ChatID,
-									"stack":   string(debug.Stack()),
-								})
-							if response == "" {
-								response = "Error processing message: the agent turn failed unexpectedly. Please try again."
-							}
-							if !published {
-								// Isolate the force-publish in its own recover so a panic
-								// here (e.g. a bug in al.bus / publishResponseIfNeeded)
-								// cannot prevent the panic(r) re-throw below — the outer
-								// recover must always see the ORIGINAL panic value r, never
-								// a secondary symptom from this publish attempt.
-								func() {
-									defer func() {
-										if pr := recover(); pr != nil {
-											logger.ErrorCF(
-												"agent",
-												"Panic while force-publishing terminal frame for unroutable-message panic",
-												map[string]any{
-													"panic":   pr,
-													"channel": msg.Channel,
-													"chat_id": msg.ChatID,
-												},
-											)
-										}
-									}()
-									termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
-									defer termCancel()
-									al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response)
-								}()
-								published = true
-							}
-							panic(r)
-						}
-					}()
-
-					var err error
-					response, ag, err = al.processMessage(runCtx, msg)
-					if err != nil && response == "" {
-						// ADR-051 §RD5: never surface raw err text in the assistant-facing
-						// reply. Route through the classifier so provider-originated body /
-						// status / model identity is replaced with the typed copy.
-						// The raw err stays in the defer's log line for operator triage.
-						//
-						// TranslateTurnError, not TranslateLLMError(nil, err.Error()):
-						// passing the error VALUE keeps the sentinels intact, so a turn
-						// refused for a known reason (agent on no workspace) says so
-						// instead of falling to the "we can't tell why" copy.
-						response = TranslateTurnError(err).Message
-					}
-					if response != "" {
-						al.publishResponseIfNeeded(runCtx, ag, msg.Channel, msg.ChatID, response)
-						published = true
-					}
-				}()
+				go al.dispatchUnroutableMessage(runCtx, msg)
 				continue
 			}
 
@@ -1159,49 +1087,13 @@ func (al *AgentLoop) Stop() {
 	if fn := al.stopCancel.Load(); fn != nil {
 		(*fn)()
 	}
-}
-
-func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, ag *AgentInstance, channel, chatID, response string) {
-	if response == "" {
-		return
+	// Cancel the loop-lifetime context too, so a revived ordinary-root turn
+	// started before Run stored its run-scoped context (loopCtx is
+	// inboundRunContext's fallback) is cancelled by the same Stop — never
+	// left detached (architect CC-2's cancellation half).
+	if al.loopCancel != nil {
+		al.loopCancel()
 	}
-
-	alreadySent := false
-	if ag == nil {
-		ag = al.GetRegistry().GetDefaultAgent()
-	}
-	if ag != nil {
-		if tool, ok := ag.Tools.Get("send_message"); ok {
-			if mt, ok := tool.(*tools.MessageTool); ok {
-				alreadySent = mt.HasSentInRound()
-			}
-		}
-	}
-
-	if alreadySent {
-		logger.DebugCF(
-			"agent",
-			"Skipped outbound (message tool already sent)",
-			map[string]any{"channel": channel},
-		)
-		return
-	}
-
-	if err := al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-		Channel: channel,
-		ChatID:  chatID,
-		Content: response,
-	}); err != nil {
-		logger.ErrorCF("agent", "Failed to publish outbound response",
-			map[string]any{"channel": channel, "chat_id": chatID, "error": err.Error()})
-		return
-	}
-	logger.InfoCF("agent", "Published outbound response",
-		map[string]any{
-			"channel":     channel,
-			"chat_id":     chatID,
-			"content_len": len(response),
-		})
 }
 
 // WaitForActiveRequests blocks until all in-flight LLM calls tracked by
@@ -1213,6 +1105,12 @@ func (al *AgentLoop) WaitForActiveRequests() {
 
 // Close releases resources held by agent session stores. Call after Stop.
 func (al *AgentLoop) Close() {
+	// Cancel the loop-lifetime context FIRST, so a revived ordinary-root turn
+	// running on it stops writing through the stores the teardown below
+	// closes (same class as the recap/task/steered-turn drains that follow).
+	if al.loopCancel != nil {
+		al.loopCancel()
+	}
 	// #265: stop scheduling new recaps, then drain the in-flight ones FIRST —
 	// while the registry, session stores, memory stores, and audit logger they
 	// write through are all still live (the teardown below closes them). A recap
@@ -1988,8 +1886,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// resolve against (FR-022: bare "confirm" is ordinary chat, no
 	// interception exists). Nothing stands between handleCommand above and
 	// runAgentLoop below anymore.
-	resp, err := pm.al.runAgentLoop(pm.ctx, agent, pm.opts)
-	return resp, agent, err
+	return pm.al.runInboundTurnWithRevival(pm.ctx, agent, pm.msg, pm.opts)
 }
 
 // runAgentLoop remains the top-level shell that starts a turn and publishes
