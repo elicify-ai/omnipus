@@ -1097,7 +1097,7 @@ func defaultAgentsConfig(workspacePath string) AgentsConfig {
 			// install.
 			MaxTokens:         32768,
 			Temperature:       nil, // nil means use provider default
-			MaxToolIterations: 200,
+			MaxToolIterations: DefaultMaxToolIterations,
 			SteeringMode:      "one-at-a-time",
 			ToolFeedback: ToolFeedbackConfig{
 				Enabled:       false,
