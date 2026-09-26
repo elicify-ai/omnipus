@@ -13,7 +13,7 @@ const ROW_1280 = 1280
 const CEILING_1280 = Math.min(ROW_1280 * 0.7, ROW_1280 - 0 - 360) // 896 (SP-17)
 const DEFAULT_1280 = Math.max(320, Math.min(720, Math.min(ROW_1280 * 0.7, ROW_1280 - 360), Math.max(0.45 * ROW_1280, 320))) // 576
 const DEFAULT_680 = 320 // panelDefaultWidth(680, 0): the 680px ceiling is exactly 320
-const EVIDENCE_DIR = 'uat/evidence/2026-09-26-side-panel-wave0'
+const EVIDENCE_DIR = 'uat/evidence/2026-09-27-side-panel-wave0-fixes'
 const PANEL_MIN = 320
 
 const STORY = 'side-panel-shell-demo-workspace'
@@ -53,6 +53,34 @@ async function dragSeparator(page: Page, dx: number) {
 /** Screenshot helper (evidence dir). */
 async function shot(page: Page, name: string) {
   await page.screenshot({ path: `${EVIDENCE_DIR}/${name}.png`, fullPage: false })
+}
+
+/**
+ * Toggle a panel through its REAL trigger (§9 rows: "click the tab entry").
+ * When the toolbar's container is ≥ 72rem the full strip shows the trigger
+ * button; below it (a docked panel narrowed the chat column, or a narrow
+ * viewport) the strip is the §11 compact dropdown and the toggle goes
+ * through the mirrored menu entry — same handler, same pressed semantics.
+ */
+async function clickPanelTrigger(page: Page, id: string) {
+  const strip = page.getByTestId(`panel-trigger-${id}`)
+  if (await strip.isVisible()) {
+    await strip.click()
+    return
+  }
+  await page.getByTestId('demo-panels-menu-trigger').click()
+  await page.getByTestId(`panel-menu-${id}`).click()
+}
+
+/** Same compact/full split for the demo's "Mark Library dirty" control. */
+async function markLibraryDirty(page: Page) {
+  const strip = page.getByTestId('demo-set-dirty')
+  if (await strip.isVisible()) {
+    await strip.click()
+    return
+  }
+  await page.getByTestId('demo-panels-menu-trigger').click()
+  await page.getByTestId('demo-set-dirty-menu').click()
 }
 
 // ─────────────────────────── Docked rows (1280×800) ───────────────────────
@@ -132,8 +160,8 @@ test('row 5: width memory is per workspace (A vs B)', async ({ page }) => {
 test('row 6: unsaved-edit guard CANCEL keeps Library exactly as it was', async ({ page }) => {
   await openStory(page, 'docked', 'panel1280x800')
   await page.getByTestId('panel-trigger-library').click()
-  await page.getByTestId('demo-set-dirty').click()
-  await page.getByTestId('panel-trigger-tasks').click()
+  await markLibraryDirty(page)
+  await clickPanelTrigger(page, 'tasks')
   const dialog = page.getByRole('alertdialog')
   await expect(dialog).toBeVisible()
   await expect(dialog).toContainText('Discard unsaved changes?')
@@ -148,8 +176,8 @@ test('row 6: unsaved-edit guard CANCEL keeps Library exactly as it was', async (
 test('row 7: guard CONTINUE leaves Library, Tasks docks, pressed state moves', async ({ page }) => {
   await openStory(page, 'docked', 'panel1280x800')
   await page.getByTestId('panel-trigger-library').click()
-  await page.getByTestId('demo-set-dirty').click()
-  await page.getByTestId('panel-trigger-tasks').click()
+  await markLibraryDirty(page)
+  await clickPanelTrigger(page, 'tasks')
   const dialog = page.getByRole('alertdialog')
   await expect(dialog).toBeVisible()
   await dialog.getByRole('button', { name: 'Discard' }).click() // CONTINUE
@@ -163,9 +191,9 @@ test('row 7: guard CONTINUE leaves Library, Tasks docks, pressed state moves', a
 
 test('row 8: second Tasks click closes the panel, pressed clears', async ({ page }) => {
   await openStory(page, 'docked', 'panel1280x800')
-  await page.getByTestId('panel-trigger-tasks').click() // opens
+  await page.getByTestId('panel-trigger-tasks').click() // opens (full strip)
   await expect(page.getByTestId('side-panel')).toBeVisible()
-  await page.getByTestId('panel-trigger-tasks').click() // second click closes
+  await clickPanelTrigger(page, 'tasks') // second click closes (compact strip)
   await expect(page.getByTestId('side-panel')).toBeHidden()
   await expect(page.getByTestId('panel-trigger-tasks')).toHaveAttribute('aria-pressed', 'false')
   await shot(page, 'row-08-toggle-close')
@@ -175,7 +203,7 @@ test('row 9: Browser then Calendar — one at a time, no stranded state', async 
   await openStory(page, 'docked', 'panel1280x800')
   await page.getByTestId('panel-trigger-browser').click() // opens Browser
   await expect(page.getByTestId('side-panel-header')).toContainText('Browser')
-  await page.getByTestId('panel-trigger-calendar').click() // one-at-a-time switch
+  await clickPanelTrigger(page, 'calendar') // one-at-a-time switch (compact strip)
   await expect(page.getByTestId('side-panel-header')).toContainText('Calendar')
   await expect(page.getByTestId('panel-content-calendar')).toBeVisible()
   await expect(page.getByTestId('panel-trigger-browser')).toHaveAttribute('aria-pressed', 'false')
@@ -188,7 +216,7 @@ test('row 9: Browser then Calendar — one at a time, no stranded state', async 
 test('row 10: at 679px Mail takes over — full row, chat inert, no resize handle', async ({ page }) => {
   await page.setViewportSize({ width: 679, height: 900 })
   await openStory(page, 'docked', 'panel679x900')
-  await page.getByTestId('panel-trigger-mail').click()
+  await clickPanelTrigger(page, 'mail') // 679px < 72rem: compact strip
   const panel = page.getByTestId('side-panel')
   await expect(panel).toBeVisible()
   await expect(panel).toHaveAttribute('data-takeover', 'true')
@@ -201,7 +229,7 @@ test('row 10: at 679px Mail takes over — full row, chat inert, no resize handl
 test('row 11: at exactly 680px the docked floors fit — chat 360, panel 320', async ({ page }) => {
   await page.setViewportSize({ width: 680, height: 900 })
   await openStory(page, 'docked', 'panel680x900')
-  await page.getByTestId('panel-trigger-library').click()
+  await clickPanelTrigger(page, 'library') // 680px < 72rem: compact strip
   const w = await widths(page)
   expect(w.panel).toBe(DEFAULT_680)
   expect(w.chat).toBe(360)
@@ -211,7 +239,7 @@ test('row 11: at exactly 680px the docked floors fit — chat 360, panel 320', a
 test('row 12: phone X closes the takeover panel, chat visible again', async ({ page }) => {
   await page.setViewportSize({ width: 679, height: 900 })
   await openStory(page, 'docked', 'panel679x900')
-  await page.getByTestId('panel-trigger-mail').click()
+  await clickPanelTrigger(page, 'mail') // 679px < 72rem: compact strip
   await expect(page.getByTestId('side-panel')).toBeVisible()
   await page.getByTestId('panel-close').click()
   await expect(page.getByTestId('side-panel')).toBeHidden()
@@ -233,7 +261,7 @@ test('row 13: phone Back closes and history returns to the pre-open entry', asyn
     const orig = w.history.pushState.bind(w.history)
     w.history.pushState = (...a) => { w.__panelPushes = (w.__panelPushes ?? 0) + 1; return orig(...a) }
   })
-  await page.getByTestId('panel-trigger-mail').click()
+  await clickPanelTrigger(page, 'mail') // 679px < 72rem: compact strip
   await expect(page.getByTestId('side-panel')).toBeVisible()
   await page.waitForTimeout(800)
   expect(await page.evaluate(() => (window as typeof window & { __panelPushes?: number }).__panelPushes)).toBe(1)
@@ -271,7 +299,7 @@ async function touchSwipe(page: Page, startX: number, startY: number, endX: numb
 test('row 14: swipe right from the left edge closes the takeover panel', async ({ page }) => {
   await page.setViewportSize({ width: 679, height: 900 })
   await openStory(page, 'docked', 'panel679x900')
-  await page.getByTestId('panel-trigger-mail').click()
+  await clickPanelTrigger(page, 'mail') // 679px < 72rem: compact strip
   await expect(page.getByTestId('side-panel')).toBeVisible()
   // Start INSIDE the 24px edge zone, drag right well past 96px.
   await touchSwipe(page, 12, 450, 12 + 160)
@@ -283,7 +311,7 @@ test('row 14: swipe right from the left edge closes the takeover panel', async (
 test('row 15: swipe inside the mail carousel scrolls content, never closes', async ({ page }) => {
   await page.setViewportSize({ width: 679, height: 900 })
   await openStory(page, 'docked', 'panel679x900')
-  await page.getByTestId('panel-trigger-mail').click()
+  await clickPanelTrigger(page, 'mail') // 679px < 72rem: compact strip
   await expect(page.getByTestId('side-panel')).toBeVisible()
   const carousel = page.getByTestId('mail-carousel')
   await expect(carousel).toBeVisible()
@@ -309,9 +337,9 @@ test('row 16: keyboard — tab to separator, arrows, Home/End, Escape with focus
   await page.getByTestId('panel-trigger-library').click()
   await expect(page.getByTestId('side-panel')).toBeVisible()
 
-  // Tab to the separator: DOM order from the Library trigger is the five
-  // remaining triggers, chat input, send — then the separator. Walk
-  // defensively (cap 30) instead of hardcoding the count.
+  // Tab to the separator: with the panel docked the strip is the compact
+  // dropdown, so the walk crosses the compact trigger, chat input, send —
+  // then the separator. Walk defensively (cap 30) instead of hardcoding.
   await page.getByTestId('panel-trigger-library').focus()
   const sep = page.getByTestId('panel-resize-separator')
   let pressed = 0
@@ -347,7 +375,7 @@ test('row 16: keyboard — tab to separator, arrows, Home/End, Escape with focus
   await expect(page.getByTestId('panel-trigger-library')).toBeFocused()
 
   // SP-19: Escape on the Browser panel NEVER closes it — it releases driving.
-  await page.getByTestId('panel-trigger-browser').click()
+  await clickPanelTrigger(page, 'browser') // Library docked: compact strip
   await expect(page.getByTestId('side-panel')).toBeVisible()
   await page.getByTestId('browser-driving-surface').focus()
   await page.keyboard.press('Escape')

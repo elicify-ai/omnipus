@@ -13,7 +13,7 @@
 // LibraryExplorer's useQuery hooks require.
 
 import { useState } from 'react'
-import type { ReactNode } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { expect, userEvent, within } from 'storybook/test'
@@ -67,49 +67,64 @@ function openViaTrigger(id: PanelId) {
 }
 
 export const Docked: Story = {
-  parameters: { viewport: { defaultViewport: 'panel1280x800' } },
+  parameters: { globals: { viewport: { value: 'panel1280x800' } } },
 }
 
 /** Row 11: at exactly 680px the docked floors fit — chat 360, panel 320. */
 export const DockedBoundary: Story = {
-  parameters: { viewport: { defaultViewport: 'panel680x900' } },
+  parameters: { globals: { viewport: { value: 'panel680x900' } } },
 }
+
+/** A fixed 679x900 stage for the phone-takeover stories. The shell measures
+ *  its OWN row (MIN-001 ResizeObserver), so a 679px-wide stage forces the
+ *  takeover layout in every surface — SB10 does not size the preview from
+ *  the viewport global on direct open (the manager's pane stays fluid and
+ *  the standalone iframe.html never applies it), and the demo must show the
+ *  phone layout on load with no manual resize. Width/height are viewport
+ *  dimensions, not spacing, so the arbitrary values are deliberate. */
+const phoneStage = (Story: ComponentType) => (
+  <div className="h-[900px] w-[679px] overflow-hidden">
+    <Story />
+  </div>
+)
 
 /** Rows 10/12/14/15: below 680px the panel takes over the full row. */
 export const PhoneTakeover: Story = {
-  parameters: { viewport: { defaultViewport: 'panel679x900' } },
+  parameters: { globals: { viewport: { value: 'panel679x900' } } },
+  decorators: [phoneStage],
 }
 
 /** Row 13: the Back affordance — one pushed history step per open panel. */
 export const PhoneBack: Story = {
-  parameters: { viewport: { defaultViewport: 'panel679x900' } },
+  parameters: { globals: { viewport: { value: 'panel679x900' } } },
+  decorators: [phoneStage],
 }
 
 export const PanelLibrary: Story = {
-  parameters: { viewport: { defaultViewport: 'panel1280x800' } },
+  parameters: { globals: { viewport: { value: 'panel1280x800' } } },
   play: openViaTrigger('library'),
 }
 
 export const PanelBrowser: Story = {
-  parameters: { viewport: { defaultViewport: 'panel1280x800' } },
+  parameters: { globals: { viewport: { value: 'panel1280x800' } } },
 }
 
 export const PanelMail: Story = {
-  parameters: { viewport: { defaultViewport: 'panel1280x800' } },
+  parameters: { globals: { viewport: { value: 'panel1280x800' } } },
   play: openViaTrigger('mail'),
 }
 
 export const PanelTasks: Story = {
-  parameters: { viewport: { defaultViewport: 'panel1280x800' } },
+  parameters: { globals: { viewport: { value: 'panel1280x800' } } },
   play: openViaTrigger('tasks'),
 }
 
 export const PanelTeam: Story = {
-  parameters: { viewport: { defaultViewport: 'panel1280x800' } },
+  parameters: { globals: { viewport: { value: 'panel1280x800' } } },
   play: openViaTrigger('team'),
 }
 
 export const PanelCalendar: Story = {
-  parameters: { viewport: { defaultViewport: 'panel1280x800' } },
+  parameters: { globals: { viewport: { value: 'panel1280x800' } } },
   play: openViaTrigger('calendar'),
 }

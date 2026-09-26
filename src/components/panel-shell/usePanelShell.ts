@@ -34,10 +34,30 @@ export function usePanelShell(panels: PanelDefinition[], username: string) {
   const panelsRef = useRef(panels)
   panelsRef.current = panels
 
-  /** Return focus to the control that opened the panel (MIN-002). */
+  /** Return focus to the control that opened the panel (MIN-002). The
+   *  trigger can be display:none AT the close moment — a container-query
+   *  strip flip (compact dropdown ↔ full strip) or the takeover's chat
+   *  un-hide resolves only after the close re-render + style recalc, and
+   *  focus() into display:none is a silent no-op — so the focus lands via a
+   *  short frame-bounded retry. Shell-level correctness: wave 1's real tab
+   *  strip collapses the same way. */
   const restoreFocusToTrigger = useCallback((id: PanelId) => {
-    const root = document.querySelector(`[${PANEL_TRIGGER_ATTR}="${id}"]`)
-    if (root instanceof HTMLElement && root.isConnected) root.focus()
+    const tryFocus = (): boolean => {
+      const root = document.querySelector(`[${PANEL_TRIGGER_ATTR}="${id}"]`)
+      if (!(root instanceof HTMLElement) || !root.isConnected) return false
+      root.focus()
+      return document.activeElement === root
+    }
+    if (tryFocus()) return
+    let frames = 0
+    const tick = (): void => {
+      if (tryFocus()) return
+      // Bounded: if the trigger never becomes focusable (e.g. the chat
+      // column is hidden in the takeover), stop after 10 frames and let
+      // focus stay where the browser put it.
+      if (++frames < 10) requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
   }, [])
 
   /** CRIT-001: run the outgoing panel's guard; true when the move is allowed. */

@@ -71,7 +71,10 @@ export function fixtureKnowledgeInfo(workspaceId: string, path: string): Knowled
   const isVault = workspaceId === 'ws-alpha' && path === 'notes'
   return {
     workspace_id: workspaceId,
-    root_path: path,
+    // The work-tree root is spelled "." — same normalization the gateway
+    // handler does (pkg/gateway/rest_knowledge.go): root_path has minLength 1,
+    // so '' would fail the generated Zod schema the explorer validates with.
+    root_path: path === '' ? '.' : path,
     is_knowledge_base: isVault,
     marker: isVault ? 'omnipus_vault' : 'none',
     ...(isVault ? { collection_id: 'col-alpha-notes', display_name: 'Alpha Notes' } : {}),

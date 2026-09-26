@@ -6,8 +6,16 @@
 // Library — B has its OWN remembered width).
 
 import { useState } from 'react'
+import { CaretDown, List } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { setLibraryEditorDirty } from '@/components/library/preview/unsavedGuard'
 import { cn } from '@/lib/utils'
 import { SidePanelShell } from '../SidePanelShell'
@@ -42,6 +50,13 @@ export function DemoWorkspace() {
     shell.requestToggle(id, { workspaceId })
   }
 
+  /** The compact trigger's label — the active panel, like the production
+   *  view-switcher names the active view (§11). */
+  const activePanelLabel =
+    shell.activePanel === null
+      ? 'Panels'
+      : (PANEL_BUTTONS.find((p) => p.id === shell.activePanel?.id)?.label ?? 'Panels')
+
   const sendMessage = () => {
     const text = draft.trim()
     if (text === '') return
@@ -52,47 +67,129 @@ export function DemoWorkspace() {
   return (
     <SidePanelShell panels={DEMO_PANELS} username={DEMO_USERNAME} chat={
       <div className="flex h-full min-h-0 flex-col">
+        {/* The demo's tab strip (US-5/MAJ-007). Same responsive rule as the
+            production WorkspaceTabBar (spec §11 compact-dropdown scenario,
+            MAJ-007): the strip collapses to a compact dropdown when its OWN
+            CONTAINER drops below @6xl (72rem) — a docked panel narrows the
+            chat column without changing the window, so this is a container
+            query (@container), never a viewport media query. Below the
+            breakpoint the dropdown MIRRORS every strip control with the same
+            handlers and pressed semantics (§11: "dropdown mirrors the
+            strip's toggle semantics"); the strip never wraps. */}
         <div
           data-testid="demo-toolbar"
-          className="flex min-h-10 shrink-0 flex-wrap items-center gap-[var(--space-1)] border-b border-[var(--color-border)] px-[var(--space-2)]"
+          className="@container flex min-h-10 shrink-0 items-center gap-[var(--space-1)] border-b border-[var(--color-border)] px-[var(--space-2)]"
         >
-          {WORKSPACES.map((w) => (
-            <Button
-              key={w.id}
-              size="sm"
-              variant={workspaceId === w.id ? 'secondary' : 'ghost'}
-              aria-pressed={workspaceId === w.id}
-              data-testid={`workspace-switch-${w.id}`}
-              onClick={() => setWorkspaceId(w.id)}
-            >
-              {w.label}
-            </Button>
-          ))}
-          <span className="grow" />
-          <Button
-            size="sm"
-            variant="ghost"
-            data-testid="demo-set-dirty"
-            onClick={() => setLibraryEditorDirty(true)}
-          >
-            Mark Library dirty
-          </Button>
-          {PANEL_BUTTONS.map((p) => {
-          const pressed = shell.activePanel?.id === p.id
-            return (
+          {/* Full strip — toolbar container ≥ 72rem (@6xl). */}
+          <div className="hidden @6xl:flex min-w-0 flex-1 items-center gap-[var(--space-1)]">
+            {WORKSPACES.map((w) => (
               <Button
-                key={p.id}
+                key={w.id}
                 size="sm"
-                variant={pressed ? 'secondary' : 'ghost'}
-                aria-pressed={pressed}
-                data-testid={`panel-trigger-${p.id}`}
-                {...{ [PANEL_TRIGGER_ATTR]: p.id }}
-                onClick={() => openPanel(p.id)}
+                variant={workspaceId === w.id ? 'secondary' : 'ghost'}
+                aria-pressed={workspaceId === w.id}
+                data-testid={`workspace-switch-${w.id}`}
+                onClick={() => setWorkspaceId(w.id)}
               >
-                {p.label}
+                {w.label}
               </Button>
-            )
-          })}
+            ))}
+            <span className="grow" />
+            <Button
+              size="sm"
+              variant="ghost"
+              data-testid="demo-set-dirty"
+              onClick={() => setLibraryEditorDirty(true)}
+            >
+              Mark Library dirty
+            </Button>
+            {PANEL_BUTTONS.map((p) => {
+              const pressed = shell.activePanel?.id === p.id
+              return (
+                <Button
+                  key={p.id}
+                  size="sm"
+                  variant={pressed ? 'secondary' : 'ghost'}
+                  aria-pressed={pressed}
+                  data-testid={`panel-trigger-${p.id}`}
+                  {...{ [PANEL_TRIGGER_ATTR]: p.id }}
+                  onClick={() => openPanel(p.id)}
+                >
+                  {p.label}
+                </Button>
+              )
+            })}
+          </div>
+
+          {/* Compact dropdown — toolbar container < 72rem (@6xl): docked
+              panel or narrow window. Trigger names the active panel (§11:
+              the compact view-switcher), menu items mirror the strip's
+              handlers and pressed semantics — as aria-current + the ●
+              marker, the same pressed-state mirror the production
+              WorkspaceTabBar dropdown uses (aria-pressed is not an allowed
+              attribute on the menuitem role; the strip buttons keep
+              aria-pressed). Menu-item test ids are DISTINCT from the strip's
+              (panel-menu-*, workspace-menu-*, demo-set-dirty-menu) so a
+              collapsed strip and an open menu can never both match one
+              get_by_test_id. */}
+          <div className="flex @6xl:hidden min-w-0 flex-1 items-center">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  data-testid="demo-panels-menu-trigger"
+                  aria-label={`Switch panel, currently ${shell.activePanel?.id ?? 'none'}`}
+                  className="font-headline"
+                >
+                  <List size={14} weight="bold" />
+                  <span className="text-[var(--color-accent)]">
+                    {activePanelLabel}
+                  </span>
+                  <CaretDown size={12} className="opacity-60" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-56">
+                {WORKSPACES.map((w) => (
+                  <DropdownMenuItem
+                    key={w.id}
+                    data-testid={`workspace-menu-${w.id}`}
+                    aria-current={workspaceId === w.id ? 'true' : undefined}
+                    onClick={() => setWorkspaceId(w.id)}
+                  >
+                    {w.label}
+                    {workspaceId === w.id && (
+                      <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-accent)]" aria-hidden="true">●</span>
+                    )}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  data-testid="demo-set-dirty-menu"
+                  onClick={() => setLibraryEditorDirty(true)}
+                >
+                  Mark Library dirty
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {PANEL_BUTTONS.map((p) => {
+                  const pressed = shell.activePanel?.id === p.id
+                  return (
+                    <DropdownMenuItem
+                      key={p.id}
+                      data-testid={`panel-menu-${p.id}`}
+                      aria-current={pressed ? 'true' : undefined}
+                      onClick={() => openPanel(p.id)}
+                    >
+                      {p.label}
+                      {pressed && (
+                        <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-accent)]" aria-hidden="true">●</span>
+                      )}
+                    </DropdownMenuItem>
+                  )
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
 
         <div data-testid="chat-messages" className="min-h-0 flex-1 overflow-y-auto p-[var(--space-3)]">
