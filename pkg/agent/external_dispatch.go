@@ -783,19 +783,6 @@ func recordExternalToolResultUpdateInPlace(
 	)
 }
 
-// DefaultExternalMaxTurns is DEAD for the runtime: prepareRunOptions no
-// longer reads it (#904 FR-004 — the turn cap is the resolver's effective
-// value, config.ResolveMaxToolIterations).
-//
-// TODO(#904 wave 2): delete this constant. Its last users are
-// pkg/gateway/rest_executor_preview.go::postAgentsExecutorPreview (must
-// preview config.ResolveMaxToolIterations(&cfg.Agents.Defaults,
-// &config.AgentConfig{MaxToolIterations: req value}).Effective instead) and
-// the legacy tests rest_executor_preview_test.go and
-// external_dispatch_test.go::TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir
-// (qa-lead's regression rows). Kept only so those still compile.
-const DefaultExternalMaxTurns = 50
-
 // transcriptModelFor returns the model string to stamp on transcript entries
 // produced by an external-CLI sub-turn. It mirrors the trim applied in
 // setLastProducedModel so the variadic and the single-slot stamp agree

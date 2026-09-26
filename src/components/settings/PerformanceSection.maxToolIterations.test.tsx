@@ -221,6 +221,9 @@ describe('PerformanceSection — Max tool calls per turn (US-1, D3, D13)', () =>
   })
 
   it('US-6 AS-4: lowering with no affected agents shows no dialog and PUTs only the limit', async () => {
+    // Spec Given: the global in force is 300 (US-6 scenarios) — the typed
+    // value must differ from the saved one or no change event fires.
+    perfGet = () => settings({ max_tool_iterations: 300 })
     putHandlers = [() => ({ status: 200, body: settings({ max_tool_iterations: 150 }) })]
     renderSection()
     await typeLimit('150')
@@ -238,6 +241,9 @@ describe('PerformanceSection — Max tool calls per turn (US-1, D3, D13)', () =>
 
 describe('PerformanceSection — D11 lowering dialog and D16 drift (US-6)', () => {
   it('US-6 AS-1: the dialog lists "Alpha: 250 → 200" BEFORE any password prompt or write', async () => {
+    // Spec Given: the global in force is 300 (US-6 scenarios) — the typed
+    // value must differ from the saved one or no change event fires.
+    perfGet = () => settings({ max_tool_iterations: 300 })
     previewHandler = () => ({ status: 200, body: { value: 200, agents: [ALPHA] } })
     renderSection()
     await typeLimit('200')
@@ -248,6 +254,9 @@ describe('PerformanceSection — D11 lowering dialog and D16 drift (US-6)', () =
   })
 
   it('US-6 AS-2: Cancel in the dialog writes nothing and asks for no password', async () => {
+    // Spec Given: the global in force is 300 (US-6 scenarios) — the typed
+    // value must differ from the saved one or no change event fires.
+    perfGet = () => settings({ max_tool_iterations: 300 })
     previewHandler = () => ({ status: 200, body: { value: 200, agents: [ALPHA] } })
     renderSection()
     await typeLimit('200')
@@ -259,6 +268,9 @@ describe('PerformanceSection — D11 lowering dialog and D16 drift (US-6)', () =
   })
 
   it('US-6 AS-3: confirm → password → PUT carries the confirmed snapshot; toast (10 s) and a persistent role=status summary name the lowered agents', async () => {
+    // Spec Given: the global in force is 300 (US-6 scenarios) — the typed
+    // value must differ from the saved one or no change event fires.
+    perfGet = () => settings({ max_tool_iterations: 300 })
     previewHandler = () => ({ status: 200, body: { value: 200, agents: [ALPHA, BETA] } })
     putHandlers = [() => ({
       status: 200,
@@ -284,6 +296,9 @@ describe('PerformanceSection — D11 lowering dialog and D16 drift (US-6)', () =
   })
 
   it('US-6 AS-6 (D16): a 409 drift reloads the dialog from the 409 preview with the notice, and requires a fresh confirm', async () => {
+    // Spec Given: the global in force is 300 (US-6 scenarios) — the typed
+    // value must differ from the saved one or no change event fires.
+    perfGet = () => settings({ max_tool_iterations: 300 })
     previewHandler = () => ({ status: 200, body: { value: 200, agents: [ALPHA] } })
     const fresh = { value: 200, agents: [ALPHA, { agent_id: 'b1', agent_name: 'Beta', old_value: 220, new_value: 200 }] }
     putHandlers = [() => ({

@@ -19,9 +19,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // executorPreviewDroppedArg is the exact anonymous shape oapi-codegen
@@ -54,17 +54,19 @@ func (a *restAPI) postAgentsExecutorPreview(w http.ResponseWriter, r *http.Reque
 	model := derefTrimStr(req.Model)
 	cliPath := derefTrimStr(req.CliPath)
 	cliArgsRaw := derefStr(req.CliArgs)
-	// Mirror runExternalCLISubTurn's own fallback EXACTLY (external_dispatch.go:
-	// "maxTurns := agent.MaxIterations; if maxTurns <= 0 { maxTurns =
-	// agent.DefaultExternalMaxTurns }") — omitted OR an explicit zero/negative
-	// value previews with the SAME default a real run would apply, referencing
-	// the constant directly so the two can never drift apart. Without this,
-	// leaving the field blank previously showed no --max-turns flag at all,
-	// silently misrepresenting what a real dispatch actually does.
-	maxTurns := agent.DefaultExternalMaxTurns
-	if req.MaxToolIterations != nil && *req.MaxToolIterations > 0 {
-		maxTurns = *req.MaxToolIterations
+	// Turn cap (#904 D4, FR-013): the same effective value a real dispatch
+	// passes — the single resolver over the global limit in force and the
+	// agent's own value being previewed (omitted = rides the global). A value
+	// outside 1..1000 is refused like on every other limit field (FR-006).
+	var ownLimit *config.AgentConfig
+	if req.MaxToolIterations != nil {
+		if err := config.ValidateMaxToolIterationsBound(*req.MaxToolIterations); err != nil {
+			jsonErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		ownLimit = &config.AgentConfig{MaxToolIterations: *req.MaxToolIterations}
 	}
+	maxTurns := config.ResolveMaxToolIterations(&a.agentLoop.GetConfig().Agents.Defaults, ownLimit).Effective
 
 	// Tokenise cli_args exactly the way the real dispatch site does
 	// (pkg/agent/external_dispatch.go via runner.ParseCLIArgs), so the

@@ -748,10 +748,13 @@ func FixtureAgent_Populated() Agent {
 		Soul:              "You are Jim, a helpful assistant.",
 		TimeoutSeconds:    300,
 		MaxToolIterations: 50,
-		Color:             &color,
-		Icon:              &icon,
-		Model:             &model,
-		Warning:           warning,
+		// #904: 50 is the agent's own value (≤ the global), so source=agent.
+		MaxToolIterationsSource:   MaxToolIterationsSourceAgent,
+		MaxToolIterationsOverride: intPtr(50),
+		Color:                     &color,
+		Icon:                      &icon,
+		Model:                     &model,
+		Warning:                   warning,
 	}
 }
 
@@ -761,15 +764,17 @@ func FixtureAgent_ZeroValue() Agent {
 
 func FixtureAgent_Edge() Agent {
 	return Agent{
-		Revision:          repeatStr("a", 64),
-		Id:                "custom-" + repeatStr("y", 36),
-		Name:              "Unicode Agent 🤖",
-		Type:              AgentTypeMain,
-		Locked:            false,
-		Status:            AgentStatusDraft,
-		Soul:              "",
-		TimeoutSeconds:    0,
-		MaxToolIterations: 0,
+		Revision:       repeatStr("a", 64),
+		Id:             "custom-" + repeatStr("y", 36),
+		Name:           "Unicode Agent 🤖",
+		Type:           AgentTypeMain,
+		Locked:         false,
+		Status:         AgentStatusDraft,
+		Soul:           "",
+		TimeoutSeconds: 0,
+		// #904: the effective limit's lower bound is 1 (Agent.yaml minimum).
+		MaxToolIterations:       1,
+		MaxToolIterationsSource: MaxToolIterationsSourceGlobal,
 	}
 }
 

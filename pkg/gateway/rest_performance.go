@@ -5,7 +5,7 @@
 package gateway
 
 import (
-	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -87,7 +87,12 @@ func wireMaxParallelAgents(configured, effective int) int {
 }
 
 func (a *restAPI) getPerformance(w http.ResponseWriter, _ *http.Request) {
-	cfg := a.agentLoop.GetConfig()
+	jsonOK(w, performanceSettingsResponse(a.agentLoop.GetConfig()))
+}
+
+// performanceSettingsResponse builds the PerformanceSettings body from cfg;
+// shared by GET and PUT so both return the identical shape.
+func performanceSettingsResponse(cfg *config.Config) gen.PerformanceSettings {
 	effective, capped := cfg.Performance.EffectiveMaxParallelAgents()
 	configured := wireMaxParallelAgents(cfg.Performance.MaxParallelAgents, effective)
 	// tools_on_demand mirrors cfg.Tools.Manifest.Compressed:
@@ -99,28 +104,36 @@ func (a *restAPI) getPerformance(w http.ResponseWriter, _ *http.Request) {
 	// is always the resolved value of the one config field, never echoed
 	// back as an unresolved 0. Always present in responses per the schema.
 	goalMaxRounds := cfg.Planning.EffectiveGoalMaxRounds()
-	jsonOK(w, gen.PerformanceSettings{
+	ps := gen.PerformanceSettings{
 		MaxParallelAgents:           &configured,
 		EffectiveMaxParallelAgents:  &effective,
 		MaxParallelAgentsConfigured: &capped,
 		ToolsOnDemand:               &toolsOnDemand,
 		GoalMaxRounds:               &goalMaxRounds,
-	})
+	}
+	// #904: the global tool-iteration limit in force, plus the D13 saved
+	// state (and raw value when out of range) for the Settings warning.
+	applyPerformanceMaxToolIterations(&ps, cfg)
+	return ps
 }
 
+// putPerformance applies a partial PerformanceSettingsUpdate. For the #904
+// global tool-iteration limit it follows the spec's D11/D16 write order:
+// (1) decode and bound-check; (2) drift pre-check before the step-up token
+// is consumed; (3) requireReAuth; (4–6) under configMu: the deciding drift
+// and revision check, the confirmed agents lowered, then config.json written
+// once (see writePerformanceLocked); (7) registry reload.
 func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
-	// Re-auth gate (Spec-6 FR-12.2 / Spec-3 FR-6.6): the Max-parallel-agents
-	// performance setting is a sensitive HTTP-layer change and requires the
-	// single-use re-auth consent token — the same gate the Integrations PUT
-	// enforces. RequireNotBypass (already in adminWrap) is a 503 dev-mode guard,
-	// NOT this consent check. The user is guaranteed in context here because the
-	// route is admin-wrapped.
+	// Re-auth gate (Spec-6 FR-12.2 / Spec-3 FR-6.6): the performance settings
+	// are a sensitive HTTP-layer change and require the single-use re-auth
+	// consent token — the same gate the Integrations PUT enforces.
+	// RequireNotBypass (already in adminWrap) is a 503 dev-mode guard, NOT
+	// this consent check. The user is guaranteed in context here because the
+	// route is admin-wrapped. The token is consumed only after the body is
+	// validated and the #904 drift pre-check passed (spec step 3).
 	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
 	if !ok || user == nil {
 		jsonErr(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
-	if !a.requireReAuth(w, r, user.Username) {
 		return
 	}
 
@@ -134,8 +147,10 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 
 	// At least one field must be present — a PUT with no recognized fields is
 	// a no-op that almost certainly indicates a client bug.
-	if req.MaxParallelAgents == nil && req.ToolsOnDemand == nil && req.GoalMaxRounds == nil {
-		jsonErr(w, http.StatusBadRequest, "at least one of max_parallel_agents, tools_on_demand or goal_max_rounds is required")
+	if req.MaxParallelAgents == nil && req.ToolsOnDemand == nil && req.GoalMaxRounds == nil &&
+		req.MaxToolIterations == nil {
+		jsonErr(w, http.StatusBadRequest,
+			"at least one of max_parallel_agents, tools_on_demand, goal_max_rounds or max_tool_iterations is required")
 		return
 	}
 
@@ -154,7 +169,21 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+	// #904 step 1 (bound, well-formed confirmation) and step 2 (drift
+	// pre-check, before the token is consumed).
+	limitUpd, ok := parseMaxToolIterationsUpdate(w, &req)
+	if !ok {
+		return
+	}
+	if limitUpd != nil && !a.preCheckMaxToolIterationsDrift(w, limitUpd) {
+		return
+	}
+
+	if !a.requireReAuth(w, r, user.Username) {
+		return
+	}
+
+	outcome, werr := a.writePerformanceLocked(r.Context(), limitUpd, func(m map[string]any) error {
 		// Partial update: only touch the fields that were provided.
 		if req.MaxParallelAgents != nil {
 			// Accept 0 as "reset to auto-detect"; values < 0 rejected above.
@@ -171,10 +200,14 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 			planning := ensureMap(m, "planning")
 			planning["goal_max_rounds"] = *req.GoalMaxRounds
 		}
+		if limitUpd != nil {
+			defaults := ensureMap(m, "agents", "defaults")
+			defaults["max_tool_iterations"] = limitUpd.value
+		}
 		return nil
-	}); err != nil {
-		jsonErr(w, http.StatusInternalServerError,
-			fmt.Sprintf("could not update performance settings: %v", err))
+	})
+	if werr != nil {
+		writeJSON(w, werr.status, werr.body)
 		return
 	}
 
@@ -187,16 +220,23 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 		te.ResizeDispatchSema(newEffective)
 	}
 
-	newCfg := a.agentLoop.GetConfig()
-	effective, capped := newCfg.Performance.EffectiveMaxParallelAgents()
-	configured := wireMaxParallelAgents(newCfg.Performance.MaxParallelAgents, effective)
-	toolsOnDemand := newCfg.Tools.Manifest.Compressed
-	goalMaxRounds := newCfg.Planning.EffectiveGoalMaxRounds()
-	jsonOK(w, gen.PerformanceSettings{
-		MaxParallelAgents:           &configured,
-		EffectiveMaxParallelAgents:  &effective,
-		MaxParallelAgentsConfigured: &capped,
-		ToolsOnDemand:               &toolsOnDemand,
-		GoalMaxRounds:               &goalMaxRounds,
-	})
+	// #904 step 7 / FR-005: every agent instance snapshots its limit at
+	// construction, so a changed global (or a lowered agent) needs a
+	// registry reload for the next turn to use it. A turn already running
+	// keeps the limit it started with (D18).
+	if outcome.globalChanged || len(outcome.lowered) > 0 {
+		if err := a.triggerReloadAndWait(); err != nil {
+			slog.Error("rest: PUT /performance: reload failed", "error", err)
+			jsonErr(w, http.StatusInternalServerError,
+				"performance settings written but the reload failed; the new tool-iteration limit applies after the next reload or restart")
+			return
+		}
+	}
+
+	resp := performanceSettingsResponse(a.agentLoop.GetConfig())
+	if len(outcome.lowered) > 0 {
+		lowered := outcome.lowered
+		resp.MaxToolIterationsLoweredAgents = &lowered
+	}
+	jsonOK(w, resp)
 }
