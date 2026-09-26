@@ -533,6 +533,17 @@ func jsonErr(w http.ResponseWriter, status int, msg string) {
 	}
 }
 
+// jsonErrCode writes an ErrorResponse with a machine-readable code (MC-8's
+// closed error-class enum in `code`, MC-16's stale_draft). Same Content-Type
+// discipline as jsonErr.
+func jsonErrCode(w http.ResponseWriter, status int, msg, code string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: msg, Code: &code}); err != nil {
+		slog.Debug("rest: write error response failed", "error", err)
+	}
+}
+
 // boolPtr returns a pointer to b. Used wherever an API response field requires
 // *bool but the source value is a plain bool.
 func boolPtr(b bool) *bool { return &b }

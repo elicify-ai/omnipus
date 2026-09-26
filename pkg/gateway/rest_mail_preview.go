@@ -274,13 +274,21 @@ func mailExtractRemoteImageURLs(raw string) []string {
 	return out
 }
 
+// mailPreviewNotFound is the ONE refusal body for the whole serve prefix
+// (MC-43/MC-45): unknown path, wrong method, bad index, unknown/expired
+// token and the cookie-variant all write byte-identical JSON 404s - never
+// the stock library body, never a distinguishable difference.
+func mailPreviewNotFound(w http.ResponseWriter) {
+	jsonErr(w, http.StatusNotFound, "not found")
+}
+
 // handleServe routes the token-only preview prefix: html/{token},
 // part/{token}/{index}, img/{token}/{index}. Every failure - unknown path,
 // unknown token, expired token, bad index - is the same bare 404 (MC-43):
 // no body distinguishes a live token from a dead one.
 func (p *mailPreviewRoutes) handleServe(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		http.NotFound(w, r)
+		mailPreviewNotFound(w)
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, mailPreviewPathPrefix)
@@ -292,7 +300,7 @@ func (p *mailPreviewRoutes) handleServe(w http.ResponseWriter, r *http.Request) 
 		token, idxStr, ok := strings.Cut(tail, "/")
 		idx, perr := strconv.Atoi(idxStr)
 		if !ok || perr != nil || idx < 0 {
-			http.NotFound(w, r)
+			mailPreviewNotFound(w)
 			return
 		}
 		if kind == "part" {
@@ -301,7 +309,7 @@ func (p *mailPreviewRoutes) handleServe(w http.ResponseWriter, r *http.Request) 
 			p.serveImage(w, r, token, idx)
 		}
 	default:
-		http.NotFound(w, r)
+		mailPreviewNotFound(w)
 	}
 }
 
@@ -310,7 +318,7 @@ func (p *mailPreviewRoutes) handleServe(w http.ResponseWriter, r *http.Request) 
 func (p *mailPreviewRoutes) serveHTML(w http.ResponseWriter, r *http.Request, token string) {
 	g, ok := p.tokens.lookup(token)
 	if !ok {
-		http.NotFound(w, r)
+		mailPreviewNotFound(w)
 		return
 	}
 	html := strings.ReplaceAll(g.HTML, mailTokenPlaceholder, token)
@@ -329,12 +337,12 @@ func (p *mailPreviewRoutes) serveHTML(w http.ResponseWriter, r *http.Request, to
 func (p *mailPreviewRoutes) servePart(w http.ResponseWriter, r *http.Request, token string, idx int) {
 	g, ok := p.tokens.lookup(token)
 	if !ok || idx >= len(g.Inline) {
-		http.NotFound(w, r)
+		mailPreviewNotFound(w)
 		return
 	}
 	part := g.Inline[idx]
 	if mt, _, perr := mime.ParseMediaType(part.ContentType); perr != nil || !strings.HasPrefix(mt, "image/") {
-		http.NotFound(w, r)
+		mailPreviewNotFound(w)
 		return
 	}
 	h := w.Header()
@@ -353,12 +361,12 @@ func (p *mailPreviewRoutes) servePart(w http.ResponseWriter, r *http.Request, to
 func (p *mailPreviewRoutes) serveImage(w http.ResponseWriter, r *http.Request, token string, idx int) {
 	g, ok := p.tokens.lookup(token)
 	if !ok || !g.LoadRemote || idx >= len(g.RemoteURLs) {
-		http.NotFound(w, r)
+		mailPreviewNotFound(w)
 		return
 	}
 	data, ctype, ok := p.fetchRemoteImage(r.Context(), g.RemoteURLs[idx])
 	if !ok {
-		http.NotFound(w, r)
+		mailPreviewNotFound(w)
 		return
 	}
 	h := w.Header()

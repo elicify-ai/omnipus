@@ -70,11 +70,33 @@ const (
 	maxBodyBytes = 256 * 1024
 )
 
-// imapDial is the production IMAPS dialer. It is a package-level var only so
-// tests can point dialIMAP at an in-memory server over a plaintext connection;
-// production code never reassigns it.
+// imapDial dials the IMAP server: implicit TLS everywhere except a loopback
+// host, which dials plaintext (LOGIN included). The D36 built-in fake server
+// (spec §7) and the D37 GreenMail UAT instance are loopback servers on
+// dynamic ports, so the local sink is identified by ADDRESS - traffic to it
+// never leaves the machine, and a name- or port-based exception could not
+// carry a dynamic port. It is a package-level var only so tests can point
+// dialIMAP at an in-memory server over a plaintext connection; production
+// code never reassigns it.
 var imapDial = func(addr string, tlsCfg *tls.Config) (*imapclient.Client, error) {
+	if isLoopbackAddr(addr) {
+		return imapclient.DialInsecure(addr, nil)
+	}
 	return imapclient.DialTLS(addr, &imapclient.Options{TLSConfig: tlsCfg})
+}
+
+// isLoopbackAddr reports whether addr's host part is a loopback IP or
+// "localhost".
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Account holds the connection parameters for a single mailbox. The password is

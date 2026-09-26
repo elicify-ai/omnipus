@@ -69,9 +69,10 @@ func decodeMailJSON(a *restAPI, w http.ResponseWriter, r *http.Request, schemaNa
 }
 
 func (a *restAPI) handleMailSend(w http.ResponseWriter, r *http.Request, workspaceID, agentID string) {
+	// MC-20: the closure is INVOKED - the limiter wraps the inner handler.
 	withRateLimit(mailMutationLimiter, func(w http.ResponseWriter, r *http.Request) {
 		a.handleMailSendInner(w, r, workspaceID, agentID)
-	})
+	})(w, r)
 }
 
 func (a *restAPI) handleMailSendInner(w http.ResponseWriter, r *http.Request, workspaceID, agentID string) {
