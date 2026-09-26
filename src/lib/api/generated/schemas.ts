@@ -5834,6 +5834,22 @@ export const MailFolder: z.ZodType<MailFolder> = z.object({
 export const MailFolderList: z.ZodType<MailFolderList> = z.object({
   folders: z.array(MailFolder),
 });
+export const MailUnavailableError = z.object({
+  error: z.string(),
+  code: z.enum(["busy", "backoff"]),
+  last_error_class: z
+    .enum([
+      "timeout",
+      "dns",
+      "connect_refused",
+      "auth_failed",
+      "tls",
+      "folder_missing",
+      "server_error",
+    ])
+    .optional(),
+  next_attempt_at: z.string().datetime({ offset: true }).optional(),
+});
 export const MailMessageSummary: z.ZodType<MailMessageSummary> = z.object({
   message_id: z.string().nullable(),
   uid: z.number().int(),
@@ -14292,6 +14308,11 @@ Returns HTTP 201 on success.
         type: "Path",
         schema: z.string(),
       },
+      {
+        name: "retry",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
     ],
     response: MailFolderList,
     errors: [
@@ -14315,6 +14336,12 @@ Returns HTTP 201 on success.
         description: `Mail server unreachable — the body&#x27;s code field carries a sanitized error class from the closed enum (MC-8).
 `,
         schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code&#x3D;busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes.
+`,
+        schema: MailUnavailableError,
       },
     ],
   },
@@ -14351,6 +14378,11 @@ Returns HTTP 201 on success.
         type: "Query",
         schema: z.number().int().optional(),
       },
+      {
+        name: "retry",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
     ],
     response: MailMessagePage,
     errors: [
@@ -14379,6 +14411,12 @@ Returns HTTP 201 on success.
         description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
 `,
         schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code&#x3D;busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes.
+`,
+        schema: MailUnavailableError,
       },
     ],
   },
@@ -14410,6 +14448,11 @@ Returns HTTP 201 on success.
         type: "Path",
         schema: z.string().min(5),
       },
+      {
+        name: "retry",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
     ],
     response: MailMessage,
     errors: [
@@ -14438,6 +14481,12 @@ Returns HTTP 201 on success.
         description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
 `,
         schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code&#x3D;busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes.
+`,
+        schema: MailUnavailableError,
       },
     ],
   },
@@ -14474,6 +14523,11 @@ Returns HTTP 201 on success.
         type: "Path",
         schema: z.number().int(),
       },
+      {
+        name: "retry",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
     ],
     response: z.void(),
     errors: [
@@ -14502,6 +14556,12 @@ Returns HTTP 201 on success.
         description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
 `,
         schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code&#x3D;busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes.
+`,
+        schema: MailUnavailableError,
       },
     ],
   },

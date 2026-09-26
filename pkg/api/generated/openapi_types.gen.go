@@ -4919,6 +4919,57 @@ func (e MailSummaryListItemsWatcherState) Valid() bool {
 	}
 }
 
+// Defines values for MailUnavailableErrorCode.
+const (
+	MailUnavailableErrorCodeBackoff MailUnavailableErrorCode = "backoff"
+	MailUnavailableErrorCodeBusy    MailUnavailableErrorCode = "busy"
+)
+
+// Valid indicates whether the value is a known member of the MailUnavailableErrorCode enum.
+func (e MailUnavailableErrorCode) Valid() bool {
+	switch e {
+	case MailUnavailableErrorCodeBackoff:
+		return true
+	case MailUnavailableErrorCodeBusy:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailUnavailableErrorLastErrorClass.
+const (
+	MailUnavailableErrorLastErrorClassAuthFailed     MailUnavailableErrorLastErrorClass = "auth_failed"
+	MailUnavailableErrorLastErrorClassConnectRefused MailUnavailableErrorLastErrorClass = "connect_refused"
+	MailUnavailableErrorLastErrorClassDns            MailUnavailableErrorLastErrorClass = "dns"
+	MailUnavailableErrorLastErrorClassFolderMissing  MailUnavailableErrorLastErrorClass = "folder_missing"
+	MailUnavailableErrorLastErrorClassServerError    MailUnavailableErrorLastErrorClass = "server_error"
+	MailUnavailableErrorLastErrorClassTimeout        MailUnavailableErrorLastErrorClass = "timeout"
+	MailUnavailableErrorLastErrorClassTls            MailUnavailableErrorLastErrorClass = "tls"
+)
+
+// Valid indicates whether the value is a known member of the MailUnavailableErrorLastErrorClass enum.
+func (e MailUnavailableErrorLastErrorClass) Valid() bool {
+	switch e {
+	case MailUnavailableErrorLastErrorClassAuthFailed:
+		return true
+	case MailUnavailableErrorLastErrorClassConnectRefused:
+		return true
+	case MailUnavailableErrorLastErrorClassDns:
+		return true
+	case MailUnavailableErrorLastErrorClassFolderMissing:
+		return true
+	case MailUnavailableErrorLastErrorClassServerError:
+		return true
+	case MailUnavailableErrorLastErrorClassTimeout:
+		return true
+	case MailUnavailableErrorLastErrorClassTls:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MailboxNewMailSummaryWatcherState.
 const (
 	MailboxNewMailSummaryWatcherStateBackoff MailboxNewMailSummaryWatcherState = "backoff"
@@ -18126,6 +18177,27 @@ type MailSummaryList struct {
 // MailSummaryListItemsWatcherState The watcher's cycle state: ok (last cycle succeeded), error (last cycle failed, next attempt not yet deferred), backoff (failing repeatedly — next_attempt_at carries the next try).
 type MailSummaryListItemsWatcherState string
 
+// MailUnavailableError Typed 503 body for a mail read that the gateway refused to dial: code=backoff (automatic poll during watcher backoff — carries the saved last error class and next_attempt_at) or code=busy (request queued past the per-mailbox concurrency cap beyond the request deadline — MIN-003). Shares error/code with ErrorResponse so generic handlers work unchanged.
+type MailUnavailableError struct {
+	// Code Machine-readable discriminator. backoff = the automatic poll hit the watcher's backoff window; busy = the request queued past the per-mailbox concurrency cap beyond the request deadline (MIN-003). A client branches on it without string matching on the message.
+	Code MailUnavailableErrorCode `json:"code"`
+
+	// Error Human-readable message, safe to display.
+	Error string `json:"error"`
+
+	// LastErrorClass Present when code=backoff — the watcher's saved upstream class (same closed enum as the 502 body's code field, MC-8).
+	LastErrorClass *MailUnavailableErrorLastErrorClass `json:"last_error_class,omitempty"`
+
+	// NextAttemptAt Present when code=backoff.
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+}
+
+// MailUnavailableErrorCode Machine-readable discriminator. backoff = the automatic poll hit the watcher's backoff window; busy = the request queued past the per-mailbox concurrency cap beyond the request deadline (MIN-003). A client branches on it without string matching on the message.
+type MailUnavailableErrorCode string
+
+// MailUnavailableErrorLastErrorClass Present when code=backoff — the watcher's saved upstream class (same closed enum as the 502 body's code field, MC-8).
+type MailUnavailableErrorLastErrorClass string
+
 // Mailbox One (agent, workspace) email mailbox account (M11). Email is a TOOL surface, not a conversational channel: a mailbox belongs to exactly one (agent, workspace) pair — an agent can hold a different mailbox in each workspace it belongs to (different roles, different inboxes), and several agents may each have mailboxes in the same workspace. The mailbox password is stored in the encrypted credential store and is NEVER returned by this endpoint — the `configured` flag reports whether a password is on file.
 type Mailbox struct {
 	// AgentId ID of the agent that owns this mailbox.
@@ -26518,6 +26590,12 @@ type DeleteWorkspaceParams struct {
 	Revision ConfigurationRevision `form:"revision" json:"revision"`
 }
 
+// ListMailFoldersParams defines parameters for ListMailFolders.
+type ListMailFoldersParams struct {
+	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply.
+	Retry *bool `form:"retry,omitempty" json:"retry,omitempty"`
+}
+
 // ListMailMessagesParams defines parameters for ListMailMessages.
 type ListMailMessagesParams struct {
 	// Limit Page size. Zero, negative or absent means the default 20; values above 100 are clamped to 100 (MC-6, mirrors clampLimit in pkg/email/transport.go). A non-integer value is rejected 400.
@@ -26525,13 +26603,28 @@ type ListMailMessagesParams struct {
 
 	// BeforeUid Cursor — list envelopes with uid lower than this value (from MailMessagePage.next_before_uid of the previous page).
 	BeforeUid *int `form:"before_uid,omitempty" json:"before_uid,omitempty"`
+
+	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply.
+	Retry *bool `form:"retry,omitempty" json:"retry,omitempty"`
 }
 
 // ListMailMessagesParamsFolder defines parameters for ListMailMessages.
 type ListMailMessagesParamsFolder string
 
+// GetMailMessageParams defines parameters for GetMailMessage.
+type GetMailMessageParams struct {
+	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply.
+	Retry *bool `form:"retry,omitempty" json:"retry,omitempty"`
+}
+
 // GetMailMessageParamsFolder defines parameters for GetMailMessage.
 type GetMailMessageParamsFolder string
+
+// GetMailAttachmentParams defines parameters for GetMailAttachment.
+type GetMailAttachmentParams struct {
+	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply.
+	Retry *bool `form:"retry,omitempty" json:"retry,omitempty"`
+}
 
 // GetMailAttachmentParamsFolder defines parameters for GetMailAttachment.
 type GetMailAttachmentParamsFolder string

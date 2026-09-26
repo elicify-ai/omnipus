@@ -1,0 +1,44 @@
+title: MailUnavailableError
+description: >
+  Typed 503 body for a mail read that the gateway refused to dial:
+  code=backoff (automatic poll during watcher backoff — carries the saved
+  last error class and next_attempt_at) or code=busy (request queued past
+  the per-mailbox concurrency cap beyond the request deadline — MIN-003).
+  Shares error/code with ErrorResponse so generic handlers work unchanged.
+type: object
+additionalProperties: false
+required:
+  - error
+  - code
+properties:
+  error:
+    type: string
+    description: Human-readable message, safe to display.
+    example: "mailbox backing off; retrying at 12:34"
+  code:
+    type: string
+    enum:
+      - busy
+      - backoff
+    description: >
+      Machine-readable discriminator. backoff = the automatic poll hit the
+      watcher's backoff window; busy = the request queued past the
+      per-mailbox concurrency cap beyond the request deadline (MIN-003).
+      A client branches on it without string matching on the message.
+  last_error_class:
+    type: string
+    enum:
+      - timeout
+      - dns
+      - connect_refused
+      - auth_failed
+      - tls
+      - folder_missing
+      - server_error
+    description: >
+      Present when code=backoff — the watcher's saved upstream class (same
+      closed enum as the 502 body's code field, MC-8).
+  next_attempt_at:
+    type: string
+    format: date-time
+    description: Present when code=backoff.

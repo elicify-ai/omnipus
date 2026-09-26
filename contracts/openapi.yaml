@@ -1728,6 +1728,8 @@ components:
       $ref: ./components/schemas/MailHtmlPreviewTokenResponse.yaml
     CreateEmailDraftResult:
       $ref: ./components/schemas/CreateEmailDraftResult.yaml
+    MailUnavailableError:
+      $ref: ./components/schemas/MailUnavailableError.yaml
     BackupCreateResponse:
       $ref: ./components/schemas/BackupCreateResponse.yaml
     OnboardingStatusResponse:
@@ -10014,6 +10016,20 @@ paths:
         schema:
           type: string
         example: mia
+      - name: retry
+        in: query
+        required: false
+        description: >
+          Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false =
+          automatic panel poll: while the mailbox watcher is in backoff this
+          request does NOT dial — it returns 503 immediately with
+          code=backoff, the watcher's last error class and next_attempt_at.
+          true = human-initiated (mount, folder switch, Retry click, open
+          message): bypasses the backoff gate for this one request; the
+          concurrency cap and coalescing still apply.
+        schema:
+          type: boolean
+          default: false
       responses:
         '200':
           description: The mailbox's three folders with live counts.
@@ -10037,6 +10053,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >
+            Not dialed: code=backoff (automatic poll during backoff — body
+            carries last_error_class + next_attempt_at, D29/R2-9) or
+            code=busy (cap-overflow queue timeout, MIN-003). The upstream
+            enum in the 502 description is unchanged; busy/backoff are
+            gateway-availability codes, not mail-server failure classes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailUnavailableError'
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
@@ -10099,6 +10126,20 @@ paths:
           MailMessagePage.next_before_uid of the previous page).
         schema:
           type: integer
+      - name: retry
+        in: query
+        required: false
+        description: >
+          Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false =
+          automatic panel poll: while the mailbox watcher is in backoff this
+          request does NOT dial — it returns 503 immediately with
+          code=backoff, the watcher's last error class and next_attempt_at.
+          true = human-initiated (mount, folder switch, Retry click, open
+          message): bypasses the backoff gate for this one request; the
+          concurrency cap and coalescing still apply.
+        schema:
+          type: boolean
+          default: false
       responses:
         '200':
           description: One explicit-truncation page of envelopes.
@@ -10128,6 +10169,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >
+            Not dialed: code=backoff (automatic poll during backoff — body
+            carries last_error_class + next_attempt_at, D29/R2-9) or
+            code=busy (cap-overflow queue timeout, MIN-003). The upstream
+            enum in the 502 description is unchanged; busy/backoff are
+            gateway-availability codes, not mail-server failure classes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailUnavailableError'
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
@@ -10187,6 +10239,20 @@ paths:
           type: string
           minLength: 5
         example: "uid:456:123"
+      - name: retry
+        in: query
+        required: false
+        description: >
+          Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false =
+          automatic panel poll: while the mailbox watcher is in backoff this
+          request does NOT dial — it returns 503 immediately with
+          code=backoff, the watcher's last error class and next_attempt_at.
+          true = human-initiated (mount, folder switch, Retry click, open
+          message): bypasses the backoff gate for this one request; the
+          concurrency cap and coalescing still apply.
+        schema:
+          type: boolean
+          default: false
       responses:
         '200':
           description: The full message.
@@ -10216,6 +10282,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >
+            Not dialed: code=backoff (automatic poll during backoff — body
+            carries last_error_class + next_attempt_at, D29/R2-9) or
+            code=busy (cap-overflow queue timeout, MIN-003). The upstream
+            enum in the 502 description is unchanged; busy/backoff are
+            gateway-availability codes, not mail-server failure classes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailUnavailableError'
         '500':
           $ref: '#/components/responses/500InternalServerError'
 
@@ -10355,6 +10432,20 @@ paths:
         description: MIME part index from MailAttachment.part_index.
         schema:
           type: integer
+      - name: retry
+        in: query
+        required: false
+        description: >
+          Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false =
+          automatic panel poll: while the mailbox watcher is in backoff this
+          request does NOT dial — it returns 503 immediately with
+          code=backoff, the watcher's last error class and next_attempt_at.
+          true = human-initiated (mount, folder switch, Retry click, open
+          message): bypasses the backoff gate for this one request; the
+          concurrency cap and coalescing still apply.
+        schema:
+          type: boolean
+          default: false
       responses:
         '200':
           description: >
@@ -10388,6 +10479,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >
+            Not dialed: code=backoff (automatic poll during backoff — body
+            carries last_error_class + next_attempt_at, D29/R2-9) or
+            code=busy (cap-overflow queue timeout, MIN-003). The upstream
+            enum in the 502 description is unchanged; busy/backoff are
+            gateway-availability codes, not mail-server failure classes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailUnavailableError'
         '500':
           $ref: '#/components/responses/500InternalServerError'
 

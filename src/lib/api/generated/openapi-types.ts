@@ -12508,6 +12508,32 @@ export interface components {
             chat_link_reason: string | null;
         };
         /**
+         * MailUnavailableError
+         * @description Typed 503 body for a mail read that the gateway refused to dial: code=backoff (automatic poll during watcher backoff — carries the saved last error class and next_attempt_at) or code=busy (request queued past the per-mailbox concurrency cap beyond the request deadline — MIN-003). Shares error/code with ErrorResponse so generic handlers work unchanged.
+         */
+        MailUnavailableError: {
+            /**
+             * @description Human-readable message, safe to display.
+             * @example mailbox backing off; retrying at 12:34
+             */
+            error: string;
+            /**
+             * @description Machine-readable discriminator. backoff = the automatic poll hit the watcher's backoff window; busy = the request queued past the per-mailbox concurrency cap beyond the request deadline (MIN-003). A client branches on it without string matching on the message.
+             * @enum {string}
+             */
+            code: "busy" | "backoff";
+            /**
+             * @description Present when code=backoff — the watcher's saved upstream class (same closed enum as the 502 body's code field, MC-8).
+             * @enum {string}
+             */
+            last_error_class?: "timeout" | "dns" | "connect_refused" | "auth_failed" | "tls" | "folder_missing" | "server_error";
+            /**
+             * Format: date-time
+             * @description Present when code=backoff.
+             */
+            next_attempt_at?: string;
+        };
+        /**
          * BackupCreateResponse
          * @description Response from POST /api/v1/backup. Returns the path, size, and creation time of the new backup archive.
          */
@@ -23656,7 +23682,10 @@ export interface operations {
     };
     listMailFolders: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. */
+                retry?: boolean;
+            };
             header?: never;
             path: {
                 /**
@@ -23703,6 +23732,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Not dialed: code=backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code=busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailUnavailableError"];
+                };
+            };
         };
     };
     listMailMessages: {
@@ -23712,6 +23750,8 @@ export interface operations {
                 limit?: number;
                 /** @description Cursor — list envelopes with uid lower than this value (from MailMessagePage.next_before_uid of the previous page). */
                 before_uid?: number;
+                /** @description Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. */
+                retry?: boolean;
             };
             header?: never;
             path: {
@@ -23770,11 +23810,23 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Not dialed: code=backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code=busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailUnavailableError"];
+                };
+            };
         };
     };
     getMailMessage: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. */
+                retry?: boolean;
+            };
             header?: never;
             path: {
                 /**
@@ -23835,6 +23887,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not dialed: code=backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code=busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailUnavailableError"];
                 };
             };
         };
@@ -23906,7 +23967,10 @@ export interface operations {
     };
     getMailAttachment: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. */
+                retry?: boolean;
+            };
             header?: never;
             path: {
                 /**
@@ -23969,6 +24033,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not dialed: code=backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code=busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailUnavailableError"];
                 };
             };
         };
@@ -25181,6 +25254,7 @@ export type MailDraftSendRequest = components["schemas"]["MailDraftSendRequest"]
 export type MailHtmlPreviewTokenRequest = components["schemas"]["MailHtmlPreviewTokenRequest"];
 export type MailHtmlPreviewTokenResponse = components["schemas"]["MailHtmlPreviewTokenResponse"];
 export type CreateEmailDraftResult = components["schemas"]["CreateEmailDraftResult"];
+export type MailUnavailableError = components["schemas"]["MailUnavailableError"];
 export type BackupCreateResponse = components["schemas"]["BackupCreateResponse"];
 export type OnboardingStatusResponse = components["schemas"]["OnboardingStatusResponse"];
 export type OperationResult = components["schemas"]["OperationResult"];
