@@ -483,3 +483,39 @@ describe('provider-messages — subtype trust gate (rows 12, 30)', () => {
     expect(le?.provider_message).toBe(true) // RED: reader drops the flag today
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// provider-messages spec RED tests — TDD row 6, TS half (C-3/C-4, OBS-002,
+// MAJ-103). Go half: pkg/api/generated/provider_messages_catalogue_test.go.
+//
+// Oracles from the SPEC ONLY (§6 + §7.1 item 5):
+//   - Bijection (C-3/C-4): the codes carrying a provider_message variant are
+//     exactly the spec §6 templated set — provider_auth_failed, rate_limited,
+//     quota_billing, model_retired — both directions.
+//   - Closed-slot token check (OBS-002): every template's slots come from the
+//     closed set {provider}, {answered_model}, {unavailable_model}.
+//
+// CHARACTERIZATION PIN, green-today-by-design: Wave 1 (contracts) landed this
+// contract data; these assertions guard it against drift. Expected values
+// derive from §6, not from the implementation.
+// ═══════════════════════════════════════════════════════════════════════════
+describe('provider-messages — row 6 TS half: provider_message catalogue bijection + closed slots (C-3/C-4, OBS-002)', () => {
+  const SPEC_TEMPLATED = ['provider_auth_failed', 'rate_limited', 'quota_billing', 'model_retired']
+  const CLOSED_SLOTS = ['provider', 'answered_model', 'unavailable_model']
+
+  it('C-3/C-4 bijection: exactly the §6 templated codes carry a provider_message variant, both directions', () => {
+    const keys = Object.keys(llmErrorProviderMessages).sort()
+    expect(keys).toEqual([...SPEC_TEMPLATED].sort())
+    expect(keys.length).toBe(4)
+  })
+
+  it('OBS-002 closed-slot check: every template uses only the closed slot vocabulary', () => {
+    for (const [code, tmpl] of Object.entries(llmErrorProviderMessages)) {
+      const slots = [...String(tmpl).matchAll(/\{([a-z_]+)\}/g)].map((m) => m[1])
+      expect(slots.length, `template for ${code} has at least one slot`).toBeGreaterThan(0)
+      for (const slot of slots) {
+        expect(CLOSED_SLOTS, `slot {${slot}} in ${code} must be in the closed set`).toContain(slot)
+      }
+    }
+  })
+})
