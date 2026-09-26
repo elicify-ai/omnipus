@@ -1,4 +1,4 @@
-Status: In review
+Status: Approved
 
 ADR: [ADR-081 — Unified Library search, general file search, and the grep engine](../architecture/ADR-081-unified-library-search-and-grep-engine.md) (D4 amendment and grill corrections of 2026-09-26) and [ADR-092 — Shell permission modes: Ask / Auto / God Mode; drop the block list; one rule format](../architecture/ADR-092-shell-permission-modes.md) (2026-09-26 revision note, D9/J2 amendment, correction note with the D8 pin fix and the MIN-004 loop-level test)
 
@@ -13,7 +13,8 @@ ADR grill report `docs/internal/architecture/ADR-092-shell-permission-modes-revi
 `docs/internal/specs/unified-search-and-grep-spec.md` (FINAL) and its two review rounds;
 spec round-1 grill `docs/internal/specs/read-boundary-consistency-spec-review.md`.
 **Evidence baseline**: branch `feature/920-read-boundary` @ `7efcc5d`; the round-1 corrections
-were re-verified against the code at `41aeee4` (see "Round 1 corrections" at the end).
+were re-verified against the code at `41aeee4` (see "Round 1 corrections" at the end); the
+round-2 corrections against `c4db625` (see "Round 2 corrections" at the end).
 **Supersedes (agent `grep` only)**: `unified-search-and-grep-spec.md` FR-020; FR-014 for the
 agent tool; US-3 narrative and AS-7; US-2 AS-5 for a `path` argument (it still holds for the
 human search bar and for symlinks met during a walk); the BDD scenarios "confinement holds
@@ -574,7 +575,8 @@ See "Edge Cases" under User Stories (single list, not duplicated).
 - **Contract**: `tools.Tool` interface, policy compositor, Auto-approve classifier and pin.
 - **On failure**: refusal result + `path.access_denied`; busy → structured busy error.
 - **Development**: real — temp directories, real `os.Root`, real policy; no filesystem mocks
-  except the existing injected-error seams.
+  except the existing injected-error seams and the test-only `grepScopeStatOpenHook`
+  (FR-010), which removes a real directory rather than faking a filesystem.
 
 ### File tools ↔ audit log
 
@@ -777,8 +779,9 @@ rows 15 and 17 mark it as "grep stricter on names".
 **Category**: Edge Case
 
 - **Given** agent "A" and the folder `<EXT>/gone`, which exists when the call starts
-- **And** a test seam removes `<EXT>/gone` after the single read decision admitted it and
-  after the existence check, before the search opens it as a root (FR-010)
+- **And** the test-only hook `grepScopeStatOpenHook` (FR-010) removes `<EXT>/gone` once,
+  synchronously, after the single read decision admitted it and after the existence check,
+  before the search opens it as a root (no sleep, no goroutine)
 - **When** "A" greps "needle" with `path` `<EXT>/gone`
 - **Then** the call is not an error; the result is marked truncated with reason `root_lost`
   and names `<EXT>/gone`
@@ -1220,7 +1223,7 @@ this spec's datasets, never from running the current code.
 | 2 | `TestReadBoundary_GrepRefusesProtected` | Integration | S-1.4, S-5.3 | DS-1 protected rows + audit reason |
 | 3 | `TestReadBoundary_DefaultAreaAndShorthand` | Integration | S-1.5, S-1.6, S-1.13 | D5 unchanged; shorthand unchanged; `path: ""` identical to omitted (DS-1 row 24) |
 | 4 | `TestReadBoundary_MissingPathIsError` | Integration | S-1.9 | error, no roots row |
-| 4a | `TestReadBoundary_AbsoluteRootLost` | Integration | S-1.14 | DS-1 row 25; seam between existence check and root open; truncated `root_lost` naming the root, one roots row, no error |
+| 4a | `TestReadBoundary_AbsoluteRootLost` | Integration | S-1.14 | DS-1 row 25; installs `grepScopeStatOpenHook` via `setGrepScopeStatOpenHook` (restored with `t.Cleanup`) to remove the directory once, synchronously, between the existence check and the root open — no sleep, no goroutine (FR-010); truncated `root_lost` naming the root, one roots row, no error |
 | 5 | `TestReadBoundary_VolumeRootBounded` | Integration | S-1.10 | injected limit; truncated `max_files`; no carve-out hit |
 | 6 | `TestReadBoundary_NULRefusedAndAudited` | Unit | S-1.11 | `path_invalid` row |
 | 7 | `TestReadBoundary_WalkWithholdsCarveOuts` | Integration | S-2.1 | test `$OMNIPUS_HOME`; sessions visible, secret set not |
@@ -1248,7 +1251,8 @@ this spec's datasets, never from running the current code.
 | 29 | `TestReadBoundary_BackslashLiteralUnix` | Unit (unix build tag) | S-7.2 | |
 | 30 | UAT lane "read boundary" | UAT | S-1.2, S-3.2, S-5.7 | real session; evidence checked by uat-validator |
 | 31 | `TestGrepTool_RegistryWiresAuditLogger` | Integration | S-1.4, S-5.1 | a `grep` registered through a real `ToolRegistry` with a real audit logger (logger set before AND after `Register`) writes its `path.access_denied` and `path.search_roots` rows; no logger set by hand on the tool (FR-020) |
-| 32 | `TestGrepTool_NewRootClosedOnEveryExit` | Integration | S-5.6 | absolute-root call refused as busy (both walk slots held by the test), rejected for an invalid pattern, and completed: after each, the process's open-descriptor count is back to its baseline (Linux `/proc/self/fd`) (FR-032) |
+| 32 | `TestGrepTool_NewRootClosedOnEveryExit` | Integration (Linux only) | S-5.6 | in its own file `pkg/tools/grep_fd_linux_test.go` with `//go:build linux`, plus a runtime `t.Skipf` if `/proc/self/fd` cannot be read (precedent `pkg/sandbox/spawn_bg_fd_test.go`): absolute-root call refused as busy (both walk slots held by the test), rejected for an invalid pattern, completed, and lost (`grepScopeStatOpenHook`): after each, the process's open-descriptor count is back to its baseline (FR-032). CHECK confirms `--- PASS` (not `--- SKIP`) on the Linux legs |
+| 32a | `TestGrepTool_NewRootExitPaths` | Integration (all platforms) | S-5.6, S-1.14 | portable companion to 32 in `grep_test.go`, no build tag, no `/proc`: the same four exit paths return their specified outcomes (busy error, invalid-pattern error, completed result, truncated `root_lost`); it does not observe closure, which only test 32 can (FR-032) |
 
 ### Test Datasets
 
@@ -1283,7 +1287,7 @@ Expected outcomes come from decisions D1–D12, ADR-081's D4 amendment and ADR-0
 | 22 | single file | `<EXT>/ext/notes.txt` | admitted, that file only | absolute | admitted | S-1.12 | |
 | 23 | volume root | `/` | admitted; bounded (`max_files` with injected limit) | absolute | admitted | S-1.10 | D7 |
 | 24 | empty string | `""` | admitted: workspace + mounts, identical to row "no `path`" (S-1.5) | `notes/a.md`, `docs-mount/src/b.md` | n/a (grep-only default) | S-1.13 | FR-003; `path_arg` `""` |
-| 25 | absolute root lost after admission | `<EXT>/gone`, removed by a seam after the existence check | not an error: truncated, reason `root_lost`, names the root; one roots row | — | n/a (race seam is grep-only) | S-1.14 | FR-010 |
+| 25 | absolute root lost after admission | `<EXT>/gone`, removed by `grepScopeStatOpenHook` after the existence check | not an error: truncated, reason `root_lost`, names the root; one roots row | — | n/a (race seam is grep-only) | S-1.14 | FR-010 |
 
 #### Dataset DS-2: Auto-approve matrix (tools `read_file`, `list_directory`, `grep`, each row applies to all three)
 
@@ -1468,8 +1472,15 @@ not at workspace A. The rewrite MUST:
   vanished or became unopenable before the walk), the root MUST be carried as an unreachable
   root (the same `unreachableRootFS` carrier a dead mount uses), so the result is truncated
   with reason `root_lost` naming it — never a hard error, never a silent zero (round-1
-  MIN-004; S-1.14). The test drives this through an injected seam between the check and the
-  open; no filesystem mock.
+  MIN-004; S-1.14). The test drives this through a named seam, following the
+  `pkg/tools/task.go::taskGoalEndedHook` pattern: a package-level, test-only
+  `grepScopeStatOpenHook atomic.Pointer[func(subPath string)]` in `pkg/tools/grep.go`, set
+  through an unexported `setGrepScopeStatOpenHook(fn) (restore func())`, and invoked in
+  `grep.go::resolveScopedRoot` after `container.Stat(subPath)` succeeds and before
+  `container.OpenRoot(subPath)` (and before the regular-file branch's parent open). Production
+  never sets it: the pointer stays nil and the cost is one atomic load and a nil check per
+  scoped root. Test 4a sets it to remove the directory once, synchronously — no sleep, no
+  goroutine, no filesystem mock — and restores it with `t.Cleanup`.
 - **FR-011**: The D7 limits (DS-5) MUST apply unchanged to every widened call.
 - **FR-012**: In a read-confined turn, `grep`, `read_file` and `list_directory` MUST admit the
   workspace and its mounts and refuse everything else with a message containing
@@ -1593,7 +1604,17 @@ not at workspace A. The rewrite MUST:
   `RealPath()` (ADR-081 D4 design step 2), and (b) every `os.Root` the new root type opens —
   the parent container and whatever `resolveScopedRoot` opens — is appended to the same
   `opened` slice before any return that can follow it, so `closeAll` covers it. No second
-  closer and no new cleanup path. Test 32 checks it by descriptor count.
+  closer and no new cleanup path. Test 32 checks it by descriptor count and runs on Linux
+  only: it lives in its own `pkg/tools/grep_fd_linux_test.go` with `//go:build linux`, and
+  also skips with `t.Skipf` if `/proc/self/fd` cannot be read (precedent
+  `pkg/sandbox/spawn_bg_fd_test.go`), so it can never fail the `macos-latest` leg of
+  `cross-platform.yml`'s `./...` matrix or any Windows job. The runtime skip is a
+  belt-and-braces guard for restricted containers, not a way to pass: CHECK MUST see
+  `--- PASS: TestGrepTool_NewRootClosedOnEveryExit` (not `--- SKIP`) on the Linux legs. The
+  non-descriptor assertions — each of the four exit paths (busy, invalid pattern, completed,
+  lost root) returns its specified outcome — run on every platform in the untagged test 32a.
+  Closure itself is observed only on Linux; the close path (`closeAll`) has no
+  platform-specific code, so the Linux count covers it.
 
 ## Success Criteria
 
@@ -1636,7 +1657,7 @@ not at workspace A. The rewrite MUST:
   - the three tool descriptions agents read;
   - user docs `docs/tools.md`, `docs/security.md` (and `docs/goals.md`), and the generated
     `docs/reference/built-in-tools.md`.
-- **Test plan execution**: RED — qa-lead writes tests 1–29 (including 4a), 31 and 32 failing
+- **Test plan execution**: RED — qa-lead writes tests 1–29 (including 4a), 31, 32 and 32a failing
   on `7efcc5d`-based code
   (CI on a tests-only commit is the red evidence). GREEN — backend-lead (`grep.go`,
   `resolvepath.go`, `auto_approve.go`, `filesystem.go` dead code, audit emitter and
@@ -1660,7 +1681,7 @@ not at workspace A. The rewrite MUST:
 | FR-007 | US-2 | S-2.5 | 9 `TestReadBoundary_MetadataGuardInWalk` | `metadata_guard.go::metadataFileMatch`; new grep wrapper |
 | FR-008 | US-2 | S-2.6, S-2.7 | 10 | `pkg/filegrep` walk (unchanged); `ResolvePath` for `path` |
 | FR-009 | US-7 | S-7.1, S-7.2 | 28, 29 | `grep.go::validateGrepScope` (removed test), `ResolvePath` |
-| FR-010 | US-1 | S-1.9, S-1.14 | 4, 4a | `grep.go::grepScopeStatError` / resolution error path; `unreachableRootFS` for a root lost after admission |
+| FR-010 | US-1 | S-1.9, S-1.14 | 4, 4a | `grep.go::grepScopeStatError` / resolution error path; `unreachableRootFS` for a root lost after admission; test-only `grepScopeStatOpenHook` in `resolveScopedRoot` |
 | FR-011 | US-1 | S-1.10 | 5 | `filegrep` limits (unchanged) |
 | FR-012 | US-4 | S-4.1, S-4.2, S-4.3, S-4.7 | 15 | `resolvepath.go::resolveValidatedPath` read-confined branch |
 | FR-013 | US-4 | S-4.4 | 16 | `resolvepath.go::ResolvePathAllowingPatterns` |
@@ -1682,7 +1703,7 @@ not at workspace A. The rewrite MUST:
 | FR-029 | — (non-behaviour) | — | `make verify-contracts` (SC-006) | contracts (unchanged) |
 | FR-030 | US-1 | S-4.9 (seed with read_file denied) | 20, 27 | policy compositor (unchanged); docs |
 | FR-031 | US-7 | S-7.1 | 28 | `.github/workflows/cross-platform.yml` new job `windows-tools-tests` + header comment; `docs/operations/platform-support.md` |
-| FR-032 | US-1 | S-5.6, S-1.14 | 32 | `grep.go::GrepTool.Execute` (`defer closeRoots()`), `grepRoots` `opened`/`closeAll` |
+| FR-032 | US-1 | S-5.6, S-1.14 | 32 (Linux), 32a (all platforms) | `grep.go::GrepTool.Execute` (`defer closeRoots()`), `grepRoots` `opened`/`closeAll` |
 
 **Completeness check**: every FR-001..FR-032 has at least one test (FR-028/FR-029 by the
 unchanged-suite and contract gates); every scenario S-1.1..S-7.2 appears in at least one row
@@ -1755,3 +1776,19 @@ correction round, on founder decisions D1–D12. Code facts re-verified at `41ae
 
 Counts after the round: 7 user stories; 51 BDD scenarios (12 Happy Path, 11 Alternate Path, 15 Error Path, 13 Edge Case); 32 functional requirements; 8
 success criteria; datasets DS-1 25 rows, DS-2 26, DS-3 14, DS-4 8, DS-5 7 (80 rows).
+
+## Round 2 corrections (2026-09-26)
+
+Grill round 2 (`read-boundary-consistency-spec-review-round2.md`, verdict REVISE, no founder
+questions, nothing escalated) fixed in the one final correction round. Code facts re-checked
+at `c4db625`. With D1–D12 and both rounds resolved, `Status` moves to `Approved`.
+
+| Finding | Fix |
+|---|---|
+| MAJ-003 — test 32's descriptor count has no cross-platform guard | FR-032 and test 32: own file `pkg/tools/grep_fd_linux_test.go` with `//go:build linux` plus a runtime `t.Skipf` when `/proc/self/fd` is unreadable (precedent `pkg/sandbox/spawn_bg_fd_test.go`); never runs on the `macos-latest` leg or any Windows job; CHECK requires `--- PASS`, not `--- SKIP`, on Linux. New untagged test 32a keeps the non-descriptor exit-path assertions on every platform; traceability FR-032 → 32, 32a; Reachability test list updated |
+| MIN-006 — FR-010's "injected seam" names no mechanism | FR-010 names it: package-level, test-only `grepScopeStatOpenHook atomic.Pointer[func(subPath string)]` with `setGrepScopeStatOpenHook(fn) (restore func())`, after the `pkg/tools/task.go::taskGoalEndedHook` pattern, invoked in `resolveScopedRoot` between `container.Stat(subPath)` and `container.OpenRoot(subPath)`; nil in production (one atomic load and nil check); test 4a removes the directory once, synchronously, no sleep, no goroutine. S-1.14, test 4a, DS-1 row 25, Integration Boundaries and traceability updated |
+| OBS-005, OBS-006, OBS-007 | No defect; no change |
+
+Counts after the round: unchanged — 7 user stories; 51 BDD scenarios (12 Happy Path, 11
+Alternate Path, 15 Error Path, 13 Edge Case); 32 functional requirements; 8 success criteria;
+datasets DS-1 25 rows, DS-2 26, DS-3 14, DS-4 8, DS-5 7 (80 rows). Tests: one added (32a).
