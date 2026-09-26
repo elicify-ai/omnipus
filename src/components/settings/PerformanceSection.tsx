@@ -16,11 +16,12 @@
  * PUT so neither field silently reverts when only one is changed.
  *
  * #904 adds the global "Max tool calls per turn" limit (MaxToolIterationsCard,
- * tool-iteration-limit-spec.md US-1/US-6): a change is first previewed
+ * tool-iteration-limit-spec.md US-1/US-6): a LOWERING is first previewed
  * (GET /performance/max-tool-iterations/preview); agents it would lower are
  * listed in MaxToolIterationsLoweringDialog before the step-up gate, and the
  * PUT carries that exact list as confirmed_lowering. A 409 drift re-opens the
- * dialog with the server's fresh list.
+ * dialog with the server's fresh list. A raise never rewrites an agent (D20)
+ * and saves directly behind the step-up gate.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
@@ -36,6 +37,7 @@ import {
   updatePerformanceSettings,
   fetchMaxToolIterationsLoweringPreview,
   isMaxToolIterationsLoweringConflict,
+  isPerformanceReloadFailed,
   getErrorMessage,
   type PerformanceSettingsUpdate,
 } from '@/lib/api'
@@ -263,37 +265,42 @@ export function PerformanceSection(): React.ReactElement {
     }
   }, [data, toolIterDirty])
 
+  // Clear a dirty flag ONLY for a control a committed PUT actually carried,
+  // and only while the user has not re-edited that control since the body was
+  // handed to the mutation. Clearing a dirty flag re-arms the sync effect
+  // above, which overwrites the input with the server's value — doing that
+  // for a field the PUT never sent is precisely the silent revert finding
+  // 15 describes.
+  const clearCommittedDirty = useCallback((saved: PerformanceSettingsUpdate) => {
+    const queued = pendingRef.current
+    const parallelSaved = 'max_parallel_agents' in saved || 'tools_on_demand' in saved
+    const parallelRequeued =
+      queued !== null && ('max_parallel_agents' in queued || 'tools_on_demand' in queued)
+    if (parallelSaved && !parallelRequeued) setDirty(false)
+    if ('goal_max_rounds' in saved && !(queued !== null && 'goal_max_rounds' in queued)) {
+      setGoalDirty(false)
+    }
+    if ('max_tool_iterations' in saved && !(queued !== null && 'max_tool_iterations' in queued)) {
+      setToolIterDirty(false)
+    }
+  }, [])
+
+  // F4: name the agents a save actually lowered — a 10 s status toast plus
+  // the same text kept inline under the field.
+  const reportLowered = useCallback((lowered: MaxToolIterationAgentChange[] | undefined) => {
+    if (!lowered || lowered.length === 0) return
+    const text = loweredSummaryText(lowered)
+    addToast({ variant: 'success', message: text, duration: LOWERED_TOAST_DURATION_MS })
+    setLoweredSummary(text)
+  }, [addToast])
+
   const mutation = useMutation({
     mutationFn: ({ body, token }: { body: PerformanceSettingsUpdate; token?: string }) =>
       updatePerformanceSettings(body, token),
     onSuccess: (result, variables) => {
       setSaveStatus('saved')
-      // Clear a dirty flag ONLY for a control this PUT actually carried, and
-      // only while the user has not re-edited that control since the body was
-      // handed to the mutation. Clearing a dirty flag re-arms the sync effect
-      // above, which overwrites the input with the server's value — doing that
-      // for a field the PUT never sent is precisely the silent revert finding
-      // 15 describes.
-      const saved = variables.body
-      const queued = pendingRef.current
-      const parallelSaved = 'max_parallel_agents' in saved || 'tools_on_demand' in saved
-      const parallelRequeued =
-        queued !== null && ('max_parallel_agents' in queued || 'tools_on_demand' in queued)
-      if (parallelSaved && !parallelRequeued) setDirty(false)
-      if ('goal_max_rounds' in saved && !(queued !== null && 'goal_max_rounds' in queued)) {
-        setGoalDirty(false)
-      }
-      if ('max_tool_iterations' in saved && !(queued !== null && 'max_tool_iterations' in queued)) {
-        setToolIterDirty(false)
-      }
-      // F4: name the agents the save actually lowered — a 10 s status toast
-      // plus the same text kept inline under the field.
-      const lowered = result?.max_tool_iterations_lowered_agents ?? []
-      if (lowered.length > 0) {
-        const text = loweredSummaryText(lowered)
-        addToast({ variant: 'success', message: text, duration: LOWERED_TOAST_DURATION_MS })
-        setLoweredSummary(text)
-      }
+      clearCommittedDirty(variables.body)
+      reportLowered(result?.max_tool_iterations_lowered_agents)
       // The slot was emptied when the body was handed over (onConfirmed),
       // so anything sitting in it now is a NEWER edit — leave it queued.
       void queryClient.invalidateQueries({ queryKey: ['performance-settings'] })
@@ -318,6 +325,18 @@ export function PerformanceSection(): React.ReactElement {
           listChanged: true,
           retryBody: rest,
         })
+        return
+      }
+      // The write committed but the running agents were not reloaded yet:
+      // not a failed save. Clear the dirty state, say so plainly, name the
+      // agents it lowered (from the error body — GET /performance does not
+      // carry them) and re-read GET /performance for the values now on disk.
+      if (isPerformanceReloadFailed(err)) {
+        setSaveStatus('idle')
+        clearCommittedDirty(variables.body)
+        addToast({ variant: 'warning', message: err.userMessage, duration: LOWERED_TOAST_DURATION_MS })
+        reportLowered(err.loweredAgents)
+        void queryClient.invalidateQueries({ queryKey: ['performance-settings'] })
         return
       }
       if ('max_tool_iterations' in variables.body) {
@@ -503,12 +522,15 @@ export function PerformanceSection(): React.ReactElement {
   }
 
   // settleToolIter runs once the tool-iteration input settles (debounce or
-  // the sr-only Save button): validate the 1–1000 bound, ask the preview
-  // endpoint which agents the new global would lower, then either open the
-  // D11 confirm dialog (some agents) or go straight to the step-up gate
-  // (none). The preview is asked on every change, not only a decrease: an
-  // agent whose own value sits above the global (ignored, D1) is also above a
-  // raised global, and the server requires it confirmed the same way.
+  // the sr-only Save button): validate the 1–1000 bound, then:
+  //   - a raise (or the same value, repairing the file, D13) goes straight to
+  //     the step-up gate with no preview and no confirmed_lowering — a raise
+  //     never rewrites any agent (D20): an agent whose own value is above the
+  //     new global keeps it and stays capped and flagged;
+  //   - a lowering asks the preview endpoint which agents it would lower,
+  //     then opens the D11 confirm dialog (some agents) or the gate (none).
+  // With no in-force value to compare against (an older backend omitting
+  // it), a raise cannot be told from a lowering, so the preview is asked.
   const settleToolIter = useCallback((raw: string) => {
     const parsed = parseMaxToolIterations(raw)
     if (parsed === null) {
@@ -527,6 +549,12 @@ export function PerformanceSection(): React.ReactElement {
     }
     const seq = ++previewSeqRef.current
     setSaveStatus('saving')
+    const inForce = data?.max_tool_iterations
+    if (inForce !== undefined && parsed >= inForce) {
+      enqueuePending({ max_tool_iterations: parsed })
+      openStepUp()
+      return
+    }
     fetchMaxToolIterationsLoweringPreview(parsed).then(
       (preview) => {
         if (seq !== previewSeqRef.current) return
@@ -581,11 +609,21 @@ export function PerformanceSection(): React.ReactElement {
     openStepUp()
   }
 
-  // Cancel writes nothing (US-6 AS-2); the field returns to the saved value.
+  // Cancel writes nothing for the limit (US-6 AS-2); the field returns to the
+  // saved value. After a D16 drift the dialog also holds the refused PUT's
+  // OTHER fields (retryBody) — their inputs are still dirty, so they are
+  // re-sent on their own (behind the step-up gate) rather than dropped with
+  // a dirty input nothing will ever save. Cancelling that gate resets them.
   function cancelLowering() {
+    const retryBody = lowering?.retryBody
     setLowering(null)
     setSaveStatus('idle')
     setToolIterDirty(false)
+    if (retryBody && Object.keys(retryBody).length > 0) {
+      setSaveStatus('saving')
+      enqueuePending(retryBody)
+      openStepUp()
+    }
   }
 
   // handleToolsOnDemandChange fires immediately (no debounce) — a toggle is an

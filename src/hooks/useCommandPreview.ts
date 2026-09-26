@@ -31,6 +31,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchExecutorPreview, isApiError } from '@/lib/api'
 import type { ExecutorCommandPreviewRequest, ExecutorCommandPreviewResponse } from '@/lib/api'
+import { MAX_TOOL_ITERATIONS_MIN, MAX_TOOL_ITERATIONS_MAX } from '@/components/settings/MaxToolIterationsCard'
 
 const DEBOUNCE_MS = 400
 
@@ -166,7 +167,11 @@ export function useCommandPreview(req: ExecutorCommandPreviewRequest | undefined
  *
  * `maxToolIterations` (#904 D14) is the agent's OWN tool-iteration limit;
  * omit it when the agent has none — the server then previews the global
- * limit, the same effective value real dispatch passes as the turn cap.
+ * limit, the same effective value real dispatch passes as the turn cap. An
+ * own value outside 1–1000 (stored before #904 bounded it) is omitted too:
+ * the preview endpoint would refuse it with a 400, and the runtime never uses
+ * it (an own value above the global is ignored, D1), so the server's preview
+ * of the resolved limit is the command that will actually run.
  */
 export function buildExecutorPreviewRequest(
   cli: ExecutorCommandPreviewRequest['cli'],
@@ -180,6 +185,10 @@ export function buildExecutorPreviewRequest(
     model: model.trim() !== '' ? model.trim() : undefined,
     cli_path: cliPath,
     cli_args: cliArgs,
-    ...(maxToolIterations !== undefined ? { max_tool_iterations: maxToolIterations } : {}),
+    ...(maxToolIterations !== undefined &&
+    maxToolIterations >= MAX_TOOL_ITERATIONS_MIN &&
+    maxToolIterations <= MAX_TOOL_ITERATIONS_MAX
+      ? { max_tool_iterations: maxToolIterations }
+      : {}),
   }
 }

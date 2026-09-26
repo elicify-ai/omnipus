@@ -83,6 +83,7 @@ import { CONTEXT_WINDOW_SOURCE_LABEL } from '@/components/settings/ContextSectio
 import { buildAgentUpdate } from './agentDraft'
 import { ToolIterationLimitField } from './ToolIterationLimitField'
 import { useGlobalToolIterationLimit } from '@/hooks/useGlobalToolIterationLimit'
+import { useToolIterationLimitRefusal } from './useToolIterationLimitRefusal'
 
 /** Editor's fallback entry — `FallbackModel` from the contract with `provider` narrowed to required (the editor always populates it at hydration). */
 type FallbackEntry = FallbackModel & { provider: string }
@@ -654,9 +655,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // limit — the same effective value real dispatch passes.
   const storedOwnToolIterationLimit = agent?.max_tool_iterations_override ?? null
   const ownToolIterationLimit = maxToolIterationsEdit !== undefined ? maxToolIterationsEdit : storedOwnToolIterationLimit
-  // A pending edit the server has not yet accepted: a failed save while this
-  // is true carries the server's refusal (D10 / bound), shown on the field.
-  const toolIterationLimitPending = maxToolIterationsEdit !== undefined && maxToolIterationsEdit !== storedOwnToolIterationLimit
+  const limitRefusal = useToolIterationLimitRefusal(agentId)
   const globalToolIterationLimit = useGlobalToolIterationLimit()
   const commandPreviewRequest: ExecutorCommandPreviewRequest | undefined = executor?.cli
     ? buildExecutorPreviewRequest(executor.cli, model, executor.cli_path, executor.cli_args, ownToolIterationLimit ?? undefined)
@@ -854,89 +853,89 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           testedExecutorSig.current = sig
         }
       }
-      const reviewedAgent = reviewedAgentRef.current
-      if (!reviewedAgent) return
-      const payload = buildAgentUpdate(reviewedAgent, data as Record<string, unknown>)
-      if (!payload) return
-      try {
-        const resp = await updateAgent(agentId, payload)
-        queryClient.invalidateQueries({ queryKey: ['agent-tools', agentId] })
-        // I2 / UAT data-loss fix (passive fallback_models repro): seed the
-        // query cache with the FULL PUT response — `PUT /agents/{id}`
-        // contractually "returns the complete updated agent object"
-        // (contracts/openapi.yaml), identical in shape to the GET response —
-        // not just `updated_at`. The earlier version only patched
-        // `updated_at` via `{ ...old, updated_at: resp.updated_at }`, which
-        // left every OTHER field (including `fallback_models`) pointing at
-        // the STALE pre-save `old` snapshot. That partial patch still swaps
-        // in a brand-new `agent` object reference, which re-triggers the
-        // `[agentId, agent]` hydration effect below on React's next render —
-        // and by the time that effect actually runs, `isDirtyRef.current`
-        // has ALREADY been cleared to `false` by this same save's own
-        // success path (a few lines down), so the hydration guard does not
-        // block it. The effect then re-hydrates EVERY field (not just
-        // updated_at) from that Frankenstein object, silently reverting
-        // `fallbackModels` state back to its pre-edit value. That reversion
-        // is a real `formData` change from useAutoSave's point of view, so
-        // it fires a second, correctly-serialized (not overlapping) debounce
-        // cycle roughly one `debounceMs` later — carrying the now-reverted,
-        // fallback_models-less payload — which silently clobbers the
-        // first save. Using the full response keeps the optimistic cache
-        // patch fully consistent with what the server now actually has, so
-        // if the hydration effect races and re-runs before the
-        // `invalidateQueries` refetch below lands, it reproduces the SAME
-        // correct state and no spurious second save fires. The
-        // `invalidateQueries` call below still runs to reconcile with a
-        // fresh GET (e.g. server-side derived fields), but this is no
-        // longer the only thing standing between a save and a stale cache.
-        //
-        // Round 2 of this same regression test (see
-        // `lastIncorporatedUpdatedAtRef`'s doc comment above): even with
-        // the full-response cache patch, a STALE `invalidateQueries`
-        // refetch immediately below can still swap in an `agent` snapshot
-        // that isn't newer than what we just saved — so the hydration
-        // effect's own `updated_at` monotonic check is the layer that
-        // actually closes the window. Set the ref here too (synchronously,
-        // before `isDirtyRef.current` is even cleared below) so there is
-        // no gap between "we know what we just saved" and "the hydration
-        // effect is willing to trust it."
-        if (resp) {
-          reviewedAgentRef.current = resp
-          queryClient.setQueryData(['agent', agentId], resp)
-          if (resp.updated_at) lastIncorporatedUpdatedAtRef.current = resp.updated_at
-        }
-      } catch (err) {
-        // W6-contracts: on a 409 Conflict, surface a toast with a Refresh
-        // action that refetches the agent state and drops pending edits.
-        if (isApiError(err) && err.status === 409) {
-          // I2: arm the conflict guard so subsequent debounced saves don't
-          // fire (and re-409) while the refetch is in flight. Cleared in the
-          // refetchAgent().then() callback below once the fresh state lands.
-          conflictRef.current = true
-          addToast({
-            message: 'This agent was changed elsewhere. Refresh to load the latest version.',
-            variant: 'error',
-            action: {
-              label: 'Refresh',
-              onClick: () => {
-                refetchAgent().then(() => {
-                  if (isDirtyRef.current) isDirtyRef.current = false
-                  // I2: refetch landed — re-arm the save path. The form will
-                  // re-hydrate from the fresh GET and the next edit debounces
-                  // normally against the server's current updated_at.
-                  conflictRef.current = false
-                })
+      // #904: a refused own limit is dropped from this and later saves so the
+      // other fields still save (useToolIterationLimitRefusal).
+      await limitRefusal.save(data, async (draft) => {
+        const reviewedAgent = reviewedAgentRef.current
+        if (!reviewedAgent) return false
+        const payload = buildAgentUpdate(reviewedAgent, draft as Record<string, unknown>)
+        if (!payload) return false
+        try {
+          const resp = await updateAgent(agentId, payload)
+          queryClient.invalidateQueries({ queryKey: ['agent-tools', agentId] })
+          // I2 / UAT data-loss fix (passive fallback_models repro): seed the
+          // query cache with the FULL PUT response — `PUT /agents/{id}`
+          // contractually "returns the complete updated agent object"
+          // (contracts/openapi.yaml), identical in shape to the GET response —
+          // not just `updated_at`. The earlier version only patched
+          // `updated_at` via `{ ...old, updated_at: resp.updated_at }`, which
+          // left every OTHER field (including `fallback_models`) pointing at
+          // the STALE pre-save `old` snapshot. That partial patch still swaps
+          // in a brand-new `agent` object reference, which re-triggers the
+          // `[agentId, agent]` hydration effect below on React's next render —
+          // and by the time that effect actually runs, `isDirtyRef.current`
+          // has ALREADY been cleared to `false` by this same save's own
+          // success path (a few lines down), so the hydration guard does not
+          // block it. The effect then re-hydrates EVERY field (not just
+          // updated_at) from that Frankenstein object, silently reverting
+          // `fallbackModels` state back to its pre-edit value. That reversion
+          // is a real `formData` change from useAutoSave's point of view, so
+          // it fires a second, correctly-serialized (not overlapping) debounce
+          // cycle roughly one `debounceMs` later — carrying the now-reverted,
+          // fallback_models-less payload — which silently clobbers the
+          // first save. Using the full response keeps the optimistic cache
+          // patch fully consistent with what the server now actually has, so
+          // if the hydration effect races and re-runs before the
+          // `invalidateQueries` refetch below lands, it reproduces the SAME
+          // correct state and no spurious second save fires. The
+          // `invalidateQueries` call below still runs to reconcile with a
+          // fresh GET (e.g. server-side derived fields), but this is no
+          // longer the only thing standing between a save and a stale cache.
+          //
+          // Round 2 (see `lastIncorporatedUpdatedAtRef`): a STALE refetch below
+          // can still swap in a snapshot no newer than this save, so the
+          // hydration effect's `updated_at` monotonic check closes the window.
+          // Set the ref here, synchronously, before dirty is cleared, so there
+          // is no gap between "we know what we saved" and "hydration trusts it".
+          if (resp) {
+            reviewedAgentRef.current = resp
+            queryClient.setQueryData(['agent', agentId], resp)
+            if (resp.updated_at) lastIncorporatedUpdatedAtRef.current = resp.updated_at
+          }
+        } catch (err) {
+          // W6-contracts: on a 409 Conflict, surface a toast with a Refresh
+          // action that refetches the agent state and drops pending edits.
+          if (isApiError(err) && err.status === 409) {
+            // I2: arm the conflict guard so subsequent debounced saves don't
+            // fire (and re-409) while the refetch is in flight. Cleared in the
+            // refetchAgent().then() callback below once the fresh state lands.
+            conflictRef.current = true
+            addToast({
+              message: 'This agent was changed elsewhere. Refresh to load the latest version.',
+              variant: 'error',
+              action: {
+                label: 'Refresh',
+                onClick: () => {
+                  refetchAgent().then(() => {
+                    if (isDirtyRef.current) isDirtyRef.current = false
+                    // I2: refetch landed — re-arm the save path. The form will
+                    // re-hydrate from the fresh GET and the next edit debounces
+                    // normally against the server's current updated_at.
+                    conflictRef.current = false
+                  })
+                },
               },
-            },
-          })
+            })
+          }
+          throw err
         }
-        throw err
-      }
-      // Draft-ownership rule: dirty clears via useAutoSave's `onSaved`
-      // callback below (only when the save snapshot still equals the live
-      // draft), NOT unconditionally here — see that callback for why.
-      queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
+        // Draft-ownership rule: dirty clears via useAutoSave's `onSaved`
+        // callback below (only when the save snapshot still equals the live
+        // draft), NOT unconditionally here — see that callback for why.
+        queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
+        queryClient.invalidateQueries({ queryKey: ['agents'] })
+        return true
+      })
     },
     // Locked agents can still save model and tool changes — locked status
     // itself must NEVER disable auto-save (an `agent.locked` guard is a
@@ -988,7 +987,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         // the debounce keeps firing no-op saves until the operator clicks
         // "Refresh").
         if (!hasHydrated.current || agentId === null || conflictRef.current) return
-        if (isCurrent) isDirtyRef.current = false
+        // A refused limit still in the draft keeps the form dirty so a refetch
+        // does not silently wipe it and its explanation.
+        if (isCurrent && !limitRefusal.holdsRefused(_saved.max_tool_iterations)) isDirtyRef.current = false
       },
       // I13: best-effort flush of pending edits on tab close / page hide /
       // unload. Auth is the omnipus-session HttpOnly cookie (US-5 / FR-010),
@@ -1001,7 +1002,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         if (!reviewedAgent || agentId === null) return
         let payload
         try {
-          payload = buildAgentUpdate(reviewedAgent, formData as Record<string, unknown>)
+          payload = buildAgentUpdate(reviewedAgent, limitRefusal.withoutRefused(formData) as Record<string, unknown>)
         } catch (error) {
           console.error('AgentProfile: pagehide flush refused an invalid draft', error)
           return
@@ -2086,9 +2087,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     </div>
   )
 
-  // #904 D10: a failed save while the limit edit is pending carries the
-  // server's refusal of that value — shown on the limit field.
-  const toolIterationLimitError = toolIterationLimitPending && saveStatus === 'error' ? (saveError ?? null) : null
+  // #904 D10 / bound: only the server's refusal of the limit is pinned on the field.
+  const toolIterationLimitError = limitRefusal.messageFor(maxToolIterationsEdit)
 
   // advanced panel
   const advancedPanel = (
@@ -2107,7 +2107,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     subagent_3p included (D14). Server-computed state only. */}
                 <ToolIterationLimitField
                   value={ownToolIterationLimit}
-                  onEdit={markDirty}
+                  onEdit={() => { markDirty(); limitRefusal.clear() }}
                   onChange={setMaxToolIterationsEdit}
                   globalLimit={globalToolIterationLimit}
                   server={{
@@ -2709,9 +2709,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       <div className="px-[var(--space-5)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0 flex items-center justify-between gap-[var(--space-2-5)]">
         <div className="flex flex-col gap-[var(--space-0-5)] min-w-0">
           <div data-testid="last-saved-indicator">
-            {/* #904: a refused limit is explained on the limit field itself;
-                the indicator then shows its generic "Save failed". */}
-            <AutoSaveIndicator status={saveStatus} error={toolIterationLimitError ? undefined : saveError} lastSavedAt={saveLastSavedAt} />
+            {/* #904: a refused limit is explained on the limit field; any other failure shows here. */}
+            <AutoSaveIndicator status={saveStatus} error={limitRefusal.isRefusalMessage(saveError) ? undefined : saveError} lastSavedAt={saveLastSavedAt} />
           </div>
           {/* UAT 4b: make the autosave scope explicit — edits to a shared agent
               take effect in every chat / workspace / delegation it is used in. */}
