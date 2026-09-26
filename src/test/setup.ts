@@ -23,8 +23,14 @@ const realSetTimeout = globalThis.setTimeout
 // "TypeError: Failed to execute 'dispatchEvent' on 'EventTarget': parameter 1
 // is not of type 'Event'" (CI shard components-agents-settings, reported
 // against ProvidersSection.awsRegion.test.tsx). Node runs equal-duration
-// timers in scheduling order, so awaiting a 0ms timer scheduled AFTER the
-// unmount guarantees every unmount timer has already fired while jsdom is live.
+// timers in scheduling order, so awaiting a 0ms timer scheduled AFTER
+// cleanup() guarantees that every 0ms timer queued synchronously during
+// cleanup() — FocusScope's included — has fired while jsdom is still live.
+// That is the whole guarantee. NOT covered: a timer with a longer delay, a
+// timer queued later (from a promise or from another timer's callback,
+// including a 0ms timer that re-queues itself), and timers on a fake clock
+// (they only fire when the test advances that clock). Regression guard:
+// src/test/setup.flushUnmountTimers.test.tsx.
 afterEach(async () => {
   cleanup()
   await new Promise<void>((resolve) => realSetTimeout(resolve, 0))
