@@ -4,7 +4,11 @@
 
 package gateway
 
-import "github.com/elicify-ai/omnipus/pkg/config"
+import (
+	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
+)
 
 // blockedPaths lists dotted configuration paths that the generic
 // PUT /api/v1/config endpoint must refuse to mutate at any nesting depth.
@@ -35,6 +39,13 @@ var blockedPaths = []config.ConfigKey{
 	// exclusively through the agent store / dedicated /api/v1/agents
 	// endpoints.
 	config.AgentsList,
+	// #904 D8/D15/D21: the global tool-iteration limit and its env-import
+	// marker have one write path, PUT /api/v1/performance (step-up re-auth,
+	// D11/D16 lowering consent, audit). agents.defaults itself stays
+	// writable; updateConfig preserves these two leaves across its
+	// one-level merge (preserveProtectedAgentDefaults).
+	config.AgentsDefaultsMaxToolIterations,
+	config.AgentsDefaultsMaxToolIterationsEnvImported,
 }
 
 // matchBlockedPath reports whether body contains any entry in blocked at any
@@ -66,16 +77,23 @@ func matchBlockedPath(body map[string]any, blocked []config.ConfigKey) (string, 
 	// Collect every dotted path present in body. This handles both nested
 	// objects (recursive walk) and dot-path literal keys (leaf keys with
 	// dots are emitted verbatim as part of the path).
+	//
+	// Matching is case-insensitive: config.json is decoded with
+	// encoding/json, which binds object keys to struct fields
+	// case-insensitively, so {"agents":{"defaults":{"MAX_TOOL_ITERATIONS":5}}}
+	// reaches the same field as the lower-case spelling. collectPaths
+	// lower-cases every path it records.
 	present := collectPaths(body)
 	for _, bp := range blocked {
-		if _, ok := present[string(bp)]; ok {
+		if _, ok := present[strings.ToLower(string(bp))]; ok {
 			return string(bp), true
 		}
 	}
 	return "", false
 }
 
-// collectPaths walks body and returns the set of dotted paths it contains.
+// collectPaths walks body and returns the set of dotted paths it contains,
+// lower-cased (see matchBlockedPath for why matching ignores case).
 // Each leaf and each intermediate map key contributes a path. Keys that
 // themselves contain dots (dot-path literals) are treated as already-dotted
 // paths and are merged with any prefix from their ancestors.
@@ -101,7 +119,7 @@ func collectPaths(body map[string]any) map[string]struct{} {
 	var walk func(prefix string, v any)
 	walk = func(prefix string, v any) {
 		if prefix != "" {
-			out[prefix] = struct{}{}
+			out[strings.ToLower(prefix)] = struct{}{}
 		}
 		m, ok := v.(map[string]any)
 		if !ok {

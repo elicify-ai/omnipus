@@ -287,8 +287,9 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 // validateMaxToolIterations is the #904 fast-path check of the per-agent
 // tool-iteration limit (FR-006, FR-007, FR-008): an explicit null clears the
 // own value; a number must be within 1..1000 and not above the global in
-// force (D10). The D10 check is repeated under configMu in persistAgent, so a
-// concurrent global change cannot slip between this check and the write.
+// force (D10). The D10 check is repeated under configMu in persistAgent,
+// which closes the window against REST global writes (see the residual
+// cases documented there).
 func (uf *restAPIUpdateAgentFlow) validateMaxToolIterations() bool {
 	uf.ru.clearsMaxToolIterations = false
 	if uf.ru.req.MaxToolIterations == nil {
@@ -930,8 +931,14 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 
 	// #904 D10, the deciding check: the global may have changed since the
 	// fast-path check in validateMaxToolIterations. This closure runs under
-	// a.configMu, which every REST global write also holds, so the global
-	// read here is the one in force when the record is written.
+	// a.configMu. PUT /api/v1/performance — the only REST write of the global
+	// — also holds configMu and refreshes the in-memory config before
+	// releasing it, so no REST global write or D11 lowering can land between
+	// this read and the record write. What configMu does NOT cover: a hand
+	// edit of config.json lowering the global, applied by the file-watcher
+	// or manual reload (both read config.json outside configMu). In that
+	// interleaving the agent can end up above the new global; the resolver
+	// then caps and flags it (D1) — never unbounded.
 	if rp.ru.req.MaxToolIterations != nil {
 		if err := config.ValidateAgentMaxToolIterations(*rp.ru.req.MaxToolIterations,
 			&rp.ru.a.agentLoop.GetConfig().Agents.Defaults); err != nil {

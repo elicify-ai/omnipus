@@ -568,7 +568,11 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 	}
 	// #904 FR-006/FR-007/FR-014: an own tool-iteration limit must be within
 	// 1..1000 and not above the global in force (D10). Re-checked under
-	// configMu in persistAgent so a concurrent global change cannot slip in.
+	// configMu in persistAgent, which closes the window against REST global
+	// writes (PUT /api/v1/performance holds configMu too). Not covered: a
+	// hand edit of config.json applied by a reload outside configMu — the
+	// agent is then capped and flagged (D1), never unbounded (see
+	// rest_agents_update.go::persistAgent).
 	if pap.maxToolIterations != nil {
 		if err := config.ValidateAgentMaxToolIterations(*pap.maxToolIterations,
 			&pap.cra.a.agentLoop.GetConfig().Agents.Defaults); err != nil {

@@ -20,9 +20,10 @@
 //   - ValidateMaxToolIterationsBound / ValidateAgentMaxToolIterations are the
 //     write-side checks (FR-006, FR-007) with the exact spec messages.
 //   - applyMaxToolIterationsOnLoad runs from loadConfigInternal: records
-//     whether the key was present, performs the one-time import of the
-//     retired OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS env var (D5-D7,
-//     D17) and logs the saved-state WARN (D13).
+//     whether the key was present on every load and, on the BOOT load of a
+//     config path only, performs the one-time import of the retired
+//     OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS env var (D5-D7, D17) and
+//     logs the saved-state WARN (D13).
 //   - WarnCappedMaxToolIterationAgents emits the single D19 startup line.
 //
 // DefaultMaxToolIterations is the only literal for this limit anywhere in
@@ -36,8 +37,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -91,12 +94,23 @@ type GlobalMaxToolIterations struct {
 	// SavedState classifies the saved value.
 	SavedState MaxToolIterationsSavedState
 	// SavedRaw is the value found in config.json; meaningful only when
-	// SavedState is below_min or above_max (HasSavedRaw reports that).
-	SavedRaw    int
+	// SavedState is below_min or above_max.
+	SavedRaw int
+	// HasSavedRaw is exactly (SavedState == below_min || SavedState ==
+	// above_max) — redundant with SavedState and kept as a field because
+	// callers and tests read it as one. Only EffectiveGlobalMaxToolIterations
+	// constructs this type, which keeps the two in step.
 	HasSavedRaw bool
 }
 
 // ResolvedMaxToolIterations is one agent's limit as every surface reports it.
+//
+// Invariants (guaranteed by ResolveMaxToolIterations, the only constructor):
+//   - OverrideIgnored ⇒ HasOverride (only a stored own value can be ignored);
+//   - Source == agent ⇔ HasOverride && !OverrideIgnored, and then
+//     Effective == Override;
+//   - Source == global ⇒ Effective == Global.Value;
+//   - !HasOverride ⇒ Override == 0.
 type ResolvedMaxToolIterations struct {
 	// Effective is the limit the agent runs with: min(global, own value), or
 	// the global when there is no own value. Always within 1..1000.
@@ -243,35 +257,70 @@ func WarnCappedMaxToolIterationAgents(defaults *AgentDefaults, agents []AgentCon
 	}
 }
 
+// maxToolIterationsBootLoads records the config.json paths this process has
+// already boot-loaded (see claimMaxToolIterationsBootLoad).
+var maxToolIterationsBootLoads sync.Map // cleaned absolute path → struct{}
+
+// claimMaxToolIterationsBootLoad reports whether this is the process's BOOT
+// load of cfgPath: the first load in this process that found the file. Every
+// later load of the same path — the in-memory refresh after a REST or tool
+// write, a manual or file-watcher reload — is a refresh and returns false.
+//
+// Why the env import is boot-only: a refresh runs right after an admin write
+// (for example PUT /api/v1/performance). Importing there would let the
+// retired env var overwrite the value the admin just saved whenever the
+// marker was not on disk yet (D6: copy once, never overwrite an admin value).
+// The D13 and "env ignored" WARNs are boot-only for the same reason as the
+// D19 line: once per boot, not once per settings save.
+func claimMaxToolIterationsBootLoad(cfgPath string) bool {
+	key := cfgPath
+	if abs, err := filepath.Abs(cfgPath); err == nil {
+		key = abs
+	}
+	_, seen := maxToolIterationsBootLoads.LoadOrStore(filepath.Clean(key), struct{}{})
+	return !seen
+}
+
 // applyMaxToolIterationsOnLoad runs on every config.json load
-// (loadConfigInternal): records whether the global key is present, performs
-// the one-time env import, and logs a WARN when the saved global is outside
-// 1..1000 or missing (D13). It never refuses the load (D7, D13).
+// (loadConfigInternal). On every load it records whether the global key is
+// present. On the boot load only (claimMaxToolIterationsBootLoad) it also
+// performs the one-time env import and logs a WARN when the saved global is
+// outside 1..1000 or missing (D13). It never refuses the load (D7, D13).
 func applyMaxToolIterationsOnLoad(cfg *Config, data []byte, cfgPath string, onSelfHeal SelfHealWriteHook) {
 	cfg.Agents.Defaults.MaxToolIterationsKeyMissing = !maxToolIterationsKeyPresent(data)
+	if !claimMaxToolIterationsBootLoad(cfgPath) {
+		return
+	}
 	importMaxToolIterationsEnv(cfg, cfgPath, onSelfHeal)
 	warnSavedGlobalMaxToolIterations(&cfg.Agents.Defaults)
 }
 
 // applyMaxToolIterationsEnvFreshInstall handles the env var when no
-// config.json exists yet: there is no file to import into, so the clamped
-// value is applied in memory for this boot; the one-time import into the file
-// happens on the first load after config.json is written (no marker yet).
+// config.json exists yet: the clamped value is applied in memory AND the
+// import marker is set in memory, so whichever write first persists this
+// config from the struct (config.SaveConfig) stores the env value together
+// with the marker — the import is then complete and a later boot can never
+// re-import over an admin's value. The boot-load claim is not taken here: the
+// first load that finds a file is still this process's boot load, which
+// imports only if that file carries no marker (a writer that did not go
+// through the struct, e.g. the datamodel first-run seed).
 func applyMaxToolIterationsEnvFreshInstall(cfg *Config) {
 	n, ok := parseMaxToolIterationsEnv()
 	if !ok {
 		return
 	}
 	cfg.Agents.Defaults.MaxToolIterations = n
+	cfg.Agents.Defaults.MaxToolIterationsEnvImported = true
 	logger.InfoF("max_tool_iterations: "+MaxToolIterationsEnvVar+" applied for this first boot; "+
-		"it is copied into config.json once that file exists and is not used after that",
+		"it is saved to config.json with the first save and is not used after that",
 		map[string]any{"value": n})
 }
 
 // maxToolIterationsKeyPresent reports whether agents.defaults carries a
-// max_tool_iterations key (any value, including null). A probe error means
-// the full unmarshal already accepted the bytes, so treat it as present
-// rather than invent a "missing" warning.
+// non-null max_tool_iterations key. An explicit JSON null counts as MISSING
+// (saved-state "missing", runs as the shipped default), the same as an absent
+// key. A probe error means the full unmarshal already accepted the bytes, so
+// treat it as present rather than invent a "missing" warning.
 func maxToolIterationsKeyPresent(data []byte) bool {
 	var probe struct {
 		Agents struct {
@@ -332,13 +381,14 @@ func parseMaxToolIterationsEnv() (int, bool) {
 // clamped, applied in memory, and written to config.json together with the
 // marker through a raw-map patch (precedent migrateCLITokenOutOfUsers). A
 // write failure leaves the in-memory import in place and no marker on disk,
-// so the import is retried on the next load.
+// so the import is retried on the next boot (a refresh load in the same
+// process does not import, and reads the file's value).
 func importMaxToolIterationsEnv(cfg *Config, cfgPath string, onSelfHeal SelfHealWriteHook) {
 	d := &cfg.Agents.Defaults
 	if d.MaxToolIterationsEnvImported {
 		if v, set := os.LookupEnv(MaxToolIterationsEnvVar); set && strings.TrimSpace(v) != "" {
-			logger.WarnF("max_tool_iterations: "+MaxToolIterationsEnvVar+" is ignored — it was imported "+
-				"into config.json earlier; change the limit in Settings → Performance and unset the variable",
+			logger.WarnF("max_tool_iterations: "+MaxToolIterationsEnvVar+" is ignored — the limit is kept "+
+				"in config.json (imported once, or set in Settings → Performance); change it there and unset the variable",
 				map[string]any{"env_value": v, "in_force": d.EffectiveGlobalMaxToolIterations().Value})
 		}
 		return
@@ -354,7 +404,7 @@ func importMaxToolIterationsEnv(cfg *Config, cfgPath string, onSelfHeal SelfHeal
 	written, err := importMaxToolIterationsEnvOnDisk(cfgPath, n)
 	if err != nil {
 		logger.WarnF("max_tool_iterations: could not save the imported "+MaxToolIterationsEnvVar+
-			" value to config.json; it applies for this run and the import is retried on the next load",
+			" value to config.json; it applies until the config is next reloaded and the import is retried on the next start",
 			map[string]any{"path": cfgPath, "value": n, "error": err.Error()})
 		return
 	}

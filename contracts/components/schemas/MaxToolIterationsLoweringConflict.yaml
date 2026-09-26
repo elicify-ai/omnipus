@@ -16,7 +16,7 @@ properties:
   error:
     type: string
     description: Human-readable error message.
-    example: "the list of agents to lower has changed; confirm again"
+    example: "the agents affected by lowering the limit to 200 changed since the preview; review the updated list and confirm again"
   code:
     type: string
     description: Machine-readable error code; always "max_tool_iterations_lowering_drift".

@@ -979,7 +979,7 @@ export interface paths {
         /**
          * Update agent concurrency settings
          * @description Updates max_parallel_agents. An explicit value is honored exactly as given — there is no ceiling, only a floor of 1; a value is never silently lowered. Set to 0 to restore the auto-detected default (available memory / ~3.5 MB per agent, floored at 2, physically bounded around 2000). Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT).
-         *     Also updates max_tool_iterations, the global tool-iteration limit (issue #904, 1–1000; out of range → 400). Lowering it below some agents' own values lowers those agents too, but only with consent (D11): confirmed_lowering must equal — as a set keyed by agent_id, order-independent — the agents whose own value is above the new global at write time. Any difference (extra, missing or changed agent, or confirmed_lowering absent while agents would be lowered) is drift (D16): nothing is written and the response is 409 MaxToolIterationsLoweringConflict carrying the fresh preview. A failure part-way through the writes rolls back the agents already lowered and leaves the global unchanged (500 ErrorResponse, code max_tool_iterations_lowering_failed, or max_tool_iterations_rollback_incomplete if a rollback also failed). A successful change reloads the agent registry so every agent's next turn uses the new limit; the response lists the lowered agents in max_tool_iterations_lowered_agents.
+         *     Also updates max_tool_iterations, the global tool-iteration limit (issue #904, 1–1000; out of range → 400). Only a LOWERING — a new value below the global currently in force — can rewrite agents (D20): a raise, or the current value, rewrites no agent and needs no confirmation; agents whose stored value is above the global keep it (capped and flagged). A lowering below some agents' own values lowers those agents too, but only with consent (D11): confirmed_lowering must equal — as a set keyed by agent_id, order-independent — the agents whose own value is above the new global at write time. Any difference (extra, missing or changed agent, confirmed_lowering absent while agents would be lowered, or present on a raise) is drift (D16): nothing is written and the response is 409 MaxToolIterationsLoweringConflict carrying the fresh preview. The same 409 is returned when an agent record changes (revision conflict) between the deciding check and its lowering write — the agents already lowered are rolled back first. A failure part-way through the writes rolls back the agents already lowered and leaves the global unchanged (500 ErrorResponse, code max_tool_iterations_lowering_failed, or max_tool_iterations_rollback_incomplete if a rollback also failed, with the original failure in details.cause). A failure to read the agent store while computing or checking the affected set is 500 code max_tool_iterations_agents_read_failed, nothing written. Setting the global also ends the retired environment-variable import for good (D6). A successful change reloads the agent registry so every agent's next turn uses the new limit; the response lists the lowered agents in max_tool_iterations_lowered_agents. If the save is committed but the in-memory refresh or that reload fails, the response is 500 code performance_reload_failed: the settings ARE saved (GET /performance shows them) but running agents use them only after the next reload or restart; the agents this request lowered are listed in details.lowered_agents (GET /performance does not carry them).
          */
         put: operations["updatePerformanceSettings"];
         post?: never;
@@ -998,7 +998,7 @@ export interface paths {
         };
         /**
          * Preview which agents a lower global tool-iteration limit would lower
-         * @description Read-only (issue #904, tool-iteration-limit spec D11). Lists the agents whose own tool-iteration limit is strictly above `value` and would therefore be lowered to it if the global limit were set to `value`. Nothing is written and no step-up token is needed (the PUT /performance that applies the change consumes it). Same access gate as GET /performance.
+         * @description Read-only (issue #904, tool-iteration-limit spec D11). Lists the agents whose own tool-iteration limit is strictly above `value` and would therefore be lowered to it if the global limit were set to `value`. A `value` at or above the global limit currently in force is a raise, which never rewrites an agent (D20): the list is empty. Nothing is written and no step-up token is needed (the PUT /performance that applies the change consumes it). Same access gate as GET /performance.
          */
         get: operations["previewMaxToolIterationsLowering"];
         put?: never;
@@ -9799,7 +9799,7 @@ export interface components {
         MaxToolIterationsLoweringConflict: {
             /**
              * @description Human-readable error message.
-             * @example the list of agents to lower has changed; confirm again
+             * @example the agents affected by lowering the limit to 200 changed since the preview; review the updated list and confirm again
              */
             error: string;
             /**
@@ -18500,13 +18500,22 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Lowering drift (issue #904, D16) — the agents the new global limit would lower differ from confirmed_lowering. Nothing was written; the body carries the fresh preview. */
+            /** @description Lowering drift (issue #904, D16) — the agents the new global limit would lower differ from confirmed_lowering, or an agent record changed mid-write (revision conflict; agents already lowered were rolled back). Nothing was written; the body carries the fresh preview. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["MaxToolIterationsLoweringConflict"];
+                };
+            };
+            /** @description Server-side failure. code tells them apart: max_tool_iterations_agents_read_failed (the agent store could not be read; nothing written), max_tool_iterations_lowering_failed (a write failed; everything rolled back, nothing changed), max_tool_iterations_rollback_incomplete (a write failed and some agents could not be restored — the error names them; details.cause carries the original failure; the global is unchanged), performance_reload_failed (the settings ARE saved — config.json and any lowered agents are written, nothing is rolled back — but the in-memory refresh or the registry reload failed; details.lowered_agents lists the agents this request lowered). Any other failure to write config.json carries no code. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             503: components["responses"]["503BypassActive"];
@@ -18544,6 +18553,15 @@ export interface operations {
             };
             /** @description Missing or invalid bearer token. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The agent store could not be read (code max_tool_iterations_agents_read_failed). */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

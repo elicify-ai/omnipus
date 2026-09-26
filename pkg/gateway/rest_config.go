@@ -369,7 +369,7 @@ func (a *restAPI) updateConfigJSONLocked(mutate func(m map[string]any) error) er
 	// Propagate the error so callers fail the HTTP request rather than silently
 	// serving stale in-memory state (prevents A1 regression on REST-initiated writes).
 	if refreshErr := a.refreshConfigAndRewireServices(a.configPath()); refreshErr != nil {
-		return fmt.Errorf("config written but in-memory refresh failed: %w", refreshErr)
+		return &configRefreshError{err: refreshErr}
 	}
 	// refreshConfigAndRewireServices loads the config, and config.LoadConfig may
 	// normalize + re-save the file (config.go SaveConfig-on-load), producing
@@ -395,6 +395,18 @@ func (a *restAPI) updateConfigJSONLocked(mutate func(m map[string]any) error) er
 	}
 	return nil
 }
+
+// configRefreshError is updateConfigJSONLocked's failure AFTER config.json
+// was durably written: the in-memory refresh failed, so the write stands on
+// disk but the running config was not swapped. Callers that must not treat
+// the write as undone (PUT /performance, #904) detect it with errors.As.
+type configRefreshError struct{ err error }
+
+func (e *configRefreshError) Error() string {
+	return "config written but in-memory refresh failed: " + e.err.Error()
+}
+
+func (e *configRefreshError) Unwrap() error { return e.err }
 
 // ensureMap walks m through the given keys, creating intermediate map[string]any
 // nodes as needed, and returns the deepest map. Panics only on a non-map value
@@ -623,6 +635,12 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 	// Deep merge nested objects so partial updates don't wipe sibling keys
 	// (e.g., updating gateway.port must not delete gateway.users).
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+		// #904: the merge below is ONE level deep, so a body carrying
+		// {"agents":{"defaults":{…}}} replaces the whole agents.defaults
+		// map. The global tool-iteration limit and its env-import marker
+		// cannot be written here (blockedPaths), so they must survive such a
+		// write unchanged — see preserveProtectedAgentDefaults.
+		protected := snapshotProtectedAgentDefaults(m)
 		for k, v := range updates {
 			var parsed any
 			if err := json.Unmarshal(v, &parsed); err != nil {
@@ -639,8 +657,13 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			m[k] = parsed
 		}
-		return nil
+		return preserveProtectedAgentDefaults(m, protected)
 	}); err != nil {
+		var refusal *requestRefusalError
+		if errors.As(err, &refusal) {
+			jsonErr(w, http.StatusBadRequest, refusal.Error())
+			return
+		}
 		slog.Error("rest: save config", "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return

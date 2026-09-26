@@ -103,4 +103,15 @@ const (
 	// removing the "agents." prefix from knownConfigPrefixes would make it
 	// unwritable via system.config.set too.
 	AgentsList ConfigKey = "agents.list"
+
+	// AgentsDefaultsMaxToolIterations is the global tool-iteration limit
+	// (#904). It has exactly one write path — PUT /api/v1/performance, with
+	// the step-up re-auth, the D11/D16 lowering consent and the audit (D8,
+	// D15, D21) — so the generic PUT /api/v1/config and set_config refuse it.
+	AgentsDefaultsMaxToolIterations ConfigKey = "agents.defaults.max_tool_iterations"
+	// AgentsDefaultsMaxToolIterationsEnvImported is the one-time env import
+	// marker (D6). Config-file-only bookkeeping: clearing it would re-arm the
+	// retired OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS import over an
+	// admin's value, so no generic write path may touch it.
+	AgentsDefaultsMaxToolIterationsEnvImported ConfigKey = "agents.defaults.max_tool_iterations_env_imported"
 )
