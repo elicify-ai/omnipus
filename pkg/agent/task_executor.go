@@ -1232,29 +1232,29 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	return taskSessionID, nil
 }
 
-// steeringRefusal is the task path's ADR-093 D5 surface: Error() is the plain
-// sentence, Unwrap() the original typed refusal — the plain-error equivalent
-// of the delegate tool's ErrorResult(sentence).WithError(cause). It keeps the
-// real refusal cause machine-readable (errors.Is reaches ErrSteeringStopped,
-// ErrSteeringRevivalFailed and the dispatch sentinels) while the string a
-// caller stores as the task's failure reason carries no machinery text
-// (gate SFH#7).
-type steeringRefusal struct {
+// steeringRefusalError is the task path's ADR-093 D5 surface: Error() is the
+// plain sentence, Unwrap() the original typed refusal — the plain-error
+// equivalent of the delegate tool's ErrorResult(sentence).WithError(cause).
+// It keeps the real refusal cause machine-readable (errors.Is reaches
+// ErrSteeringStopped, ErrSteeringRevivalFailed and the dispatch sentinels)
+// while the string a caller stores as the task's failure reason carries no
+// machinery text (gate SFH#7).
+type steeringRefusalError struct {
 	sentence string
 	cause    error
 }
 
-func (e *steeringRefusal) Error() string { return e.sentence }
-func (e *steeringRefusal) Unwrap() error { return e.cause }
+func (e *steeringRefusalError) Error() string { return e.sentence }
+func (e *steeringRefusalError) Unwrap() error { return e.cause }
 
-// steeringRefusalError maps a typed steering refusal to the task surface's
+// newSteeringRefusalError maps a typed steering refusal to the task surface's
 // plain sentence, keeping the original error identifiable (gate SFH#7).
-func steeringRefusalError(err error) error {
+func newSteeringRefusalError(err error) error {
 	sentence := steer.SteeringUnavailableMessage
 	if errors.Is(err, steer.ErrSteeringRevivalFailed) {
 		sentence = steer.SteeringRevivalFailedMessage
 	}
-	return &steeringRefusal{sentence: sentence, cause: err}
+	return &steeringRefusalError{sentence: sentence, cause: err}
 }
 
 // startTaskNowViaLauncher is FR-A-010's single task front: Launch+Dispatch
@@ -1274,7 +1274,7 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 			if steer.IsSteeringUnavailable(err) {
 				logger.ErrorCF("agent", "adr093: task dispatch refused (session not dispatchable — cancelled, terminal, or stale generation)",
 					map[string]any{"task_id": t.ID, "session_id": t.SessionID, "error": err.Error()})
-				return "", steeringRefusalError(err)
+				return "", newSteeringRefusalError(err)
 			}
 			return "", fmt.Errorf("task_executor: StartTaskNow: dispatch existing session: %w", err)
 		}
@@ -1346,7 +1346,7 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 			// the real cause; the surface string is still sentence-only.
 			logger.ErrorCF("agent", "adr093: task launch refused (creating conversation not active)",
 				map[string]any{"task_id": t.ID, "origin_session_id": t.OriginSessionID, "error": err.Error()})
-			return "", steeringRefusalError(err)
+			return "", newSteeringRefusalError(err)
 		}
 		return "", fmt.Errorf("task_executor: StartTaskNow: launch: %w", err)
 	}
@@ -1376,7 +1376,7 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 		if steer.IsSteeringUnavailable(err) {
 			logger.ErrorCF("agent", "adr093: task dispatch refused (session not dispatchable — cancelled, terminal, or stale generation)",
 				map[string]any{"task_id": t.ID, "session_id": launched.SessionID, "error": err.Error()})
-			return "", steeringRefusalError(err)
+			return "", newSteeringRefusalError(err)
 		}
 		return "", fmt.Errorf("task_executor: StartTaskNow: dispatch: %w", err)
 	}

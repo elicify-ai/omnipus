@@ -313,7 +313,7 @@ func (al *AgentLoop) reviveInactiveInbound(route routing.ResolvedRoute, msg bus.
 			map[string]any{"session_id": sessionID, "error": err.Error()})
 		return false, fmt.Errorf("enqueueSteeringFromMessage: load %q: %w", sessionID, err)
 	}
-	if !(rec.Terminal() || rec.Stopped()) {
+	if !rec.Terminal() && !rec.Stopped() {
 		return false, nil
 	}
 	classifier := NewSteerRecordClassifier(lifecycle, al.ResolveSessionStore(sessionID))

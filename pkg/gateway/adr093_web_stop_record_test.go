@@ -63,8 +63,8 @@ func TestAdr093WebStop_DelegatedChatStaysRunningWithCurrentStop(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	const workspaceID = "ws-adr093-web-stop"
-	if err := al.GetSessionStore().SetMeta(meta.ID, session.MetaPatch{WorkspaceID: strPtr(workspaceID)}); err != nil {
-		t.Fatalf("SetMeta workspace: %v", err)
+	if setMetaErr := al.GetSessionStore().SetMeta(meta.ID, session.MetaPatch{WorkspaceID: strPtr(workspaceID)}); setMetaErr != nil {
+		t.Fatalf("SetMeta workspace: %v", setMetaErr)
 	}
 	parent := &session.LifecycleRecord{
 		SessionID:      meta.ID,
@@ -75,16 +75,16 @@ func TestAdr093WebStop_DelegatedChatStaysRunningWithCurrentStop(t *testing.T) {
 		AgentID:        "mia",
 		Origin:         &session.Origin{Kind: session.OriginKindChat},
 	}
-	if err := lifecycle.Persist(parent); err != nil {
-		t.Fatalf("persist parent: %v", err)
+	if persistErr := lifecycle.Persist(parent); persistErr != nil {
+		t.Fatalf("persist parent: %v", persistErr)
 	}
-	if _, err := agent.NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+	if _, launchErr := agent.NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 		SteeringSessionID: meta.ID,
 		TargetAgentID:     "mia",
 		Task:              "Prepare the spreadsheet",
 		Origin:            steer.Origin{Kind: steer.OriginKindDelegate},
-	}); err != nil {
-		t.Fatalf("delegate from the chat (the root must already have a child): %v", err)
+	}); launchErr != nil {
+		t.Fatalf("delegate from the chat (the root must already have a child): %v", launchErr)
 	}
 
 	h := makeMinimalHandler()

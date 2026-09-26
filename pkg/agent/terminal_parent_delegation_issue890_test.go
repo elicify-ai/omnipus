@@ -206,8 +206,8 @@ func TestAdr093RootRevival_HumanMessageRevivesTerminalChatAndDelegationSucceeds(
 		t.Fatalf("delegate from the revived chat failed (ADR-093 re-pin item 1: it must succeed):\n%s", result.ForLLM)
 	}
 	childID := adr093ChildSessionIDFromResult(t, result.ForLLM, h.parentID)
-	if _, err := h.al.GetSessionLifecycleStore().Load(childID); err != nil {
-		t.Fatalf("child lifecycle record for %q missing after the successful delegation (ADR-093 re-pin item 1): %v", childID, err)
+	if _, loadErr := h.al.GetSessionLifecycleStore().Load(childID); loadErr != nil {
+		t.Fatalf("child lifecycle record for %q missing after the successful delegation (ADR-093 re-pin item 1): %v", childID, loadErr)
 	}
 
 	// The delegate call is not the human's newer instruction (ADR-093 D4

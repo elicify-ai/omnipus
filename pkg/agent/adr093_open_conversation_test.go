@@ -82,20 +82,6 @@ func adr093LoadStore(t *testing.T, ls *session.LifecycleStore, id string) *sessi
 	return rec
 }
 
-// adr093UnifiedSession mints the unified session a creator session needs so
-// GetMeta loads (the D6 creator-detection branch) — a plain chat session
-// with the workspace stamped.
-func adr093UnifiedSession(t *testing.T, al *AgentLoop, id string) {
-	t.Helper()
-	if _, err := al.GetSessionStore().CreateSessionWithID(id, "", session.SessionTypeChat, "webchat", testDefaultAgentID); err != nil {
-		t.Fatalf("CreateSessionWithID(%s): %v", id, err)
-	}
-	ws := adr093Workspace
-	if err := al.GetSessionStore().SetMeta(id, session.MetaPatch{WorkspaceID: &ws}); err != nil {
-		t.Fatalf("SetMeta(%s).WorkspaceID: %v", id, err)
-	}
-}
-
 // adr093TaskExecutor builds a TaskExecutor over the loop's real task store
 // with a launcher on the loop's real stores — the production shape, no
 // doubles. (Unexported fields; same package.)
