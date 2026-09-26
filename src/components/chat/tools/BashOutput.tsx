@@ -198,7 +198,11 @@ export function BashOutputBlock({
   )
 
   return (
-    <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
+    // data-tool (toolName) matches GenericToolCall.tsx/ToolCallBadge.tsx's
+    // existing data-tool convention — replay-fidelity test (f) reads it to
+    // keep its identity check meaningful now bash renders this dedicated
+    // block on both paths instead of the generic badge.
+    <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono" data-tool={toolName}>
       {/* Header row — a single toggle button; there is no sibling action on
           this row (unlike BrowserTool/BrowserNavigate's "Watch live"), so
           the caret lives INSIDE the button and the whole row is one click
