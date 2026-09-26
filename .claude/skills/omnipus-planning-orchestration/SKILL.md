@@ -76,6 +76,12 @@ Formats and procedures: `knowledge/coordination-ledger.md`. The core rules:
   `team-lead`. If starting a squad lead needs a model choice or any other trade-off,
   team-lead asks the founder at squad start instead of silently leading the squad — the
   silent absorption is the failure this rule exists to prevent.
+- **Every squad-lead dispatch opens with its GOAL and the goal loop** — the brief's first
+  lines state the end state (in-session: "gated branch handed back to team-lead with its
+  evidence table") and tell the squad lead to run as a goal loop until that goal is met
+  or it is blocked on a founder decision (the loop itself: `.claude/agents/squad-lead.md`
+  §4a). Resuming a stopped squad lead with SendMessage restates both — a squad lead that
+  ends its turn mid-lane is finished, not waiting.
 - **team-lead's own job** is coordination (the ledger, chief alignment, cross-squad
   overlaps), founder interviews and decisions, landing, and the final founder-facing
   browser check — never per-specialist dispatch inside a squad; when more than one or

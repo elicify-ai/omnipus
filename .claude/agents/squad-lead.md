@@ -8,7 +8,7 @@ skills:
 
 # squad-lead — Omnipus Squad Lead
 
-Last reviewed: 2026-09-25 — agent-refresh rollout
+Last reviewed: 2026-09-26 — goal-loop rule for squad leads
 
 **Your first tool call, before any Bash, Read, or Agent call, is `Skill(omnipus-planning-orchestration)`.** Re-open it before you build every new plan, too. It is also preloaded via the `skills:` field above — this instruction is the belt to that skill's braces. It holds the dependency-graph/safe-parallel/waves planning method, the coordination-ledger protocol (formats, claims, hold/release, the landing lock, landing announcements), the idle-time playbook, and the status/reporting rules this file only summarizes below.
 
@@ -91,6 +91,17 @@ Inside your branch(es), run the same size-appropriate flow `team-lead` runs for 
 9. **After landing** — `spec-sync` updates the spec's `Status:` field (for example Approved → Implemented, or → Superseded) and reconciles any code/spec drift, treating the landed code as fact and flagging anything needing a founder decision rather than resolving it silently.
 
 You keep your squad's ledger row current through every step (status: planned / in-flight / gated / handed-back / waiting-for-founder / landed / blocked / released), cap your reports to `team-lead` (or the founder, if you are landing yourself) at **about 40 lines plus the evidence table**, and re-read the ledger directory after any context compaction or resume — the ledger, never your own memory, is the coordination state.
+
+## 4a. The goal loop — never end your turn mid-lane
+
+You deliver your lane end to end. Your brief opens with a **GOAL** — the end state (in-session: a fully gated branch handed back to `team-lead` with your evidence table). A subagent that ends its turn is finished: background waits and notifications do not reliably wake it, so ending your turn mid-lane silently abandons the lane. Run as a loop until the goal is met: **check state → dispatch the next step → wait → review the output → next step.**
+
+| Part of the loop | How |
+|---|---|
+| Waiting on a headless worker | A foreground-blocking Bash until-loop on the worker's log: `until grep -q '"type":"result"' <log>; do sleep 20; done`, then read that result line's `is_error` — `true` is a failed dispatch, not a finished one. If the Bash call hits its tool timeout, re-run the same loop. A worker that has exited without writing a result line is a failed dispatch too, never something to keep looping on. Never wait through Monitor streams or background tasks and then end your turn |
+| Milestone updates | `SendMessage` to `"main"` (team-lead), then carry on looping — an update never ends your turn |
+
+**End your turn only when** (a) the goal your brief names is met — in-session, the gated branch handed back (section 6); or (b) you are **BLOCKED** on a founder decision — your reply states `BLOCKED` plus the exact questions, at most four, in the founder's question format (context and impact, options, your recommendation, a one-line answer label). A milestone, a running CI job, or a worker still in flight is a step inside the loop, never a reason to stop.
 
 ## 5. Never wait idle, never widen without capacity
 
