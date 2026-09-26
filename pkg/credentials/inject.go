@@ -263,6 +263,12 @@ func nonChannelRefsFor(cfg *config.Config) []credentialRef {
 	add(cfg.Tools.Web.Perplexity.APIKeyRef, ScopeWebSearch, "perplexity")
 	add(cfg.Tools.Web.GLMSearch.APIKeyRef, ScopeWebSearch, "glm_search")
 	add(cfg.Tools.Web.BaiduSearch.APIKeyRef, ScopeWebSearch, "baidu_search")
+	// ADR-094 (spec "Exa", Key injection row): Exa joins the shared
+	// enumeration feeding InjectFromConfig (os.Setenv) and ResolveAll (the
+	// redaction bundle). Without this line the key sits in the vault, the
+	// process environment never sees it, and search silently degrades —
+	// exactly the Tavily defect this function's shape fixed.
+	add(cfg.Tools.Web.Exa.APIKeyRef, ScopeWebSearch, "exa")
 	// Skill marketplace credential refs (FR-10.1 unified list): each
 	// marketplace entry may carry a ClawHub AuthTokenRef and/or a GitHub
 	// TokenRef, both resolved via the credential store (SEC-23).
