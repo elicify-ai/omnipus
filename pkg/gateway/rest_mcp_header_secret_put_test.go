@@ -72,3 +72,60 @@ func TestConfigPUT_MCPLiteralHeader_RejectedInEveryBodyShape(t *testing.T) {
 		})
 	}
 }
+
+// TestConfigPUT_MCPLiteralHeader_RejectedForCornerServerNames covers issue
+// #638 F6 (round-3 review): the flattened-shape guard
+// (rest_config.go::isLiteralMCPServerHeaderDotPath) matched the header word
+// POSITIONALLY (segs[4] == "headers"), so two legal server-name spellings
+// shift the segment index and slip the guard — the literal secret persists
+// verbatim into config.json:
+//
+//   - a server name containing a dot ("acme.corp") splits into two segments,
+//     pushing "headers" to segs[6];
+//   - a server literally named "headers" consumes the header slot, leaving a
+//     5-segment path (fails len >= 6).
+//
+// Both spellings are legal server names — rest_tasks.go::validateEntityID
+// rejects only "/", "\", "..", NUL and the empty string. Specification
+// source: the PUT guard's own contract (rest_config.go::
+// findLiteralMCPServerHeaderValue doc comment) and issue #638's intent: no
+// literal secret ever lands in config.json, regardless of spelling.
+// Expected values derive from that contract, never from current output.
+func TestConfigPUT_MCPLiteralHeader_RejectedForCornerServerNames(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			// Server name "acme.corp": the dot splits the name across the
+			// positional split, so segs[4] is "corp", not "headers".
+			name: "dot_in_server_name",
+			body: `{"tools.mcp.servers.acme.corp.headers.Authorization":"Bearer ` + mcpAuthSecret + `"}`,
+		},
+		{
+			// Server literally named "headers": segs[3] is the server name and
+			// the path has only 5 segments, so the positional guard misses.
+			name: "server_named_headers",
+			body: `{"tools.mcp.servers.headers.Authorization":"Bearer ` + mcpAuthSecret + `"}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newTestRestAPIWithHome(t)
+			before := readConfigOnDisk(t, api)
+
+			r := httptest.NewRequest(http.MethodPut, "/api/v1/config", strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			api.updateConfig(w, r)
+
+			require.Equal(t, http.StatusForbidden, w.Code,
+				"issue #638 F6: a literal MCP header value must be rejected whatever the server-name spelling (case %q); body=%s",
+				tc.name, w.Body.String())
+
+			after := readConfigOnDisk(t, api)
+			assert.Equal(t, before, after,
+				"rejected PUT must not mutate config.json (atomic reject, case %q)", tc.name)
+		})
+	}
+}
