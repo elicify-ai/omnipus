@@ -1,7 +1,10 @@
 package audit
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 )
@@ -88,31 +91,57 @@ func normalizeKey(s string) string {
 
 // Redactor replaces sensitive patterns in audit log entries (SEC-16).
 type Redactor struct {
-	patterns []*regexp.Regexp
-	enabled  bool
+	rules   []redactRule
+	enabled bool
+}
+
+// redactRule is one compiled pattern plus its ReplaceAllString template.
+// Plain patterns replace the whole match with [REDACTED]; the audit set's
+// anchored and URL-userinfo patterns keep a captured prefix ("${1}[REDACTED]").
+type redactRule struct {
+	re   *regexp.Regexp
+	repl string
 }
 
 // NewRedactor creates a Redactor with default and optional custom patterns.
 // Pass nil for customPatterns to use only default patterns.
 // Returns an error if a custom pattern is invalid.
 func NewRedactor(customPatterns []string) (*Redactor, error) {
-	return newRedactorFrom(defaultPatterns, customPatterns)
+	return newRedactorFrom(plainRules(defaultPatterns), customPatterns)
 }
 
-// newAuditRedactor creates the Redactor the audit Logger uses: every default
-// credential pattern plus customPatterns, but NOT the email-address pattern.
-// The audit log must record mail recipients and Message-IDs in full (founder
-// ruling MC-19, issue #914), so only credentials are redacted there.
-// defaultPatterns itself stays untouched: secretscan.go depends on its order
-// and on defaultPatternLabels, and NewRedactor's callers keep the full set.
+// auditKeyBoundaryPrefix makes a credential pattern match only when the
+// credential starts the string or follows a character that is not an ASCII
+// letter or digit, so "project-task-management" or "risk-assessment" is not
+// read as an "sk-" key. RE2 has no lookbehind, so the preceding character is
+// captured as group 1 and written back by the replacement template.
+const auditKeyBoundaryPrefix = `(^|[^A-Za-z0-9])(?:`
+
+// auditUserinfoPattern matches the password in a URL's userinfo
+// (scheme://user:PASSWORD@host). Group 1 keeps "scheme://user:" and the
+// trailing "@" is re-emitted, so only the password becomes [REDACTED]. It
+// needs "://" and a ":" before the "@", so a plain email address or a
+// Message-ID never matches. This replaces the incidental cover the email
+// pattern used to give such URLs, which the audit set drops.
+const auditUserinfoPattern = `([A-Za-z][A-Za-z0-9+.\-]*://[^\s:/@]+:)[^\s@/]+@`
+
+// newAuditRedactor creates the Redactor the audit Logger uses (issue #914):
+// see auditCredentialPatterns for the set. customPatterns are appended as
+// plain whole-match patterns.
 func newAuditRedactor(customPatterns []string) (*Redactor, error) {
-	return newRedactorFrom(auditCredentialPatterns(), customPatterns)
+	return newRedactorFrom(auditCredentialRules(), customPatterns)
 }
 
-// auditCredentialPatterns returns defaultPatterns without the email-address
-// pattern, located by its label so a reorder of defaultPatterns cannot make it
-// drop the wrong entry. It panics on a hardcoded-table defect (labels out of
-// step with patterns, or no email label found) — the same class of bug as an
+// auditCredentialPatterns returns the audit logger's pattern set: every
+// defaultPatterns credential pattern, anchored with auditKeyBoundaryPrefix,
+// except the email-address pattern, plus auditUserinfoPattern. The email
+// pattern is dropped because the audit log must record mail recipients and
+// Message-IDs in full (founder ruling MC-19). defaultPatterns itself stays
+// untouched: secretscan.go depends on its order and on defaultPatternLabels,
+// and NewRedactor's callers keep the full, unanchored set. The email pattern
+// is located by its label so a reorder of defaultPatterns cannot drop the
+// wrong entry. Panics on a hardcoded-table defect (labels out of step with
+// patterns, or not exactly one email label) — the same class of bug as an
 // invalid hardcoded pattern in newRedactorFrom.
 func auditCredentialPatterns() []string {
 	if len(defaultPatterns) != len(defaultPatternLabels) {
@@ -126,26 +155,58 @@ func auditCredentialPatterns() []string {
 			dropped++
 			continue
 		}
-		patterns = append(patterns, p)
+		patterns = append(patterns, auditKeyBoundaryPrefix+p+`)`)
 	}
 	if dropped != 1 {
 		panic(fmt.Sprintf("BUG: expected exactly one %q pattern in defaultPatterns, found %d", emailPatternLabel, dropped))
 	}
-	return patterns
+	return append(patterns, auditUserinfoPattern)
+}
+
+// auditCredentialRules pairs auditCredentialPatterns with their replacement
+// template. Every audit pattern captures a kept prefix as group 1; the
+// userinfo pattern also consumed the "@" that ends the password, so its
+// template writes it back.
+func auditCredentialRules() []ruleSource {
+	patterns := auditCredentialPatterns()
+	out := make([]ruleSource, len(patterns))
+	for i, p := range patterns {
+		repl := "${1}" + redactedValue
+		if p == auditUserinfoPattern {
+			repl += "@"
+		}
+		out[i] = ruleSource{pattern: p, repl: repl}
+	}
+	return out
+}
+
+// ruleSource is an uncompiled redactRule.
+type ruleSource struct {
+	pattern string
+	repl    string
+}
+
+// plainRules wraps patterns as whole-match [REDACTED] rules.
+func plainRules(patterns []string) []ruleSource {
+	out := make([]ruleSource, len(patterns))
+	for i, p := range patterns {
+		out[i] = ruleSource{pattern: p, repl: redactedValue}
+	}
+	return out
 }
 
 // newRedactorFrom compiles base (hardcoded, so a compile failure is a bug and
 // panics) followed by customPatterns (operator input, so a compile failure is
 // returned as an error).
-func newRedactorFrom(base, customPatterns []string) (*Redactor, error) {
-	patterns := make([]*regexp.Regexp, 0, len(base)+len(customPatterns))
+func newRedactorFrom(base []ruleSource, customPatterns []string) (*Redactor, error) {
+	rules := make([]redactRule, 0, len(base)+len(customPatterns))
 
-	for _, p := range base {
-		re, err := regexp.Compile(p)
+	for _, src := range base {
+		re, err := regexp.Compile(src.pattern)
 		if err != nil {
-			panic(fmt.Sprintf("BUG: invalid hardcoded redaction pattern %q: %v", p, err))
+			panic(fmt.Sprintf("BUG: invalid hardcoded redaction pattern %q: %v", src.pattern, err))
 		}
-		patterns = append(patterns, re)
+		rules = append(rules, redactRule{re: re, repl: src.repl})
 	}
 
 	for _, p := range customPatterns {
@@ -153,10 +214,30 @@ func newRedactorFrom(base, customPatterns []string) (*Redactor, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid redaction pattern %q: %w", p, err)
 		}
-		patterns = append(patterns, re)
+		rules = append(rules, redactRule{re: re, repl: redactedValue})
 	}
 
-	return &Redactor{patterns: patterns, enabled: true}, nil
+	return &Redactor{rules: rules, enabled: true}, nil
+}
+
+// processAuditRedactor is the audit credential set with no custom patterns,
+// built once for RedactCredentials.
+var processAuditRedactor = func() *Redactor {
+	r, err := newAuditRedactor(nil)
+	if err != nil {
+		panic(fmt.Sprintf("BUG: audit redactor with no custom patterns failed: %v", err))
+	}
+	return r
+}()
+
+// RedactCredentials applies the audit logger's credential patterns (no
+// email redaction, anchored key prefixes, URL userinfo passwords) to s. Use
+// it wherever a command or other agent-supplied string that is also
+// audited is written somewhere else — for example the gateway log line on
+// an audit-failure path — so that copy is no less redacted than the audit
+// entry (issue #914).
+func RedactCredentials(s string) string {
+	return processAuditRedactor.Redact(s)
 }
 
 // DisabledRedactor returns a Redactor that passes through all values unchanged.
@@ -166,11 +247,11 @@ func DisabledRedactor() *Redactor {
 
 // Redact replaces all matching patterns in a string with [REDACTED].
 func (r *Redactor) Redact(s string) string {
-	if !r.enabled || len(r.patterns) == 0 {
+	if r == nil || !r.enabled || len(r.rules) == 0 {
 		return s
 	}
-	for _, re := range r.patterns {
-		s = re.ReplaceAllString(s, redactedValue)
+	for _, rule := range r.rules {
+		s = rule.re.ReplaceAllString(s, rule.repl)
 	}
 	return s
 }
@@ -188,8 +269,10 @@ func (r *Redactor) redactField(key string, value any) any {
 		return value
 	}
 	if _, sensitive := sensitiveFieldNames[normalizeKey(key)]; sensitive {
-		// Already redacted? Leave it to avoid double-wrapping.
-		if s, ok := value.(string); ok && s == redactedValue {
+		// Already redacted? Leave it to avoid double-wrapping. The
+		// security-setting-change sentinel counts too, so that record keeps
+		// its own "***redacted***" marker when the logger also redacts.
+		if s, ok := value.(string); ok && (s == redactedValue || s == redactedSentinel) {
 			return value
 		}
 		return redactedValue
@@ -208,8 +291,22 @@ func (r *Redactor) redactMap(m map[string]any) map[string]any {
 	return result
 }
 
+// redactValue redacts one value. Strings go through the patterns; the
+// container shapes audit callers actually build ([]any, []string,
+// map[string]any, map[string]string, []map[string]any) are walked with the
+// field-name layer applied to map keys; numbers, booleans and nil pass
+// through. Any other type (a struct, a pointer, a named slice) is never
+// passed through unexamined: it is converted through its JSON form into
+// generic maps and slices and walked like the rest, which writes the same
+// JSON the audit line would have carried. A value JSON cannot encode is
+// replaced by a marker naming its type.
 func (r *Redactor) redactValue(v any) any {
 	switch val := v.(type) {
+	case nil, bool, json.Number,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64:
+		return v
 	case string:
 		return r.Redact(val)
 	case map[string]any:
@@ -220,7 +317,58 @@ func (r *Redactor) redactValue(v any) any {
 			result[i] = r.redactValue(item)
 		}
 		return result
+	case []string:
+		result := make([]string, len(val))
+		for i, item := range val {
+			result[i] = r.Redact(item)
+		}
+		return result
+	case map[string]string:
+		result := make(map[string]string, len(val))
+		for k, item := range val {
+			if _, sensitive := sensitiveFieldNames[normalizeKey(k)]; sensitive {
+				result[k] = redactedValue
+				continue
+			}
+			result[k] = r.Redact(item)
+		}
+		return result
+	case []map[string]any:
+		result := make([]map[string]any, len(val))
+		for i, item := range val {
+			result[i] = r.redactMap(item)
+		}
+		return result
 	default:
+		return r.redactViaJSON(v)
+	}
+}
+
+// redactViaJSON handles a type redactValue has no case for: named string
+// kinds are redacted as strings, other numeric/bool kinds pass through, and
+// everything else is round-tripped through JSON into generic values and
+// walked. A marshal/unmarshal failure yields a type-naming marker rather
+// than the raw value.
+func (r *Redactor) redactViaJSON(v any) any {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.String:
+		return r.Redact(rv.String())
+	case reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
 		return v
 	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%s (unserialisable %T)", redactedValue, v)
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var generic any
+	if err := dec.Decode(&generic); err != nil {
+		return fmt.Sprintf("%s (unserialisable %T)", redactedValue, v)
+	}
+	return r.redactValue(generic)
 }

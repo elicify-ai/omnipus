@@ -104,7 +104,7 @@ For unattended deployments, provision `OMNIPUS_MASTER_KEY` or `OMNIPUS_KEY_FILE`
 
 ## Sensitive-value filtering
 
-Resolved credential values are registered at startup and after a successful configuration reload. Omnipus uses that complete current set to scrub selected content before it reaches a model or an audit record.
+Resolved credential values are registered at startup and again whenever the credential set changes (configuration reload, settings save, provider sign-in). Omnipus uses that complete current set to scrub tool results and other selected content before it reaches a model. It is not applied to the audit log; see "Audit log redaction" below, which matches credential formats, not your registered values.
 
 Filtering is best-effort and can be switched off. Configure it under `tools` in `config.json`:
 
@@ -119,11 +119,13 @@ Filtering is best-effort and can be switched off. Configure it under `tools` in 
 
 `filter_sensitive_data` defaults to `true`. `filter_min_length` defaults to `8`; shorter content bypasses this filter. The matching environment variables are `OMNIPUS_TOOLS_FILTER_SENSITIVE_DATA` and `OMNIPUS_TOOLS_FILTER_MIN_LENGTH`.
 
-This filter only covers values Omnipus has registered and patterns recognized by the audit redactor. It does not discover every secret in arbitrary text. Treat any suspected exposure as real and rotate the affected credential.
+This filter only covers credential values Omnipus has registered. It does not recognise credential formats, and it does not discover every secret in arbitrary text. Treat any suspected exposure as real and rotate the affected credential.
 
 ### Audit log redaction
 
-Separately from the filter above, the audit logger always redacts before it writes: every entry's command, parameters and details (nested values included) pass through the credential patterns, and any value under a secret-named field (`password`, `token`, `api_key`, `authorization` and similar) becomes `[REDACTED]`. There is no setting to turn it off. Redaction runs before the entry is signed, so the tamper-evident chain covers the redacted text and still verifies. Email addresses are deliberately not redacted in the audit log, so mail recipients and Message-IDs are recorded in full.
+Separately from the filter above, the audit logger redacts every entry before it writes it: the command, parameters and details of tool-call and shell entries, and the fields of structured event records, pass through the credential patterns (including nested maps and lists of any type). The patterns cover `sk-…` and `key-…` keys, `Bearer …` tokens, GitHub `ghp_…`/`gho_…` tokens, Slack `xoxb-…`/`xoxp-…` tokens, AWS access-key IDs (`AKIA…`/`ASIA…`), Google `ya29.…` access tokens, JSON Web Tokens, and the password in a URL such as `postgres://user:PASSWORD@host` (only the password is replaced). A key prefix directly after a letter or digit is not treated as a key, so names like `project-task-…` or `risk-assessment` are left intact. A value whose field name is exactly one of a short list (`password`, `token`, `api_key`, `secret`, `authorization` and similar; case, `_` and `-` are ignored) becomes `[REDACTED]`; a field such as `github_token` is not caught by name. There is no setting to turn it off. Redaction runs before the entry is signed, so the tamper-evident chain covers the redacted text and still verifies. Security-setting-change records keep their own, broader name-based redaction (`***redacted***`) and also pass through the credential patterns. Email addresses are deliberately not redacted in the audit log, so mail recipients and Message-IDs are recorded in full.
+
+When an audit write fails, the gateway log line that reports it carries the command with the same credential patterns applied.
 
 Audit files written before this was switched on (issue #914) are not rewritten — rewriting them would break the signature chain. They may contain credentials typed into `bash`, `web_serve` or `environment_setup` commands; rotate those credentials if that matters.
 
