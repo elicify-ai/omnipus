@@ -479,6 +479,14 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 		// our own formatted messages are the only thing printed.
 		SilenceUsage: true,
 
+		// SilenceErrors hands the error print to runMain (issue #877): cobra
+		// would otherwise print every returned error itself (v1.10.2 prints
+		// unless the root silences it — command.go, "If root command has
+		// SilenceErrors flagged, all subcommands should respect it"), and the
+		// print would be duplicated once runMain prints it. Cobra applies the
+		// root's flag to every subcommand, so one flag silences the whole tree.
+		SilenceErrors: true,
+
 		RunE: func(cmd *cobra.Command, args []string) error {
 			home := internal.GetOmnipusHome()
 			configPath := internal.GetConfigPath()
@@ -653,9 +661,24 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 	return cmd
 }
 
-func Main() {
-	cmd := NewRootCommand()
-	if err := cmd.ExecuteContext(context.Background()); err != nil {
-		os.Exit(1)
+// runMain executes cmd and maps the result to the process exit code
+// (issue #877: Main used to bind the error and drop it). It owns the single
+// print of a returned command error — the root sets SilenceErrors, so cobra
+// is quiet and this is the one place the error surfaces ("Error: <err>", the
+// same prefix cobra used). Written to cmd's error stream (os.Stderr on the
+// real root), which the #876 boot path showed is the stream that reaches the
+// operator. Exit codes a command owns itself (ExitSandboxConfig=78, usage
+// errors=2) os.Exit inside RunE/PreRunE and never return here, so runMain's
+// 1 cannot override them.
+func runMain(ctx context.Context, cmd *cobra.Command) int {
+	err := cmd.ExecuteContext(ctx)
+	if err == nil {
+		return 0
 	}
+	fmt.Fprintln(cmd.ErrOrStderr(), "Error:", err)
+	return 1
+}
+
+func Main() {
+	os.Exit(runMain(context.Background(), NewRootCommand()))
 }
