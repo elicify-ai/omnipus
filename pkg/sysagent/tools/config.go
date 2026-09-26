@@ -455,7 +455,10 @@ var blockedConfigKeys = []blockedConfigKey{
 		Key: "tools.mcp",
 		Reason: "an MCP server entry names a program the gateway launches — writing it is arbitrary " +
 			"code execution, and it would bypass whatever policy governs add_mcp_server",
-		ReadOKReason: "the configured servers. Embedded credentials are caught by redactConfigValue's field-name redaction at any depth, so the list is readable while its secrets are not",
+		ReadOKReason: "the configured servers. Header values under tools.mcp.servers.<name>.headers are redacted " +
+			"structurally by redactMCPHeaderValuesAt — header names like Authorization match no sensitive-name " +
+			"fragment — while credential-shaped field names are still caught by redactConfigValue, so the list " +
+			"is readable while its secrets are not",
 	},
 	{
 		Key: "tools.browser",
@@ -965,18 +968,32 @@ var mcpHeaderPathPrefix = []string{"tools", "mcp", "servers"}
 // the model context, even though GET /api/v1/config redacts the same values
 // (pkg/gateway/rest_config.go::redactMCPServerHeaderValues). Anchoring on the
 // requested key's own segments (the same configKeySegments output dotGet
-// resolved the read with) keeps every subtree read correct: the servers map,
-// one server entry, its headers map, or a single header value. Paths that
-// walkDot could not resolve never reach here (dotGet errors first), so a
-// server name containing a dot is only ever readable through the servers-map
-// read — which this handles structurally.
+// resolved the read with) covers every position the read can take relative to
+// the anchor: at or below it — the servers map, one server entry, its headers
+// map, or a single header value — resolves by shape, and a strict ANCESTOR of
+// it (key "tools" or "tools.mcp", round-2 review F1) descends the anchor
+// segments the key did not consume and redacts every headers map it reaches,
+// the same unconditional structural walk the REST side applies to its
+// whole-config read. A key that diverges from the anchor before being
+// exhausted (tools.exec, gateway.port) addresses a different subtree, which
+// cannot contain header values. Paths that walkDot could not resolve never
+// reach here (dotGet errors first), so a server name containing a dot is only
+// ever readable through the servers-map read — which this handles
+// structurally.
 func redactMCPHeaderValuesAt(segs []string, v any) any {
 	i := 0
 	for i < len(segs) && i < len(mcpHeaderPathPrefix) && segs[i] == mcpHeaderPathPrefix[i] {
 		i++
 	}
 	if i < len(mcpHeaderPathPrefix) {
-		return v // the read is not under tools.mcp.servers — it holds no header values
+		if i == len(segs) {
+			// The read key is a strict ancestor of tools.mcp.servers
+			// ("tools", "tools.mcp"): the returned subtree still contains
+			// header values, so descend the anchor segments the key did not
+			// consume and redact every headers map found there.
+			return redactMCPHeaderAncestorSubtree(v, mcpHeaderPathPrefix[i:])
+		}
+		return v // unrelated subtree — it holds no header values
 	}
 	rest := segs[len(mcpHeaderPathPrefix):]
 	switch {
@@ -1009,6 +1026,33 @@ func redactMCPHeaderValuesAt(segs []string, v any) any {
 		// rest[1] != "headers": the value sits under a non-header field of the
 		// server entry — MCPServerConfig has no nested headers map under any
 		// other field, so there is nothing to redact.
+	}
+	return v
+}
+
+// redactMCPHeaderAncestorSubtree descends a decoded ancestor-read subtree
+// along the anchor segments the read key did not consume and redacts the
+// headers map of every MCP server entry it reaches. A missing level (an
+// install with no MCP section at all) or a non-map level ends the walk. v is
+// the throwaway configToMap copy dotGet resolved the read from, so the
+// in-place header redaction never touches live config.
+func redactMCPHeaderAncestorSubtree(v any, remaining []string) any {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return v
+	}
+	if len(remaining) == 0 {
+		// m IS the tools.mcp.servers map: every child is a server entry whose
+		// headers must come back redacted.
+		for _, srv := range m {
+			if srvMap, ok := srv.(map[string]any); ok {
+				redactMCPServerHeaderEntryMap(srvMap)
+			}
+		}
+		return v
+	}
+	if child, ok := m[remaining[0]]; ok {
+		return redactMCPHeaderAncestorSubtree(child, remaining[1:])
 	}
 	return v
 }
