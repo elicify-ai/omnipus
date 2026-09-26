@@ -74,6 +74,8 @@ const mockExternalAgent: Agent = {
   soul: 'You are a focused delegate.',
   timeout_seconds: 60,
   max_tool_iterations: 20,
+  max_tool_iterations_source: 'global',
+  max_tool_iterations_override_ignored: false,
   rate_limits: { use_global_defaults: true },
   executor: { kind: 'external-cli', cli: 'claude-code' },
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.

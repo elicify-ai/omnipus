@@ -72,6 +72,8 @@ describe('API contract: agent and supporting resource shapes', () => {
       soul: '',
       timeout_seconds: 60,
       max_tool_iterations: 20,
+      max_tool_iterations_source: 'global',
+      max_tool_iterations_override_ignored: false,
       // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
       memory_enabled: true,
     } satisfies Agent
@@ -96,6 +98,8 @@ describe('API contract: agent and supporting resource shapes', () => {
       soul: '',
       timeout_seconds: 60,
       max_tool_iterations: 20,
+      max_tool_iterations_source: 'global',
+      max_tool_iterations_override_ignored: false,
       // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
       memory_enabled: true,
     } satisfies Agent
