@@ -369,7 +369,7 @@ func (a *restAPI) updateConfigJSONLocked(mutate func(m map[string]any) error) er
 	// Propagate the error so callers fail the HTTP request rather than silently
 	// serving stale in-memory state (prevents A1 regression on REST-initiated writes).
 	if refreshErr := a.refreshConfigAndRewireServices(a.configPath()); refreshErr != nil {
-		return fmt.Errorf("config written but in-memory refresh failed: %w", refreshErr)
+		return &configRefreshError{err: refreshErr}
 	}
 	// refreshConfigAndRewireServices loads the config, and config.LoadConfig may
 	// normalize + re-save the file (config.go SaveConfig-on-load), producing
@@ -395,6 +395,18 @@ func (a *restAPI) updateConfigJSONLocked(mutate func(m map[string]any) error) er
 	}
 	return nil
 }
+
+// configRefreshError is updateConfigJSONLocked's failure AFTER config.json
+// was durably written: the in-memory refresh failed, so the write stands on
+// disk but the running config was not swapped. Callers that must not treat
+// the write as undone (PUT /performance, #904) detect it with errors.As.
+type configRefreshError struct{ err error }
+
+func (e *configRefreshError) Error() string {
+	return "config written but in-memory refresh failed: " + e.err.Error()
+}
+
+func (e *configRefreshError) Unwrap() error { return e.err }
 
 // ensureMap walks m through the given keys, creating intermediate map[string]any
 // nodes as needed, and returns the deepest map. Panics only on a non-map value

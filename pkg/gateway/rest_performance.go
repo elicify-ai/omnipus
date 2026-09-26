@@ -214,6 +214,13 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, werr.status, werr.body)
 		return
 	}
+	if outcome.notApplied != nil {
+		// Saved but not applied: config.json (and any lowered agents) are
+		// written, the in-memory refresh failed — same answer as a failed
+		// registry reload below.
+		writePerformanceReloadFailed(w, outcome, outcome.notApplied)
+		return
+	}
 
 	// Resize the in-memory dispatch semaphore immediately so the new parallel cap
 	// takes effect without a restart (no-op when max_parallel_agents was not updated).
@@ -245,7 +252,7 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 
 // writePerformanceReloadFailed answers a PUT whose writes are COMMITTED
 // (config.json and any lowered agents are on disk and audited) but whose
-// registry reload failed: 500 with code performance_reload_failed, so the
+// in-memory refresh or registry reload failed: 500 with code performance_reload_failed, so the
 // client can say "saved, not applied yet" instead of "failed". The lowered
 // agents, if any, travel in details.lowered_agents — GET /performance does
 // not carry them (PerformanceSettings.max_tool_iterations_lowered_agents is

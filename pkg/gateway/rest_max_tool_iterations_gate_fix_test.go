@@ -270,3 +270,42 @@ func TestGateFix_ReloadFailure_CodeAndLoweredAgents(t *testing.T) {
 	require.NotNil(t, ps.MaxToolIterations)
 	assert.Equal(t, 200, *ps.MaxToolIterations, "GET after the failed reload shows the saved global")
 }
+
+// corruptAfterLowerStore lowers through the real store, then makes every
+// agent record unparseable, so updateConfigJSONLocked's in-memory refresh
+// (populateAgentsListFromEntityStoreStrict) fails AFTER config.json is
+// written — the real refresh-failure path, no test-only hook.
+type corruptAfterLowerStore struct {
+	*agentstore.Store
+	home string
+}
+
+func (c *corruptAfterLowerStore) MutateState(id, rev string, mutate func(*config.AgentConfig) error, soul *string) (agentstore.MutationResult, error) {
+	res, err := c.Store.MutateState(id, rev, mutate, soul)
+	if err == nil {
+		p := filepath.Join(c.home, "entities", "agents", id+".json")
+		if werr := os.WriteFile(p, []byte("{not json"), 0o600); werr != nil {
+			return res, werr
+		}
+	}
+	return res, err
+}
+
+// Coordinator ruling on item 4/5: when config.json is already written and the
+// refresh step fails, the save is committed — 500 performance_reload_failed
+// with details.lowered_agents, no rollback, never "nothing was changed".
+func TestGateFix_RefreshFailureAfterWrite_IsReloadFailedNotRollback(t *testing.T) {
+	api := newLimitAPI(t, 300, config.AgentConfig{ID: "agent-a", Name: "A", MaxToolIterations: 250})
+	api.limitAgentStore = &corruptAfterLowerStore{Store: agentstore.New(api.homePath), home: api.homePath}
+	w := putPerformanceJSON(t, api,
+		`{"max_tool_iterations":200,"confirmed_lowering":[{"agent_id":"agent-a","old_value":250}]}`, true)
+	require.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
+	e := gateFixErr(t, w)
+	require.NotNil(t, e.Code, w.Body.String())
+	assert.Equal(t, "performance_reload_failed", *e.Code)
+	assert.NotContains(t, e.Error, "nothing was changed")
+	require.NotNil(t, e.Details)
+	lowered, _ := (*e.Details)["lowered_agents"].([]any)
+	require.Len(t, lowered, 1, "details.lowered_agents: %v", *e.Details)
+	assert.EqualValues(t, 200, savedGlobal(t, api), "the global write stands")
+}

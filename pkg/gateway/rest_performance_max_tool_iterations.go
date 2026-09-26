@@ -270,6 +270,11 @@ var errLoweringValueChanged = errors.New("agent's own tool-iteration limit chang
 type performanceWriteOutcome struct {
 	lowered       []gen.MaxToolIterationAgentChange
 	globalChanged bool
+	// notApplied is set when every write is committed (config.json and the
+	// lowered agents) but the in-memory refresh after the config.json write
+	// failed: the caller answers performance_reload_failed, like a failed
+	// registry reload, and nothing is rolled back.
+	notApplied error
 }
 
 // performanceWriteError is a fully-formed HTTP failure from the locked write.
@@ -473,6 +478,17 @@ func (a *restAPI) writePerformanceLocked(ctx context.Context, upd *maxToolIterat
 		return out, a.loweringFailure(ctx, store, defaults, upd, done, failing, err)
 	}
 	if writeErr := a.updateConfigJSONLocked(mutate); writeErr != nil {
+		// config.json is already written when only the refresh failed: the
+		// save is committed, so rolling the agents back would contradict
+		// the written global and "nothing was changed" would be false.
+		var refreshErr *configRefreshError
+		if errors.As(writeErr, &refreshErr) {
+			slog.Error("rest: PUT /performance: config.json written but the in-memory refresh failed; "+
+				"keeping the lowered agents", "lowered_agents", len(done), "error", writeErr)
+			out.notApplied = writeErr
+			a.commitPerformanceOutcome(ctx, &out, upd, done, oldGlobal)
+			return out, nil
+		}
 		if len(done) > 0 {
 			return out, a.loweringFailure(ctx, store, defaults, upd, done, "", writeErr)
 		}
@@ -480,11 +496,19 @@ func (a *restAPI) writePerformanceLocked(ctx context.Context, upd *maxToolIterat
 		return out, &performanceWriteError{status: http.StatusInternalServerError,
 			body: gen.ErrorResponse{Error: fmt.Sprintf("could not update performance settings: %v", writeErr)}}
 	}
+	a.commitPerformanceOutcome(ctx, &out, upd, done, oldGlobal)
+	return out, nil
+}
+
+// commitPerformanceOutcome records a committed write: the lowered agents in
+// the outcome and the audit record for a changed global.
+func (a *restAPI) commitPerformanceOutcome(ctx context.Context, out *performanceWriteOutcome,
+	upd *maxToolIterationsGlobalUpdate, done []loweredAgent, oldGlobal int,
+) {
 	for _, d := range done {
 		out.lowered = append(out.lowered, d.change)
 	}
 	if upd != nil && out.globalChanged {
 		a.auditMaxToolIterationsChange(ctx, maxToolIterationsGlobalAuditResource, oldGlobal, upd.value)
 	}
-	return out, nil
 }
