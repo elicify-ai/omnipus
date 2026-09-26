@@ -69,7 +69,11 @@ func savedGlobal(t *testing.T, api *restAPI) any {
 	require.NoError(t, err)
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(raw, &m))
-	return m["agents"].(map[string]any)["defaults"].(map[string]any)["max_tool_iterations"]
+	agents, ok := m["agents"].(map[string]any)
+	require.True(t, ok, "config.json agents is not an object: %v", m["agents"])
+	defaults, ok := agents["defaults"].(map[string]any)
+	require.True(t, ok, "config.json agents.defaults is not an object: %v", agents["defaults"])
+	return defaults["max_tool_iterations"]
 }
 
 func putPerformanceJSON(t *testing.T, api *restAPI, body string, withToken bool) *httptest.ResponseRecorder {
