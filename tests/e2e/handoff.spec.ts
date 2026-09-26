@@ -300,7 +300,7 @@ test(
 // finishing) gets a budget sized to that step alone rather than the old
 // combined number.
 test(
-  '(b) delegate output is visible via the delegate chip and Activity panel; the child\'s own bash call is visible only in its own session',
+  '(b) delegate output is visible via the delegated event line and Activity panel; the child\'s own bash call is visible only in its own session',
   async ({ page }) => {
     // T0.1: OPENROUTER_API_KEY_CI soft-skip removed. The key is required in CI;
     // its absence is a CI configuration failure, not a per-test skip condition.
@@ -308,8 +308,9 @@ test(
     // test will fail honestly — which is the correct behavior.
 
     // 300s: sized to the two waits that actually gate this test, not
-    // inherited from the old combined 270s. The delegate badge only needs
-    // the PARENT's own tool-call emission (a single round trip — other
+    // inherited from the old combined 270s. The delegated event line only needs
+    // the PARENT's own tool-call emission plus the child's subagent_start (a
+    // single round trip — other
     // specs in this shard document 40-90s for that alone); the child's own
     // bash badge needs the CHILD to actually start executing, the same
     // underlying "two round trips" wait the old 150s collapsed-block
@@ -326,8 +327,8 @@ test(
     // below. Without this, a page-load-time reconnect blip can leave the
     // composer looking usable while the first message it sends lands in
     // the outbound queue instead of the wire — the delegate call never
-    // fires, and the test hangs to its full timeout waiting on a chip that
-    // will never appear.
+    // fires, and the test hangs to its full timeout waiting on a delegated
+    // line that will never appear.
     await expect(input).toBeEnabled({ timeout: 15_000 });
     await waitForConnected(page, { timeout: 15_000 });
 
@@ -362,12 +363,24 @@ test(
     );
     await input.press('Enter');
 
-    // (1) THREAD — the delegate tool-call chip is the parent's only
-    // delegation surface, visible unconditionally (ADR-091 D7/AC-7). This
-    // needs only the PARENT's own turn to emit the call — no child
-    // round-trip required — so it resolves fast.
-    const delegateBadge = page.locator('[data-testid="tool-call-badge"][data-tool="delegate"]');
-    await expect(delegateBadge.first()).toBeVisible({ timeout: 60_000 });
+    // (1) THREAD — the parent's own delegate call on its CURRENT default-thread
+    // surface: the grey delegated event line (DelegationEventLine.tsx). UPDATE
+    // 2026-09-27: fe1e2406a (delegation-chat-surface spec D2) hid the delegate
+    // tool-call badge from the non-verbose thread — shouldRenderToolCall's
+    // `delegate` case returns false — so the stale claim this comment used to
+    // make ("the chip is the parent's only delegation surface, visible
+    // unconditionally, ADR-091 D7/AC-7") is no longer true: the badge is
+    // verbose-only now, and the line is the default surface. This still needs
+    // only the PARENT's own call plus the child's subagent_start (the line
+    // derives from the span record) — effectively no child round-trip — so it
+    // resolves fast. Birth-kind list + label filter, for the reasons
+    // subagent.spec.ts test (a) states in full.
+    const delegateLine = page
+      .locator(
+        '[data-testid="delegation-event-line"][data-event-kind="delegated"], [data-testid="delegation-event-line"][data-event-kind="started"]',
+      )
+      .filter({ hasText: label });
+    await expect(delegateLine.first()).toBeVisible({ timeout: 60_000 });
 
     // (2) THREAD — the guard: zero subagent-collapsed elements, ever.
     await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
@@ -378,14 +391,20 @@ test(
     // this test waits.
     await expect(page.locator('[data-testid="tool-call-badge"][data-tool="bash"]')).toHaveCount(0);
 
-    // a11y baseline check on the delegate chip, BEFORE navigating away to
-    // the child's session below (the parent's thread, delegate chip
+    // a11y baseline check on the delegated event line, BEFORE navigating away
+    // to the child's session below (the parent's thread, delegated line
     // included, leaves the DOM once the chat surface rebinds to the child).
+    // UPDATE 2026-09-27: the include used to name the delegate tool-call
+    // badge — verbose-only since fe1e2406a, so in this default non-verbose
+    // thread it matched nothing and axe passed silently over an empty
+    // selection (this file's own comment on the child-session scan below
+    // documents that exact false-green shape). The event line is the chip's
+    // replacement surface and keeps this scan real.
     // Traces to: sprint-h-subagent-block-spec.md line 316 (Scenario 11) —
     // same accessibility guarantee SubagentBlock used to carry, re-pointed
     // at the surface that replaced it.
     await expectA11yClean(page, {
-      include: ['[data-testid="tool-call-badge"]'],
+      include: ['[data-testid="delegation-event-line"]'],
     });
 
     // (4) PANEL — the row that replaced "click the collapsed header":
