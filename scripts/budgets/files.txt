@@ -13,7 +13,7 @@
 # size-budget-grandfather-2026-09-15.md, re-measured at release/v0.1.1 @ 0ea1b81b7.
 # so that file can grow back to its old size with no FAIL, and a row whose path
 pkg/agent/loop_test.go	3650
-pkg/agent/loop.go	3083
+pkg/agent/loop.go	3060
 pkg/channels/manager_test.go	    3040
 src/components/agents/AgentProfile.test.tsx	3194
 src/components/agents/AgentProfile.tsx	3211

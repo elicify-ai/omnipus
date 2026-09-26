@@ -1205,49 +1205,6 @@ func (al *AgentLoop) Stop() {
 	}
 }
 
-func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, ag *AgentInstance, channel, chatID, response string) {
-	if response == "" {
-		return
-	}
-
-	alreadySent := false
-	if ag == nil {
-		ag = al.GetRegistry().GetDefaultAgent()
-	}
-	if ag != nil {
-		if tool, ok := ag.Tools.Get("send_message"); ok {
-			if mt, ok := tool.(*tools.MessageTool); ok {
-				alreadySent = mt.HasSentInRound()
-			}
-		}
-	}
-
-	if alreadySent {
-		logger.DebugCF(
-			"agent",
-			"Skipped outbound (message tool already sent)",
-			map[string]any{"channel": channel},
-		)
-		return
-	}
-
-	if err := al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-		Channel: channel,
-		ChatID:  chatID,
-		Content: response,
-	}); err != nil {
-		logger.ErrorCF("agent", "Failed to publish outbound response",
-			map[string]any{"channel": channel, "chat_id": chatID, "error": err.Error()})
-		return
-	}
-	logger.InfoCF("agent", "Published outbound response",
-		map[string]any{
-			"channel":     channel,
-			"chat_id":     chatID,
-			"content_len": len(response),
-		})
-}
-
 // WaitForActiveRequests blocks until all in-flight LLM calls tracked by
 // activeRequests have completed. Used by the graceful shutdown sequence to
 // ensure active turns finish before the process exits.
