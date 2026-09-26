@@ -7,10 +7,13 @@ ADR: [ADR-081 — Unified Library search, general file search, and the grep engi
 **Created**: 2026-09-26
 **Issue**: https://github.com/elicify-ai/omnipus/issues/920
 **Input**: founder interview record `docs/internal/specs/read-boundary-consistency-interview.md`
-(decisions D1–D10, FINAL); ADR-081 and ADR-092 as amended and corrected at commit `a809546`;
+(decisions D1–D12, FINAL; D11 and D12 from the spec round-1 founder interview); ADR-081 and
+ADR-092 as amended and corrected at commit `a809546`;
 ADR grill report `docs/internal/architecture/ADR-092-shell-permission-modes-review.md`;
-`docs/internal/specs/unified-search-and-grep-spec.md` (FINAL) and its two review rounds.
-**Evidence baseline**: branch `feature/920-read-boundary` @ `7efcc5d`.
+`docs/internal/specs/unified-search-and-grep-spec.md` (FINAL) and its two review rounds;
+spec round-1 grill `docs/internal/specs/read-boundary-consistency-spec-review.md`.
+**Evidence baseline**: branch `feature/920-read-boundary` @ `7efcc5d`; the round-1 corrections
+were re-verified against the code at `41aeee4` (see "Round 1 corrections" at the end).
 **Supersedes (agent `grep` only)**: `unified-search-and-grep-spec.md` FR-020; FR-014 for the
 agent tool; US-3 narrative and AS-7; US-2 AS-5 for a `path` argument (it still holds for the
 human search bar and for symlinks met during a walk); the BDD scenarios "confinement holds
@@ -66,10 +69,13 @@ Inferred accordingly.
 | `pkg/tools/resolvepath.go::isSkillInstructionFileLeaf`, `classifySkillsGateCandidate`, `classifySkillsGate` | reused | ADR-072 D10.3 skills-registry gate primitives; single-spelling pair for the per-visited-file check (ADR-081 MIN-003 correction). |
 | `pkg/tools/grep.go::validateGrepScope` | modifies / retires | refuses `strings.HasPrefix(scope, "/")` and any `..` segment; keeps a NUL pre-check. Not Windows-safe. |
 | `pkg/tools/grep.go::grepRoots`, `resolveScopedRoot`, `splitGrepScopeMount`, `normalizeGrepScope`, `guardCarveOuts`, `carveOutFS` | modifies / extends | root assembly. `carveOutFS.ReadDir` filters carve-out entries out of listings; `splitGrepScopeMount` splits on `/` only. |
+| `pkg/tools/grep.go::GrepTool` (struct), `GrepTool.Execute` | extends | today it has no audit-logger field and no `SetAuditLogger` method, so it does not satisfy `pkg/tools/registry.go::auditLoggerAware` and receives no logger from `ToolRegistry.Register` / `ToolRegistry.SetAuditLogger` (FR-020). `Execute` runs `grepRoots` → `defer closeRoots()` → `filegrep.TryAcquire` → `filegrep.Search`, so the closer is deferred before the busy check (FR-032). |
+| `pkg/tools/filesystem.go::ReadFileTool.SetAuditLogger`, `emitPathAccessDeniedCorrelated` | reused | the `read_file` pattern `grep` copies: a logger field set through `auditLoggerAware`, refusals emitted with the Judge adjudication correlation. |
 | `pkg/tools/grep.go::GrepTool.Description` | rewritten (prometheus-prompt-engineer) | states "never anywhere else; … another agent's or workspace's files are never reachable". |
 | `pkg/tools/filesystem.go::ReadFileTool.Description`, `ListDirTool.Description` | reviewed / rewritten | rendered into `docs/reference/built-in-tools.md`. |
 | `pkg/tools/filesystem.go::ReadFileTool.AutoApproveVerdict`, `ListDirTool.AutoApproveVerdict` | deleted (dead after the class move) | ADR-092 correction note, "Dead code this leaves". |
-| `pkg/tools/filesystem.go::guardMetadataPath` + `pkg/tools/metadata_guard.go::metadataFileMatch` | reused | `read_file` calls `guardMetadataPath(…, "read")`; `list_directory` does not. |
+| `pkg/tools/filesystem.go::guardMetadataPath` + `pkg/tools/metadata_guard.go::metadataFileMatch` | reused | `read_file` calls `guardMetadataPath(…, "read")`; `list_directory` does not, and stays that way (D11). |
+| `.github/workflows/cross-platform.yml` (header comment; jobs `windows-compile` on `ubuntu-latest`, `windows-daemon-tests` on `windows-latest`) | extends | new job `windows-tools-tests` (FR-031); the header's "What actually exists today" inventory is updated in the same commit. |
 | `pkg/tools/auto_approve.go::autoApproveClasses` | modifies | `"read_file": AutoRunsIfArgs`, `"list_directory": AutoRunsIfArgs`, `"grep": AutoRuns`. |
 | `pkg/tools/auto_approve.go::AutoPin`, `AutoPinForVerdict`, `RecheckAutoPin`, `resolveAutoCheckedPath` | modifies | D8 fix: `AutoPin.Class`, copy in `AutoPinForVerdict`, skip in `RecheckAutoPin` for class `runs`. |
 | `pkg/agent/loop_run_turn_tools.go` | unchanged | pins every Auto-run call on an `ask` policy (`tools.WithAutoApproved(…, tools.AutoPinForVerdict(…))`). |
@@ -330,7 +336,15 @@ a UNC path and a backslash-relative path, and compare with `read_file`.
 
 ### Edge Cases
 
-- `path` is the empty string → same as no `path` (US-1 AS-4).
+- `path` is the empty string → identical result to no `path` (same matches, same audit
+  row with `path_arg` `""`) (US-1 AS-4; S-1.13).
+- `path` is an absolute location whose folder disappears after it was admitted and before
+  the search opens it → the result says the search stopped early because that location was
+  lost, naming it; never a hard error and never a silent "0 matches" (S-1.14). A location
+  that did not exist when the call started is still an error (US-1 AS-7).
+- `path` is the absolute host folder another workspace mounts → admitted like any host folder
+  outside the secret set, exactly as `read_file` admits it; a mount target is not "another
+  workspace's files" (those live under `$OMNIPUS_HOME/workspaces/`, DS-1 row 12).
 - `path` names one regular file (anywhere admitted) → only that file is searched; its match
   path follows US-1 AS-6.
 - `path` contains a NUL byte → refused as an invalid path; audited with reason `path_invalid`.
@@ -456,6 +470,13 @@ D9 dedicated check.
 | `docs/goals.md` ("The Judge, in plain language") | "Its tools are read-only — open files, list folders, read session records" | SHOULD add that during a review the Judge reads only the workspace and its mounted folders |
 | `docs/reference/built-in-tools.md` | generated | regenerate only (FR-025); never hand-edit |
 
+### Other documents to correct (same change)
+
+| File | Current text (verbatim excerpt) | Required correction |
+|---|---|---|
+| `.github/workflows/cross-platform.yml` header comment ("What actually exists today") | "This workflow's `windows-daemon-tests` job runs pkg/daemon tests on a windows-latest runner, including daemon_windows_test.go." | add a bullet naming the new `windows-tools-tests` job: it runs only the #920 Windows path tests in `pkg/tools` on `windows-latest`; the full suite still does not run on Windows (#113). Updated in the SAME commit that adds the job (FR-031) |
+| `docs/operations/platform-support.md` (Windows paragraph) | "CI does cover Windows in two ways today: the `windows-compile` job … and the `windows-daemon-tests` job runs the daemon package's tests on a real Windows runner." | "three ways", adding the `windows-tools-tests` job and what it runs; drafted by backend-lead, audited by docs-verifier |
+
 ---
 
 ## Behavioral Contract
@@ -518,6 +539,11 @@ See "Edge Cases" under User Stories (single list, not duplicated).
 - The system must not put the search term or any file content into an audit row.
 - The system must not follow symlinks during a walk.
 - The system must not add a new tool, config key, REST route, WS frame or contract schema.
+- The system must not change what `list_directory` shows by name (D11): it keeps listing
+  metadata files and registry skill instruction files that `grep` withholds.
+- The system must not rename, re-scope or remove the existing `windows-daemon-tests` job
+  (FR-031), and must not run the whole `pkg/tools` suite on Windows in this change (D12;
+  the broad gap stays on #113).
 
 ### Machine-Verifiable Constraints
 
@@ -529,8 +555,10 @@ See "Edge Cases" under User Stories (single list, not duplicated).
   for the same path (DS-1 column "reason").
 - **MV-3** Roots-searched audit: event `path.search_roots` (matches `^[a-z_.]+$`, registered as
   a valid event name so no "unknown event" warning is logged), one row per call whose search
-  ran, `decision` = `allow`, `details.roots` = the absolute realpaths actually walked (in walk
-  order), `details.path_arg` = the raw argument or `""`; no other detail keys.
+  ran, `decision` = `allow`, `details.roots` = the absolute realpaths of the roots handed to
+  the search engine, in walk order (a root that turned out lost, S-1.14, is still listed),
+  `details.path_arg` = the raw argument or `""`; no other detail keys. Written only after
+  `filegrep.Search` returned without error (FR-021).
 - **MV-4** Limits unchanged: DS-5 values asserted against the constants, not re-derived.
 - **MV-5** Auto classification: `read_file`, `list_directory`, `grep` → `runs`; `write_file`,
   `edit_file`, `append_file`, `send_file`, `browser_screenshot` → `runs_if_args` (unchanged);
@@ -567,13 +595,23 @@ See "Edge Cases" under User Stories (single list, not duplicated).
 ## Ambiguity Warnings
 
 These are spec-level choices made inside the founder's decisions and the ADRs, recorded so
-grill round 1 can challenge them. None is an unanswered founder question.
+the grill rounds can challenge them. None is an unanswered founder question. Row 1 was
+removed in the round-1 corrections: it is now a founder decision (below); the remaining rows
+keep their numbers so earlier references stay valid.
+
+### Founder-accepted decision (formerly Ambiguity Warning 1)
+
+**Name-visibility asymmetry (D11, 2026-09-26).** `grep` withholds agent metadata files and
+registry skill instruction files by NAME and content (FR-006, FR-007); `list_directory` of the
+same folder still lists those names, and `read_file` of them is refused. The founder accepted
+this difference as out of scope for #920: #920 is about where the tools may look (path
+admission), not which names are visible. `list_directory` is unchanged (Non-Behaviors). DS-1
+rows 15 and 17 mark it as "grep stricter on names".
 
 | # | What could be read two ways | Choice this spec makes | Why |
 |---|---|---|---|
-| 1 | `grep` withholds metadata and registry-skill instruction files by NAME; `list_directory` of the same folder still lists those names | keep the asymmetry: `grep` stricter on names, `list_directory` unchanged | ADR-081 gates 2–3 require refusing name hits; changing `list_directory` is outside #920 |
 | 2 | ADR-081 left the roots-searched event name to backend-lead | this spec fixes it as `path.search_roots` so tests and docs have an oracle | sibling of `path.access_denied` in the same family; backend-lead may propose another name in grill, never at GREEN silently |
-| 3 | whether a grep call rejected for an invalid pattern or glob writes a roots-searched row | it does not: the row is written only when the search ran (including zero-hit, truncated and `root_lost` outcomes) | deterministic oracle; nothing was searched |
+| 3 | whether a grep call rejected for an invalid pattern or glob writes a roots-searched row | it does not: the row is written only after `filegrep.Search` returns without error (including zero-hit, truncated and `root_lost` outcomes), never before or instead of it (FR-021 names the emission point) | deterministic oracle; nothing was searched |
 | 4 | Windows: is `my-mount\src` a mount shorthand | yes — on Windows `\` is a separator for the shorthand test too | the platform's own path semantics; `read_file` already treats `\` as a separator on Windows |
 | 5 | a NUL-byte `path` is refused by `grep`'s own pre-check before the single read decision | the pre-check stays (ADR-081) but MUST also write the `path.access_denied` row with reason `path_invalid` | audit parity with `read_file` |
 | 6 | a relative `path` that stays inside the workspace | goes through the single read decision too (not only absolute and `..`) | one rule; a relative symlink leaving the workspace must be judged like `read_file` judges it |
@@ -719,6 +757,33 @@ grill round 1 can challenge them. None is an unanswered founder question.
 
 - **When** "A" greps "needle" with `path` `<EXT>/ext/notes.txt`
 - **Then** the result contains exactly `<EXT>/ext/notes.txt`
+
+##### Scenario: S-1.13 an empty `path` behaves exactly like an omitted `path`
+
+**Traces to**: User Story 1, Acceptance Scenario 4
+**Category**: Edge Case
+
+- **Given** agent "A"
+- **When** "A" greps "needle" once with no `path` and once with `path` `""`
+- **Then** both results contain exactly `notes/a.md` and `docs-mount/src/b.md`, in the same
+  order, with the same stats line
+- **And** each call writes one `path.search_roots` entry with `roots` [`<WS>` realpath,
+  `<MNT>` realpath] and `path_arg` `""`
+- **And** neither call writes a `path.access_denied` entry
+
+##### Scenario: S-1.14 an absolute root lost after admission is reported, not an error
+
+**Traces to**: User Story 1, Acceptance Scenario 8 (stop-early honesty); Edge Cases
+**Category**: Edge Case
+
+- **Given** agent "A" and the folder `<EXT>/gone`, which exists when the call starts
+- **And** a test seam removes `<EXT>/gone` after the single read decision admitted it and
+  after the existence check, before the search opens it as a root (FR-010)
+- **When** "A" greps "needle" with `path` `<EXT>/gone`
+- **Then** the call is not an error; the result is marked truncated with reason `root_lost`
+  and names `<EXT>/gone`
+- **And** one `path.search_roots` entry is written with `roots` [`<EXT>/gone` realpath]
+- **And** no `path.access_denied` entry is written
 
 #### US-2 — the walk withholds what reading refuses
 
@@ -886,6 +951,30 @@ grill round 1 can challenge them. None is an unanswered founder question.
 - **Then** an approval card appears
 - **And** the same happens for an agent without the mark in a chat whose Auto-approve toggle
   is off
+
+##### Scenario: S-3.8 Deny is never overridden by Auto, even inside the workspace (D8 guard)
+
+**Traces to**: User Story 3, Acceptance Scenario 3
+**Category**: Error Path
+
+- **Given** `<tool>` set to Deny for "A", Auto-approve on, and the call dispatched by the real
+  agent loop
+- **When** "A" calls `<tool>` on `notes/a.md` (inside `<WS>`)
+- **Then** the call is refused and no approval card appears
+- **And** no `tool.auto_approved` audit entry is written and the file's content is not
+  returned
+
+**Examples**:
+
+| tool |
+|---|
+| `read_file` |
+| `list_directory` |
+| `grep` |
+
+Why a dedicated scenario: the D8 fix skips the mid-call re-check for class `runs` pins. A fix
+that wrongly skipped the policy check instead would pass every other deny row (each has Auto
+off or a location outside the workspace); this is the one cell where it would show.
 
 #### US-4 — the Judge's review turns
 
@@ -1129,8 +1218,9 @@ this spec's datasets, never from running the current code.
 |---|---|---|---|---|
 | 1 | `TestReadBoundary_ParityMatrix` | Integration | S-1.1, S-1.2, S-1.3, S-1.7, S-1.8, S-1.12 | DS-1 table-driven; same agent/turn; compares grep vs read_file vs list_directory admission, reason, hit form |
 | 2 | `TestReadBoundary_GrepRefusesProtected` | Integration | S-1.4, S-5.3 | DS-1 protected rows + audit reason |
-| 3 | `TestReadBoundary_DefaultAreaAndShorthand` | Integration | S-1.5, S-1.6 | D5 unchanged; shorthand unchanged |
+| 3 | `TestReadBoundary_DefaultAreaAndShorthand` | Integration | S-1.5, S-1.6, S-1.13 | D5 unchanged; shorthand unchanged; `path: ""` identical to omitted (DS-1 row 24) |
 | 4 | `TestReadBoundary_MissingPathIsError` | Integration | S-1.9 | error, no roots row |
+| 4a | `TestReadBoundary_AbsoluteRootLost` | Integration | S-1.14 | DS-1 row 25; seam between existence check and root open; truncated `root_lost` naming the root, one roots row, no error |
 | 5 | `TestReadBoundary_VolumeRootBounded` | Integration | S-1.10 | injected limit; truncated `max_files`; no carve-out hit |
 | 6 | `TestReadBoundary_NULRefusedAndAudited` | Unit | S-1.11 | `path_invalid` row |
 | 7 | `TestReadBoundary_WalkWithholdsCarveOuts` | Integration | S-2.1 | test `$OMNIPUS_HOME`; sessions visible, secret set not |
@@ -1140,7 +1230,7 @@ this spec's datasets, never from running the current code.
 | 11 | `TestAutoPin_RunsClassSkipsRecheck` | Unit | S-3.4 | class `runs` passes; zero class fails; `runs_if_args` unchanged |
 | 12 | `TestAutoApproveClasses_ReadToolsRun` | Unit | S-3.1 (classification) | MV-5 golden copy updated |
 | 13 | `TestReadBoundary_AutoAskRunsThroughLoop` | Loop | S-3.2, S-3.3, S-3.5 | MIN-004: real loop pin; read/list/grep inside+outside succeed; secret refused; image re-authorisation; write_file swap refused |
-| 14 | `TestReadBoundary_AutoPolicyMatrix` | Loop | S-3.1, S-3.6, S-3.7 | DS-2 |
+| 14 | `TestReadBoundary_AutoPolicyMatrix` | Loop | S-3.1, S-3.6, S-3.7, S-3.8 | DS-2, every row, all three tools; the full policy × Auto × location grid |
 | 15 | `TestResolvePath_ReadConfinedMountMatrix` | Integration | S-4.1, S-4.2, S-4.3, S-4.7 | DS-3 × three tools |
 | 16 | `TestResolvePath_ReadConfinedIgnoresAllowPatterns` | Integration | S-4.4 | JUDGE-FR-060 guard |
 | 17 | `TestResolvePath_ReadConfinedSendStaysConfined` | Integration | S-4.5 | FSOpSend |
@@ -1154,13 +1244,15 @@ this spec's datasets, never from running the current code.
 | 25 | docs reference gate (`scripts/check-docs-reference.sh`) | CI | S-6.2 | exit 0 |
 | 26 | `ToolPolicyEditor` marker test | vitest | S-6.3 | `auto_approve: runs` → "Auto: runs" for read_file |
 | 27 | docs-verifier audit | Docs | S-6.4 | against FR-026 |
-| 28 | `TestReadBoundary_Windows*` | Windows | S-7.1 | DS-4, run on `windows-latest` (FR-031) |
+| 28 | `TestReadBoundary_Windows` (subtests `W1`..`W8`) | Windows | S-7.1 | DS-4, run on `windows-latest` by the `windows-tools-tests` job (FR-031); the step fails unless all eight `--- PASS: TestReadBoundary_Windows/W<n>` lines appear |
 | 29 | `TestReadBoundary_BackslashLiteralUnix` | Unit (unix build tag) | S-7.2 | |
 | 30 | UAT lane "read boundary" | UAT | S-1.2, S-3.2, S-5.7 | real session; evidence checked by uat-validator |
+| 31 | `TestGrepTool_RegistryWiresAuditLogger` | Integration | S-1.4, S-5.1 | a `grep` registered through a real `ToolRegistry` with a real audit logger (logger set before AND after `Register`) writes its `path.access_denied` and `path.search_roots` rows; no logger set by hand on the tool (FR-020) |
+| 32 | `TestGrepTool_NewRootClosedOnEveryExit` | Integration | S-5.6 | absolute-root call refused as busy (both walk slots held by the test), rejected for an invalid pattern, and completed: after each, the process's open-descriptor count is back to its baseline (Linux `/proc/self/fd`) (FR-032) |
 
 ### Test Datasets
 
-Expected outcomes come from decisions D1–D10, ADR-081's D4 amendment and ADR-092's
+Expected outcomes come from decisions D1–D12, ADR-081's D4 amendment and ADR-092's
 2026-09-26 notes. "Admitted" = the call proceeds; "refused(r)" = refused with audit reason r.
 
 #### Dataset DS-1: Parity matrix (unconfined agent "A", policy Allow)
@@ -1181,15 +1273,17 @@ Expected outcomes come from decisions D1–D10, ADR-081's D4 amendment and ADR-0
 | 12 | another workspace | `$OMNIPUS_HOME/workspaces/<other>/work` | refused(`carve_out`) | — | refused(`carve_out`) | S-1.4 | |
 | 13 | Omnipus home itself | `$OMNIPUS_HOME` | admitted; carve-outs withheld | absolute | admitted (list_directory output unchanged by #920) | S-2.1 | D10 reach |
 | 14 | registry skill instruction file | `$OMNIPUS_HOME/skills/demo/SKILL.md` | refused | — | read_file refused (points to the Skill tool) | S-2.3 | ADR-072 D10.3 |
-| 15 | registry skills folder | `$OMNIPUS_HOME/skills` | admitted; `SKILL.md`/`AGENT.md`/`AGENTS.md` withheld | absolute | list_directory unchanged by #920 | S-2.2 | grep stricter on names (Ambiguity 1) |
+| 15 | registry skills folder | `$OMNIPUS_HOME/skills` | admitted; `SKILL.md`/`AGENT.md`/`AGENTS.md` withheld | absolute | list_directory unchanged by #920 | S-2.2 | grep stricter on names (D11, founder-accepted) |
 | 16 | project-shelf instruction file | project shelf in `<MNT>` | admitted, matches | per location | admitted | S-2.4 | never read-denied |
-| 17 | metadata file in a searched root | `agents/a1/SOUL.md` under `<WS>` | withheld (no hit) | — | read_file refused; list_directory unchanged | S-2.5 | grep stricter on names |
+| 17 | metadata file in a searched root | `agents/a1/SOUL.md` under `<WS>` | withheld (no hit) | — | read_file refused; list_directory unchanged | S-2.5 | grep stricter on names (D11) |
 | 18 | symlink given as `path`, target outside | `link-out` | admitted, searches target | absolute (target location) | admitted | S-2.7 | location decides |
 | 19 | symlink met during walk | `<WS>/link-out` inside default area | not followed; name-match only | `link-out` | n/a | S-2.6 | unchanged |
 | 20 | embedded NUL | `notes\x00a` | refused(`path_invalid`) | — | refused(`path_invalid`) | S-1.11 | |
 | 21 | nonexistent outside | `<EXT>/does-not-exist` | error naming path, no roots row | — | error (not found) | S-1.9 | never "0 matches" |
 | 22 | single file | `<EXT>/ext/notes.txt` | admitted, that file only | absolute | admitted | S-1.12 | |
 | 23 | volume root | `/` | admitted; bounded (`max_files` with injected limit) | absolute | admitted | S-1.10 | D7 |
+| 24 | empty string | `""` | admitted: workspace + mounts, identical to row "no `path`" (S-1.5) | `notes/a.md`, `docs-mount/src/b.md` | n/a (grep-only default) | S-1.13 | FR-003; `path_arg` `""` |
+| 25 | absolute root lost after admission | `<EXT>/gone`, removed by a seam after the existence check | not an error: truncated, reason `root_lost`, names the root; one roots row | — | n/a (race seam is grep-only) | S-1.14 | FR-010 |
 
 #### Dataset DS-2: Auto-approve matrix (tools `read_file`, `list_directory`, `grep`, each row applies to all three)
 
@@ -1208,6 +1302,19 @@ Expected outcomes come from decisions D1–D10, ADR-081's D4 amendment and ADR-0
 | 11 | ask | on, agent "Never auto-approve" | `<EXT>` | approval card | S-3.7 |
 | 12 | ask | on globally, chat toggle off | `<EXT>` | approval card | S-3.7 |
 | 13 | ask | on | `<EXT>/pic.png` (read_file only) | image inspected | S-3.3 |
+| 14 | allow | on | inside `<WS>` | runs, no card | S-3.1 |
+| 15 | allow | off | `$OMNIPUS_HOME/master.key` | refused (`carve_out`), no card | S-3.1 |
+| 16 | allow | on | `$OMNIPUS_HOME/master.key` | refused (`carve_out`), no card | S-3.1 |
+| 17 | ask | off | `$OMNIPUS_HOME/master.key` | approval card first (US-3 AS-2); once approved, refused (`carve_out`), no content | S-3.1 |
+| 18 | deny | off | `<EXT>` | refused, no card | S-3.1 |
+| 19 | deny | on | inside `<WS>` | refused, no card; no `tool.auto_approved` entry (round-1 MAJ-002) | S-3.1, S-3.8 |
+| 20 | deny | off | `$OMNIPUS_HOME/master.key` | refused, no card | S-3.1 |
+| 21 | deny | on | `$OMNIPUS_HOME/master.key` | refused, no card | S-3.1 |
+
+Grid completeness: rows 1–10 and 14–21 cover every cell of policy {allow, ask, deny} ×
+Auto-approve {off, on} × location {inside `<WS>`, `<EXT>`, secret set} — 18 cells, one row
+each. Rows 11–13 are modifiers on the ask/on/`<EXT>` cell; R1–R5 are write-tool and pin
+regressions.
 | R1 | `write_file` ask | on | `<WS>/out/x.txt`, swapped to `<EXT>` mid-call | refused as moved; nothing written | S-3.5 |
 | R2 | `write_file`/`edit_file`/`append_file`/`send_file` ask | on | `<EXT>` | approval card | S-3.6 |
 | R3 | `send_file` ask | on | inside `<WS>` | runs, no card | S-3.6 (control) |
@@ -1262,7 +1369,7 @@ Expected outcomes come from decisions D1–D10, ADR-081's D4 amendment and ADR-0
 
 | Existing Behaviour | Existing Test | New Regression Test Needed | Notes |
 |---|---|---|---|
-| grep confined to own workspace for any `path` | `pkg/tools/grep_ownworkspace_test.go::TestGrepTool_OwnWorkspaceOnly` | Yes — rewrite to DS-1 rows 9–12 (other workspace still unreachable) | superseded rule; keep the cross-workspace refusal half |
+| grep confined to own workspace for any `path` | `pkg/tools/grep_ownworkspace_test.go::TestGrepTool_OwnWorkspaceOnly` | Yes — rewrite (round-1 unasked question 3, below) | superseded rule; keep the cross-workspace refusal half, tightened |
 | `..` / absolute refused | `pkg/tools/grep_test.go::TestGrepTool_ArgValidation` | Yes — absolute/`..` cases now admitted | NUL case stays |
 | scope normalisation | `pkg/tools/grep_scope_normalize_test.go` | No — must stay green | relative spellings unchanged |
 | engine symlink confinement | `pkg/filegrep/integration_test.go::TestFileGrep_SymlinkConfinement` | No — must stay green | engine unchanged |
@@ -1274,6 +1381,25 @@ Expected outcomes come from decisions D1–D10, ADR-081's D4 amendment and ADR-0
 | grep policy roster | `TestGrep_PolicyAllTiersAndDriftBackfill`, `TestGrepTool_ExecuteAndPolicy` | No | |
 | docs reference | `cmd/docsref/main_test.go`, `scripts/check-docs-reference.sh` | regenerate | |
 
+**`TestGrepTool_OwnWorkspaceOnly` rewrite (round-1 unasked question 3).** Verified at
+`41aeee4`: today the test asserts NO reason at all — its cross-workspace subtests only check
+`res.IsError`, and its `mustZeroHits` helper accepts any error as a refusal. Its `..` subtest
+uses `../ws-a/work` from `workspaces/ws-b/work`, which lands at `workspaces/ws-b/ws-a/work`,
+not at workspace A. The rewrite MUST:
+
+- reach workspace A by an unambiguous spelling — `../../ws-a/work` and the absolute
+  `$OMNIPUS_HOME/workspaces/ws-a/work` — and assert the call is refused, returns no match, and
+  writes exactly one `path.access_denied` row with tool `grep` and reason **`carve_out`**
+  (DS-1 row 12), through a real audit logger wired by a real registry (FR-020);
+- keep the default-scope subtests (A's and B's own content never cross over) and the
+  "B names `extra`, which is not B's mount" subtest (now: workspace-relative `extra`, not
+  found, an error naming it, no `path.access_denied` row, FR-010);
+- flip the subtest "an absolute path naming A's mount target directly is rejected" to
+  **admitted with the hit**: A's mount target is a `t.TempDir()` host folder outside
+  `$OMNIPUS_HOME`, which `read_file` already admits for B (Edge Cases; D1). Keeping it as a
+  refusal would pin the superseded rule;
+- keep the `include_globs` subtest unchanged.
+
 ---
 
 ## Functional Requirements
@@ -1283,6 +1409,35 @@ Expected outcomes come from decisions D1–D10, ADR-081's D4 amendment and ADR-0
   absolute and `..` paths alike — giving the same admitted/refused outcome for the same agent,
   turn and path (D1; ADR-081 D4 amendment). `grep.go::validateGrepScope`'s absolute-path and
   `..` refusals are removed; the NUL pre-check stays.
+  **Dispatch algorithm (round-1 MIN-002) — shorthand first, then one uniform decision; no
+  lexical attempt with a fall-through.** For a non-empty `path`, in this order:
+  1. NUL pre-check (FR-020 audit on refusal).
+  2. Mount-name shorthand test (`splitGrepScopeMount`, lexical, no I/O), only for a relative
+     `path` with no `..` segment (FR-002). A match takes the existing mount branch unchanged.
+  3. Every other `path` — relative, absolute or `..`-bearing alike — goes through
+     `ResolvePath(ctx, policy, "grep", "", FSOpList, path)`, the exact call ADR-081's
+     corrected D4 design names. A refusal ends the call (FR-020). On admission `grep` takes
+     the handle's `RealPath()` and closes the handle at once.
+  4. If that realpath lies inside `policy.WorkDir`, the root is opened as today's
+     workspace-scoped root: `resolveScopedRoot` under an `os.OpenRoot(policy.WorkDir)`
+     container, with the realpath made relative to the workspace realpath as `subPath`
+     (workspace-relative match paths, FR-004; ancestor ignore layers preloaded up to the
+     workspace root, as today). Otherwise the root is the new absolute root type of ADR-081
+     D4 design step 3 (container at the realpath's parent, `namePrefix` its forward-slash
+     form; the volume-root special case as ADR-081 states it).
+  There is no "try `os.OpenRoot(WorkDir)` lexically first, fall through on an escape error"
+  path. Why uniform: (a) ADR-081's corrected D4 item 6 says the replacement "resolves through
+  `ResolvePath`", with mount matching still running first and unchanged — nothing else is
+  lexical; (b) a lexical first attempt would judge a relative symlink that leaves the
+  workspace (DS-1 row 18, `link-out`) by `os.Root`'s escape refusal instead of by the read
+  decision, so it would need a second fall-through rule for exactly the case parity is about
+  — two decisions where D1 asks for one (Ambiguity Warning 6); (c) both readings give the
+  same security outcome (round-1 review), so the simpler one wins. The plain `ResolvePath`
+  call (not `ResolvePathAllowingPatterns`) keeps read parity: for `FSOpRead`/`FSOpList`
+  outside `WorkDir`, `resolvepath.go::resolveValidatedPath` admits everything outside the
+  secret set without consulting `AllowedRoots`, and in a read-confined turn the operator
+  patterns must not widen anything (FR-013) — so `read_file`'s patterns change no read
+  outcome that `grep` could see.
 - **FR-002**: The mount-name shorthand MUST apply only to a relative `path` with no `..`
   segment whose first segment exactly equals a mount name; an absolute path or a path with
   `..` MUST never be read as a mount name. On Windows `\` MUST count as a separator for this
@@ -1306,7 +1461,15 @@ Expected outcomes come from decisions D1–D10, ADR-081's D4 amendment and ADR-0
   drive and UNC forms MUST be treated as absolute; a backslash MUST be a file-name character on
   Linux/macOS.
 - **FR-010**: A `path` that does not exist or cannot be opened MUST return an error naming it,
-  never a zero-match success.
+  never a zero-match success. The boundary between "error" and "lost" is one existence check
+  made right after the single read decision admits the `path`: if the location does not exist
+  (or cannot be opened) at that check, the call is an error naming it. If it existed at that
+  check and the new absolute root then cannot be opened (its container or the location itself
+  vanished or became unopenable before the walk), the root MUST be carried as an unreachable
+  root (the same `unreachableRootFS` carrier a dead mount uses), so the result is truncated
+  with reason `root_lost` naming it — never a hard error, never a silent zero (round-1
+  MIN-004; S-1.14). The test drives this through an injected seam between the check and the
+  open; no filesystem mock.
 - **FR-011**: The D7 limits (DS-5) MUST apply unchanged to every widened call.
 - **FR-012**: In a read-confined turn, `grep`, `read_file` and `list_directory` MUST admit the
   workspace and its mounts and refuse everything else with a message containing
@@ -1334,10 +1497,27 @@ Expected outcomes come from decisions D1–D10, ADR-081's D4 amendment and ADR-0
   auto-approve" and a chat with Auto-approve off MUST still ask.
 - **FR-020**: A refused `grep` `path` MUST write one `path.access_denied` entry with tool
   `grep` and the same reason `read_file` records for that path.
+  **Logger wiring (round-1 unasked question 1).** Verified at `41aeee4`: `GrepTool` has no
+  audit-logger field and no `SetAuditLogger` method, so the registry never hands it a logger
+  (`registry.go::ToolRegistry.Register` and `ToolRegistry.SetAuditLogger` only reach tools
+  that satisfy `auditLoggerAware`). `GrepTool` MUST gain an `auditLogger *audit.Logger` field
+  and a nil-safe `SetAuditLogger(*audit.Logger)` method satisfying `auditLoggerAware`, exactly
+  like `ReadFileTool.SetAuditLogger`, so both propagation paths (logger set before or after
+  registration) reach it. A nil logger stays best-effort (no row, no failure), as for
+  `read_file`. Refusals MUST be emitted with `emitPathAccessDeniedCorrelated` (the variant
+  `read_file` uses), so a Judge review turn's `grep` refusal carries the same adjudication
+  correlation as its `read_file` refusal. Test 31 proves the wiring through a real registry,
+  never a logger set by hand on the tool.
 - **FR-021**: Every `grep` call whose search ran MUST write exactly one `path.search_roots`
   entry (decision `allow`, details `roots` and `path_arg` only, no pattern, no content);
   a call refused at resolution, rejected for an invalid pattern/glob, or refused as busy MUST
-  NOT write one. The event name MUST be registered in `pkg/audit/audit.go::validEventNames`.
+  NOT write one. **Emission point (round-1 MIN-005):** the row is written in `GrepTool.Execute`
+  only after `filegrep.Search` has returned with a nil error — after `grepRoots`, after
+  `filegrep.TryAcquire` succeeded, after `Search` — and before the result is rendered. A
+  `Search` result that is truncated (limits, deadline, `root_lost`) still counts as "ran" and
+  gets its row; a non-nil `Search` error (bad regex or glob) gets none. The event name MUST be
+  registered in `pkg/audit/audit.go::validEventNames`, and the row uses the same logger as
+  FR-020.
 - **FR-022**: `grep` MUST NOT write per-file read entries; `read_file`/`list_directory` audit
   behaviour MUST be unchanged.
 - **FR-023**: The Audit Log screen MUST render and filter `path.search_roots` entries with the
@@ -1372,19 +1552,60 @@ Expected outcomes come from decisions D1–D10, ADR-081's D4 amendment and ADR-0
   third policy layer.
 - **FR-030**: `grep`'s reach MUST NOT depend on `read_file`'s policy (a `grep: allow`,
   `read_file: deny` agent gets FR-001's reach), and this MUST be documented (FR-026).
-- **FR-031**: The Windows cases (DS-4) MUST execute on the `windows-latest` runner: a step in
-  `.github/workflows/cross-platform.yml`'s Windows job MUST run the named tests
-  (`-run '^TestReadBoundary_Windows'` over `./pkg/tools/`), so they are not skipped by the
-  Linux-only test gates.
+- **FR-031**: The Windows cases (DS-4) MUST execute on a real `windows-latest` runner, scoped
+  to exactly the #920 Windows tests (D12). **Job (round-1 MAJ-001):** a NEW job
+  `windows-tools-tests` (display name "Windows read-boundary tests (#920)") in
+  `.github/workflows/cross-platform.yml`, `runs-on: windows-latest`, `CGO_ENABLED: "0"`, the
+  same checkout and `setup-go` steps as `windows-daemon-tests`. It MUST NOT be added to
+  `windows-compile`: that job runs on `ubuntu-latest`, where a `_windows_test.go` file is
+  excluded by its filename build constraint, so `-run` matches nothing, prints "no tests to
+  run" and exits 0 — a false green. Why a new job rather than renaming `windows-daemon-tests`
+  to a general Windows job: (a) the existing job's id and display name are referenced by name
+  in the workflow header and `docs/operations/platform-support.md`, and a status-check name
+  is what branch protection keys on — whether it is a required check could not be verified
+  in this round (no `gh` in the author's environment), and a rename of a required check
+  leaves protected PRs waiting on a check that never reports; a new job touches nothing
+  existing; (b) a red Windows read-boundary step then names its own failure instead of
+  appearing as "Windows daemon tests" failing; (c) cost is one more runner start, which D12's
+  narrow scope makes small. The job is part of the cross-platform workflow, which must be
+  green before landing (Hard Constraint #7) whether or not branch protection lists it.
+  **The step MUST prove the tests ran** (`docs/internal/false-green-patterns.md`): it runs,
+  with `shell: bash`,
+  `go test -tags goolm,stdjson -count=1 -p 1 -v -run '^TestReadBoundary_Windows$' ./pkg/tools/`
+  into a log file, captures the exit code without a pipe, prints the log, and then fails the
+  step if (1) the exit code is non-zero, (2) the log contains "no tests to run", or (3) any of
+  the eight lines `--- PASS: TestReadBoundary_Windows/W1` … `--- PASS:
+  TestReadBoundary_Windows/W8` is missing (one named subtest per DS-4 row). A skip counts as
+  missing. `pkg/tools` does not depend on `pkg/gateway` (`go list -deps` for `GOOS=windows`),
+  so no SPA embed stub is needed; its test files type-check for Windows
+  (`GOOS=windows go vet -tags goolm,stdjson ./pkg/tools/` exits 0 at `41aeee4`).
+  **Same commit:** the workflow's header comment inventory ("What actually exists today")
+  MUST gain a bullet for `windows-tools-tests`, in the same commit that adds the job; and
+  `docs/operations/platform-support.md` MUST be corrected ("Other documents to correct").
+  `windows-daemon-tests` and `windows-compile` stay unchanged. The broader Windows suite gap
+  stays on #113 (D12).
+- **FR-032**: Every handle the widened `grep` opens MUST be closed on every exit path of
+  `GrepTool.Execute` — resolution refusal, busy refusal, invalid pattern or glob, completed
+  search, and a lost root (round-1 unasked question 2). Verified at `41aeee4`: `Execute` defers
+  the closer `grepRoots` returns (`defer closeRoots()`) immediately after `grepRoots` and
+  before `filegrep.TryAcquire`, and `grepRoots` returns that closer on its error paths too; so
+  the requirement holds provided (a) the handle `ResolvePath` returns is closed right after
+  `RealPath()` (ADR-081 D4 design step 2), and (b) every `os.Root` the new root type opens —
+  the parent container and whatever `resolveScopedRoot` opens — is appended to the same
+  `opened` slice before any return that can follow it, so `closeAll` covers it. No second
+  closer and no new cleanup path. Test 32 checks it by descriptor count.
 
 ## Success Criteria
 
-- **SC-001**: DS-1 parity: 23/23 rows produce the expected outcome; zero rows where grep and
+- **SC-001**: DS-1 parity: 25/25 rows produce the expected outcome; zero rows where grep and
   read_file disagree outside the rows marked grep-only or grep stricter.
-- **SC-002**: DS-2: 18/18 rows pass through the real agent loop (not a hand-built pin).
+- **SC-002**: DS-2: 26/26 rows pass (rows 1–21 and R1–R3 through the real agent loop, not a
+  hand-built pin; R4–R5 are the unit-level pin rows), including row 19 (Deny + Auto on + inside
+  the workspace, S-3.8).
 - **SC-003**: DS-3: 14/14 rows pass for every applicable tool.
-- **SC-004**: DS-4: 8/8 rows pass on `windows-latest` (the CI log shows the named tests ran, with
-  `--- PASS` lines, not zero tests).
+- **SC-004**: DS-4: 8/8 rows pass on `windows-latest` in the `windows-tools-tests` job: the CI
+  log shows the eight lines `--- PASS: TestReadBoundary_Windows/W1` … `/W8`, no "no tests to
+  run", and the step's own zero-match guard (FR-031) is present.
 - **SC-005**: Exactly one `path.search_roots` entry per searched call in S-5.1 (300 matched
   files → 1 entry).
 - **SC-006**: `scripts/check-docs-reference.sh` exit 0; `make verify-contracts` shows no drift
@@ -1415,10 +1636,12 @@ Expected outcomes come from decisions D1–D10, ADR-081's D4 amendment and ADR-0
   - the three tool descriptions agents read;
   - user docs `docs/tools.md`, `docs/security.md` (and `docs/goals.md`), and the generated
     `docs/reference/built-in-tools.md`.
-- **Test plan execution**: RED — qa-lead writes tests 1–29 failing on `7efcc5d`-based code
+- **Test plan execution**: RED — qa-lead writes tests 1–29 (including 4a), 31 and 32 failing
+  on `7efcc5d`-based code
   (CI on a tests-only commit is the red evidence). GREEN — backend-lead (`grep.go`,
   `resolvepath.go`, `auto_approve.go`, `filesystem.go` dead code, audit emitter and
-  registration, `cross-platform.yml` step, docsref regeneration) and
+  registration, `GrepTool.SetAuditLogger`, the new `windows-tools-tests` job with its header
+  comment and `docs/operations/platform-support.md`, docsref regeneration) and
   prometheus-prompt-engineer (descriptions) in parallel; frontend needs no code change
   unless test 23/26 exposes a gap. CHECK — qa-lead (other instance) audits. UAT lane (test 30)
   runs in a real session with `openrouter` + `z-ai/glm-5.3-flash`, checked by uat-validator.
@@ -1428,16 +1651,16 @@ Expected outcomes come from decisions D1–D10, ADR-081's D4 amendment and ADR-0
 
 | Requirement | User Story | BDD Scenario(s) | Test Name(s) | Code site |
 |---|---|---|---|---|
-| FR-001 | US-1 | S-1.1, S-1.2, S-1.3 | 1 `TestReadBoundary_ParityMatrix` | `grep.go::validateGrepScope`, `grepRoots`; `resolvepath.go::ResolvePath` |
+| FR-001 | US-1 | S-1.1, S-1.2, S-1.3, S-2.7 | 1 `TestReadBoundary_ParityMatrix`, 10 | `grep.go::validateGrepScope`, `grepRoots` (dispatch order: NUL, shorthand, uniform `ResolvePath`); `resolvepath.go::ResolvePath` |
 | FR-002 | US-1, US-7 | S-1.6, S-1.7, S-7.1 (W5) | 3, 28 | `grep.go::splitGrepScopeMount` |
-| FR-003 | US-1 | S-1.5 | 3 `TestReadBoundary_DefaultAreaAndShorthand` | `grep.go::grepRoots` (no-scope branch) |
+| FR-003 | US-1 | S-1.5, S-1.13 | 3 `TestReadBoundary_DefaultAreaAndShorthand` | `grep.go::grepRoots` (no-scope branch) |
 | FR-004 | US-1 | S-1.2, S-1.7, S-1.8, S-1.12 | 1 | `grep.go::resolveScopedRoot` (namePrefix), `renderGrepResult` |
 | FR-005 | US-1, US-2 | S-1.4, S-2.1 | 2, 7 | `grep.go::guardCarveOuts`/`carveOutFS`; `fspolicy.IsCarveOut` |
 | FR-006 | US-2 | S-2.2, S-2.3, S-2.4 | 8 `TestReadBoundary_SkillsRegistryGate` | `resolvepath.go::isSkillInstructionFileLeaf`, `classifySkillsGateCandidate`; new grep wrapper |
 | FR-007 | US-2 | S-2.5 | 9 `TestReadBoundary_MetadataGuardInWalk` | `metadata_guard.go::metadataFileMatch`; new grep wrapper |
 | FR-008 | US-2 | S-2.6, S-2.7 | 10 | `pkg/filegrep` walk (unchanged); `ResolvePath` for `path` |
 | FR-009 | US-7 | S-7.1, S-7.2 | 28, 29 | `grep.go::validateGrepScope` (removed test), `ResolvePath` |
-| FR-010 | US-1 | S-1.9 | 4 | `grep.go::grepScopeStatError` / resolution error path |
+| FR-010 | US-1 | S-1.9, S-1.14 | 4, 4a | `grep.go::grepScopeStatError` / resolution error path; `unreachableRootFS` for a root lost after admission |
 | FR-011 | US-1 | S-1.10 | 5 | `filegrep` limits (unchanged) |
 | FR-012 | US-4 | S-4.1, S-4.2, S-4.3, S-4.7 | 15 | `resolvepath.go::resolveValidatedPath` read-confined branch |
 | FR-013 | US-4 | S-4.4 | 16 | `resolvepath.go::ResolvePathAllowingPatterns` |
@@ -1446,9 +1669,9 @@ Expected outcomes come from decisions D1–D10, ADR-081's D4 amendment and ADR-0
 | FR-016 | US-4 | S-4.8, S-4.9 | 19, 20 | `verifier_adjudication.go::dispatchTurn` (unchanged); comments in `resolvepath.go`, `seed_system.go` |
 | FR-017 | US-3 | S-3.1, S-3.2, S-3.3 | 12, 13, 14 | `auto_approve.go::autoApproveClasses` |
 | FR-018 | US-3 | S-3.4, S-3.5 | 11, 13 | `auto_approve.go::AutoPin`, `AutoPinForVerdict`, `RecheckAutoPin`; `filesystem.go` dead code |
-| FR-019 | US-3 | S-3.1 (DS-2 rows 4, 5, 9–12), S-3.6, S-3.7 | 14 | policy compositor, loop (unchanged) |
-| FR-020 | US-5 | S-1.4, S-1.11, S-4.3, S-5.3 | 2, 6, 15, 21 | `path_audit.go::emitPathAccessDenied` wired into `grep.go` |
-| FR-021 | US-5 | S-5.1, S-5.2, S-5.4, S-5.5, S-5.6, S-1.9 | 21, 22, 4 | new emitter in `grep.go`/`path_audit.go`; `audit.go::validEventNames` |
+| FR-019 | US-3 | S-3.1 (DS-2 rows 4, 5, 9–12, 17–21), S-3.6, S-3.7, S-3.8 | 14 | policy compositor, loop (unchanged) |
+| FR-020 | US-5 | S-1.4, S-1.11, S-4.3, S-5.3 | 2, 6, 15, 21, 31 | `GrepTool.SetAuditLogger` (new, `auditLoggerAware`); `filesystem.go::emitPathAccessDeniedCorrelated` wired into `grep.go`; `TestGrepTool_OwnWorkspaceOnly` rewrite |
+| FR-021 | US-5 | S-5.1, S-5.2, S-5.4, S-5.5, S-5.6, S-1.9, S-1.13, S-1.14 | 21, 22, 4, 3, 4a, 31 | new emitter in `grep.go`/`path_audit.go`; `audit.go::validEventNames` |
 | FR-022 | US-5 | S-5.1 | 21 | `grep.go` (no `emitFileReadAudit`) |
 | FR-023 | US-5 | S-5.7 | 23 | `AuditLogViewer.tsx` (existing) |
 | FR-024 | US-6 | S-6.1 | 24 | `GrepTool.Description`, `ReadFileTool.Description`, `ListDirTool.Description` |
@@ -1458,11 +1681,13 @@ Expected outcomes come from decisions D1–D10, ADR-081's D4 amendment and ADR-0
 | FR-028 | — (non-behaviour) | regression table | existing Library search tests | `pkg/gateway/rest_library_files_search.go` (unchanged) |
 | FR-029 | — (non-behaviour) | — | `make verify-contracts` (SC-006) | contracts (unchanged) |
 | FR-030 | US-1 | S-4.9 (seed with read_file denied) | 20, 27 | policy compositor (unchanged); docs |
-| FR-031 | US-7 | S-7.1 | 28 | `.github/workflows/cross-platform.yml` Windows job |
+| FR-031 | US-7 | S-7.1 | 28 | `.github/workflows/cross-platform.yml` new job `windows-tools-tests` + header comment; `docs/operations/platform-support.md` |
+| FR-032 | US-1 | S-5.6, S-1.14 | 32 | `grep.go::GrepTool.Execute` (`defer closeRoots()`), `grepRoots` `opened`/`closeAll` |
 
-**Completeness check**: every FR-001..FR-031 has at least one test (FR-028/FR-029 by the
+**Completeness check**: every FR-001..FR-032 has at least one test (FR-028/FR-029 by the
 unchanged-suite and contract gates); every scenario S-1.1..S-7.2 appears in at least one row
-above (S-1.11 via FR-020; S-1.12 via FR-004; S-2.x via FR-005..FR-008; S-3.x via
+above (S-1.11 via FR-020; S-1.12 via FR-004; S-1.13 via FR-003/FR-021; S-1.14 via
+FR-010/FR-021/FR-032; S-3.8 via FR-019; S-2.x via FR-005..FR-008; S-3.x via
 FR-017..FR-019; S-4.x via FR-012..FR-016; S-5.x via FR-020..FR-023; S-6.x via FR-024..FR-027;
 S-7.x via FR-002/FR-009/FR-031).
 
@@ -1475,7 +1700,7 @@ S-7.x via FR-002/FR-009/FR-031).
   verified by Grep at `7efcc5d`. If another read-confined caller appears before GREEN, D6
   applies to it too and security-lead re-checks SL-1..SL-3.
 - `list_directory` does not apply the metadata guard today (`guardMetadataPath` is called with
-  `"read"` only from `read_file`); this spec does not change that (Ambiguity 1).
+  `"read"` only from `read_file`); this spec does not change that (founder decision D11).
 - The existing Audit Log viewer builds its event filter from the loaded entries, so no SPA code
   change is needed for FR-023 (`AuditLogViewer.tsx`, "Live filter vocabulary" comment); test 23
   confirms it.
@@ -1501,3 +1726,32 @@ S-7.x via FR-002/FR-009/FR-031).
 - Q: Does the new audit event need a contract change? → A: No; register the name in
   `validEventNames`; it matches `AuditEntry.yaml`'s pattern (squad-lead dispatch, verified).
 - Q: Personal secret folders (`~/.ssh` etc.)? → A: out of scope, issue #921 (interview D4).
+- Q: `grep` hides metadata and registry skill instruction files by name while `list_directory`
+  still lists them — change `list_directory`? → A: No. Accepted and out of scope; documented
+  as a founder decision (interview D11, spec round-1 Q1).
+- Q: Is a scoped Windows step enough, or must a broader Windows pass come first? → A: A scoped
+  step on a real `windows-latest` runner, running exactly the #920 Windows tests, is enough;
+  the broader gap stays on #113 (interview D12, spec round-1 Q2).
+
+---
+
+## Round 1 corrections (2026-09-26)
+
+Grill round 1 (`read-boundary-consistency-spec-review.md`, verdict REVISE) fixed in one
+correction round, on founder decisions D1–D12. Code facts re-verified at `41aeee4`.
+
+| Finding | Fix |
+|---|---|
+| MAJ-001 — FR-031's "Windows job" ambiguous; `windows-compile` would false-green | FR-031 names a NEW `windows-latest` job `windows-tools-tests` (rename rejected: it would change an existing, externally referenced check name); forbids `windows-compile`; the step proves the tests ran (exit code without a pipe, fails on "no tests to run", requires the eight named `--- PASS: TestReadBoundary_Windows/W<n>` lines); header comment inventory updated in the same commit; `cross-platform.yml` header and `docs/operations/platform-support.md` added under "Other documents to correct"; SC-004, test 28, Non-Behaviors updated |
+| MAJ-002 — no Deny + Auto on + inside-workspace row | DS-2 row 19 added, traced to S-3.1 and the new dedicated scenario S-3.8; the grid check found seven more missing cells (allow/on/inside, allow/off/secret, allow/on/secret, ask/off/secret, deny/off/outside, deny/off/secret, deny/on/secret), added as rows 14–18, 20–21; the full 18-cell grid is now stated; SC-002 26/26 |
+| MIN-001 — name-visibility asymmetry | Ambiguity Warning 1 moved to a stated founder-accepted decision (D11); Non-Behaviors forbid changing `list_directory`; DS-1 rows 15/17 and Assumptions repointed to D11 |
+| MIN-002 — dispatch algorithm unspecified | FR-001 states it: NUL pre-check, mount shorthand (lexical, relative, no `..`), then one uniform `ResolvePath(…, FSOpList, path)` for every other path; inside-workspace realpaths reuse the workspace-scoped root, others the ADR-081 absolute root type; no lexical-first fall-through. Chosen to match ADR-081's corrected D4 item 6 and design steps 1–3 |
+| MIN-003 — `path: ""` vs omitted | S-1.13 and DS-1 row 24; Edge Case sharpened; test 3 extended |
+| MIN-004 — no `root_lost` case for the new root type | FR-010 defines the error-vs-lost boundary (one existence check after admission); S-1.14, DS-1 row 25, test 4a |
+| MIN-005 — roots-searched emission point implicit | FR-021 and MV-3: written only after `filegrep.Search` returns a nil error; Ambiguity Warning 3 aligned |
+| Unasked Q1 — audit-logger wiring | FR-020: `GrepTool` has no logger today (verified); it gains an `auditLogger` field and `SetAuditLogger` (`auditLoggerAware`) and uses `emitPathAccessDeniedCorrelated`; test 31 through a real registry |
+| Unasked Q2 — new root closed when the search is refused as busy | FR-032: verified `defer closeRoots()` precedes `TryAcquire`; requires every new handle in `opened` and the `ResolvePath` handle closed at once; test 32 |
+| Unasked Q3 — reason asserted by the rewritten `TestGrepTool_OwnWorkspaceOnly` | Regression section: today it asserts no reason (verified); the rewrite asserts `carve_out` via `../../ws-a/work` and the absolute path, and flips the "absolute mount target" subtest to admitted (D1) |
+
+Counts after the round: 7 user stories; 51 BDD scenarios (12 Happy Path, 11 Alternate Path, 15 Error Path, 13 Edge Case); 32 functional requirements; 8
+success criteria; datasets DS-1 25 rows, DS-2 26, DS-3 14, DS-4 8, DS-5 7 (80 rows).
