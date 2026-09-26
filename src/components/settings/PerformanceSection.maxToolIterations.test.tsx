@@ -353,7 +353,7 @@ describe('PerformanceSection — raise (D20) and reload failure (8-reviewer gate
     await passReAuth()
     await waitFor(() => expect(puts()).toHaveLength(1))
     const shown = () => [...addToast.mock.calls.map((c) => String((c[0] as { message?: string })?.message ?? '')), document.body.textContent ?? '']
-    await waitFor(() => expect(shown().some((t) => /saved but not applied/i.test(t))).toBe(true))
+    await waitFor(() => expect(shown().some((t) => /saved,? but not (yet )?applied/i.test(t))).toBe(true))
     expect(shown().some((t) => /server (is )?unavailable/i.test(t))).toBe(false)
   })
 })
