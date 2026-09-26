@@ -109,7 +109,7 @@ func redactSensitiveFields(m map[string]any) {
 		for _, s := range sensitive {
 			if strings.Contains(kl, s) {
 				if str, ok := v.(string); ok && str != "" {
-					m[k] = "[redacted]"
+					m[k] = redactedHeaderValue
 				}
 				break
 			}
@@ -229,6 +229,62 @@ func (a *restAPI) credentialStoreReady() error {
 	return nil
 }
 
+// credValueSnapshot captures one credential-store entry's plaintext before it
+// is overwritten or deleted, so a failed multi-step config write can restore
+// the store to its pre-request state (gate finding: silent-failure #2 — a
+// failed PATCH used to leave the NEW bearer committed in the store while the
+// operator believed the old one was still in use).
+type credValueSnapshot struct {
+	refName string
+	value   string
+	existed bool
+}
+
+// peekStoredCredential reads the current plaintext for refName without
+// changing the store. existed is false when nothing is stored under the name
+// (including when the store file itself does not exist yet — the
+// snapshot/rollback pair then degrades to a no-op rather than failing).
+func (a *restAPI) peekStoredCredential(refName string) (string, bool, error) {
+	store := a.credStore
+	if store == nil {
+		store = credentials.NewStore(a.credentialsStorePath())
+		if err := credentials.Unlock(store); err != nil {
+			return "", false, fmt.Errorf("credential store locked: %w", err)
+		}
+	}
+	value, err := store.Get(refName)
+	if err != nil {
+		var nf *credentials.NotFoundError
+		if errors.As(err, &nf) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("credential store read: %w", err)
+	}
+	return value, true, nil
+}
+
+// rollbackCredValueSnapshots restores every snapshot in reverse order (newest
+// first): entries that did not exist before the request are deleted again,
+// entries that did are overwritten with their pre-request value. The first
+// failure is returned only after ALL entries have been attempted, so one
+// failed restore does not abandon the rest.
+func (a *restAPI) rollbackCredValueSnapshots(snaps []credValueSnapshot) error {
+	var firstErr error
+	for i := len(snaps) - 1; i >= 0; i-- {
+		s := snaps[i]
+		var err error
+		if s.existed {
+			_, err = a.storeCredential(s.refName, s.value)
+		} else {
+			err = a.removeStoredCredential(s.refName)
+		}
+		if err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("restore credential %q: %w", s.refName, err)
+		}
+	}
+	return firstErr
+}
+
 // channelCredKey is the credential-store key for a channel's secret field. The
 // format is opaque to readers (channel constructors resolve secrets via the
 // config <field>_ref, never by reconstructing this key); it exists so the
@@ -260,6 +316,28 @@ func mcpHeaderCredKey(serverName, header string) string {
 	return "mcp_" + serverName + "_header_" + header
 }
 
+// mcpServersSection returns tools.mcp.servers from a decoded config map, or
+// nil when any level is absent.
+func mcpServersSection(m map[string]any) map[string]any {
+	tools, _ := m["tools"].(map[string]any)
+	if tools == nil {
+		return nil
+	}
+	mcp, _ := tools["mcp"].(map[string]any)
+	if mcp == nil {
+		return nil
+	}
+	servers, _ := mcp["servers"].(map[string]any)
+	return servers
+}
+
+// redactedHeaderValue is the placeholder GET /api/v1/config serves for a
+// literal MCP header value (redactMCPServerHeaderValues) and for
+// keyword-sensitive fields (redactSensitiveFields). The PUT /api/v1/config
+// guard treats this exact string as "a read-modify-write round-trip
+// placeholder", not as a secret to persist.
+const redactedHeaderValue = "[redacted]"
+
 // redactMCPServerHeaderValues redacts the values of
 // tools.mcp.servers.<name>.headers in a decoded config map (issue #638).
 // redactSensitiveFields's keyword list ("key/token/secret/password/credential/
@@ -269,18 +347,7 @@ func mcpHeaderCredKey(serverName, header string) string {
 // values are request credentials by definition; a header whose value is NOT a
 // secret (User-Agent) loses nothing material to [redacted].
 func redactMCPServerHeaderValues(m map[string]any) {
-	tools, _ := m["tools"].(map[string]any)
-	if tools == nil {
-		return
-	}
-	mcp, _ := tools["mcp"].(map[string]any)
-	if mcp == nil {
-		return
-	}
-	servers, _ := mcp["servers"].(map[string]any)
-	if servers == nil {
-		return
-	}
+	servers := mcpServersSection(m)
 	for _, srv := range servers {
 		srvMap, ok := srv.(map[string]any)
 		if !ok {
@@ -292,8 +359,79 @@ func redactMCPServerHeaderValues(m map[string]any) {
 		}
 		for k, v := range headers {
 			if s, ok := v.(string); ok && s != "" {
-				headers[k] = "[redacted]"
+				headers[k] = redactedHeaderValue
 			}
+		}
+	}
+}
+
+// findLiteralMCPServerHeaderValue walks tools.mcp.servers.<name>.headers in a
+// decoded PUT /api/v1/config body and returns the dotted config path of the
+// first header value that is neither empty nor the GET /config redaction
+// placeholder (redactedHeaderValue), or "" when there is none (issue #638:
+// PUT /api/v1/config persisted literal header secrets).
+//
+// A header value is a request credential by the same reading GET /config
+// redacts it under, and the dedicated MCP routes are the only sanctioned
+// writers: they route the value into the encrypted credential store and
+// persist only the ref name (header_refs). The generic config write keeps its
+// one-level deep-merge, so without this guard a whole-config PUT round-trip
+// — or a hand-built body — re-persisted the bearer verbatim into config.json
+// while the response, served through getConfig, showed [redacted] and looked
+// safe.
+func findLiteralMCPServerHeaderValue(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return ""
+	}
+	servers := mcpServersSection(m)
+	for name, srv := range servers {
+		srvMap, ok := srv.(map[string]any)
+		if !ok {
+			continue
+		}
+		headers, ok := srvMap["headers"].(map[string]any)
+		if !ok {
+			continue
+		}
+		for h, hv := range headers {
+			if s, ok := hv.(string); ok && s != "" && s != redactedHeaderValue {
+				return "tools.mcp.servers." + name + ".headers." + h
+			}
+		}
+	}
+	return ""
+}
+
+// dropRedactedMCPServerHeaderValues removes placeholder header entries
+// (exactly redactedHeaderValue) from tools.mcp.servers.<name>.headers in a
+// decoded PUT /api/v1/config body, deleting the headers key once empty. The
+// companion to findLiteralMCPServerHeaderValue: a whole-config read-modify-
+// write round-trip (GET /config → PUT) always carries the placeholders GET
+// served, and persisting them would replace nothing but put literal
+// "[redacted]" junk into config.json — the live secret lives under
+// header_refs and must stay there untouched.
+func dropRedactedMCPServerHeaderValues(v any) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return
+	}
+	for _, srv := range mcpServersSection(m) {
+		srvMap, ok := srv.(map[string]any)
+		if !ok {
+			continue
+		}
+		headers, ok := srvMap["headers"].(map[string]any)
+		if !ok {
+			continue
+		}
+		for h, hv := range headers {
+			if s, ok := hv.(string); ok && s == redactedHeaderValue {
+				delete(headers, h)
+			}
+		}
+		if len(headers) == 0 {
+			delete(srvMap, "headers")
 		}
 	}
 }
@@ -668,6 +806,24 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Issue #638: a literal value under tools.mcp.servers.<name>.headers is a
+	// request credential; the generic config write must never persist it. The
+	// dedicated MCP routes are the only sanctioned writers — they route the
+	// value into the encrypted credential store and persist only its ref name
+	// (header_refs). Rejected requests persist NOTHING (this returns before
+	// safeUpdateConfigJSON, like the blockedPaths guard above). A GET
+	// round-trip's "[redacted]" placeholders are tolerated by the scan and
+	// stripped from the write below, so Settings-style whole-config saves
+	// keep working.
+	if badPath := findLiteralMCPServerHeaderValue(typedBody); badPath != "" {
+		jsonErr(
+			w,
+			http.StatusForbidden,
+			fmt.Sprintf("%s holds a literal MCP header value — header values are credentials; set them via POST/PATCH /api/v1/mcp-servers, which store them encrypted (only ref names land in config.json)", badPath),
+		)
+		return
+	}
+
 	// Use safeUpdateConfigJSON to hold configMu during the read-modify-write cycle.
 	// Deep merge nested objects so partial updates don't wipe sibling keys
 	// (e.g., updating gateway.port must not delete gateway.users).
@@ -677,6 +833,13 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 			if err := json.Unmarshal(v, &parsed); err != nil {
 				return fmt.Errorf("invalid value for %q: %w", k, err)
 			}
+			// Issue #638: strip GET round-trip placeholders from any
+			// tools.mcp.servers.<name>.headers in this write, so a
+			// whole-config read-modify-write never persists "[redacted]" as a
+			// literal (the live value stays under header_refs). Runs after the
+			// literal-value guard above, so anything still standing here is a
+			// placeholder or an empty string.
+			dropRedactedMCPServerHeaderValues(parsed)
 			// Deep merge maps; replace scalars/arrays.
 			if existingMap, ok := m[k].(map[string]any); ok {
 				if newMap, ok := parsed.(map[string]any); ok {
