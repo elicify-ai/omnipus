@@ -1,13 +1,16 @@
 package gateway
 
 // T32 - TestMailAuditEvents (spec section 7 row 32, MC-19, D33).
-// Characterization oracle (per dispatch): pin the audit events the mail panel
-// currently emits, with the field sets CURRENTLY implemented - do not invent
-// fields. The two send-path events (mail.panel.send, mail.panel.draft_sent)
-// cannot execute today: the production SMTP client requires trusted TLS
-// (unconditional STARTTLS on non-465; no loopback exception mirroring
-// imapDial), so a local SMTP double cannot be spoken to. That gap is part of
-// the RED evidence, reported as such.
+// Round-2 fix-forward (D46): the round-1 characterization pins on the
+// count-only field shape (recipients_count/attachment_count/uid/uidvalidity/
+// expunged and the field-set-drift guards) are SUPERSEDED by MC-19's full
+// field set - a full-fields oracle that contradicted nothing but pinned the
+// very shape the founder ruled against. They are removed; the full-field
+// oracle now lives in mail_audit_full_fields_red_test.go. This file keeps
+// the spec-derived identity assertions: exactly one event per action, with
+// pair and Message-ID. The two send subtests now run against startSMTPSink
+// (the loopback plaintext exception, 89e16221f, makes a local sink speakable
+// - the round-1 BLOCKED fatals are stale and gone).
 
 import (
 	"fmt"
@@ -97,18 +100,6 @@ func TestMailAuditEvents(t *testing.T) {
 		require.Equal(t, mailRedWS, details["workspace_id"])
 		require.Equal(t, mailRedAgent, details["agent_id"])
 		require.Equal(t, "<audit-draft@example.test>", details["message_id"], "bracketed Message-ID of the edited draft")
-		if uid, ok := details["uid"].(float64); !ok || uid < 1 {
-			t.Fatalf("uid = %v, want a nonzero uid reference (characterization: the event records the updated copy's uid)", details["uid"])
-		}
-		require.Equal(t, float64(uv), details["uidvalidity"], "same Drafts folder, same UIDVALIDITY")
-		require.Equal(t, float64(0), details["attachment_count"], "characterization: draft had no attachments")
-		for k := range details {
-			switch k {
-			case "workspace_id", "agent_id", "message_id", "uid", "uidvalidity", "attachment_count":
-			default:
-				t.Fatalf("characterization: unexpected draft_updated field %q - field set drift", k)
-			}
-		}
 	})
 
 	t.Run("draft discard emits mail.panel.draft_discarded", func(t *testing.T) {
@@ -131,68 +122,48 @@ func TestMailAuditEvents(t *testing.T) {
 		require.Equal(t, mailRedWS, details["workspace_id"])
 		require.Equal(t, mailRedAgent, details["agent_id"])
 		require.Equal(t, "<audit-draft@example.test>", details["message_id"])
-		require.Equal(t, float64(1), details["uid"])
-		require.Equal(t, float64(uv), details["uidvalidity"])
-		require.Equal(t, true, details["expunged"])
-		for k := range details {
-			switch k {
-			case "workspace_id", "agent_id", "message_id", "uid", "uidvalidity", "expunged":
-			default:
-				t.Fatalf("characterization: unexpected draft_discarded field %q - field set drift", k)
-			}
-		}
+		// Superseded pins removed (round-2 fix-forward): uid/uidvalidity and
+		// expunged are fields MC-19 does not specify; the full-field oracle
+		// lives in mail_audit_full_fields_red_test.go.
 	})
 
 	t.Run("draft send emits mail.panel.draft_sent", func(t *testing.T) {
 		env := newMailRedEnv(t)
 		auditDir := mailAuditLogger(t, env)
 		imapPort, cl := startPlainIMAP(t)
-		smtpPort, _ := listenCount(t)
-		pointMailboxAt(t, env, imapPort, smtpPort)
+		sink := startSMTPSink(t)
+		pointMailboxAt(t, env, imapPort, portOfAddr(t, sink.addr))
 		appendRaw(t, cl, "Drafts", []byte(auditDraftRaw), []imap.Flag{imap.FlagDraft})
 		uv := draftUIDValidity(t, cl)
 
 		path := draftRefPath(uv, 1) + "/send"
 		rec := mailDo(env.mux, http.MethodPost, path, nextMailIP(), true,
 			`{"uid":1,"uidvalidity":`+utoa(uv)+`,"to":["a@b.test"],"subject":"s","body_markdown":"hello"}`)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("BLOCKED behind the loopback-SMTP gap (D36 fake-server strategy): draft send = %d, want 200; body=%s - the production SMTP client demands trusted TLS (unconditional STARTTLS), so no local double can complete a send, and the draft_sent audit path cannot execute. Required by MC-19/D33.", rec.Code, rec.Body.String())
-		}
+		require.Equal(t, http.StatusOK, rec.Code, "draft send must succeed against the loopback sink; body: "+rec.Body.String())
 		require.Equal(t, 1, countAuditEvents(t, auditDir, "mail.panel.draft_sent"))
 		ev := findAuditEvent(t, auditDir, "mail.panel.draft_sent")
 		details := ev["details"].(map[string]any)
-		for k := range details {
-			switch k {
-			case "workspace_id", "agent_id", "message_id", "recipients_count", "attachment_count", "sent_saved", "draft_cleanup_warning", "expunged":
-			default:
-				t.Fatalf("characterization: unexpected draft_sent field %q - field set drift", k)
-			}
-		}
+		require.Equal(t, mailRedWS, details["workspace_id"])
+		require.Equal(t, mailRedAgent, details["agent_id"])
+		require.Equal(t, "<audit-draft@example.test>", details["message_id"])
 	})
 
 	t.Run("manual send emits mail.panel.send", func(t *testing.T) {
 		env := newMailRedEnv(t)
 		auditDir := mailAuditLogger(t, env)
 		imapPort, _ := startPlainIMAP(t)
-		smtpPort, _ := listenCount(t)
-		pointMailboxAt(t, env, imapPort, smtpPort)
+		sink := startSMTPSink(t)
+		pointMailboxAt(t, env, imapPort, portOfAddr(t, sink.addr))
 
 		rec := mailDo(env.mux, http.MethodPost, "/api/v1/workspaces/"+mailRedWS+"/mail/"+mailRedAgent+"/messages", nextMailIP(), true,
 			`{"to":["a@b.test"],"subject":"s","body_markdown":"hello"}`)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("BLOCKED behind the loopback-SMTP gap (D36 fake-server strategy): manual send = %d, want 200; body=%s - the production SMTP client demands trusted TLS (unconditional STARTTLS on non-465), so no local double can complete a send, and the mail.panel.send audit path cannot execute. Required by MC-19/D33.", rec.Code, rec.Body.String())
-		}
+		require.Equal(t, http.StatusOK, rec.Code, "manual send must succeed against the loopback sink; body: "+rec.Body.String())
 		require.Equal(t, 1, countAuditEvents(t, auditDir, "mail.panel.send"))
 		ev := findAuditEvent(t, auditDir, "mail.panel.send")
 		details := ev["details"].(map[string]any)
 		require.Equal(t, mailRedWS, details["workspace_id"])
 		require.Equal(t, mailRedAgent, details["agent_id"])
-		for k := range details {
-			switch k {
-			case "workspace_id", "agent_id", "message_id", "recipients_count", "attachment_count", "sent_saved":
-			default:
-				t.Fatalf("characterization: unexpected send field %q - field set drift", k)
-			}
-		}
+		// Superseded count-only pins removed (round-2 fix-forward): the
+		// full-field oracle lives in mail_audit_full_fields_red_test.go.
 	})
 }
