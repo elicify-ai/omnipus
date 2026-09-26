@@ -59,6 +59,9 @@ what the founder decided and the as-is findings those decisions rest on. It is n
 | D9 | "Use global limit" on the agent profile | Yes — one click clears the agent's own value | Today an override can never be cleared | Interview | 2026-09-26 |
 | D10 | Saving an agent value above the global | Refuse the save with a message naming the global limit | Founder choice (architect had recommended accept-and-flag) | Interview | 2026-09-26 |
 | D11 | Lowering the global below some agents' own values | Allowed; those agents' stored values are lowered to the new global. A confirm dialog lists each affected agent (old → new) before anything changes; each change is audited | Deliberate operator action; visible, cancellable. Old values are NOT restored if the global is raised again (founder informed) | Interview | 2026-09-26 |
+| D13 | Saved global value outside 1–1000 at startup (0, missing, 5000) | Correct in memory only: 1001+ → 1000; 0 or missing → shipped default (200); never rewrite the file; WARN in the log and a warning in Settings; never refuse to start | Matches D1 (upgrade never rewrites) and D7 (never an outage) | Interview | 2026-09-26 |
+| D14 | External-CLI workers' own limit | They get the same per-agent "lower than global" control and "Use global limit" reset as other agents (create form + profile) | Founder choice (squad lead had recommended global-only); today `agent_field_rules.go` rejects the field for this variant — the spec must lift that | Interview | 2026-09-26 |
+| D15 | System-agent chat path (`create_agent`/`update_agent` tools) | Bound by the same 1–1000 range and the D10 refuse-above-global rule (no second way around them) | Found by the squad's code check; direct consequence of D2/D10, not a new founder choice | Interview | 2026-09-26 |
 | D12 | Relationship D1 vs D11 | Upgrade never rewrites (D1); an explicit global lowering does rewrite, after confirmation (D11). The capped-and-flagged state (D1) therefore only arises from upgrade or hand-edited config | Keeps both founder answers consistent | Interview | 2026-09-26 |
 
 ## Open points for plan-spec (not founder decisions)
@@ -71,6 +74,12 @@ what the founder decided and the as-is findings those decisions rest on. It is n
   affected agents before confirming (e.g. a dry-run field on the PUT response or a preview
   endpoint) — spec decides.
 - ADR-066 text ("per-agent → defaults → hardcoded 200") needs a dated correction.
+- Squad code check (2026-09-26): `pkg/agent/external_dispatch.go::DefaultExternalMaxTurns` = 50
+  is a second hidden literal (the executor preview falls back to it) — remove under the
+  no-hidden-default rule; `pkg/agent/loop.go::toolLimitResponse` tells users to edit
+  config.json — point it to Settings; `PUT /api/v1/performance` consumes a single-use step-up
+  token (`requireReAuth`), so the D11 affected-agents preview must be a separate read-only
+  admin endpoint followed by the confirmed PUT.
 
 ## Dependency Graph & Implementation Order
 
