@@ -24,6 +24,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 	"github.com/elicify-ai/omnipus/pkg/health"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
@@ -836,6 +837,15 @@ func (m *Manager) SetupHTTPServer(addr string, healthServer *health.Server) {
 	// Register health endpoints
 	if healthServer != nil {
 		healthServer.RegisterOnMux(m.mux)
+		// Issues #276/#640: the health mux serves /reload — a mutating admin
+		// action (full config reload). The pre-fix mount left it open to any
+		// local process able to reach the gateway port. The authorizer is
+		// wired unconditionally at the ONLY production mount: a bearer the
+		// ordinary mutating REST routes accept (any Gateway.Users account or
+		// the machine-only CLI token) passes; everything else gets 401
+		// without the reload callback ever firing. /health and /ready stay
+		// open — #640 keeps liveness probes unauthenticated.
+		healthServer.SetReloadAuthorizer(m.reloadBearerAuthorizer())
 		// RegisterOnMux only attaches handlers; it does NOT mark the server
 		// as ready the way Start()/StartContext() do. Without this explicit
 		// SetReady(true), /ready returns 503 forever in the embedded-mux
@@ -852,6 +862,57 @@ func (m *Manager) SetupHTTPServer(addr string, healthServer *health.Server) {
 		Handler:      m.mux,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
+	}
+}
+
+// reloadBearerAuthorizer returns the POST /reload authorization gate
+// (issues #276/#640). It accepts ONLY a bearer: an Authorization: Bearer
+// header matching a Gateway.Users account or the machine-only
+// Gateway.CLIToken. It is STRICTER than the ordinary mutating REST routes,
+// which also accept the omnipus-session cookie, the OMNIPUS_BEARER_TOKEN
+// env fallback, and dev_mode_bypass — this gate accepts none of those. The
+// bearer checks deliberately mirror gateway's resolveBearerIdentity
+// (pkg/gateway/auth.go) without its identity detail: the ID-tagged-first
+// ordering there is a bcrypt-count optimization only, so "any user match OR
+// CLI match" is the same accept/reject decision. gateway cannot be imported
+// from here (it imports this package), hence the local re-check.
+//
+// The config is read from the request context FIRST (the same
+// ctxkey.ConfigContextKey snapshot configSnapshotMiddleware injects in
+// production, and the reload harness injects in tests), falling back to the
+// Manager's construction-time config. Context-first matters: /reload itself
+// swaps the config pointer, and a bearer minted after a reload must
+// authenticate against the config it was minted on — the construction-time
+// pointer can go stale.
+//
+// Fail-closed by construction: a nil config, a missing/non-Bearer
+// Authorization header, and an empty raw token all reject; with zero
+// configured credentials every VerifyToken call errs, so an install with
+// no accounts and no CLI token rejects all /reload traffic.
+func (m *Manager) reloadBearerAuthorizer() func(*http.Request) bool {
+	return func(r *http.Request) bool {
+		cfg := m.config
+		if snap, ok := r.Context().Value(ctxkey.ConfigContextKey{}).(*config.Config); ok && snap != nil {
+			cfg = snap
+		}
+		if cfg == nil {
+			return false
+		}
+		const prefix = "Bearer "
+		authz := r.Header.Get("Authorization")
+		if !strings.HasPrefix(authz, prefix) {
+			return false
+		}
+		raw := strings.TrimPrefix(authz, prefix)
+		if raw == "" {
+			return false
+		}
+		for i := range cfg.Gateway.Users {
+			if cfg.Gateway.Users[i].VerifyToken(raw) == nil {
+				return true
+			}
+		}
+		return cfg.Gateway.VerifyCLIToken(raw) == nil
 	}
 }
 

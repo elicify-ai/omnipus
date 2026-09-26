@@ -176,9 +176,21 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 			sort.Strings(keys)
 			entry.EnvKeys = &keys
 		}
-		if len(srv.Headers) > 0 {
-			names := make([]string, 0, len(srv.Headers))
+		// Issue #638: names from BOTH sources — literal Headers (pre-#638
+		// install) and HeaderRefs (credential-store-backed, everything the
+		// REST create/patch path has written since) — are reported, so a
+		// ref-backed server still shows its header configuration in the UI
+		// edit pre-fill. Names only; values never cross the wire either way.
+		if len(srv.Headers) > 0 || len(srv.HeaderRefs) > 0 {
+			nameSet := make(map[string]struct{}, len(srv.Headers)+len(srv.HeaderRefs))
 			for k := range srv.Headers {
+				nameSet[k] = struct{}{}
+			}
+			for k := range srv.HeaderRefs {
+				nameSet[k] = struct{}{}
+			}
+			names := make([]string, 0, len(nameSet))
+			for k := range nameSet {
 				names = append(names, k)
 			}
 			sort.Strings(names)
@@ -259,25 +271,9 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 	// The MCP manager (pkg/mcp/manager.go ConnectServer) hard-fails on missing
 	// cfg.URL for sse/http and missing cfg.Command for stdio — catch it here so the
 	// error surfaces as a 422 rather than a silent connection failure.
-	switch transport {
-	case "stdio":
-		if req.Command == nil || *req.Command == "" {
-			jsonErr(w, http.StatusUnprocessableEntity, "command is required for stdio transport")
-			return
-		}
-	case "sse", "http":
-		if req.Url == nil || *req.Url == "" {
-			jsonErr(w, http.StatusUnprocessableEntity, "url is required for sse/http transport")
-			return
-		}
-		// Mirror SPA isValidUrlScheme: https always accepted; http only for
-		// loopback (localhost, 127.x.x.x, ::1). Any other http:// URL is
-		// rejected so the SPA validation cannot be bypassed via direct API call.
-		if !mcpURLSchemeValid(*req.Url) {
-			jsonErr(w, http.StatusUnprocessableEntity,
-				"url must use https, or http for loopback addresses only (localhost, 127.x.x.x, ::1)")
-			return
-		}
+	if status, msg := validateMCPServerTransportFields(transport, req); status != 0 {
+		jsonErr(w, status, msg)
+		return
 	}
 	// Duplicate-name pre-check, BEFORE any credential-store write (mirrors the
 	// add_mcp_server tool fix, pkg/sysagent/tools/mcp.go): without this, a name
@@ -309,6 +305,27 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			envRefs[key] = credKey
+		}
+	}
+	// Issue #638: header values (Authorization, Proxy-Authorization, Cookie,
+	// and any other request header the operator sets) are credentials — they
+	// go to the encrypted credential store exactly like env values above, and
+	// only their NAMES land in config.json, under header_refs. The literal
+	// headers block this used to write (`entry["headers"] = *req.Headers`) is
+	// gone: persisting the values there was the #638 leak. Same partial-
+	// failure semantics as env: a mid-loop store failure leaves earlier
+	// entries stored but harmless (no config write happens) and 500s.
+	var headerRefs map[string]string
+	if req.Headers != nil && len(*req.Headers) > 0 {
+		headerRefs = make(map[string]string, len(*req.Headers))
+		for key, value := range *req.Headers {
+			credKey := mcpHeaderCredKey(req.Name, key)
+			if _, err := a.storeCredential(credKey, value); err != nil {
+				slog.Error("rest: add mcp server: store header credential", "server", req.Name, "header", key, "error", err)
+				jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not store header credential %q: %v", key, err))
+				return
+			}
+			headerRefs[key] = credKey
 		}
 	}
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
@@ -363,8 +380,12 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		if req.EnvFile != nil && *req.EnvFile != "" {
 			entry["env_file"] = *req.EnvFile
 		}
-		if req.Headers != nil && len(*req.Headers) > 0 {
-			entry["headers"] = *req.Headers
+		// Issue #638: only the ref NAMES are persisted; the values live in
+		// the encrypted credential store (written above the closure). The
+		// literal `entry["headers"] = *req.Headers` write is deleted — that
+		// plaintext persistence was the leak the issue closes.
+		if len(headerRefs) > 0 {
+			entry["header_refs"] = headerRefs
 		}
 		servers[req.Name] = entry
 		return nil
@@ -379,6 +400,15 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 				if delErr := a.removeStoredCredential(credKey); delErr != nil {
 					slog.Warn("rest: add mcp server: name-collision race — failed to roll back env credential",
 						"server", req.Name, "env_key", envKey, "cred_key", credKey, "error", delErr)
+				}
+			}
+			// Same rollback for #638's header credentials: a rejected create
+			// must not leave its header secrets stored under the winning
+			// server's deterministic keys.
+			for headerName, credKey := range headerRefs {
+				if delErr := a.removeStoredCredential(credKey); delErr != nil {
+					slog.Warn("rest: add mcp server: name-collision race — failed to roll back header credential",
+						"server", req.Name, "header", headerName, "cred_key", credKey, "error", delErr)
 				}
 			}
 			jsonErr(w, http.StatusConflict, err.Error())
@@ -419,6 +449,31 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 	jsonCreated(w, resp)
 }
 
+// validateMCPServerTransportFields enforces the per-transport field rules for a
+// create request: stdio requires command; sse/http require url, and the url
+// must use https, or http for loopback addresses only (mcpURLSchemeValid
+// mirrors the SPA's isValidUrlScheme so the rule cannot be bypassed via direct
+// API calls). Returns (0, "") when the request is valid, or the HTTP status
+// and message to reject it with — so addMCPServer stays a flat registration
+// dispatch and this gate lives in one place.
+func validateMCPServerTransportFields(transport string, req gen.McpServerCreate) (int, string) {
+	switch transport {
+	case "stdio":
+		if req.Command == nil || *req.Command == "" {
+			return http.StatusUnprocessableEntity, "command is required for stdio transport"
+		}
+	case "sse", "http":
+		if req.Url == nil || *req.Url == "" {
+			return http.StatusUnprocessableEntity, "url is required for sse/http transport"
+		}
+		if !mcpURLSchemeValid(*req.Url) {
+			return http.StatusUnprocessableEntity,
+				"url must use https, or http for loopback addresses only (localhost, 127.x.x.x, ::1)"
+		}
+	}
+	return 0, ""
+}
+
 // mcpURLSchemeValid reports whether rawURL is acceptable for an sse/http MCP
 // server endpoint. It mirrors the SPA's isValidUrlScheme function
 // (src/components/skills/McpServerModal.tsx) so the contract described in
@@ -449,6 +504,84 @@ func mcpURLSchemeValid(rawURL string) bool {
 	}
 }
 
+// routeEnvCredentialsThroughStore routes each provided env literal into the
+// encrypted credential store, keyed by the deterministic mcp_<server>_<envKey>
+// ("mcp_<name>_<key>") — extracted verbatim from patchMCPServer for the
+// gocyclo budget (gate finding T1); merge semantics unchanged.
+func (a *restAPI) routeEnvCredentialsThroughStore(serverID string, current *config.MCPServerConfig, env map[string]string) error {
+	if current.EnvRefs == nil {
+		current.EnvRefs = make(map[string]string, len(env))
+	}
+	for key, value := range env {
+		credKey := mcpEnvCredKey(serverID, key)
+		if _, credErr := a.storeCredential(credKey, value); credErr != nil {
+			return fmt.Errorf("store env credential %q: %w", key, credErr)
+		}
+		current.EnvRefs[key] = credKey
+		if current.Env != nil {
+			delete(current.Env, key)
+		}
+	}
+	return nil
+}
+
+// replaceMCPServerHeaderCredentials implements PATCH's replacement semantics
+// for `headers` (issue #638, gate findings SF1+SF2). It stores each provided
+// header's value in the encrypted credential store under the deterministic
+// key mcp_<server>_header_<header>, deletes the stored entries of every name
+// that disappears (literal or ref-backed), and leaves the entry with
+// HeaderRefs only (current.Headers is cleared — a literal header surviving by
+// not being mentioned would contradict replacement). Every store mutation is
+// snapshotted first; the returned snapshots restore the pre-request store if
+// the surrounding config write fails. On error, the snapshots accumulated so
+// far are returned together with the error so the caller can roll back.
+func (a *restAPI) replaceMCPServerHeaderCredentials(serverID string, current *config.MCPServerConfig, newHeaders map[string]string) ([]credValueSnapshot, error) {
+	oldNames := make(map[string]struct{}, len(current.Headers)+len(current.HeaderRefs))
+	for name := range current.Headers {
+		oldNames[name] = struct{}{}
+	}
+	for name := range current.HeaderRefs {
+		oldNames[name] = struct{}{}
+	}
+
+	var snaps []credValueSnapshot
+	for name, value := range newHeaders {
+		credKey := mcpHeaderCredKey(serverID, name)
+		existing, existed, perr := a.peekStoredCredential(credKey)
+		if perr != nil {
+			return snaps, perr
+		}
+		if _, serr := a.storeCredential(credKey, value); serr != nil {
+			return snaps, fmt.Errorf("store header credential %q: %w", name, serr)
+		}
+		snaps = append(snaps, credValueSnapshot{refName: credKey, value: existing, existed: existed})
+	}
+	for name := range oldNames {
+		if _, kept := newHeaders[name]; kept {
+			continue
+		}
+		credKey := mcpHeaderCredKey(serverID, name)
+		existing, existed, perr := a.peekStoredCredential(credKey)
+		if perr != nil {
+			return snaps, perr
+		}
+		snaps = append(snaps, credValueSnapshot{refName: credKey, value: existing, existed: existed})
+		if derr := a.removeStoredCredential(credKey); derr != nil {
+			return snaps, fmt.Errorf("delete header credential %q: %w", name, derr)
+		}
+	}
+
+	current.HeaderRefs = nil
+	if len(newHeaders) > 0 {
+		current.HeaderRefs = make(map[string]string, len(newHeaders))
+		for name := range newHeaders {
+			current.HeaderRefs[name] = mcpHeaderCredKey(serverID, name)
+		}
+	}
+	current.Headers = nil
+	return snaps, nil
+}
+
 // deleteMCPServer handles DELETE /api/v1/mcp-servers/{id}. Removes the server
 // from config, then live-reconciles the MCP manager (AgentLoop.ReconcileMCP) so
 // a connected server is actually disconnected and its tools evicted from the
@@ -465,6 +598,9 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 	// deleting the credential entries before the config write is confirmed
 	// would risk destroying secrets for a removal that then fails to persist.
 	var removedEnvRefs map[string]string
+	// Issue #638: the server's ref-backed header secrets are cleaned up
+	// exactly like its env secrets below — after the config write confirms.
+	var removedHeaderRefs map[string]string
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
 		if tools == nil {
@@ -479,14 +615,24 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 			return nil
 		}
 		if existing, exists := servers[id]; exists {
-			// Round-trip through the typed struct to pull out EnvRefs cleanly
-			// (mirrors patchMCPServer's own existing-entry round-trip).
-			if raw, mErr := json.Marshal(existing); mErr == nil {
-				var current config.MCPServerConfig
-				if uErr := json.Unmarshal(raw, &current); uErr == nil {
-					removedEnvRefs = current.EnvRefs
-				}
+			// Round-trip through the typed struct to pull out EnvRefs and
+			// HeaderRefs cleanly (mirrors patchMCPServer's own existing-entry
+			// round-trip). A failed round-trip now FAILS the delete — the
+			// server's env/header secrets live only in the credential store,
+			// keyed by refs that die with this config entry, where deleting on
+			// a corrupt round-trip silently orphaned the stored bearer with no
+			// log (gate finding: silent-failure #3). Nothing is removed and
+			// the request answers 500 instead.
+			raw, mErr := json.Marshal(existing)
+			if mErr != nil {
+				return fmt.Errorf("marshal existing entry: %w", mErr)
 			}
+			var current config.MCPServerConfig
+			if uErr := json.Unmarshal(raw, &current); uErr != nil {
+				return fmt.Errorf("unmarshal existing entry: %w", uErr)
+			}
+			removedEnvRefs = current.EnvRefs
+			removedHeaderRefs = current.HeaderRefs
 			delete(servers, id)
 			found = true
 		}
@@ -513,6 +659,13 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 		if err := a.removeStoredCredential(credKey); err != nil {
 			slog.Warn("rest: delete mcp server: failed to delete env credential",
 				"server", id, "env_key", envKey, "cred_key", credKey, "error", err)
+		}
+	}
+	// Issue #638: same cleanup for the ref-backed header secrets.
+	for headerName, credKey := range removedHeaderRefs {
+		if err := a.removeStoredCredential(credKey); err != nil {
+			slog.Warn("rest: delete mcp server: failed to delete header credential",
+				"server", id, "header", headerName, "cred_key", credKey, "error", err)
 		}
 	}
 	// Config write succeeded — reconcile the live manager so the removed server is
@@ -578,8 +731,7 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, r *http.Request, id strin
 	// Resolve any credential-store env refs the same way production
 	// reconciliation does (pkg/agent/loop_mcp.go's reconcileLocked) — a
 	// server added via add_mcp_server carries EnvRefs, not literal Env, so
-	// without this the throwaway test connection would spawn the process
-	// with its secrets missing and report a misleading failure.
+	// without this the throwaway connection would report a misleading failure.
 	if a.credStore != nil {
 		resolvedSrv, err = mcp.ResolveServerEnvRefs(resolvedSrv, a.credStore.Get)
 	} else {
@@ -589,6 +741,22 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, r *http.Request, id strin
 		jsonOK(w, gen.McpServerTestResponse{
 			Success: false,
 			Message: fmt.Sprintf("env credential reference: %s", err.Error()),
+		})
+		return
+	}
+	// Issue #638: resolve credential-store header refs the same way — an
+	// sse/http server carries its Authorization/Cookie/Proxy-Authorization
+	// as HeaderRefs, and a Test click must exercise the connection exactly
+	// as production would make it.
+	if a.credStore != nil {
+		resolvedSrv, err = mcp.ResolveServerHeaderRefs(resolvedSrv, a.credStore.Get)
+	} else {
+		resolvedSrv, err = mcp.ResolveServerHeaderRefs(resolvedSrv, nil)
+	}
+	if err != nil {
+		jsonOK(w, gen.McpServerTestResponse{
+			Success: false,
+			Message: fmt.Sprintf("header credential reference: %s", err.Error()),
 		})
 		return
 	}
@@ -697,6 +865,12 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 	var updatedEntry config.MCPServerConfig
 	mcpPatchValidationMsg := ""
 
+	// headerSnapshots accumulates one snapshot per credential-store entry
+	// this request touches, in call order. Declared OUTSIDE the closure so
+	// the error branch below can restore the store regardless of where the
+	// failure hit (gate finding SF2); empty for the 422 and 404 paths.
+	var headerSnapshots []credValueSnapshot
+
 	// errMCPNotFound is returned ONLY by the closure when the server id is absent,
 	// so the dispatch below can distinguish a genuine 404 from a config I/O/parse
 	// failure (e.g. unreadable or corrupt config.json) that aborts safeUpdateConfigJSON
@@ -748,9 +922,8 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		if req.EnvFile != nil {
 			current.EnvFile = *req.EnvFile
 		}
-		if req.Headers != nil {
-			current.Headers = *req.Headers
-		}
+		// req.Headers is handled in the credential block below (issue #638):
+		// values go to the encrypted store, only names land in config.json.
 
 		// Transport-consistency on the MERGED result (transport itself is immutable
 		// via PATCH): stdio uses command (no url); sse/http use url (no command).
@@ -780,18 +953,30 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		// in this PATCH, and any pre-existing EnvRefs entries for other keys,
 		// are left untouched.
 		if req.Env != nil && len(*req.Env) > 0 {
-			if current.EnvRefs == nil {
-				current.EnvRefs = make(map[string]string, len(*req.Env))
+			if envErr := a.routeEnvCredentialsThroughStore(id, &current, *req.Env); envErr != nil {
+				return envErr
 			}
-			for key, value := range *req.Env {
-				credKey := mcpEnvCredKey(id, key)
-				if _, credErr := a.storeCredential(credKey, value); credErr != nil {
-					return fmt.Errorf("store env credential %q: %w", key, credErr)
-				}
-				current.EnvRefs[key] = credKey
-				if current.Env != nil {
-					delete(current.Env, key)
-				}
+		}
+
+		// Issue #638, gate findings SF1+SF2: a non-nil `headers` field
+		// REPLACES the server's whole header set — the schema calls it
+		// "Replacement HTTP headers". The previous merge behaviour lied about
+		// that: an empty `headers` was ignored entirely and unmentioned names
+		// survived, so an operator clearing or rotating a bearer was told the
+		// update succeeded while the old secret kept being sent. Now: every
+		// provided header is stored under its deterministic credential key and
+		// lands in HeaderRefs; every name NOT in the request (literal or
+		// ref-backed) has its stored credential deleted; current.Headers is
+		// cleared, so all survivors are ref-backed. Every store mutation is
+		// snapshotted first; the outer error branch restores the store when
+		// the config write fails. The 200 body does not yet echo the
+		// surviving header names — a wire-shape addition that needs a contract
+		// edit, deferred (architect F3).
+		if req.Headers != nil {
+			var credErr error
+			headerSnapshots, credErr = a.replaceMCPServerHeaderCredentials(id, &current, *req.Headers)
+			if credErr != nil {
+				return fmt.Errorf("replace header credentials: %w", credErr)
 			}
 		}
 
@@ -821,6 +1006,14 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		}
 		return nil
 	}); err != nil {
+		// Gate finding SF2: the credential store may already hold THIS
+		// request's new values even though the config write failed — restore
+		// the pre-request store state before answering. A no-op for the 422
+		// and 404 paths (nothing is written before validation/lookup).
+		if rerr := a.rollbackCredValueSnapshots(headerSnapshots); rerr != nil {
+			err = fmt.Errorf("%w; credential-store rollback also failed: %v "+
+				"(a stored header secret may now differ from before this request)", err, rerr)
+		}
 		if mcpPatchValidationMsg != "" {
 			jsonErr(w, http.StatusUnprocessableEntity, mcpPatchValidationMsg)
 			return

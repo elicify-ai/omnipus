@@ -25,9 +25,10 @@
 //	   a single dropped directive is both invisible and total.
 //
 // The round-4 finding this file exists for is not a preview feature at all:
-// /api/v1/media/workspace/{workspace}/{id} is registered withOptionalAuth and
-// served Library-resolved bytes inline, as real HTML, on the gateway origin,
-// with no policy — today, before any of ADR-067 shipped.
+// /api/v1/media/workspace/{workspace}/{id} served Library-resolved bytes
+// inline, as real HTML, on the gateway origin, with no policy — and (until
+// issue #716 moved it to withAuth) it was registered withOptionalAuth, so
+// those bytes were also reachable without signing in.
 
 package gateway
 

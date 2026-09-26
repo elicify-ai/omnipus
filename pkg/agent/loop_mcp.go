@@ -460,6 +460,20 @@ func (al *AgentLoop) reconcileLocked(ctx context.Context) error {
 				skipped[name] = true
 				continue
 			}
+			// Issue #638: resolve credential-store header refs the same way —
+			// an sse/http server added via the gateway REST API carries its
+			// Authorization/Cookie/Proxy-Authorization values as HeaderRefs,
+			// never as literal Headers in config.json. Same skip-on-failure
+			// semantics: connecting without the secret the operator configured
+			// is worse than refusing to connect.
+			resolvedCfg, err = mcp.ResolveServerHeaderRefs(resolvedCfg, al.mcp.getCredentialResolver())
+			if err != nil {
+				logger.WarnCF("agent", "Skipping MCP server: cannot resolve header credential reference(s)",
+					map[string]any{"server": name, "error": err.Error()})
+				al.mcp.setConnectErr(name, fmt.Errorf("server %s: %w", name, err))
+				skipped[name] = true
+				continue
+			}
 			desired[name] = resolvedCfg
 		}
 	}

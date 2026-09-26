@@ -759,7 +759,14 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	}
 	// Option A keeps workspace and media IDs as separately validated path segments;
 	// the legacy global media route remains below for backward compatibility.
-	rae.cm.RegisterHTTPHandler("/api/v1/media/workspace/", rae.a.withOptionalAuth(rae.a.HandleMediaByRef))
+	// Issue #716 (founder ruling 2026-09-15): the workspace-media route requires
+	// the same login as every other API route — an unauthenticated fetch is a 401
+	// with no stored bytes in the body, and a signed-in session cookie still
+	// receives the exact bytes (checkBearerAuth's FR-009 cookie fallback). The
+	// legacy /api/v1/media/{uuid} route deliberately stays on optional auth: #716
+	// leaves it as the accepted secret-link (UUID randomness) and says to
+	// document that choice rather than require login.
+	rae.cm.RegisterHTTPHandler("/api/v1/media/workspace/", rae.a.withAuth(rae.a.HandleMediaByRef))
 	rae.cm.RegisterHTTPHandler("/api/v1/media/", rae.a.withOptionalAuth(rae.a.HandleMedia))
 	// Exact match takes precedence over the /sessions/ prefix handler for this specific path.
 	rae.cm.RegisterHTTPHandler("/api/v1/sessions/all", rae.a.withAuth(rae.a.HandleClearSessions))
@@ -835,7 +842,11 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 func (rae *restAPIRegisterAdditionalEndpoints) registerAncillaryRoutes() {
 	// File upload endpoints (Milestone 3).
 	rae.cm.RegisterHTTPHandler("/api/v1/upload", rae.a.withUploadAuth(rae.a.HandleUpload))
-	rae.cm.RegisterHTTPHandler("/api/v1/uploads/", rae.a.withOptionalAuth(rae.a.HandleServeUpload))
+	// Issue #716 (founder ruling 2026-09-15): serving a chat upload requires the
+	// same login as every other API route — an unauthenticated fetch is a 401
+	// with no stored bytes in the body; a signed-in session cookie still receives
+	// the exact bytes (the SPA sends that cookie on same-origin image loads).
+	rae.cm.RegisterHTTPHandler("/api/v1/uploads/", rae.a.withAuth(rae.a.HandleServeUpload))
 
 	// Prometheus-compatible metrics endpoint (FR-039).
 	// Unauthenticated for Prometheus scrape compatibility; does not expose secrets.
