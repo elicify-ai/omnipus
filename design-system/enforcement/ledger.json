@@ -4732,6 +4732,174 @@
       "syntax": "Tooltip#className",
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: Tooltip's own destructured prop `className` is declared at src/components/ui/tooltip.tsx:46:67 and flows unmodified to 1 sink(s) — src/components/ui/tooltip.tsx:107:11 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
       "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/mail/MailDraftPanel.tsx",
+      "syntax": "MailDraftPanel#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailDraftPanel's own destructured prop `className` is declared at src/components/mail/MailDraftPanel.tsx:33:72 and flows unmodified to 1 sink(s) — src/components/mail/MailDraftPanel.tsx:44:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/mail/MailExplorer.tsx",
+      "syntax": "MailExplorer#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailExplorer's own destructured prop `className` is declared at src/components/mail/MailExplorer.tsx:29:91 and flows unmodified to 1 sink(s) — src/components/mail/MailExplorer.tsx:41:10 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/mail/MailFolderRail.tsx",
+      "syntax": "MailFolderRail#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailFolderRail's own destructured prop `className` is declared at src/components/mail/MailFolderRail.tsx:24:3 and flows unmodified to 1 sink(s) — src/components/mail/MailFolderRail.tsx:29:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/mail/MailHtmlFrame.tsx",
+      "syntax": "MailHtmlFrame#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailHtmlFrame's own destructured prop `className` is declared at src/components/mail/MailHtmlFrame.tsx:20:46 and flows unmodified to 1 sink(s) — src/components/mail/MailHtmlFrame.tsx:26:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/mail/MailMessageList.tsx",
+      "syntax": "MailMessageList#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailMessageList's own destructured prop `className` is declared at src/components/mail/MailMessageList.tsx:36:3 and flows unmodified to 1 sink(s) — src/components/mail/MailMessageList.tsx:42:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/mail/MailPanel.tsx",
+      "syntax": "MailPanel#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailPanel's own destructured prop `className` is declared at src/components/mail/MailPanel.tsx:48:3 and flows unmodified to 1 sink(s) — src/components/mail/MailPanel.tsx:58:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/mail/MailReadingPane.tsx",
+      "syntax": "MailReadingPane#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailReadingPane's own destructured prop `className` is declared at src/components/mail/MailReadingPane.tsx:27:62 and flows unmodified to 1 sink(s) — src/components/mail/MailReadingPane.tsx:35:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/mail/MailSignatureEditor.tsx",
+      "syntax": "MailSignatureEditor#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailSignatureEditor's own destructured prop `className` is declared at src/components/mail/MailSignatureEditor.tsx:19:62 and flows unmodified to 1 sink(s) — src/components/mail/MailSignatureEditor.tsx:33:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/mail/MailDraftPanel.tsx",
+      "syntax": "MailDraftPanel#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailDraftPanel's own destructured prop `className` is declared at src/components/mail/MailDraftPanel.tsx:33:72 and flows unmodified to 1 sink(s) — src/components/mail/MailDraftPanel.tsx:44:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/mail/MailExplorer.tsx",
+      "syntax": "MailExplorer#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailExplorer's own destructured prop `className` is declared at src/components/mail/MailExplorer.tsx:29:91 and flows unmodified to 1 sink(s) — src/components/mail/MailExplorer.tsx:41:10 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/mail/MailFolderRail.tsx",
+      "syntax": "MailFolderRail#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailFolderRail's own destructured prop `className` is declared at src/components/mail/MailFolderRail.tsx:24:3 and flows unmodified to 1 sink(s) — src/components/mail/MailFolderRail.tsx:29:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/mail/MailHtmlFrame.tsx",
+      "syntax": "MailHtmlFrame#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailHtmlFrame's own destructured prop `className` is declared at src/components/mail/MailHtmlFrame.tsx:20:46 and flows unmodified to 1 sink(s) — src/components/mail/MailHtmlFrame.tsx:26:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/mail/MailMessageList.tsx",
+      "syntax": "MailMessageList#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailMessageList's own destructured prop `className` is declared at src/components/mail/MailMessageList.tsx:36:3 and flows unmodified to 1 sink(s) — src/components/mail/MailMessageList.tsx:42:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/mail/MailPanel.tsx",
+      "syntax": "MailPanel#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailPanel's own destructured prop `className` is declared at src/components/mail/MailPanel.tsx:48:3 and flows unmodified to 1 sink(s) — src/components/mail/MailPanel.tsx:58:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/mail/MailReadingPane.tsx",
+      "syntax": "MailReadingPane#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailReadingPane's own destructured prop `className` is declared at src/components/mail/MailReadingPane.tsx:27:62 and flows unmodified to 1 sink(s) — src/components/mail/MailReadingPane.tsx:35:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/mail/MailSignatureEditor.tsx",
+      "syntax": "MailSignatureEditor#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailSignatureEditor's own destructured prop `className` is declared at src/components/mail/MailSignatureEditor.tsx:19:62 and flows unmodified to 1 sink(s) — src/components/mail/MailSignatureEditor.tsx:33:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/mail/MailDraftPanel.tsx",
+      "syntax": "MailDraftPanel#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailDraftPanel's own destructured prop `className` is declared at src/components/mail/MailDraftPanel.tsx:33:72 and flows unmodified to 1 sink(s) — src/components/mail/MailDraftPanel.tsx:44:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/mail/MailExplorer.tsx",
+      "syntax": "MailExplorer#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailExplorer's own destructured prop `className` is declared at src/components/mail/MailExplorer.tsx:29:91 and flows unmodified to 1 sink(s) — src/components/mail/MailExplorer.tsx:41:10 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/mail/MailFolderRail.tsx",
+      "syntax": "MailFolderRail#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailFolderRail's own destructured prop `className` is declared at src/components/mail/MailFolderRail.tsx:24:3 and flows unmodified to 1 sink(s) — src/components/mail/MailFolderRail.tsx:29:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/mail/MailHtmlFrame.tsx",
+      "syntax": "MailHtmlFrame#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailHtmlFrame's own destructured prop `className` is declared at src/components/mail/MailHtmlFrame.tsx:20:46 and flows unmodified to 1 sink(s) — src/components/mail/MailHtmlFrame.tsx:26:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/mail/MailMessageList.tsx",
+      "syntax": "MailMessageList#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailMessageList's own destructured prop `className` is declared at src/components/mail/MailMessageList.tsx:36:3 and flows unmodified to 1 sink(s) — src/components/mail/MailMessageList.tsx:42:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/mail/MailPanel.tsx",
+      "syntax": "MailPanel#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailPanel's own destructured prop `className` is declared at src/components/mail/MailPanel.tsx:48:3 and flows unmodified to 1 sink(s) — src/components/mail/MailPanel.tsx:58:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/mail/MailReadingPane.tsx",
+      "syntax": "MailReadingPane#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailReadingPane's own destructured prop `className` is declared at src/components/mail/MailReadingPane.tsx:27:62 and flows unmodified to 1 sink(s) — src/components/mail/MailReadingPane.tsx:35:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/mail/MailSignatureEditor.tsx",
+      "syntax": "MailSignatureEditor#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MailSignatureEditor's own destructured prop `className` is declared at src/components/mail/MailSignatureEditor.tsx:19:62 and flows unmodified to 1 sink(s) — src/components/mail/MailSignatureEditor.tsx:33:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
     }
   ],
   "reviewedBoundaries": [
@@ -8149,6 +8317,16 @@
       "path": "src/components/ui/zoomable-view.stories.tsx",
       "kind": "story",
       "reason": "Storybook story file (exact .stories.js|jsx|ts|tsx suffix). Consumed only by the .storybook/main.ts glob, never by the production import graph (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/chat/ChatScreen.delegation-event-lines.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md). Added 2026-09-26 with the email UI prototype work (frontend-lead)."
+    },
+    {
+      "path": "src/components/chat/ChatScreen.delegation-events-wired.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md). Added 2026-09-26 with the email UI prototype work (frontend-lead)."
     }
   ]
 }

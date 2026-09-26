@@ -6086,6 +6086,74 @@
           "status": "planned"
         }
       ]
+    },
+    {
+      "id": "src/components/mail/MailComposeDialog.tsx#MailComposeDialog",
+      "kind": "modal",
+      "source": "src/components/mail/MailComposeDialog.tsx",
+      "symbol": "MailComposeDialog",
+      "lane": 6,
+      "verification": [
+        {
+          "checkId": "surface:mail-MailComposeDialog-tsx-mailcomposedialog:unit",
+          "file": "tests/design-system/surfaces/mail-MailComposeDialog-tsx-mailcomposedialog.test.tsx",
+          "test": "src/components/mail/MailComposeDialog.tsx#MailComposeDialog surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:mail-MailComposeDialog-tsx-mailcomposedialog:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/mail/MailComposeDialog.tsx#MailComposeDialog surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:mail-MailComposeDialog-tsx-mailcomposedialog:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/mail/MailComposeDialog.tsx#MailComposeDialog surface interaction contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/mail/MailComposeDialog.tsx#MailComposeDialog"
+      }
+    },
+    {
+      "id": "src/components/mail/MailComposeDialog.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/mail/MailComposeDialog.tsx",
+      "symbol": "overlay:1",
+      "lane": 6,
+      "verification": [
+        {
+          "checkId": "surface:mail-MailComposeDialog-tsx-overlay-1:unit",
+          "file": "tests/design-system/surfaces/mail-MailComposeDialog-tsx-overlay-1.test.tsx",
+          "test": "src/components/mail/MailComposeDialog.tsx#overlay:1 surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:mail-MailComposeDialog-tsx-overlay-1:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/mail/MailComposeDialog.tsx#overlay:1 surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:mail-MailComposeDialog-tsx-overlay-1:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/mail/MailComposeDialog.tsx#overlay:1 surface interaction contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/mail/MailComposeDialog.tsx#overlay:1"
+      }
     }
   ],
   "sourceOwners": [
@@ -7476,6 +7544,50 @@
     {
       "source": "src/components/chat/useChatDelegationEvents.ts",
       "lane": 3
+    },
+    {
+      "source": "src/components/mail/MailComposeDialog.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/mail/MailConnectionBanner.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/mail/MailDraftPanel.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/mail/MailExplorer.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/mail/MailFolderRail.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/mail/MailHtmlFrame.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/mail/MailMessageList.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/mail/MailPanel.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/mail/MailReadingPane.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/mail/MailSignatureEditor.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/mail/sampleMail.ts",
+      "lane": 6
     }
   ]
 }
