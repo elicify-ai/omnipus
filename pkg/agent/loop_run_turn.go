@@ -190,6 +190,13 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	// no-op on "" — every root, heartbeat, scheduled and task turn stays
 	// unstamped, and message_parent's structural refusal keeps firing for
 	// them.
+	// GUARD: that no-op is only safe because every production turn's base
+	// ctx is detached (Background-derived) before this turn's own context
+	// construction runs — a turn's base ctx must never already carry the
+	// delegate-session-id key from a DIFFERENT turn/session. WithDelegate
+	// SessionID no-ops on "", so an unstamped turn would otherwise silently
+	// INHERIT the base ctx's id — a wrong delegate-session-id, not an
+	// absent one, and nothing would error.
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithDelegateSessionID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.opts.SteeredSessionID)
 	// ADR-085 BROWSER-FR-021: stamp the ROOT chat session id (ADR-057
 	// routingSessionID, inherited verbatim through a whole delegation
