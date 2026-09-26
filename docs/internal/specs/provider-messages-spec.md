@@ -10,6 +10,78 @@
 
 ---
 
+## Founder decisions — round 1 (resolves grill round 1's Questions for the founder)
+
+Recorded verbatim-in-meaning from the founder's answers, 2026-09-26. These decisions
+supersede the corresponding options in §16 and in `provider-messages-spec-review.md`'s
+"Questions for the founder"; the fix round below applies them.
+
+**D1 — ADR-051 stays; #711 is closed by *display*, not by stripping the wire (resolves
+Q1, Q2, FQ-5, FQ-6).** Founder: *"the raw message can be sent as well, but not
+displayed — the question is not what is sent from our server but how it is displayed;
+verbose chat is not sending more messages to the UI, it only displays the session
+events differently, it hides less."* Consequence: the wire keeps carrying the raw
+detail exactly as ADR-051 already decided. Normal chat **displays** only the clean,
+fact-assembled one-line sentence. Verbose chat **displays** more — the raw detail too
+— from the same frame; it is not a second, richer message from the server. No REST
+fetch (Option 1 is withdrawn), no per-tab Verbose flag at attach, no deletion of the
+`detail` field. §5's "Delivery mechanism" options are moot — replace with: one frame,
+two displays. The grill's delivery-path findings still apply and must be fixed:
+MAJ-001 (the assembled sentence must actually reach the live bubble, the persisted
+transcript, and replay — today it doesn't), MAJ-015 (the #711 oracle must be re-scoped
+from "nothing raw on the wire" to "nothing raw *rendered* to a non-Verbose viewer",
+and must additionally cover the forwarded retry event, not only the error frame).
+
+**D2 — No billing/quota lockout at all (resolves FQ-1; CRIT-001 is moot).** Founder:
+*"we should not block a model at all, simplify — if the user loads more usage credits
+he cannot continue for 5 hours would be bad."* Remove the billing-cooldown path
+(`pkg/providers/cooldown.go::calculateBillingCooldown`) from the `quota_billing`
+classification outcome entirely — no extended lockout, no special cooldown curve for
+this code. (Whatever normal, non-billing retry/fallback behavior otherwise applies is
+unaffected; this decision only removes the billing-specific lockout.)
+
+**D3 — Retry-then-fallback policy (resolves FQ-4, Q3, FQ-3).** Retry the chosen model
+**3 times**. Honor the provider's `retry-after` **only when it is ≤ 2 minutes**
+(showing the countdown); when the provider asks for longer than 2 minutes, skip the
+remaining retries and switch to the fallback model(s) immediately. If no fallback is
+configured, end the turn with the message instead.
+
+**D4 — Stop ends the wait (resolves FQ-10).** The Stop control ends both the countdown
+wait and the turn — the wait is always interruptible.
+
+**D5 — Verbose shows the raw provider text as-is (resolves FQ-2).** No filtered/masked
+view. The founder accepts the key-fragment risk explicitly (masked keys the scrubber
+cannot recognise may appear in the raw view).
+
+**D6 — Billing button descoped entirely (resolves Q5, FQ-9).** Founder: build it only
+if the provider list data already has billing links. Team-lead checked: the provider
+catalog (`pkg/providers/catalog`, sourced from models.dev + litellm + local overrides)
+carries no billing/top-up link field today. Remove `billing_url` and the "Open billing
+page" button from this spec's scope entirely — not "ship without it now", removed.
+
+**D7 — Fallback note persists; naming (resolves Q6).** The fallback note persists in
+history (unchanged from the spec's recommendation). Call the answering model the
+**"Fallback model"** in copy — never "backup".
+
+**D8 — Provider messages get their own visual format (NEW).** Provider-message
+presentation (rate-limit countdown, fallback-model note, out-of-credit, Verbose
+facts+raw) must not look like a regular assistant response. Frontend produces 2-3
+visual options as a clickable static demo (static Storybook build or static HTML
+snapshot — never a live dev server) covering all four cases; squad-lead real-browser-
+checks it before hand-off. Runs in parallel with the spec fix round, not gating it.
+
+**Still open — do not block the fix round on these; team-lead brings them to the
+founder next round:**
+
+- **FQ-7** — add the "model no longer offered" template now, or defer to a tracked
+  issue.
+- **Q4** — `quota_billing` attribution (`config` vs `provider`) — now that the lockout
+  (D2) and the billing button (D6) are both gone, is this attribution still
+  meaningful, or is there nothing left for it to gate?
+- **FQ-8** — landing order with `gateway-security`'s `c13c4d279`: team-lead is
+  defaulting to the review's recommendation (keep it on that branch until this feature
+  lands, then this design replaces it) absent a correction.
+
 ## 1. Problem & actors
 
 **Actors.** The **user** (reads chat; may have Verbose chat on or off — a per-device, client-only preference, `src/store/chatPreferences.ts::verboseChatEnabled`); the **operator** (the same person on a self-hosted install; fixes credentials and billing); the **agent loop** (produces provider errors and retry/fallback state); the **gateway** (the single WS choke point that shapes what reaches any browser).
