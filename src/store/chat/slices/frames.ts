@@ -1794,6 +1794,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                       msg.errorCode = llmError.code
                       if (errorDetail !== undefined) msg.errorDetail = errorDetail
                       if (errorEntryId) msg.errorEntryId = errorEntryId
+                      if (llmError.facts) msg.errorFacts = llmError.facts
                     }
                   }
                   draft.isStreaming = false
@@ -1846,6 +1847,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                       errorCode: llmError.code,
                       ...(errorDetail !== undefined ? { errorDetail } : {}),
                       ...(errorEntryId ? { errorEntryId } : {}),
+                      ...(llmError.facts ? { errorFacts: llmError.facts } : {}),
                     }
                   : {}),
               }

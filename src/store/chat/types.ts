@@ -8,6 +8,7 @@ import type {
   AskUserQuestionCard,
   AskUserAnswerFrame,
   SubagentStateFrame,
+  LLMError as GeneratedLLMError,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
 
@@ -253,6 +254,16 @@ export type ChatMessage = Message & {
    * payload) — dedup then falls back to the existing content+role dedup.
    */
   errorEntryId?: string
+  /**
+   * provider-messages spec (MAJ-103/DG-4) — the optional `facts` object from
+   * a live `ErrorFrame`'s `payload.llm_error.facts` (provider, model,
+   * request_id — nothing else). Display-only (never serialized): rendered as
+   * the verbose-only facts lines inside the "Technical details" disclosure
+   * (`MessageItem.tsx`); request_id is surfaced ONLY under Verbose chat.
+   * Replay frames carry no facts (the `LLMErrorReplay` wire type omits the
+   * field), so this is set only on live error bubbles.
+   */
+  errorFacts?: GeneratedLLMError['facts']
   /**
    * ADR-070 §2.4 — true when this assistant bubble was closed because a
    * mid-turn steer (a follow-up sent while it was still streaming) landed
