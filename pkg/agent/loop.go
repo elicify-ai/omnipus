@@ -2058,9 +2058,9 @@ func (al *AgentLoop) handleReasoning(
 		return
 	}
 
-	// Check context cancellation before attempting to publish,
-	// since PublishOutbound's select may race between send and ctx.Done().
-	if ctx.Err() != nil {
+	// Check context cancellation before attempting to publish, since
+	// PublishOutbound's select may race between send and ctx.Done().
+	if reasoningPublishCanceledOnEntry(ctx, channelName) {
 		return
 	}
 
