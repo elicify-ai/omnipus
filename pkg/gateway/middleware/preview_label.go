@@ -208,3 +208,31 @@ func ClassifyPreviewOrigin(origin string) (PreviewOriginClass, string) {
 	}
 	return PreviewOriginMode1, base
 }
+
+// PreviewIsolatedURL mints the Mode 1 URL for a registration token from a
+// Mode 1 base returned by ClassifyPreviewOrigin ("http://localhost[:port]"):
+// http://<label>.localhost[:port]/ — the token's label in place of the bare
+// loopback host, root path, explicit port preserved, portless for an
+// implicit-80 origin (FR-001/S-1.1, DS-3 row 10). The label is derived from
+// the token (PreviewLabelForToken), so the URL is lower-case throughout
+// (FR-005) and shares the token's lifecycle (FR-008/FR-029).
+func PreviewIsolatedURL(mode1Base, token string) string {
+	u, err := url.Parse(mode1Base)
+	if err != nil || u.Scheme == "" {
+		// mode1Base comes from ClassifyPreviewOrigin, which only ever returns
+		// a parseable base; this branch is defense in depth for a future
+		// caller passing an arbitrary string — degrade to the bare-label form
+		// rather than mint a malformed URL.
+		return "http://" + PreviewLabelForToken(token) + "." + PreviewLabelHostSuffix + "/"
+	}
+	host := PreviewLabelForToken(token) + "." + PreviewLabelHostSuffix
+	if port := u.Port(); port != "" {
+		host += ":" + port
+	}
+	u.Host = host
+	u.Path = "/"
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
