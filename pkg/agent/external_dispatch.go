@@ -783,17 +783,16 @@ func recordExternalToolResultUpdateInPlace(
 	)
 }
 
-// DefaultExternalMaxTurns is DEAD for the runtime: prepareRunOptions no
-// longer reads it (#904 FR-004 — the turn cap is the resolver's effective
-// value, config.ResolveMaxToolIterations).
+// DefaultExternalMaxTurns has NO production reader left (#904 FR-004): the
+// runtime turn cap (prepareRunOptions) and the executor preview
+// (pkg/gateway/rest_executor_preview.go::postAgentsExecutorPreview) both use
+// config.ResolveMaxToolIterations.
 //
-// TODO(#904 wave 2): delete this constant. Its last users are
-// pkg/gateway/rest_executor_preview.go::postAgentsExecutorPreview (must
-// preview config.ResolveMaxToolIterations(&cfg.Agents.Defaults,
-// &config.AgentConfig{MaxToolIterations: req value}).Effective instead) and
-// the legacy tests rest_executor_preview_test.go and
-// external_dispatch_test.go::TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir
-// (qa-lead's regression rows). Kept only so those still compile.
+// TODO(#904): delete this constant. Its only remaining references are legacy
+// test assertions (pkg/gateway/rest_executor_preview_test.go,
+// external_dispatch_test.go::TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir)
+// that the RED pack's regression rows replace; implementers do not edit test
+// files, so it stays only to keep those compiling until then.
 const DefaultExternalMaxTurns = 50
 
 // transcriptModelFor returns the model string to stamp on transcript entries

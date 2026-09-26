@@ -18,7 +18,7 @@ import (
 // (contracts/components/schemas/AgentCreateRequest*.yaml, each
 // additionalProperties: false). AgentCreateRequestSubagent3p structurally has
 // no tools_cfg / skills / fallback_models / model_params /
-// auto_approve_disabled / max_tool_iterations property at all, and createAgent's
+// auto_approve_disabled property at all, and createAgent's
 // per-variant decode (decodeAgentCreateVariant) always runs a
 // json.Decoder with DisallowUnknownFields — so a caller who sends one of
 // these fields on a subagent_3p create gets a 400 naming the offending
@@ -44,6 +44,11 @@ import (
 // concept to force Auto off for (ToolsAndPermissions.tsx hides the control
 // for subagent_3p on the same basis).
 //
+// max_tool_iterations is deliberately NOT here (#904 D14): an external CLI
+// worker follows the same global tool-iteration limit and may lower it for
+// itself on create and on PUT; the effective value is passed to the CLI as
+// its turn cap (external_dispatch.go::prepareRunOptions).
+//
 // This slice is the single source of truth for "does this PUT field make
 // sense on an external-CLI worker" — TestSubagent3pForbiddenFieldsDrift
 // (agent_field_rules_test.go) walks every gen.AgentUpdateRequest field via
@@ -55,7 +60,6 @@ var subagent3pForbiddenUpdateFields = []string{
 	"fallback_models",
 	"model_params",
 	"auto_approve_disabled",
-	"max_tool_iterations",
 }
 
 // subagent3pCreateOnlyExemptFields documents wire fields that are present on
@@ -137,9 +141,6 @@ func firstForbiddenSubagent3pField(req *gen.AgentUpdateRequest) (string, bool) {
 	}
 	if req.AutoApproveDisabled != nil {
 		return "auto_approve_disabled", true
-	}
-	if req.MaxToolIterations != nil {
-		return "max_tool_iterations", true
 	}
 	return "", false
 }
