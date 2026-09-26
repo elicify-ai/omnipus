@@ -570,11 +570,10 @@ func TestLaunch_SteeredLaunch_ExplicitWorkspaceOwnerRefused(t *testing.T) {
 	}
 }
 
-// TestLaunch_UnderStampedParent_ChildStampedAtLaunch is US-4/AS-6: a launch
-// under a parent carrying a Stop marker for its CURRENT generation is
-// stamped at launch and never starts.
 // TestLaunch_UnderStampedParent_ChildStampedAtLaunch is named for the
-// pre-ADR-093 stamp-at-launch behavior it originally verified. ADR-093 D2
+// pre-ADR-093 stamp-at-launch behavior it originally verified (was US-4/AS-6:
+// a launch under a parent carrying a Stop marker for its CURRENT generation
+// used to be stamped at launch and never start). ADR-093 D2
 // retired that behavior outright: "Option (b) stays rejected... refuse
 // outright, publish nothing... under the parent lock, inside the launch
 // callback and before anything is created" — a launch under a parent
