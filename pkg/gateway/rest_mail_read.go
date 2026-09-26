@@ -249,15 +249,6 @@ func (a *restAPI) handleMailSeen(w http.ResponseWriter, r *http.Request, workspa
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// mailContentDisposition is the mail attachment disposition (MC-42): always
-// "attachment", always the dual RFC 6266 form - filename (ASCII fallback via
-// asciiFallbackFilename) plus filename* (RFC 5987) on every name, ASCII or
-// not. Deliberately NOT the shared Library helper: its ASCII output is pinned
-// byte-identical for existing downloads.
-func mailContentDisposition(name string) string {
-	return `attachment; filename="` + asciiFallbackFilename(name) + `"; filename*=UTF-8''` + percentEncodeRFC5987(name)
-}
-
 func (a *restAPI) handleMailAttachment(w http.ResponseWriter, r *http.Request, workspaceID, agentID, folder, ref string, idx int) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -298,14 +289,10 @@ func (a *restAPI) handleMailAttachment(w http.ResponseWriter, r *http.Request, w
 	if ctype == "" {
 		ctype = "application/octet-stream"
 	}
-	// MC-42: an .html part is never inline; the disposition is the DUAL RFC 6266
-	// form on every name - filename (ASCII fallback) AND filename* (RFC 5987),
-	// unlike the Library helper, whose ASCII path is pinned single-form byte-for-byte
-	// by rest_library_stage0_test.go.
-	disposition := mailContentDisposition(name)
-	w.Header().Set("Content-Type", ctype)
-	w.Header().Set("Content-Disposition", disposition)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// MC-42: an .html part is never inline. The headers go through the shared
+	// inline_serving.go helper: FR-008c's source gate allows the disposition
+	// policy to be written in exactly one place in this package.
+	applyMailByteHeaders(w, ctype, name)
 	w.WriteHeader(http.StatusOK)
 	_, werr := w.Write(part.Data)
 	if werr != nil {
