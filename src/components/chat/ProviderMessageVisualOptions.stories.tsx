@@ -37,8 +37,11 @@ import {
  * - Option B "Event Pill" — compact centered stadium chip with a
  *   RateLimitIndicator-style tint; a system event, not a message; the pill
  *   itself expands in the verbose story.
- * - Option C "Console Strip" — desaturated operator-console strip: mono
+ * - Option C "Console Strip" — desaturated, flat operator-console line: mono
  *   metadata line + one small kind-colored status dot; all text monochrome.
+ *   Founder ruling: no card-style border — the thread's normal tool-call rows
+ *   (ToolCallBadge's flat text-line treatment) are borderless too, so the
+ *   strip is transparent on the thread with no surface fill of its own.
  */
 
 interface DemoMessageProps {
@@ -220,19 +223,23 @@ const KIND_CONSOLE_META: Record<ProviderDemoKind, { dot: string; meta: string }>
 function ProviderConsoleStripDemo({ kind, verbose = false }: DemoMessageProps) {
   const meta = KIND_CONSOLE_META[kind]
   return (
+    // Flat text-line design, matching the thread's tool-call rows —
+    // ToolCallBadge's flat treatment (founder ruling: "our normal tool calls
+    // also do not have card-style borders — minimalistic and flat"): no
+    // border, no surface fill, no rounded frame, no card padding; the strip
+    // is transparent on the thread. Separation comes from spacing and the
+    // kind-colored dot, not a card frame.
     <div className="w-full max-w-[85%]" role="status" aria-live="polite">
-      <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-3)] py-[var(--space-2)]">
-        <div className="flex items-center gap-[var(--space-2)] font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-          <span aria-hidden="true" className={cn('inline-block h-[var(--space-1)] w-[var(--space-1)] shrink-0 rounded-full', meta.dot)} />
-          <span>provider: {PROVIDER_DEMO_CONTENT[kind].provider.toLowerCase()}</span>
-          <span aria-hidden="true" className="text-[var(--color-border)]">·</span>
-          <span>{meta.meta}</span>
-        </div>
-        <p className="mt-[var(--space-2)] text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
-          <DemoMessageSentence kind={kind} />
-        </p>
-        {verbose && <DemoTechDetails kind={kind} monoSummary />}
+      <div className="flex items-center gap-[var(--space-2)] font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+        <span aria-hidden="true" className={cn('inline-block h-[var(--space-1)] w-[var(--space-1)] shrink-0 rounded-full', meta.dot)} />
+        <span>provider: {PROVIDER_DEMO_CONTENT[kind].provider.toLowerCase()}</span>
+        <span aria-hidden="true" className="text-[var(--color-border)]">·</span>
+        <span>{meta.meta}</span>
       </div>
+      <p className="mt-[var(--space-2)] text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
+        <DemoMessageSentence kind={kind} />
+      </p>
+      {verbose && <DemoTechDetails kind={kind} monoSummary />}
     </div>
   )
 }
