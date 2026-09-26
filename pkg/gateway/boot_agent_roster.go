@@ -107,5 +107,10 @@ func seedAndPersistAgentRoster(cfg *config.Config, homePath, configPath string) 
 				"error", persistErr)
 		}
 	}
+
+	// #904 D1/D19: one startup WARN line listing every agent whose stored
+	// own tool-iteration limit is above the global (kept on disk, capped at
+	// runtime). Boot-only — this function is not on the reload path.
+	config.WarnCappedMaxToolIterationAgents(&cfg.Agents.Defaults, cfg.Agents.List)
 	return nil
 }
