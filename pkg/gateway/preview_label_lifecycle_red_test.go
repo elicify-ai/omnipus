@@ -166,7 +166,18 @@ func TestPreviewLabelLifecycle(t *testing.T) {
 				dir, "pi-red-life-agent-dev",
 				func() *config.Config { return h.api.agentLoop.GetConfig() },
 				h.api.servedSubdirs, reg,
-				tools.WebServeDevConfig{PortRange: [2]int32{18000, 18999}, MaxConcurrent: 2},
+				tools.WebServeDevConfig{
+					// Two-token "binary subcommand" format (the codebase's Tier3Commands
+					// convention): a single-token entry is skipped at runtime by
+					// validateTier3Command's defense-in-depth, so "python3" alone would
+					// never admit the "python3 -m http.server <port>" command the dev
+					// subtests drive. Mirrors the fixture fix already in
+					// preview_host_dispatch_red_test.go (Linux CI 2026-09-27: an empty
+					// Tier3Commands list refused the dev mint before it could run).
+					Tier3Commands: []string{"python3 -m"},
+					PortRange:     [2]int32{18000, 18999},
+					MaxConcurrent: 2,
+				},
 				nil, nil, 60, 86400)
 			result := tool.Execute(tools.WithAgentID(context.Background(), "pi-red-life-agent-dev"),
 				map[string]any{
