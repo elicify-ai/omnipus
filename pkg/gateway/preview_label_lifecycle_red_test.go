@@ -20,9 +20,12 @@
 //     sandbox.NewDevServerRegistry for dev), real chain via
 //     piRedNewPlantedHarness, real mints through the serve_web tool.
 //   - RED shape: the label does not exist pre-GREEN — every row REDs at the
-//     missing isolated_url mint (dev rows additionally at the tier3 Linux
-//     gate on darwin). The rate-limit row additionally REDs at "no 429 ever
-//     appears" once the mint lands. Isolation rows are pins post-mint.
+//     missing isolated_url mint. The rate-limit row additionally REDs at "no
+//     429 ever appears" once the mint lands. Isolation rows are pins
+//     post-mint. Platform split: the dev rows' tier3 gate is
+//     platform-dependent — on non-Linux the subtest asserts the gate's
+//     refusal (tools.Tier3UnsupportedMessage) and returns; on Linux it drives
+//     the dev mint.
 //   - Known gaps (documented): rotation at maxTokenLifetime (a 24h
 //     package-private const in pkg/agent/served_subdirs.go — no clock seam)
 //     and janitor expiry (time-based) are not drivable without a clock seam;
@@ -45,6 +48,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -154,14 +158,19 @@ func TestPreviewLabelLifecycle(t *testing.T) {
 
 	t.Run("dev_reserve_mints_new_label_each_time", func(t *testing.T) {
 		// FR-029 / round-2 MIN-005: the dev store does NOT renew — a dev
-		// re-serve mints a new token, hence a new label and origin. On darwin
-		// the tier3 Linux gate answers before any mint (green-able on Linux
-		// CI); on Linux pre-GREEN the RED here is the missing isolated_url.
+		// re-serve mints a new token, hence a new label and origin.
+		//
+		// Platform split: executeDev's FIRST check is the tier3 platform gate
+		// — on non-Linux it refuses with tools.Tier3UnsupportedMessage before
+		// any mint (pkg/tools/web_serve.go::executeDev). Non-Linux runs ONE
+		// dev mint, pins that refusal with real assertions (never a t.Skip),
+		// and returns — the no-renewal rows are only drivable where the gate
+		// admits the spawn. Linux runs the existing rows unchanged.
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(
 			filepath.Join(dir, "index.html"), []byte("x"), 0o644))
 		reg := newDevRegistryForLife(t)
-		devMint := func(port int32) string {
+		devExecute := func(port int32) *tools.ToolResult {
 			tool := tools.NewWebServeTool(
 				dir, "pi-red-life-agent-dev",
 				func() *config.Config { return h.api.agentLoop.GetConfig() },
@@ -179,22 +188,31 @@ func TestPreviewLabelLifecycle(t *testing.T) {
 					MaxConcurrent: 2,
 				},
 				nil, nil, 60, 86400)
-			result := tool.Execute(tools.WithAgentID(context.Background(), "pi-red-life-agent-dev"),
+			return tool.Execute(tools.WithAgentID(context.Background(), "pi-red-life-agent-dev"),
 				map[string]any{
 					// "path" is required by WebServeTool.Execute BEFORE mode
 					// dispatch — without it the call fails with "path is
 					// required" on every platform and never reaches the dev
 					// mint this subtest drives. (Test-fixture fix, backend-lead
-					// GREEN 2026-09-27: missing required argument; assertions
-					// and the darwin/Linux gate expectations unchanged.)
+					// GREEN 2026-09-27: missing required argument.)
 					"path":    ".",
 					"command": fmt.Sprintf("python3 -m http.server %d", port),
 					"port":    port,
 				})
+		}
+		if runtime.GOOS != "linux" {
+			res := devExecute(18044)
+			require.True(t, res.IsError,
+				"non-Linux: the tier3 platform gate must refuse the dev mint "+
+					"(got a successful result — the gate is broken)")
+			require.Contains(t, res.ForLLM, tools.Tier3UnsupportedMessage,
+				"non-Linux: the dev-mint refusal must carry the tier3 Linux-gate message")
+			return
+		}
+		devMint := func(port int32) string {
+			result := devExecute(port)
 			require.False(t, result.IsError,
-				"RED (dev path): on darwin the tier3 Linux gate answers before any mint — "+
-					"green-able on Linux CI; on Linux pre-GREEN this is the missing mint. Got: %s",
-				result.ForLLM)
+				"web_serve dev mint must succeed (Linux): %s", result.ForLLM)
 			var parsed map[string]any
 			require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &parsed))
 			isoRaw, has := parsed["isolated_url"]

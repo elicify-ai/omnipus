@@ -22,10 +22,11 @@
 //   - RED shape: today's proxy passes every Location through untouched
 //     (ModifyResponse touches only CSP headers and reserved Set-Cookies) —
 //     the 8 verdict rows (502 / re-root / deletion) RED at that; the 5
-//     pass-through rows are pins ACROSS the change. Order 13 (Mode 1) REDs
-//     at the dev mint — on darwin the tier3 Linux gate answers first
-//     ("Tier 3 dev servers are Linux only"); green-able on Linux CI (the
-//     same platform note as preview_host_dispatch_red_test.go).
+//     pass-through rows are pins ACROSS the change. Order 13's Mode 1 label
+//     is minted through the STATIC mint (piRedRedirectLabel: static mode, no
+//     dev spawn — platform-independent), and the file's dev entries come
+//     from the store-level DevServerRegistry.Register, not the tool's
+//     Linux-gated dev mint — no tier3 platform split applies in this file.
 //   - Known gaps: none at this layer; the alias set (rows 10–11) is asserted
 //     behaviorally through both loopback alias forms.
 //   - Mutations: M-x (post-GREEN, CHECK): re-root to the wrong prefix, skip

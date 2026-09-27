@@ -32,10 +32,13 @@
 //     upper-case rows red. M-1/M-2 are order 25's instruments (their own
 //     file); M-6/M-7 target other files.
 //   - Known gaps (documented): the per-label rate-limit clause of FR-028 is
-//     order 19's dedicated row (preview_lifecycle_rate_red_test.go). The
-//     dev-mode clause of order 3 needs the tool's dev path, which is
-//     Linux-gated (Tier3UnsupportedMessage on darwin) — that subtest is RED
-//     at its named Linux-gate line on this host and green-able on Linux CI.
+//     order 19's dedicated row (preview_lifecycle_rate_red_test.go).
+//     Platform split: the dev-mode clause of order 3 drives the tool's dev
+//     path, whose tier3 gate refuses non-Linux hosts with
+//     tools.Tier3UnsupportedMessage before any spawn
+//     (pkg/tools/web_serve.go::executeDev) — non-Linux asserts that refusal
+//     with real assertions (piRedAssertDevTier3Gate) and returns; Linux
+//     drives the dev-proxy rows.
 
 package gateway
 
@@ -48,6 +51,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -177,11 +181,14 @@ func piRedBody(t *testing.T, resp *http.Response) string {
 // piRedLabelHost builds a Host header for a label (port appended by callers).
 func piRedLabelHost(label string) string { return label + ".localhost" }
 
-// piRedIsolatedURL runs the serve_web tool in the given mode against the
-// harness's canonical origin and returns the parsed result payload.
-func piRedIsolatedURL(
+// piRedServeExecute builds the fixture web_serve tool (the one contract-fixed
+// mint surface, FR-022) and runs ONE Execute, returning the raw result with
+// no success assertion — the shared instrument behind the mint
+// (piRedIsolatedURL) and the non-Linux tier3 platform-gate assertion
+// (piRedAssertDevTier3Gate).
+func piRedServeExecute(
 	t *testing.T, h *piRedDispatchHarness, agentID, inputCommand string, inputPort int32,
-) map[string]any {
+) *tools.ToolResult {
 	t.Helper()
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(
@@ -225,13 +232,41 @@ func piRedIsolatedURL(
 		input["command"] = inputCommand
 		input["port"] = inputPort
 	}
-	result := tool.Execute(tools.WithAgentID(context.Background(), agentID), input)
+	return tool.Execute(tools.WithAgentID(context.Background(), agentID), input)
+}
+
+// piRedIsolatedURL runs the serve_web tool in the given mode against the
+// harness's canonical origin and returns the parsed result payload.
+func piRedIsolatedURL(
+	t *testing.T, h *piRedDispatchHarness, agentID, inputCommand string, inputPort int32,
+) map[string]any {
+	t.Helper()
+	result := piRedServeExecute(t, h, agentID, inputCommand, inputPort)
 	require.False(t, result.IsError, "web_serve must succeed: %s", result.ForLLM)
 
 	var parsed map[string]any
 	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &parsed),
 		"web_serve result must be valid JSON")
 	return parsed
+}
+
+// piRedAssertDevTier3Gate runs ONE dev-variant Execute on a non-Linux host
+// and asserts the tier3 platform gate refused it with
+// tools.Tier3UnsupportedMessage (pkg/tools/web_serve.go::executeDev, first
+// check) — the platform-correct stand-in for the dev-proxy claims the gate
+// makes undrivable off Linux. Never a t.Skip: the gate is asserted, not
+// skipped over. Linux callers never reach this (the gate admits the spawn
+// there).
+func piRedAssertDevTier3Gate(t *testing.T, h *piRedDispatchHarness, agentID string) {
+	t.Helper()
+	const devPort = int32(18042)
+	res := piRedServeExecute(t, h, agentID,
+		fmt.Sprintf("python3 -m http.server %d", devPort), devPort)
+	require.True(t, res.IsError,
+		"non-Linux: the tier3 platform gate must refuse the dev mint "+
+			"(got a successful result — the gate is broken)")
+	require.Contains(t, res.ForLLM, tools.Tier3UnsupportedMessage,
+		"non-Linux: the refusal must carry the tier3 Linux-gate message")
 }
 
 // piRedMintStaticLabel mints a live static label through the serve_web tool
@@ -265,9 +300,10 @@ func piRedMintStaticLabel(t *testing.T, h *piRedDispatchHarness, agentID string)
 
 // piRedSpawnDevUpstream drives the DEV path for real: registers a tier3
 // fixture command (python3 http.server) and calls Execute's dev variant so a
-// REAL spawned upstream backs the dev registration. On darwin the tool's
-// Linux gate returns an error result before any spawn — subtests using this
-// helper carry their RED at that named line and are green-able on Linux CI.
+// REAL spawned upstream backs the dev registration. Linux-only caller: the
+// tier3 platform gate refuses the dev mint on every other platform, so
+// non-Linux subtests assert that refusal (piRedAssertDevTier3Gate) and
+// return before reaching this helper.
 func piRedSpawnDevUpstream(t *testing.T, h *piRedDispatchHarness, agentID string) string {
 	t.Helper()
 	const devPort = int32(18042)
@@ -351,6 +387,16 @@ func TestPreviewHostDispatch_NoGatewayHandler(t *testing.T) {
 
 	t.Run("dev_mode_label_host_serves_upstream_not_gateway", func(t *testing.T) {
 		h := piRedNewDispatchHarness(t)
+		if runtime.GOOS != "linux" {
+			// Platform split: executeDev refuses the dev mint on non-Linux
+			// with tools.Tier3UnsupportedMessage before any spawn
+			// (pkg/tools/web_serve.go::executeDev, first check). Non-Linux
+			// pins that refusal with real assertions and returns; the
+			// dev-proxy rows below need a real spawn, which only Linux can
+			// drive.
+			piRedAssertDevTier3Gate(t, h, "pi-red-dev-agent")
+			return
+		}
 		label := piRedSpawnDevUpstream(t, h, "pi-red-dev-agent")
 		host := piRedLabelHost(label) + ":" + h.port
 
