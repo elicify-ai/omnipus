@@ -825,7 +825,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             result = await testAgentRunner(agentId)
           } catch (err) {
             // Network / 5xx failure — surface the message inline. The user
-            // can retry the save (or run the explicit Test Connection button).
+            // can retry the save (the next save re-runs this check).
             const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : String(err)
             addToast({
               message: `Runner test failed before save: ${msg}`,
