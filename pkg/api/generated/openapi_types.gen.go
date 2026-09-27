@@ -17783,7 +17783,7 @@ type MailDraftSendRequest struct {
 	// Cc The displayed/edited Cc recipients. Absent or empty means none.
 	Cc *[]string `json:"cc,omitempty"`
 
-	// KeepAttachmentParts Part indices from the current copy's MailMessage.attachments to carry onto the sent message. Optional — absent or empty-list semantics: absent carries ALL of the current copy's attachments (spec §2.2 default carry all); an explicit list carries exactly those parts.
+	// KeepAttachmentParts Part indices from the current copy's MailMessage.attachments to carry onto the sent message. Each value is the attachment's own stable part_index — the same value the download endpoint's {partIndex} path parameter expects — NOT its position in the listing array. Optional — absent or empty-list semantics: absent carries ALL of the current copy's attachments (spec §2.2 default carry all); an explicit list carries exactly those parts.
 	KeepAttachmentParts *[]int `json:"keep_attachment_parts,omitempty"`
 
 	// Subject The displayed/edited subject, transmitted as-is.
@@ -17822,7 +17822,7 @@ type MailDraftUpdateRequest struct {
 	// Cc Cc recipients replacing the draft's current list. Absent or empty means none.
 	Cc *[]string `json:"cc,omitempty"`
 
-	// KeepAttachmentParts Part indices from the current copy's MailMessage.attachments to carry over (FR-035, server-side carry-over by part reference). Required — the panel lists exactly what will be carried (D28).
+	// KeepAttachmentParts Part indices from the current copy's MailMessage.attachments to carry over (FR-035, server-side carry-over by part reference). Each value is the attachment's own stable part_index — the same value the download endpoint's {partIndex} path parameter expects — NOT its position in the listing array. Required — the panel lists exactly what will be carried (D28).
 	KeepAttachmentParts []int `json:"keep_attachment_parts"`
 
 	// Subject New subject (D23).
