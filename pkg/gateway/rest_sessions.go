@@ -154,6 +154,7 @@ type modelEntry = struct { // not-wire-format: alias of the codegen-inlined Sess
 	CacheWrite *int `json:"cache_write,omitempty"`
 	In         *int `json:"in,omitempty"`
 	Out        *int `json:"out,omitempty"`
+	Thinking   *int `json:"thinking,omitempty"`
 	Total      int  `json:"total"`
 }
 
@@ -170,6 +171,7 @@ func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
 				Out:        intPtrIfPositive(mt.Out),
 				CacheRead:  intPtrIfPositive(mt.CacheRead),
 				CacheWrite: intPtrIfPositive(mt.CacheWrite),
+				Thinking:   intPtrIfPositive(mt.Thinking),
 				Total:      mt.Total,
 			}
 		}
@@ -200,6 +202,7 @@ func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
 				CacheWrite *int `json:"cache_write,omitempty"`
 				In         *int `json:"in,omitempty"`
 				Out        *int `json:"out,omitempty"`
+				Thinking   *int `json:"thinking,omitempty"`
 				Total      int  `json:"total"`
 			} `json:"by_model,omitempty"`
 			Cost             float64 `json:"cost"`

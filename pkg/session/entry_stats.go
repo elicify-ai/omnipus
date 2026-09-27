@@ -80,6 +80,7 @@ func accumulateEntryStats(stats *SessionStats, entry TranscriptEntry) {
 			mt.Out += completionTokens
 			mt.CacheRead += entry.CacheReadTokens
 			mt.CacheWrite += entry.CacheWriteTokens
+			mt.Thinking += entry.ThinkingTokens
 			mt.Total += entry.Tokens
 			stats.ByModel[entry.Model] = mt
 		}

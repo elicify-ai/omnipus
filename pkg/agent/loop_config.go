@@ -339,7 +339,7 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	agent.Model = model
 	agent.Provider = nextProvider
 	agent.Candidates = nextCandidates
-	agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
+	agent.ReasoningEffort = modelCfg.ReasoningEffort
 	agent.applyWindowResolutionLocked(window)
 	// From the CONFIGURED max_tokens, never from the current (possibly
 	// already-clamped) field: the clamp only lowers, so re-feeding its own

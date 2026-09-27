@@ -29,7 +29,7 @@ import (
 // AgentInstance represents a fully configured agent with its own workspace,
 // session manager, context builder, and tool registry.
 type AgentInstance struct {
-	// mu protects Model, Provider, Candidates, and ThinkingLevel which may be
+	// mu protects Model, Provider, Candidates, and ReasoningEffort which may be
 	// written by SwitchModel while runTurn reads them concurrently.
 	mu sync.RWMutex
 
@@ -61,7 +61,14 @@ type AgentInstance struct {
 	// this field, never MaxTokens.
 	configuredMaxTokens int
 	Temperature         float64
-	ThinkingLevel       ThinkingLevel
+	// ReasoningEffort is the effort stored for the agent's primary model row
+	// (config.ModelConfig.ReasoningEffort, C5's agent-primary stored surface),
+	// carried in memory from construction and every ApplyAgentModel. A plain
+	// string, never validated or normalized (T1): empty and the literal
+	// "default" both mean "Default" (D9) — resolveReasoningEffort decides.
+	// Written under mu by ApplyAgentModel; the turn path reads it under the
+	// same RLock as the rest of the model identity.
+	ReasoningEffort string
 	// ContextWindow is the effective window resolved by the ADR-066 D2
 	// ladder (ResolveWindow) at construction and on every model switch. 0
 	// when the provider is exempt (WindowExempt) or the window is unknown
@@ -180,7 +187,7 @@ type newAgentInstance struct {
 	maxIter             int
 	maxTokens           int
 	temperature         float64
-	thinkingLevel       ThinkingLevel
+	reasoningEffort     string
 	candidates          []providers.FallbackCandidate
 	poolBuild           providerPoolBuild
 	window              WindowResolution
@@ -456,11 +463,12 @@ func (nai *newAgentInstance) resolveRuntimeLimits() {
 		nai.temperature = *nai.agentCfg.ModelParams.Temperature
 	}
 
-	var thinkingLevelStr string
+	// C5 stored effort: the primary model row's reasoning_effort, carried as
+	// the plain string it is stored as (T1 — no parse, no normalization; the
+	// resolver selects, it never validates).
 	if mc, err := nai.cfg.FindModelConfigBySlug(nai.model); err == nil {
-		thinkingLevelStr = mc.ThinkingLevel
+		nai.reasoningEffort = mc.ReasoningEffort
 	}
-	nai.thinkingLevel = parseThinkingLevel(thinkingLevelStr)
 }
 
 // resolveCandidates resolves provider candidates, provider pool, and context-window limits.
@@ -579,7 +587,7 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 		MaxTokens:           nai.maxTokens,
 		configuredMaxTokens: nai.configuredMaxTokens,
 		Temperature:         nai.temperature,
-		ThinkingLevel:       nai.thinkingLevel,
+		ReasoningEffort:     nai.reasoningEffort,
 		ContextWindow:       nai.contextWindow,
 		WindowSource:        nai.window.Source,
 		WindowClamped:       nai.window.Clamped,
@@ -730,7 +738,7 @@ func (a *AgentInstance) StoreProviderPool(pool map[string]providers.LLMProvider)
 // to a long-running dispatch that executes OUTSIDE of a.mu's protection
 // window (e.g. an external-CLI run, which can take minutes) — a itself may be
 // the LIVE registry instance, and SwitchModel/ApplyAgentModel can concurrently
-// rewrite its Model/Provider/Candidates/ThinkingLevel (+ providerPool) tuple
+// rewrite its Model/Provider/Candidates/ReasoningEffort (+ providerPool) tuple
 // while the dispatched run is in flight (see mu's doc comment above).
 //
 // FIX 1 (7-reviewer gate, data race): processTaskDirectExternalCLI used to
@@ -758,7 +766,7 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	model := a.Model
 	provider := a.Provider
 	candidates := a.Candidates
-	thinkingLevel := a.ThinkingLevel
+	reasoningEffort := a.ReasoningEffort
 	contextWindow := a.ContextWindow
 	windowSource := a.WindowSource
 	windowClamped := a.WindowClamped
@@ -779,7 +787,7 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 		MaxIterations:   a.MaxIterations,
 		MaxTokens:       a.MaxTokens,
 		Temperature:     a.Temperature,
-		ThinkingLevel:   thinkingLevel,
+		ReasoningEffort: reasoningEffort,
 		ContextWindow:   contextWindow,
 		WindowSource:    windowSource,
 		WindowClamped:   windowClamped,

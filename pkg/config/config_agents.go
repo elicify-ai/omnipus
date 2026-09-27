@@ -170,15 +170,19 @@ func (f *FallbackModelSlice) UnmarshalJSON(data []byte) error {
 // round-trip.
 func (f FallbackModelSlice) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Model    string `json:"model"`
-		Provider string `json:"provider,omitempty"`
+		Model           string `json:"model"`
+		Provider        string `json:"provider,omitempty"`
+		ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	}
 	if len(f) == 0 {
 		return []byte("[]"), nil
 	}
 	out := make([]wire, len(f))
 	for i, fb := range f {
-		out[i] = wire(fb)
+		// Keyed field mapping, not a struct conversion: FallbackModel and
+		// this wire mirror are separate types, and the conversion the old
+		// code used breaks the moment either gains a field (it did, C5).
+		out[i] = wire{Model: fb.Model, Provider: fb.Provider, ReasoningEffort: fb.ReasoningEffort}
 	}
 	return json.Marshal(out)
 }

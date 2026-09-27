@@ -628,6 +628,10 @@ func (al *AgentLoop) debitLLMUsage(ts *turnState, llmModel string, usage *provid
 	ts.AddTurnStats(int64(usage.TotalTokens), estimateLLMCallCost(llmModel, usage))
 	ts.AddTurnCacheStats(usage.CacheReadTokens, usage.CacheWriteTokens)
 	ts.AddTurnIOStats(usage.PromptTokens, usage.CompletionTokens)
+	// D11 usage: debit the provider-reported thinking-token count the same way
+	// the cache and IO splits are debited, so the assistant transcript entry and
+	// SessionStats.ByModel's Thinking carry it (protocoltypes.UsageInfo.ThinkingTokens).
+	ts.AddTurnThinkingStats(usage.ThinkingTokens)
 }
 
 // ErrReloadNotConfigured is returned by TriggerReload when no reload function

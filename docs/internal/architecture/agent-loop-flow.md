@@ -238,7 +238,7 @@ return activeProvider.Chat(providerCtx, msgs, toolDefs, model, opts) // non-stre
   prefers it, the client-side `web_search` tool is filtered out of the defs
   (`loop.go:~3650`).
 - **Thinking:** when the agent's thinking level is on and the provider is
-  `ThinkingCapable`, a `thinking_level` option is added (`loop.go:~3701`).
+  the resolved `reasoning_effort` option is added per C5 (`pkg/agent/reasoning_effort.go`).
 - **Retries:** transient/provider errors back off and retry (max 2);
   context-limit errors trigger `windowTrim` and a retry on the trimmed
   history; an empty-content response retries once via the closure without

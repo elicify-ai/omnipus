@@ -208,7 +208,15 @@ type Model struct {
 	MaxOutputTokens int
 	InputModalities []Modality
 	ToolCall        bool
-	Status          Status
+	// Reasoning / ReasoningOptions carry the C6 per-model reasoning surface:
+	// whether the model offers a reasoning mode and which effort levels it
+	// offers, IN ASCENDING EFFORT ORDER as the catalog publishes it — the
+	// catalog is the source of order; Omnipus preserves it, does not re-sort
+	// (D25; D7: no hardcoded list). Absence in the document is equivalent to
+	// false (CatalogModel.yaml).
+	Reasoning        bool
+	ReasoningOptions []string
+	Status           Status
 	// Disputed marks a row whose upstream registries disagreed beyond the
 	// tolerance and the last-known-good value was kept (A-22).
 	Disputed bool

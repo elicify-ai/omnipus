@@ -27,7 +27,7 @@
       "provider": "anthropic",
       "model": "claude-sonnet-4-5",
       "api_key_ref": "ANTHROPIC_API_KEY",
-      "thinking_level": "high"
+      "reasoning_effort": "high"
     },
     {
       "_comment": "Same provider on its secondary wire protocol — `protocol` selects one of the endpoints the catalog row offers.",

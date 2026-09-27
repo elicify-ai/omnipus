@@ -24,6 +24,7 @@ type byModelCell struct { // not-wire-format: mirrors the oapi-codegen-inlined b
 	CacheWrite *int `json:"cache_write,omitempty"`
 	In         *int `json:"in,omitempty"`
 	Out        *int `json:"out,omitempty"`
+	Thinking   *int `json:"thinking,omitempty"`
 	Total      int  `json:"total"`
 }
 
@@ -44,6 +45,7 @@ func toByModelCell(mt session.ModelTokens) byModelCell {
 		CacheWrite: nonZeroPtr(mt.CacheWrite),
 		In:         nonZeroPtr(mt.In),
 		Out:        nonZeroPtr(mt.Out),
+		Thinking:   nonZeroPtr(mt.Thinking),
 		Total:      mt.Total,
 	}
 }
@@ -54,6 +56,7 @@ func addModelTokens(dst *session.ModelTokens, src session.ModelTokens) {
 	dst.Out += src.Out
 	dst.CacheRead += src.CacheRead
 	dst.CacheWrite += src.CacheWrite
+	dst.Thinking += src.Thinking
 	dst.Total += src.Total
 }
 

@@ -75,9 +75,10 @@ type StreamingProvider interface {
 	) (*LLMResponse, error)
 }
 
-// ThinkingCapable is an optional interface for providers that support
-// extended thinking (e.g. Anthropic). Used by the agent loop to warn
-// when thinking_level is configured but the active provider cannot use it.
+// ThinkingCapable is an optional interface for providers that support a
+// provider-native thinking/reasoning mode (e.g. Anthropic). Callers use it
+// to ask whether the active provider can act on a thinking request at all,
+// independent of any particular effort/control mechanism.
 type ThinkingCapable interface {
 	SupportsThinking() bool
 }

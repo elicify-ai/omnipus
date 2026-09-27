@@ -285,6 +285,7 @@ func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bo
 	turnTokens, turnCost := ts.GetTurnStats()
 	turnCacheRead, turnCacheWrite := ts.GetTurnCacheStats()
 	turnPromptTokens, turnCompletionTokens := ts.GetTurnIOStats()
+	turnThinkingTokens := ts.GetTurnThinkingStats()
 	entry := session.TranscriptEntry{
 		ID:      uuid.New().String(),
 		Role:    "assistant",
@@ -310,6 +311,7 @@ func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bo
 		CompletionTokens: turnCompletionTokens,
 		CacheReadTokens:  turnCacheRead,
 		CacheWriteTokens: turnCacheWrite,
+		ThinkingTokens:   turnThinkingTokens,
 		// ParentSpawnCallID: see appendIntermediateAssistantTranscript's
 		// identical stamp for the full rationale — non-empty only for a
 		// child delegation sub-turn's own final-turn text.

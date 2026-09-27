@@ -648,7 +648,7 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// FIX 1 (7-reviewer gate, data race): liveAgent is the LIVE registry
 	// *AgentInstance (registry.GetAgent, in processTaskDirect above) —
 	// SwitchModel/ApplyAgentModel may concurrently rewrite its
-	// Model/Provider/Candidates/ThinkingLevel tuple (+ providerPool) while
+	// Model/Provider/Candidates/ReasoningEffort tuple (+ providerPool) while
 	// this run is in flight (AgentInstance.mu's doc, instance.go:28-30), and
 	// runExternalCLISubTurn reads agent.Model unlocked (transcript
 	// attribution + RunOptions.Model) — a read/write race with SwitchModel.

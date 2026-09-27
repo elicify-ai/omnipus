@@ -6,6 +6,7 @@
 package anthropicprovider
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -101,4 +102,19 @@ func TestParseResponse_ToolCallDecodeFailureWithoutTruncatingStopReason(t *testi
 	if tae.Truncated {
 		t.Error("Truncated = true, want false — well-formed non-object shape with a non-truncating stop reason")
 	}
+}
+
+// unmarshalBlocks constructs []ContentBlockUnion via JSON round-trip so that
+// the internal JSON.raw field is populated (required by AsText/AsThinking).
+//
+// Relocated here from the deleted thinking_test.go (WP-G effort plumbing),
+// which had owned this helper; this file was its only remaining user. No
+// assertion or name changed — the helper moved verbatim.
+func unmarshalBlocks(t *testing.T, jsonStr string) []anthropic.ContentBlockUnion {
+	t.Helper()
+	var blocks []anthropic.ContentBlockUnion
+	if err := json.Unmarshal([]byte(jsonStr), &blocks); err != nil {
+		t.Fatalf("unmarshalBlocks: %v", err)
+	}
+	return blocks
 }
