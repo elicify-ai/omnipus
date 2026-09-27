@@ -169,6 +169,7 @@ var validEventNames = map[EventName]struct{}{
 	"sandbox_restrict_failed":    {},
 	"git_evidence_sandbox_block": {},
 	"path.access_denied":         {},
+	"path.search_roots":          {}, // #920 FR-021: one row per agent grep search (pkg/tools/path_audit.go)
 	EventStartup:                 {},
 	EventShutdown:                {},
 	EventBootAbort:               {},

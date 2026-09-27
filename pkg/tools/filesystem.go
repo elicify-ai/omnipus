@@ -555,18 +555,6 @@ func (t *ReadFileTool) Parameters() map[string]any {
 	}
 }
 
-// AutoApproveVerdict implements AutoApproveClassifier: read_file runs under
-// Auto only when its path is inside the workspace or a mount (ADR-092 D9,
-// J2) — a read anywhere else asks.
-func (t *ReadFileTool) AutoApproveVerdict(ctx context.Context, args map[string]any) AutoVerdict {
-	path, ok := args["path"].(string)
-	if !ok {
-		return autoAsks("read_file: path argument missing")
-	}
-	return autoWorkspaceVerdict(ctx, t.agentHome, t.restrict, t.Name(), FSOpRead, path, t.patterns,
-		fspolicy.PathGrantAccessRead)
-}
-
 func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	path, ok := args["path"].(string)
 	if !ok {
@@ -1202,18 +1190,6 @@ func (t *ListDirTool) Parameters() map[string]any {
 			},
 		},
 	}
-}
-
-// AutoApproveVerdict implements AutoApproveClassifier: list_directory runs
-// under Auto only when its path (default ".", the work folder) is inside the
-// workspace or a mount (ADR-092 D9, J2).
-func (t *ListDirTool) AutoApproveVerdict(ctx context.Context, args map[string]any) AutoVerdict {
-	path, ok := args["path"].(string)
-	if !ok {
-		path = "."
-	}
-	return autoWorkspaceVerdict(ctx, t.agentHome, t.restrict, t.Name(), FSOpList, path, t.patterns,
-		fspolicy.PathGrantAccessRead)
 }
 
 func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
