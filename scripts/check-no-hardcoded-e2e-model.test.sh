@@ -41,6 +41,21 @@
 #                                               clear message when running as
 #                                               root (chmod 000 cannot stop
 #                                               root).
+#  14. Unreadable subdir under tests/e2e   -> guard exits 2 AND shows the
+#                                               grep stderr — same as 13 but
+#                                               on the FILTERED scan (the
+#                                               e2e-model.json exclusion).
+#                                               RED on the c943cc1d9 guard:
+#                                               its filtered branch ran
+#                                               `grep ... | grep -vE` under
+#                                               pipefail, whose rc is the
+#                                               RIGHTMOST non-zero — `grep -v`
+#                                               exiting 1 on empty input
+#                                               superseded the scan grep's
+#                                               rc=2 and the guard printed OK
+#                                               on a partial scan (finding
+#                                               G2b, 2026-09-27). Skipped as
+#                                               root like case 13.
 #
 # Exit: 0 all cases pass; 1 a case failed (prints which).
 
@@ -311,13 +326,41 @@ else
   chmod 0755 "$t13/deploy/sealed"
 fi
 
+# Case 14: an unreadable subdir under tests/e2e/ — the FILTERED scan (the one
+# whose exclusion filter pipes through `grep -vE`). RED on the c943cc1d9
+# guard: pipefail makes the pipeline's rc the RIGHTMOST non-zero, so
+# `grep -vE` exiting 1 on empty input superseded the scan grep's rc=2 and the
+# guard reported a clean scan over a tree it had only PARTIALLY read (finding
+# G2b, 2026-09-27 — squad-lead review of c943cc1d9). Case 13 cannot see this:
+# the deploy//evals//workflows scan is unfiltered, so its rc is read directly.
+# Skipped when running as root, like case 13.
+t14="$tmp/unreadable-e2e"
+make_tree "$t14"
+mkdir "$t14/tests/e2e/sealed"
+chmod 000 "$t14/tests/e2e/sealed"
+if [ "$(id -u)" -eq 0 ]; then
+  echo "case14 unreadable-e2e-subdir-exit2: SKIP (running as root — chmod 000 cannot make a dir unreadable to root)"
+  skipped=$((skipped + 1))
+else
+  rc=0
+  REPO_ROOT="$t14" bash "$GUARD" >"$tmp/c14.out" 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ] && grep -q "grep exited" "$tmp/c14.out"; then
+    echo "case14 unreadable-e2e-subdir-exit2: PASS (guard exited 2 and showed the grep stderr)"
+  else
+    echo "case14 unreadable-e2e-subdir-exit2: FAIL — want exit 2 with the grep stderr shown, got $rc" >&2
+    sed 's/^/  /' "$tmp/c14.out" >&2
+    fail=1
+  fi
+  chmod 0755 "$t14/tests/e2e/sealed"
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "check-no-hardcoded-e2e-model.test: FAILED" >&2
   exit 1
 fi
 if [ "${skipped:-0}" -gt 0 ]; then
-  echo "check-no-hardcoded-e2e-model.test: all 13 cases PASS ($skipped skipped)"
+  echo "check-no-hardcoded-e2e-model.test: all 14 cases PASS ($skipped skipped)"
 else
-  echo "check-no-hardcoded-e2e-model.test: all 13 cases PASS"
+  echo "check-no-hardcoded-e2e-model.test: all 14 cases PASS"
 fi
 exit 0

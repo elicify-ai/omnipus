@@ -91,32 +91,45 @@ violations=""
 #   1   clean
 #   >1  the scan itself failed (unreadable dir/file, bad regex) — exit 2 with
 #       the grep stderr shown; never a silent partial green.
-# pipefail makes $? the rightmost non-zero rc, so the scan grep's error
-# survives the optional exclusion pipe.
+# The scan grep runs ALONE and its rc is read directly — never inside a
+# pipeline. Under pipefail a pipeline's rc is the RIGHTMOST non-zero rc, so
+# in the filtered branch the exclusion `grep -vE` exiting 1 on empty input
+# (clean surface, or everything filtered out) would SUPERSEDE the scan
+# grep's rc>1 and mask a partial scan as clean (finding G2b, 2026-09-27 —
+# squad-lead review of c943cc1d9). Hence: raw matches to a temp file, rc
+# checked, THEN the optional exclusion filter applied to the raw file — the
+# filter's own rc is irrelevant (an empty selection is not an error here,
+# only empty output, which just means no violations).
 scan() {
   local label="$1"; shift
   local filter="$1"; shift
-  local errf out rc
+  local errf rawf out rc
   errf="$(mktemp "${TMPDIR:-/tmp}/e2e-model-guard.XXXXXX")" || {
     echo "check-no-hardcoded-e2e-model: cannot create a stderr capture file" >&2
     exit 2
   }
-  if [ -n "$filter" ]; then
-    out="$(grep "$@" 2>"$errf" | grep -vE "$filter")"
-  else
-    out="$(grep "$@" 2>"$errf")"
-  fi
+  rawf="$(mktemp "${TMPDIR:-/tmp}/e2e-model-guard.XXXXXX")" || {
+    echo "check-no-hardcoded-e2e-model: cannot create a raw capture file" >&2
+    rm -f "$errf"
+    exit 2
+  }
+  grep "$@" >"$rawf" 2>"$errf"
   rc=$?
   if [ "$rc" -gt 1 ]; then
     echo "check-no-hardcoded-e2e-model: grep exited $rc while scanning $label — the scan was PARTIAL, refusing a green verdict. grep stderr:" >&2
     sed 's/^/  /' "$errf" >&2
-    rm -f "$errf"
+    rm -f "$errf" "$rawf"
     exit 2
+  fi
+  if [ -n "$filter" ]; then
+    out="$(grep -vE "$filter" <"$rawf")"
+  else
+    out="$(cat "$rawf")"
   fi
   if [ -n "$out" ]; then
     violations+="$out"$'\n'
   fi
-  rm -f "$errf"
+  rm -f "$errf" "$rawf"
 }
 
 # .github/workflows/, deploy/ and evals/ — ALL text files, no --include
