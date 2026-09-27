@@ -1,8 +1,8 @@
 # Feature Specification: Thinking & Reasoning Effort
 
 - **Created:** 2026-09-27
-- **Status:** Draft — grill round 1 complete (verdict BLOCK, `thinking-reasoning-spec-review.md`); founder answers D22-D28 recorded; fix round 1 applied; grill round 2 complete (verdict BLOCK, `thinking-reasoning-spec-review-round2.md`, 24 findings); fix round 2 **parts A and B** applied. Founder decisions D29-D31 resolve Q1-Q3; Q4 (provider coverage) remains pending and is visibly marked where it affects scope. Section 20 row 9 separately retains the pre-existing, non-blocking request for founder acceptance of the hold-back latency; part B does not decide it.
-- **Input:** founder interview output `docs/internal/specs/spec-thinking-reasoning.md` (Decisions Log D1–D31, T1–T4; Code Facts CF1–CF11) — that file is the source of record for *why*; this spec is the source of record for *how*. In this spec, an unqualified `D<n>` cites that Decisions Log (D22-D28 are grill-round-1 answers; D29-D31 are grill-round-2 answers); ADR-local decisions are cited as "ADR-095 D<n>".
+- **Status:** Draft — grill round 1 complete (verdict BLOCK, `thinking-reasoning-spec-review.md`); founder answers D22-D28 recorded; fix round 1 applied; grill round 2 complete (verdict BLOCK, `thinking-reasoning-spec-review-round2.md`, 24 findings); fix round 2 **parts A, B and C** applied. Founder decisions D29-D32 resolve Q1-Q4. Section 20 row 9 separately retains the pre-existing, non-blocking request for founder acceptance of the hold-back latency; D32 does not decide it.
+- **Input:** founder interview output `docs/internal/specs/spec-thinking-reasoning.md` (Decisions Log D1–D32, T1–T4; Code Facts CF1–CF11) — that file is the source of record for *why*; this spec is the source of record for *how*. In this spec, an unqualified `D<n>` cites that Decisions Log (D22-D28 are grill-round-1 answers; D29-D32 are grill-round-2 answers); ADR-local decisions are cited as "ADR-095 D<n>".
 - **Technical design:** [ADR-095 — Thinking visibility gate and signed blocks](../architecture/ADR-095-thinking-visibility-gate-and-signed-blocks.md) (Status: Accepted, grill + founder interview + one correction complete, no open questions). This spec builds on it; it does not re-derive the design.
 - **Evidence baseline:** this spec's own first-hand code checks ran on `feat/thinking-reasoning` @ `2aa2bfb44` (worktree `thinking-reasoning`). The interview's CF1–CF11 were verified on `origin/release/v0.1.1` @ `73bdad862`; ADR-095's correction re-verified on `a5f02fc34`. Cites are `file::symbol`, never line numbers.
 - **Rules honoured throughout:** contract-first sequencing (T2 / Hard Constraint #8); greenfield — no migration, no shims (D17, founder ruling 2026-09-15); superseded code is deleted outright, never deprecated (D1); no emoji in stored data or UI chrome (root `CLAUDE.md`).
@@ -19,7 +19,7 @@ Per T2, **the whole feature's wire surface is ONE contract change** covering `co
 | C2 | Live thinking frame | `contracts/asyncapi.yaml` (new WS frame type in the frame-type enum + `ThinkingFrame.yaml` in `contracts/components/schemas/`) | One frame carrying: `entry_id` (the transcript thinking row this frame belongs to — minted by the producer at capture start, so live rows and replayed rows are one row by construction), `text` = the **whole redacted text-so-far, hold-back applied — the client REPLACES its rendered text with each frame rather than appending** (the property the hold-back rule can actually guarantee), `elapsed_ms`, `thinking_tokens` when the provider reports one (absent otherwise), `provider_summary` flag (D18's "summarized thinking" label), `final` flag on a round's last frame — **the `final: true` frame carries the STORED redacted text: the post-strip text (after `pkg/agent/loop_truncation.go::stripOrphanToolCallMarkup`), redacted whole-string — and the client replaces its rendered text with it**, so the row a reload renders is byte-identical to the row the live view ended on. `text` capped at **65536 bytes** (maxLength; the `TokenFrame` text-cap precedent) — beyond the cap live updates stop (the stored row still replays in full). Producers **coalesce to at most one frame per 250 ms per round** (latest state wins). In the per-session reconnect journal, a newer thinking frame supersedes the prior full thinking payload with the same `entry_id`: the prior slot becomes C8's content-free `seq_skip` at its original sequence number, and only the newest full thinking update remains. This preserves a contiguous cursor while bounding each thinking row to one full payload in catch-up storage (D31). Published unconditionally by producers, **filtered per connection at delivery** (ADR-095 D2) | D2, D4, D11, D18, D19, D31; ADR-095 D2 |
 | C3 | Thinking as its own transcript entry type | `Message.yaml` — the entry `type` enum gains `"thinking"` (alongside `message`/`compaction`/`system`/`tool_call`/`turn_canceled`/`judge_verdict`), with fields `thinking_text` (the redacted display copy — a dedicated field, NOT `content`, so no content-consumer can ever read it as an answer), `elapsed_ms`, `thinking_tokens` (absent when unreported), `provider_summary`, `turn_id` (binds the row to its round); `ReplayMessageFrame.yaml` carries a thinking entry through replay; **the entry carries NO `role`** (empty role — the invariant that keeps every role-keyed reader, hydration first, from ever classifying thinking as a user or assistant utterance) | **The storage unit for thinking is one `type: "thinking"` transcript entry per round, appended EXACTLY ONCE — at round end, or at cancel/error with the redacted text-so-far — never rewritten or re-appended (one entry, one ID, no latest-wins dedup needed; mid-round state lives only in C2 frames and the journal).** Includes tool-only rounds that produce no answer text (their thinking row exists on its own entry, not folded anywhere). Entry ID minted **at capture start** = the same ID the live C2 frame carries: live and replay are one row by construction. REST serializers strip thinking entries and fields for a requestor whose gate is off — the entry's *absence* is the gate at replay/REST. `thinking_text` is captured from the provider's reasoning field — `Reasoning`, falling back to `ReasoningContent` when empty — and only after the accumulated text has passed the orphan tool-call markup strip (`pkg/agent/loop_truncation.go::stripOrphanToolCallMarkup`): capture reads the post-strip text, so markup never lands in a stored or displayed thinking row. **No `reasoning_effort` field on the entry** (no consumer; effort resolution is C5's, at request time) | D2, D3, D11, D18, D19; ADR-095 D2 Boundaries 2-3 |
 | C4 | No-answer outcome marker + notice text | `Message.yaml` + `ReplayMessageFrame.yaml` (additive typed `outcome` field on the assistant entry, value `"no_answer"`, absent otherwise) + the live done frame (`DoneStats.yaml` and its inline copy in `contracts/asyncapi.yaml` — where the additive `truncation_reason` precedent lives — gain the same additive `outcome`) | A round with thinking but no answer text persists an assistant entry whose `content` **is the D26 notice text** ("The model (Provider · Model) did not respond") — so every ordinary *consumer* (messenger reply, parent agent, recap deliverer, SPA) delivers the same notice with **zero special handling** (D26: "same notice everywhere") — plus the typed `outcome: "no_answer"` marker so the SPA renders the approved console-strip style with Retry, and `turnWasReasoningOnly` keys on the marker instead of truncation inference. **The notice is display- and delivery-only, never model context (T4):** the agent's LLM-context file records the round as the provider returned it — empty answer content, raw reasoning where D15 applies, never the notice string — and hydration skips assistant entries carrying `outcome: "no_answer"`, so no provider-bound request ever contains the notice (guard-tested). The recap path treats a recap result with empty text after the strip as a **candidate failure, exactly like a transient-error candidate failure: the next recap candidate is tried; if all candidates fail, no recap is persisted** (aligned with `pkg/agent/session_end.go`'s `maxTransientRetries`/`isTransientStreamError` candidate-walk) — never reasoning-as-recap | D20, D26, T4; ADR-095 D4 |
-| C5 | Effort-level fields, per surface | See the per-surface table below | `reasoning_effort` is a **plain string, not validated against a fixed enum at write time** (T1); every fallback candidate carries its own effort (D10) | D6, D8, D9, D10, D23, T1 |
+| C5 | Effort-level fields, per surface | See the per-surface table below | `reasoning_effort` is a **plain string, not validated against a fixed enum at write time** (T1); every fallback candidate carries its own effort (D10); D32's CLI, Codex API and Bedrock routes expose the same catalog-derived control even where v1 deliberately stores no thinking row | D6, D8, D9, D10, D23, D32, T1 |
 | C6 | Catalog-derived effort variants | `getProvidersCatalog` response schema in `contracts/openapi.yaml` (additive per-model fields on `CatalogModel`) | Per-model `reasoning` + `reasoning_options` — **Omnipus parses them through its typed catalog plumbing** (`pkg/providers/catalog/parse.go` DTO → `document.go::Model` → `served.go` envelope re-serialize; the upstream schema extension is owned by the catalog repo, which is **ours** — elicify-ai/omnipus-provider-catalog, D25). `ProvidersCatalog` `schema_version` stays `"2.0.0"` — the fields are additive under the existing version, no version bump. **No hardcoded interim list in Omnipus** (D7) | D6, D7, D9, D25, T1 |
 | C7 | Usage-totals thinking tokens | `ModelTokens.yaml` (additive `thinking` integer, present only when the provider reports one) | `in`/`out`/`cache_read`/`cache_write`/`total` gain the `thinking` sibling (US-7). `thinking` is **a subset of `out`** — providers report thinking tokens inside output totals (Anthropic `OutputTokensDetails.ThinkingTokens`, OpenAI `completion_tokens_details.reasoning_tokens` precedents), never added on top. Parse points: the Anthropic SDK adapter (the SDK already exposes the detail field) and the openai-compat adapter (whose usage parsing has no reasoning-token plumbing today — new work) | D11; ADR-095 Neutral |
 | C8 | Sequence-skip placeholder | `contracts/asyncapi.yaml` (new server-to-client message `SeqSkipFrame`, wire type `seq_skip`; no schema-name or wire-type collision exists in the current contract) | Exactly `{type, session_id, seq}`. It carries no `text`, `entry_id`, thinking metadata, extension map, or other payload field — therefore **zero thinking bytes**. For a toggle-off connection, the hub emits one `seq_skip` in place of each hidden thinking frame both live and during reconnect journal-tail replay. It also occupies the original sequence position of a C2 thinking payload superseded under D31. The SPA passes it through `src/store/chat/cursor.ts::gateFrameBySeq`, advances the cursor in `src/store/chat/slices/frames.ts::applySeqGate`, and performs no transcript/UI mutation. Result: contiguous sequence via skip placeholders, zero thinking bytes, and no false `chatSeqGapReattach` diagnostic (D29). | D29; ADR-095 D2 Boundary 1 |
@@ -36,7 +36,7 @@ Per T2, **the whole feature's wire surface is ONE contract change** covering `co
 | Non-web conversation effort (`/effort` on CLI and messengers) | New internal `ReasoningEffort string` on `pkg/session/daypartition.go::SessionMeta`, patchable through `pkg/session/unified.go::MetaPatch` and persisted in the identity group represented by `pkg/session/unified_meta_files.go::u5IdentityFile`; no new agent-config field or writer. `pkg/gateway/rest_sessions.go::unifiedMetaToGenSession` deliberately does not map it, so it is not a new gateway/SPA wire field | D30: populated only for non-web conversation sessions. It survives process restart with that session and remains until `/effort default`, a model change, or normal session deletion/retention; it never applies to another session or user |
 | Provider catalog | C6's per-model `reasoning_options` — the levels a model *offers*, never a stored choice | D7, D25 |
 
-**C5 resolution order on each turn** (one model serves the turn; one effort value applies): (1) in web chat, inbound per-message `reasoning_effort` metadata applies **only when the model it was chosen for is the one serving** — the per-message `model_name` when present, otherwise the agent primary; (2) in a non-web conversation, that session's `SessionMeta.ReasoningEffort` applies only to the conversation's current primary model; (3) otherwise the serving candidate's OWN effort applies — a serving fallback always uses its own stored effort, never a web per-message or non-web conversation value chosen for another model (D10); (4) an agent primary inherited from the instance default consults `DefaultModel.reasoning_effort`; (5) otherwise nothing is sent — the provider default applies (D9), and for Anthropic that means no thinking request (D24). `"default"` means "send nothing" and clears the web picker value or non-web session field. **A model change clears the effort stored for that surface**: web clears its picker value; a non-web model change clears `SessionMeta.ReasoningEffort`; agent/settings model writers clear their paired configured effort. The existing agent-wide `/model` implementation (`pkg/commands/cmd_model.go::modelHandler` -> `commands.Runtime.SwitchModel` -> `pkg/agent/loop_slash.go::buildCommandsRuntime` -> `pkg/agent/loop_config.go::ApplyAgentModel`) is explicitly **not** the write path for `/effort`; redesigning `/model` on channels is out of scope here and tracked by issue #955 (D30). Adapter coverage remains PENDING Q4.
+**C5 resolution order on each turn** (one model serves the turn; one effort value applies): (1) in web chat, inbound per-message `reasoning_effort` metadata applies **only when the model it was chosen for is the one serving** — the per-message `model_name` when present, otherwise the agent primary; (2) in a non-web conversation, that session's `SessionMeta.ReasoningEffort` applies only to the conversation's current primary model; (3) otherwise the serving candidate's OWN effort applies — a serving fallback always uses its own stored effort, never a web per-message or non-web conversation value chosen for another model (D10); (4) an agent primary inherited from the instance default consults `DefaultModel.reasoning_effort`; (5) otherwise nothing is sent — the provider default applies (D9), and for Anthropic that means no thinking request (D24). `"default"` means "send nothing" and clears the web picker value or non-web session field. **A model change clears the effort stored for that surface**: web clears its picker value; a non-web model change clears `SessionMeta.ReasoningEffort`; agent/settings model writers clear their paired configured effort. The existing agent-wide `/model` implementation (`pkg/commands/cmd_model.go::modelHandler` -> `commands.Runtime.SwitchModel` -> `pkg/agent/loop_slash.go::buildCommandsRuntime` -> `pkg/agent/loop_config.go::ApplyAgentModel`) is explicitly **not** the write path for `/effort`; redesigning `/model` on channels is out of scope here and tracked by issue #955 (D30). **D32 adapter coverage is decided:** every routable row in the Section 2.2 matrix whose catalog model lists effort levels shows those levels and sends the selected value through its named adapter field; Default sends no effort flag or field. Codex CLI and GitHub Copilot CLI never produce thinking rows; Bedrock produces no thinking row in v1; ChatGPT subscription / Codex API may produce one gated, stored row only from the completed Responses API reasoning summary, with no live thinking frames.
 
 Explicit non-additions:
 no reasoning byte-count field on any ungated wire frame (ADR-095 D7 keeps the growth-only progress callbacks internal; **thinking text on `ToolCallProgress` is banned**); no reasoning fields on channel/messenger wire surfaces (D1: web chat only); no effort field on `openapi.yaml`'s provider key-probe endpoints; **no thinking event on the legacy SSE chat stream** — `POST /api/v1/chat` is a no-thinking surface by construction (the prohibition lives in Section 6; the Section 16 test asserting SSE silence stays).
@@ -85,6 +85,18 @@ GitNexus was checked before this edit: `gitnexus status` exited 0 but reported *
 | `pkg/providers/protocoltypes` provider streaming callback | today `anthropic/provider.go` streaming counts `len(block.Thinking)` only and `openai_compat` counts bytes into `ToolCallProgress` while dropping the text ( confirmed gap: the text is parsed and thrown away) | **Extended**: a new gated accumulated-text reasoning callback, implemented by **both** adapters — anthropic streaming (`case "thinking"`) and openai_compat delta handling — feeding ONLY the turn's capture (redaction + hold-back -> the C2 frame path). Signatures still captured at response parse only (ADR-095 D7); the callback carries display text, never signatures | D5a, D5b;  |
 | `pkg/providers/catalog/parse.go` + `document.go::Model` + `served.go` | catalog DTO parse -> typed `Model` -> served envelope re-serialize; today no reasoning fields survive the typed round-trip | **Extended**: parses and serves `reasoning`/`reasoning_options` under `schema_version: "2.0.0"` (no version bump; D25 — the catalog repo is ours) — all three symbols confirmed present |
 | `pkg/tools/delegate_status.go` | renders a per-round reasoning byte count ("progress:... - N bytes of reasoning so far this round") | **Unchanged** — the byte count is internal telemetry (ADR-095 D7), a count is not thinking text, and the gate does not apply to internal agent-side tool output  — confirmed present |
+
+**Adapter coverage matrix (D32).** “Stored thinking row” always means C3 storage behind the same D2/D19 server-side visibility gate; “No” means Omnipus does not parse, store or show thinking from that route.
+
+| Route / adapter | API shape | Sends effort (field) | Live thinking | Stored thinking row | v1 scope | Authority |
+|---|---|---|---|---|---|---|
+| Anthropic native SDK — `pkg/providers/anthropic/provider.go::buildParams` / `parseResponse` | Anthropic Messages API | Yes — provider-native `thinking` request plus the named-level mapping; Default omits it (D9/D24) | Yes — accumulated text callback | Yes — summarized thinking, gated and stored | Covered | Founder D5b, D6, D18, D24 |
+| OpenAI-compatible including OpenRouter — `pkg/providers/openai_compat/provider.go::buildRequestBody` / `ChatStream` | OpenAI-compatible Chat Completions JSON | Yes — adapter/provider translation (standard field `reasoning_effort`); Default omits it | Yes — `reasoning` / `reasoning_content` deltas | Yes — gated and stored; OpenRouter's structured signed-block round-trip remains #943 | Covered | Founder D5a, D6-D10, D21 |
+| Codex CLI — `pkg/providers/codex_cli_provider.go::CodexCliProvider.Chat` / `parseJSONLEvents` | `codex exec --json` subprocess | Yes — argv `-c model_reasoning_effort=<level>`; Default adds neither argument | No | No — permanent scope line, even if CLI JSONL contains reasoning-like events | Effort only | **Founder-final**, D32 |
+| GitHub Copilot CLI — `pkg/providers/copilot_cli_provider.go::CopilotCliProvider.Chat` / `parseOutput` | `copilot -p … -s` subprocess | Yes — argv `--reasoning-effort=<level>`; Default adds no argument | No | No — permanent scope line, even if output resembles reasoning | Effort only | **Founder-final**, D32 |
+| ChatGPT subscription / Codex API — `pkg/providers/codex_provider.go::buildCodexParams`; `pkg/providers/openai_responses_common/responses_common.go::parseResponse` | OpenAI Responses API | Yes — `reasoning.effort=<level>`; Default omits `reasoning` | No — the adapter consumes the terminal response only for thinking | Yes — only the completed `reasoning` item's summary; gated and stored through C3 | Effort + completed-summary thinking | **Team-lead default, pending founder objection**, D32 |
+| Amazon Bedrock — `pkg/providers/bedrock/provider_bedrock.go::buildConverseRequest` | Bedrock Converse JSON | Yes — model-family translation in `additionalModelRequestFields`: Anthropic models use `thinking` plus `output_config.effort`; Nova uses `reasoningConfig.maxReasoningEffort`; Default omits the additional fields | No | No in v1; Bedrock thinking is a follow-up issue | Effort only in v1 | **Team-lead default, pending founder objection**, D32 |
+| Azure | Catalog row is unsupported; no routable adapter | No | No | No | Out of scope | D32; verified unsupported catalog row |
 
 Frontend symbols (CF9 surfaces, all confirmed present on this branch except as noted): `src/components/chat/composer/ModelPicker.tsx`, `src/components/settings/DefaultModelCard.tsx`, `src/components/agents/AgentProfile.tsx`, `src/components/agents/wizard/Step1Identity.tsx`, `src/components/agents/wizard/Step3Tools.tsx` (the wizard's fallback-chain step — gains effort per fallback candidate, D28), `src/components/agents/CreateAgentModal.tsx`, `src/components/agents/CreateAgentWizard.tsx`, `src/routes/onboarding.tsx`, `src/components/settings/MemorySection.tsx`, `src/components/settings/ChatSection.tsx` (the D22 toggle's home, next to "Verbose chat"), `src/components/ui/model-selector.tsx`, `src/hooks/useSlashMenu.ts` + `pkg/commands/cmd_model.go::modelCommand` (the `/model` command definition — the D27 template `/effort` mirrors). **Correction to CF9:** `src/lib/onboarding/defaultModel.ts` does **not** exist on this branch — it was deleted upstream on 2026-09-16 as an unused helper (commit `af6a7f63e`), before this worktree was cut; the onboarding surface remains `src/routes/onboarding.tsx`. **D28 correction to CF9's effort scope:** `src/components/chat/ModelFooter.tsx` renders the active model's slug per turn, not a chooser — no effort control there; `src/components/chat/ChatControls.tsx` holds chat display toggles only — both **excluded** from effort work; `src/components/settings/RemoveProviderDialog.tsx` imports ModelSelector for a picker context where effort makes no sense — excluded. CF8's `@assistant-ui/react` 0.14.27 is confirmed in `package.json`. **Chat-store consumers:** thinking frames, replayed thinking entries, the `outcome` marker and per-message `reasoning_effort` metadata are handled in the chat store, whose reducer functions sit at grandfathered shrink-only budget ceilings — `src/store/chat/slices/frames.ts::handleFrame` (1773) and `createFrameSlice` (1777), `src/store/chat/slices/replay-and-status-frames.ts::handleReplayAndStatusFrame` (580), `src/store/chat/slices/outbound-lifecycle.ts::sendMessage` (428) (`scripts/budgets/functions.txt`; these are store functions, not React components, so the budget FAILS over 240, it does not warn). WP-D/WP-H land their changes extract-first (Section 23), with store-level tests for: a thinking frame REPLACING the row text, a replay thinking entry mapping to a row, and `outcome` mapping to the notice.
 
@@ -200,7 +212,7 @@ Anthropic's protocol-routed models move to the adapter that supports thinking, l
 
 ### US-6 — Effort control on every model surface (Priority: P1)
 
-An operator wants to choose how hard a model reasons — as named levels on a slider, per model (D6, D8). Effort is **conversation-scoped on every conversational surface** (D30), never agent-wide. In web chat it remains D23's per-message picker value, re-sent with outbound messages and not saved as conversation state. CLI and messengers have no picker, so `/effort` keeps the selected level only for that conversation; it survives a restart with the conversation, is cleared by `default` or a model change, and never affects another conversation, user, or the agent configuration. The control appears on: the per-chat model picker, the `/effort` slash command (D27: everywhere `/model` works — web, CLI, messengers — with thinking *display* still web-only), each fallback candidate in a chain (added to the agent wizard's fallback step per D28), the recap model in Settings → Memory, the agent creation wizard and modal, onboarding's model step, and the settings' default model. Per D28 the effort control is **not** added to the per-message footer, chat controls bar, or remove-provider dialog. Leaving it at "Default" shows the hint "choose a level to see thinking" where the model supports thinking (D24) and sends nothing to the provider (D9). A stored level the catalog no longer knows falls back to the provider default with a visible note, never a block (T1).
+An operator wants to choose how hard a model reasons — as named levels on a slider, per model (D6, D8). Effort is **conversation-scoped on every conversational surface** (D30), never agent-wide. In web chat it remains D23's per-message picker value, re-sent with outbound messages and not saved as conversation state. CLI and messengers have no picker, so `/effort` keeps the selected level only for that conversation; it survives a restart with the conversation, is cleared by `default` or a model change, and never affects another conversation, user, or the agent configuration. The control appears on: the per-chat model picker, the `/effort` slash command (D27: everywhere `/model` works — web, CLI, messengers — with thinking *display* still web-only), each fallback candidate in a chain (added to the agent wizard's fallback step per D28), the recap model in Settings → Memory, the agent creation wizard and modal, onboarding's model step, and the settings' default model. Per D28 the effort control is **not** added to the per-message footer, chat controls bar, or remove-provider dialog. Leaving it at "Default" shows the hint "choose a level to see thinking" where the model supports thinking (D24) and sends nothing to the provider (D9). A stored level the catalog no longer knows falls back to the provider default with a visible note, never a block (T1). Per D32, the control is available for catalogued models routed through Codex CLI, GitHub Copilot CLI, ChatGPT subscription / Codex API, and Amazon Bedrock; that effort support does not imply thinking support — the Section 2.2 matrix is authoritative.
 
 **Why this priority**: effort is the "reasoning effort" half of the feature, but it is blocked on the external catalog change (WP-EXT) and adds no safety risk — hence P1 behind the visibility core.
 
@@ -218,6 +230,10 @@ An operator wants to choose how hard a model reasons — as named levels on a sl
 8. **Given** Anthropic's raw budget-based "adaptive" mode, **When** any surface renders, **Then** no adaptive/budget control exists — named levels only (D6;: the banned control is a **raw token-budget input**, not the effort mapping — the named-level presentation that maps to Anthropic's adaptive thinking type is not a budget field).
 9. **Given** the per-message effort choice, **When** a later message omits it, **Then** the previously chosen level stays in force for the chat's outbound messages (the client re-sends the last chosen model and effort per message — no server-side per-chat state is created, D23).
 10. **Given** a model that supports thinking, **When** the effort control sits at "Default" on any surface that renders it, **Then** the hint "choose a level to see thinking" is shown (D24).
+11. **Given** a selected catalog level on Codex CLI, GitHub Copilot CLI, ChatGPT subscription / Codex API, or Amazon Bedrock, **When** that route serves the turn, **Then** the exact D32 flag or request field in the Section 2.2 matrix carries the selected level; Default sends no such flag or field.
+12. **Given** either CLI emits output that resembles reasoning events, **When** Omnipus parses the completed subprocess output, **Then** it creates no thinking frame or stored thinking row; this is the founder-final permanent CLI scope line (D32).
+13. **Given** the Codex API completed response contains a reasoning summary, **When** `parseResponse` returns it, **Then** the summary enters the ordinary gated C3 storage path once and no live thinking frame was emitted (team-lead default, pending founder objection; D32).
+14. **Given** a Bedrock model with a selected effort level, **When** the Converse request is built, **Then** the per-model request field is sent but no Bedrock thinking row is created in v1; Bedrock thinking remains a follow-up issue (team-lead default, pending founder objection; D32).
 
 ### US-7 — Thinking cost signals (Priority: P2)
 
@@ -393,10 +409,10 @@ Boundary conditions:
 - **On failure**: catalog unchanged/stale → effort controls render "Default" only (or the T1 note for a stale stored level); no chat, agent, or settings flow blocks.
 - **Development**: real catalog document in integration tests; no mock server needed — the document is static data.
 
-### LLM providers (Anthropic / OpenAI-compatible / OpenRouter)
+### LLM providers (Anthropic / OpenAI-compatible / OpenRouter / D32 routes)
 
-- **Data in**: chat + tool context; thinking config (effort level; Anthropic summary request); signed-block round-trip on Anthropic tool turns.
-- **Data out**: streamed/complete responses; reasoning text via the new gated accumulated-text callback (openai-compat) or summarized thinking blocks with signatures (Anthropic); thinking-token counts where reported (C7's parse points). Nothing reasoning-related rides `ToolCallProgress` beyond the existing byte count.
+- **Data in**: chat + tool context; thinking config (effort level; Anthropic summary request); signed-block round-trip on Anthropic tool turns; D32 route translation for both a chosen catalog level and Default omission.
+- **Data out**: streamed/complete responses; reasoning text via the new gated accumulated-text callback (openai-compat) or summarized thinking blocks with signatures (Anthropic); a completed-only reasoning summary from ChatGPT subscription / Codex API; thinking-token counts where reported (C7's parse points). The CLI routes and Bedrock produce no thinking output in v1. Nothing reasoning-related rides `ToolCallProgress` beyond the existing byte count.
 - **Contract**: provider-native APIs behind Omnipus's provider protocol; the signed-block carrier and request pinning per ADR-095 D6/D7.
 - **On failure**: provider rejects thinking (unsupported/missing blocks) → the availability guard omits thinking and logs (Anthropic); reasoning text absent → no thinking row; the answer path is unaffected in every case.
 - **Development**: real providers in UAT (OpenRouter is the acceptance provider); unit/integration tests use recorded provider shapes.
@@ -656,6 +672,7 @@ Green tests are not delivery. Per surface, how a real user or agent reaches the 
 | Effort — recap model | Settings → Memory (`MemorySection.tsx`) | slider renders for the recap model + its fallbacks |
 | `/effort` command (web) | typing `/` in the composer, then `/effort` in the palette | command appears, activates, opens the effort control |
 | `/effort` command (CLI + messengers) | `/effort [level]` in a CLI or messenger conversation; the handler addresses that conversation through `commands.Runtime.SessionID` and `SessionMeta.ReasoningEffort` (D30) | current/set replies are visible; restart preserves only that conversation's value; another conversation/user is unchanged; a model change clears it; instrumentation proves zero calls to `ApplyAgentModel` or any agent-config writer |
+| Effort — D32 provider routes | any Section 14 model-selection surface for a catalogued Codex CLI, GitHub Copilot CLI, ChatGPT subscription / Codex API, or Amazon Bedrock model | the catalog's levels render; a chosen level reaches the exact route flag/field in §2.2; Default emits no effort flag/field. CLI and Bedrock runs create no thinking row; a Codex API completed summary creates a gated stored row with no live frames |
 | No-answer notice + Retry | a reasoning-only round in the web chat | notice renders with provider · model named; Retry re-sends |
 | No-answer notice (messenger) | a reasoning-only round on any connector | the connector delivers the notice text as an ordinary reply (D26) |
 | Catalog variants data | `GET /providers/catalog` consumed by every surface above | variants appear per model; variant-less models show Default-only |
@@ -1035,6 +1052,57 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 - **When** a turn runs
 - **Then** the provider request carries "high"
 
+#### Scenario Outline: D32 routes map a selected level and omit Default exactly
+
+**Traces to**: US-6, Acceptance Scenario 11; D9; D32
+**Category**: Happy Path / Contract
+
+- **Given** `<route>` serves a catalogued model that offers "high"
+- **When** effort "high" is selected
+- **Then** the outbound request or argv contains `<selected-shape>` exactly
+- **When** effort is reset to Default
+- **Then** `<default-absence>`
+
+**Examples**:
+
+| route | selected-shape | default-absence |
+|---|---|---|
+| Codex CLI | `-c` followed by `model_reasoning_effort=high` | neither argv element is added |
+| GitHub Copilot CLI | `--reasoning-effort=high` | the flag is absent |
+| ChatGPT subscription / Codex API | `reasoning.effort = high` | the `reasoning` request object is absent |
+| Bedrock Anthropic model | `additionalModelRequestFields.thinking` plus `additionalModelRequestFields.output_config.effort = high` | both additional fields are absent |
+| Bedrock Nova model | `additionalModelRequestFields.reasoningConfig.maxReasoningEffort = high` | `reasoningConfig` is absent |
+
+#### Scenario: CLI reasoning-like output never becomes thinking
+
+**Traces to**: US-6, Acceptance Scenario 12; D32
+**Category**: Security / Negative Path
+
+- **Given** Codex CLI JSONL or Copilot CLI stdout containing reasoning-like event names or text plus a normal answer
+- **When** the CLI adapter parses the completed subprocess output
+- **Then** the response's reasoning carriers are empty, no thinking callback fires, and no C2 frame or C3 thinking entry is created
+- **And** the normal answer remains available through the existing CLI response path
+
+#### Scenario: Codex API completed summary is gated and stored without live frames
+
+**Traces to**: US-6, Acceptance Scenario 13; D32
+**Category**: Happy Path / Security
+
+- **Given** a ChatGPT subscription / Codex API terminal Responses API event whose completed response contains a `reasoning` item with summary text
+- **When** `pkg/providers/openai_responses_common/responses_common.go::parseResponse` returns the completed summary
+- **Then** no live C2 thinking frame was emitted
+- **And** the summary is redacted, appended once as the ordinary C3 thinking entry, hidden from a toggle-off login, and visible to a toggle-on login on replay/REST
+
+#### Scenario: Bedrock effort does not create a thinking row in v1
+
+**Traces to**: US-6, Acceptance Scenario 14; D32
+**Category**: Negative Path
+
+- **Given** a Bedrock Anthropic or Nova model with a selected effort level
+- **When** the Converse turn completes
+- **Then** the request contains the model-family field from the D32 route-mapping scenario
+- **But** Omnipus creates no live or stored thinking row from Bedrock in v1
+
 #### Scenario: Each fallback uses its own effort
 
 **Traces to**: US-6, Acceptance Scenario 5; D10
@@ -1290,6 +1358,12 @@ Frontend gates: `npm run typecheck` (the only meaningful TS gate — bare `tsc -
 | 37 | `seq_skip` is content-free and cursor-only | Contract + Unit (frontend) | A skip placeholder carries no thinking bytes | generated schema accepts exactly `type`, `session_id`, `seq`; byte inspection finds zero thinking bytes; `gateFrameBySeq`/`applySeqGate` advance once and make no UI mutation (D29) |
 | 38 | journal supersedes thinking updates by `entry_id` | Integration | Long thinking does not evict answer catch-up | a long stream leaves only the latest full thinking payload plus lightweight skips, preserves a toggle-off client's answer catch-up, and does not trim another session's journal (D31) |
 | 39 | `/effort` is non-web conversation-scoped | Unit + Integration + E2E | `/effort` is isolated to one non-web conversation | A changes, B and agent config do not; restart preserves A; model change clears A; spies prove zero agent-config writer/`ApplyAgentModel` calls (D30) |
+| 40 | Codex CLI effort argv | Unit | D32 routes map a selected level and omit Default exactly | "high" adds `-c`, `model_reasoning_effort=high` exactly once; Default adds neither argv element |
+| 41 | GitHub Copilot CLI effort argv | Unit | D32 routes map a selected level and omit Default exactly | "high" adds `--reasoning-effort=high` exactly once; Default omits the flag |
+| 42 | Codex API effort request shape | Unit | D32 routes map a selected level and omit Default exactly | "high" sets `reasoning.effort`; Default leaves the `reasoning` request object absent |
+| 43 | Bedrock per-model effort request shapes | Unit | D32 routes map a selected level and omit Default exactly | table-driven Anthropic + Nova cases assert the exact `additionalModelRequestFields` shape for "high" and complete omission for Default |
+| 44 | CLI reasoning-like output is never thinking | Unit + Integration | CLI reasoning-like output never becomes thinking | fixtures for both CLI adapters contain reasoning-like events/text plus an answer; reasoning carriers and thinking callbacks stay empty, with zero C2/C3 output |
+| 45 | Codex API completed summary enters gated storage only | Integration | Codex API completed summary is gated and stored without live frames | completed `reasoning.summary` becomes one redacted C3 row; toggle on/off replay and REST gates apply; C2 frame count is zero |
 
 ### Test datasets
 
@@ -1321,7 +1395,7 @@ Frontend gates: `npm run typecheck` (the only meaningful TS gate — bare `tsc -
 | 8 | per-message "high" (picked for the primary); fallback candidate "low" serves | low, medium, high | Per-message cross-model | request carries "low" — the per-message value binds to the model it was picked for (D10) | Per-message effort does not cross models |
 | 9 | agent with no own model; instance default carries "medium" | low, medium, high | Inherited primary | request carries "medium" from `DefaultModel.reasoning_effort`  | An agent riding the instance default model… |
 | 10 | "high" set, then the model is changed | low, medium, high | Model-change clearing | stored effort cleared for that surface; next turn resolves per C5 steps (3)/(4)  | Changing the model clears the stored effort |
-| 11 | any level; one of the Q4 routes not yet assigned to v1 (Codex/ChatGPT Responses API, Codex CLI, Copilot CLI, Bedrock; Azure is not routable) | low, medium, high (catalog lists them) | Pending-scope adapter | expected request/display behavior remains PENDING Q4; the provider table exists, but this spec does not choose the founder's answer | Pending Q4 |
+| 11 | "high", then Default, on each D32 route | low, medium, high (catalog lists them) | Route-specific adapter | Codex CLI: `-c model_reasoning_effort=high`; Copilot CLI: `--reasoning-effort=high`; Codex API: `reasoning.effort=high`; Bedrock Anthropic: `additionalModelRequestFields` contains `thinking` + `output_config.effort=high`; Bedrock Nova: `reasoningConfig.maxReasoningEffort=high`. Default omits every named flag/object. CLI and Bedrock create no thinking row; Codex API may store only the completed summary with zero live frames. Azure remains unsupported/out of scope | D32 routes map…; CLI reasoning-like output…; Codex API completed summary…; Bedrock effort… |
 | 12 | `/effort high` in non-web conversation A; conversation B uses same agent | low, medium, high | Conversation isolation | A's session stores `high`; B and agent config unchanged; A clears on model change | `/effort` is isolated to one non-web conversation |
 
 #### Dataset: gated boundary matrix
@@ -1393,6 +1467,10 @@ The feature modifies existing behavior — regression protection is mandatory.
 - **FR-034**: System MUST apply operator-configured `RedactPatterns` to the thinking redaction, and mask only formats the redactor recognises — unrecognised formats are not masked.
 - **FR-035**: System MUST parse and serve the catalog document's per-model `reasoning`/`reasoning_options` through the typed catalog plumbing under `schema_version: "2.0.0"`, no version bump (D25).
 - **FR-036**: System MUST record thinking tokens in `ModelTokens` as a subset of `out` (never added on top), parsed at the Anthropic SDK adapter and the openai-compat adapter (C7).
+- **FR-037**: System MUST translate a selected effort level on every D32 routable adapter exactly as follows: Codex CLI `-c model_reasoning_effort=<level>`; GitHub Copilot CLI `--reasoning-effort=<level>`; ChatGPT subscription / Codex API `reasoning.effort=<level>`; Bedrock Anthropic models through `additionalModelRequestFields` using `thinking` plus `output_config.effort`; Bedrock Nova through `reasoningConfig.maxReasoningEffort`. Default MUST omit the corresponding flag or request object entirely (D9, D32).
+- **FR-038**: System MUST NOT parse, store, stream or show thinking from Codex CLI or GitHub Copilot CLI, even when subprocess output resembles reasoning events; only their ordinary answer/tool/usage parsing remains (founder-final, D32).
+- **FR-039**: System MUST accept ChatGPT subscription / Codex API thinking only from the completed Responses API `reasoning` summary already decoded by `pkg/providers/openai_responses_common/responses_common.go::parseResponse`; it MUST emit zero live thinking frames and MUST send the completed summary through the same redaction, one-entry C3 storage, and per-login gate as every other stored thinking row (team-lead default, pending founder objection; D32).
+- **FR-040**: System MUST create no Bedrock thinking row in v1; Bedrock thinking is deferred to a follow-up issue whose text the squad-lead proposes and the team-lead files. Azure remains unsupported and out of scope (team-lead default, pending founder objection; D32).
 
 ## 18. Success Criteria
 
@@ -1411,6 +1489,7 @@ The feature modifies existing behavior — regression protection is mandatory.
 - **SC-013**: `make lint-budgets` is green after the extract-first steps (ChatScreen additions extracted to components under `src/components/chat/`; `streamReplay` gains its gate via a helper with net lines <= 0).
 - **SC-014**: A toggle-off thinking turn emits only contiguous content-free skips at hidden sequences, produces zero `chatSeqGapReattach` diagnostics, and renders the complete answer; a long stream preserves answer catch-up in its session and another session (D29/D31).
 - **SC-015**: `/effort high` in non-web conversation A survives restart in A, changes neither conversation B nor agent config, and is cleared when A's model changes; the command records zero agent-config-writer calls (D30).
+- **SC-016**: Tests 40-45 prove every D32 request shape and Default omission, prove both CLI routes can never create a thinking row, and prove a Codex API completed summary creates one gated stored row with zero live frames.
 
 ---
 
@@ -1453,8 +1532,12 @@ The feature modifies existing behavior — regression protection is mandatory.
 | FR-034 | US-3 | A credential-shaped secret is masked in stored and shown thinking | 1 (dataset rows 8-9) |
 | FR-035 | US-11 | Catalog fields survive Omnipus's typed catalog round-trip  | 23 |
 | FR-036 | US-7 | Thinking tokens land in usage totals | 22 |
+| FR-037 | US-6 | D32 routes map a selected level and omit Default exactly | 40, 41, 42, 43 |
+| FR-038 | US-6 | CLI reasoning-like output never becomes thinking | 44 |
+| FR-039 | US-6 | Codex API completed summary is gated and stored without live frames | 42, 45 |
+| FR-040 | US-6 | Bedrock effort does not create a thinking row in v1 | 43 |
 
-**Completeness check:** the matrix carries FR-001…FR-027 except retired FR-028, plus FR-029…FR-036 — all 35 live requirements. D29 traces through FR-002/tests 30 and 37; D30 through FR-019/023/029/test 39; D31 through FR-032/test 38. Every BDD scenario appears in at least one row or in its directly named parent requirement's test set.
+**Completeness check:** the matrix carries FR-001…FR-027 except retired FR-028, plus FR-029…FR-040 — all 39 live requirements. D29 traces through FR-002/tests 30 and 37; D30 through FR-019/023/029/test 39; D31 through FR-032/test 38; D32 through FR-037…FR-040/tests 40-45. Every BDD scenario appears in at least one row or in its directly named parent requirement's test set.
 
 ## 20. Ambiguity Warnings (residual risks — status per row: founder-accepted where a D-number or ADR clause cites it, otherwise explicitly pending)
 
@@ -1472,7 +1555,7 @@ The feature modifies existing behavior — regression protection is mandatory.
 | 10 | Repeated whole-text thinking updates can pressure the per-session (2048 frames / 1 MiB) and global (32 MiB) reconnect journals; the 65536-byte live-frame cap remains | an agent might retain every full update, raise caps, or trim another session | **Decided by founder (D31):** keep only the latest full thinking update per `entry_id`; replace older sequence slots with content-free skips. Test 38 proves this session's answer catch-up and another session's buffer remain intact. The 65536-byte cap remains the explicit live bound; stored replay is complete |
 | 11 | A mid-turn attach shows thinking-so-far up to the last intermediate persist (the projection-class cost) | an agent might "complete" it with live frames of unknown count | **Accepted** (ADR-095 D2 Boundary 1 item 4; the deleted FR-028's content) — recorded here instead of a fake MAY requirement |
 
-Status after fix round 2 part B: D29-D31 resolve Q1-Q3 and their former PENDING markers. Q4 remains the only unresolved question from the Q1-Q4 founder-decision table; §20 row 9 separately preserves the pre-existing proposed hold-back-latency risk pending founder acceptance. Review history remains in the revision logs; normative sections omit review finding IDs where part B touched them.
+Status after fix round 2 part C: D29-D32 resolve Q1-Q4. The CLI part of D32 is founder-final; the Codex API and Bedrock parts are team-lead defaults pending founder objection. Section 20 row 9 separately preserves the pre-existing proposed hold-back-latency risk pending founder acceptance. Review history remains in the revision logs; normative sections omit review finding IDs where the fix rounds touched them.
 
 ## 21. Evaluation Scenarios (Holdout — post-implementation only; NOT in the TDD plan or traceability)
 
@@ -1565,6 +1648,17 @@ WP-0  T2 contract change (C1-C8 + the C5 per-surface effort table, Section 1)
       │
       └──► WP-G  effort plumbing (D7-D10, T1) + Omnipus-side catalog parser
                  plumbing (parse -> typed model -> served envelope)
+                 ├─► WP-GA D32 adapter completion: Codex CLI `-c
+                 │       model_reasoning_effort=<level>`; Copilot CLI
+                 │       `--reasoning-effort=<level>`; Codex API
+                 │       `reasoning.effort`; Bedrock Anthropic/Nova
+                 │       `additionalModelRequestFields`; every route omits its
+                 │       flag/object for Default. The two CLIs permanently
+                 │       ignore reasoning-like output; Codex API sends only a
+                 │       completed summary through C3 (zero live frames);
+                 │       Bedrock produces no thinking row in v1. Tests 40-45
+                 │       are the proof pack. The squad-lead proposes the
+                 │       Bedrock-thinking follow-up issue text; team-lead files it.
                  └─► WP-H  effort UI on every D28 surface + /effort on
                          web+CLI+channels (D23, D27, D28, D30); web updates
                          the picker; CLI/channels patch only the current
@@ -1600,7 +1694,7 @@ WP-I  proving tests (Section 15/16: boundary matrix, D29 skip shape and
 
 **Relationship to the interview's dependency graph:** this graph supersedes the interview section 3 dependency graph's struck D12/D13 nodes — those amendments predate this spec (D15), and nothing here implements a struck clause.
 
-Sequencing rules from the interview (§3) and T2/T3: WP-0 before every consumer; WP-A is a top-level sibling — contract-independent, landable in parallel; WP-E is one reviewed change with #750 (its own dedicated issue, filed by team-lead); WP-F after WP-E; WP-G after WP-EXT's data + WP-0; WP-B/WP-F own the C7 token-parse points and feed WP-G's usage display. Open items tracked outside this feature: #943 (bounded-gap test ships with WP-I; the fix does not), #274's Selection Toolbar (untouched).
+Sequencing rules from the interview (§3) and T2/T3: WP-0 before every consumer; WP-A is a top-level sibling — contract-independent, landable in parallel; WP-E is one reviewed change with #750 (its own dedicated issue, filed by team-lead); WP-F after WP-E; WP-G after WP-EXT's data + WP-0; WP-GA after WP-G's common effort value reaches provider options; WP-B/WP-F own the C7 token-parse points and feed WP-G's usage display. Open items tracked outside this feature: #943 (bounded-gap test ships with WP-I; the fix does not), #274's Selection Toolbar (untouched), and the Bedrock-thinking follow-up proposed by squad-lead and filed by team-lead (D32).
 
 ## 24. Clarifications
 
@@ -1624,20 +1718,20 @@ Both required amendments are applied in `docs/internal/architecture/ADR-095-thin
 
 ## Pending founder decisions (grill round 2)
 
-Interviewed by team-lead after grill round 2. Q1-Q3 are decided and applied; Q4 remains pending.
+Interviewed by team-lead after grill round 2. Q1-Q4 are decided and applied.
 
 | # | Status | Decision / remaining question | Applied / affected sections |
 |---|---|---|---|
 | Q1 | **Decided: D29** | Content-free `seq_skip {type, session_id, seq}` per hidden thinking frame, live and reconnect catch-up; contiguous sequence, zero thinking bytes | §1 C8; §2.2 cursor/hub symbols; §4; §6; §7; Group A BDD; tests 30/37; §20 row 5; ADR-095 amendment |
 | Q2 | **Decided: D30** | `/effort` is conversation-scoped everywhere. Web sets the per-message picker; CLI/messenger stores only current-session effort. Never agent-wide; no agent-config writer. `/model` channel redesign is issue #955 | §1 C5; §2.2 session/command symbols; US-6 AS7; §8.2/8.3; §9.5; §13; §14; Group D BDD; test 39; FR-019/023/029 |
 | Q3 | **Decided: D31** | Reconnect journal keeps only the latest full thinking update per `entry_id`; older sequence slots become content-free skips. Proving test protects this session's answer catch-up and another session's buffer | §1 C2; §6; Group A BDD; test 38; FR-032; §20 row 10 |
-| Q4 | **PENDING** | Founder is deciding from the provider table. Four uncovered routes remain: Codex/ChatGPT Responses API, Codex CLI, Copilot CLI, and Bedrock; Azure is not routable. Final v1 adapter scope is not chosen | §2.2 adapter matrix; C5; §16 effort dataset row 11; US-6 |
+| Q4 | **Decided: D32 (CLI part founder-final; Codex API + Bedrock team-lead default, pending founder objection)** | Codex CLI and GitHub Copilot CLI support effort only and never expose thinking. ChatGPT subscription / Codex API supports effort plus a completed, gated/stored reasoning summary with no live frames. Bedrock supports per-model effort; thinking is a follow-up. Azure is unsupported/out of scope | §2.2 adapter matrix; C5; US-6 AS11-14; §14; Group D BDD; tests 40-45; §16 dataset row 11; FR-037…FR-040; WP-GA |
 
 ---
 
 ## Open questions for the founder (fix round 2)
 
-**Q4 above remains unresolved.** Q1-Q3 are resolved by D29-D31. Section 20 row 9 remains the pre-existing, non-blocking hold-back-latency acceptance request. No new open question was raised in part B.
+Q1-Q4 are resolved by D29-D32. Section 20 row 9 remains the pre-existing, non-blocking hold-back-latency acceptance request. D32 introduces no new open question; its Codex API and Bedrock clauses remain explicitly labelled team-lead defaults pending founder objection.
 
 ---
 
@@ -1690,7 +1784,7 @@ Completeness: 3 CRITICAL + 18 MAJOR + 12 MINOR + 3 observations = 36 findings, a
 
 ## Revision log — fix round 2 (part A)
 
-Review input: `docs/internal/specs/thinking-reasoning-spec-review-round2.md` (verdict BLOCK, 24 findings). **Part A** applied every finding that then needed no founder decision. At that checkpoint Q1–Q4 were pending; final part-B status is D29-D31 applied for Q1-Q3, with Q4 alone still pending. Citations are `file::symbol`, never line numbers.
+Review input: `docs/internal/specs/thinking-reasoning-spec-review-round2.md` (verdict BLOCK, 24 findings). **Part A** applied every finding that then needed no founder decision. D29-D31 later settled Q1-Q3 in part B, and D32 settles Q4 in part C. Citations are `file::symbol`, never line numbers.
 
 | ID | What changed (section) or why not |
 |---|---|
@@ -1698,7 +1792,7 @@ Review input: `docs/internal/specs/thinking-reasoning-spec-review-round2.md` (ve
 | MAJ-001 | C4 rewritten per T4 (`docs/internal/specs/spec-thinking-reasoning.md`, team-lead decision): the notice is display- and delivery-only — the LLM-context file records the round as the provider returned it (empty answer content, raw reasoning where D15 applies), hydration skips `outcome: "no_answer"` assistant entries, and a test proves the notice string never reaches the next provider request (test 31's second half + Group E's new scenario) |
 | MAJ-002 | §1 C5 resolution order rewritten: per-message effort binds ONLY to the model it was chosen for; the serving fallback candidate uses its own effort (D10, binding); an inherited primary consults `DefaultModel.reasoning_effort`; a model change clears the stored effort for that surface (the `pkg/agent/loop_slash.go::SwitchModel` → `ApplyAgentModel` path already shared with `/model`). BDD: "Per-message effort does not cross models (D10)", "An agent riding the instance default model…", "Changing the model clears the stored effort"; dataset rows 8–10; test 32; FR-029 extended |
 | MAJ-003 | **Resolved in part B by D30.** §14's CLI+messengers row, §9.5 and the pending-decisions table originally carried Q2; the final conversation-scoped semantics are recorded in the part-B log |
-| MAJ-004 | **PENDING Q4.** §16 dataset row 11 added (out-of-scope adapter → Default-only control, nothing sent) with the final adapter list marked pending; the full adapter matrix lands in part B with the founder's scope answer |
+| MAJ-004 | **Resolved in part C by D32.** The final §2.2 adapter matrix, request mappings, thinking exclusions, dataset row 11, tests 40-45 and WP-GA are recorded in the part-B log additions below |
 | MAJ-005 | §1 C2: the `final: true` frame carries the STORED post-strip redacted text and the client replaces its row text with it — live and reload are byte-identical (US-3 AS1/FR-007); test 36 (orphan-markup reasoning: final-frame text == stored `thinking_text`); the ADR-095 D7 amendment (streaming display source added, signatures stay parse-only) recorded under the new "ADR-095 amendments needed" section — the ADR file itself is the architect's to edit |
 | MAJ-006 | **Resolved in part B by D31.** Part A corrected the cap facts; part B adds journal supersession by `entry_id` and the cross-session catch-up proving test |
 | MAJ-007 | §20 retitled "residual risks — status per row" in part A; part B settles row 5 by D29 and row 10 by D31. Row 9 remains the only risk in that pair still awaiting a founder decision |
@@ -1718,13 +1812,13 @@ Review input: `docs/internal/specs/thinking-reasoning-spec-review-round2.md` (ve
 | OBS-001 | `reasoning_effort` dropped from the thinking entry (C3 + FR-030): no user story, UI state or test consumed it; effort resolves at request time per C5 |
 | OBS-002 | **PARTIAL (deliberate).** The log move + tag strip is sequencing work for AFTER this fix round (the reviewer's own suggestion) and this round's commit scope is this spec file alone; the round-2 part-B revision will append its log and then perform the move/tag-strip in one pass. The 1531-line size and finding-tag density are unchanged by design in part A |
 
-Part-A checkpoint: 24 findings — 18 applied in full, 1 partial by design (OBS-002), and 5 carried into part B (CRIT-001→Q1; MAJ-003→Q2; MAJ-006→Q3; MAJ-004→Q4; MAJ-007 row 10 folded into Q3). Final state: Q1-Q3 are resolved by D29-D31, OBS-002 is completed as far as the authorized two-file scope permits, and Q4 alone remains pending. 0 disputed; every reviewer code claim used by part A was re-verified first-hand in this worktree.
+Part-A checkpoint: 24 findings — 18 applied in full, 1 partial by design (OBS-002), and 5 carried forward (CRIT-001→Q1; MAJ-003→Q2; MAJ-006→Q3; MAJ-004→Q4; MAJ-007 row 10 folded into Q3). Final state after part C: Q1-Q4 are resolved by D29-D32, and OBS-002 is completed as far as the authorized scope permits. 0 disputed; every reviewer code claim used by part A was re-verified first-hand in this worktree.
 
 ---
 
 ## Revision log — fix round 2 (part B)
 
-Founder answers D29-D31 from `docs/internal/specs/spec-thinking-reasoning.md` are applied. Q4 remains pending. The already-recorded D7 final-frame amendment is also applied to ADR-095. No new product question was introduced.
+Founder answers D29-D31 from `docs/internal/specs/spec-thinking-reasoning.md` were applied in part B; D32 is now applied by the final part-C additions below. The already-recorded D7 final-frame amendment is also applied to ADR-095. No new product question was introduced.
 
 | Finding | Section changed |
 |---|---|
@@ -1733,3 +1827,5 @@ Founder answers D29-D31 from `docs/internal/specs/spec-thinking-reasoning.md` ar
 | MAJ-006 | §1 C2 and §6 apply D31: the reconnect journal keeps one full thinking payload per `entry_id`, older slots become content-free skips; Group A adds the cross-session protection scenario; test 38; FR-032; SC-014 |
 | MAJ-007 row 10 | §20 row 10 is settled by D31 rather than self-labelled or pending; it names the fixed supersession behavior and retains the explicit 65536-byte live bound |
 | OBS-002 | Finding-ID labels are mechanically stripped from the normative portion of this spec in part B. The two historical revision logs remain here because this task authorizes edits only to this spec and ADR-095, so moving them into a review file would exceed scope; the part-B log records the final mapping without changing a third file |
+| MAJ-004 (D32 scope) | §1 C5 and §2.2 now carry the complete adapter matrix: exact effort flags/fields for Codex CLI, GitHub Copilot CLI, ChatGPT subscription / Codex API and Bedrock; CLI thinking is permanently excluded; Codex API accepts completed-summary thinking only; Bedrock thinking is deferred; Azure is unsupported/out of scope. Founder-final versus team-lead-default authority is explicit per row |
+| MAJ-004 (proof and delivery) | US-6 AS11-14; §7; §14 reachability; Group D's four D32 scenarios; tests 40-45; effort dataset row 11; FR-037…FR-040; SC-016; §19 traceability; and WP-GA cover request shape, Default omission, CLI non-processing, completed-summary gating/storage with zero live frames, and the Bedrock-thinking follow-up issue handoff |
