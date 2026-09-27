@@ -19,9 +19,15 @@
  * provided by global-setup.ts unless stated otherwise.
  */
 
-import { expect } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, assistantMessages, newChatButton, waitForConnected } from './fixtures/selectors'
+import {
+  chatInput,
+  assistantMessages,
+  newChatButton,
+  waitForConnected,
+  dismissStaleDialogOverlay,
+} from './fixtures/selectors'
 
 // ─── Bug-1: Skip onboarding button must be gone ───────────────────────────────
 
@@ -257,6 +263,53 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
   )
 })
 
+/**
+ * Bug-5-b count-wait that drains a pending ADR-092 tool-approval dialog while
+ * waiting for assistant messages.
+ *
+ * Mechanism this guards (CI run 36328177911, job 108646568376, E2E llm-light):
+ * a two-turn chat run is not guaranteed tool-free. When the model calls
+ * `bash` and the ADR-092 D7/D8 pre-flight escalates, the run blocks on the
+ * approval modal for up to the server approval timeout (600s,
+ * pkg/gateway/gateway.go::defaultToolApprovalTimeout): the turn's assistant
+ * message stays data-status="running", which assistantMessages() does not
+ * count, so a plain toHaveCount() times out even though nothing is broken.
+ * Worse, a retry attempt's fresh page rehydrates the still-pending approval
+ * as a reconnect stub (session_state.pending_approvals on every WS connect →
+ * toolApproval.ts::reconcileWithSessionState), and the Radix dialog's focus
+ * trap then captures the composer's Enter press and activates the focused
+ * Deny button — the new message is never sent at all (gateway log: bash
+ * "not approved (user)", duration 95003).
+ *
+ * dismissStaleDialogOverlay() is the sanctioned disposal (commit 585b70b1b,
+ * added for the same failure class in chat specs): Escape ON the overlay
+ * denies server-side, so the blocked run resolves, the model continues past
+ * the refused tool, and the turn finalizes. Dismissing before each poll
+ * interval keeps the counts reachable without widening a single timeout —
+ * the same counts are still required within the same budgets.
+ */
+async function expectAssistantMessagesWithApprovalDrain(
+  page: Page,
+  count: number,
+  timeoutMs: number,
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        try {
+          await dismissStaleDialogOverlay(page)
+        } catch {
+          // The overlay poller throws only if a dialog outstays its own 15s
+          // budget; keep counting anyway — this outer poll owns the overall
+          // budget and a later interval can still clear the dialog.
+        }
+        return assistantMessages(page).count()
+      },
+      { timeout: timeoutMs, intervals: [500, 1_000, 2_000, 4_000] },
+    )
+    .toBe(count)
+}
+
 // ─── Bug-5: Replay frame ordering preserved on reconnect ─────────────────────
 
 test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
@@ -347,15 +400,21 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
         await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
       }
 
-      // Turn 1.
+      // Turn 1. Dismiss first: a retry attempt's fresh page rehydrates any
+      // approval the failed attempt left pending (session_state frame on
+      // every WS connect), and that dialog's focus trap hijacks the
+      // composer's Enter press (activates the focused Deny button), so the
+      // message is never sent.
+      await dismissStaleDialogOverlay(page)
       await input.fill('Bug-5 turn 1 — first message')
       await input.press('Enter')
-      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 })
+      await expectAssistantMessagesWithApprovalDrain(page, 1, 90_000)
 
       // Turn 2.
+      await dismissStaleDialogOverlay(page)
       await input.fill('Bug-5 turn 2 — second message')
       await input.press('Enter')
-      await expect(assistantMessages(page)).toHaveCount(2, { timeout: 90_000 })
+      await expectAssistantMessagesWithApprovalDrain(page, 2, 90_000)
 
       // Capture original ordering.
       const originalTexts = await assistantMessages(page).allTextContents()
