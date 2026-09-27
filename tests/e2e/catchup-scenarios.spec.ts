@@ -29,10 +29,10 @@
  * auto-reconnect/reattach to the SAME session all verified (see `h`'s own
  * comment for the `restart({relogin:false})` harness-bug fix that came out
  * of that pass). Pass 3 still could not reliably catch a turn genuinely
- * mid-answer at kill time — z-ai/glm-5.2 answered fast enough in that
- * environment that three different timing strategies produced three
- * different outcomes. The central default model (OMNIPUS_E2E_MODEL, see
- * fixtures/e2e-model.ts — currently deepseek/deepseek-v4.1-flash) streams
+ * mid-answer at kill time — the then-configured model answered fast enough
+ * in that environment that three different timing strategies produced three
+ * different outcomes. The central e2e model (tests/e2e/e2e-model.json, see
+ * fixtures/e2e-model.ts) streams
  * much more slowly (measured full real turns ran 17s-1.8m across scenarios
  * a-f, 2026-09-27 local run), which widens the window, and pass 4's
  * stream-delay knob makes it model-independent anyway. Pass 4 closed that
@@ -60,12 +60,12 @@ const LONG_PROMPT =
 
 // Scenario h only: real-browser follow-up (orchestrator) — the ordinary
 // LONG_PROMPT above genuinely raced kill9() in practice against the pass-3
-// model (z-ai/glm-5.2 completed the full ~600-word answer, `done` and all,
+// model (it completed the full ~600-word answer, `done` and all,
 // before that cycle finished — confirmed by a local run whose failure
 // screenshot showed a COMPLETE, model-footer-stamped answer with no
 // "Generate again", i.e. nothing was actually interrupted, not a real
-// product bug). The central default model (OMNIPUS_E2E_MODEL — currently
-// deepseek/deepseek-v4.1-flash) streams far more slowly than that, and the
+// product bug). The central e2e model (tests/e2e/e2e-model.json) streams
+// far more slowly than that, and the
 // pass-4 stream-delay knob below keeps the turn mid-stream through
 // kill9()/restart() regardless of model speed either way. Item h's whole
 // premise is a turn that is GENUINELY still in flight at the moment of the
@@ -524,15 +524,15 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       // Deliberately NOT `startLongTurn()` here: that helper polls for
       // >80 characters of streamed bubble text before returning, which two
       // pass-3 runs proved fatal for this scenario specifically (before the
-      // stream-delay knob existed) — the then-configured model (z-ai/
-      // glm-5.2, the pass-3 GatewayProcess default) answered BOTH the
+      // stream-delay knob existed) — the then-configured model (the pass-3
+      // GatewayProcess default) answered BOTH the
       // original 600-word LONG_PROMPT and a 3000-word VERY_LONG_PROMPT so
       // fast (screenshots showed the COMPLETE, model-footer-stamped answer,
       // 16-20k tokens, already rendered) that by the time that poll
       // resolved, the turn had already finished — nothing was left to
       // interrupt. GatewayProcess's default is now the central e2e model
-      // (`fixtures/e2e-model.ts`: OMNIPUS_E2E_MODEL, fallback
-      // deepseek/deepseek-v4.1-flash, which streams far more slowly), and
+      // (tests/e2e/e2e-model.json via `fixtures/e2e-model.ts`, which
+      // streams far more slowly than that), and
       // pass 4's `OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '300'` (above)
       // removes the race at the source anyway (300ms per token keeps the
       // turn mid-stream for many seconds on ANY model), but the kill point

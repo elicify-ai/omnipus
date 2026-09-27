@@ -403,8 +403,8 @@ export async function onboardAdmin(
           process.env.OPENROUTER_API_KEY ??
           process.env.OPENROUTER_API_KEY_CI ??
           'sk-test-placeholder',
-        // Central e2e model — see fixtures/e2e-model.ts. (Was openai/gpt-4o,
-        // a literal this shared helper kept picking up independently.)
+        // Central e2e model — the one source of truth is
+        // tests/e2e/e2e-model.json, threaded through fixtures/e2e-model.ts.
         model: E2E_MODEL,
       },
       admin: { username, password },

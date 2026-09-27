@@ -3,6 +3,7 @@ import type { Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 import { E2E_MODEL } from './fixtures/e2e-model';
+import { selectCentralModel } from './fixtures/select-model';
 
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
@@ -205,13 +206,10 @@ test('(f) name collision on Create Agent surfaces server 409 error in UI', async
   await expect(nameInput).toBeVisible({ timeout: 10_000 });
   await nameInput.pressSequentially('Mia');
 
-  // Select the seeded model from the Step 1 picker so we can advance.
-  const modelSelect = modal.getByRole('combobox', { name: /Model/i });
-  await expect(modelSelect).toBeVisible({ timeout: 10_000 });
-  await modelSelect.click();
-  const firstModelOption = modal.locator('[role="option"]').first();
-  await expect(firstModelOption).toBeVisible({ timeout: 5_000 });
-  await firstModelOption.click();
+  // Select the central e2e model (tests/e2e/e2e-model.json) from the Step 1
+  // picker — never "first option" — so the suite's model choice lives in the
+  // one setting, and the helper asserts the trigger displays it.
+  await selectCentralModel(page, { triggerTestId: 'wizard-model' });
 
   await modal.getByTestId('wizard-next-1').click();
 

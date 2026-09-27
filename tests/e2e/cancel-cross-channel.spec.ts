@@ -167,7 +167,7 @@ function safeMtimeMs(p: string): number {
  * A prompt that reliably produces multi-second, tool-free streaming output.
  *
  * Forbidding tools and demanding inline prose: on a bare "write 500 words" prompt,
- * gemini-2.5-flash intermittently shortcuts to the write_file TOOL (Jim has an
+ * the earlier pick intermittently shortcuts to the write_file TOOL (Jim has an
  * explicit "allow" policy entry for it), which ends the turn instantly with
  * zero inline stream and no cancellable window. Forcing long inline prose
  * keeps stop-btn live for several seconds so Stop/Escape/cancel land mid-stream.
@@ -431,7 +431,8 @@ test(
  *
  * `mode.asyncArg` selects the delegation mode via the `delegate` tool's
  * `async` argument (`"true"` background / `"false"` await); `mode.closer` is
- * the final instruction line that nudges deepseek-v4.1-flash to emit exactly that tool
+ * the final instruction line that nudges the central e2e model (tests/e2e/e2e-model.json)
+ * to emit exactly that tool
  * call and nothing else.
  */
 async function assertCancelCascadesToSubagent(
@@ -565,7 +566,8 @@ async function assertCancelCascadesToSubagent(
   // Stop click lands while it's live. A long inline essay streams for several
   // seconds; an instant-rejected task (e.g. a sandbox-escaping read) finishes in
   // ~0s before Stop can fire. Explicit single-tool instruction with a hard "no
-  // prose" guardrail so deepseek-v4.1-flash reliably emits the delegation call.
+  // prose" guardrail so the central e2e model (tests/e2e/e2e-model.json) reliably
+  // emits the delegation call.
   await input.fill(
     [
       'Call the `delegate` tool exactly once, now, with these arguments:',
@@ -758,8 +760,8 @@ async function assertCancelCascadesToSubagent(
 test(
   'T24a — cancel cascades to background subagent (delegate async=true): transcript records turn_canceled with descendants',
   async ({ page }) => {
-    // deepseek-v4.1-flash (the standard e2e model) is reliable but slower than the old gemini
-    // pick — the delegation turn + the subagent's inline essay + cancel can exceed
+    // The central e2e model (tests/e2e/e2e-model.json) is reliable but slower than the
+    // earlier pick — the delegation turn + the subagent's inline essay + cancel can exceed
     // the 270s test.slow() ceiling under suite load. Use an explicit higher budget.
     test.setTimeout(360_000)
     await assertCancelCascadesToSubagent(page, {
@@ -773,7 +775,8 @@ test(
   'T24b — cancel cascades to awaited subagent (delegate async=false): transcript records turn_canceled with descendants',
   async ({ page }) => {
     // Await mode blocks the parent turn on the descendant's full run, so under
-    // deepseek-v4.1-flash's slower streaming this needs more headroom than the background variant.
+    // the central e2e model's (tests/e2e/e2e-model.json) slower streaming this needs
+    // more headroom than the background variant.
     test.setTimeout(420_000)
     await assertCancelCascadesToSubagent(page, {
       asyncArg: 'false',
