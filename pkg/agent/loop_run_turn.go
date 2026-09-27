@@ -1456,11 +1456,15 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 					// activeProvider from the same candidate list selectCandidates
 					// returned), so the attempt runs exactly what today's plain
 					// path runs — same instance, same streaming behavior, same
-					// rt.llmModel. FR-007's per-candidate pool lookup only
+					// rt.llmModel. rt.llmModel is what the attempt calls with:
+					// it is activeModel as selected, plus any BeforeLLM hook's
+					// model override (applied just above, at the hook block) —
+					// the chain's `model` parameter would silently drop the
+					// override. FR-007's per-candidate pool lookup only
 					// distinguishes providers when there is more than one
 					// candidate.
 					rt.providerCallStreamedBytes.Store(0) // C-10 counts THIS attempt only
-					return rt.runProviderAttempt(ctx, rt.activeProvider, provider, model, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes)
+					return rt.runProviderAttempt(ctx, rt.activeProvider, provider, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes)
 				}
 				cat := rt.al.getCapabilityCatalog()
 				budget := resizeBudgetForModel(cat, provider, model, int(catalog.DefaultResizeLimits.MaxBytes))
