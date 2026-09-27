@@ -462,6 +462,19 @@ func (fc *FallbackChain) Execute(
 				return nil, context.Canceled
 			}
 
+			// The chain ctx is done but NOT with a user cancel: the attempt's
+			// error may be a bridge artifact. candidateBudget's detached-floor
+			// path bridges the parent being done into attemptCancel — a parent
+			// DEADLINE therefore surfaces on the attempt as "context canceled",
+			// which ClassifyError maps to nil and would return as an
+			// unclassified error (a wrong turn_canceled verdict). The chain
+			// ctx inherits the parent deadline, so its Err() carries the true
+			// identity: record it on the attempt and classify it (a parent
+			// deadline → FailoverTimeout → retriable → mark+move on).
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				err = ctxErr
+			}
+
 			// Classify the error.
 			failErr := ClassifyError(err, candidate.Provider, candidate.Model)
 
