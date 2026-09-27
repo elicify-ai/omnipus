@@ -11,7 +11,7 @@
 // (D25); error shows the error CLASS (e.g. connect_refused) + Retry, never
 // the empty-state text; the US-6 read-by-agent tag appears exactly once per
 // flagged message; watcher backoff renders "Retrying at …" (D29/R2-8).
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useUiStore } from '@/store/ui'
 import { Button } from '@/components/ui/button'
@@ -140,16 +140,36 @@ export function MailPanel({ workspaceId }: MailPanelProps) {
   }, [workspaceId, agentId, folder])
 
   // ── Queries ───────────────────────────────────────────────────────────
+  // Human-initiated dialing (D29/R2-9, MC-33): a human gesture that must
+  // reach the IMAP connection (the banner's "Retry now", a Retry button on
+  // an error surface, an attachment download) marks the affected queries'
+  // NEXT fetch human — the queryFn consumes the mark once and sends the
+  // contract's `retry=true` query parameter, which bypasses the mailbox
+  // watcher's backoff gate for that one request. Everything else (the 30s
+  // cadence, invalidate-driven refetches) fetches WITHOUT the marker — the
+  // contract's automatic-poll posture (503 code=backoff while backing off).
+  const foldersHumanRef = useRef(false)
+  const messagesHumanRef = useRef(false)
+  const detailHumanRef = useRef(false)
+
   const foldersQuery = useQuery({
     queryKey: [...FOLDERS_KEY, workspaceId, agentId],
-    queryFn: () => fetchMailFolders(workspaceId, agentId as string),
+    queryFn: () => {
+      const retry = foldersHumanRef.current
+      foldersHumanRef.current = false
+      return fetchMailFolders(workspaceId, agentId as string, { retry })
+    },
     enabled: agentId !== null,
     refetchInterval: FOLDERS_REFETCH_MS,
     refetchIntervalInBackground: false,
   })
   const messagesQuery = useQuery({
     queryKey: [...MESSAGES_KEY, workspaceId, agentId, folder],
-    queryFn: () => fetchMailMessages(workspaceId, agentId as string, folder),
+    queryFn: () => {
+      const retry = messagesHumanRef.current
+      messagesHumanRef.current = false
+      return fetchMailMessages(workspaceId, agentId as string, folder, { retry })
+    },
     enabled: agentId !== null && foldersQuery.isSuccess && folder !== null,
     retry: false,
   })
@@ -163,7 +183,11 @@ export function MailPanel({ workspaceId }: MailPanelProps) {
   // ── Detail query + mark-seen (B-27) ──────────────────────────────────
   const detailQuery = useQuery({
     queryKey: [...DETAIL_KEY, workspaceId, agentId, folder, selectedRef],
-    queryFn: () => fetchMailMessage(workspaceId, agentId as string, folder, selectedRef as string),
+    queryFn: () => {
+      const retry = detailHumanRef.current
+      detailHumanRef.current = false
+      return fetchMailMessage(workspaceId, agentId as string, folder, selectedRef as string, { retry })
+    },
     enabled: agentId !== null && folder !== null && selectedRef !== null,
     retry: false,
   })
@@ -306,9 +330,29 @@ export function MailPanel({ workspaceId }: MailPanelProps) {
     return items.length > 0 ? (items[0] as MailboxNewMailSummary) : null
   }, [summaryQuery.data, agentId])
 
+  /** Retry now (D29/R2-9, MC-33): a human gesture that must actually DIAL —
+   * marks the dialing queries' next fetches human (`retry=true`, which
+   * bypasses the watcher's backoff gate) and refetches them, instead of the
+   * old invalidate-only path whose follow-up fetches arrived WITHOUT the
+   * marker and were refused with 503 code=backoff while backing off. The
+   * summary GET is not a dialing route (it reads saved watcher state, never
+   * dials IMAP — D29/R2-5), so it just refetches. Guards mirror each
+   * query's `enabled` — refetch() forces a fetch even for a disabled query.
+   */
   const refreshWatcher = () => {
-    void queryClient.invalidateQueries({ queryKey: ['mail-summary', workspaceId] })
-    void queryClient.invalidateQueries({ queryKey: FOLDERS_KEY })
+    if (agentId !== null) {
+      foldersHumanRef.current = true
+      void foldersQuery.refetch()
+      if (foldersQuery.isSuccess) {
+        messagesHumanRef.current = true
+        void messagesQuery.refetch()
+      }
+      if (selectedRef !== null) {
+        detailHumanRef.current = true
+        void detailQuery.refetch()
+      }
+    }
+    void summaryQuery.refetch()
   }
 
   const replyTarget = detail === null ? null : { from: detail.from ?? '', subject: detail.subject ?? '', messageId: detail.message_id ?? '' }
@@ -399,7 +443,14 @@ export function MailPanel({ workspaceId }: MailPanelProps) {
                 <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
                   {mailErrorCode(foldersQuery.error)}
                 </p>
-                <Button variant="outline" size="sm" onClick={() => void foldersQuery.refetch()}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    foldersHumanRef.current = true
+                    void foldersQuery.refetch()
+                  }}
+                >
                   Retry
                 </Button>
               </div>
@@ -419,7 +470,14 @@ export function MailPanel({ workspaceId }: MailPanelProps) {
                     <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
                       {mailErrorCode(messagesQuery.error)}
                     </p>
-                    <Button variant="outline" size="sm" onClick={() => void messagesQuery.refetch()}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        messagesHumanRef.current = true
+                        void messagesQuery.refetch()
+                      }}
+                    >
                       Retry
                     </Button>
                   </div>
@@ -452,7 +510,14 @@ export function MailPanel({ workspaceId }: MailPanelProps) {
                 <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
                   {mailErrorCode(detailQuery.error)}
                 </p>
-                <Button variant="outline" size="sm" onClick={() => void detailQuery.refetch()}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    detailHumanRef.current = true
+                    void detailQuery.refetch()
+                  }}
+                >
                   Retry
                 </Button>
               </div>
@@ -564,7 +629,7 @@ function AttachmentList({ workspaceId, agentId, folder, messageRef, attachments 
             variant="ghost"
             size="sm"
             onClick={() => {
-              void downloadMailAttachment({ workspaceId, agentId, folder, messageRef, partIndex: attachment.part_index, filename: attachment.filename })
+              void downloadMailAttachment({ workspaceId, agentId, folder, messageRef, partIndex: attachment.part_index, filename: attachment.filename, retry: true })
             }}
           >
             Download
@@ -576,7 +641,8 @@ function AttachmentList({ workspaceId, agentId, folder, messageRef, attachments 
 }
 
 /** Download one attachment: fetch the blob (part_index-addressed), save via
- * a temporary object URL. */
+ * a temporary object URL. `retry: true` — a download is human-initiated
+ * (D29/R2-9): it must dial even while the watcher is backing off. */
 async function downloadMailAttachment(args: {
   workspaceId: string
   agentId: string
@@ -584,8 +650,9 @@ async function downloadMailAttachment(args: {
   messageRef: string
   partIndex: number
   filename: string
+  retry?: boolean
 }): Promise<void> {
-  const blob = await fetchMailAttachment(args.workspaceId, args.agentId, args.folder, args.messageRef, args.partIndex)
+  const blob = await fetchMailAttachment(args.workspaceId, args.agentId, args.folder, args.messageRef, args.partIndex, { retry: args.retry })
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url

@@ -51,12 +51,28 @@ export interface MailMessagePageParams {
   limit?: number
   /** Cursor: return messages with uid < before_uid. */
   beforeUid?: number
+  /**
+   * Human-initiated fetch marker (D29/R2-9, MC-33): bypasses the mailbox
+   * watcher's backoff gate for THIS one request. Absent/false = automatic
+   * panel poll (refused with 503 code=backoff while the watcher is backing
+   * off) — never send it from a refetch cadence.
+   */
+  retry?: boolean
+}
+
+/** Query-string suffix for the contract's `retry` marker (absent when false). */
+function retryQs(opts: { retry?: boolean }): string {
+  return opts.retry === true ? '?retry=true' : ''
 }
 
 /** GET .../mail/{agent}/folders — the folder rail (US-3). */
-export async function fetchMailFolders(workspaceId: string, agentId: string): Promise<MailFolderList> {
+export async function fetchMailFolders(
+  workspaceId: string,
+  agentId: string,
+  opts: { retry?: boolean } = {},
+): Promise<MailFolderList> {
   return request<MailFolderList>(
-    `/workspaces/${seg(workspaceId)}/mail/${seg(agentId)}/folders`,
+    `/workspaces/${seg(workspaceId)}/mail/${seg(agentId)}/folders${retryQs(opts)}`,
     undefined,
     MailFolderListSchema as ZodType<MailFolderList>,
   )
@@ -76,6 +92,7 @@ export async function fetchMailMessages(
   const qs = new URLSearchParams()
   if (params.limit !== undefined) qs.set('limit', String(params.limit))
   if (params.beforeUid !== undefined) qs.set('before_uid', String(params.beforeUid))
+  if (params.retry === true) qs.set('retry', 'true')
   const suffix = qs.size > 0 ? `?${qs.toString()}` : ''
   return request<MailMessagePage>(
     `/workspaces/${seg(workspaceId)}/mail/${seg(agentId)}/folders/${seg(folder)}/messages${suffix}`,
@@ -93,9 +110,10 @@ export async function fetchMailMessage(
   agentId: string,
   folder: string,
   ref: string,
+  opts: { retry?: boolean } = {},
 ): Promise<MailMessage> {
   return request<MailMessage>(
-    `/workspaces/${seg(workspaceId)}/mail/${seg(agentId)}/folders/${seg(folder)}/messages/${seg(ref)}`,
+    `/workspaces/${seg(workspaceId)}/mail/${seg(agentId)}/folders/${seg(folder)}/messages/${seg(ref)}${retryQs(opts)}`,
     undefined,
     MailMessageSchema as ZodType<MailMessage>,
   )
@@ -126,11 +144,12 @@ export async function fetchMailAttachment(
   folder: string,
   ref: string,
   partIndex: number,
+  opts: { retry?: boolean } = {},
 ): Promise<Blob> {
   let res: Response
   try {
     res = await fetch(
-      `${BASE_URL}/api/v1/workspaces/${seg(workspaceId)}/mail/${seg(agentId)}/folders/${seg(folder)}/messages/${seg(ref)}/attachments/${partIndex}`,
+      `${BASE_URL}/api/v1/workspaces/${seg(workspaceId)}/mail/${seg(agentId)}/folders/${seg(folder)}/messages/${seg(ref)}/attachments/${partIndex}${retryQs(opts)}`,
       { credentials: 'include', headers: buildHeaders() },
     )
   } catch (cause) {
