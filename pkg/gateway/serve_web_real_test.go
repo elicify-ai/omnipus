@@ -150,9 +150,15 @@ func TestServeWeb_RealStaticSite_IndexHTML(t *testing.T) {
 }
 
 // TestServeWeb_RealStaticSite_CSPAllowsOwnStylesheet verifies that the CSP on
-// a static preview document permits the browser to apply a stylesheet served
-// from the same preview origin. Fetching style.css successfully is not enough:
-// browsers discard it when style-src omits 'self'.
+// a static preview document is the ADR-094 FR-014 Mode 2 template
+// byte-identically, and that the template's style-src ${ORIGIN}${PREFIX}
+// source is exactly what admits the app's own stylesheet (served under the
+// token prefix on the same origin). Fetching style.css successfully is not
+// enough: browsers discard it unless style-src names its origin+prefix.
+// Supersedes the pre-ADR-094 oracle, which pinned the workspace-style CSP
+// ('self'/'unsafe-inline' sources) instead of the template.
+// Traces to: adr-094-preview-isolation-spec.md FR-014; the template below is
+// the spec's, transcribed verbatim.
 func TestServeWeb_RealStaticSite_CSPAllowsOwnStylesheet(t *testing.T) {
 	api, ss := newServeWebTestAPI(t)
 
@@ -175,19 +181,37 @@ func TestServeWeb_RealStaticSite_CSPAllowsOwnStylesheet(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	csp := rec.Header().Get("Content-Security-Policy")
 	require.NotEmpty(t, csp, "static preview response must carry a CSP header")
-	assert.Equal(t, []string{"'none'"}, cspDirectiveSources(t, csp, "default-src"))
-	assert.Equal(t, []string{"'self'", "'unsafe-inline'"}, cspDirectiveSources(t, csp, "style-src"),
-		"same-origin linked stylesheets must be allowed without admitting third-party styles")
-	assert.Equal(t, []string{"'self'", "'unsafe-inline'"}, cspDirectiveSources(t, csp, "script-src"),
-		"same-origin static bundles must be allowed without admitting third-party scripts")
-	assert.Equal(t, []string{"'none'"}, cspDirectiveSources(t, csp, "worker-src"),
-		"script-src must not become the fallback permission for workers")
-	assert.Equal(t, []string{"'self'"}, cspDirectiveSources(t, csp, "font-src"),
-		"same-origin fonts must be allowed without admitting data or third-party sources")
-	assert.Equal(t, []string{"'self'", "data:", "blob:"}, cspDirectiveSources(t, csp, "img-src"),
-		"the existing local and embedded image policy must remain unchanged")
-	assert.Equal(t, []string{"'self'"}, cspDirectiveSources(t, csp, "connect-src"),
-		"same-origin data requests must remain allowed without admitting external connections")
+
+	// FR-014: the static Mode 2 header must equal the spec template — the
+	// recorder carries the header pre-wire, so the raw \n form is observable.
+	//
+	// ${ORIGIN} = the canonical origin (this harness's own Gateway config, no
+	// public_url); ${PREFIX} = the token prefix — this fixture's characters
+	// are all in the RFC 3986 unreserved set, so percent-encoding is identity.
+	const origin = "http://127.0.0.1:8080"
+	prefix := "/preview/site-agent-csp/" + token
+	want := "default-src 'none';\n" +
+		"script-src " + origin + prefix + " 'unsafe-inline' 'unsafe-eval';\n" +
+		"style-src " + origin + prefix + ";\n" +
+		"img-src " + origin + prefix + " data:;\n" +
+		"font-src " + origin + prefix + " data:;\n" +
+		"media-src " + origin + prefix + ";\n" +
+		"connect-src " + origin + prefix + " ws://127.0.0.1:8080" + prefix + ";\n" +
+		"form-action " + origin + prefix + ";\n" +
+		"worker-src " + origin + prefix + " blob:;\n" +
+		"base-uri 'none';\n" +
+		"object-src 'none';\n" +
+		"frame-ancestors 'none';\n"
+	assert.Equal(t, want, csp,
+		"ADR-094 FR-014: the static Mode 2 CSP must be byte-identical to the spec template")
+
+	// The purpose row: the app's own stylesheet is allowed — via the
+	// template's single style-src source, origin+prefix. The linked
+	// style.css loads from under the token prefix; 'self' (any same-origin
+	// path) and third-party sources stay out.
+	assert.Equal(t, []string{origin + prefix}, cspDirectiveSources(t, csp, "style-src"),
+		"the app's own stylesheet must be allowed via the template's prefix source — "+
+			"linked stylesheets from under the token prefix load, nothing wider")
 }
 
 // TestServeWeb_RealStaticSite_AppJS verifies that app.js is served with the

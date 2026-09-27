@@ -220,6 +220,7 @@ func TestFix3Mode2Redirect_InPrefixDotSegmentsEmitted(t *testing.T) {
 	// in-prefix targets.
 	h.f3redEmit(http.StatusFound, prefix+"/foo/../next")
 	resp := h.f3redProxyGet(t, "f3red-dot-seg-agent", "page")
+	t.Cleanup(func() { _ = resp.Body.Close() })
 
 	require.Equal(t, http.StatusFound, resp.StatusCode,
 		"FR-013: an in-prefix redirect keeps the upstream status — got %d", resp.StatusCode)
@@ -243,6 +244,7 @@ func TestFix3Mode2Redirect_PercentEncodedAgentIDEmitted(t *testing.T) {
 	// the encoded prefix, misses, falls to the reserved-root check and 502s.
 	h.f3redEmit(http.StatusFound, prefix+"/dashboard")
 	resp := h.f3redProxyGet(t, escaped, "page")
+	t.Cleanup(func() { _ = resp.Body.Close() })
 
 	require.Equal(t, http.StatusFound, resp.StatusCode,
 		"FR-013: an in-prefix redirect keeps the upstream status — got %d", resp.StatusCode)
@@ -272,6 +274,7 @@ func TestFix3Mode1ServiceWorker_NotRefused(t *testing.T) {
 			"Service-Worker": "script",
 			"Sec-Fetch-Dest": "serviceworker",
 		})
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		require.Equal(t, http.StatusOK, resp.StatusCode,
 			"RED (FR-028, A3): a Mode 1 app's own service-worker request must be served — got %d", resp.StatusCode)
 		assert.Equal(t, int32(1), h.upstreamHits.Load(),
@@ -285,6 +288,7 @@ func TestFix3Mode1ServiceWorker_NotRefused(t *testing.T) {
 			"Service-Worker": "script",
 			"Sec-Fetch-Dest": "serviceworker",
 		})
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		assert.GreaterOrEqual(t, resp.StatusCode, http.StatusBadRequest,
 			"pin (FR-028): the main-host /preview/ SW refusal must survive the fix")
 		assert.Equal(t, int32(0), h.upstreamHits.Load(),
@@ -517,6 +521,7 @@ func TestFix3Mode1Dispatch_PortlessHostDispatches(t *testing.T) {
 	t.Run("portless_label_host_dispatches_to_preview", func(t *testing.T) {
 		h.upstreamHits.Store(0)
 		resp := h.piRedGuardGet(t, label+".localhost", "/", http.MethodGet, nil)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		require.Equal(t, http.StatusOK, resp.StatusCode,
 			"RED (DS-3 row 10, CR2): the portless label Host must dispatch to the preview handler — got %d "+
 				"(today previewPortAgrees compares the Host's empty port to the origin's implicit 80 and falls through)", resp.StatusCode)
@@ -528,6 +533,7 @@ func TestFix3Mode1Dispatch_PortlessHostDispatches(t *testing.T) {
 		// On the portless install the explicit :80 form is equally valid.
 		h.upstreamHits.Store(0)
 		resp := h.piRedGuardGet(t, label+".localhost:80", "/", http.MethodGet, nil)
+		t.Cleanup(func() { _ = resp.Body.Close() })
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
 			"pin (DS-3 row 10): the explicit-port form must keep dispatching")
 		assert.Equal(t, int32(1), h.upstreamHits.Load(),
