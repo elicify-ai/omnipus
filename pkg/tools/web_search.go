@@ -154,10 +154,17 @@ func resolveRoles(cfg *config.WebToolsConfig) roleEntries {
 			entries.ignoredSameAsDefault = true
 		}
 	case fallbackRaw == "":
-		// R3/R6: absent → auto-DuckDuckGo when DDG is usable and not the
-		// default, regardless of the default's own usability (lane decision
-		// anchored in US-1.5's own wording).
-		if defaultID != config.SearchProviderDuckDuckGo && usable[config.SearchProviderDuckDuckGo] {
+		// R3: absent → auto-DuckDuckGo when DDG is usable and the default
+		// is a USABLE provider other than DuckDuckGo. The usable-default
+		// conjunct is R3's own third condition: without it, an unusable
+		// default + absent fallback + usable DDG would hand off to DDG
+		// even though R6 requires an R3/R4 fallback and R7 says nobody
+		// runs — D3's "it does not run because nothing else matched".
+		// US-1 acceptance 5 stays reachable: its "resolved fallback is a
+		// usable DuckDuckGo" is an explicit R4 pick.
+		if defaultID != config.SearchProviderDuckDuckGo &&
+			usable[config.SearchProviderDuckDuckGo] &&
+			usable[defaultID] {
 			entries.fallbackID = config.SearchProviderDuckDuckGo
 			entries.fallbackAuto = true
 		}
