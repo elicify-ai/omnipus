@@ -175,6 +175,16 @@ func readRolesWebConfig(t *testing.T, api *restAPI) map[string]any {
 	return web
 }
 
+// roleSection asserts the provider section exists in tools.web and returns
+// it — the checked form of web[id].(map[string]any), which the linter
+// requires (forcetypeassert).
+func roleSection(t *testing.T, web map[string]any, id string) map[string]any {
+	t.Helper()
+	sec, ok := web[id].(map[string]any)
+	require.True(t, ok, "provider section %q missing from tools.web", id)
+	return sec
+}
+
 // wireRolesReload replaces the harness's absent reload with one that stands
 // in for the production executeReload: it loads config.json fresh and
 // refreshes the shared config's content in place (the loop keeps the pointer
@@ -541,7 +551,7 @@ func TestIntegrationPut_SetDefaultWithKey_IsLiveAndReady(t *testing.T) {
 	// roles migration can never overwrite the operator's choice.
 	web := readRolesWebConfig(t, api)
 	assert.Equal(t, "tavily", web["default_provider"])
-	assert.Equal(t, "BRAVE_API_KEY", web["brave"].(map[string]any)["api_key_ref"],
+	assert.Equal(t, "BRAVE_API_KEY", roleSection(t, web, "brave")["api_key_ref"],
 		"SC-004: the save must leave another provider's api_key_ref in place")
 	tavilySec, _ := web["tavily"].(map[string]any)
 	require.NotNil(t, tavilySec)
@@ -679,7 +689,7 @@ func TestIntegrationPut_KeyOnlySave_NoRoleChange(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
 	web := readRolesWebConfig(t, api)
-	assert.Equal(t, "BRAVE_API_KEY", web["brave"].(map[string]any)["api_key_ref"],
+	assert.Equal(t, "BRAVE_API_KEY", roleSection(t, web, "brave")["api_key_ref"],
 		"the key is stored")
 	assert.Equal(t, "tavily", web["default_provider"], "D18: no role changed")
 	assert.Equal(t, "none", web["fallback_provider"], "D18: no role changed")
@@ -711,7 +721,7 @@ func TestIntegrationPut_MaterializesAutomaticFallback(t *testing.T) {
 	web = readRolesWebConfig(t, api)
 	assert.Equal(t, "duckduckgo", web["fallback_provider"],
 		"the save materializes the resolved id so the file is no longer absent")
-	assert.Equal(t, "BRAVE_API_KEY", web["brave"].(map[string]any)["api_key_ref"],
+	assert.Equal(t, "BRAVE_API_KEY", roleSection(t, web, "brave")["api_key_ref"],
 		"the materialization must not resurrect the ref deletion (FR-005)")
 }
 
