@@ -210,11 +210,8 @@ func (a *restAPI) reloadAgentsAndConfirm() error {
 	if err := a.triggerReloadAndWait(); err != nil {
 		return err
 	}
-	// TEMP RED (red-before-green, finding 3): lastFailed check reverted.
-	if false {
-		if a.reloadOutcome.lastFailed() {
-			return errRegistryRebuildFailed
-		}
+	if a.reloadOutcome.lastFailed() {
+		return errRegistryRebuildFailed
 	}
 	return nil
 }
