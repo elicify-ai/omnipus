@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
@@ -285,7 +286,11 @@ func (w *Watcher) recordFailure(errClass, errText string) {
 		w.state.LastErrorClass = errClass
 		w.state.LastErrorText = errText
 		w.state.Attempt++
-		w.state.NextAttemptAt = w.now().Add(WatcherBackoff(w.state.Attempt, errClass, 0.5)).UTC().Format(time.RFC3339)
+		// Real jitter (MC-33): draw the unit from the package-level
+		// concurrency-safe source (math/rand/v2) instead of the hardcoded
+		// midpoint — a literal 0.5 yields factor exactly 1.0, i.e. zero
+		// jitter, so every failure of an attempt count backed off identically.
+		w.state.NextAttemptAt = w.now().Add(WatcherBackoff(w.state.Attempt, errClass, rand.Float64())).UTC().Format(time.RFC3339)
 	})
 }
 
