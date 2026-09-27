@@ -127,7 +127,14 @@ func TestDepth_GLM_MappingAndLowRefusal(t *testing.T) {
 	f2 := newRolesSearchFixture(t, func(c *config.WebToolsConfig) {
 		c.DefaultProvider = config.SearchProviderGLM
 		c.GLMSearch = config.GLMSearchConfig{Enabled: true, APIKeyRef: envRefGLM}
-	}, nil)
+	}, func(o *WebSearchToolOptions) {
+		// D20: the operator's configured depth is a ceiling, "not just a
+		// default" — the shipped medium ceiling clamps the agent's high to
+		// medium (pinned by TestFixK2_GLMHighClampedToOperatorMedium). The
+		// depth-table mapping high→high needs the ceiling RAISED: here the
+		// operator sets high, so the agent's high passes through unclamped.
+		o.GLMContentSize = "high"
+	})
 	res2 := f2.run(map[string]any{"query": "golang", "depth": "high"})
 	if res2.IsError {
 		t.Fatalf("expected success: %s", res2.ForLLM)

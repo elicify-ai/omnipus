@@ -161,12 +161,17 @@ func TestR5_FallbackSameAsDefault_CalledAtMostOnce(t *testing.T) {
 	}
 }
 
-// R6 flagship (US-1.5): default unusable (no key), fallback absent, DuckDuckGo
-// usable -> DuckDuckGo runs and the note says the default was not called
-// because it has no API key.
-func TestR6_DefaultUnusable_AutoFallbackRuns(t *testing.T) {
+// R6 flagship (US-1.5): default unusable (no key), the operator's explicit
+// DuckDuckGo fallback usable -> DuckDuckGo runs and the note says the
+// default was not called because it has no API key. (K6, gate round 1: the
+// fallback is now EXPLICIT — with an absent fallback, R3 requires a usable
+// default, so an unusable default + absent fallback is R7 nobody-runs, per
+// the spec's R-table. US-1.5's "resolved fallback is a usable DuckDuckGo"
+// is the explicit R4 pick this test now configures.)
+func TestR6_DefaultUnusable_ExplicitFallbackRuns(t *testing.T) {
 	f := newRolesSearchFixture(t, func(c *config.WebToolsConfig) {
 		c.Tavily.APIKeyRef = envRefMissingTav
+		c.FallbackProvider = config.SearchProviderDuckDuckGo
 	}, func(o *WebSearchToolOptions) {
 		o.TavilyAPIKeys = nil
 	})
@@ -235,12 +240,16 @@ func TestR8_NoFallbackInvented_WhenDDGDisabled(t *testing.T) {
 	}
 }
 
-// R9: an unknown default id is treated as not usable — and, consistently with
-// US-1.5, the auto-DuckDuckGo fallback still resolves (lane decision: R9 says
-// "treated as not usable (R6 or R7)"). The error names the unknown id.
-func TestR9_UnknownDefault_AutoFallbackRuns_NamesUnknownID(t *testing.T) {
+// R9: an unknown default id is treated as not usable; with the operator's
+// explicit DuckDuckGo fallback, R6 runs it and the error names the unknown
+// id. (K6, gate round 1: with an ABSENT fallback the auto-DDG arm requires
+// a usable default — R3's third conjunct — so the absent-fallback form of
+// this scenario is R7 nobody-runs; R9's "the error names the unknown id"
+// needs a fallback that actually resolves.)
+func TestR9_UnknownDefault_ExplicitFallbackRuns_NamesUnknownID(t *testing.T) {
 	f := newRolesSearchFixture(t, func(c *config.WebToolsConfig) {
 		c.DefaultProvider = "not-a-provider"
+		c.FallbackProvider = config.SearchProviderDuckDuckGo
 	}, nil)
 	res := f.run(map[string]any{"query": "golang"})
 	if res.IsError {
