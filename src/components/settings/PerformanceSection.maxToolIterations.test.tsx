@@ -355,6 +355,18 @@ describe('PerformanceSection — raise (D20) and reload failure (8-reviewer gate
     const shown = () => [...addToast.mock.calls.map((c) => String((c[0] as { message?: string })?.message ?? '')), document.body.textContent ?? '']
     await waitFor(() => expect(shown().some((t) => /saved,? but not (yet )?applied/i.test(t))).toBe(true))
     expect(shown().some((t) => /server (is )?unavailable/i.test(t))).toBe(false)
+    // CHECK round 2, finding C: the TEXT alone does not tell "saved, not
+    // applied" from a failed save (the generic error path would toast the same
+    // userMessage). What distinguishes them (spec edge case "Reload fails after
+    // the global is written": the value IS saved) is the treatment: a warning,
+    // never an error toast, and no save error pinned on the limit field.
+    const toasts = addToast.mock.calls.map((c) => c[0] as { variant?: string; message?: string })
+    const savedNotApplied = toasts.filter((t) => /saved,? but not (yet )?applied/i.test(t.message ?? ''))
+    expect(savedNotApplied, 'exactly one "saved, not applied" toast').toHaveLength(1)
+    expect(savedNotApplied[0].variant, 'a committed save is a warning, not an error').toBe('warning')
+    expect(toasts.filter((t) => t.variant === 'error'), 'no error toast for a committed save').toEqual([])
+    expect(screen.queryAllByRole('alert').filter((a) => /saved,? but not (yet )?applied|failed/i.test(a.textContent ?? '')),
+      'no save error pinned on the field').toEqual([])
   })
 
   // Gate round 2 (typed reload-failure details, backend-lead feature/904-fix2-be):

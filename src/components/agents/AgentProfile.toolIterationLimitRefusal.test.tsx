@@ -193,3 +193,59 @@ describe('AgentProfile — a refused limit is never re-sent by the tab-close flu
     expect('max_tool_iterations' in keepalive[0].body, `flush body re-sent the refused limit: ${JSON.stringify(keepalive[0].body)}`).toBe(false)
   })
 })
+
+// CHECK round 2, finding B (surviving mutant S5c: the refusal's agentId
+// scoping removed). AgentProfile is NOT remounted per agent (it lives at the
+// route level and only its agentId prop changes), so a refusal recorded for
+// agent A must never follow the form to agent B: B's same value is sent
+// normally and nothing is pinned on B's field (the hook's own contract: "a
+// refusal belongs to one agent and never follows the form to another").
+describe('AgentProfile — a limit refusal belongs to one agent', () => {
+  it('after A is refused 300, switching the same profile to B and entering 300 sends it for B and pins nothing', async () => {
+    const agentB: Agent = { ...baseAgent, id: 'beta', name: 'Beta Agent' }
+    vi.mocked(fetchAgent).mockImplementation(async (id: string) => (id === 'beta' ? agentB : baseAgent))
+    vi.mocked(updateAgent).mockImplementation(async (id: string, data: unknown) => {
+      if (id === 'triage' && (data as Record<string, unknown>).max_tool_iterations === 300) {
+        throw new ApiError(400, NEUTRAL_MESSAGE, { field: 'max_tool_iterations' })
+      }
+      return id === 'beta' ? agentB : baseAgent
+    })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { rerender } = render(
+      <QueryClientProvider client={client}>
+        <AgentProfile agentId="triage" />
+      </QueryClientProvider>,
+    )
+    await screen.findByText(baseAgent.name)
+    const openLimit = async () => {
+      if (!screen.queryByTestId('agent-max-tool-calls-input')) {
+        const trigger = screen.getByTestId('tab-advanced')
+        trigger.focus()
+        fireEvent.keyDown(trigger, { key: 'Enter' })
+        fireEvent.click(trigger)
+      }
+      return (await screen.findByTestId('agent-max-tool-calls-input')) as HTMLInputElement
+    }
+    fireEvent.change(await openLimit(), { target: { value: '300' } })
+    await screen.findByText(NEUTRAL_MESSAGE, { selector: '[role="alert"]' }, { timeout: 6000 })
+
+    rerender(
+      <QueryClientProvider client={client}>
+        <AgentProfile agentId="beta" />
+      </QueryClientProvider>,
+    )
+    await screen.findByText(agentB.name)
+    const inputB = await openLimit()
+    await vi.waitFor(() => expect(inputB.value, 'instrument: B hydrated with no own value').toBe(''))
+    expect(screen.queryByText(NEUTRAL_MESSAGE, { selector: '[role="alert"]' }), "A's refusal is not shown on B").toBeNull()
+
+    fireEvent.change(inputB, { target: { value: '300' } })
+    await vi.waitFor(
+      () => expect(vi.mocked(updateAgent).mock.calls.some((c) => c[0] === 'beta')).toBe(true),
+      { timeout: 6000 },
+    )
+    const bCalls = vi.mocked(updateAgent).mock.calls.filter((c) => c[0] === 'beta')
+    expect(bCalls[0][1] as Record<string, unknown>, "B's 300 is sent, not dropped as A's refused value").toMatchObject({ max_tool_iterations: 300 })
+    expect(screen.queryByText(NEUTRAL_MESSAGE, { selector: '[role="alert"]' }), 'nothing is pinned on B').toBeNull()
+  })
+})

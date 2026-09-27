@@ -43,6 +43,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
@@ -231,11 +232,12 @@ func TestPerformancePut_GlobalOnlyRefreshFailure_ReloadFailedStageRefreshAudited
 
 	details, _ := m["details"].(map[string]any)
 	require.NotNil(t, details, "RED until feature/904-fix2-be: the reload-failure body carries typed details; body: %s", w.Body.String())
+	// contracts/components/schemas/PerformanceReloadFailedDetails.yaml:
+	// stage, changed_fields (= the fields in the PUT body) and lowered_agents
+	// (empty when none) are all required.
 	assert.Equal(t, "refresh", details["stage"], "the in-memory refresh (not the registry reload) failed")
-	if lowered, present := details["lowered_agents"]; present {
-		arr, _ := lowered.([]any)
-		assert.Empty(t, arr, "a raise lowers nobody (D20)")
-	}
+	assert.Equal(t, []any{"max_tool_iterations"}, details["changed_fields"], "changed_fields = the fields in the PUT body")
+	assert.Equal(t, []any{}, details["lowered_agents"], "a raise lowers nobody (D20); the list is present and empty")
 }
 
 // Twin: when the REGISTRY reload is what failed (config.json written and
@@ -250,6 +252,8 @@ func TestPerformancePut_ReloadFailure_DetailsStageReload(t *testing.T) {
 	details, _ := m["details"].(map[string]any)
 	require.NotNil(t, details, "RED until feature/904-fix2-be: typed reload-failure details; body: %s", w.Body.String())
 	assert.Equal(t, "reload", details["stage"])
+	assert.Equal(t, []any{"max_tool_iterations"}, details["changed_fields"])
+	assert.Equal(t, []any{}, details["lowered_agents"])
 	assert.EqualValues(t, 300, mtiGetPerf(t, api)["max_tool_iterations"],
 		"stage reload: the refresh succeeded, so GET already shows the saved value")
 }
@@ -288,4 +292,49 @@ func TestAgentLimitRefusals_SetErrorResponseField(t *testing.T) {
 			assert.Equal(t, "max_tool_iterations", m["field"], "the refusal names its field; body: %s", w.Body.String())
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// CHECK round 2, finding A (BLOCK, surviving mutant M1b): the DECIDING check
+// under configMu must compare the confirmed snapshot against a FRESH list.
+// Spec "API and Data" PerformanceSettingsUpdate rule: "the server recomputes,
+// at write time, the set of agents whose own value is above the new global;
+// the PUT succeeds only if that set equals confirmed_lowering ... an extra
+// agent ... is drift: nothing is written and the PUT answers 409". Here agent
+// C GAINS an own value (260 > 200) after the pre-check List and before the
+// deciding List, so only the deciding comparison
+// (decideMaxToolIterationsLowering's matchesConfirmation) can see the extra
+// agent. Kills M1b (`!upd.matchesConfirmation(live)` → `false`): the handler
+// would then lower A and B and write the global, leaving C at 260 unconfirmed.
+// ---------------------------------------------------------------------------
+
+func TestPerformancePut_DecidingCheck_AgentGainsOwnValueBetweenLists_Drift409(t *testing.T) {
+	api := newMTIAPI(t, "300",
+		mtiAgent{id: "agent-a", own: 250}, mtiAgent{id: "agent-b", own: 280}, mtiAgent{id: "agent-c"})
+	s := &mtiScriptStore{Store: agentstore.New(api.homePath)}
+	api.limitAgentStore = s
+	extraAudit := attachTestAuditor(t, api)
+	s.onList = func(n int) error {
+		if n == 2 { // 1 = pre-check (before the step-up token), 2 = the deciding list under configMu
+			s.concurrentWrite(t, "agent-c", func(ac *config.AgentConfig) { ac.MaxToolIterations = 260 })
+		}
+		return nil
+	}
+	before := mtiSnapshotFiles(t, api, "agent-a", "agent-b")
+
+	w := mtiPutPerf(t, api, mtiRollbackBody) // confirms exactly A(250) and B(280)
+
+	require.GreaterOrEqual(t, s.listCalls, 2, "instrument: the deciding List ran, so the change landed between the two lists")
+	require.Equal(t, http.StatusConflict, w.Code, "an agent that gained an own value above the target is drift; body: %s", w.Body.String())
+	m := mtiDecode(t, w.Body.Bytes())
+	assert.Equal(t, mtiDriftCode, m["code"])
+	mtiAssertAgentChanges(t, mtiPreviewAgents(t, m), []mtiLowering{
+		{"agent-a", "Agent agent-a", 250, 200},
+		{"agent-b", "Agent agent-b", 280, 200},
+		{"agent-c", "Agent agent-c", 260, 200},
+	})
+	assert.Equal(t, 0, s.mutates(), "nothing written: no lowering attempted")
+	assert.Equal(t, before, mtiSnapshotFiles(t, api, "agent-a", "agent-b"), "config.json, A and B byte-identical")
+	assert.EqualValues(t, 260, mtiStoredOwn(t, api, "agent-c"), "C keeps the value it gained")
+	assert.Empty(t, mtiSecurityChanges(t, api, extraAudit), "no audit record for a refused lowering")
 }
