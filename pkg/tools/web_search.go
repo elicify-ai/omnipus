@@ -890,16 +890,28 @@ func (t *WebSearchTool) executeChosen(
 	if spErr == nil {
 		return successText(text, id, "chosen", t.excludeNote(entries, id, req))
 	}
-	// A capability use never hops (US-4); usesCap was computed on entry.
-	if hopClass(spErr.class) && !usesCap && entries.usable[entries.fallbackID] {
-		text2, spErr2 := t.runProvider(ctx, start, entries.fallbackID, req)
-		if spErr2 == nil {
-			return successText(text2, entries.fallbackID, "fallback",
-				[]string{t.hopNote(id, "chosen", spErr.class, spErr.msg)})
+	// A capability use never hops (US-4); usesCap was computed on entry. A
+	// plain named call hops only when the fallback passes the SAME
+	// eligibility gate as the default path (K4): site filters and the D17a
+	// time budget.
+	if hopClass(spErr.class) && !usesCap {
+		if reason := t.fallbackEligibility(entries, req, start); reason != "" {
+			return ErrorResult(strings.Join([]string{
+				"search failed",
+				t.failureLine(id, "chosen", spErr.class, spErr.msg),
+				notCalledLine(entries.fallbackID, "fallback", reason),
+			}, "\n"))
 		}
-		return ErrorResult(strings.Join([]string{"search failed",
-			t.failureLine(id, "chosen", spErr.class, spErr.msg),
-			t.failureLine(entries.fallbackID, "fallback", spErr2.class, spErr2.msg)}, "\n"))
+		if entries.usable[entries.fallbackID] {
+			text2, spErr2 := t.runProvider(ctx, start, entries.fallbackID, req)
+			if spErr2 == nil {
+				return successText(text2, entries.fallbackID, "fallback",
+					[]string{t.hopNote(id, "chosen", spErr.class, spErr.msg)})
+			}
+			return ErrorResult(strings.Join([]string{"search failed",
+				t.failureLine(id, "chosen", spErr.class, spErr.msg),
+				t.failureLine(entries.fallbackID, "fallback", spErr2.class, spErr2.msg)}, "\n"))
+		}
 	}
 	// Hard fail: capability use, no fallback, or final class.
 	tail := fmt.Sprintf("This call named %s, so the fallback was not tried. "+
