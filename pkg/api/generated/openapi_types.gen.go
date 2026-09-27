@@ -5750,6 +5750,48 @@ func (e OperationResultValidationOutcome) Valid() bool {
 	}
 }
 
+// Defines values for PerformancePendingApplyChangedFields.
+const (
+	PerformancePendingApplyChangedFieldsGoalMaxRounds     PerformancePendingApplyChangedFields = "goal_max_rounds"
+	PerformancePendingApplyChangedFieldsMaxParallelAgents PerformancePendingApplyChangedFields = "max_parallel_agents"
+	PerformancePendingApplyChangedFieldsMaxToolIterations PerformancePendingApplyChangedFields = "max_tool_iterations"
+	PerformancePendingApplyChangedFieldsToolsOnDemand     PerformancePendingApplyChangedFields = "tools_on_demand"
+)
+
+// Valid indicates whether the value is a known member of the PerformancePendingApplyChangedFields enum.
+func (e PerformancePendingApplyChangedFields) Valid() bool {
+	switch e {
+	case PerformancePendingApplyChangedFieldsGoalMaxRounds:
+		return true
+	case PerformancePendingApplyChangedFieldsMaxParallelAgents:
+		return true
+	case PerformancePendingApplyChangedFieldsMaxToolIterations:
+		return true
+	case PerformancePendingApplyChangedFieldsToolsOnDemand:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PerformancePendingApplyStage.
+const (
+	PerformancePendingApplyStageRefresh PerformancePendingApplyStage = "refresh"
+	PerformancePendingApplyStageReload  PerformancePendingApplyStage = "reload"
+)
+
+// Valid indicates whether the value is a known member of the PerformancePendingApplyStage enum.
+func (e PerformancePendingApplyStage) Valid() bool {
+	switch e {
+	case PerformancePendingApplyStageRefresh:
+		return true
+	case PerformancePendingApplyStageReload:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PerformanceReloadFailedDetailsChangedFields.
 const (
 	PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds     PerformanceReloadFailedDetailsChangedFields = "goal_max_rounds"
@@ -18674,6 +18716,21 @@ type PendingRestartEntry struct {
 	PersistedValue interface{} `json:"persisted_value"`
 }
 
+// PerformancePendingApply Server-side "saved but not applied yet" state of the Performance settings (issue #904). Set when a PUT /performance ends in a performance_reload_failed answer (its writes are committed on disk but not in force). It survives page reloads and new sessions — it lives in the gateway, not in the client — and is cleared only when a later refresh of the running configuration AND an agent registry reload both succeed: a later successful PUT /performance (which always reloads the agents while this state is set), or a successful manual or automatic configuration reload. A gateway restart applies everything on disk, so a restarted gateway never reports it.
+type PerformancePendingApply struct {
+	// ChangedFields Every Performance setting saved but not yet in force — the union of the changed_fields of each failed PUT since the settings were last fully applied, in contract enum order.
+	ChangedFields []PerformancePendingApplyChangedFields `json:"changed_fields"`
+
+	// Stage How far the most recent failed apply got (same meaning as PerformanceReloadFailedDetails.stage). refresh — the running configuration was NOT refreshed: the other fields of this response still show the OLD values. reload — the running configuration shows the NEW values but the agents were not rebuilt: their next turns keep the old limits.
+	Stage PerformancePendingApplyStage `json:"stage"`
+}
+
+// PerformancePendingApplyChangedFields defines model for PerformancePendingApply.ChangedFields.
+type PerformancePendingApplyChangedFields string
+
+// PerformancePendingApplyStage How far the most recent failed apply got (same meaning as PerformanceReloadFailedDetails.stage). refresh — the running configuration was NOT refreshed: the other fields of this response still show the OLD values. reload — the running configuration shows the NEW values but the agents were not rebuilt: their next turns keep the old limits.
+type PerformancePendingApplyStage string
+
 // PerformanceReloadFailedDetails details of the 500 performance_reload_failed answer of PUT /performance (issue #904). Every write of the request is COMMITTED (config.json and any lowered agents are on disk and audited; nothing is rolled back), but the new values are not in force yet. stage says how far the apply got, and so what GET /performance shows until the next reload or restart.
 type PerformanceReloadFailedDetails struct {
 	// ChangedFields The performance settings this request changed, i.e. the fields present in the PUT body. The client names these — and only these — in its "saved, not applied yet" message.
@@ -18729,6 +18786,9 @@ type PerformanceSettings struct {
 
 	// MaxToolIterationsSavedState State of the global tool-iteration limit as saved in config.json (agents.defaults.max_tool_iterations), used for the Settings warning (issue #904, tool-iteration-limit spec D13). The file is never rewritten to correct it; the value in force is PerformanceSettings.max_tool_iterations. "ok" = saved value within 1–1000 and in force as saved; "missing" = key absent (the shipped default is in force); "below_min" = saved value below 1 (0 and negative included; the shipped default is in force); "above_max" = saved value above 1000 (1000 is in force).
 	MaxToolIterationsSavedState *MaxToolIterationsSavedState `json:"max_tool_iterations_saved_state,omitempty"`
+
+	// PendingApply Server-side "saved but not applied yet" state of the Performance settings (issue #904). Set when a PUT /performance ends in a performance_reload_failed answer (its writes are committed on disk but not in force). It survives page reloads and new sessions — it lives in the gateway, not in the client — and is cleared only when a later refresh of the running configuration AND an agent registry reload both succeed: a later successful PUT /performance (which always reloads the agents while this state is set), or a successful manual or automatic configuration reload. A gateway restart applies everything on disk, so a restarted gateway never reports it.
+	PendingApply *PerformancePendingApply `json:"pending_apply,omitempty"`
 
 	// ToolsOnDemand Tool-loading mode. true (default) — agents load tools on demand to keep each message small (the compressed tool manifest); a load step is required before a non-core tool is callable. false — every allowed tool is sent on every message with no loading step (more tokens per message). Maps to tools.manifest.compressed. Always present in responses.
 	ToolsOnDemand *bool `json:"tools_on_demand,omitempty"`
