@@ -97,6 +97,7 @@ export interface MessageFrame {
   auto_approve?: boolean | null;
   metadata?: {
     model_name?: string;
+    reasoning_effort?: string;
     workspace_id?: string;
     workspace_setup_kickoff?: boolean;
     [key: string]: unknown;
@@ -169,6 +170,7 @@ export interface DoneStats {
   turn_failed?: boolean;
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";
+  outcome?: "no_answer";
   [key: string]: unknown;
 }
 
@@ -178,6 +180,20 @@ export interface DoneFrame {
   stats?: DoneStats;
   turn_id?: string;
   message_id?: string;
+  seq?: number;
+}
+
+export interface ThinkingFrame {
+  type: "thinking";
+  session_id: string;
+  entry_id: string;
+  text: string;
+  elapsed_ms: number;
+  thinking_tokens?: number;
+  provider_summary?: boolean;
+  final?: boolean;
+  turn_id?: string;
+  agent_id?: string;
   seq?: number;
 }
 
@@ -379,6 +395,7 @@ export interface ReplayMessageFrame {
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";
   client_message_id?: string;
+  outcome?: "no_answer";
 }
 
 export interface ReplayErrorFrame {
@@ -392,6 +409,25 @@ export interface ReplayErrorFrame {
   payload?: {
     llm_error: LLMErrorReplay;
   };
+}
+
+export interface ReplayThinkingFrame {
+  type: "replay_thinking";
+  session_id: string;
+  entry_id: string;
+  thinking_text: string;
+  elapsed_ms: number;
+  thinking_tokens?: number;
+  provider_summary?: boolean;
+  turn_id?: string;
+  agent_id?: string;
+  timestamp?: string;
+}
+
+export interface SeqSkipFrame {
+  type: "seq_skip";
+  session_id: string;
+  seq: number;
 }
 
 export interface ToolResultProjectionFrame {
@@ -1076,6 +1112,7 @@ export type WsFrame =
   | MessageStatusFrame
   | TokenFrame
   | DoneFrame
+  | ThinkingFrame
   | ErrorFrame
   | ToolCallStartFrame
   | ToolCallResultFrame
@@ -1087,6 +1124,8 @@ export type WsFrame =
   | TaskRunStatusFrame
   | ReplayMessageFrame
   | ReplayErrorFrame
+  | ReplayThinkingFrame
+  | SeqSkipFrame
   | ToolResultProjectionFrame
   | RateLimitFrame
   | LibraryChangedFrame
@@ -1174,6 +1213,7 @@ export type ServerFrame =
   | MessageStatusFrame
   | TokenFrame
   | DoneFrame
+  | ThinkingFrame
   | ErrorFrame
   | ToolCallStartFrame
   | ToolCallResultFrame
@@ -1185,6 +1225,8 @@ export type ServerFrame =
   | TaskRunStatusFrame
   | ReplayMessageFrame
   | ReplayErrorFrame
+  | ReplayThinkingFrame
+  | SeqSkipFrame
   | ToolResultProjectionFrame
   | RateLimitFrame
   | LibraryChangedFrame

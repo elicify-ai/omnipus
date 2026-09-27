@@ -4937,6 +4937,21 @@ func (e MessageGoalOutcomeEnding) Valid() bool {
 	}
 }
 
+// Defines values for MessageOutcome.
+const (
+	MessageOutcomeNoAnswer MessageOutcome = "no_answer"
+)
+
+// Valid indicates whether the value is a known member of the MessageOutcome enum.
+func (e MessageOutcome) Valid() bool {
+	switch e {
+	case MessageOutcomeNoAnswer:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageRole.
 const (
 	MessageRoleAssistant MessageRole = "assistant"
@@ -5285,6 +5300,7 @@ const (
 	MessageTypeJudgeVerdict MessageType = "judge_verdict"
 	MessageTypeMessage      MessageType = "message"
 	MessageTypeSystem       MessageType = "system"
+	MessageTypeThinking     MessageType = "thinking"
 	MessageTypeToolCall     MessageType = "tool_call"
 	MessageTypeTurnCanceled MessageType = "turn_canceled"
 )
@@ -5299,6 +5315,8 @@ func (e MessageType) Valid() bool {
 	case MessageTypeMessage:
 		return true
 	case MessageTypeSystem:
+		return true
+	case MessageTypeThinking:
 		return true
 	case MessageTypeToolCall:
 		return true
@@ -8384,6 +8402,21 @@ func (e SessionDetailMessagesGoalOutcomeEnding) Valid() bool {
 	}
 }
 
+// Defines values for SessionDetailMessagesOutcome.
+const (
+	SessionDetailMessagesOutcomeNoAnswer SessionDetailMessagesOutcome = "no_answer"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesOutcome enum.
+func (e SessionDetailMessagesOutcome) Valid() bool {
+	switch e {
+	case SessionDetailMessagesOutcomeNoAnswer:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionDetailMessagesRole.
 const (
 	SessionDetailMessagesRoleAssistant SessionDetailMessagesRole = "assistant"
@@ -8732,6 +8765,7 @@ const (
 	SessionDetailMessagesTypeJudgeVerdict SessionDetailMessagesType = "judge_verdict"
 	SessionDetailMessagesTypeMessage      SessionDetailMessagesType = "message"
 	SessionDetailMessagesTypeSystem       SessionDetailMessagesType = "system"
+	SessionDetailMessagesTypeThinking     SessionDetailMessagesType = "thinking"
 	SessionDetailMessagesTypeToolCall     SessionDetailMessagesType = "tool_call"
 	SessionDetailMessagesTypeTurnCanceled SessionDetailMessagesType = "turn_canceled"
 )
@@ -8746,6 +8780,8 @@ func (e SessionDetailMessagesType) Valid() bool {
 	case SessionDetailMessagesTypeMessage:
 		return true
 	case SessionDetailMessagesTypeSystem:
+		return true
+	case SessionDetailMessagesTypeThinking:
 		return true
 	case SessionDetailMessagesTypeToolCall:
 		return true
@@ -12585,6 +12621,9 @@ type Agent struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
+	// ReasoningEffort Reasoning-effort level for the agent's primary model (D23), as persisted. Absent/empty means "Default" (D9) — the model's own catalog default. Level names come from the model's catalog reasoning_options — never hardcoded.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
 
@@ -12719,6 +12758,9 @@ type AgentCreateRequestMain struct {
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
 
+	// ReasoningEffort Reasoning-effort level for the agent's primary model (D23). Omitted means "Default" (D9) — the model's own catalog default. Level names come from the model's catalog reasoning_options — never hardcoded.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
 	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
 
@@ -12808,6 +12850,9 @@ type AgentCreateRequestSubagent struct {
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort Reasoning-effort level for the agent's primary model (D23). Omitted means "Default" (D9) — the model's own catalog default. Level names come from the model's catalog reasoning_options — never hardcoded.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
 	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
@@ -13013,6 +13058,9 @@ type AgentTokenEntry struct {
 
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
+
+		// Thinking Thinking tokens reported by the provider for this model. A SUBSET of out (Anthropic OutputTokensDetails.ThinkingTokens, OpenAI completion_tokens_details.reasoning_tokens precedents) — never added on top of total. Absent when the provider does not report one.
+		Thinking *int `json:"thinking,omitempty"`
 
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
@@ -13276,6 +13324,9 @@ type AgentUpdateRequest struct {
 
 	// Provider New explicit routing key for the primary model (O3 two-field model). When set, resolution uses it directly and never infers a provider. Allowed on all agents. Send an empty string to clear it (fall back to default-provider resolution).
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort New reasoning-effort level for the agent's primary model (D23). Omitting this field leaves the stored value unchanged; send an empty string to clear it back to "Default" (D9) — same convention as `provider`. A model change (this same PUT's `model`/`provider` fields) does not implicitly clear it; a client that wants both must send both.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
@@ -13671,6 +13722,12 @@ type CatalogModel struct {
 
 	// Name Display name (Unicode preserved).
 	Name string `json:"name"`
+
+	// Reasoning Whether this model supports a reasoning/thinking request at all (ADR-067 schema 2.0.0 extension, D25). Absent is equivalent to false. A model with reasoning true but an empty/absent reasoning_options is treated identically to reasoning false by every effort control — only "Default" is offered (US-6 AC2).
+	Reasoning *bool `json:"reasoning,omitempty"`
+
+	// ReasoningOptions Named reasoning-effort levels this model accepts, as supplied by the catalog (D7/D25) — never hardcoded by Omnipus. No enum: level names are vendor-defined strings (e.g. "low"/"medium"/"high"), passed through Omnipus's typed catalog plumbing (parse.go DTO -> document.go::Model -> served.go) unchanged, IN ASCENDING EFFORT ORDER (the catalog is the source of order; Omnipus preserves it, does not re-sort). Absence and an empty array are semantically identical (no positions to slide beyond "Default").
+	ReasoningOptions *[]string `json:"reasoning_options,omitempty"`
 
 	// ReleaseDate Release date as YYYY-MM-DD. Optional; undated models sort last in the picker.
 	ReleaseDate *string `json:"release_date,omitempty"`
@@ -14319,6 +14376,9 @@ type DefaultModel struct {
 	// Provider Catalog provider id or operator-named custom row id. Empty when unset.
 	Provider string `json:"provider"`
 
+	// ReasoningEffort Reasoning-effort level for the instance default model (D23). Absent/empty means "Default" (D9) — the model's own catalog default. Level names come from the model's catalog reasoning_options — never hardcoded.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
 	// WindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 	WindowSource *DefaultModelWindowSource `json:"window_source,omitempty"`
 
@@ -14333,6 +14393,9 @@ type DefaultModelWindowSource string
 type DefaultModelUpdateRequest struct {
 	Model    string `json:"model"`
 	Provider string `json:"provider"`
+
+	// ReasoningEffort Reasoning-effort level for the instance default model (D23). Omit to leave/set it unset ("Default" — D9): this PUT replaces the whole persisted pair, so an omitted field here is not stored.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 }
 
 // DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment).
@@ -15701,6 +15764,9 @@ type FallbackModel struct {
 
 	// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort Reasoning-effort level for THIS fallback model (D23) — the per-entry sibling of model/provider, covering both agent-chain and recap-chain uses of this shared schema. Absent/empty means "Default" (D9) — the model's own catalog default. Level names come from the model's catalog reasoning_options — never hardcoded.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 }
 
 // FileSearchHit One file-search hit (ADR-081; spec MV-14). A hit is ONE matching line — the first match position on that line is what `line` reports; two matches on one line are still one hit. A name/path match is one hit with match_kind "name" and no line.
@@ -17745,6 +17811,9 @@ type MemorySettings struct {
 	// RecapModel Model slug used for session recap / summarization. A fast, cheap model is recommended. Empty → falls back to agents.defaults.model_name (the overall default model), then to the session's own agent model. Maps to agents.defaults.recap_model.
 	RecapModel *string `json:"recap_model,omitempty"`
 
+	// RecapReasoningEffort Reasoning-effort level for the recap model (D23). Sibling of recap_model. Empty/absent means "Default" (D9) — the recap model's own catalog default. Level names come from the recap model's catalog reasoning_options — never hardcoded. Maps to agents.defaults.recap_reasoning_effort.
+	RecapReasoningEffort *string `json:"recap_reasoning_effort,omitempty"`
+
 	// SessionDays Number of days to retain session JSONL files before the retention sweep removes them. Maps to storage.retention.session_days.
 	SessionDays *int `json:"session_days,omitempty"`
 }
@@ -17790,6 +17859,9 @@ type Message struct {
 	// DescendantsCanceled IDs of descendant turns that were canceled in cascade — present only on type="turn_canceled" entries (FR-6a).
 	DescendantsCanceled *[]string `json:"descendants_canceled,omitempty"`
 
+	// ElapsedMs Wall-clock duration of the thinking round. Present only on type=thinking entries.
+	ElapsedMs *int `json:"elapsed_ms,omitempty"`
+
 	// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
 	GoalOutcome *struct {
 		// CriteriaTotal Number of criteria the deciding Judge verdict evaluated (`per_criterion` length). OPTIONAL — present only when a verdict exists. With `ending: met` every one of them was confirmed.
@@ -17825,6 +17897,12 @@ type Message struct {
 
 	// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
 	Model *string `json:"model,omitempty"`
+
+	// Outcome Present only when a round produced thinking but no answer text (D20/D26): the entry's content is the notice text ("The model (Provider · Model) did not respond"), and this marker drives the SPA's console-strip render plus turnWasReasoningOnly classification. Absent on every ordinary assistant entry.
+	Outcome *MessageOutcome `json:"outcome,omitempty"`
+
+	// ProviderSummary True when this thinking entry is Anthropic's model-generated summary (D18), driving the "summarized thinking" label. Present only when true.
+	ProviderSummary *bool `json:"provider_summary,omitempty"`
 
 	// Role Author role. Absent on compaction entries.
 	Role *MessageRole `json:"role,omitempty"`
@@ -17968,6 +18046,12 @@ type Message struct {
 	// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
 	SystemSubtype *MessageSystemSubtype `json:"system_subtype,omitempty"`
 
+	// ThinkingText Redacted display text for a type=thinking entry (dedicated field, NOT content, so no content-consumer can ever read it as an answer). Present only on type=thinking entries.
+	ThinkingText *string `json:"thinking_text,omitempty"`
+
+	// ThinkingTokens Thinking-token count when the provider reported one. Present only on type=thinking entries that have a count; absent when the provider reported none.
+	ThinkingTokens *int `json:"thinking_tokens,omitempty"`
+
 	// Timestamp RFC3339 timestamp when this entry was recorded.
 	Timestamp time.Time `json:"timestamp"`
 
@@ -18014,7 +18098,7 @@ type Message struct {
 	// TurnId Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
 	TurnId *string `json:"turn_id,omitempty"`
 
-	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "thinking" entries (ADR-095) carry the redacted display copy of one round's reasoning in `thinking_text`; they carry no `role` (empty role is deliberate — no role-keyed reader may classify a thinking entry as a user or assistant utterance). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 	Type *MessageType `json:"type,omitempty"`
 
 	// Verdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
@@ -18096,6 +18180,9 @@ type MessageCancelMethod string
 // MessageGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type MessageGoalOutcomeEnding string
 
+// MessageOutcome Present only when a round produced thinking but no answer text (D20/D26): the entry's content is the notice text ("The model (Provider · Model) did not respond"), and this marker drives the SPA's console-strip render plus turnWasReasoningOnly classification. Absent on every ordinary assistant entry.
+type MessageOutcome string
+
 // MessageRole Author role. Absent on compaction entries.
 type MessageRole string
 
@@ -18138,7 +18225,7 @@ type MessageToolCallsStatus string
 // MessageTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
 type MessageTruncationReason string
 
-// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "thinking" entries (ADR-095) carry the redacted display copy of one round's reasoning in `thinking_text`; they carry no `role` (empty role is deliberate — no role-keyed reader may classify a thinking entry as a user or assistant utterance). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 type MessageType string
 
 // MessageVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
@@ -18306,6 +18393,9 @@ type ModelTokens struct {
 
 	// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 	Out *int `json:"out,omitempty"`
+
+	// Thinking Thinking tokens reported by the provider for this model. A SUBSET of out (Anthropic OutputTokensDetails.ThinkingTokens, OpenAI completion_tokens_details.reasoning_tokens precedents) — never added on top of total. Absent when the provider does not report one.
+	Thinking *int `json:"thinking,omitempty"`
 
 	// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 	Total int `json:"total"`
@@ -21083,6 +21173,9 @@ type Session struct {
 			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
 
+			// Thinking Thinking tokens reported by the provider for this model. A SUBSET of out (Anthropic OutputTokensDetails.ThinkingTokens, OpenAI completion_tokens_details.reasoning_tokens precedents) — never added on top of total. Absent when the provider does not report one.
+			Thinking *int `json:"thinking,omitempty"`
+
 			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
@@ -21200,6 +21293,9 @@ type SessionDetail struct {
 		// DescendantsCanceled IDs of descendant turns that were canceled in cascade — present only on type="turn_canceled" entries (FR-6a).
 		DescendantsCanceled *[]string `json:"descendants_canceled,omitempty"`
 
+		// ElapsedMs Wall-clock duration of the thinking round. Present only on type=thinking entries.
+		ElapsedMs *int `json:"elapsed_ms,omitempty"`
+
 		// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
 		GoalOutcome *struct {
 			// CriteriaTotal Number of criteria the deciding Judge verdict evaluated (`per_criterion` length). OPTIONAL — present only when a verdict exists. With `ending: met` every one of them was confirmed.
@@ -21235,6 +21331,12 @@ type SessionDetail struct {
 
 		// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
 		Model *string `json:"model,omitempty"`
+
+		// Outcome Present only when a round produced thinking but no answer text (D20/D26): the entry's content is the notice text ("The model (Provider · Model) did not respond"), and this marker drives the SPA's console-strip render plus turnWasReasoningOnly classification. Absent on every ordinary assistant entry.
+		Outcome *SessionDetailMessagesOutcome `json:"outcome,omitempty"`
+
+		// ProviderSummary True when this thinking entry is Anthropic's model-generated summary (D18), driving the "summarized thinking" label. Present only when true.
+		ProviderSummary *bool `json:"provider_summary,omitempty"`
 
 		// Role Author role. Absent on compaction entries.
 		Role *SessionDetailMessagesRole `json:"role,omitempty"`
@@ -21378,6 +21480,12 @@ type SessionDetail struct {
 		// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
 		SystemSubtype *SessionDetailMessagesSystemSubtype `json:"system_subtype,omitempty"`
 
+		// ThinkingText Redacted display text for a type=thinking entry (dedicated field, NOT content, so no content-consumer can ever read it as an answer). Present only on type=thinking entries.
+		ThinkingText *string `json:"thinking_text,omitempty"`
+
+		// ThinkingTokens Thinking-token count when the provider reported one. Present only on type=thinking entries that have a count; absent when the provider reported none.
+		ThinkingTokens *int `json:"thinking_tokens,omitempty"`
+
 		// Timestamp RFC3339 timestamp when this entry was recorded.
 		Timestamp time.Time `json:"timestamp"`
 
@@ -21424,7 +21532,7 @@ type SessionDetail struct {
 		// TurnId Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
 		TurnId *string `json:"turn_id,omitempty"`
 
-		// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+		// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "thinking" entries (ADR-095) carry the redacted display copy of one round's reasoning in `thinking_text`; they carry no `role` (empty role is deliberate — no role-keyed reader may classify a thinking entry as a user or assistant utterance). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 		Type *SessionDetailMessagesType `json:"type,omitempty"`
 
 		// Verdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
@@ -21557,6 +21665,9 @@ type SessionDetail struct {
 				// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 				Out *int `json:"out,omitempty"`
 
+				// Thinking Thinking tokens reported by the provider for this model. A SUBSET of out (Anthropic OutputTokensDetails.ThinkingTokens, OpenAI completion_tokens_details.reasoning_tokens precedents) — never added on top of total. Absent when the provider does not report one.
+				Thinking *int `json:"thinking,omitempty"`
+
 				// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 				Total int `json:"total"`
 			} `json:"by_model,omitempty"`
@@ -21615,6 +21726,9 @@ type SessionDetailMessagesCancelMethod string
 // SessionDetailMessagesGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type SessionDetailMessagesGoalOutcomeEnding string
 
+// SessionDetailMessagesOutcome Present only when a round produced thinking but no answer text (D20/D26): the entry's content is the notice text ("The model (Provider · Model) did not respond"), and this marker drives the SPA's console-strip render plus turnWasReasoningOnly classification. Absent on every ordinary assistant entry.
+type SessionDetailMessagesOutcome string
+
 // SessionDetailMessagesRole Author role. Absent on compaction entries.
 type SessionDetailMessagesRole string
 
@@ -21657,7 +21771,7 @@ type SessionDetailMessagesToolCallsStatus string
 // SessionDetailMessagesTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
 type SessionDetailMessagesTruncationReason string
 
-// SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+// SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "thinking" entries (ADR-095) carry the redacted display copy of one round's reasoning in `thinking_text`; they carry no `role` (empty role is deliberate — no role-keyed reader may classify a thinking entry as a user or assistant utterance). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 type SessionDetailMessagesType string
 
 // SessionDetailMessagesVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
@@ -22323,6 +22437,9 @@ type SessionStats struct {
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
+		// Thinking Thinking tokens reported by the provider for this model. A SUBSET of out (Anthropic OutputTokensDetails.ThinkingTokens, OpenAI completion_tokens_details.reasoning_tokens precedents) — never added on top of total. Absent when the provider does not report one.
+		Thinking *int `json:"thinking,omitempty"`
+
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
@@ -22350,6 +22467,18 @@ type SessionStats struct {
 
 	// ToolCalls Total number of tool calls made in this session.
 	ToolCalls int `json:"tool_calls"`
+}
+
+// ShowThinkingToggle The calling login's show-thinking preference (ADR-095 D1). Returned by both GET and PUT /auth/preferences/thinking. Never serializes any UserConfig hash or token material.
+type ShowThinkingToggle struct {
+	// ShowThinking Whether thinking/reasoning text is shown to this login on every gated surface. Off by default for every new and existing login (greenfield — absence means off, no backfill).
+	ShowThinking bool `json:"show_thinking"`
+}
+
+// ShowThinkingToggleRequest Request body for PUT /auth/preferences/thinking.
+type ShowThinkingToggleRequest struct {
+	// ShowThinking New value for the calling login's show-thinking preference.
+	ShowThinking bool `json:"show_thinking"`
 }
 
 // SignInPollRequest Body for POST /providers/{id}/sign-in/poll (ADR-068 FR-044, added 2026-08-23 §8b). Identifies which open device-code session to check.
@@ -23758,6 +23887,9 @@ type TokenUsageSummary struct {
 			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
 
+			// Thinking Thinking tokens reported by the provider for this model. A SUBSET of out (Anthropic OutputTokensDetails.ThinkingTokens, OpenAI completion_tokens_details.reasoning_tokens precedents) — never added on top of total. Absent when the provider does not report one.
+			Thinking *int `json:"thinking,omitempty"`
+
 			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
@@ -23785,6 +23917,9 @@ type TokenUsageSummary struct {
 
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
+
+		// Thinking Thinking tokens reported by the provider for this model. A SUBSET of out (Anthropic OutputTokensDetails.ThinkingTokens, OpenAI completion_tokens_details.reasoning_tokens precedents) — never added on top of total. Absent when the provider does not report one.
+		Thinking *int `json:"thinking,omitempty"`
 
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
@@ -25788,6 +25923,9 @@ type ClaimPlatformAuthJSONRequestBody = PlatformAuthClaimRequest
 
 // StartPlatformAuthJSONRequestBody defines body for StartPlatformAuth for application/json ContentType.
 type StartPlatformAuthJSONRequestBody = PlatformAuthStartRequest
+
+// PutUserThinkingPreferenceJSONRequestBody defines body for PutUserThinkingPreference for application/json ContentType.
+type PutUserThinkingPreferenceJSONRequestBody = ShowThinkingToggleRequest
 
 // ReAuthJSONRequestBody defines body for ReAuth for application/json ContentType.
 type ReAuthJSONRequestBody = ReAuthRequest

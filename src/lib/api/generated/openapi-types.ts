@@ -164,6 +164,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/preferences/thinking": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the calling login's show-thinking preference
+         * @description Returns whether thinking/reasoning text is currently shown to the calling login on every gated surface (live chat, replay, REST session reads). Per-login (ADR-095 D1/D2), live-read, not restart-gated.
+         */
+        get: operations["getUserThinkingPreference"];
+        /**
+         * Set the calling login's show-thinking preference
+         * @description Idempotent — re-PUTting the same value succeeds without error (the SPA flips this optimistically and can race itself). Persists UserConfig.ShowThinking for the calling login only; never affects any other login. CSRF-protected like every other state-changing request (X-CSRF-Token echoing __Host-csrf). Audited under the toggle's own audit event (login + new boolean, never a token or hash).
+         */
+        put: operations["putUserThinkingPreference"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/reauth": {
         parameters: {
             query?: never;
@@ -4250,11 +4274,11 @@ export interface components {
              */
             client_message_id?: string;
             /**
-             * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+             * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "thinking" entries (ADR-095) carry the redacted display copy of one round's reasoning in `thinking_text`; they carry no `role` (empty role is deliberate — no role-keyed reader may classify a thinking entry as a user or assistant utterance). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
              * @example message
              * @enum {string}
              */
-            type?: "message" | "compaction" | "system" | "tool_call" | "turn_canceled" | "judge_verdict";
+            type?: "message" | "compaction" | "system" | "tool_call" | "turn_canceled" | "judge_verdict" | "thinking";
             /**
              * @description Author role. Absent on compaction entries.
              * @example assistant
@@ -4360,6 +4384,32 @@ export interface components {
              */
             system_subtype?: "browser_handover_notice" | "goal_outcome" | "subagent_start" | "subagent_state" | "subagent_message" | "subagent_end";
             goal_outcome?: components["schemas"]["GoalOutcome"];
+            /**
+             * @description Redacted display text for a type=thinking entry (dedicated field, NOT content, so no content-consumer can ever read it as an answer). Present only on type=thinking entries.
+             * @example Considering three approaches...
+             */
+            thinking_text?: string;
+            /**
+             * @description Wall-clock duration of the thinking round. Present only on type=thinking entries.
+             * @example 4200
+             */
+            elapsed_ms?: number;
+            /**
+             * @description Thinking-token count when the provider reported one. Present only on type=thinking entries that have a count; absent when the provider reported none.
+             * @example 512
+             */
+            thinking_tokens?: number;
+            /**
+             * @description True when this thinking entry is Anthropic's model-generated summary (D18), driving the "summarized thinking" label. Present only when true.
+             * @example true
+             */
+            provider_summary?: boolean;
+            /**
+             * @description Present only when a round produced thinking but no answer text (D20/D26): the entry's content is the notice text ("The model (Provider · Model) did not respond"), and this marker drives the SPA's console-strip render plus turnWasReasoningOnly classification. Absent on every ordinary assistant entry.
+             * @example no_answer
+             * @enum {string}
+             */
+            outcome?: "no_answer";
             subagent_start?: components["schemas"]["SubagentStartFrame"];
             subagent_state?: components["schemas"]["SubagentStateFrame"];
             subagent_message?: components["schemas"]["SubagentMessageFrame"];
@@ -7959,6 +8009,11 @@ export interface components {
              */
             provider?: string;
             /**
+             * @description Reasoning-effort level for the agent's primary model (D23), as persisted. Absent/empty means "Default" (D9) — the model's own catalog default. Level names come from the model's catalog reasoning_options — never hardcoded.
+             * @example high
+             */
+            reasoning_effort?: string;
+            /**
              * @description Short description of the agent's purpose.
              * @example General-purpose coding assistant
              */
@@ -8245,6 +8300,11 @@ export interface components {
              */
             provider?: string;
             /**
+             * @description Reasoning-effort level for the agent's primary model (D23). Omitted means "Default" (D9) — the model's own catalog default. Level names come from the model's catalog reasoning_options — never hardcoded.
+             * @example high
+             */
+            reasoning_effort?: string;
+            /**
              * @description Hex color code for the agent avatar.
              * @example #D4AF37
              */
@@ -8342,6 +8402,11 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            /**
+             * @description Reasoning-effort level for the agent's primary model (D23). Omitted means "Default" (D9) — the model's own catalog default. Level names come from the model's catalog reasoning_options — never hardcoded.
+             * @example high
+             */
+            reasoning_effort?: string;
             /**
              * @description Hex color code for the agent avatar.
              * @example #D4AF37
@@ -8504,6 +8569,8 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            /** @description New reasoning-effort level for the agent's primary model (D23). Omitting this field leaves the stored value unchanged; send an empty string to clear it back to "Default" (D9) — same convention as `provider`. A model change (this same PUT's `model`/`provider` fields) does not implicitly clear it; a client that wants both must send both. */
+            reasoning_effort?: string;
             /**
              * @description Per-agent context-window override in tokens (ADR-066 D2 rung 1, D9). Lower-only — clamped to the model's capability on resolution (a WARN names the agent and the clamp). Send null to clear. Every write triggers a registry reload so the next turn uses the new window.
              * @example 200000
@@ -8601,6 +8668,11 @@ export interface components {
              * @example anthropic
              */
             provider?: string;
+            /**
+             * @description Reasoning-effort level for THIS fallback model (D23) — the per-entry sibling of model/provider, covering both agent-chain and recap-chain uses of this shared schema. Absent/empty means "Default" (D9) — the model's own catalog default. Level names come from the model's catalog reasoning_options — never hardcoded.
+             * @example high
+             */
+            reasoning_effort?: string;
         };
         ExternalCliTool: components["schemas"]["ExternalCli"];
         /**
@@ -9837,6 +9909,11 @@ export interface components {
              */
             model: string;
             /**
+             * @description Reasoning-effort level for the instance default model (D23). Absent/empty means "Default" (D9) — the model's own catalog default. Level names come from the model's catalog reasoning_options — never hardcoded.
+             * @example high
+             */
+            reasoning_effort?: string;
+            /**
              * @description Effective context window in tokens; 0 for exempt rows.
              * @example 1048576
              */
@@ -9857,6 +9934,11 @@ export interface components {
             provider: string;
             /** @example claude-sonnet-4-6 */
             model: string;
+            /**
+             * @description Reasoning-effort level for the instance default model (D23). Omit to leave/set it unset ("Default" — D9): this PUT replaces the whole persisted pair, so an omitted field here is not stored.
+             * @example high
+             */
+            reasoning_effort?: string;
         };
         /**
          * EntitlementModel
@@ -10121,6 +10203,20 @@ export interface components {
              *     ]
              */
             inference_profiles?: ("us" | "eu" | "apac" | "jp" | "au" | "global")[];
+            /**
+             * @description Whether this model supports a reasoning/thinking request at all (ADR-067 schema 2.0.0 extension, D25). Absent is equivalent to false. A model with reasoning true but an empty/absent reasoning_options is treated identically to reasoning false by every effort control — only "Default" is offered (US-6 AC2).
+             * @example true
+             */
+            reasoning?: boolean;
+            /**
+             * @description Named reasoning-effort levels this model accepts, as supplied by the catalog (D7/D25) — never hardcoded by Omnipus. No enum: level names are vendor-defined strings (e.g. "low"/"medium"/"high"), passed through Omnipus's typed catalog plumbing (parse.go DTO -> document.go::Model -> served.go) unchanged, IN ASCENDING EFFORT ORDER (the catalog is the source of order; Omnipus preserves it, does not re-sort). Absence and an empty array are semantically identical (no positions to slide beyond "Default").
+             * @example [
+             *       "low",
+             *       "medium",
+             *       "high"
+             *     ]
+             */
+            reasoning_options?: string[];
             window_source?: components["schemas"]["ContextWindowSource"];
             /**
              * @description ADR-066 projection (X-08): true iff the provider has locality "local" and the live limits query failed or reported no context length. The SPA renders "No context length" with a link to Settings → Models → Model overrides. Never a Provider.status value.
@@ -11392,6 +11488,28 @@ export interface components {
              * @example true
              */
             enabled: boolean;
+        };
+        /**
+         * ShowThinkingToggle
+         * @description The calling login's show-thinking preference (ADR-095 D1). Returned by both GET and PUT /auth/preferences/thinking. Never serializes any UserConfig hash or token material.
+         */
+        ShowThinkingToggle: {
+            /**
+             * @description Whether thinking/reasoning text is shown to this login on every gated surface. Off by default for every new and existing login (greenfield — absence means off, no backfill).
+             * @example false
+             */
+            show_thinking: boolean;
+        };
+        /**
+         * ShowThinkingToggleRequest
+         * @description Request body for PUT /auth/preferences/thinking.
+         */
+        ShowThinkingToggleRequest: {
+            /**
+             * @description New value for the calling login's show-thinking preference.
+             * @example true
+             */
+            show_thinking: boolean;
         };
         /**
          * AuditLogUpdateResponse
@@ -13337,6 +13455,11 @@ export interface components {
              * @example z-ai/glm-4-flash
              */
             recap_model?: string;
+            /**
+             * @description Reasoning-effort level for the recap model (D23). Sibling of recap_model. Empty/absent means "Default" (D9) — the recap model's own catalog default. Level names come from the recap model's catalog reasoning_options — never hardcoded. Maps to agents.defaults.recap_reasoning_effort.
+             * @example low
+             */
+            recap_reasoning_effort?: string;
             /** @description Ordered fallback chain for the recap model, tried in order when the primary recap model fails — same shape and behaviour as an agent's fallback_models. Maps to agents.defaults.recap_fallback_models. */
             recap_fallback_models?: components["schemas"]["FallbackModel"][];
             /**
@@ -14356,6 +14479,11 @@ export interface components {
              * @example 180
              */
             out?: number;
+            /**
+             * @description Thinking tokens reported by the provider for this model. A SUBSET of out (Anthropic OutputTokensDetails.ThinkingTokens, OpenAI completion_tokens_details.reasoning_tokens precedents) — never added on top of total. Absent when the provider does not report one.
+             * @example 340
+             */
+            thinking?: number;
             /**
              * @description Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
              * @example 150
@@ -16611,6 +16739,55 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getUserThinkingPreference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current preference for the calling login. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowThinkingToggle"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    putUserThinkingPreference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShowThinkingToggleRequest"];
+            };
+        };
+        responses: {
+            /** @description Preference saved; returns the persisted state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShowThinkingToggle"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -23826,6 +24003,8 @@ export type DevicesResponse = components["schemas"]["DevicesResponse"];
 export type BackupEntry = components["schemas"]["BackupEntry"];
 export type StorageStats = components["schemas"]["StorageStats"];
 export type AuditLogToggleRequest = components["schemas"]["AuditLogToggleRequest"];
+export type ShowThinkingToggle = components["schemas"]["ShowThinkingToggle"];
+export type ShowThinkingToggleRequest = components["schemas"]["ShowThinkingToggleRequest"];
 export type AuditLogUpdateResponse = components["schemas"]["AuditLogUpdateResponse"];
 export type SkillTrustUpdateRequest = components["schemas"]["SkillTrustUpdateRequest"];
 export type SkillTrustUpdateResponse = components["schemas"]["SkillTrustUpdateResponse"];

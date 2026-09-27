@@ -134,6 +134,7 @@ type SessionStats = {
 type ModelTokens = {
   in?: number | undefined;
   out?: number | undefined;
+  thinking?: number | undefined;
   cache_read?: number | undefined;
   cache_write?: number | undefined;
   total: number;
@@ -154,6 +155,7 @@ type Message = {
         | "tool_call"
         | "turn_canceled"
         | "judge_verdict"
+        | "thinking"
       )
     | undefined;
   role?: ("user" | "assistant" | "system") | undefined;
@@ -187,6 +189,11 @@ type Message = {
       )
     | undefined;
   goal_outcome?: GoalOutcome | undefined;
+  thinking_text?: string | undefined;
+  elapsed_ms?: number | undefined;
+  thinking_tokens?: number | undefined;
+  provider_summary?: boolean | undefined;
+  outcome?: "no_answer" | undefined;
   subagent_start?:
     | {
         type: "subagent_start";
@@ -1197,6 +1204,7 @@ type Agent = {
   icon?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
+  reasoning_effort?: string | undefined;
   description?: string | undefined;
   status: "active" | "idle" | "draft" | "error";
   soul: string;
@@ -1242,6 +1250,7 @@ type AgentToolsMcpServerBinding = {
 type FallbackModel = {
   model: string;
   provider?: string | undefined;
+  reasoning_effort?: string | undefined;
 };
 type AgentModelParams = Partial<{
   temperature: number;
@@ -1297,6 +1306,7 @@ type AgentCreateRequestMain = {
   description?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
+  reasoning_effort?: string | undefined;
   color?: string | undefined;
   icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
@@ -1329,6 +1339,7 @@ type AgentCreateRequestSubagent = {
   description?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
+  reasoning_effort?: string | undefined;
   color?: string | undefined;
   icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
@@ -1372,6 +1383,7 @@ type AgentUpdateRequest = {
   description?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
+  reasoning_effort?: string | undefined;
   context_window_override?: (number | null) | undefined;
   soul?: string | undefined;
   max_tool_iterations?: number | undefined;
@@ -1507,6 +1519,7 @@ type ProviderDeleteRequest = Partial<{
 type DefaultModelUpdateRequest = {
   provider: string;
   model: string;
+  reasoning_effort?: string | undefined;
 };
 type ProviderDeleteResponse = {
   deleted: boolean;
@@ -1517,6 +1530,7 @@ type ProviderDeleteResponse = {
 type DefaultModel = {
   provider: string;
   model: string;
+  reasoning_effort?: string | undefined;
   context_window?: number | undefined;
   window_source?: ContextWindowSource | undefined;
   window_unknown?: boolean | undefined;
@@ -1604,6 +1618,8 @@ type CatalogModel = {
   inference_profiles?:
     | Array<"us" | "eu" | "apac" | "jp" | "au" | "global">
     | undefined;
+  reasoning?: boolean | undefined;
+  reasoning_options?: Array<string> | undefined;
   window_source?: ContextWindowSource | undefined;
   window_unknown?: boolean | undefined;
 };
@@ -2181,6 +2197,7 @@ type MemorySettings = Partial<{
   bootstrap_recap_enabled: boolean;
   bootstrap_recap_max_per_minute: number;
   recap_model: string;
+  recap_reasoning_effort: string;
   recap_fallback_models: Array<FallbackModel>;
   session_days: number;
   memory_retros_days: number;
@@ -2904,6 +2921,10 @@ export const OperationResult: z.ZodType<OperationResult> = z.object({
   error: z.string().optional(),
   validation: ProviderValidation.optional(),
 });
+export const ShowThinkingToggle = z.object({ show_thinking: z.boolean() });
+export const ShowThinkingToggleRequest = z.object({
+  show_thinking: z.boolean(),
+});
 export const ReAuthRequest = z.object({ password: z.string().min(1).max(72) });
 export const ReAuthResponse = z.object({
   verified: z.boolean(),
@@ -3014,6 +3035,7 @@ export const ModelTokens: z.ZodType<ModelTokens> = z
   .object({
     in: z.number().int().gte(0).optional(),
     out: z.number().int().gte(0).optional(),
+    thinking: z.number().int().gte(0).optional(),
     cache_read: z.number().int().gte(0).optional(),
     cache_write: z.number().int().gte(0).optional(),
     total: z.number().int().gte(0),
@@ -3170,6 +3192,7 @@ export const Message: z.ZodType<Message> = z.object({
       "tool_call",
       "turn_canceled",
       "judge_verdict",
+      "thinking",
     ])
     .optional(),
   role: z.enum(["user", "assistant", "system"]).optional(),
@@ -3203,6 +3226,11 @@ export const Message: z.ZodType<Message> = z.object({
     ])
     .optional(),
   goal_outcome: GoalOutcome.optional(),
+  thinking_text: z.string().optional(),
+  elapsed_ms: z.number().int().gte(0).optional(),
+  thinking_tokens: z.number().int().gte(0).optional(),
+  provider_summary: z.boolean().optional(),
+  outcome: z.literal("no_answer").optional(),
   subagent_start: z
     .object({
       type: z.literal("subagent_start"),
@@ -3343,6 +3371,7 @@ export const AgentToolsCfg: z.ZodType<AgentToolsCfg> = z
 export const FallbackModel: z.ZodType<FallbackModel> = z.object({
   model: z.string().max(256),
   provider: z.string().max(64).optional(),
+  reasoning_effort: z.string().max(64).optional(),
 }).strict();
 export const AgentModelParams: z.ZodType<AgentModelParams> = z
   .object({
@@ -3404,6 +3433,7 @@ export const Agent: z.ZodType<Agent> = z
     icon: z.string().max(50).optional(),
     model: z.string().max(256).optional(),
     provider: z.string().max(64).optional(),
+    reasoning_effort: z.string().max(64).optional(),
     description: z.string().optional(),
     status: z.enum(["active", "idle", "draft", "error"]),
     soul: z.string(),
@@ -3449,6 +3479,7 @@ export const AgentCreateRequestMain =
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
+    reasoning_effort: z.string().max(64).optional(),
     color: z
       .string()
       .regex(/^#[0-9A-Fa-f]{6}$/)
@@ -3476,6 +3507,7 @@ export const AgentCreateRequestSubagent =
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
+    reasoning_effort: z.string().max(64).optional(),
     color: z
       .string()
       .regex(/^#[0-9A-Fa-f]{6}$/)
@@ -3533,6 +3565,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   description: z.string().optional(),
   model: z.string().optional(),
   provider: z.string().max(64).optional(),
+  reasoning_effort: z.string().max(64).optional(),
   context_window_override: z.number().int().gte(1).nullish(),
   soul: z.string().min(1).optional(),
   max_tool_iterations: z.number().int().optional(),
@@ -3934,6 +3967,7 @@ export const MemorySettings: z.ZodType<MemorySettings> = z
     bootstrap_recap_enabled: z.boolean(),
     bootstrap_recap_max_per_minute: z.number().int(),
     recap_model: z.string().max(256),
+    recap_reasoning_effort: z.string().max(64),
     recap_fallback_models: z.array(FallbackModel),
     session_days: z.number().int(),
     memory_retros_days: z.number().int(),
@@ -4189,6 +4223,8 @@ export const CatalogModel: z.ZodType<CatalogModel> = z.object({
   inference_profiles: z
     .array(z.enum(["us", "eu", "apac", "jp", "au", "global"]))
     .optional(),
+  reasoning: z.boolean().optional(),
+  reasoning_options: z.array(z.string().min(1).max(64)).optional(),
   window_source: ContextWindowSource.optional(),
   window_unknown: z.boolean().optional(),
 });
@@ -4237,6 +4273,7 @@ export const ProvidersCatalog: z.ZodType<ProvidersCatalog> = z.object({
 export const DefaultModel: z.ZodType<DefaultModel> = z.object({
   provider: z.string().max(64),
   model: z.string().max(256),
+  reasoning_effort: z.string().max(64).optional(),
   context_window: z.number().int().gte(0).optional(),
   window_source: ContextWindowSource.optional(),
   window_unknown: z.boolean().optional(),
@@ -4245,6 +4282,7 @@ export const DefaultModelUpdateRequest: z.ZodType<DefaultModelUpdateRequest> =
   z.object({
     provider: z.string().min(1).max(64),
     model: z.string().min(1).max(256),
+    reasoning_effort: z.string().max(64).optional(),
   });
 export const ProviderUpdateRequest = z
   .object({
@@ -7648,6 +7686,60 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 503,
         description: `Platform sign-in is not configured on this instance.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/auth/preferences/thinking",
+    alias: "getUserThinkingPreference",
+    description: `Returns whether thinking/reasoning text is currently shown to the calling login on every gated surface (live chat, replay, REST session reads). Per-login (ADR-095 D1/D2), live-read, not restart-gated.
+`,
+    requestFormat: "json",
+    response: z.object({ show_thinking: z.boolean() }),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/auth/preferences/thinking",
+    alias: "putUserThinkingPreference",
+    description: `Idempotent — re-PUTting the same value succeeds without error (the SPA flips this optimistically and can race itself). Persists UserConfig.ShowThinking for the calling login only; never affects any other login. CSRF-protected like every other state-changing request (X-CSRF-Token echoing __Host-csrf). Audited under the toggle&#x27;s own audit event (login + new boolean, never a token or hash).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ show_thinking: z.boolean() }),
+      },
+    ],
+    response: z.object({ show_thinking: z.boolean() }),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -14454,6 +14546,7 @@ export const MessageFrameBase = z
     metadata: z
     .object({
       model_name: z.string().min(1).max(256).optional(),
+      reasoning_effort: z.string().max(64).optional(),
       workspace_id: z.string().min(1).max(128).optional(),
       workspace_setup_kickoff: z.boolean().optional(),
     })
@@ -14561,6 +14654,7 @@ export const DoneStats = z
     turn_failed: z.boolean().optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
+    outcome: z.literal("no_answer").optional(),
   })
   .passthrough();
 
@@ -14571,6 +14665,22 @@ export const DoneFrame = z
     stats: DoneStats.optional(),
     turn_id: z.string().optional(),
     message_id: z.string().optional(),
+    seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const ThinkingFrame = z
+  .object({
+    type: z.literal("thinking"),
+    session_id: z.string().min(1).max(128),
+    entry_id: z.string(),
+    text: z.string().max(65536),
+    elapsed_ms: z.number().int().min(0),
+    thinking_tokens: z.number().int().min(0).optional(),
+    provider_summary: z.boolean().optional(),
+    final: z.boolean().optional(),
+    turn_id: z.string().optional(),
+    agent_id: z.string().optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -14816,6 +14926,7 @@ export const ReplayMessageFrame = z
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
     client_message_id: z.string().optional(),
+    outcome: z.literal("no_answer").optional(),
   })
   .strict();
 
@@ -14833,6 +14944,29 @@ export const ReplayErrorFrame = z
       llm_error: LLMErrorReplay,
     })
     .strict().optional(),
+  })
+  .strict();
+
+export const ReplayThinkingFrame = z
+  .object({
+    type: z.literal("replay_thinking"),
+    session_id: z.string().min(1),
+    entry_id: z.string(),
+    thinking_text: z.string(),
+    elapsed_ms: z.number().int().min(0),
+    thinking_tokens: z.number().int().min(0).optional(),
+    provider_summary: z.boolean().optional(),
+    turn_id: z.string().optional(),
+    agent_id: z.string().optional(),
+    timestamp: z.string().optional(),
+  })
+  .strict();
+
+export const SeqSkipFrame = z
+  .object({
+    type: z.literal("seq_skip"),
+    session_id: z.string().min(1),
+    seq: z.number().int().min(1),
   })
   .strict();
 
@@ -15673,6 +15807,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   MessageStatusFrame,
   TokenFrame,
   DoneFrame,
+  ThinkingFrame,
   ErrorFrame,
   ToolCallStartFrame,
   ToolCallResultFrame,
@@ -15684,6 +15819,8 @@ export const WsFrame = z.discriminatedUnion("type", [
   TaskRunStatusFrame,
   ReplayMessageFrame,
   ReplayErrorFrame,
+  ReplayThinkingFrame,
+  SeqSkipFrame,
   ToolResultProjectionFrame,
   RateLimitFrame,
   LibraryChangedFrame,

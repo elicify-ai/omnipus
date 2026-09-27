@@ -86,3 +86,12 @@ properties:
       user canceled the turn mid-stream) or "max_output_tokens" (the
       provider's output-token limit cut the answer off before it finished).
       Absent on a normal turn.
+  outcome:
+    type: string
+    enum:
+      - no_answer
+    description: >
+      Mirrors Message.outcome for the live done frame (same pattern as
+      truncated/truncation_reason, ADR-087 D2): a reasoning-only round with
+      no answer text renders the notice immediately, before reload/replay.
+      Absent on a normal turn.

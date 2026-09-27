@@ -134,6 +134,17 @@ properties:
           `model` (and then to the active session's default) when
           absent. Empty string is treated the same as absent.
         example: "z-ai/glm-5-turbo"
+      reasoning_effort:
+        type: string
+        maxLength: 64
+        description: >
+          Reasoning-effort level for THIS turn only (D23) — same per-turn
+          override semantics as metadata.model_name: the server honors it
+          when present and falls back to the resolved agent/default model's
+          effort otherwise. Absent means "no per-turn override"; an empty
+          string is treated the same as absent. Level names come from the
+          model's catalog reasoning_options — never hardcoded.
+        example: "high"
       workspace_id:
         type: string
         minLength: 1

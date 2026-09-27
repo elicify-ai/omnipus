@@ -1,0 +1,55 @@
+title: ReplayThinkingFrame
+description: >
+  Server → client. Replay of a type=thinking transcript entry
+  (ADR-095). A dedicated frame — not ReplayMessageFrame — because a
+  thinking entry carries no role (spec C3 invariant) and
+  ReplayMessageFrame.role is required and falls back to "assistant"
+  when empty (the same bug class ReplayErrorFrame was built to avoid
+  for system-error entries; see ReplayErrorFrame's description).
+  Emitted only to a connection whose gate (ADR-095 D2) says visible;
+  a hidden thinking row is a SeqSkipFrame instead, both live and
+  during journal-tail replay. Session-scoped (registered in
+  SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit
+  (FR-089) — emitted by the gateway replay path.
+type: object
+required:
+  - type
+  - session_id
+  - entry_id
+  - thinking_text
+  - elapsed_ms
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: replay_thinking
+  session_id:
+    type: string
+    minLength: 1
+    description: Session being replayed.
+  entry_id:
+    type: string
+    description: >-
+      Server-assigned transcript entry ID (matches TranscriptEntry.ID
+      — the same id the live ThinkingFrame carried for this round).
+  thinking_text:
+    type: string
+    description: Redacted display text, identical to the stored entry.
+  elapsed_ms:
+    type: integer
+    minimum: 0
+  thinking_tokens:
+    type: integer
+    minimum: 0
+    description: Absent when the provider reported none.
+  provider_summary:
+    type: boolean
+    description: Present only when true (D18).
+  turn_id:
+    type: string
+    description: Turn-correlation id, from TranscriptEntry.TurnID.
+  agent_id:
+    type: string
+  timestamp:
+    type: string
+    format: date-time

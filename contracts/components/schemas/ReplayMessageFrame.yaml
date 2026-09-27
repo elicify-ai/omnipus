@@ -97,3 +97,14 @@ properties:
       frame means "cancelled" — every entry written before this field
       existed predates it and was always a cancel.
     example: "max_output_tokens"
+  outcome:
+    type: string
+    enum:
+      - no_answer
+    description: >
+      Present only when a round produced thinking but no answer text
+      (D20/D26): the entry's content is the notice text ("The model
+      (Provider · Model) did not respond"), and this marker drives the
+      SPA's console-strip render plus turnWasReasoningOnly classification.
+      Absent on every ordinary assistant entry.
+    example: "no_answer"

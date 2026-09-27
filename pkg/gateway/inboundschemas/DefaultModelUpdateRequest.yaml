@@ -23,3 +23,11 @@ properties:
     minLength: 1
     maxLength: 256
     example: "claude-sonnet-4-6"
+  reasoning_effort:
+    type: string
+    maxLength: 64
+    description: >
+      Reasoning-effort level for the instance default model (D23). Omit to
+      leave/set it unset ("Default" — D9): this PUT replaces the whole
+      persisted pair, so an omitted field here is not stored.
+    example: "high"

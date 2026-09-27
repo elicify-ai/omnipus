@@ -21,6 +21,15 @@ properties:
       provider split was recorded carry 0 here with the whole turn total in
       total, so a 0 means "not recorded", not "no output tokens".
     example: 180
+  thinking:
+    type: integer
+    minimum: 0
+    description: >
+      Thinking tokens reported by the provider for this model. A SUBSET of
+      out (Anthropic OutputTokensDetails.ThinkingTokens, OpenAI
+      completion_tokens_details.reasoning_tokens precedents) — never added
+      on top of total. Absent when the provider does not report one.
+    example: 340
   cache_read:
     type: integer
     minimum: 0

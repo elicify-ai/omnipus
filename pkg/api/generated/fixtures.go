@@ -670,6 +670,7 @@ func FixtureSession_Populated() Session {
 				CacheWrite *int `json:"cache_write,omitempty"`
 				In         *int `json:"in,omitempty"`
 				Out        *int `json:"out,omitempty"`
+				Thinking   *int `json:"thinking,omitempty"`
 				Total      int  `json:"total"`
 			} `json:"by_model,omitempty"`
 			Cost             float64 `json:"cost"`
@@ -717,6 +718,7 @@ func FixtureSession_Edge() Session {
 				CacheWrite *int `json:"cache_write,omitempty"`
 				In         *int `json:"in,omitempty"`
 				Out        *int `json:"out,omitempty"`
+				Thinking   *int `json:"thinking,omitempty"`
 				Total      int  `json:"total"`
 			} `json:"by_model,omitempty"`
 			Cost             float64 `json:"cost"`

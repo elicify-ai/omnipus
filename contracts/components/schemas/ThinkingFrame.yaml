@@ -1,0 +1,81 @@
+title: ThinkingFrame
+description: >
+  Server → client. Live thinking/reasoning row for one round. `text` is
+  the WHOLE redacted text-so-far (hold-back applied) — the client
+  REPLACES its rendered text with each frame rather than appending
+  (ADR-095 D4). The `final: true` frame carries the STORED redacted
+  text (post-strip, pkg/agent/loop_truncation.go::stripOrphanToolCallMarkup),
+  so a reload renders byte-identical to the live view's end state
+  (spec D3). Producers coalesce to at most one frame per 250ms per
+  round (latest state wins). Published unconditionally by producers,
+  filtered per connection at delivery (ADR-095 D2) — a connection whose
+  gate says hidden receives a SeqSkipFrame at this frame's seq instead.
+  Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a)
+  per the ADR-057 W5 audit (FR-089) — genuinely round-produced.
+type: object
+required:
+  - type
+  - session_id
+  - entry_id
+  - text
+  - elapsed_ms
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: thinking
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  entry_id:
+    type: string
+    description: >-
+      The transcript thinking row this frame belongs to. Minted by the
+      producer at capture start (spec D2/D3) — the SAME id the stored
+      type=thinking transcript entry carries (Message.yaml/C3), so live
+      and replayed rows are one row by construction.
+  text:
+    type: string
+    maxLength: 65536
+    description: >-
+      Whole redacted text-so-far. REPLACES the client's rendered text
+      (never append). Beyond the 65536-byte cap live updates stop; the
+      stored row still replays in full.
+  elapsed_ms:
+    type: integer
+    minimum: 0
+    description: Elapsed wall-clock time since this round's thinking started.
+  thinking_tokens:
+    type: integer
+    minimum: 0
+    description: >-
+      Thinking-token count when the provider reports one. Absent
+      otherwise (not zero — the provider did not report a count).
+  provider_summary:
+    type: boolean
+    description: >-
+      True when this text is a model-generated summary rather than raw
+      reasoning (Anthropic "summarized thinking", D18). Present only
+      when true.
+  final:
+    type: boolean
+    description: >-
+      True on a round's last thinking frame. Present only when true.
+  turn_id:
+    type: string
+    description: Correlates this frame with the round/turn that produced it.
+  agent_id:
+    type: string
+    description: >-
+      Agent that produced this round's thinking — same rationale as
+      TokenFrame.agent_id (background/delegated sub-turns).
+  seq:
+    type: integer
+    format: int64
+    minimum: 1
+    description: >-
+      Per-session sequence number (#823 catch-up redesign), same
+      semantics as TokenFrame.seq. A newer ThinkingFrame for the same
+      entry_id supersedes the prior full payload in the journal: the
+      prior slot becomes a SeqSkipFrame at its original seq (spec D31).

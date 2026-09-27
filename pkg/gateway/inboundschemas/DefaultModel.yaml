@@ -26,6 +26,15 @@ properties:
     maxLength: 256
     description: Bare catalog model id. Empty when unset.
     example: "z-ai/glm-5.2"
+  reasoning_effort:
+    type: string
+    maxLength: 64
+    description: >
+      Reasoning-effort level for the instance default model (D23).
+      Absent/empty means "Default" (D9) — the model's own catalog default.
+      Level names come from the model's catalog reasoning_options — never
+      hardcoded.
+    example: "high"
   context_window:
     type: integer
     minimum: 0

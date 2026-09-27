@@ -524,8 +524,10 @@ type DoneStats struct {
 	DurationMs               *float64 `json:"duration_ms,omitempty"`
 	FramesEmitted            *float64 `json:"frames_emitted,omitempty"`
 	OrphanCount              *float64 `json:"orphan_count,omitempty"`
-	ReplayError              *bool    `json:"replay_error,omitempty"`
-	Tokens                   *float64 `json:"tokens,omitempty"`
+	// Mirrors Message.outcome for the live done frame (same pattern as truncated/truncation_reason, ADR-087 D2): a reasoning-only round with no answer text renders the notice immediately, before reload/replay. Absent on a normal turn.
+	Outcome     *string  `json:"outcome,omitempty"`
+	ReplayError *bool    `json:"replay_error,omitempty"`
+	Tokens      *float64 `json:"tokens,omitempty"`
 	// Deprecated (#823 catch-up redesign, Q5): the gateway never drops frames under backpressure now (WS close 4008 + reconnect instead). Never set.
 	TokensDropped *float64 `json:"tokens_dropped,omitempty"`
 	// ADR-087 D2 (finding #10). Mirrors Message.truncation_reason for the live done frame, so a turn cut off while the user is still watching renders the notice immediately instead of only after reload/reattach via replay. Only present when true. Absent on a normal turn.
@@ -899,7 +901,9 @@ type ReplayMessageFrame struct {
 	Content         string  `json:"content"`
 	Id              *string `json:"id,omitempty"`
 	// Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy entries written before per-turn model recording landed.
-	Model     *string `json:"model,omitempty"`
+	Model *string `json:"model,omitempty"`
+	// Present only when a round produced thinking but no answer text (D20/D26): the entry's content is the notice text ("The model (Provider · Model) did not respond"), and this marker drives the SPA's console-strip render plus turnWasReasoningOnly classification. Absent on every ordinary assistant entry.
+	Outcome   *string `json:"outcome,omitempty"`
 	Role      string  `json:"role"`
 	SessionId string  `json:"session_id"`
 	Timestamp *string `json:"timestamp,omitempty"`
@@ -908,6 +912,26 @@ type ReplayMessageFrame struct {
 	// ADR-087 D2. Populated from TranscriptEntry.TruncationReason. Narrows why truncated is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a truncated: true frame means "cancelled" — every entry written before this field existed predates it and was always a cancel.
 	TruncationReason *string `json:"truncation_reason,omitempty"`
 	// Turn-correlation identifier (from TranscriptEntry.TurnID), stamped on assistant entries and turn-cancellation entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels, without relying on stream adjacency (async delegation can interleave other agents'/turns' frames in between). Omitted for legacy entries written before turn-id stamping landed.
+	TurnId *string `json:"turn_id,omitempty"`
+	Type   string  `json:"type"`
+}
+
+// ReplayThinkingFrame — Server → client. Replay of a type=thinking transcript entry (ADR-095). A dedicated frame — not ReplayMessageFrame — because a thinking entry carries no role (spec C3 invariant) and ReplayMessageFrame.role is required and falls back to "assistant" when empty (the same bug class ReplayErrorFrame was built to avoid for system-error entries; see ReplayErrorFrame's description). Emitted only to a connection whose gate (ADR-095 D2) says visible; a hidden thinking row is a SeqSkipFrame instead, both live and during journal-tail replay. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the gateway replay path.
+type ReplayThinkingFrame struct {
+	AgentId   *string `json:"agent_id,omitempty"`
+	ElapsedMs int     `json:"elapsed_ms"`
+	// Server-assigned transcript entry ID (matches TranscriptEntry.ID — the same id the live ThinkingFrame carried for this round).
+	EntryId string `json:"entry_id"`
+	// Present only when true (D18).
+	ProviderSummary *bool `json:"provider_summary,omitempty"`
+	// Session being replayed.
+	SessionId string `json:"session_id"`
+	// Redacted display text, identical to the stored entry.
+	ThinkingText string `json:"thinking_text"`
+	// Absent when the provider reported none.
+	ThinkingTokens *int    `json:"thinking_tokens,omitempty"`
+	Timestamp      *string `json:"timestamp,omitempty"`
+	// Turn-correlation id, from TranscriptEntry.TurnID.
 	TurnId *string `json:"turn_id,omitempty"`
 	Type   string  `json:"type"`
 }
@@ -923,6 +947,14 @@ type ReplayWarningFrame struct {
 // ReplayWarningStats — Diagnostic counters in a ReplayWarningFrame.
 type ReplayWarningStats struct {
 	DuplicateToolCallIdCount *int `json:"duplicate_tool_call_id_count,omitempty"`
+}
+
+// SeqSkipFrame — Server → client. Content-free placeholder substituted, both live and during reconnect journal-tail replay, for a ThinkingFrame this connection's gate hides (ADR-095 D2 Boundary 1) or for a ThinkingFrame payload superseded by a newer one at the same entry_id (spec D31). Carries zero thinking bytes: no text, entry_id, thinking metadata, or extension map. Passed through the ordinary contiguous sequence gate (src/store/chat/cursor.ts::gateFrameBySeq), advances the cursor (src/store/chat/slices/frames.ts::applySeqGate), and performs no transcript/UI mutation. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES).
+type SeqSkipFrame struct {
+	// The sequence position of the hidden or superseded thinking payload this placeholder occupies. Always present (unlike TokenFrame.seq, which is optional) — the placeholder's entire purpose is to keep the cursor contiguous at a definite position.
+	Seq       int64  `json:"seq"`
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
 }
 
 // SessionCloseAckFrame — Server → client session close acknowledged. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output.
@@ -1107,6 +1139,30 @@ type TaskStatusChangedFrame struct {
 	Status    string  `json:"status"`
 	TaskId    string  `json:"task_id"`
 	Type      string  `json:"type"`
+}
+
+// ThinkingFrame — Server → client. Live thinking/reasoning row for one round. `text` is the WHOLE redacted text-so-far (hold-back applied) — the client REPLACES its rendered text with each frame rather than appending (ADR-095 D4). The `final: true` frame carries the STORED redacted text (post-strip, pkg/agent/loop_truncation.go::stripOrphanToolCallMarkup), so a reload renders byte-identical to the live view's end state (spec D3). Producers coalesce to at most one frame per 250ms per round (latest state wins). Published unconditionally by producers, filtered per connection at delivery (ADR-095 D2) — a connection whose gate says hidden receives a SeqSkipFrame at this frame's seq instead. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely round-produced. Keep in sync by hand with contracts/components/schemas/ThinkingFrame.yaml.
+type ThinkingFrame struct {
+	// Agent that produced this round's thinking — same rationale as TokenFrame.agent_id (background/delegated sub-turns).
+	AgentId *string `json:"agent_id,omitempty"`
+	// Elapsed wall-clock time since this round's thinking started.
+	ElapsedMs int `json:"elapsed_ms"`
+	// The transcript thinking row this frame belongs to. Minted by the producer at capture start (spec D2/D3) — the SAME id the stored type=thinking transcript entry carries (Message.yaml/C3), so live and replayed rows are one row by construction.
+	EntryId string `json:"entry_id"`
+	// True on a round's last thinking frame. Present only when true.
+	Final *bool `json:"final,omitempty"`
+	// True when this text is a model-generated summary rather than raw reasoning (Anthropic "summarized thinking", D18). Present only when true.
+	ProviderSummary *bool `json:"provider_summary,omitempty"`
+	// Per-session sequence number (#823 catch-up redesign), same semantics as TokenFrame.seq. A newer ThinkingFrame for the same entry_id supersedes the prior full payload in the journal: the prior slot becomes a SeqSkipFrame at its original seq (spec D31).
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	// Whole redacted text-so-far. REPLACES the client's rendered text (never append). Beyond the 65536-byte cap live updates stop; the stored row still replays in full.
+	Text string `json:"text"`
+	// Thinking-token count when the provider reports one. Absent otherwise (not zero — the provider did not report a count).
+	ThinkingTokens *int `json:"thinking_tokens,omitempty"`
+	// Correlates this frame with the round/turn that produced it.
+	TurnId *string `json:"turn_id,omitempty"`
+	Type   string  `json:"type"`
 }
 
 // TokenFrame — Server → client partial LLM response token. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.

@@ -36,6 +36,7 @@ export const MessageFrameBase = z
     metadata: z
     .object({
       model_name: z.string().min(1).max(256).optional(),
+      reasoning_effort: z.string().max(64).optional(),
       workspace_id: z.string().min(1).max(128).optional(),
       workspace_setup_kickoff: z.boolean().optional(),
     })
@@ -130,6 +131,7 @@ export const DoneStats = z
     turn_failed: z.boolean().optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
+    outcome: z.literal("no_answer").optional(),
   })
   .passthrough();
 
@@ -140,6 +142,22 @@ export const DoneFrame = z
     stats: DoneStats.optional(),
     turn_id: z.string().optional(),
     message_id: z.string().optional(),
+    seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const ThinkingFrame = z
+  .object({
+    type: z.literal("thinking"),
+    session_id: z.string().min(1).max(128),
+    entry_id: z.string(),
+    text: z.string().max(65536),
+    elapsed_ms: z.number().int().min(0),
+    thinking_tokens: z.number().int().min(0).optional(),
+    provider_summary: z.boolean().optional(),
+    final: z.boolean().optional(),
+    turn_id: z.string().optional(),
+    agent_id: z.string().optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -385,6 +403,7 @@ export const ReplayMessageFrame = z
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
     client_message_id: z.string().optional(),
+    outcome: z.literal("no_answer").optional(),
   })
   .strict();
 
@@ -402,6 +421,29 @@ export const ReplayErrorFrame = z
       llm_error: LLMErrorReplay,
     })
     .strict().optional(),
+  })
+  .strict();
+
+export const ReplayThinkingFrame = z
+  .object({
+    type: z.literal("replay_thinking"),
+    session_id: z.string().min(1),
+    entry_id: z.string(),
+    thinking_text: z.string(),
+    elapsed_ms: z.number().int().min(0),
+    thinking_tokens: z.number().int().min(0).optional(),
+    provider_summary: z.boolean().optional(),
+    turn_id: z.string().optional(),
+    agent_id: z.string().optional(),
+    timestamp: z.string().optional(),
+  })
+  .strict();
+
+export const SeqSkipFrame = z
+  .object({
+    type: z.literal("seq_skip"),
+    session_id: z.string().min(1),
+    seq: z.number().int().min(1),
   })
   .strict();
 
@@ -1242,6 +1284,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   MessageStatusFrame,
   TokenFrame,
   DoneFrame,
+  ThinkingFrame,
   ErrorFrame,
   ToolCallStartFrame,
   ToolCallResultFrame,
@@ -1253,6 +1296,8 @@ export const WsFrame = z.discriminatedUnion("type", [
   TaskRunStatusFrame,
   ReplayMessageFrame,
   ReplayErrorFrame,
+  ReplayThinkingFrame,
+  SeqSkipFrame,
   ToolResultProjectionFrame,
   RateLimitFrame,
   LibraryChangedFrame,

@@ -45,6 +45,15 @@ properties:
       agents. Send an empty string to clear it (fall back to default-provider
       resolution).
     example: "openrouter"
+  reasoning_effort:
+    type: string
+    maxLength: 64
+    description: >
+      New reasoning-effort level for the agent's primary model (D23).
+      Omitting this field leaves the stored value unchanged; send an empty
+      string to clear it back to "Default" (D9) — same convention as
+      `provider`. A model change (this same PUT's `model`/`provider` fields)
+      does not implicitly clear it; a client that wants both must send both.
   context_window_override:
     type: integer
     minimum: 1

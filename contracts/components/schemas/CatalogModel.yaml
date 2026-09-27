@@ -98,6 +98,31 @@ properties:
       `global` profile is never auto-selected. Absent or empty means only
       on-demand (regional, unprefixed) access exists.
     example: ["us", "eu"]
+  reasoning:
+    type: boolean
+    description: >
+      Whether this model supports a reasoning/thinking request at all
+      (ADR-067 schema 2.0.0 extension, D25). Absent is equivalent to false.
+      A model with reasoning true but an empty/absent reasoning_options is
+      treated identically to reasoning false by every effort control — only
+      "Default" is offered (US-6 AC2).
+    example: true
+  reasoning_options:
+    type: array
+    items:
+      type: string
+      minLength: 1
+      maxLength: 64
+    description: >
+      Named reasoning-effort levels this model accepts, as supplied by the
+      catalog (D7/D25) — never hardcoded by Omnipus. No enum: level names
+      are vendor-defined strings (e.g. "low"/"medium"/"high"), passed
+      through Omnipus's typed catalog plumbing (parse.go DTO ->
+      document.go::Model -> served.go) unchanged, IN ASCENDING EFFORT ORDER
+      (the catalog is the source of order; Omnipus preserves it, does not
+      re-sort). Absence and an empty array are semantically identical (no
+      positions to slide beyond "Default").
+    example: ["low", "medium", "high"]
   window_source:
     $ref: './ContextWindowSource.yaml'
   window_unknown:

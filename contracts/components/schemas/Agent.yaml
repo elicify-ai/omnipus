@@ -103,6 +103,15 @@ properties:
       and never infers one. Empty/absent for agents that predate the migration or
       whose model resolves via the default provider.
     example: "openrouter"
+  reasoning_effort:
+    type: string
+    maxLength: 64
+    description: >
+      Reasoning-effort level for the agent's primary model (D23), as
+      persisted. Absent/empty means "Default" (D9) — the model's own
+      catalog default. Level names come from the model's catalog
+      reasoning_options — never hardcoded.
+    example: "high"
   description:
     type: string
     description: Short description of the agent's purpose.

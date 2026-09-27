@@ -35,3 +35,13 @@ properties:
       agent's primary model's provider. This is the FR-007 contract: a
       rate-limited primary does NOT poison the fallback's provider.
     example: "anthropic"
+  reasoning_effort:
+    type: string
+    maxLength: 64
+    description: >
+      Reasoning-effort level for THIS fallback model (D23) — the per-entry
+      sibling of model/provider, covering both agent-chain and recap-chain
+      uses of this shared schema. Absent/empty means "Default" (D9) — the
+      model's own catalog default. Level names come from the model's catalog
+      reasoning_options — never hardcoded.
+    example: "high"

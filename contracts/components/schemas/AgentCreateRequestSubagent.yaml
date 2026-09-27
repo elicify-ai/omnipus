@@ -54,6 +54,14 @@ properties:
       infers a provider. Optional; when omitted the model resolves via the default
       provider.
     example: "openrouter"
+  reasoning_effort:
+    type: string
+    maxLength: 64
+    description: >
+      Reasoning-effort level for the agent's primary model (D23). Omitted
+      means "Default" (D9) — the model's own catalog default. Level names
+      come from the model's catalog reasoning_options — never hardcoded.
+    example: "high"
   color:
     type: string
     pattern: '^#[0-9A-Fa-f]{6}$'

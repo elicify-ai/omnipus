@@ -1647,6 +1647,10 @@ components:
       $ref: ./components/schemas/StorageStats.yaml
     AuditLogToggleRequest:
       $ref: ./components/schemas/AuditLogToggleRequest.yaml
+    ShowThinkingToggle:
+      $ref: ./components/schemas/ShowThinkingToggle.yaml
+    ShowThinkingToggleRequest:
+      $ref: ./components/schemas/ShowThinkingToggleRequest.yaml
     AuditLogUpdateResponse:
       $ref: ./components/schemas/AuditLogUpdateResponse.yaml
     SkillTrustUpdateRequest:
@@ -2384,6 +2388,62 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /auth/preferences/thinking:
+    get:
+      operationId: getUserThinkingPreference
+      summary: Get the calling login's show-thinking preference
+      description: >
+        Returns whether thinking/reasoning text is currently shown to the
+        calling login on every gated surface (live chat, replay, REST session
+        reads). Per-login (ADR-095 D1/D2), live-read, not restart-gated.
+      tags:
+      - auth
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Current preference for the calling login.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShowThinkingToggle'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    put:
+      operationId: putUserThinkingPreference
+      summary: Set the calling login's show-thinking preference
+      description: >
+        Idempotent — re-PUTting the same value succeeds without error (the
+        SPA flips this optimistically and can race itself). Persists
+        UserConfig.ShowThinking for the calling login only; never affects any
+        other login. CSRF-protected like every other state-changing request
+        (X-CSRF-Token echoing __Host-csrf). Audited under the toggle's own
+        audit event (login + new boolean, never a token or hash).
+      tags:
+      - auth
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShowThinkingToggleRequest'
+      responses:
+        '200':
+          description: Preference saved; returns the persisted state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShowThinkingToggle'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
         '500':
           $ref: '#/components/responses/500InternalServerError'
   /auth/reauth:

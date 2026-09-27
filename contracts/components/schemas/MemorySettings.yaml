@@ -42,6 +42,16 @@ properties:
       default model), then to the session's own agent model. Maps to
       agents.defaults.recap_model.
     example: "z-ai/glm-4-flash"
+  recap_reasoning_effort:
+    type: string
+    maxLength: 64
+    description: >
+      Reasoning-effort level for the recap model (D23). Sibling of
+      recap_model. Empty/absent means "Default" (D9) — the recap model's
+      own catalog default. Level names come from the recap model's catalog
+      reasoning_options — never hardcoded. Maps to
+      agents.defaults.recap_reasoning_effort.
+    example: "low"
   recap_fallback_models:
     type: array
     items:

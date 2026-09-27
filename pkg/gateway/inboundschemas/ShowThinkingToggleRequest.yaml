@@ -1,0 +1,11 @@
+title: ShowThinkingToggleRequest
+description: Request body for PUT /auth/preferences/thinking.
+type: object
+required:
+  - show_thinking
+additionalProperties: false
+properties:
+  show_thinking:
+    type: boolean
+    description: New value for the calling login's show-thinking preference.
+    example: true

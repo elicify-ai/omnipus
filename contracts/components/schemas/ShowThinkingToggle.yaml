@@ -1,0 +1,17 @@
+title: ShowThinkingToggle
+description: >
+  The calling login's show-thinking preference (ADR-095 D1). Returned by both
+  GET and PUT /auth/preferences/thinking. Never serializes any UserConfig
+  hash or token material.
+type: object
+required:
+  - show_thinking
+additionalProperties: false
+properties:
+  show_thinking:
+    type: boolean
+    description: >
+      Whether thinking/reasoning text is shown to this login on every gated
+      surface. Off by default for every new and existing login (greenfield —
+      absence means off, no backfill).
+    example: false
