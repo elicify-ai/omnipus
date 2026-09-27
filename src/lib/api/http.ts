@@ -4,7 +4,6 @@ import { ApiError, isApiError as isApiErrorFn } from '../api-error'
 import { maybeDevToast } from '../dev-toast'
 import { logError } from '../telemetry'
 import type { ZodType } from 'zod'
-import { useUiStore } from '@/store/ui'
 
 // ── Schema validation error ────────────────────────────────────────────────────
 //
@@ -231,8 +230,19 @@ let _plantedCookieToastAt = 0
  * `defaultUserMessage(status)`, so the server's human text only survives on
  * `body`. Falls back to the spec's verbatim recovery line when the body is
  * missing or unparseable.
+ *
+ * Awaited dynamic import (not a static top-level import): keeps @/store/ui
+ * out of http.ts's static module graph — the same policy queryClient.ts's
+ * _handleApiSchemaError already applies ("keep the ui store out of the
+ * api-module init path"). A static edge from src/lib into the store executes
+ * every vi.mock('@/store/ui') factory at test-file import time, before the
+ * test file's own top-level consts initialize (TDZ ReferenceError — the
+ * queryClient.test.ts red this removes). Ordering stays deterministic:
+ * everything before the import is synchronous (the dedup check-and-set
+ * cannot lose a race), and request() awaits this raise BEFORE rethrowing,
+ * so the toast is queued before the planted error propagates to the caller.
  */
-function raisePlantedCookieToast(err: ApiError, retry: () => Promise<unknown>): void {
+async function raisePlantedCookieToast(err: ApiError, retry: () => Promise<unknown>): Promise<void> {
   if (typeof window === 'undefined') return
   const now = Date.now()
   if (now - _plantedCookieToastAt < PLANTED_COOKIE_TOAST_DEDUP_MS) return
@@ -252,23 +262,28 @@ function raisePlantedCookieToast(err: ApiError, retry: () => Promise<unknown>): 
     }
   }
 
-  // Static import (not the lazy dynamic import queryClient.ts uses): the
-  // toast must be observable synchronously in the same tick the rejection
-  // propagates — a dynamic import would race a test-visibility window.
-  useUiStore.getState().addToast({
-    message,
-    variant: 'error',
-    action: {
-      label: 'Retry',
-      onClick: () => {
-        void retry().catch((retryErr) => {
-          // A failed user-initiated retry never re-toasts (S-4.2) and never
-          // recurses into request()'s catch (requestOnce is called directly).
-          console.warn('[api] planted-cookie retry failed', retryErr)
-        })
+  try {
+    const { useUiStore } = await import('@/store/ui')
+    useUiStore.getState().addToast({
+      message,
+      variant: 'error',
+      action: {
+        label: 'Retry',
+        onClick: () => {
+          void retry().catch((retryErr) => {
+            // A failed user-initiated retry never re-toasts (S-4.2) and never
+            // recurses into request()'s catch (requestOnce is called directly).
+            console.warn('[api] planted-cookie retry failed', retryErr)
+          })
+        },
       },
-    },
-  })
+    })
+  } catch (importErr) {
+    // Never let a failed store import mask the ORIGINAL planted error:
+    // request() rethrows it unchanged whether or not the toast raise
+    // succeeded.
+    console.warn('[api] failed to load toast store for planted-cookie recovery', importErr)
+  }
 }
 
 /**
@@ -283,7 +298,7 @@ export async function request<T>(path: string, init?: RequestInit, schema?: ZodT
     return await requestOnce(path, init, schema)
   } catch (err) {
     if (isApiErrorFn(err) && err.code === PLANTED_COOKIE_CODE) {
-      raisePlantedCookieToast(err, () => requestOnce<T>(path, init, schema))
+      await raisePlantedCookieToast(err, () => requestOnce<T>(path, init, schema))
     }
     throw err
   }
