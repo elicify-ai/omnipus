@@ -17,11 +17,11 @@
 // raw fetch, stubbed on globalThis).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { render, screen, fireEvent, act, renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
 import type { Agent, PerformanceSettings } from '@/lib/api'
-import { isToolIterationLimitRefusal } from './useToolIterationLimitRefusal'
+import { isToolIterationLimitRefusal, useToolIterationLimitRefusal } from './useToolIterationLimitRefusal'
 
 class ResizeObserverStub {
   observe() {}
@@ -247,5 +247,32 @@ describe('AgentProfile — a limit refusal belongs to one agent', () => {
     const bCalls = vi.mocked(updateAgent).mock.calls.filter((c) => c[0] === 'beta')
     expect(bCalls[0][1] as Record<string, unknown>, "B's 300 is sent, not dropped as A's refused value").toMatchObject({ max_tool_iterations: 300 })
     expect(screen.queryByText(NEUTRAL_MESSAGE, { selector: '[role="alert"]' }), 'nothing is pinned on B').toBeNull()
+  })
+})
+
+// Hook-level twin (kills S5c directly). Through the profile, re-typing the
+// limit on B calls clear() and hides a missing scope; the hook's own contract
+// — "a refusal belongs to one agent and never follows the form to another" —
+// is asserted on every read the profile makes: the pinned message, the dirty
+// hold, and the payload filter used by autosave AND the pagehide flush.
+describe('useToolIterationLimitRefusal — scoped to the agent it was recorded for', () => {
+  it("A's refused 300 is not applied to B: nothing pinned, not held dirty, not dropped from B's payload", async () => {
+    const { result, rerender } = renderHook(({ id }) => useToolIterationLimitRefusal(id), { initialProps: { id: 'agent-a' } })
+    const refusal = new ApiError(400, NEUTRAL_MESSAGE, { field: 'max_tool_iterations' })
+    const send = vi.fn(async (data: { max_tool_iterations?: number | null }) => {
+      if (data.max_tool_iterations === 300) throw refusal
+      return true
+    })
+    await act(async () => {
+      await result.current.save({ max_tool_iterations: 300, description: 'x' }, send)
+    })
+    // Instrument: on A the refusal is recorded and applied.
+    expect(result.current.messageFor(300), 'instrument: A pins its refusal').toBe(NEUTRAL_MESSAGE)
+    expect(result.current.withoutRefused({ max_tool_iterations: 300 }).max_tool_iterations, 'instrument: A drops its refused value').toBeUndefined()
+
+    rerender({ id: 'agent-b' })
+    expect(result.current.messageFor(300), 'nothing pinned on B').toBeNull()
+    expect(result.current.holdsRefused(300), 'B is not held dirty by A\'s refusal').toBe(false)
+    expect(result.current.withoutRefused({ max_tool_iterations: 300 }).max_tool_iterations, "B's 300 is sent").toBe(300)
   })
 })

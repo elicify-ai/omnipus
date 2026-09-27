@@ -69,8 +69,8 @@ func fix2AssertRefusedUnchanged(t *testing.T, api *restAPI, before map[string]st
 // ---------------------------------------------------------------------------
 
 const (
-	longS  = "ſ" // LATIN SMALL LETTER LONG S — folds to "s"
-	kelvin = "K" // KELVIN SIGN — folds to "k"
+	fix2LongS  = "ſ" // LATIN SMALL LETTER LONG S — folds to "s"
+	fix2Kelvin = "K" // KELVIN SIGN — folds to "k"
 )
 
 // instrument: the premise of every fold test — encoding/json binds the
@@ -78,29 +78,29 @@ const (
 // tests below would pass for the wrong reason, so it is asserted, not assumed.
 func TestUpdateConfig_UnicodeFold_InstrumentJSONBindsFoldedKeys(t *testing.T) {
 	var d config.AgentDefaults
-	require.NoError(t, json.Unmarshal([]byte(`{"max_tool_iteration`+longS+`":1000}`), &d))
+	require.NoError(t, json.Unmarshal([]byte(`{"max_tool_iteration`+fix2LongS+`":1000}`), &d))
 	require.Equal(t, 1000, d.MaxToolIterations,
 		"instrument: encoding/json folds U+017F onto max_tool_iterations — the bypass premise")
 	var g config.GatewayConfig
-	require.NoError(t, json.Unmarshal([]byte(`{"dev_mode_bypa`+longS+`s":true}`), &g))
+	require.NoError(t, json.Unmarshal([]byte(`{"dev_mode_bypa`+fix2LongS+`s":true}`), &g))
 	require.True(t, g.DevModeBypass, "instrument: U+017F folds onto gateway.dev_mode_bypass")
 	var probe struct {
 		Kind string `json:"kind"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(`{"`+kelvin+`ind":"x"}`), &probe))
+	require.NoError(t, json.Unmarshal([]byte(`{"`+fix2Kelvin+`ind":"x"}`), &probe))
 	require.Equal(t, "x", probe.Kind, "instrument: U+212A folds onto a key with a k")
 }
 
 func TestUpdateConfig_UnicodeFoldBypass_GlobalMaxToolIterations(t *testing.T) {
 	const seeded = `250,"max_tool_iterations_env_imported":true`
 	for _, tc := range []struct{ name, body, canonical string }{
-		{"nested global, long s", `{"agents":{"defaults":{"max_tool_iteration` + longS + `":1000}}}`,
+		{"nested global, long s", `{"agents":{"defaults":{"max_tool_iteration` + fix2LongS + `":1000}}}`,
 			string(config.AgentsDefaultsMaxToolIterations)},
-		{"dotted global, long s", `{"agents.defaults.max_tool_iteration` + longS + `":1000}`,
+		{"dotted global, long s", `{"agents.defaults.max_tool_iteration` + fix2LongS + `":1000}`,
 			string(config.AgentsDefaultsMaxToolIterations)},
-		{"nested marker, long s", `{"agents":{"defaults":{"max_tool_iteration` + longS + `_env_imported":false}}}`,
+		{"nested marker, long s", `{"agents":{"defaults":{"max_tool_iteration` + fix2LongS + `_env_imported":false}}}`,
 			string(config.AgentsDefaultsMaxToolIterationsEnvImported)},
-		{"long s in an ancestor segment", `{"agent` + longS + `":{"defaults":{"max_tool_iterations":1000}}}`,
+		{"long s in an ancestor segment", `{"agent` + fix2LongS + `":{"defaults":{"max_tool_iterations":1000}}}`,
 			string(config.AgentsDefaultsMaxToolIterations)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -118,10 +118,10 @@ func TestUpdateConfig_UnicodeFoldBypass_GlobalMaxToolIterations(t *testing.T) {
 
 func TestUpdateConfig_UnicodeFoldBypass_GatewayBlockedPaths(t *testing.T) {
 	for _, tc := range []struct{ name, body, canonical string }{
-		{"dev_mode_bypass, long s", `{"gateway":{"dev_mode_bypa` + longS + `s":true}}`, string(config.GatewayDevModeBypass)},
-		{"users, long s", `{"gateway":{"u` + longS + `ers":[{"username":"mallory","role":"admin"}]}}`, string(config.GatewayUsers)},
-		{"dotted users, long s", `{"gateway.u` + longS + `ers":[{"username":"mallory","role":"admin"}]}`, string(config.GatewayUsers)},
-		{"sandbox, long s", `{"` + longS + `andbox":{"mode":"off"}}`, "sandbox"},
+		{"dev_mode_bypass, long s", `{"gateway":{"dev_mode_bypa` + fix2LongS + `s":true}}`, string(config.GatewayDevModeBypass)},
+		{"users, long s", `{"gateway":{"u` + fix2LongS + `ers":[{"username":"mallory","role":"admin"}]}}`, string(config.GatewayUsers)},
+		{"dotted users, long s", `{"gateway.u` + fix2LongS + `ers":[{"username":"mallory","role":"admin"}]}`, string(config.GatewayUsers)},
+		{"sandbox, long s", `{"` + fix2LongS + `andbox":{"mode":"off"}}`, "sandbox"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newMTIAPI(t, "250")
