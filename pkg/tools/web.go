@@ -694,8 +694,9 @@ func (p *PerplexitySearchProvider) Search(
 }
 
 type SearXNGSearchProvider struct {
-	baseURL string
-	client  *http.Client
+	baseURL     string
+	client      *http.Client
+	ingestBound int64 // ADR-066 D10 / ADR-096 D10: <= 0 means the config default
 }
 
 func (p *SearXNGSearchProvider) Search(
@@ -722,6 +723,15 @@ func (p *SearXNGSearchProvider) Search(
 	}
 	defer resp.Body.Close()
 
+	// FR-020 / ADR-096 D10: bound the body before decode. SearXNG's base
+	// URL is operator-set, so an unbounded read can exhaust memory. The
+	// bound error is returned unwrapped so the ladder classifies it as
+	// ingest-bound and does not hop.
+	body, err := readIngestBounded(resp.Body, p.ingestBound, "SearXNG")
+	if err != nil {
+		return "", err
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("SearXNG returned status %d", resp.StatusCode)
 	}
@@ -736,7 +746,7 @@ func (p *SearXNGSearchProvider) Search(
 		} `json:"results"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return "", fmt.Errorf("failed to parse response: %w", err)
 	}
 
@@ -957,6 +967,10 @@ type WebSearchTool struct {
 	// dynamic is the ADR-096 provider map (catalogue id -> provider), built
 	// only when Roles is set; the R-table ladder dispatches over it.
 	dynamic map[string]SearchProvider
+	// constructErr is a catalogue id whose constructor failed, so it is
+	// absent from dynamic. The call reports "not usable: <cause>" and
+	// does not hop (ADR-096 D16). nil when Roles is nil.
+	constructErr map[string]string
 	// callBudget is D17a: the whole call's wall-clock budget (0 → default).
 	callBudget time.Duration
 	// redact runs over every provider message that reaches the result text.
@@ -1129,27 +1143,24 @@ func newBraveSearchProvider(opts WebSearchToolOptions, ingestBound int64) (Searc
 	return provider, 0, nil
 }
 
-// newSearXNGSearchProvider builds the SearXNG search provider from opts. It
-// cannot fail (self-hosted: no credential, no proxy client to construct), so
-// it returns no error; it takes no ingestBound because SearXNGSearchProvider
-// carries no ingestBound field.
-func newSearXNGSearchProvider(opts WebSearchToolOptions) (SearchProvider, int) {
-	// SearXNG: when SSRFChecker is present use its safe client; otherwise
-	// use a minimal stock client (SearXNG is self-hosted so no proxy needed).
-	var searXNGClient *http.Client
-	if opts.SSRFChecker != nil {
-		searXNGClient = opts.SSRFChecker.SafeClient()
-	} else {
-		searXNGClient = &http.Client{Timeout: 10 * time.Second}
+// newSearXNGSearchProvider builds the SearXNG search provider from opts.
+// The client comes from makeSearchClient, like every other provider
+// (ADR-096 D10 / AC-9): SSRF-safe when a checker is set, proxy-aware
+// otherwise. The response body is capped at ingestBound.
+func newSearXNGSearchProvider(opts WebSearchToolOptions, ingestBound int64) (SearchProvider, int, error) {
+	client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to create HTTP client for SearXNG: %w", err)
 	}
 	provider := &SearXNGSearchProvider{
-		baseURL: opts.SearXNGBaseURL,
-		client:  searXNGClient,
+		baseURL:     opts.SearXNGBaseURL,
+		client:      client,
+		ingestBound: ingestBound,
 	}
 	if opts.SearXNGMaxResults > 0 {
-		return provider, min(opts.SearXNGMaxResults, 10)
+		return provider, min(opts.SearXNGMaxResults, 10), nil
 	}
-	return provider, 0
+	return provider, 0, nil
 }
 
 // newTavilySearchProvider builds the Tavily search provider from opts. It
@@ -1322,75 +1333,54 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 	// (names only, never key values).
 	warnKeylessSearchProviders(opts)
 
-	// Priority: Perplexity > Brave > SearXNG > Tavily > DuckDuckGo > Baidu Search > GLM Search
-	if opts.PerplexityEnabled && len(opts.PerplexityAPIKeys) > 0 {
-		prov, override, err := newPerplexitySearchProvider(opts, ingestBound)
+	// Priority: Perplexity > Brave > SearXNG > Tavily > DuckDuckGo > Baidu Search > GLM Search.
+	// A constructor error fails the tool only on the legacy path (Roles nil),
+	// where this one provider is the whole tool. With Roles set, the dynamic
+	// map records the cause and the call reports "not usable" — boot continues.
+	assign := func(prov SearchProvider, override int, err error) error {
 		if err != nil {
-			return nil, err
+			if roles != nil {
+				return nil
+			}
+			return err
 		}
 		provider = prov
 		if override > 0 {
 			maxResults = override
+		}
+		return nil
+	}
+	if opts.PerplexityEnabled && len(opts.PerplexityAPIKeys) > 0 {
+		if err := assign(newPerplexitySearchProvider(opts, ingestBound)); err != nil {
+			return nil, err
 		}
 	} else if opts.BraveEnabled && len(opts.BraveAPIKeys) > 0 {
-		prov, override, err := newBraveSearchProvider(opts, ingestBound)
-		if err != nil {
+		if err := assign(newBraveSearchProvider(opts, ingestBound)); err != nil {
 			return nil, err
-		}
-		provider = prov
-		if override > 0 {
-			maxResults = override
 		}
 	} else if opts.SearXNGEnabled && opts.SearXNGBaseURL != "" {
-		prov, override := newSearXNGSearchProvider(opts)
-		provider = prov
-		if override > 0 {
-			maxResults = override
+		if err := assign(newSearXNGSearchProvider(opts, ingestBound)); err != nil {
+			return nil, err
 		}
 	} else if opts.TavilyEnabled && len(opts.TavilyAPIKeys) > 0 {
-		prov, override, err := newTavilySearchProvider(opts, ingestBound)
-		if err != nil {
+		if err := assign(newTavilySearchProvider(opts, ingestBound)); err != nil {
 			return nil, err
-		}
-		provider = prov
-		if override > 0 {
-			maxResults = override
 		}
 	} else if opts.DuckDuckGoEnabled {
-		prov, override, err := newDuckDuckGoSearchProvider(opts, ingestBound)
-		if err != nil {
+		if err := assign(newDuckDuckGoSearchProvider(opts, ingestBound)); err != nil {
 			return nil, err
-		}
-		provider = prov
-		if override > 0 {
-			maxResults = override
 		}
 	} else if opts.BaiduSearchEnabled && opts.BaiduSearchAPIKey != "" {
-		prov, override, err := newBaiduSearchProvider(opts, ingestBound)
-		if err != nil {
+		if err := assign(newBaiduSearchProvider(opts, ingestBound)); err != nil {
 			return nil, err
-		}
-		provider = prov
-		if override > 0 {
-			maxResults = override
 		}
 	} else if opts.GLMSearchEnabled && opts.GLMSearchAPIKey != "" {
-		prov, override, err := newGLMSearchProvider(opts, ingestBound)
-		if err != nil {
+		if err := assign(newGLMSearchProvider(opts, ingestBound)); err != nil {
 			return nil, err
-		}
-		provider = prov
-		if override > 0 {
-			maxResults = override
 		}
 	} else {
-		prov, override, err := newDuckDuckGoFallbackSearchProvider(opts, ingestBound)
-		if err != nil {
+		if err := assign(newDuckDuckGoFallbackSearchProvider(opts, ingestBound)); err != nil {
 			return nil, err
-		}
-		provider = prov
-		if override > 0 {
-			maxResults = override
 		}
 	}
 
@@ -1398,48 +1388,80 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 	// ladder can fail over across providers; the legacy single-provider
 	// chain above stays the path when Roles is nil.
 	var dynamic map[string]SearchProvider
+	var constructErr map[string]string
 	if roles != nil {
-		dynamic = buildDynamicSearchProviders(opts, ingestBound)
+		dynamic, constructErr = buildDynamicSearchProviders(opts, ingestBound)
 	}
 
 	return &WebSearchTool{
-		provider:   provider,
-		maxResults: maxResults,
-		roles:      roles,
-		dynamic:    dynamic,
-		callBudget: opts.CallBudget,
-		redact:     opts.Redact,
+		provider:     provider,
+		maxResults:   maxResults,
+		roles:        roles,
+		dynamic:      dynamic,
+		constructErr: constructErr,
+		callBudget:   opts.CallBudget,
+		redact:       opts.Redact,
 	}, nil
 }
 
 // buildDynamicSearchProviders constructs the whole ADR-096 provider map.
-// A provider whose constructor errors (e.g. a malformed base URL) is simply
-// absent — the R-table then reports it "switched off" rather than failing
-// the boot.
-func buildDynamicSearchProviders(opts WebSearchToolOptions, ingestBound int64) map[string]SearchProvider {
+// A constructor error is not swallowed: it is logged with the provider id
+// and the cause, and returned so the call can report "not usable: <cause>"
+// instead of a network hop (ADR-096 D16).
+func buildDynamicSearchProviders(opts WebSearchToolOptions, ingestBound int64) (map[string]SearchProvider, map[string]string) {
 	dynamic := map[string]SearchProvider{}
-	if p, _, err := newPerplexitySearchProvider(opts, ingestBound); err == nil {
+	failed := map[string]string{}
+	note := func(id string, err error) {
+		if err == nil {
+			return
+		}
+		logger.WarnCF("tool", "search provider not usable: constructor failed", map[string]any{
+			"provider": id,
+			"cause":    err.Error(),
+		})
+		failed[id] = err.Error()
+	}
+	if p, _, err := newPerplexitySearchProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderPerplexity, err)
+	} else {
 		dynamic[config.SearchProviderPerplexity] = p
 	}
-	if p, _, err := newBraveSearchProvider(opts, ingestBound); err == nil {
+	if p, _, err := newBraveSearchProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderBrave, err)
+	} else {
 		dynamic[config.SearchProviderBrave] = p
 	}
-	p, _ := newSearXNGSearchProvider(opts)
-	dynamic[config.SearchProviderSearXNG] = p
-	if p, _, err := newTavilySearchProvider(opts, ingestBound); err == nil {
+	if p, _, err := newSearXNGSearchProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderSearXNG, err)
+	} else {
+		dynamic[config.SearchProviderSearXNG] = p
+	}
+	if p, _, err := newTavilySearchProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderTavily, err)
+	} else {
 		dynamic[config.SearchProviderTavily] = p
 	}
-	if p, _, err := newDuckDuckGoSearchProvider(opts, ingestBound); err == nil {
+	if p, _, err := newDuckDuckGoSearchProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderDuckDuckGo, err)
+	} else {
 		dynamic[config.SearchProviderDuckDuckGo] = p
 	}
-	if p, _, err := newBaiduSearchProvider(opts, ingestBound); err == nil {
+	if p, _, err := newBaiduSearchProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderBaidu, err)
+	} else {
 		dynamic[config.SearchProviderBaidu] = p
 	}
-	if p, _, err := newGLMSearchProvider(opts, ingestBound); err == nil {
+	if p, _, err := newGLMSearchProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderGLM, err)
+	} else {
 		dynamic[config.SearchProviderGLM] = p
 	}
-	dynamic[config.SearchProviderExa] = newExaProvider(opts)
-	return dynamic
+	if p, err := newExaProvider(opts, ingestBound); err != nil {
+		note(config.SearchProviderExa, err)
+	} else {
+		dynamic[config.SearchProviderExa] = p
+	}
+	return dynamic, failed
 }
 
 func (t *WebSearchTool) Name() string {

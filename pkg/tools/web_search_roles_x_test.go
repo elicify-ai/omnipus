@@ -65,7 +65,10 @@ func TestExa_CamelCaseFilters(t *testing.T) {
 
 // The shipped default base URL applies when the operator left it empty.
 func TestExa_DefaultBaseURLWhenEmpty(t *testing.T) {
-	p := newExaProvider(WebSearchToolOptions{ExaAPIKey: "k", ExaEnabled: true, IngestBoundBytes: 1 << 20})
+	p, err := newExaProvider(WebSearchToolOptions{ExaAPIKey: "k", ExaEnabled: true, IngestBoundBytes: 1 << 20}, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if p.baseURL != "https://api.exa.ai/search" {
 		t.Fatalf("default exa base URL = %q", p.baseURL)
 	}

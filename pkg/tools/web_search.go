@@ -241,17 +241,25 @@ type ExaSearchProvider struct {
 
 // newExaProvider builds the Exa provider; empty base URL falls back to the
 // shipped default.
-func newExaProvider(opts WebSearchToolOptions) *ExaSearchProvider {
+func newExaProvider(opts WebSearchToolOptions, ingestBound int64) (*ExaSearchProvider, error) {
 	baseURL := opts.ExaBaseURL
 	if baseURL == "" {
 		baseURL = "https://api.exa.ai/search"
 	}
-	return &ExaSearchProvider{
-		apiKey:     opts.ExaAPIKey,
-		baseURL:    baseURL,
-		client:     &http.Client{Timeout: searchTimeout},
-		maxResults: 10,
+	// S1: the same client factory as every other provider. A stock
+	// http.Client would send the Bearer key to whatever base_url is set,
+	// including a private address the SSRF checker is supposed to block.
+	client, err := makeSearchClient(opts.SSRFChecker, opts.Proxy, searchTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP client for Exa: %w", err)
 	}
+	return &ExaSearchProvider{
+		apiKey:      opts.ExaAPIKey,
+		baseURL:     baseURL,
+		client:      client,
+		ingestBound: ingestBound,
+		maxResults:  10,
+	}, nil
 }
 
 // Failure classes (spec 292–317). Hop classes move to the fallback; final
@@ -266,6 +274,10 @@ const (
 	classRejected    = "rejected"
 	classCancelled   = "cancelled"
 	classIngestBound = "ingest-bound"
+	// classNotUsable is a constructor failure. It is not a hop class: the
+	// provider was never built, so the agent is told "not usable: <cause>"
+	// (ADR-096 D16) instead of a network retry.
+	classNotUsable = "not usable"
 )
 
 // hopClass reports whether a failure class hops to the fallback (spec "Which
@@ -365,6 +377,9 @@ func (t *WebSearchTool) runProvider(
 	req searchRequest,
 ) (string, *searchProviderError) {
 	p, ok := t.dynamic[id]
+	if reason, failed := t.constructErr[id]; failed {
+		return "", &searchProviderError{class: classNotUsable, msg: reason}
+	}
 	if !ok {
 		return "", &searchProviderError{class: classNetwork, msg: id + ": provider not constructed"}
 	}
@@ -411,31 +426,54 @@ func (t *WebSearchTool) runProvider(
 // searchProviderDefaultCount is the dynamic path's default result count.
 const searchProviderDefaultCount = 10
 
-// validSearchHostname applies the spec's site-filter rules (spec 479–527):
-// lowercase, strip ONE trailing dot, reject empty entries, wildcards, ports
-// (a ":" anywhere), and anything scheme-shaped ("https://..." carries ":").
-// Returns the normalised hostname.
+// validSearchHostname applies FR-026: the rule set of
+// pkg/gateway/video_embed_hosts.go::validVideoEmbedHosts (bare DNS name,
+// no IP literal, at most 253 characters, labels of 1-63), after the search
+// normalisation the spec adds (lowercase, one trailing dot stripped).
+// Returns the normalised hostname. A failure rejects the call; entries are
+// not dropped.
 func validSearchHostname(raw string) (string, error) {
 	h := strings.ToLower(strings.TrimSpace(raw))
 	h = strings.TrimSuffix(h, ".")
 	if h == "" {
 		return "", fmt.Errorf("empty domain entry")
 	}
-	if strings.ContainsAny(h, ":*") {
-		return "", fmt.Errorf("%q is not a bare hostname (no ports, schemes or wildcards)", raw)
+	// Length is the normalised name, so a trailing dot does not count.
+	// The raw value is not quoted: a 10 KB entry must not be copied into the
+	// tool error.
+	if len(h) > 253 {
+		return "", fmt.Errorf("entry is over 253 characters")
 	}
-	if strings.ContainsAny(h, "/@? ") {
+	if strings.Contains(h, "*") {
+		return "", fmt.Errorf("%q is not a bare hostname (no wildcards)", raw)
+	}
+	if strings.Contains(h, "://") || strings.ContainsAny(h, "/:?#@\\ ") {
+		return "", fmt.Errorf("%q is not a bare hostname (no ports, schemes or paths)", raw)
+	}
+	labels := strings.Split(h, ".")
+	if len(labels) < 2 {
 		return "", fmt.Errorf("%q is not a bare hostname", raw)
 	}
-	for _, label := range strings.Split(h, ".") {
-		if label == "" {
-			return "", fmt.Errorf("%q has an empty label", raw)
+	for _, label := range labels {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return "", fmt.Errorf("%q has an invalid label", raw)
 		}
 		for _, r := range label {
 			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
 				return "", fmt.Errorf("%q has invalid characters", raw)
 			}
 		}
+	}
+	last := labels[len(labels)-1]
+	allDigits := true
+	for _, r := range last {
+		if r < '0' || r > '9' {
+			allDigits = false
+			break
+		}
+	}
+	if allDigits {
+		return "", fmt.Errorf("%q is an IP literal, not a hostname", raw)
 	}
 	return h, nil
 }
@@ -452,9 +490,6 @@ func normalizeSearchDomains(raws []any, kind string) ([]string, error) {
 		s, ok := raw.(string)
 		if !ok {
 			return nil, fmt.Errorf("%s entries must be strings", kind)
-		}
-		if len(s) > 253 {
-			return nil, fmt.Errorf("%s: %q is over 253 characters", kind, s)
 		}
 		h, err := validSearchHostname(s)
 		if err != nil {
@@ -1137,10 +1172,11 @@ func (p *TavilySearchProvider) searchCaps(ctx context.Context, req searchRequest
 		}
 		depth, clamped := p.effectiveDepth(req.depth)
 		payload := map[string]any{
-			"api_key":      apiKey,
-			"query":        req.query,
-			"search_depth": depth,
-			"max_results":  req.count,
+			"api_key":        apiKey,
+			"query":          req.query,
+			"search_depth":   depth,
+			"include_answer": false,
+			"max_results":    req.count,
 		}
 		if timeRange := mapTavilyTimeRange(req.rangeFilter); timeRange != "" {
 			payload["time_range"] = timeRange
