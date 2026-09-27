@@ -24,13 +24,33 @@
 #                                               are that case 6 proves
 #                                               tests/e2e IS scanned)
 #   9. Literal in .github/SECRETS.md         -> guard exits 1, names the file
+#  10. Literal in deploy/fake.sh             -> guard exits 1 (regression:
+#                                               the old closed --include list
+#                                               caught *.sh; the all-text-file
+#                                               scan must keep catching it)
+#  11. Literal in evals/x/main.go            -> guard exits 1 (same regression,
+#                                               *.go)
+#  12. Literal in deploy/foo.toml            -> guard exits 1 (RED on the old
+#                                               guard: the closed --include
+#                                               list never scanned .toml)
+#  13. Unreadable scanned subdir (chmod 000) -> guard exits 2 AND shows the
+#                                               grep stderr (RED on the old
+#                                               guard: it discarded grep's
+#                                               rc/stderr and printed OK on a
+#                                               partial scan). Skipped with a
+#                                               clear message when running as
+#                                               root (chmod 000 cannot stop
+#                                               root).
 #
 # Exit: 0 all cases pass; 1 a case failed (prints which).
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GUARD="$SCRIPT_DIR/check-no-hardcoded-e2e-model.sh"
+# GUARD — the guard under test. E2E_GUARD lets a caller point the companion
+# at a different guard build (used to prove new cases red on the pre-fix
+# guard before they go green on the new one).
+GUARD="${E2E_GUARD:-$SCRIPT_DIR/check-no-hardcoded-e2e-model.sh}"
 REAL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 tmp="$(mktemp -d /tmp/e2e-model-guard-test.XXXXXX)"
@@ -47,6 +67,7 @@ make_tree() {
 }
 
 fail=0
+skipped=0
 
 # Case 1: clean synthetic tree -> the guard must pass.
 t1="$tmp/clean"
@@ -206,9 +227,97 @@ else
   fi
 fi
 
+# Case 10: a literal in deploy/fake.sh — deploy/ is scanned. Regression case:
+# the old guard's closed --include list already caught *.sh; the all-text-file
+# scan must keep catching it (guards against a widening that silently narrows).
+t10="$tmp/deploy-sh"
+make_tree "$t10"
+printf '%s\n' 'AGENT_MODEL="z-ai/glm-5.2"' > "$t10/deploy/fake.sh"
+if REPO_ROOT="$t10" bash "$GUARD" >"$tmp/c10.out" 2>&1; then
+  echo "case10 deploy-sh-literal-fails: FAIL — guard went green on a planted violation" >&2
+  sed 's/^/  /' "$tmp/c10.out" >&2
+  fail=1
+else
+  if grep -q "deploy/fake.sh" "$tmp/c10.out"; then
+    echo "case10 deploy-sh-literal-fails: PASS (guard named deploy/fake.sh)"
+  else
+    echo "case10 deploy-sh-literal-fails: FAIL — guard failed but did not name deploy/fake.sh" >&2
+    sed 's/^/  /' "$tmp/c10.out" >&2
+    fail=1
+  fi
+fi
+
+# Case 11: a literal in evals/x/main.go — same regression as case 10 for *.go
+# inside evals/ (old closed --include list caught *.go; must stay caught).
+t11="$tmp/evals-go"
+make_tree "$t11"
+mkdir -p "$t11/evals/x"
+printf '%s\n' 'package main' '' 'const fallbackModel = "openai/gpt-4o"' > "$t11/evals/x/main.go"
+if REPO_ROOT="$t11" bash "$GUARD" >"$tmp/c11.out" 2>&1; then
+  echo "case11 evals-go-literal-fails: FAIL — guard went green on a planted violation" >&2
+  sed 's/^/  /' "$tmp/c11.out" >&2
+  fail=1
+else
+  if grep -q "evals/x/main.go" "$tmp/c11.out"; then
+    echo "case11 evals-go-literal-fails: PASS (guard named evals/x/main.go)"
+  else
+    echo "case11 evals-go-literal-fails: FAIL — guard failed but did not name evals/x/main.go" >&2
+    sed 's/^/  /' "$tmp/c11.out" >&2
+    fail=1
+  fi
+fi
+
+# Case 12: a literal in deploy/foo.toml — RED on the old guard: its closed
+# --include list had no *.toml term, so an other-extension file in a scanned
+# dir went unscanned while the guard still printed OK (finding G1).
+t12="$tmp/toml"
+make_tree "$t12"
+printf '%s\n' 'model = "deepseek/deepseek-v4.1-flash"' > "$t12/deploy/foo.toml"
+if REPO_ROOT="$t12" bash "$GUARD" >"$tmp/c12.out" 2>&1; then
+  echo "case12 toml-literal-fails: FAIL — guard went green on a planted violation" >&2
+  sed 's/^/  /' "$tmp/c12.out" >&2
+  fail=1
+else
+  if grep -q "deploy/foo.toml" "$tmp/c12.out"; then
+    echo "case12 toml-literal-fails: PASS (guard named deploy/foo.toml)"
+  else
+    echo "case12 toml-literal-fails: FAIL — guard failed but did not name deploy/foo.toml" >&2
+    sed 's/^/  /' "$tmp/c12.out" >&2
+    fail=1
+  fi
+fi
+
+# Case 13: an unreadable scanned subdir — the guard must refuse a green on a
+# PARTIAL scan: grep exits 2, the guard exits 2 and shows the grep stderr
+# (finding G2). Skipped when running as root: chmod 000 cannot make a
+# directory unreadable to root, so the case would prove nothing there.
+t13="$tmp/unreadable"
+make_tree "$t13"
+mkdir "$t13/deploy/sealed"
+chmod 000 "$t13/deploy/sealed"
+if [ "$(id -u)" -eq 0 ]; then
+  echo "case13 unreadable-subdir-exit2: SKIP (running as root — chmod 000 cannot make a dir unreadable to root)"
+  skipped=$((skipped + 1))
+else
+  rc=0
+  REPO_ROOT="$t13" bash "$GUARD" >"$tmp/c13.out" 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ] && grep -q "grep exited" "$tmp/c13.out"; then
+    echo "case13 unreadable-subdir-exit2: PASS (guard exited 2 and showed the grep stderr)"
+  else
+    echo "case13 unreadable-subdir-exit2: FAIL — want exit 2 with the grep stderr shown, got $rc" >&2
+    sed 's/^/  /' "$tmp/c13.out" >&2
+    fail=1
+  fi
+  chmod 0755 "$t13/deploy/sealed"
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "check-no-hardcoded-e2e-model.test: FAILED" >&2
   exit 1
 fi
-echo "check-no-hardcoded-e2e-model.test: all 9 cases PASS"
+if [ "${skipped:-0}" -gt 0 ]; then
+  echo "check-no-hardcoded-e2e-model.test: all 13 cases PASS ($skipped skipped)"
+else
+  echo "check-no-hardcoded-e2e-model.test: all 13 cases PASS"
+fi
 exit 0

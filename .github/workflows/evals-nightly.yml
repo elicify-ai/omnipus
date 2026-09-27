@@ -37,9 +37,9 @@ jobs:
         # literal in live config is banned (scripts/check-no-hardcoded-e2e-model.sh),
         # so the run step below derives AGENT_MODEL/JUDGE_MODEL from it.
         run: |
-          m=$(jq -r '.model // empty' tests/e2e/e2e-model.json)
+          m=$(jq -r '.model // empty | gsub("^\\s+|\\s+$";"")' tests/e2e/e2e-model.json)
           if [ -z "$m" ]; then
-            echo "::error::tests/e2e/e2e-model.json: .model is missing or empty" >&2
+            echo "::error::tests/e2e/e2e-model.json: .model is missing, empty, or whitespace-only" >&2
             exit 1
           fi
           echo "OMNIPUS_E2E_MODEL=$m" >> "$GITHUB_ENV"

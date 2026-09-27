@@ -11,6 +11,14 @@
 # again: the old ids must never return, and the CURRENT id must never be
 # re-hardcoded outside the source file either.
 #
+# Switching the model (the ONLY sanctioned procedure — runbook):
+#   1. edit tests/e2e/e2e-model.json to the new {"model": "<vendor>/<model>"}, AND
+#   2. add the new id to PATTERN below. The old id STAYS BANNED — old ids must
+#      never return, and the current id must never be re-hardcoded outside the
+#      source file either.
+# Any other path (a literal in a workflow, a deploy script, an eval flag
+# default, a TOML, an extensionless file, a comment) fails this guard.
+#
 # Banned literals (old ids that must never return, plus the current id):
 #   z-ai/glm-5.2, z-ai/glm-5.3-flash, z-ai/glm-5-turbo,
 #   deepseek/deepseek-v4.1-flash,
@@ -20,6 +28,12 @@
 # Scanned — exactly the surfaces this centralization covers, where a model id
 # would be CONSUMED as the e2e/evals model choice:
 #   .github/workflows/  deploy/  evals/  tests/e2e/**  .github/*.md
+#
+#   .github/workflows/, deploy/ and evals/ are scanned as ALL text files
+#   (-I; binaries skipped) — no extension filter, so a literal in a .toml,
+#   a .txt or an extensionless file is an offender like any other (finding
+#   G1, 2026-09-27). No vendored/generated dirs exist under these surfaces
+#   (checked 2026-09-27); if one ever appears, exclude it here explicitly.
 #
 #   tests/e2e/** is scanned across every file type present there (.ts, .tsx,
 #   .js, .json, .md, .yml, .go, ... — any text file; binaries are skipped),
@@ -42,7 +56,10 @@
 #                              semantics; comments are prose. Neither is the
 #                              e2e model choice.
 #
-# Exit: 0 clean, 1 offenders found, 2 the check itself could not run.
+# Exit: 0 clean, 1 offenders found, 2 the check itself could not run — an
+# existence-checked path is missing, OR a grep errored mid-scan (rc > 1,
+# e.g. an unreadable dir/file): a PARTIAL scan refuses a green verdict and
+# shows the grep stderr (finding G2, 2026-09-27).
 
 set -uo pipefail
 
@@ -65,27 +82,68 @@ done
 
 PATTERN='z-ai/glm-5\.2|z-ai/glm-5\.3-flash|z-ai/glm-5-turbo|google/gemini-2\.5-flash|google/gemini-2\.0-flash-001|openai/gpt-4o|anthropic/claude-sonnet-4\.6|claude-sonnet-4-6|deepseek/deepseek-v4\.1-flash'
 
-violations="$(
-  grep -rnE "$PATTERN" \
-    --include='*.yml' --include='*.yaml' --include='*.sh' --include='*.go' --include='*.ts' --include='*.tsx' --include='*.js' --include='*.json' --include='*.md' \
-    .github/workflows/ deploy/ evals/ 2>/dev/null
-  # tests/e2e/**: every text file type (binaries skipped via -I), excluding
-  # exactly tests/e2e/e2e-model.json (the single committed source of truth)
-  # and the transient node_modules/test-results/playwright-report dirs.
-  grep -rnEI "$PATTERN" \
-    --exclude-dir=node_modules --exclude-dir=test-results --exclude-dir=playwright-report \
-    tests/e2e/ 2>/dev/null | grep -v '^tests/e2e/e2e-model\.json:'
-  # .github/*.md (top level): SECRETS.md and any other doc that could
-  # describe the e2e/evals model. -H forces the filename prefix even when the
-  # glob resolves to a single file (a lone .github/SECRETS.md would otherwise
-  # print line content with no file name).
-  grep -HnE "$PATTERN" .github/*.md 2>/dev/null
-)"
+violations=""
+
+# scan <label> <post-filter-ERE-or-empty> <grep args ...>: run one grep over
+# one surface, accumulate matching lines into $violations, and refuse a
+# partial-scan green. grep's own exit codes decide (finding G2):
+#   0   offenders — lines are appended to $violations
+#   1   clean
+#   >1  the scan itself failed (unreadable dir/file, bad regex) — exit 2 with
+#       the grep stderr shown; never a silent partial green.
+# pipefail makes $? the rightmost non-zero rc, so the scan grep's error
+# survives the optional exclusion pipe.
+scan() {
+  local label="$1"; shift
+  local filter="$1"; shift
+  local errf out rc
+  errf="$(mktemp "${TMPDIR:-/tmp}/e2e-model-guard.XXXXXX")" || {
+    echo "check-no-hardcoded-e2e-model: cannot create a stderr capture file" >&2
+    exit 2
+  }
+  if [ -n "$filter" ]; then
+    out="$(grep "$@" 2>"$errf" | grep -vE "$filter")"
+  else
+    out="$(grep "$@" 2>"$errf")"
+  fi
+  rc=$?
+  if [ "$rc" -gt 1 ]; then
+    echo "check-no-hardcoded-e2e-model: grep exited $rc while scanning $label — the scan was PARTIAL, refusing a green verdict. grep stderr:" >&2
+    sed 's/^/  /' "$errf" >&2
+    rm -f "$errf"
+    exit 2
+  fi
+  if [ -n "$out" ]; then
+    violations+="$out"$'\n'
+  fi
+  rm -f "$errf"
+}
+
+# .github/workflows/, deploy/ and evals/ — ALL text files, no --include
+# filter (finding G1): a literal in deploy/foo.toml or an extensionless file
+# is an offender like one in a .yml.
+scan ".github/workflows/ deploy/ evals/" '' -rnIE "$PATTERN" .github/workflows/ deploy/ evals/
+
+# tests/e2e/**: every text file type (binaries skipped via -I), excluding
+# exactly tests/e2e/e2e-model.json (the single committed source of truth)
+# and the transient node_modules/test-results/playwright-report dirs. The
+# exclusion stays path-exact: the filter removes only lines whose file path
+# is exactly tests/e2e/e2e-model.json.
+scan "tests/e2e/" '^tests/e2e/e2e-model\.json:' -rnIE "$PATTERN" \
+  --exclude-dir=node_modules --exclude-dir=test-results --exclude-dir=playwright-report \
+  tests/e2e/
+
+# .github/*.md (top level): SECRETS.md and any other doc that could
+# describe the e2e/evals model. -H forces the filename prefix even when the
+# glob resolves to a single file (a lone .github/SECRETS.md would otherwise
+# print line content with no file name).
+scan ".github/*.md" '' -HnE "$PATTERN" .github/*.md
 
 if [ -n "$violations" ]; then
   {
     echo "check-no-hardcoded-e2e-model: FAILED — hardcoded e2e model id(s) found outside tests/e2e/e2e-model.json"
-    echo "  (the single committed source of truth; see this guard's header for the consumer wiring)"
+    echo "  (the single committed source of truth; see this guard's header for the consumer wiring"
+    echo "   and the switch runbook: edit the JSON AND add the new id to PATTERN — the old id stays banned)"
     printf '%s\n' "$violations" | sed 's/^/  /'
   } >&2
   exit 1

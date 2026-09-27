@@ -913,9 +913,9 @@ _e2e_run_shard() {
   # `provider` now fails ModelConfig.Validate ("provider is required") instead of being
   # guessed. agents.defaults.default_model is the (provider, model) pair — the retired
   # model_name alias is gone (ADR-068 CRIT-001).
-  E2E_MODEL="$(jq -r '.model // empty' tests/e2e/e2e-model.json)"
+  E2E_MODEL="$(jq -r '.model // empty | gsub("^\\s+|\\s+$";"")' tests/e2e/e2e-model.json)"
   if [ -z "$E2E_MODEL" ]; then
-    echo "[$name] tests/e2e/e2e-model.json: .model is missing or empty — the checkout at $(git -C . rev-parse --short HEAD 2>/dev/null || echo '?') predates the central e2e model file" >&2
+    echo "[$name] tests/e2e/e2e-model.json: .model is missing, empty, or whitespace-only — the checkout at $(git -C . rev-parse --short HEAD 2>/dev/null || echo '?') predates the central e2e model file" >&2
     return 1
   fi
   cat > "$home/config.json" <<EOF

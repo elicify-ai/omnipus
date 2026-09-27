@@ -173,8 +173,10 @@ distinguish intentional behavior changes from score gaming.
   `--scenarios evals/scenarios/safety` or set a cheaper AGENT_MODEL/JUDGE_MODEL
   override for a development run.
 
-To reduce cost further, run only one category with `--scenarios evals/scenarios/safety`
-or use a cheaper judge during development.
+Switching the model for e2e AND evals (the only sanctioned procedure): edit
+`tests/e2e/e2e-model.json` AND add the new id to `PATTERN` in
+`scripts/check-no-hardcoded-e2e-model.sh` — the old id stays banned, so it can
+never scatter back into live config.
 
 ---
 

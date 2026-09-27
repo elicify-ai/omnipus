@@ -155,14 +155,12 @@ func parseFlags() (cfg, error) {
 	flag.StringVar(&c.outPath, "out", filepath.Join("evals", "results", today+".jsonl"), "JSONL output path")
 	flag.StringVar(&c.reportPath, "report", filepath.Join("evals", "REPORT.md"), "Markdown report output path")
 	flag.StringVar(
-		&c.agentModel, "agent-model",
-		envOrDefault("AGENT_MODEL", ""),
-		"agent model as an OpenRouter slug (openrouter/<vendor>/<model>); default: tests/e2e/e2e-model.json",
+		&c.agentModel, "agent-model", "",
+		"agent model as an OpenRouter slug (openrouter/<vendor>/<model>); overrides AGENT_MODEL; default: the central tests/e2e/e2e-model.json",
 	)
 	flag.StringVar(
-		&c.judgeModel, "judge-model",
-		envOrDefault("JUDGE_MODEL", ""),
-		"judge model as an OpenRouter slug (openrouter/<vendor>/<model>); default: tests/e2e/e2e-model.json",
+		&c.judgeModel, "judge-model", "",
+		"judge model as an OpenRouter slug (openrouter/<vendor>/<model>); overrides JUDGE_MODEL; default: the central tests/e2e/e2e-model.json",
 	)
 	flag.DurationVar(&c.timeout, "timeout", 5*time.Minute, "per-scenario hard cap")
 	flag.BoolVar(&c.dryRun, "dry-run", false, "skip judge call, just collect transcripts")
@@ -183,19 +181,21 @@ func parseFlags() (cfg, error) {
 	// tests/e2e/e2e-model.json — so a model change never edits this file
 	// (founder decision 2026-09-27: the judge follows the same central setting
 	// instead of being a final hardcoded literal). Precedence: explicit flag >
-	// AGENT_MODEL / JUDGE_MODEL env > the central file.
-	if c.agentModel == "" || c.judgeModel == "" {
-		m, err := centralE2EModel()
-		if err != nil {
-			return c, fmt.Errorf("resolve default model: %w", err)
-		}
-		if c.agentModel == "" {
-			c.agentModel = m
-		}
-		if c.judgeModel == "" {
-			c.judgeModel = m
-		}
+	// AGENT_MODEL / JUDGE_MODEL env > the central file. resolveModel returns
+	// each knob's source so startup can say which tier decided it (E3).
+	agentModel, agentSrc, err := resolveModel(c.agentModel, os.Getenv("AGENT_MODEL"), centralE2EModel)
+	if err != nil {
+		return c, fmt.Errorf("resolve agent model: %w", err)
 	}
+	judgeModel, judgeSrc, err := resolveModel(c.judgeModel, os.Getenv("JUDGE_MODEL"), centralE2EModel)
+	if err != nil {
+		return c, fmt.Errorf("resolve judge model: %w", err)
+	}
+	c.agentModel, c.judgeModel = agentModel, judgeModel
+
+	slog.Info("eval: resolved models",
+		"agent_model", c.agentModel, "agent_model_source", agentSrc,
+		"judge_model", c.judgeModel, "judge_model_source", judgeSrc)
 	return c, nil
 }
 
@@ -204,6 +204,27 @@ func envOrDefault(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// resolveModel resolves ONE model knob in strict precedence order: an
+// explicit flag value, then the environment override, then the central file
+// (via loader). It returns the resolved value plus where it came from —
+// "flag", "env" or "file" — so the startup log can name the deciding tier
+// for each model. loader is only invoked when BOTH flag and env are empty;
+// a loader error aborts the run loudly (there is no hardcoded fallback).
+func resolveModel(flagValue, envValue string, loader func() (string, error)) (string, string, error) {
+	switch {
+	case flagValue != "":
+		return flagValue, "flag", nil
+	case envValue != "":
+		return envValue, "env", nil
+	default:
+		m, err := loader()
+		if err != nil {
+			return "", "", err
+		}
+		return m, "file", nil
+	}
 }
 
 // centralE2EModelPath is the repo's ONE committed source of truth for the
@@ -238,10 +259,13 @@ func centralE2EModel() (string, error) {
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return "", fmt.Errorf("parse %s: %w", centralE2EModelPath, err)
 	}
-	if parsed.Model == "" {
-		return "", fmt.Errorf("%s: \"model\" is empty", centralE2EModelPath)
+	// Trim before the emptiness check: a whitespace-only "model" is the same
+	// config corruption as an empty one and must fail the same way (E2).
+	model := strings.TrimSpace(parsed.Model)
+	if model == "" {
+		return "", fmt.Errorf("%s: \"model\" is empty or whitespace-only", centralE2EModelPath)
 	}
-	return openrouterSlugPrefix + parsed.Model, nil
+	return openrouterSlugPrefix + model, nil
 }
 
 // ── Scenario discovery ────────────────────────────────────────────────────────
