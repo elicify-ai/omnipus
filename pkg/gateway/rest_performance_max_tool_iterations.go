@@ -22,8 +22,10 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"strconv"
 	"strings"
@@ -485,23 +487,55 @@ func (a *restAPI) writePerformanceLocked(ctx context.Context, upd *maxToolIterat
 		// config.json is already written when only the refresh failed: the
 		// save is committed, so rolling the agents back would contradict
 		// the written global and "nothing was changed" would be false.
+		// The raw writeErr is never logged or returned here: a refresh
+		// failure's text can carry a credential reference NAME (from
+		// refreshConfigAndRewireServices' credential resolution; CodeQL
+		// clear-text-logging on PR #932). Only a fixed stage / cause class
+		// leaves this function; refreshConfigAndRewireServices logs its
+		// roster and credential causes itself (not a config load failure).
 		var refreshErr *configRefreshError
 		if errors.As(writeErr, &refreshErr) {
 			logsafeError("rest: PUT /performance: config.json written but the in-memory refresh failed; "+
-				"keeping the lowered agents", "lowered_agents", len(done), "error", writeErr)
-			out.notApplied = writeErr
+				"keeping the lowered agents (roster/credential causes are logged by refreshConfigAndRewireServices)",
+				"stage", "refresh", "lowered_agents", len(done))
+			out.notApplied = errPerformanceRefreshFailed
 			a.commitPerformanceOutcome(ctx, &out, upd, done, oldGlobal)
 			return out, nil
 		}
+		cause := configWriteFailure(writeErr)
 		if len(done) > 0 {
-			return out, a.loweringFailure(ctx, store, defaults, upd, done, "", writeErr)
+			return out, a.loweringFailure(ctx, store, defaults, upd, done, "", cause)
 		}
-		logsafeError("rest: PUT /performance: could not write config.json", "error", writeErr)
+		logsafeError("rest: PUT /performance: could not write config.json", "cause", cause.Error())
 		return out, &performanceWriteError{status: http.StatusInternalServerError,
-			body: gen.ErrorResponse{Error: fmt.Sprintf("could not update performance settings: %v", writeErr)}}
+			body: gen.ErrorResponse{Error: "could not update performance settings: " + cause.Error()}}
 	}
 	a.commitPerformanceOutcome(ctx, &out, upd, done, oldGlobal)
 	return out, nil
+}
+
+// errPerformanceRefreshFailed stands in for a configRefreshError in the
+// outcome: fixed text, no credential-derived detail.
+var errPerformanceRefreshFailed = errors.New("config.json written but the in-memory refresh failed")
+
+// configWriteFailure maps a non-refresh updateConfigJSONLocked failure to a
+// fixed, credential-free description (the cause class only): the file
+// could not be read, parsed or written.
+func configWriteFailure(err error) error {
+	var pathErr *fs.PathError
+	var syntaxErr *json.SyntaxError
+	switch {
+	case errors.Is(err, fs.ErrPermission):
+		return errors.New("config.json: permission denied")
+	case errors.Is(err, fs.ErrNotExist):
+		return errors.New("config.json: file not found")
+	case errors.As(err, &syntaxErr):
+		return errors.New("config.json: invalid JSON")
+	case errors.As(err, &pathErr):
+		return fmt.Errorf("config.json: %s failed", pathErr.Op)
+	default:
+		return errors.New("config.json could not be written")
+	}
 }
 
 // commitPerformanceOutcome records a committed write: the lowered agents in

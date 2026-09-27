@@ -87,6 +87,7 @@ func TestUpdateConfig_UnicodeFoldBypass_Refused(t *testing.T) {
 		})
 	}
 }
+
 // TestUpdateConfig_NonASCIIKeyUnderProtectedSection: every config.Config key
 // is ASCII, so a non-ASCII key in a map that holds a blocked path (the root,
 // gateway, agents, agents.defaults) can only be a folding trick or garbage.

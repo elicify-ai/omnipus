@@ -219,7 +219,7 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 		// written, the in-memory refresh failed — same answer as a failed
 		// registry reload below.
 		writePerformanceReloadFailed(w, outcome, gen.PerformanceReloadFailedDetailsStageRefresh,
-			performanceChangedFields(&req), outcome.notApplied)
+			performanceChangedFields(&req))
 		return
 	}
 
@@ -239,7 +239,7 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 	if outcome.globalChanged || len(outcome.lowered) > 0 {
 		if err := a.triggerReloadAndWait(); err != nil {
 			writePerformanceReloadFailed(w, outcome, gen.PerformanceReloadFailedDetailsStageReload,
-				performanceChangedFields(&req), err)
+				performanceChangedFields(&req))
 			return
 		}
 	}
@@ -264,10 +264,16 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 // (PerformanceSettings.max_tool_iterations_lowered_agents is PUT-only), so
 // this response is the only place the summary survives.
 func writePerformanceReloadFailed(w http.ResponseWriter, outcome performanceWriteOutcome,
-	stage gen.PerformanceReloadFailedDetailsStage, changed []gen.PerformanceReloadFailedDetailsChangedFields, err error,
+	stage gen.PerformanceReloadFailedDetailsStage, changed []gen.PerformanceReloadFailedDetailsChangedFields,
 ) {
+	// The cause is NOT logged here: its text can carry a credential
+	// reference name (CodeQL clear-text logging, PR #932). For the refresh
+	// stage, refreshConfigAndRewireServices logs its roster and credential
+	// causes itself (a config load failure there is not logged); the reload
+	// stage's cause is logged by waitForReloadOutcome ("config reload
+	// failed").
 	logsafeError("rest: PUT /performance: settings saved but not applied",
-		"stage", string(stage), "error", err, "lowered_agents", len(outcome.lowered))
+		"stage", string(stage), "lowered_agents", len(outcome.lowered))
 	lowered := outcome.lowered
 	if lowered == nil {
 		lowered = []gen.MaxToolIterationAgentChange{}

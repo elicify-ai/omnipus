@@ -117,3 +117,38 @@ func TestPerformancePut_ReloadFailed_ReloadStage_CarriesLoweredAgents(t *testing
 	assert.Equal(t, 250, got.Details.LoweredAgents[0].OldValue)
 	assert.Equal(t, 200, got.Details.LoweredAgents[0].NewValue)
 }
+
+// CodeQL clear-text logging (PR #932): a refresh failure's error text can
+// carry a credential reference name, so PUT /performance's own log lines and
+// its response carry only the fixed stage, never the cause text. The roster
+// failure injected here has a recognisable cause ("unparseable") standing in
+// for any such text.
+func TestPerformancePut_ReloadFailed_CauseTextNotLoggedOrReturned(t *testing.T) {
+	api := newMTIAPI(t, "200")
+	logs := captureMTILogs(t)
+	breakInMemoryRefresh(t, api)
+
+	w := mtiPutPerf(t, api, `{"max_parallel_agents":3}`)
+	require.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
+	assert.NotContains(t, w.Body.String(), "unparseable", "the response must not echo the cause text")
+
+	logs.mu.Lock()
+	all := logs.buf.String()
+	logs.mu.Unlock()
+	require.Contains(t, all, "unparseable",
+		"instrument: the cause text must be visible somewhere in the capture (refreshConfigAndRewireServices logs it)")
+	var perfLines []string
+	for _, l := range strings.Split(all, "\n") {
+		if strings.Contains(l, "rest: PUT /performance") {
+			perfLines = append(perfLines, l)
+		}
+	}
+	require.NotEmpty(t, perfLines, "instrument: PUT /performance must log the saved-but-not-applied outcome")
+	for _, l := range perfLines {
+		assert.NotContains(t, l, "unparseable", "PUT /performance log line carries the cause text: %s", l)
+		// Formatting-agnostic: logsafe.go's helpers currently hand slog one
+		// slice argument (rendered !BADKEY=[stage refresh …]), reported
+		// separately; only the presence of the stage value matters here.
+		assert.Contains(t, l, "refresh", "the log line names the stage: %s", l)
+	}
+}
