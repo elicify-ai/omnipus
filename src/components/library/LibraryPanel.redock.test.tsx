@@ -17,10 +17,20 @@
 // the tab that OPENED the pop-out (holds its window handle) reacts to a
 // pop-out close" (§6, MAJ-006 as corrected by MAJ-208; §12 dataset row 7
 // cites BrowserLivePanel.tsx::watchPopoutClosed as the pattern). The test
-// therefore establishes opener-ness FIRST by driving the REAL pop-out flow
-// (handlePopOut via the mock explorer's onPopOut button — the same mock
-// boundary as LibraryPanel.test.tsx), proven by the window.open spy, before
-// the pop-out-close broadcast.
+// therefore establishes opener-ness FIRST by driving the REAL pop-out flow,
+// proven by the window.open spy, before the pop-out-close broadcast.
+//
+// Expand-drive ruling (batch-4 item 1, §2.2/§2.3): the pop-out is NO LONGER
+// driven through LibraryExplorer's onPopOut button — the "Open in new tab"
+// control MOVES TO THE SHELL HEADER ("panel keeps the behaviour, not the
+// button", §2.2; §2.3: "content behaviours executed through the shell's
+// single Expand action"). The pack drives Expand the way the shell does:
+// the panel registers its pop-out behaviour through the shell-provided
+// registerExpand callback (§8.1: "content: React component (receives
+// close/expand callbacks via props)"; "Expand delegates to the panel's own
+// pop-out behaviour"), and the test standing in for the shell invokes that
+// registered action and closes the docked panel on success (US-6/SP-12:
+// Expand closes the source panel, through the gate).
 //
 // Oracles (§6, MAJ-006/MAJ-208, FR-018):
 //   - a DIFFERENT panel open -> re-dock is a no-op (never clobbers)
@@ -28,9 +38,9 @@
 //   - opener tab + SAME panel open + dirty -> the re-dock runs the leave
 //     guard; cancel leaves the open Library where it was
 
-import { useEffect } from 'react'
+import { useEffect, type ComponentType } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, act, screen, fireEvent } from '@testing-library/react'
+import { render, act, waitFor } from '@testing-library/react'
 import { useUiStore } from '@/store/ui'
 import { announceLibraryPopoutClosed } from '@/lib/libraryHandoff'
 import {
@@ -39,24 +49,64 @@ import {
   resolveDiscardConfirmDialog,
 } from '@/components/library/preview/unsavedGuard'
 
+// The mock explorer renders NO pop-out control: §2.2 moves "Open in new tab"
+// to the shell header, and the panel passes its behaviour to the shell via
+// registerExpand instead of rendering the button (GREEN's colocated
+// LibraryPanel.test.tsx asserts Close/Expand are left out of LibraryExplorer).
 vi.mock('./LibraryExplorer', () => ({
-  LibraryExplorer: (props: { onWorkspaceChange?: (id: string | null) => void; onPopOut?: () => void }) => {
+  LibraryExplorer: (props: { onWorkspaceChange?: (id: string | null) => void }) => {
     useEffect(() => {
       props.onWorkspaceChange?.('ws-current')
     }, [])
-    return (
-      <div data-testid="mock-library-explorer">
-        {props.onPopOut && (
-          <button type="button" tabIndex={0} onClick={props.onPopOut}>
-            mock-pop-out
-          </button>
-        )}
-      </div>
-    )
+    return <div data-testid="mock-library-explorer" />
   },
 }))
 
 import { LibraryPanel } from './LibraryPanel'
+
+/** §8.1: the shell hands panel content close/expand callbacks via props —
+ * including registerExpand, through which the panel supplies the pop-out
+ * behaviour the shell header's Expand action invokes (§2.2/§2.3). Wave-0
+ * panel-shell/types.ts does not carry registerExpand yet, so the contract is
+ * typed structurally here; the component cast keeps this file compiling on
+ * the pre-GREEN tree (whose LibraryPanel predates shell hosting) without
+ * loosening what is asserted. */
+type ShellExpandProps = {
+  context: Record<string, unknown>
+  close: () => void
+  expand: () => void
+  registerExpand: (action: () => boolean) => void
+  onWidthSettle: () => void
+}
+const ShellHostedLibraryPanel = LibraryPanel as unknown as ComponentType<{ shellProps?: ShellExpandProps }>
+
+let registeredExpand: (() => boolean) | null = null
+
+function makeShellProps(context: Record<string, unknown>): { shellProps: ShellExpandProps } {
+  return {
+    shellProps: {
+      context,
+      close: () => useUiStore.getState().closePanel(),
+      expand: () => {},
+      registerExpand: (action) => {
+        registeredExpand = action
+      },
+      onWidthSettle: () => {},
+    },
+  }
+}
+
+/** The shell's Expand click (US-6/SP-12): invoke the panel's registered
+ * pop-out behaviour; a successful open closes the docked panel — through
+ * the gate. Returns whether the expand happened. */
+function invokeShellExpand(): boolean {
+  let opened = false
+  act(() => {
+    opened = registeredExpand?.() ?? false
+    if (opened) useUiStore.getState().closePanel()
+  })
+  return opened
+}
 
 /** §8.1 single-slice view of the ui store (defensive: absent pre-GREEN). */
 type Section81Store = {
@@ -78,17 +128,21 @@ function requireSection81Api() {
 }
 
 beforeEach(() => {
+  registeredExpand = null
   requireSection81Api()
   act(() => {
     s81().closePanel()
   })
   setLibraryEditorDirty(false)
-  if (getDiscardConfirmDialogOpen()) resolveDiscardConfirmDialog(true)
+  // Cancel (never proceed) any dialog a previous test left pending — the
+  // batch-3 rationale: resolving `true` would complete the previous test's
+  // transition as a reset side effect.
+  if (getDiscardConfirmDialogOpen()) resolveDiscardConfirmDialog(false)
 })
 
 afterEach(() => {
   setLibraryEditorDirty(false)
-  if (getDiscardConfirmDialogOpen()) resolveDiscardConfirmDialog(true)
+  if (getDiscardConfirmDialogOpen()) resolveDiscardConfirmDialog(false)
 })
 
 describe('pop-out re-dock no-clobber and opener-only (§12 #8c, #19)', () => {
@@ -124,16 +178,19 @@ describe('pop-out re-dock no-clobber and opener-only (§12 #8c, #19)', () => {
 
   it('RED — opener tab, SAME panel open with unsaved edits: the re-dock runs the discard guard; cancel leaves the workspace (MAJ-208, FR-013, FR-018)', async () => {
     const openSpy = vi.spyOn(window, 'open').mockReturnValue({ closed: false, close: () => {} } as unknown as Window)
-    render(<LibraryPanel />)
     act(() => {
       s81().openPanel('library', { workspaceId: 'ws-current' })
     })
+    render(<ShellHostedLibraryPanel {...makeShellProps({ workspaceId: 'ws-current' })} />)
+    // The panel registers its pop-out behaviour with the shell (§8.1).
+    await waitFor(() => expect(registeredExpand).not.toBeNull())
 
-    // Establish THIS TAB as the opener (MAJ-208): drive the REAL pop-out
-    // flow — handlePopOut opens the pop-out window and closes the docked
-    // panel (C4). The spy proves the opener event happened here.
-    fireEvent.click(screen.getByText('mock-pop-out'))
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    // Establish THIS TAB as the opener (MAJ-208): drive Expand the way the
+    // shell does — invoke the registered action; a successful open closes
+    // the docked panel (US-6/SP-12, through the gate). The spy proves the
+    // opener handle was created HERE.
+    const opened = invokeShellExpand()
+    expect(opened).toBe(true)
     expect(openSpy).toHaveBeenCalledTimes(1)
     expect(s81().activePanel).toBeNull()
 
