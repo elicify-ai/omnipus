@@ -32,7 +32,7 @@ func sysAboveGlobalMsg(n, g int) string {
 // one seeded agent "lim-agent" with the given own value (0 = none).
 func newLimitDeps(t *testing.T, global, own int) *systools.Deps {
 	t.Helper()
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Agents.Defaults.MaxToolIterations = global
 	rec := &config.AgentConfig{ID: "lim-agent", Name: "Lim Agent", MaxToolIterations: own}
 	if err := agentstore.New(deps.Home).Create("lim-agent", rec); err != nil {
@@ -92,7 +92,7 @@ func TestSysagentAgentTools_MaxToolIterations_UpdateAboveGlobalRefused(t *testin
 
 // Scenario "System agent creates with an own value" (US-8 AS-2).
 func TestSysagentAgentTools_MaxToolIterations_CreateWithOwnValue(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Agents.Defaults.MaxToolIterations = 200
 	res := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
 		"name":                "Lim Created",
@@ -111,7 +111,7 @@ func TestSysagentAgentTools_MaxToolIterations_CreateWithOwnValue(t *testing.T) {
 
 // create_agent above the global is refused with the same text (D15/FR-007).
 func TestSysagentAgentTools_MaxToolIterations_CreateAboveGlobalRefused(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Agents.Defaults.MaxToolIterations = 200
 	res := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
 		"name":                "Lim Too High",
@@ -194,7 +194,7 @@ func TestSysagentAgentTools_MaxToolIterations_BoundsDataset(t *testing.T) {
 			}
 		})
 		t.Run("create_"+tc.name, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			cfg.Agents.Defaults.MaxToolIterations = 1000
 			res := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
 				"name":                "Bound " + tc.name,

@@ -64,7 +64,7 @@ func TestSeededPolicy_AddMCPServerAdminOnly(t *testing.T) {
 // hardcoded a refusal inside Execute — which would look secure and would
 // silently take the choice away from the operator.
 func TestMCPAddTool_HasNoHardcodedRefusal(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 
 	result := systools.NewMCPAddTool(deps).Execute(context.Background(), map[string]any{
 		"name":      "operator-granted",

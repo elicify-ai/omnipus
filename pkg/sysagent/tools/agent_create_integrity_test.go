@@ -31,7 +31,7 @@ func TestCreateAgent_RejectsNonStringHeartbeatWithoutWrite(t *testing.T) {
 		{"bool", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			deps, _ := newTestDeps()
+			deps, _ := newTestDeps(t)
 			args := createNativeArgs("Hb Type")
 			args["heartbeat"] = tc.value
 			result := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
@@ -53,7 +53,7 @@ func TestCreateAgent_RejectsNonStringHeartbeatWithoutWrite(t *testing.T) {
 }
 
 func TestCreateAgent_InitAgentHomeFailureReportsPartial(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	id := "home-fault"
 	sessions := filepath.Join(deps.Home, "agents", id, "sessions")
 	if err := os.MkdirAll(filepath.Dir(sessions), 0o700); err != nil {
@@ -95,7 +95,7 @@ func TestCreateAgent_InitAgentHomeFailureReportsPartial(t *testing.T) {
 }
 
 func TestCreateAgent_HeartbeatWriteFailureReportsPartial(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	id := "hb-fault"
 	hbDir := filepath.Join(deps.Home, "agents", id, "HEARTBEAT.md")
 	if err := os.MkdirAll(hbDir, 0o700); err != nil {
@@ -123,7 +123,7 @@ func TestCreateAgent_HeartbeatWriteFailureReportsPartial(t *testing.T) {
 }
 
 func TestCreateAgent_HeartbeatFileModeIsPrivate(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	args := createNativeArgs("Hb Mode")
 	args["heartbeat"] = "stay brief"
 	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)

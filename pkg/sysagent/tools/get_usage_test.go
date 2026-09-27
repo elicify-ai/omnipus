@@ -65,7 +65,7 @@ func newTestDepsWithSessions(cfg *config.Config, sessions []*session.UnifiedMeta
 // When get_usage is called,
 // Then an error result with code USAGE_UNAVAILABLE is returned.
 func TestGetUsage_NilListSessions(t *testing.T) {
-	deps, _ := newTestDeps() // newTestDeps does not wire ListSessions
+	deps, _ := newTestDeps(t) // newTestDeps does not wire ListSessions
 	tool := systools.NewUsageQueryTool(deps)
 
 	res := tool.Execute(context.Background(), map[string]any{})

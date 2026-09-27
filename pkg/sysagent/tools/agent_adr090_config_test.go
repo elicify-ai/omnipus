@@ -96,7 +96,7 @@ func containsField(fields []string, want string) bool {
 // the patch on top of custom-agent defaults in the same persist, before
 // publication.
 func TestCreateAgent_AppliesInitialSkillsMCPAndPolicyPatchAtomically(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	_, _, mailHook := mailLiveInventory()
 	draftAndMail := testInventory([]string{"draft"}, nil)
 	base := draftAndMail()
@@ -149,7 +149,7 @@ func TestCreateAgent_AppliesInitialSkillsMCPAndPolicyPatchAtomically(t *testing.
 // TestCreateAgent_RejectsCapabilityFieldsOnExternalCLI is FR-005: capability
 // fields on unsupported external runtimes must not write.
 func TestCreateAgent_RejectsCapabilityFieldsOnExternalCLI(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.AgentConfigInventory = testInventory([]string{"draft"}, nil)
 	tool := systools.NewAgentCreateTool(deps)
 
@@ -175,7 +175,7 @@ func TestCreateAgent_RejectsCapabilityFieldsOnExternalCLI(t *testing.T) {
 }
 
 func TestCreateAgent_RejectsUnknownSkillIDWithoutWrite(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.AgentConfigInventory = testInventory([]string{"draft"}, nil)
 	tool := systools.NewAgentCreateTool(deps)
 
@@ -198,7 +198,7 @@ func TestCreateAgent_RejectsUnknownSkillIDWithoutWrite(t *testing.T) {
 }
 
 func TestUpdateAgent_RejectsUnknownSkillIDWithoutWrite(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.AgentConfigInventory = testInventory([]string{"draft"}, nil)
 	store := agentstore.New(deps.Home)
 	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer", Skills: []string{"draft"}}); err != nil {
@@ -227,7 +227,7 @@ func TestUpdateAgent_RejectsUnknownSkillIDWithoutWrite(t *testing.T) {
 }
 
 func TestUpdateAgent_RejectsUnconfiguredMCPServerWithoutWrite(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.AgentConfigInventory = testInventory(nil, map[string][]string{"mail": {"inbox_read"}})
 	store := agentstore.New(deps.Home)
 	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
@@ -259,7 +259,7 @@ func TestUpdateAgent_RejectsUnconfiguredMCPServerWithoutWrite(t *testing.T) {
 }
 
 func TestUpdateAgent_RejectsNonLiveConnectorToolNameWithoutWrite(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	_, _, mailHook := mailLiveInventory()
 	deps.AgentConfigInventory = mailHook
 	store := agentstore.New(deps.Home)
@@ -295,7 +295,7 @@ func TestUpdateAgent_RejectsNonLiveConnectorToolNameWithoutWrite(t *testing.T) {
 }
 
 func TestUpdateAgent_EmptySkillsAndMCPServersClear(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.AgentConfigInventory = testInventory([]string{"draft"}, map[string][]string{"mail": {"inbox_read"}})
 	store := agentstore.New(deps.Home)
 	empty := []string{}
@@ -328,7 +328,7 @@ func TestUpdateAgent_EmptySkillsAndMCPServersClear(t *testing.T) {
 }
 
 func TestUpdateAgent_RejectsNullAndWrongTypeScalars(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 		t.Fatal(err)
@@ -376,7 +376,7 @@ func TestUpdateAgent_RejectsNullAndWrongTypeScalars(t *testing.T) {
 }
 
 func TestUpdateAgent_NullContextWindowOverrideClears(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	window := 4096
 	if err := store.Create("writer", &config.AgentConfig{
@@ -403,7 +403,7 @@ func TestUpdateAgent_NullContextWindowOverrideClears(t *testing.T) {
 }
 
 func TestUpdateAgent_AppliesSharedEditableConfiguration(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 		t.Fatal(err)
@@ -453,7 +453,7 @@ func TestUpdateAgent_AppliesSharedEditableConfiguration(t *testing.T) {
 }
 
 func TestUpdateAgent_DefaultWritesSingleton(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 		t.Fatal(err)
@@ -480,7 +480,7 @@ func TestUpdateAgent_DefaultWritesSingleton(t *testing.T) {
 }
 
 func TestUpdateAgent_RejectsDefaultAndVoiceOnWorker(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	if err := store.Create("helper", &config.AgentConfig{
 		ID: "helper", Name: "Helper", Type: config.AgentTypeWorker,
@@ -523,7 +523,7 @@ func TestUpdateAgent_RejectsDefaultAndVoiceOnWorker(t *testing.T) {
 }
 
 func TestUpdateAgent_RejectsUnknownArgumentAndTopP(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 		t.Fatal(err)
@@ -564,7 +564,7 @@ func TestUpdateAgent_RejectsUnknownArgumentAndTopP(t *testing.T) {
 }
 
 func TestUpdateAgent_UnwiredPublishersReportNotAttempted(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	if err := agentstore.New(deps.Home).Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 		t.Fatal(err)
 	}
@@ -587,7 +587,7 @@ func TestUpdateAgent_UnwiredPublishersReportNotAttempted(t *testing.T) {
 }
 
 func TestUpdateAgent_PublisherErrorReportsActivationFailed(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.UpsertAgentFastFunc = func(string) error { return errors.New("registry busy") }
 	if err := agentstore.New(deps.Home).Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 		t.Fatal(err)
@@ -608,7 +608,7 @@ func TestUpdateAgent_PublisherErrorReportsActivationFailed(t *testing.T) {
 }
 
 func TestGetAgent_RegistryMembershipAloneDoesNotProveActivation(t *testing.T) {
-	homeDeps, _ := newTestDeps()
+	homeDeps, _ := newTestDeps(t)
 	if err := agentstore.New(homeDeps.Home).Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 		t.Fatal(err)
 	}
@@ -641,7 +641,7 @@ func TestGetAgent_RegistryMembershipAloneDoesNotProveActivation(t *testing.T) {
 }
 
 func TestCreateAgent_KnownEmptySkillInventoryRejectsExplicitIDs(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.AgentConfigInventory = testInventory(nil, nil)
 	args := createNativeArgs("Fresh Skills")
 	args["skills"] = []any{"not-yet-indexed"}
@@ -662,7 +662,7 @@ func TestCreateAgent_KnownEmptySkillInventoryRejectsExplicitIDs(t *testing.T) {
 }
 
 func TestCreateAgent_UnavailableSkillInventoryRejectsExplicitIDs(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	args := createNativeArgs("No Inventory")
 	args["skills"] = []any{"draft"}
 	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
@@ -706,7 +706,7 @@ func TestUpdateAgent_AcceptsRemoteAndPublicMCPToolNames(t *testing.T) {
 	public, _, hook := mailLiveInventory()
 	for _, toolName := range []string{"inbox_read", public} {
 		t.Run(toolName, func(t *testing.T) {
-			deps, _ := newTestDeps()
+			deps, _ := newTestDeps(t)
 			deps.AgentConfigInventory = hook
 			store := agentstore.New(deps.Home)
 			if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
@@ -735,7 +735,7 @@ func TestUpdateAgent_AcceptsRemoteAndPublicMCPToolNames(t *testing.T) {
 }
 
 func TestUpdateAgent_DefaultSingletonSaveFailureReportsPartial(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	deps.SaveConfigLocked = func(*config.Config) error { return errors.New("disk full") }
 	store := agentstore.New(deps.Home)
 	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
@@ -785,7 +785,7 @@ func TestUpdateAgent_DefaultSingletonSaveFailureReportsPartial(t *testing.T) {
 }
 
 func TestUpdateAgent_DefaultWithoutWriterDoesNotWrite(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	deps.MutateConfig = nil
 	store := agentstore.New(deps.Home)
 	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {

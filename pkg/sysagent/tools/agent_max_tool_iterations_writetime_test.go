@@ -77,7 +77,7 @@ func lowerDuringWrite(deps *systools.Deps, marker string, callStart, lowered int
 }
 
 func TestSysagentCreateAgent_GlobalLoweredBeforeWrite_Refused(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	inside := lowerDuringWrite(deps, "persistAndJoin", 300, 100)
 	res := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
 		"name":                "Lim Race",
@@ -118,7 +118,7 @@ func TestSysagentUpdateAgent_GlobalLoweredBeforeWrite_Refused(t *testing.T) {
 // Control: with no lowering in flight, the same value is accepted — proves
 // the refusal above comes from the write-time read, not from the seam.
 func TestSysagentCreateUpdate_NoLoweringInFlight_Accepted(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	lowerDuringWrite(deps, "persistAndJoin", 300, 300)
 	res := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
 		"name": "Lim Calm", "description": "d", "soul": "s", "model": "test/model",

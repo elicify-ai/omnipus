@@ -43,7 +43,7 @@ func TestConfigSet_CaseVariantOfBlockedKeyRefused(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			before := snapshotConfig(t, cfg)
 
 			result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
@@ -123,7 +123,7 @@ func TestConfigSet_SectionWriteRefused(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			before := snapshotConfig(t, cfg)
 
 			result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
@@ -160,7 +160,7 @@ func TestConfigSet_SectionWriteRefused(t *testing.T) {
 // descendant is still writable as a whole, and so are ordinary leaves.
 func TestConfigSet_SectionWritesThatAreSafeStillWork(t *testing.T) {
 	t.Run("agents.defaults section", func(t *testing.T) {
-		deps, cfg := newTestDeps()
+		deps, cfg := newTestDeps(t)
 		result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 			"key":   "agents.defaults",
 			"value": map[string]any{"default_model": map[string]any{"model": "glm-4.7"}},
@@ -174,7 +174,7 @@ func TestConfigSet_SectionWritesThatAreSafeStillWork(t *testing.T) {
 	})
 
 	t.Run("tools.read_file section", func(t *testing.T) {
-		deps, cfg := newTestDeps()
+		deps, cfg := newTestDeps(t)
 		result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 			"key":   "tools.read_file",
 			"value": map[string]any{"max_read_file_size": float64(4242)},
@@ -188,7 +188,7 @@ func TestConfigSet_SectionWritesThatAreSafeStillWork(t *testing.T) {
 	})
 
 	t.Run("gateway.port leaf", func(t *testing.T) {
-		deps, cfg := newTestDeps()
+		deps, cfg := newTestDeps(t)
 		result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 			"key":   "gateway.port",
 			"value": float64(7331),

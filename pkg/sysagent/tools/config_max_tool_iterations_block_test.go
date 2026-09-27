@@ -35,7 +35,7 @@ func TestSetConfig_RefusesGlobalToolIterationLimit(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			cfg.Agents.Defaults.MaxToolIterations = 300
 			cfg.Agents.Defaults.MaxToolIterationsEnvImported = true
 			res := systools.NewConfigSetTool(deps).Execute(context.Background(),
@@ -58,7 +58,7 @@ func TestSetConfig_RefusesGlobalToolIterationLimit(t *testing.T) {
 // section that does not touch the protected fields — and such a section
 // write keeps the global.
 func TestSetConfig_AgentsDefaultsStillWritable(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Agents.Defaults.MaxToolIterations = 300
 	tool := systools.NewConfigSetTool(deps)
 

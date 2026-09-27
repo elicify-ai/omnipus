@@ -27,7 +27,7 @@ func TestSetConfig_RefusesGlobalMaxToolIterations(t *testing.T) {
 		{"the import marker via its parent object", "agents.defaults", map[string]any{"max_tool_iterations_env_imported": false}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			cfg.Agents.Defaults.MaxToolIterations = 250
 			cfg.Agents.Defaults.MaxToolIterationsEnvImported = true
 
@@ -53,7 +53,7 @@ func TestSetConfig_RefusesGlobalMaxToolIterations(t *testing.T) {
 	// Control: the refusal is targeted — a sibling agents.defaults setting
 	// still lands, so a tool that refuses everything cannot pass this test.
 	t.Run("a sibling agents.defaults key is still writable", func(t *testing.T) {
-		deps, cfg := newTestDeps()
+		deps, cfg := newTestDeps(t)
 		cfg.Agents.Defaults.MaxToolIterations = 250
 		res := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
 			"key": "agents.defaults.temperature", "value": 0.5,

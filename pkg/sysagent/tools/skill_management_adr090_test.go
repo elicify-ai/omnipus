@@ -39,7 +39,7 @@ func allowManagement(deps *systools.Deps, verdicts map[string]string) {
 func TestSkillListTool_ManagementRequiresComposedReadAndWriterPolicies(t *testing.T) {
 	root := t.TempDir()
 	writeManagementSkill(t, root, "release", "# Release\nSafe body.\n")
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.SkillsLoader = skills.NewSkillsLoader("", root, "")
 	tool := systools.NewSkillListTool(deps)
 	ctx := tools.WithAgentID(context.Background(), "ava")
@@ -76,7 +76,7 @@ func TestSkillListTool_ManagementRequiresComposedReadAndWriterPolicies(t *testin
 func TestSkillListTool_ManagementNamedInspectionIsSanitizedAndUnfiltered(t *testing.T) {
 	root := t.TempDir()
 	writeManagementSkill(t, root, "release", "# Release\nSafe body.\n")
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	deps.SkillsLoader = skills.NewSkillsLoader("", root, "")
 	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{ID: "ava", Skills: []string{}})
 	allowManagement(deps, map[string]string{"list_skills": "allow", "edit_skill": "ask"})
@@ -123,7 +123,7 @@ func TestSkillListTool_ManagementRejectsTraversalUnknownAndSymlinkEscape(t *test
 	if err := os.Symlink(outside, filepath.Join(dir, "SKILL.md")); err != nil {
 		t.Fatal(err)
 	}
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.SkillsLoader = skills.NewSkillsLoader("", root, "")
 	allowManagement(deps, map[string]string{"list_skills": "allow", "create_skill": "allow"})
 	tool := systools.NewSkillListTool(deps)
@@ -170,7 +170,7 @@ func TestSkillListTool_ManagementIncludesMountedProjectAndRefusesCollision(t *te
 	if err := os.WriteFile(filepath.Join(home, "entities", "mounts", wsID+".json"), record, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.Home = home
 	deps.SkillsLoader = skills.NewSkillsLoader("", t.TempDir(), "")
 	allowManagement(deps, map[string]string{"list_skills": "allow", "update_agent": "allow"})
@@ -190,7 +190,7 @@ func TestSkillListTool_ManagementIncludesMountedProjectAndRefusesCollision(t *te
 func TestSkillListTool_ManagementContentAndRevisionShareMutationLock(t *testing.T) {
 	root := t.TempDir()
 	writeManagementSkill(t, root, "release", "old body\n")
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.SkillsLoader = skills.NewSkillsLoader("", root, "")
 	allowManagement(deps, map[string]string{"list_skills": "allow", "edit_skill": "allow"})
 	tool := systools.NewSkillListTool(deps)

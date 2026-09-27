@@ -25,7 +25,7 @@ func validSkill(name string) string {
 // and a SkillsLoader spanning an optional builtin dir.
 func newAuthoringDeps(t *testing.T, globalDir, builtinDir string) *systools.Deps {
 	t.Helper()
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.SkillWriter = skills.NewSkillWriter(globalDir)
 	deps.SkillsLoader = skills.NewSkillsLoader("", globalDir, builtinDir)
 	return deps
@@ -155,7 +155,7 @@ func TestSkillCreateTool_OversizeRejected(t *testing.T) {
 
 // TestSkillCreateTool_NilWriter_ReturnsNotAvailable verifies the nil-dep guard.
 func TestSkillCreateTool_NilWriter_ReturnsNotAvailable(t *testing.T) {
-	deps, _ := newTestDeps() // no SkillWriter
+	deps, _ := newTestDeps(t) // no SkillWriter
 	create := systools.NewSkillCreateTool(deps)
 	res := create.Execute(context.Background(), map[string]any{"name": "x", "content": validSkill("x")})
 	em := parseError(t, res.ForLLM)
