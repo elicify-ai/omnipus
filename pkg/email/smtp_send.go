@@ -52,27 +52,7 @@ func sendSMTPWithSTARTTLS(ctx context.Context, addr string, auth smtp.Auth, from
 	if stepErr := smtpStep(ctx, cl.Auth(auth), "auth"); stepErr != nil {
 		return stepErr
 	}
-	if stepErr := smtpStep(ctx, cl.Mail(from), "MAIL FROM"); stepErr != nil {
-		return stepErr
-	}
-	for _, r := range rcpts {
-		if stepErr := smtpStep(ctx, cl.Rcpt(r), "RCPT TO"); stepErr != nil {
-			return stepErr
-		}
-	}
-	w, err := cl.Data()
-	if stepErr := smtpStep(ctx, err, "DATA"); stepErr != nil {
-		return stepErr
-	}
-	if _, err := io.WriteString(w, body); err != nil {
-		return smtpStep(ctx, err, "write body")
-	}
-	if err := smtpStep(ctx, w.Close(), "body close"); err != nil {
-		return err
-	}
-	// Best-effort goodbye; the message is already transmitted.
-	_ = smtpStep(ctx, cl.Quit(), "QUIT")
-	return nil
+	return smtpSendEnvelope(ctx, cl, from, rcpts, body)
 }
 
 // sendSMTPS transmits body to every envelope recipient over implicit TLS
@@ -98,6 +78,15 @@ func sendSMTPS(ctx context.Context, addr, username, password, from string, rcpts
 	if stepErr := smtpStep(ctx, cl.Auth(auth), "auth"); stepErr != nil {
 		return stepErr
 	}
+	return smtpSendEnvelope(ctx, cl, from, rcpts, body)
+}
+
+// smtpSendEnvelope runs the post-auth envelope sequence — MAIL FROM → RCPT
+// TO → DATA → body write → body close → best-effort QUIT — on an
+// already-authenticated client, bounded by ctx exactly like every step
+// before it. One shared copy for both the STARTTLS and the implicit-TLS
+// path, so the two wire sequences cannot drift.
+func smtpSendEnvelope(ctx context.Context, cl *smtp.Client, from string, rcpts []string, body string) error {
 	if stepErr := smtpStep(ctx, cl.Mail(from), "MAIL FROM"); stepErr != nil {
 		return stepErr
 	}
@@ -116,6 +105,7 @@ func sendSMTPS(ctx context.Context, addr, username, password, from string, rcpts
 	if err := smtpStep(ctx, w.Close(), "body close"); err != nil {
 		return err
 	}
+	// Best-effort goodbye; the message is already transmitted.
 	_ = smtpStep(ctx, cl.Quit(), "QUIT")
 	return nil
 }

@@ -232,19 +232,9 @@ func (b *MailBudget) TryCall(ctx context.Context, req MailBudgetRequest, fn func
 	}
 }
 
-// runDial acquires one of the account's two slots, queueing under ctx, and
-// runs fn. Deadline exceeded while queued → ErrMailBusy, never a dial.
-func (g *mailAccountGate) runDial(ctx context.Context, fn func(context.Context) error) error {
-	select {
-	case g.slots <- struct{}{}:
-		defer func() { <-g.slots }()
-		return fn(ctx)
-	case <-ctx.Done():
-		return fmt.Errorf("%w: %v", ErrMailBusy, ctx.Err())
-	}
-}
-
-// runDialValue is runDial for a data-bearing dial.
+// runDialValue acquires one of the account's two slots, queueing under ctx,
+// and runs the data-bearing dial fn. Deadline exceeded while queued →
+// ErrMailBusy, never a dial.
 func (g *mailAccountGate) runDialValue(ctx context.Context, fn func(context.Context) (any, error)) (any, error) {
 	select {
 	case g.slots <- struct{}{}:
