@@ -17,6 +17,16 @@
 
 import type { ComponentType } from 'react'
 
+/**
+ * Sentinel: "no width chosen yet — derive at open". Not a real px value.
+ * Lives here (the shape-level contract module) rather than next to the store
+ * because BOTH the real ui store (src/store/ui.ts, wave 1) and the wave-0
+ * demo shim (panelShellStore.ts) need it, and zustand runs the store
+ * initializer eagerly at module evaluation — the sentinel must already be
+ * initialized (a TDZ ReferenceError otherwise).
+ */
+export const PANEL_WIDTH_UNSET = -1
+
 /** The registered panel ids (§8.1; §8.2: valid `?panel=` values are the REGISTERED ids). */
 export type PanelId = 'library' | 'browser' | 'mail' | 'tasks' | 'team' | 'calendar'
 
@@ -41,6 +51,12 @@ export interface PanelContentProps {
   close: () => void
   /** Ask the shell to expand this panel to its full-page route (SP-12). */
   expand: () => void
+}
+
+/** What the store holds for the at-most-one open panel (§8.1, verbatim). */
+export interface ActivePanel {
+  id: PanelId
+  context: PanelContext
 }
 
 /**

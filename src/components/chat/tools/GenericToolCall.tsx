@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import type { TruncatedResult, MarshalErrorResult } from '@/lib/ws'
 import type {
@@ -412,7 +413,11 @@ export function GenericToolCall({
       useUiStore.getState().addToast({ message: 'No active session to watch.', variant: 'error' })
       return
     }
-    useUiStore.getState().openBrowserPanel(sid, activeAgentId)
+    // CRIT-001: "Watch live" REPLACES whatever panel is open (SP-7), so the
+    // outgoing panel's leave gate (Library unsaved edits) runs first.
+    leaveGateThen(() => {
+      useUiStore.getState().openPanel('browser', { sessionId: sid, agentId: activeAgentId })
+    })
   }
 
   // F1: isRunning/isCancelled are checked BEFORE sentinels.statusConfig —
