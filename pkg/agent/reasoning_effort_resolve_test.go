@@ -24,8 +24,15 @@
 //	      agentEffort          string,  // step 5: the agent's own configured effort
 //	  ) (value string, ok bool)
 //
-//	Semantics — walk 3 -> 4 -> 5; FIRST non-empty, non-"default" value wins;
-//	none → ("", false). The caller maps ok=false to "set NO llmOpts key"
+//	Semantics — RULED 2026-09-28 (squad-lead): step 3 is EXCLUSIVE. A serving
+//	fallback resolves ONLY to its own stored token ("default"/unset →
+//	("", false); DefaultModel and the agent's own effort are never consulted
+//	for a fallback — D10). Steps 4 -> 5 (FIRST non-empty, non-"default" of
+//	DefaultModel [primaryInherited-gated], then the agent's own) run only on
+//	the primary's own path, i.e. servingCandidateEffort == "" ("when the
+//	primary serves"); a fallback whose stored effort is unset is passed as
+//	"default", the unset token — never "". none → ("", false). The caller
+//	maps ok=false to "set NO llmOpts key"
 //	(D9: absence is the send-nothing signal — never an empty-string value).
 //	"default" (exact, lowercase — the spec's literal token) means unset.
 //	Effort is a plain string (T1): the function SELECTS, it never validates,
@@ -34,12 +41,13 @@
 //	TWO INTERPRETATION FLAGS (spec-ambiguous points, pinned here so a ruling
 //	is a one-row change; flagged to squad-lead in the WP-G RED report):
 //
-//	  FLAG 1 (walk vs exclusive branches): the dispatch's "if none of these
-//	  produce a non-empty, non-"default" value, resolve to nothing" is pinned
-//	  as a linear walk — a serving candidate with NO own effort falls through
-//	  to steps 4/5 (DefaultModel, then the agent's own). The alternative
-//	  exclusive reading (a serving fallback consults ONLY its own effort;
-//	  empty → nothing) would change exactly the two FLAG 1 rows below.
+//	  FLAG 1 (walk vs exclusive branches): RULED 2026-09-28 — EXCLUSIVE wins.
+//	  Squad-lead, on the spec's C5 order: steps (4)/(5) are both scoped to
+//	  "an agent primary", so they describe the PRIMARY's resolution path only;
+//	  step (3) is a fallback's entire resolution — its own stored effort or
+//	  nothing. Both FLAG 1 rows below pin the ruling: a serving fallback with
+//	  an unset own effort resolves to nothing; DefaultModel and the agent's
+//	  own effort are never consulted for a fallback.
 //
 //	  FLAG 2 (sentinel exactness): "default" is matched exactly; "Default"
 //	  (any other casing) is NOT the sentinel and passes through as a plain
@@ -83,20 +91,24 @@ func TestResolveReasoningEffort_ResolutionWalk(t *testing.T) {
 			wantSource: "C5 step (3); BDD 'A serving fallback candidate uses its own effort' (primary high, candidate low → request carries low); D10",
 		},
 		{
-			name:                   "serving candidate with no own effort falls through to the inherited default model",
-			servingCandidateEffort: "", primaryInherited: true,
+			// squad-lead ruling 2026-09-28: fallback resolution is exclusive to the candidate's own stored effort — steps (4)/(5) apply only to the primary's own resolution path, so an unset fallback effort ("default" token; "" means the primary serves) resolves to nothing and the inherited surfaces are never consulted.
+			name:                   "serving fallback with no own effort resolves to nothing (exclusive)",
+			servingCandidateEffort: "default", primaryInherited: true,
 			defaultModelEffort: "medium", agentEffort: "high",
-			wantValue: "medium", wantOK: true,
-			wantSource:       "C5 steps (3)-(5) walk; dispatch 'if none of these produce a non-empty, non-default value'",
-			interpretationFL: "FLAG 1",
+			wantValue:        "",
+			wantOK:           false,
+			wantSource:       "C5 step (3) exclusive (D10): a serving fallback uses its own stored effort or nothing — never a value chosen for another model; FR-029; squad-lead ruling 2026-09-28",
+			interpretationFL: "FLAG 1 (RULED: exclusive)",
 		},
 		{
-			name:                   "serving candidate at the default sentinel falls through to the inherited default model",
+			// squad-lead ruling 2026-09-28: as above — the fallback's unset sentinel is terminal; the walk never reaches DefaultModel.
+			name:                   "serving fallback at the default sentinel resolves to nothing (exclusive)",
 			servingCandidateEffort: "default", primaryInherited: true,
 			defaultModelEffort: "medium", agentEffort: "",
-			wantValue: "medium", wantOK: true,
-			wantSource:       "'default' means send nothing → the surface is unset; C5 walk",
-			interpretationFL: "FLAG 1",
+			wantValue:        "",
+			wantOK:           false,
+			wantSource:       "'default' = unset → the exclusive step (3) surface resolves to nothing; squad-lead ruling 2026-09-28",
+			interpretationFL: "FLAG 1 (RULED: exclusive)",
 		},
 		{
 			name:                   "inherited primary consults DefaultModel.reasoning_effort",
