@@ -2098,6 +2098,12 @@ func (al *AgentLoop) ExecuteBoardTask(agentID, taskID, sessionID, prompt string,
 	taskCtx := context.Background()
 
 	if !al.beginActiveRequest() {
+		logger.WarnCF("agent", "active request admission refused after intake closed", map[string]any{
+			"site":       "ExecuteBoardTask",
+			"task_id":    taskID,
+			"session_id": sessionID,
+			"agent_id":   agentID,
+		})
 		if onComplete != nil {
 			onComplete("", context.Canceled)
 		}

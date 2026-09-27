@@ -3,9 +3,11 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
@@ -30,6 +32,7 @@ func (*activeRequestCountingProvider) GetDefaultModel() string { return "test-mo
 // must be refused before it reaches the provider; otherwise an ungated
 // request registration can race the shutdown waiter or outlive store teardown.
 func TestActiveRequests_StopRejectsProviderCallBetweenRounds(t *testing.T) {
+	readLog := captureLogFile(t, logger.WARN)
 	provider := &activeRequestCountingProvider{}
 	agent := &AgentInstance{ID: "test-agent", Provider: provider}
 	al := &AgentLoop{}
@@ -51,6 +54,10 @@ func TestActiveRequests_StopRejectsProviderCallBetweenRounds(t *testing.T) {
 	}
 	if got := provider.calls.Load(); got != 1 {
 		t.Fatalf("provider calls = %d, want 1; shutdown admitted a call between rounds", got)
+	}
+	logs := readLog()
+	if got := strings.Count(logs, `"site":"callProviderOnce"`); got != 1 {
+		t.Fatalf("refused provider admission WARNs naming callProviderOnce = %d, want 1; logs:\n%s", got, logs)
 	}
 }
 
