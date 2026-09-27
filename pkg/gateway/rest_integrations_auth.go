@@ -305,7 +305,11 @@ func (a *restAPI) buildIntegrationResponse(cfg *config.Config) gen.IntegrationPr
 			(d.kind == "voice" && d.id == activeVoice)
 		activeCopy := active
 		entry := gen.IntegrationProvider{
-			Id:          d.id,
+			// ADR-096 narrowed IntegrationProvider.id from a free string to the
+			// IntegrationProviderId enum, so the catalogue's id needs the same
+			// conversion Kind has always had. integrationCatalogue is the source
+			// the enum was generated FROM, so every id here is a member of it.
+			Id:          gen.IntegrationProviderId(d.id),
 			Kind:        gen.IntegrationProviderKind(d.kind),
 			DisplayName: d.displayName,
 			Configured:  configured,
