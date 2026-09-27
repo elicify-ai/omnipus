@@ -228,7 +228,11 @@ type services struct {
 	reloadInFlight   bool
 	reloadRequested  bool
 	reloadTrigger    func() error
-	credStore        *credentials.Store
+	// reloadOutcome records each reload's rebuild outcome (runReloadCycle);
+	// shared with restAPI so PUT /performance can tell a failed rebuild from
+	// an applied one. Nil in test constructions (a nil tracker is a no-op).
+	reloadOutcome *reloadOutcomeTracker
+	credStore     *credentials.Store
 	// toolStore owns the on-disk tool-result offload directory. Exposed here
 	// so RunContext can wire its retentionSweep into the nightly sweep loop.
 	toolStore *toolResultStore

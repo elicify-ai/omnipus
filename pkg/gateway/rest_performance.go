@@ -87,7 +87,9 @@ func wireMaxParallelAgents(configured, effective int) int {
 }
 
 func (a *restAPI) getPerformance(w http.ResponseWriter, _ *http.Request) {
-	jsonOK(w, performanceSettingsResponse(a.agentLoop.GetConfig()))
+	resp := performanceSettingsResponse(a.agentLoop.GetConfig())
+	resp.PendingApply = a.pendingApply.snapshot()
+	jsonOK(w, resp)
 }
 
 // performanceSettingsResponse builds the PerformanceSettings body from cfg;
@@ -183,7 +185,8 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	outcome, werr := a.writePerformanceLocked(r.Context(), limitUpd, func(m map[string]any) error {
+	changed := performanceChangedFields(&req)
+	outcome, werr := a.writePerformanceLocked(r.Context(), limitUpd, changed, func(m map[string]any) error {
 		// Partial update: only touch the fields that were provided.
 		if req.MaxParallelAgents != nil {
 			// Accept 0 as "reset to auto-detect"; values < 0 rejected above.
@@ -218,8 +221,8 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 		// Saved but not applied: config.json (and any lowered agents) are
 		// written, the in-memory refresh failed — same answer as a failed
 		// registry reload below.
-		writePerformanceReloadFailed(w, outcome, gen.PerformanceReloadFailedDetailsStageRefresh,
-			performanceChangedFields(&req))
+		// writePerformanceLocked already marked the fields pending apply.
+		writePerformanceReloadFailed(w, outcome, gen.PerformanceReloadFailedDetailsStageRefresh, changed)
 		return
 	}
 
@@ -235,16 +238,25 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 	// #904 step 7 / FR-005: every agent instance snapshots its limit at
 	// construction, so a changed global (or a lowered agent) needs a
 	// registry reload for the next turn to use it. A turn already running
-	// keeps the limit it started with (D18).
-	if outcome.globalChanged || len(outcome.lowered) > 0 {
-		if err := a.triggerReloadAndWait(); err != nil {
-			writePerformanceReloadFailed(w, outcome, gen.PerformanceReloadFailedDetailsStageReload,
-				performanceChangedFields(&req))
+	// keeps the limit it started with (D18). While an earlier save is
+	// pending apply the registry is reloaded whatever this request changed:
+	// that is how a later PUT applies it. reloadAgentsAndConfirm also fails
+	// when the reload ran but its rebuild failed (gate round 3) — plain
+	// triggerReloadAndWait reports that as success.
+	if outcome.globalChanged || len(outcome.lowered) > 0 || a.pendingApply.isSet() {
+		if err := a.reloadAgentsAndConfirm(); err != nil {
+			a.pendingApply.mark(gen.PerformanceReloadFailedDetailsStageReload, changed,
+				a.reloadOutcome.startedCount())
+			writePerformanceReloadFailed(w, outcome, gen.PerformanceReloadFailedDetailsStageReload, changed)
 			return
 		}
 	}
+	// The refresh and (when needed) the registry reload both succeeded:
+	// everything saved up to this request's refresh is in force.
+	a.pendingApply.clearIfEpoch(outcome.appliedEpoch)
 
 	resp := performanceSettingsResponse(a.agentLoop.GetConfig())
+	resp.PendingApply = a.pendingApply.snapshot()
 	if len(outcome.lowered) > 0 {
 		lowered := outcome.lowered
 		resp.MaxToolIterationsLoweredAgents = &lowered
@@ -268,10 +280,11 @@ func writePerformanceReloadFailed(w http.ResponseWriter, outcome performanceWrit
 ) {
 	// The cause is NOT logged here: its text can carry a credential
 	// reference name (CodeQL clear-text logging, PR #932). For the refresh
-	// stage, refreshConfigAndRewireServices logs its roster and credential
-	// causes itself (a config load failure there is not logged); the reload
-	// stage's cause is logged by waitForReloadOutcome ("config reload
-	// failed").
+	// stage, refreshConfigAndRewireServices logs its load, roster and
+	// credential causes itself; the reload stage's cause is logged by
+	// waitForReloadOutcome ("config reload failed": the reload could not
+	// start), waitForReload (timeout) or runReloadCycle ("Config reload
+	// failed": the rebuild failed).
 	logsafeError("rest: PUT /performance: settings saved but not applied",
 		"stage", string(stage), "lowered_agents", len(outcome.lowered))
 	lowered := outcome.lowered

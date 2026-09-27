@@ -92,6 +92,14 @@ type restAPI struct {
 	// faults here (rest_performance_max_tool_iterations.go).
 	limitAgentStore maxToolIterationsAgentStore
 
+	// pendingApply is the #904 "Performance settings saved but not applied
+	// yet" state (PerformanceSettings.pending_apply); zero value = nothing
+	// pending. reloadOutcome is the gateway's registry-reload outcome record
+	// (shared with services; nil in test constructions without the boot
+	// path). See rest_performance_pending_apply.go.
+	pendingApply  performancePendingApply
+	reloadOutcome *reloadOutcomeTracker
+
 	// liveTaskActivity (founder decision 2026-09-14) is the read seam
 	// Task.last_activity_at is stamped from: the live progress stamp of a
 	// running task's turn (advancing on streamed reasoning as well as
