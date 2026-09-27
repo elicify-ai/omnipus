@@ -253,9 +253,8 @@ async function globalSetup(): Promise<void> {
       throw new Error(`POST /api/v1/auth/login failed: ${res.status()} — ${body}`);
     }
     // Validate the response shape (proof the login itself succeeded and
-    // returned the expected LoginResponse contract) — the bearer token
-    // itself is deliberately not persisted anywhere; the SPA never reads one
-    // anymore (ADR-044), so there is nothing to write it into.
+    // returned the expected LoginResponse contract). The bearer is persisted
+    // only in admin-reload-bearer.txt below; it is never exposed to the SPA.
     const json = (await res.json()) as { token: string };
     if (!json.token) throw new Error('Login response missing token field');
 
@@ -305,6 +304,7 @@ async function globalSetup(): Promise<void> {
     fs.mkdirSync(bearerDir, { recursive: true });
     const bearerFile = path.join(bearerDir, 'admin-reload-bearer.txt');
     fs.writeFileSync(bearerFile, json.token, { mode: 0o600 });
+    fs.chmodSync(bearerFile, 0o600);
   } finally {
     await ctx.dispose();
   }

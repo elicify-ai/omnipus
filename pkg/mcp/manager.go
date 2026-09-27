@@ -355,7 +355,9 @@ func ResolveServerHeaderRefs(
 	}
 
 	resolved := cfg
-	mergedHeaders := make(map[string]string, len(cfg.Headers)+len(cfg.HeaderRefs))
+	// No summed capacity hint: len+len can overflow (CodeQL
+	// go/allocation-size-overflow); the map grows fine unsized.
+	mergedHeaders := make(map[string]string)
 	for k, v := range cfg.Headers {
 		mergedHeaders[k] = v
 	}

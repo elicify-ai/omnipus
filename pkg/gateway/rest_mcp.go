@@ -182,7 +182,9 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 		// ref-backed server still shows its header configuration in the UI
 		// edit pre-fill. Names only; values never cross the wire either way.
 		if len(srv.Headers) > 0 || len(srv.HeaderRefs) > 0 {
-			nameSet := make(map[string]struct{}, len(srv.Headers)+len(srv.HeaderRefs))
+			// No summed capacity hint: len+len can overflow (CodeQL
+			// go/allocation-size-overflow); the map grows fine unsized.
+			nameSet := make(map[string]struct{})
 			for k := range srv.Headers {
 				nameSet[k] = struct{}{}
 			}
