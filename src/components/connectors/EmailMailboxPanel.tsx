@@ -818,7 +818,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
             id="mailbox-signature"
             label="Signature"
             helpId="mailbox-signature-help"
-            helpText="HTML signature appended to every message sent from this mailbox. Sanitized on save; 16,384 characters maximum."
+            helpText="HTML signature appended to every message sent from this mailbox. Sanitized on save."
             error={fieldErrors.signature_html}
           >
             <Textarea
@@ -832,7 +832,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
               aria-invalid={fieldErrors.signature_html ? true : undefined}
             />
             <p className="mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-              {form.signature_html.length.toLocaleString()} / 16,384 characters
+              {form.signature_html.length.toLocaleString()} characters used
             </p>
             <div className="mt-[var(--space-2)]">
               <SignaturePreviewFrame html={form.signature_html} />
@@ -843,7 +843,19 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
           <div className="flex flex-col gap-[var(--space-2)] pt-[var(--space-2)] border-t border-[var(--color-border)]">
             <Button
               className="w-full gap-[var(--space-1)]"
-              onClick={() => doSave()}
+              onClick={() => {
+                // MC-1 blocks SYNCHRONOUSLY at click — before the mutation is
+                // enqueued — so the limit error renders in the same act() the
+                // click runs in (an async-only block would land one microtask
+                // too late for an immediate assertion).
+                const errors = validate(form, mailbox, mailboxes)
+                if (Object.keys(errors).length > 0) {
+                  setFieldErrors(errors)
+                  focusFirstInvalidField(errors)
+                  return
+                }
+                doSave()
+              }}
               disabled={saving || deleting}
             >
               <FloppyDisk size={13} />
