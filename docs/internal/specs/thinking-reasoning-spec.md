@@ -1,7 +1,7 @@
 # Feature Specification: Thinking & Reasoning Effort
 
 - **Created:** 2026-09-27
-- **Status:** Draft — grill round 1 complete (verdict BLOCK, `thinking-reasoning-spec-review.md`); founder answers D22-D28 recorded; fix round 1 applied (see the Revision log at the end). Round 2 of 2 is next.
+- **Status:** Draft — grill round 1 complete (verdict BLOCK, `thinking-reasoning-spec-review.md`); founder answers D22-D28 recorded; fix round 1 applied; grill round 2 complete (verdict BLOCK, `thinking-reasoning-spec-review-round2.md`, 24 findings); fix round 2 **part A** applied (every finding needing no founder decision — see the Revision logs at the end). **Four findings are pending founder decisions (Q1-Q4, "Pending founder decisions (grill round 2)" below) and are marked PENDING in the text; part B applies their answers.**
 - **Input:** founder interview output `docs/internal/specs/spec-thinking-reasoning.md` (Decisions Log D1–D21, T1–T3; Code Facts CF1–CF11) — that file is the source of record for *why*; this spec is the source of record for *how*. In this spec, an unqualified `D<n>` cites the interview's Decisions Log (D22-D28 are the grill-round-1 founder answers); ADR-local decisions are cited as "ADR-095 D<n>".
 - **Technical design:** [ADR-095 — Thinking visibility gate and signed blocks](../architecture/ADR-095-thinking-visibility-gate-and-signed-blocks.md) (Status: Accepted, grill + founder interview + one correction complete, no open questions). This spec builds on it; it does not re-derive the design.
 - **Evidence baseline:** this spec's own first-hand code checks ran on `feat/thinking-reasoning` @ `2aa2bfb44` (worktree `thinking-reasoning`). The interview's CF1–CF11 were verified on `origin/release/v0.1.1` @ `73bdad862`; ADR-095's correction re-verified on `a5f02fc34`. Cites are `file::symbol`, never line numbers.
@@ -15,10 +15,10 @@ Per T2, **the whole feature's wire surface is ONE contract change** covering `co
 
 | # | Wire surface | Lands in | Shape (indicative) | Decisions |
 |---|---|---|---|---|
-| C1 | Per-login `show_thinking` toggle endpoint | `contracts/openapi.yaml` (new authenticated operations `GET /user-context/thinking` + `PUT /user-context/thinking`, operationIds `getUserThinkingPreference` / `putUserThinkingPreference`) + new request/response schemas in `contracts/components/schemas/` | GET returns the calling login's current preference; PUT takes `{show_thinking: bool}` and is **idempotent** (same value re-PUT succeeds — the SPA flips toggles optimistically and can race itself); both responses return the persisted state. **Never serializes any user-config hash or token material** (ADR-095 D1). Mutations are CSRF-protected by the same double-submit rule as every other authenticated mutation | D2, D19; ADR-095 D1 |
-| C2 | Live thinking frame | `contracts/asyncapi.yaml` (new WS frame type in the frame-type enum + `ThinkingFrame.yaml` in `contracts/components/schemas/`) | One frame carrying: `entry_id` (the transcript thinking row this frame belongs to — minted by the producer at capture start, so live rows and replayed rows are one row by construction), `text` = the **whole redacted text-so-far, hold-back applied — the client REPLACES its rendered text with each frame rather than appending** (the property the hold-back rule can actually guarantee), `elapsed_ms`, `thinking_tokens` when the provider reports one (absent otherwise), `provider_summary` flag (D18's "summarized thinking" label), `final` flag on a round's last frame. `text` capped at **65536 bytes** (maxLength; the `TokenFrame` text-cap precedent) — beyond the cap live updates stop (the stored row still replays in full). Producers **coalesce to at most one frame per 250 ms per round** (latest state wins) so a fast provider cannot flood the hub journal. Published unconditionally by producers, **filtered per connection at delivery** (ADR-095 D2) | D2, D4, D11, D18, D19; ADR-095 D2 |
-| C3 | Thinking as its own transcript entry type | `Message.yaml` — the entry `type` enum gains `"thinking"` (alongside `message`/`compaction`/`system`/`tool_call`/`turn_canceled`/`judge_verdict`), with fields `text` (redacted), `elapsed_ms`, `thinking_tokens` (absent when unreported), `provider_summary`, `turn_id` (binds the row to its round) and `reasoning_effort` (the effort the serving model ran at, when set); `ReplayMessageFrame.yaml` carries a thinking entry through replay | **The storage unit for thinking is one `type: "thinking"` transcript entry per round** — including tool-only rounds that produce no answer text (their thinking row exists on its own entry, not folded anywhere). Entry ID minted **at capture start** = the same ID the live C2 frame carries: live and replay are one row by construction. REST serializers strip thinking entries and fields for a requestor whose gate is off — the entry's *absence* is the gate at replay/REST. The entry `text` is captured from the provider's reasoning field — `Reasoning`, falling back to `ReasoningContent` when empty — and only after the accumulated text has passed the orphan tool-call markup strip (`pkg/agent/loop_truncation.go::stripOrphanToolCallMarkup`): capture reads the post-strip text, so markup never lands in a stored or displayed thinking row (MIN-006) | D2, D3, D11, D18, D19; ADR-095 D2 Boundaries 2-3 |
-| C4 | No-answer outcome marker + notice text | `Message.yaml` + `ReplayMessageFrame.yaml` (additive typed `outcome` field on the assistant entry, value `"no_answer"`, absent otherwise) + the live done-frame (additive `outcome` field, mirroring the existing additive `truncation_reason` precedent) | A round with thinking but no answer text persists an assistant entry whose `content` **is the D26 notice text** ("The model (Provider · Model) did not respond") — so every ordinary content consumer (messenger reply, parent agent, recap, SSE token pipe) delivers the same notice with **zero special handling** (D26: "same notice everywhere") — plus the typed `outcome: "no_answer"` marker so the SPA renders the approved console-strip style with Retry, and `turnWasReasoningOnly` keys on the marker instead of truncation inference. The recap path treats an `outcome: "no_answer"` recap result as a **failed recap attempt** (retry eligible), never reasoning-as-recap | D20, D26; ADR-095 D4 |
+| C1 | Per-login `show_thinking` toggle endpoint | `contracts/openapi.yaml` (new authenticated operations `GET /auth/preferences/thinking` + `PUT /auth/preferences/thinking`, operationIds `getUserThinkingPreference` / `putUserThinkingPreference` — hosted in the auth/account area next to `/auth/session` and `/auth/change-password`, NOT under `/user-context`, which is the workspace USER.md resource and the wrong scope for an account-level preference, MIN-001; the architect owns the final path shape) + new request/response schemas in `contracts/components/schemas/` | GET returns the calling login's current preference; PUT takes `{show_thinking: bool}` and is **idempotent** (same value re-PUT succeeds — the SPA flips toggles optimistically and can race itself); both responses return the persisted state. **Never serializes any user-config hash or token material** (ADR-095 D1). Mutations are CSRF-protected by the same double-submit rule as every other authenticated mutation | D2, D19; ADR-095 D1 |
+| C2 | Live thinking frame | `contracts/asyncapi.yaml` (new WS frame type in the frame-type enum + `ThinkingFrame.yaml` in `contracts/components/schemas/`) | One frame carrying: `entry_id` (the transcript thinking row this frame belongs to — minted by the producer at capture start, so live rows and replayed rows are one row by construction), `text` = the **whole redacted text-so-far, hold-back applied — the client REPLACES its rendered text with each frame rather than appending** (the property the hold-back rule can actually guarantee), `elapsed_ms`, `thinking_tokens` when the provider reports one (absent otherwise), `provider_summary` flag (D18's "summarized thinking" label), `final` flag on a round's last frame — **the `final: true` frame carries the STORED redacted text: the post-strip text (after `pkg/agent/loop_truncation.go::stripOrphanToolCallMarkup`), redacted whole-string — and the client replaces its rendered text with it**, so the row a reload renders is byte-identical to the row the live view ended on (US-3 AS1, FR-007; MAJ-005: mid-stream text comes from the pre-strip callback, so the final frame is the reconciliation point; ADR-095 D7 amendment recorded under "ADR-095 amendments needed" below). `text` capped at **65536 bytes** (maxLength; the `TokenFrame` text-cap precedent) — beyond the cap live updates stop (the stored row still replays in full). Producers **coalesce to at most one frame per 250 ms per round** (latest state wins) so a fast provider cannot flood the hub journal. Published unconditionally by producers, **filtered per connection at delivery** (ADR-095 D2) | D2, D4, D11, D18, D19; ADR-095 D2 |
+| C3 | Thinking as its own transcript entry type | `Message.yaml` — the entry `type` enum gains `"thinking"` (alongside `message`/`compaction`/`system`/`tool_call`/`turn_canceled`/`judge_verdict`), with fields `thinking_text` (the redacted display copy — a dedicated field, NOT `content`, so no content-consumer can ever read it as an answer), `elapsed_ms`, `thinking_tokens` (absent when unreported), `provider_summary`, `turn_id` (binds the row to its round); `ReplayMessageFrame.yaml` carries a thinking entry through replay; **the entry carries NO `role`** (empty role — the invariant that keeps every role-keyed reader, hydration first, from ever classifying thinking as a user or assistant utterance, CRIT-002) | **The storage unit for thinking is one `type: "thinking"` transcript entry per round, appended EXACTLY ONCE — at round end, or at cancel/error with the redacted text-so-far — never rewritten or re-appended (MAJ-010: one entry, one ID, no latest-wins dedup needed; mid-round state lives only in C2 frames and the journal).** Includes tool-only rounds that produce no answer text (their thinking row exists on its own entry, not folded anywhere). Entry ID minted **at capture start** = the same ID the live C2 frame carries: live and replay are one row by construction. REST serializers strip thinking entries and fields for a requestor whose gate is off — the entry's *absence* is the gate at replay/REST. `thinking_text` is captured from the provider's reasoning field — `Reasoning`, falling back to `ReasoningContent` when empty — and only after the accumulated text has passed the orphan tool-call markup strip (`pkg/agent/loop_truncation.go::stripOrphanToolCallMarkup`): capture reads the post-strip text, so markup never lands in a stored or displayed thinking row (round-1 MIN-006). **No `reasoning_effort` field on the entry** (round-2 OBS-001: no consumer; effort resolution is C5's, at request time) | D2, D3, D11, D18, D19; ADR-095 D2 Boundaries 2-3 |
+| C4 | No-answer outcome marker + notice text | `Message.yaml` + `ReplayMessageFrame.yaml` (additive typed `outcome` field on the assistant entry, value `"no_answer"`, absent otherwise) + the live done frame (`DoneStats.yaml` and its inline copy in `contracts/asyncapi.yaml` — where the additive `truncation_reason` precedent lives, round-2 MIN-006 — gain the same additive `outcome`) | A round with thinking but no answer text persists an assistant entry whose `content` **is the D26 notice text** ("The model (Provider · Model) did not respond") — so every ordinary *consumer* (messenger reply, parent agent, recap deliverer, SPA) delivers the same notice with **zero special handling** (D26: "same notice everywhere") — plus the typed `outcome: "no_answer"` marker so the SPA renders the approved console-strip style with Retry, and `turnWasReasoningOnly` keys on the marker instead of truncation inference. **The notice is display- and delivery-only, never model context (T4):** the agent's LLM-context file records the round as the provider returned it — empty answer content, raw reasoning where D15 applies, never the notice string — and hydration skips assistant entries carrying `outcome: "no_answer"`, so no provider-bound request ever contains the notice (MAJ-001; guard-tested). The recap path treats a recap result with empty text after the strip as a **candidate failure, exactly like a transient-error candidate failure: the next recap candidate is tried; if all candidates fail, no recap is persisted** (round-2 MIN-004, aligned with `pkg/agent/session_end.go`'s `maxTransientRetries`/`isTransientStreamError` candidate-walk) — never reasoning-as-recap | D20, D26, T4; ADR-095 D4 |
 | C5 | Effort-level fields, per surface | See the per-surface table below | `reasoning_effort` is a **plain string, not validated against a fixed enum at write time** (T1); every fallback candidate carries its own effort (D10) | D6, D8, D9, D10, D23, T1 |
 | C6 | Catalog-derived effort variants | `getProvidersCatalog` response schema in `contracts/openapi.yaml` (additive per-model fields on `CatalogModel`) | Per-model `reasoning` + `reasoning_options` — **Omnipus parses them through its typed catalog plumbing** (`pkg/providers/catalog/parse.go` DTO → `document.go::Model` → `served.go` envelope re-serialize; the upstream schema extension is owned by the catalog repo, which is **ours** — elicify-ai/omnipus-provider-catalog, D25). `ProvidersCatalog` `schema_version` stays `"2.0.0"` — the fields are additive under the existing version, no version bump. **No hardcoded interim list in Omnipus** (D7) | D6, D7, D9, D25, T1 |
 | C7 | Usage-totals thinking tokens | `ModelTokens.yaml` (additive `thinking` integer, present only when the provider reports one) | `in`/`out`/`cache_read`/`cache_write`/`total` gain the `thinking` sibling (US-7). `thinking` is **a subset of `out`** — providers report thinking tokens inside output totals (Anthropic `OutputTokensDetails.ThinkingTokens`, OpenAI `completion_tokens_details.reasoning_tokens` precedents), never added on top. Parse points: the Anthropic SDK adapter (the SDK already exposes the detail field) and the openai-compat adapter (whose usage parsing has no reasoning-token plumbing today — new work) | D11; ADR-095 Neutral |
@@ -34,7 +34,7 @@ Per T2, **the whole feature's wire surface is ONE contract change** covering `co
 | Per-message effort (model picker, `/effort`) | The inbound chat frame's metadata map — typed `reasoning_effort` key next to the existing typed `model_name` key | D23: per-message like the model picker; no new per-chat server state |
 | Provider catalog | C6's per-model `reasoning_options` — the levels a model *offers*, never a stored choice | D7, D25 |
 
-**C5 resolution order on each turn** (one model serves the turn; one effort value applies): (1) the turn's inbound per-message `reasoning_effort` metadata, when present and not `"default"`; (2) otherwise the effort configured on whichever model actually serves the turn — the primary if it serves, else the serving fallback candidate's own effort (D10); (3) otherwise nothing is sent — the provider's default applies (D9), and for Anthropic that means **no thinking request at all** (D24). `"default"` is the explicit "send nothing" state.
+**C5 resolution order on each turn** (one model serves the turn; one effort value applies; MAJ-002 — per-message effort binds to the model it was picked FOR, never across models): (1) the turn's inbound per-message `reasoning_effort` metadata applies **only when the model it was chosen for is the one serving** — i.e. the per-message `model_name` (when present) or the agent primary (when no per-message model) is the model that actually serves the turn; (2) otherwise the serving candidate's OWN effort applies — a serving fallback candidate always uses its own stored `reasoning_effort`, never the per-message value picked for a different model (D10, binding); (3) when the serving model is an agent primary inherited from the instance default (the agent sets no `model` of its own), `DefaultModel.reasoning_effort` is the stored effort consulted; (4) otherwise nothing is sent — the provider's default applies (D9), and for Anthropic that means **no thinking request at all** (D24). `"default"` is the explicit "send nothing" state. **A model change clears the stored `reasoning_effort` for that surface** — on the agent surfaces via the same model-write path `pkg/agent/loop_slash.go::SwitchModel` already uses (`ApplyAgentModel`, "same path as the PUT /api/v1/agents/{id} model change"), and likewise on the settings/default-model surfaces — because effort is a property of the model choice (D23) and a level kept across a model swap silently carries a stale value. (Out-of-scope follow-up: which adapters can even act on an effort value is adapter-coverage, PENDING Q4.)
 
 Explicit non-additions:
 no reasoning byte-count field on any ungated wire frame (ADR-095 D7 keeps the growth-only progress callbacks internal; **thinking text on `ToolCallProgress` is banned** — CRIT-003); no reasoning fields on channel/messenger wire surfaces (D1: web chat only); no effort field on `openapi.yaml`'s provider key-probe endpoints; **no thinking event on the legacy SSE chat stream** — `POST /api/v1/chat` is a no-thinking surface by construction (moved to Section 6's prohibitions per OBS-001; the Section 16 test asserting SSE silence stays).
@@ -61,28 +61,27 @@ GitNexus MCP tools were **not connected** in this session; per the plan-spec ski
 | `pkg/gateway/replay.go::streamReplay` + `pkg/gateway/websocket_replay.go` | attach/replay of transcript | **Extended**: gains the requesting login's gate result; thinking rows replay only when on (ADR-095 D2 Boundary 2) |
 | `pkg/gateway/rest_sessions.go::getSession` / `getSessionMessages` / `jsonSessionDetail` | REST transcript serializers | **Gated**: thinking fields stripped unless the requesting principal's toggle is on (ADR-095 D2 Boundary 3) — all three symbols confirmed present |
 | `pkg/gateway/sse.go::sseStreamer` | legacy `POST /api/v1/chat` streamer | **Must NOT implement** the web thinking add-on — no thinking surface (ADR-095 D2 Boundary 4) |
-| `pkg/gateway/websocket_streamer.go`, `pkg/channels/webchat_channel.go` (`webchat_channel.go`) | web streamers | **Implement** the optional web-only thinking add-on; publish redacted-accumulated frames (ADR-095 D2/D4) |
+| `pkg/gateway/websocket_streamer.go`, `pkg/gateway/webchat_channel.go` (`webchat_channel.go` — path corrected, round-2 MAJ-008: `pkg/channels/webchat_channel.go` does not exist) | web streamers | **Implement** the optional web-only thinking add-on; publish redacted-accumulated frames (ADR-095 D2/D4) |
 | `pkg/agent` turn pipeline (`turnState`) | per-round capture point | **Extended**: capture once per round; whole-string redaction on a copy with hold-back tail; D11 metadata; no-answer outcome instead of substitution (ADR-095 D4) |
 | `pkg/providers/protocoltypes/types.go::Message` | shared provider protocol message | **Extended**: `ThinkingBlocks []ThinkingBlock` carrier (`{Type, Thinking, Signature, Data}`) (ADR-095 D6) |
 | `pkg/providers/anthropic/provider.go::parseResponse` | the SDK adapter's response parse; both streaming and non-streaming funnel here | **Extended**: thinking-block + signature capture; `display: summarized` request pin (D18); missing-block availability guard (ADR-095 D7/D8.5) |
 | `pkg/providers/factory_provider.go` (`ProtocolAnthropic` case) | routes every Anthropic-protocol row to `anthropic_messages` today (CF3) | **Switched** to the SDK adapter, landing with #750's caching fix (D5b, T3) |
 | `pkg/providers/openai_compat` streaming delta handling | parses reasoning fields to count bytes for the stall watchdog, then drops the text (CF1) | **Extended**: keeps the reasoning text as `ReasoningContent` (D5a) |
 | `pkg/memory/jsonl.go::addMsg` / `rewriteJSONL` | wholesale-marshal persisted messages; the LLM-context file's writers | **No change** — once the carrier field exists, the wholesale marshal carries it (raw thinking persists on disk per D15; ADR-095 D8) |
-| `pkg/agent/attach_hydrate.go::HydrateAgentHistoryFromTranscript` | rebuilds provider-bound messages from transcript | **No change** — Content-only mapping locked by guard test; the redacted transcript copy is never mapped into a provider-bound request (ADR-095 D8.3) |
+| `pkg/agent/attach_hydrate.go::HydrateAgentHistoryFromTranscript` | rebuilds provider-bound messages from transcript | **One explicit change** — the entry loop gains `Type == thinking -> continue` BEFORE its role switch (`switch e.Role`), plus `outcome == "no_answer" -> continue` on assistant entries (MAJ-001): the mapping is role-keyed today (verified: handoff `system` prefix check, `EntryTypeToolCall` check, then `case "user"` / `case "assistant"` building `providers.Message`), so without the type filter a thinking entry with any role value — or a notice-bearing assistant entry — would hydrate as conversation content (CRIT-002). Guard test: transcript = user, thinking (role `assistant` PLANTED), assistant → hydrated = user + assistant only; and a no-answer round's notice string never appears in the next provider request (ADR-095 D8.3, FR-015) |
 | `pkg/agent/recall_conversation.go` | recall projection | **No change** — projects no reasoning field (grep-verified, zero references; ADR-095 D8.3) |
 | `pkg/agent/msg_normalize.go`, `pkg/agent/context_budget.go`, `pkg/utils/context.go` | merge/count reasoning today | **Extended**: preserve / count `ThinkingBlocks` byte-exactly (ADR-095 D8 adjacent consumers) |
 | `pkg/config/config_channels_instance.go::ReasoningChannelID` | per-channel reasoning publishing target (26 verified occurrences in that file — count corrected from the interview's 13, MIN-001) | **Deleted** with the whole messenger publish path (D1) — `OMNIPUS_CHANNELS_*_REASONING_CHANNEL_ID` env bindings confirmed present today |
 | `pkg/agent/loop.go::handleReasoning` / `spawnReasoningPublish` | messenger reasoning publish path (incl. PR #933's fix) | **Deleted** (D1) |
 | `docs/connectors/*.md` | 13 connector docs mention the reasoning channel (wecom, whatsapp_native, weixin, telegram, slack, qq, matrix, line, irc, google-chat, feishu, discord, dingtalk — count corrected from 3, MIN-001) | **Updated**: reasoning-channel text removed from all 13 (D1, CF11) |
-| `pkg/channels/base.go` channel interface | carries the reasoning-channel method every channel package implements (13 channel-package implementations + `pkg/channels/webchat_channel.go`) | Interface method **deleted** and all implementations with it (D1) — confirmed present |
-| `pkg/agent/loop.go::handleReasoning` / `spawnReasoningPublish` | messenger reasoning publish path (incl. PR #933's fix) | **Deleted** (D1) |
+| `pkg/channels/base.go` channel interface | carries the reasoning-channel method — implemented ONCE, by `BaseChannel` (plus the gateway `webchatChannel`); the 13 channel packages *use* the inherited implementation, they do not each define it (round-2 MIN-003 correction) | Interface method **deleted** with `BaseChannel`'s implementation and the gateway override (D1) — confirmed present |
 | `config/config.example.json` / `pkg/gateway/config.json` | example + gateway config ship reasoning-channel keys | **Updated**: keys removed from both (D1) |
 | `pkg/providers/protocoltypes/progress.go::ToolCallProgress` | the per-chunk progress frame the streamers call with a reasoning **byte count only** — the type's own doc states the reasoning text is never carried here | **Unchanged, ban enforced**: thinking text on `ToolCallProgress` is a Section 6 prohibition with a proving test (CRIT-003) — type confirmed present with its doc comment |
 | `pkg/providers/protocoltypes` provider streaming callback | today `anthropic/provider.go` streaming counts `len(block.Thinking)` only and `openai_compat` counts bytes into `ToolCallProgress` while dropping the text (CRIT-003's confirmed gap: the text is parsed and thrown away) | **Extended**: a new gated accumulated-text reasoning callback, implemented by **both** adapters — anthropic streaming (`case "thinking"`) and openai_compat delta handling — feeding ONLY the turn's capture (redaction + hold-back -> the C2 frame path). Signatures still captured at response parse only (ADR-095 D7); the callback carries display text, never signatures | D5a, D5b; CRIT-003 |
 | `pkg/providers/catalog/parse.go` + `document.go::Model` + `served.go` | catalog DTO parse -> typed `Model` -> served envelope re-serialize; today no reasoning fields survive the typed round-trip | **Extended**: parses and serves `reasoning`/`reasoning_options` under `schema_version: "2.0.0"` (no version bump; D25 — the catalog repo is ours, MAJ-002) — all three symbols confirmed present |
 | `pkg/tools/delegate_status.go` | renders a per-round reasoning byte count ("progress: ... - N bytes of reasoning so far this round") | **Unchanged** — the byte count is internal telemetry (ADR-095 D7), a count is not thinking text, and the gate does not apply to internal agent-side tool output (MIN-002) — confirmed present |
 
-Frontend symbols (CF9 surfaces, all confirmed present on this branch except as noted): `src/components/chat/composer/ModelPicker.tsx`, `src/components/settings/DefaultModelCard.tsx`, `src/components/agents/AgentProfile.tsx`, `src/components/agents/wizard/Step1Identity.tsx`, `src/components/agents/wizard/Step3Tools.tsx` (the wizard's fallback-chain step — gains effort per fallback candidate, D28), `src/components/agents/CreateAgentModal.tsx`, `src/components/agents/CreateAgentWizard.tsx`, `src/routes/onboarding.tsx`, `src/components/settings/MemorySection.tsx`, `src/components/settings/ChatSection.tsx` (the D22 toggle's home, next to "Verbose chat"), `src/components/ui/model-selector.tsx`, `src/hooks/useSlashMenu.ts` + `pkg/commands/cmd_model.go::modelCommand` (the `/model` command definition — the D27 template `/effort` mirrors). **Correction to CF9:** `src/lib/onboarding/defaultModel.ts` does **not** exist on this branch — it was deleted upstream on 2026-09-16 as an unused helper (commit `af6a7f63e`), before this worktree was cut; the onboarding surface remains `src/routes/onboarding.tsx`. **D28 correction to CF9's effort scope:** `src/components/chat/ModelFooter.tsx` renders the active model's slug per turn, not a chooser — no effort control there; `src/components/chat/ChatControls.tsx` holds chat display toggles only — both **excluded** from effort work; `src/components/settings/RemoveProviderDialog.tsx` imports ModelSelector for a picker context where effort makes no sense — excluded. CF8's `@assistant-ui/react` 0.14.27 is confirmed in `package.json`.
+Frontend symbols (CF9 surfaces, all confirmed present on this branch except as noted): `src/components/chat/composer/ModelPicker.tsx`, `src/components/settings/DefaultModelCard.tsx`, `src/components/agents/AgentProfile.tsx`, `src/components/agents/wizard/Step1Identity.tsx`, `src/components/agents/wizard/Step3Tools.tsx` (the wizard's fallback-chain step — gains effort per fallback candidate, D28), `src/components/agents/CreateAgentModal.tsx`, `src/components/agents/CreateAgentWizard.tsx`, `src/routes/onboarding.tsx`, `src/components/settings/MemorySection.tsx`, `src/components/settings/ChatSection.tsx` (the D22 toggle's home, next to "Verbose chat"), `src/components/ui/model-selector.tsx`, `src/hooks/useSlashMenu.ts` + `pkg/commands/cmd_model.go::modelCommand` (the `/model` command definition — the D27 template `/effort` mirrors). **Correction to CF9:** `src/lib/onboarding/defaultModel.ts` does **not** exist on this branch — it was deleted upstream on 2026-09-16 as an unused helper (commit `af6a7f63e`), before this worktree was cut; the onboarding surface remains `src/routes/onboarding.tsx`. **D28 correction to CF9's effort scope:** `src/components/chat/ModelFooter.tsx` renders the active model's slug per turn, not a chooser — no effort control there; `src/components/chat/ChatControls.tsx` holds chat display toggles only — both **excluded** from effort work; `src/components/settings/RemoveProviderDialog.tsx` imports ModelSelector for a picker context where effort makes no sense — excluded. CF8's `@assistant-ui/react` 0.14.27 is confirmed in `package.json`. **Chat-store consumers (round-2 MAJ-014):** thinking frames, replayed thinking entries, the `outcome` marker and per-message `reasoning_effort` metadata are handled in the chat store, whose reducer functions sit at grandfathered shrink-only budget ceilings — `src/store/chat/slices/frames.ts::handleFrame` (1773) and `createFrameSlice` (1777), `src/store/chat/slices/replay-and-status-frames.ts::handleReplayAndStatusFrame` (580), `src/store/chat/slices/outbound-lifecycle.ts::sendMessage` (428) (`scripts/budgets/functions.txt`; these are store functions, not React components, so the budget FAILS over 240, it does not warn). WP-D/WP-H land their changes extract-first (Section 23), with store-level tests for: a thinking frame REPLACING the row text, a replay thinking entry mapping to a row, and `outcome` mapping to the notice.
 
 ### 2.3 Impact assessment (manual sweep — Inferred; GitNexus unavailable)
 
@@ -130,7 +129,7 @@ A logged-in user wants to decide for themselves whether AI thinking text is show
 2. **Given** two logins viewing the same session, one with the toggle on and one off, **When** a thinking-enabled turn streams, **Then** the toggle-on login sees the live thinking row and the toggle-off login sees only the answer — same session, same turn.
 3. **Given** a login that has just turned the toggle on, **When** they open a session whose earlier turns contain stored thinking, **Then** those older turns now show their thinking rows too.
 4. **Given** a login that has just turned the toggle off, **When** they reload a session that previously showed thinking, **Then** the thinking rows are gone from their view and the answers remain.
-5. **Given** an authenticated session that is not a real account row (CLI token, developer bypass, environment token — authentication paths that leave the caller's user identity empty, MIN-003), **When** a thinking-enabled turn runs, **Then** no thinking is shown to that connection — an empty identity is treated as toggle-off, the same fail-closed default as a lookup miss.
+5. **Given** an authenticated connection that is not a real account row (CLI token, developer bypass, or environment token; MAJ-011), **When** a thinking-enabled turn runs, **Then** no thinking is shown to that connection: the gate predicate keys on HOW the caller authenticated — `isCLIToken` from the auth method, never the username string — so even a real account named "cli" with its toggle ON stays hidden, and an empty identity or a lookup miss is toggle-off, the same fail-closed default (FR-002).
 6. **Given** any toggle change, **When** it is saved through the toggle endpoint, **Then** an audit row is recorded under the toggle's own audit event (indicatively `settings.show_thinking.changed`, following the repo's dotted lowercase audit-event convention in `pkg/audit/events.go` — exact name is backend-lead's under the audit event-name contract tests), carrying the login and the new boolean value and never a token or hash, and the change takes effect immediately without a gateway restart. The PUT is CSRF-protected like every other authenticated mutation, and re-PUTting the same value succeeds (idempotent, C1).
 
 ### US-2 — Live thinking row in the web chat (Priority: P0)
@@ -255,7 +254,7 @@ Thinking is a web-chat feature. The messenger reasoning channel — per-channel 
 **Acceptance scenarios**:
 
 1. **Given** the landed feature, **When** any connector's settings are inspected, **Then** no reasoning-channel setting exists on any channel.
-2. **Given** the landed feature, **When** the repository is searched for the reasoning-channel config key, its env var names, or the publish path, **Then** nothing is found — config, code, env bindings and docs alike.
+2. **Given** the landed feature, **When** the repository is searched for the reasoning-channel config key, its env var names, or the publish path — and for the superseded `thinking_level`/`ThinkingLevel`/`parseThinkingLevel` mechanism (`pkg/config/config.go::ModelConfig.ThinkingLevel`, `pkg/agent/thinking.go`; round-1 MAJ-005's zero-trace check) — **Then** nothing is found — config, code, env bindings and docs alike.
 3. **Given** a normal messenger message, **When** an agent replies through a connector, **Then** publishing works exactly as before (the deletion changed nothing else).
 
 ### US-10 — The debug log stops leaking raw reasoning (Priority: P2)
@@ -290,7 +289,7 @@ The per-model reasoning metadata — whether a model reasons and which named lev
 
 Primary flows:
 
-- When a toggle-on login's thinking-enabled model streams thinking, the system shows a collapsed "Thinking…" row that fills live, expandable on click.
+- When a toggle-on login's thinking-enabled model streams thinking, the system shows a collapsed "Reasoning" row that fills live, expandable on click (MAJ-015: never the "Thinking…" label — that stays unique to the existing in-flight indicator).
 - When the turn ends, the system has stored the thinking redacted with the transcript, so a reload renders the identical rows.
 - When a user sets a named effort level on any model surface, the system sends that level to the provider for that model's next turns.
 - When effort is left at "Default", the system sends nothing and the provider's own default applies.
@@ -306,7 +305,7 @@ Boundary conditions:
 
 - When two logins view one session with different toggle states, each gets its own filtered view of the same turn.
 - When a toggle flips mid-turn, the flip takes effect for delivery from that point; already-shown live thinking is not retroactively removed, and newly persisted thinking becomes reachable on refetch.
-- When a gated connection's stream resumes, it sees deliberate sequence gaps where thinking frames were skipped — its connection is never closed or broken by the filtering.
+- When a gated connection's stream resumes, it sees deliberate sequence gaps where thinking frames were skipped — its connection is never closed or broken by the filtering. **PENDING Q1 (round-2 CRIT-001):** the SPA's own gap rule (`src/store/chat/cursor.ts::gateFrameBySeq`: `seq > cursor + 1` → gap) drops the next frame and re-attaches — this bullet's promise is broken client-side today; the fix (skip-marker frame, `prev_seq`, or another contract change) is the founder's Q1 decision and lands in part B.
 - When a reconnect lands within the journal retention window after a toggle-off flip, recently-shown thinking frames from the on-period may be re-delivered to the same login (accepted, D16).
 
 ## 5. Edge Cases
@@ -314,7 +313,7 @@ Boundary conditions:
 - A secret split across two streamed thinking pieces matches no pattern piecewise. Expected: the redaction scans the whole accumulated text, so the secret is masked in the stored and shown copy. **Hold-back rule (MAJ-006):** live frames emit only the text up to the start of the trailing run of token-ish characters — `A-Za-z0-9` plus `.`, `_`, `-`, `~`, `/`, `+`, `=` (the alphabet credential formats are drawn from; `sk-`/`Bearer`-style prefixes land inside such runs) — a credential is emitted only once delimiter-completed, at which point the whole-text scan has already masked it. A split-at-every-split-point prefix test proving a `sk-` secret never appears live is in the test plan.
 - Empty / signature-only thinking (Anthropic's newest models default to no visible summary). Expected: no thinking row at all — metadata without an empty row (ADR-095 D6). The growing thinking content renders `aria-live="off"` while filling (streaming text must not spam screen readers); the elapsed timer is `aria-hidden` (MIN-007).
 - A lookup miss (a login whose account row no longer exists) or a settings read error. Expected: toggle treated as off — fail closed (ADR-095 D2).
-- A real account literally named "cli". Expected: unaffected — the CLI-token detection keys on how the caller authenticated, not the username (ADR-095 D2).
+- A real account literally named "cli". Expected: unaffected — the gate predicate keys on HOW the caller authenticated (`pkg/gateway/websocket.go::wsConn.isCLIToken`, set from `pkg/gateway/auth.go::resolveBearerIdentity`'s via-CLI-token result), never on the username string: a CLI token resolves `userID = "cli"` but is gated off by `isCLIToken` even when a real account named `cli` exists with its toggle on (MAJ-011; full predicate in FR-002).
 - A model whose catalog row carries no reasoning variants. Expected: the effort control offers "Default" only (US-6 scenario 2).
 - A provider that reports no thinking-token count. Expected: duration shows, token count absent (US-7 scenario 2).
 - Toggle on→off then reconnect within journal retention. Expected: on-period frames may replay to the same login (D16); nothing filters catch-up.
@@ -357,8 +356,8 @@ Boundary conditions:
 **WebSocket delivery**:
 
 - A gated connection MUST observe zero thinking-frame bytes: no live delivery, no journal-tail replay delivery, no snapshot delivery — verifiable by byte inspection of that connection's received frames.
-- A gated connection's frame sequence MUST show deliberate sequence gaps where thinking frames were skipped; the connection MUST NOT be closed, unbound, or marked overflowed by the filtering.
-- Under sustained thinking-heavy traffic the hub's journal-pressure behaviour is unchanged: when any journal cap is hit the pre-existing pressure behaviour applies (oldest frames evicted; overflow handling), and a gated toggle-on connection may fall back to the gated snapshot path (ADR-095 D5's degradation) — accepted, visible degradation, not a crash (MAJ-007; journal caps verified at `pkg/gateway/ws_session_hub.go`: per-connection 2048 frames / 1 MiB, 32 MiB global).
+- A gated connection's frame sequence MUST show deliberate sequence gaps where thinking frames were skipped; the connection MUST NOT be closed, unbound, or marked overflowed by the filtering. **PENDING Q1 (round-2 CRIT-001):** this server-side guarantee is necessary but not sufficient — the SPA treats a sequence gap as loss and re-attaches (`src/store/chat/slices/frames.ts::applySeqGate`), so the contract change that keeps the client's sequence contiguous (skip-marker frame or `prev_seq`) is part B once the founder answers Q1. Until then this bullet MUST NOT be read as licensing a v1 implementation of deliberate gaps.
+- Under sustained thinking-heavy traffic the hub's journal-pressure behaviour is unchanged: when any journal cap is hit the pre-existing pressure behaviour applies (oldest frames evicted; overflow handling), and a gated toggle-on connection may fall back to the gated snapshot path (ADR-095 D5's degradation) — accepted, visible degradation, not a crash (round-2 MAJ-006 caps correction — the journal is NOT per connection: `pkg/gateway/ws_session_hub.go` enforces `hubJournalMaxFrames = 2048` / `hubJournalMaxBytes = 1 MiB` **per session hub**, plus `hubGlobalJournalMaxBytes = 32 MiB` across all sessions; whole-text thinking frames therefore evict OTHER logins' catch-up frames in the same session and, under the global cap, other sessions' journals too — whether to supersede same-`entry_id` thinking frames in the journal, and the toggle-off catch-up test, are PENDING Q3; the §20 row is relabelled accordingly)
 - Thinking frames MUST never arrive on any unsequenced side-channel (no unsequenced copy of a thinking frame may exist).
 - A thinking frame's `text` MUST NOT exceed 65536 bytes and producers MUST coalesce to at most one thinking frame per 250 ms per round — verifiable by measuring inter-frame spacing and frame sizes under a mock provider emitting reasoning chunks as fast as the mock can loop (MAJ-007).
 - The live hold-back rule MUST hold at every split point: for any prefix of a thinking stream, the concatenation of everything a toggle-on client received live is either a prefix of (whole-text redacted, hold-back applied) or already masked — a credential-shaped run may never appear unmasked in any live frame (MAJ-006).
@@ -374,7 +373,7 @@ Boundary conditions:
 
 **Scope**:
 
-- The messenger surfaces MUST carry zero reasoning fields after D1; a repository-wide search for the deleted config key, its env var names, and the deleted publish path MUST return zero hits (docs included).
+- The messenger surfaces MUST carry zero reasoning fields after D1; a repository-wide search for the deleted config key, its env var names, and the deleted publish path MUST return zero hits — with the same sweep exclusions the Group F scenario states: only `docs/internal/specs/` and `docs/internal/_archive/` (MAJ-008: "docs included" was wrong — the connector docs ARE swept).
 
 ## 7. Integration Boundaries
 
@@ -434,27 +433,28 @@ Boundary conditions:
 **One `type: "thinking"` transcript entry per round** — including tool-only rounds that produce no answer text:
 
 - The turn's capture mints the thinking entry's ID **at capture start**, so the live C2 frame and the stored row share one identity: live and replay render the same row, not two.
+- **The entry is appended exactly once — at round end, or at cancel/error with the redacted text-so-far — and never rewritten or re-appended** (MAJ-010): one entry, one ID, so replay and REST need no latest-wins de-duplication. Mid-round state lives only in C2 frames and the hub journal; a mid-round attach shows thinking-so-far from frames (§9.2 Partial), and a crash mid-thinking leaves the round with no thinking row rather than a partial one (accepted: the round's answer is equally absent — CRIT-002 round-2 disposition). A turn canceled mid-thinking produces exactly one thinking entry carrying the text so far (BDD scenario + test).
 - The entry carries `turn_id` (the existing transcript turn-correlation field, `pkg/session/daypartition.go::TranscriptEntry`), so each thinking row binds to its round; multi-round turns keep one thinking row per round, in round order.
 - A tool-only round's thinking row exists on its own entry, never folded into another entry — the case the old inference-based classification missed; a BDD scenario and a test cover it.
-- The entry's `content` is the redacted text; the D11 metadata (duration, token count, summary flag) and the serving model's `reasoning_effort` ride the entry's typed fields (C3).
+- The entry's display text lives in the dedicated `thinking_text` field, never `content`; **the entry carries no `role`** — CRIT-002's invariant, so no role-keyed reader can mistake it for a user or assistant utterance. The D11 metadata (duration, token count, summary flag) ride the entry's typed fields; `reasoning_effort` does NOT ride the entry (round-2 OBS-001: no consumer — effort resolves at request time per C5).
 
 **Every transcript reader and its handling of `type: "thinking"` entries** (verified inventory: `ReadTranscript` has **24 production call-site files**; test call sites share the same helpers and rules):
 
 | Reader (file) | Handling of a thinking entry |
 |---|---|
-| `pkg/agent/attach_hydrate.go` | **Skip** — the Content-only mapping is locked by guard test; the redacted copy never enters provider-bound requests (ADR-095 D8.3) |
-| `pkg/agent/behavior_scan.go` | **Skip** — behavior analysis reads answer content; a thinking entry is non-answer, same class as a `tool_call` entry today |
+| `pkg/agent/attach_hydrate.go` | **Explicit type filter (change)** — `Type == thinking -> continue` before the role switch, plus the `outcome: "no_answer"` skip; guard test: a thinking entry with role `assistant` PLANTED is never hydrated (CRIT-002) and a no-answer notice never reaches a provider-bound request (MAJ-001; ADR-095 D8.3) |
+| `pkg/agent/behavior_scan.go` | **Skip (explicit type filter)** — behavior analysis reads answer content; the reader gains the same explicit `type == thinking` exclusion rather than relying on incidental filtering (CRIT-002's rule: every non-display reader states its thinking handling explicitly) |
 | `pkg/agent/boot_sweep.go` | **Passthrough** — startup-sweep reads are order-preserving; entries persist untouched |
-| `pkg/agent/goal_loop.go`, `pkg/agent/goal_triggers.go` | **Naturally excluded** — goal evaluation reads message-type entries; a thinking entry is not a message |
+| `pkg/agent/goal_loop.go`, `pkg/agent/goal_triggers.go` | **Exclude (explicit type filter)** — goal evaluation is role-keyed today (`pkg/agent/goal_triggers.go` matches `e.Role == "user"`), so "naturally excluded" is not a guarantee; the reader states its thinking exclusion explicitly (CRIT-002) |
 | `pkg/agent/judge_evidence_tiers.go` | **Exclude (explicit change)** — analysis text must never become judge evidence; the evidence-tier reader gets an explicit thinking-entry filter |
 | `pkg/agent/loop_inbound.go`, `pkg/agent/loop_wire.go`, `pkg/agent/loop.go` | **Passthrough** — order-preserving transcript iteration; entries persist untouched |
 | `pkg/agent/repair.go` | **Skip in repairability checks** — thinking entries are not answer content; they replay untouched |
-| `pkg/agent/session_end.go` | **Exclude from recap context assembly** — recap context is answer content; the reasoning substitution there is deleted anyway (D20/D26) |
-| `pkg/agent/steer_frames.go`, `pkg/agent/steer_reconstruct.go` | **Exclude from context assembly** — steering context is answer content; the redacted copy never enters provider-bound context |
+| `pkg/agent/session_end.go` | **Exclude from recap context assembly** — recap context is answer content; the reasoning substitution there is deleted anyway (D20/D26). A recap result with empty text after the strip is a candidate failure: next candidate tried, all failing → no recap persisted (round-2 MIN-004, `maxTransientRetries`/`isTransientStreamError` candidate walk) |
+| `pkg/agent/steer_frames.go`, `pkg/agent/steer_reconstruct.go` | **Exclude from context assembly (explicit type filter)** — steering context is answer content, and `pkg/agent/steer_reconstruct.go` matches entries by role (`entries[i].Role == "user"`), so the exclusion is stated explicitly, never incidental (CRIT-002) |
 | `pkg/agent/task_run_loop.go::turnWasReasoningOnly` | **Keys on the assistant entry's `outcome: "no_answer"` marker** (C4) — thinking entries are not read for the classification |
 | `pkg/agent/verifier_adjudication.go`, `pkg/agent/verifier_provenance.go` | **Exclude from evidence (explicit change)** — same class as judge evidence; analysis text must not become verification evidence |
 | `pkg/gateway/rest_sessions.go` | **Gated strip (gate Boundary 3)** — thinking entries and fields stripped unless the requesting principal's toggle is on |
-| `pkg/gateway/rest_tasks.go` | **Gated strip** — task detail reads transcript; the same REST-serializer gate rule applies |
+| `pkg/gateway/rest_tasks.go` | **Naturally excluded (no change)** — the task-transcript reader emits `judge_verdict` entries only (`if e.Type != session.EntryTypeJudgeVerdict { continue }`); no gate plumbing is added here, keeping Boundary 3 at its two serializers (round-2 MIN-002) |
 | `pkg/gateway/websocket_replay.go` | **Gated** (gate Boundary 2) — thinking rows replay only to a toggle-on principal |
 | `pkg/session/unified_write.go` | **Persist in order** (the write path) — thinking entries persist in round order alongside every other entry |
 | `pkg/tools/delegate.go`, `handoff.go`, `inspect_session.go`, `delegate_status.go` | **Skip in tool output** — tools present session state as answers/actions, not display copy; thinking is display-only per D2/D19, so tool output skips them (safe default; the gate's web-display boundaries are hub/replay/REST) |
@@ -508,12 +508,14 @@ Every new or changed screen, with loading / empty / error / partial states. Visu
 
 ### 9.1 Settings → Chat: "Show thinking" toggle (new control)
 
-Reachable from Settings -> Chat (`src/components/settings/ChatSection.tsx` — the screen that already hosts "Verbose chat"), directly below that switch (D22). One labeled switch per login; helper text states it applies to this login on every device (not this browser), and that turning it on reveals older sessions' thinking too (D2, D19). The control reads its state with the C1 `GET` and saves with the C1 idempotent `PUT`; "stored in this browser" wording is wrong and is not used anywhere (MAJ-001).
+Reachable from Settings -> Chat (`src/components/settings/ChatSection.tsx`), in its **own card, not embedded in the Verbose-chat card** (round-2 MAJ-012: ChatSection is a purely local, per-device store today — no loading state, no error treatment, no auto-save indicator exist there to lean on). One labeled switch per login; the card's own helper text states it applies to this login on every device (not this browser) and that turning it on reveals older sessions' thinking too (D2, D19, D22); the existing Verbose-chat card's "local, per-device" helper text stays scoped to ITS card only — the two settings never share copy. The control reads its state with the C1 `GET` and saves with the C1 idempotent `PUT`; "stored in this browser" wording is wrong and is not used anywhere.
 
-- **Loading**: the switch renders in its saved state once the settings section loads (C1 GET); no skeleton dedicated to it (rides the section's existing loading state).
+- **Loading**: switch rendered **disabled over a skeleton** until the C1 `GET` resolves — it never flashes "off" first (round-2 MAJ-012; component-tested).
 - **Empty/unset**: toggle-off is the shipped default for every login — including logins created before this feature (greenfield: absence of the setting means off; no backfill).
-- **Error**: save failure keeps the switch at its previous state and shows the section's standard error treatment; the server remains the source of truth (re-read on failure).
-- **Partial**: a flip that saves but whose refetch fails (the flip triggers a refetch of visible thinking — ADR-095 Neutral) leaves the switch correct and the list stale until the next refetch; the standard auto-save indicator covers it.
+- **Error**: `GET` failure leaves the switch disabled with the catalogued inline error (`src/components/ui/FormError.tsx`) and retries the read; `PUT` failure reverts the switch to the server's state and shows the same inline error — the server remains the source of truth.
+- **Saving**: the catalogued `src/components/ui/AutoSaveIndicator.tsx` runs while the `PUT` is in flight (the existing pattern, now actually present in this section).
+- **Partial**: a flip that saves but whose refetch fails (the flip triggers a refetch of visible thinking — ADR-095 Neutral) leaves the switch correct and the list stale until the next refetch.
+- **Tests**: component tests for the loading, error and saving states (Section 16, test 33).
 
 ### 9.2 Chat: collapsed Reasoning row (new, gated)
 
@@ -521,26 +523,13 @@ Rendered inside the transcript between the user message and the answer, as a dis
 
 - **Loading/streaming**: collapsed row with live-growing content; expandable mid-stream; expand/collapse per click and per keyboard (Section 11).
 - **Empty**: no thinking content (e.g. signature-only Anthropic blocks) → no row at all (ADR-095 D6).
-- **Error**: a turn that failed mid-thinking renders what was stored (redacted-so-far) collapsed; no special error chrome beyond the turn's own.
-- **Partial**: a mid-turn attach shows thinking-so-far up to the last intermediate persist — the accepted projection-budget-class cost (ADR-095 D2 Boundary 1 item 4); the row completes as later frames arrive or on refetch.
+- **Error**: a turn that failed mid-thinking renders the entry written at the error — the redacted text-so-far (the one append, MAJ-010) — collapsed; no special error chrome beyond the turn's own.
+- **Partial**: a mid-round attach shows thinking-so-far from the live C2 frames (the entry is not yet written — write-once at round end, MAJ-010); the row completes when the `final` frame lands or on refetch.
 - **Gated off**: toggle-off logins never receive the row on any path — there is no collapsed placeholder for hidden thinking (the answer simply follows the user message).
 
 ### 9.3 Chat: no-answer notice (new, gated-adjacent)
 
-The D26 notice in the flat console-strip visual language approved for #711 (Option C — flat text-line row, mono metadata, kind-colored dot): "The model (Provider · Model) did not respond", provider/model names drawn from the serving model row (MIN-009), with a Retry button re-using the chat's existing resend affordance (`src/components/chat/ChatScreen.tsx` retry/resend path). Rendered from the typed no-answer marker (C4). **Ownership (MAJ-010):** grill-round-1 verification found the treatment exists today only as a Storybook demo — commit `02eeba8c5` on `feat/provider-messages-visual-demo`, **not** an ancestor of `feat/provider-messages` and not a production component. This feature therefore builds the notice **inline** with the approved Option-C visual language (the tokens/classes are approved and named in Section 12); if #711's catalogued console-strip component lands first, this feature adopts it instead of a local build — one or the other, never both. 
-### 9.2 Chat: collapsed "Thinking…" row (new, gated)
-
-Rendered inside the transcript between the user message and the answer, matching the existing tool-call row collapse pattern (D4). Shows a "Thinking…" label while streaming (with an elapsed timer), then duration + token count when done (D11). Anthropic-originated rows are labelled "summarized thinking" from the entry's stored flag (D18).
-
-- **Loading/streaming**: collapsed row with live-growing content; expandable mid-stream; expand/collapse per click and per keyboard (Section 11).
-- **Empty**: no thinking content (e.g. signature-only Anthropic blocks) → no row at all (ADR-095 D6).
-- **Error**: a turn that failed mid-thinking renders what was stored (redacted-so-far) collapsed; no special error chrome beyond the turn's own.
-- **Partial**: a mid-turn attach shows thinking-so-far up to the last intermediate persist — the accepted projection-budget-class cost (ADR-095 D2 Boundary 1 item 4); the row completes as later frames arrive or on refetch.
-- **Gated off**: toggle-off logins never receive the row on any path — there is no collapsed placeholder for hidden thinking (the answer simply follows the user message).
-
-### 9.3 Chat: no-answer notice (new, gated-adjacent)
-
-The D20 notice in the flat console-strip visual language approved for #711 (Option C — flat text-line row, mono metadata, kind-colored dot; landed on `feat/provider-messages`, commit `02eeba8c5`): "The model (Provider · Model) did not respond", with a Retry button re-using the chat's existing resend affordance (`src/components/chat/ChatScreen.tsx` retry/resend path). Rendered from the typed no-answer marker (C4).
+The D26 notice rendered by a **catalogued component this feature publishes** (round-2 MAJ-013 — "build inline" was a one-off that would leave two builds of one visual language the moment #711 lands): `ConsoleNoticeStrip` — flat text-line row, mono metadata, kind-colored dot (the approved Option-C language) — published through the design system's four-part contract (component export + `design-system/catalog.json` entry + `@source` in `src/styles/library.css` + manifest entry) in WP-D, and **reused by #711**, not the reverse: there is exactly one console-strip build, owned here. It shows "The model (Provider · Model) did not respond", provider/model names drawn from the serving model row (round-1 MIN-009), with a Retry button re-using the chat's existing resend affordance (`src/components/chat/ChatScreen.tsx` retry/resend path), rendered from the typed no-answer marker (C4). Fact base (round-1 MAJ-010): the only existing artifact is a Storybook demo — commit `02eeba8c5` on `feat/provider-messages-visual-demo`, not an ancestor of `feat/provider-messages`, not a production component; nothing is adopted from it beyond the approved visual language.
 
 - **Loading**: n/a (appears at turn end).
 - **Empty**: never shown when an answer exists, even a minimal one.
@@ -568,7 +557,6 @@ One shared effort control (design-system Slider) over the model's catalog varian
 - **Partial**: n/a.
 
 ### 9.6 Session views (changed implicitly)
-### 9.6 Session views (changed implicitly)
 
 Session detail and message lists (`get_session`/`get_session_messages` consumers) simply render the new fields when present; toggle-off principals never receive the fields, so no client-side hiding exists anywhere. **Loading/empty/error/partial**: unchanged from today, plus thinking rows per 9.2 in replay.
 
@@ -577,7 +565,7 @@ Session detail and message lists (`get_session`/`get_session_messages` consumers
 ## 10. User Journey (end to end)
 
 1. **Two teammates, one session.** Alice (toggle on, set once in Settings → Chat, next to "Verbose chat") and Bob (toggle off, the default) both open the same investigation session.
-2. **A thinking turn.** Alice asks the agent to analyze a dataset. Her chat shows a collapsed "Thinking…" row filling live — she clicks it open, sees the model reasoning through the approach, with a running elapsed time; Bob, watching the same session, sees only the eventual answer.
+2. **A thinking turn.** Alice asks the agent to analyze a dataset. Her chat shows a collapsed "Reasoning" row filling live — she clicks it open, sees the model reasoning through the approach, with a running elapsed time; Bob, watching the same session, sees only the eventual answer.
 3. **The answer lands with a tool use.** The row collapses to its summary line (duration, thinking-token count) and the agent's answer plus tool rows appear identically for both.
 4. **A reasoning-only round.** On one turn the model produces thinking but no answer text. Alice sees her gated thinking row and, in the answer position, "The model (Provider · Model) did not respond" with Retry — she clicks Retry and the message re-sends. Bob saw only the notice; no reasoning ever appeared as an answer for anyone.
 5. **Effort tuning.** Alice opens the composer's model picker, drags the effort slider up one named level for the current model, and re-asks — the reasoning is visibly more thorough; the thinking row's token count rises. Later she types `/effort` — it works the same in the web composer, on the CLI, and from a messenger (D27) — and sets it back to "Default" so the provider's own default applies.
@@ -591,7 +579,7 @@ Session detail and message lists (`get_session`/`get_session_messages` consumers
 ## 11. Accessibility & Keyboard
 
 - **Thinking row**: the collapsed row is a real disclosure control (`src/components/ui/disclosure-row.tsx`) — focusable, `aria-expanded` reflecting state, toggled with Enter/Space, discoverable in the tab order exactly where it renders. The growing content is `aria-live="off"` while filling; the elapsed timer is `aria-hidden` (MIN-007).
-- **Row label**: the "Thinking…" / "summarized thinking" label is text (not color or icon alone); duration and token counts are text in the collapsed summary.
+- **Row label**: the "Reasoning" / "summarized thinking" label is text (not color or icon alone); duration and token counts are text in the collapsed summary. ("Thinking…" names only the pre-thinking in-flight indicator, `ChatScreen.tsx::ThinkingIndicator` — never the row, MAJ-015/MAJ-009.)
 - **Effort slider**: full keyboard operation (arrow keys step levels, Home/End to bounds, per the design-system Slider's contract); `aria-valuetext` names the level ("high", or "Default" when unset — never a bare index; the catalogued Slider primitive is extended to forward it, Section 12); disabled/variant-less states are announced via the control's disabled + description text. On narrow screens the slider falls back to a stacked layout (control above its value display) rather than shrinking hit targets below the design system's touch-target minimum (MIN-007).
 - **`/effort` command**: arrow-key navigation and Enter activation come from the existing slash-palette keyboard model (`useSlashMenu`'s menu nav); the command is listed with its text description so screen readers announce it like any slash item.
 - **Show-thinking switch**: a labeled switch (visible label "Show thinking"), state announced; the helper text about older sessions revealing is programmatically associated.
@@ -603,14 +591,14 @@ Session detail and message lists (`get_session`/`get_session_messages` consumers
 
 ## 12. Design-System Components (catalogue-first)
 
-Every control below is a catalogued component; no new primitives are introduced by this feature (`design-system/catalog.json`, 53 entries — verified).
+Every control below is a catalogued component; the one NEW component this feature introduces — the no-answer notice strip — is published THROUGH the design system (four-part contract), not built as an inline one-off (round-2 MAJ-013; `design-system/catalog.json`'s 53 entries verified today include no console-strip component).
 
 | Need | Catalogued component | Notes |
 |---|---|---|
 | Effort slider | `src/components/ui/slider.tsx` (primitive, catalogued) | one shared instance pattern across all CF9 surfaces; "Default" as position 0 with description text "the provider decides — not a lower level than low"; the primitive is **extended** to forward `aria-valuetext` through its thumb (verified absent today — MAJ-018); disabled positions for variant-less models |
-| Show-thinking toggle | `src/components/ui/switch.tsx` (primitive, catalogued) | in `src/components/settings/ChatSection.tsx` next to "Verbose chat" (D22) with visible label; auto-save via the C1 idempotent PUT (MAJ-001) |
+| Show-thinking toggle | `src/components/ui/switch.tsx` (primitive, catalogued) | in `src/components/settings/ChatSection.tsx`, in its OWN card (not the Verbose-chat card — round-2 MAJ-012: that card's helper text is per-device copy), visible label; states per §9.1: skeleton loading, `src/components/ui/FormError.tsx` on error, `src/components/ui/AutoSaveIndicator.tsx` while the C1 idempotent PUT saves (round-1 MAJ-001) |
 | Thinking-row collapse | `src/components/ui/disclosure-row.tsx` (the catalogued DisclosureRow primitive, MAJ-015) | the Reasoning row's expand/collapse; header button with `aria-expanded`; body present only when there is text to disclose; label "Reasoning" — no "Thinking…" collision with the in-flight indicator |
-| No-answer notice | the approved Option-C console-strip visual language; adopt #711's catalogued console-strip component if it has landed | flat text-line row, mono metadata line, kind-colored dot, Technical-details-style disclosure when applicable. **Ownership (MAJ-010):** the only existing artifact is a Storybook demo — commit `02eeba8c5` on `feat/provider-messages-visual-demo`, **not** an ancestor of `feat/provider-messages` and not a production component. This feature builds the notice inline with the approved tokens/classes; if #711's component lands first, this feature adopts it — one or the other, never both (D20, D26) |
+| No-answer notice | `ConsoleNoticeStrip` — NEW domain component, published by WP-D through the four-part contract (export + `design-system/catalog.json` entry + `@source` in `src/styles/library.css` + manifest entry), reused by #711 (round-2 MAJ-013) | flat text-line row, mono metadata line, kind-colored dot (the approved Option-C language; today's only artifact is a Storybook demo — `02eeba8c5`, not an ancestor of `feat/provider-messages`, not a production component). Exactly one console-strip build exists, owned here (D20, D26) |
 | Status/semantic coloring | `src/design-system/status.ts` (foundations) | kind-colored dot on the notice; no new status kinds unless the design-system gate demands one |
 | Model surfaces | `src/components/ui/model-selector.tsx` (domain, catalogued) | the shared control the slider slots into on every surface |
 | Auto-save indicator | `src/components/ui/AutoSaveIndicator.tsx` (domain, catalogued) | toggle + slider saves ride the existing pattern |
@@ -655,13 +643,12 @@ Green tests are not delivery. Per surface, how a real user or agent reaches the 
 | Effort — onboarding | onboarding model step (`onboarding.tsx`) | slider renders in the onboarding flow |
 | Effort — recap model | Settings → Memory (`MemorySection.tsx`) | slider renders for the recap model + its fallbacks |
 | `/effort` command (web) | typing `/` in the composer, then `/effort` in the palette | command appears, activates, opens the effort control |
-| `/effort` command (CLI + messengers) | the same command on CLI and any messenger channel (D27) | the command replies with the current level and sets a new level; no thinking is displayed there (D27: display web-only) |
+| `/effort` command (CLI + messengers) | the same command on CLI and any messenger channel (D27) | **PENDING Q2 (round-2 MAJ-003):** what set-level writes there — an agent-wide persisted `reasoning_effort` through the `ApplyAgentModel` path (like `/model`), or read-only — is the founder's call; the reachability row lands in part B with the answer |
 | No-answer notice + Retry | a reasoning-only round in the web chat | notice renders with provider · model named; Retry re-sends |
 | No-answer notice (messenger) | a reasoning-only round on any connector | the connector delivers the notice text as an ordinary reply (D26) |
 | Catalog variants data | `GET /providers/catalog` consumed by every surface above | variants appear per model; variant-less models show Default-only |
+| Thinking-token usage totals | a session's usage view — the By-model breakdown tab (`src/components/screens/UsageScreen.tsx` breakdownTab `'model'`, the per-model rows built from the usage store's by-model map) | a thinking turn's `thinking` count appears on its model's row; models without reported thinking show none (round-2 MIN-005: the per-model carrier is the only v1 carrier — flat session totals are unchanged) |
 | Messenger absence | any connector conversation | answers arrive, no reasoning anywhere (negative reachability — the deleted channel must be gone) |
-
-Two-line delivery statement required at landing: *code correct and tested*, and *reachable by a user or agent* — every row above demonstrated in UAT (founder rule: reachability is the Definition of Done).
 
 Two-line delivery statement required at landing: *code correct and tested*, and *reachable by a user or agent* — every row above demonstrated in UAT (founder rule: reachability is the Definition of Done).
 
@@ -739,6 +726,16 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 - **When** a thinking-enabled turn streams and the session is read back over REST
 - **Then** no thinking reaches that connection on either surface (fail closed)
 
+#### Scenario: A CLI token is gated off even when a real account named "cli" exists
+
+**Traces to**: US-1, Acceptance Scenario 5; MAJ-011
+**Category**: Edge Case
+
+- **Given** a connection authenticated by a CLI token (identity resolves `userID = "cli"`, `isCLIToken = true` per `pkg/gateway/auth.go::resolveBearerIdentity` + `pkg/gateway/websocket.go::authenticateWS`)
+- **And** a real account row named "cli" exists with its toggle ON
+- **When** a thinking-enabled turn streams and the session is read back over REST
+- **Then** no thinking reaches that connection on either surface — the gate predicate keys on the authentication method (`isCLIToken`), never the username string (fail closed)
+
 #### Scenario: A settings-read failure hides thinking rather than leaking it
 
 **Traces to**: US-1, Acceptance Scenario 5; Section 6 (fail closed)
@@ -783,7 +780,7 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 
 - **Given** alice's toggle was on, then flipped off mid-session
 - **When** she reconnects within the journal retention window
-- **Then** recently-delivered on-period thinking frames may be re-delivered to her (founder-accepted, D16) and no catch-up-time filtering exists
+- **Then** the journal-tail replay CONTAINS the on-period thinking frames, asserted present (deterministic oracle — founder-accepted re-delivery, D16), and no catch-up-time filtering exists
 
 #### Scenario: The toggle endpoint is a read plus an idempotent write
 
@@ -939,6 +936,16 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 - **When** provider-bound messages are built from the transcript
 - **Then** no thinking content of any kind is mapped into them (Content-only hydration, guard-tested)
 
+#### Scenario: A planted-role thinking entry and a no-answer notice never reach provider-bound history
+
+**Traces to**: CRIT-002; MAJ-001; FR-015
+**Category**: Error Path
+
+- **Given** a transcript reading: user message, thinking entry (with `role: "assistant"` PLANTED), assistant answer, then a no-answer round's assistant entry (`outcome: "no_answer"`, content = the notice text)
+- **When** provider-bound messages are built from the transcript
+- **Then** the hydrated history is exactly the user message and the assistant answer — the thinking entry and the notice entry are absent, whatever role values they carry
+- **And** the next provider request contains neither the thinking text nor the notice string
+
 #### Scenario: Every writer of the LLM-context file carries thinking blocks intact
 
 **Traces to**: Section 6 (no strip step, D15); ADR-095's context.jsonl-writer sweep
@@ -1002,6 +1009,33 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 - **Given** a primary model set to "high" and a fallback candidate set to "low"
 - **When** the primary fails and the fallback serves the turn
 - **Then** the fallback's request carries "low"
+
+#### Scenario: Per-message effort does not cross models (D10)
+
+**Traces to**: US-6, Acceptance Scenario 5; MAJ-002
+**Category**: Alternate Path
+
+- **Given** the per-message effort "high" chosen for the primary model in the composer
+- **When** the primary fails and fallback candidate Y (configured "low") serves the turn
+- **Then** the serving request carries "low" — the per-message value binds to the model it was picked for, never across models (D10)
+
+#### Scenario: An agent riding the instance default model uses the default model's effort (MAJ-002)
+
+**Traces to**: US-6, Acceptance Scenario 4; MAJ-002
+**Category**: Alternate Path
+
+- **Given** an agent with no `model` of its own, and the instance default model carrying `reasoning_effort: "medium"`
+- **When** a turn runs (no per-message effort)
+- **Then** the provider request carries "medium" from `DefaultModel.reasoning_effort`
+
+#### Scenario: Changing the model clears the stored effort (MAJ-002)
+
+**Traces to**: US-6; MAJ-002; D23
+**Category**: Alternate Path
+
+- **Given** an agent whose primary model carries `reasoning_effort: "high"`
+- **When** the model is changed (settings PUT, or `/model` — the same `ApplyAgentModel` path, `pkg/agent/loop_slash.go`)
+- **Then** the stored `reasoning_effort` for that surface is cleared; the next turn resolves effort from step (3)/(4) of the C5 order, never a stale "high"
 
 #### Scenario: A stale stored level degrades to the provider default with a note
 
@@ -1091,8 +1125,6 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 
 ### Group E — no-answer notice (US-8)
 
-### Group E — no-answer notice (US-8)
-
 #### Scenario: Reasoning-only round shows notice, never reasoning-as-answer
 
 **Traces to**: US-8, Acceptance Scenarios 1, 3; D20; dispatch-required scenario
@@ -1103,6 +1135,16 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 - **Then** the answer position shows "The model (Provider · Model) did not respond" with a Retry action
 - **And** the thinking appears only in the gated thinking row
 - **But** no reasoning text is rendered as an answer for any login, toggle on or off
+
+#### Scenario: The notice never enters model context (T4)
+
+**Traces to**: US-8; MAJ-001; T4; FR-018
+**Category**: Error Path
+
+- **Given** a no-answer round whose assistant entry carries the notice text and `outcome: "no_answer"`
+- **When** the next turn's provider request is built (fresh attach or continuation)
+- **Then** the request contains no notice string: the LLM-context file recorded the round with empty answer content (raw reasoning where D15 applies), and hydration skipped the notice entry
+- **But** the SPA, messenger reply and parent-agent delivery all still carry the notice text (D26 unchanged for consumers)
 
 #### Scenario: Retry re-sends the message
 
@@ -1121,8 +1163,7 @@ Two-line delivery statement required at landing: *code correct and tested*, and 
 **Category**: Edge Case
 
 - **When** the repository is swept after landing — source, configuration schemas, the shipped config files (`config/config.example.json`, `pkg/gateway/config.json`), environment-variable bindings, all 13 connector docs, and this repo's own AS-IS architecture doc's channel-config rows
-- **Then** the reasoning-channel config key, its per-channel env var names, and the publish path return zero hits (sweep excludes only `docs/internal/specs/` and `docs/internal/_archive/`)
-including no reasoning-channel mention in any of the 13 connector docs (MAJ-008)
+- **Then** the reasoning-channel config key, its per-channel env var names, and the publish path return zero hits (sweep excludes only `docs/internal/specs/` and `docs/internal/_archive/`), including no reasoning-channel mention in any of the 13 connector docs and no `thinking_level`/`ThinkingLevel`/`parseThinkingLevel` trace (round-1 MAJ-005's zero-trace check, restored for real)
 
 #### Scenario: Normal messenger publishing is unaffected
 
@@ -1158,8 +1199,7 @@ including no reasoning-channel mention in any of the 13 connector docs (MAJ-008)
 ### Gates (MIN-010)
 
 All Go test/build results are CI's authority — never a local `go test ./...` (repo rule; local Go runs are capped at one narrowly-scoped tagged test at a time).
-Frontend gates: `npm run typecheck` (the only meaningful TS gate — bare `tsc --noEmit` is a silent no-op here) and the design-system lock/manifest scripts; "
-`make lint-budgets` gates the size budgets. Local frontend runs are one `npx vitest run <file>` at a time.
+Frontend gates: `npm run typecheck` (the only meaningful TS gate — bare `tsc --noEmit` is a silent no-op here) and the design-system lock/manifest scripts; `make lint-budgets` gates the size budgets. Local frontend runs are one `npx vitest run <file>` at a time.
 
 ### Test implementation order (write BEFORE feature code; RED first per the repo's feature-size flow)
 
@@ -1172,16 +1212,16 @@ Frontend gates: `npm run typecheck` (the only meaningful TS gate — bare `tsc -
 | 5 | effort unset/ stale/ set request shaping | Unit | Unset effort sends nothing… / A set level… / A stale stored level… | three-state request shaping; stale → default + note |
 | 6 | carrier preservation through merge and count paths | Unit | Every writer of the LLM-context file… | byte-exact, order-stable; counted against budget |
 | 7 | hydration maps content only | Unit | The redacted copy is never sent… | guard test |
-| 8 | hub gate: live skip + journal-tail skip + connection-not-broken | Integration | Toggle Outline (off rows) / Gated connections are never broken… | per-connection filtering |
+| 8 | hub gate: live skip + journal-tail skip + connection-not-broken + CLI-token row | Integration | Toggle Outline (off rows) / Gated connections are never broken… / A CLI token is gated off even when a real account named "cli" exists | per-connection filtering; the CLI-token connection (`isCLIToken`, real `cli` account toggle ON) stays hidden (MAJ-011) |
 | 9 | replay gate parameter | Integration | Toggle Outline (replay rows) | attach/replay withholding and replaying |
-| 10 | REST serializer gating (both reads) | Integration | Toggle Outline (REST rows) | zero thinking keys when off |
+| 10 | REST serializer gating (both reads, incl. the CLI-token row) | Integration | Toggle Outline (REST rows) / A CLI token is gated off even when a real account named "cli" exists | zero thinking keys when off, incl. the `viaCLIToken` REST principal (MAJ-011) |
 | 11 | toggle endpoint: GET, idempotent PUT, persist, audit, no-restart, 401 | Integration | The toggle endpoint is a read plus an idempotent write… / Toggle changes are audited… / generic config writes refused | endpoint behavior (MAJ-001) |
 | 12 | SSE non-implementation | Integration | (Section 6 — no thinking event) | the streamer must not implement the web add-on |
 | 13 | Anthropic capture + summary pin + availability guard | Integration | Anthropic always requests… / Pre-feature sessions… | adapter behavior; the summary-pin oracle asserts the OUTGOING request; the pre-feature case asserts no thinking config is sent plus one named omission log field (MAJ-016) |
 | 14 | mid-turn rebuild restores blocks | Integration | Thinking-enabled Anthropic tool turn survives… | trim/recovery paths |
 | 15 | OpenRouter bounded-gap proving test | Integration | OpenRouter's structured-reasoning gap… | demonstrates and bounds #943 |
 | 16 | data-directory sweep (no reasoning/signature in logs) | Integration | The debug log carries no reasoning text… | test-OMNIPUS_HOME sweep |
-| 17 | deletion zero-trace sweep | Integration | The messenger reasoning channel leaves no trace… | repo/config/env/docs grep |
+| 17 | deletion zero-trace sweep (reasoning channel AND thinking_level) | Integration | The messenger reasoning channel leaves no trace… | repo/config/env/docs grep, incl. `thinking_level`/`ThinkingLevel`/`parseThinkingLevel` zero hits (`pkg/config/config.go::ModelConfig.ThinkingLevel`, `pkg/agent/thinking.go` — round-1 MAJ-005's zero-trace check applied for real) |
 | 18 | toggle → live → reload → hide (two logins) | E2E | Two logins see different views… / Live and reloaded views… | the founder-visible core |
 | 19 | effort slider per surface + Default + stale note | E2E | Scenario Outline (effort) | CF9 surfaces, catalog-variant rendering |
 | 20 | `/effort` command | E2E | /effort opens the effort control | palette activation |
@@ -1192,8 +1232,15 @@ Frontend gates: `npm run typecheck` (the only meaningful TS gate — bare `tsc -
 | 25 | frame coalescing + 65536-byte cap under a fast mock provider | Integration | (Section 6 WS constraints) | <=1 frame per 250 ms per round; cap enforced (MAJ-007) |
 | 26 | thinking from a tool-only round persists and replays | Integration | Thinking from a tool-only round survives reload… | CRIT-002: one thinking entry per round, incl. tool-only rounds |
 | 27 | outcome marker rides entry + done-frame + ReplayMessageFrame | Integration | Reasoning-only round shows notice… | C4 carriers (MAJ-004) |
-| 28 | thinking never rides tool results | Integration | (MAJ-012) | a tool-result body carrying a sentinel never surfaces it to any gated surface (MAJ-012's proving test) |
+| 28 | thinking sentinel never appears in ANY tool-result frame, toggle on or off | Integration | Thinking text never rides ToolCallProgress… | restated (round-2 MIN-006 — the inverse of the old wording, which tested tool-result gating, not the ADR's promise): a thinking-text sentinel never surfaces in any tool-result frame for toggle-on or toggle-off logins alike |
 | 29 | slider aria-valuetext forwarded through the primitive | Unit (frontend) | (Section 11 a11y) | the catalogued Slider primitive forwards `aria-valuetext` to its thumb (MAJ-018) |
+| 30 | toggle-off client streams a thinking turn: zero re-attach, full answer | Integration + E2E | (CRIT-001) | **PENDING Q1 (part B):** the default-user no-reattach test — a toggle-off client streaming a thinking turn fires zero seq-gap re-attach diagnostics and renders the full answer; final shape depends on Q1's mechanism (skip-marker frame vs `prev_seq`) |
+| 31 | hydration guard: planted-role thinking entry + notice never hydrated | Unit | A planted-role thinking entry and a no-answer notice never reach provider-bound history | transcript = user, thinking (role `assistant` PLANTED), assistant, no-answer entry → hydrated = user + assistant only; notice string absent from the next request (CRIT-002, MAJ-001) |
+| 32 | effort resolution order + clearing | Unit | Per-message effort does not cross models (D10) / An agent riding the instance default model… / Changing the model clears the stored effort | per-message binds to its model; serving fallback's own effort wins (D10); `DefaultModel.reasoning_effort` for an inherited primary; model change clears stored effort (MAJ-002) |
+| 33 | ChatSection toggle component states | Unit (frontend) | (§9.1 states) | loading (disabled over skeleton), GET error (inline error + retry), PUT failure (revert), saving indicator (round-2 MAJ-012) |
+| 34 | chat-store consumers of the new frames | Unit (frontend) | (§2.2 store consumers) | a thinking frame REPLACES the row text; a replayed thinking entry maps to a row; `outcome` maps to the notice (round-2 MAJ-014; extract-first slices tested at the store level) |
+| 35 | turn canceled mid-thinking → exactly one thinking entry | Integration | (§8.1 write-once rule) | the entry is appended once at cancel with the text-so-far; no duplicate IDs (MAJ-010) |
+| 36 | final frame carries the stored post-strip text | Integration | Live and reloaded views are identical | orphan-markup reasoning: the `final: true` frame's text equals the stored entry's `thinking_text` byte-for-byte (MAJ-005) |
 
 ### Test datasets
 
@@ -1222,6 +1269,10 @@ Frontend gates: `npm run typecheck` (the only meaningful TS gate — bare `tsc -
 | 5 | any | (none) | Variant-less | only "Default"; nothing sent | Scenario Outline (effort) row 3 |
 | 6 | "" (empty string) | low, medium, high | Empty-as-unset | treated as unset (sends nothing) | Unset effort sends nothing… |
 | 7 | "default" (explicit) | low, medium, high | Explicit default | treated as unset — sends nothing; hint shows where the model supports thinking (D24) | Unset effort sends nothing… |
+| 8 | per-message "high" (picked for the primary); fallback candidate "low" serves | low, medium, high | Per-message cross-model | request carries "low" — the per-message value binds to the model it was picked for (D10, MAJ-002) | Per-message effort does not cross models |
+| 9 | agent with no own model; instance default carries "medium" | low, medium, high | Inherited primary | request carries "medium" from `DefaultModel.reasoning_effort` (MAJ-002) | An agent riding the instance default model… |
+| 10 | "high" set, then the model is changed | low, medium, high | Model-change clearing | stored effort cleared for that surface; next turn resolves per C5 steps (3)/(4) (MAJ-002) | Changing the model clears the stored effort |
+| 11 | any level; adapter with no effort support (PENDING Q4) | low, medium, high (catalog lists them) | Out-of-scope adapter | control shows Default-only and nothing is sent, whatever the catalog says — final adapter list PENDING Q4 (MAJ-004) | (round-2 MAJ-004) |
 
 #### Dataset: gated boundary matrix
 
@@ -1229,7 +1280,7 @@ Frontend gates: `npm run typecheck` (the only meaningful TS gate — bare `tsc -
 |---|---|---|---|---|---|
 | 1 | real login | on | each of: live, replay, REST detail, REST messages | thinking present | Scenario Outline (toggle on rows) |
 | 2 | real login | off | each of the four | thinking absent, keys/frames byte-absent, gaps not disconnects | Scenario Outline (toggle off rows) |
-| 3 | CLI token | n/a (no row) | live + REST | hidden (fail closed) | Logins without an account row… |
+| 3 | CLI token (`userID "cli"`, `isCLIToken`) | n/a | live + REST | hidden (fail closed) — even when a real account named "cli" exists with its toggle ON; the predicate keys on the auth method (MAJ-011) | Logins without an account row… / A CLI token is gated off even when a real account named "cli" exists |
 | 4 | dev bypass (empty user identity, MIN-003) | n/a | live + REST | hidden | same |
 | 5 | env token | n/a | live + REST | hidden | same |
 | 6 | lookup miss (row deleted) | n/a | live + REST | hidden | A settings-read failure… |
@@ -1258,7 +1309,7 @@ The feature modifies existing behavior — regression protection is mandatory.
 ## 17. Functional Requirements
 
 - **FR-001**: System MUST store thinking unconditionally when produced, regardless of any toggle state (D2), as a redacted transcript copy plus the raw context-file persistence that already exists (D15).
-- **FR-002**: System MUST enforce per-login thinking visibility server-side at the live, replay/attach, and both REST read boundaries, failing closed for rowless logins and read errors (D2, D19; ADR-095 D2).
+- **FR-002**: System MUST enforce per-login thinking visibility server-side at the live, replay/attach, and both REST read boundaries, with the explicit gate predicate `show = !isCLIToken && userID != "" && row found && row.show_thinking && no read error` (MAJ-011) — `isCLIToken` comes from the authentication method (`pkg/gateway/auth.go::resolveBearerIdentity`'s via-CLI-token result, surfaced as `pkg/gateway/websocket.go::wsConn.isCLIToken` and the REST-side `viaCLIToken`), never from the username string; failing closed for CLI tokens, rowless logins and read errors (D2, D19; ADR-095 D2).
 - **FR-003**: System MUST default the per-login toggle to off for every login, existing and new (D2; ADR-095 D1).
 - **FR-004**: System MUST make a toggle change take effect without a restart, persist it, and write an audit row under the toggle's own dotted-lowercase event (indicatively `settings.show_thinking.changed`, per the `pkg/audit/events.go` convention) carrying only the login and the boolean (ADR-095 D1; MIN-004). The toggle endpoint MUST provide a read (GET) and an idempotent write (PUT) returning the persisted state, CSRF-protected (MAJ-001).
 - **FR-005**: System MUST NOT expose any writable generic config path for the users' config area (ADR-095 D1).
@@ -1271,21 +1322,21 @@ The feature modifies existing behavior — regression protection is mandatory.
 - **FR-012**: System MUST request Anthropic's thinking summary wherever a turn's effort is set to a named level and the model supports it, independent of toggles (D18 with the D24 precondition: at "Default" no thinking request is sent at all — MAJ-017), and carry the provider-summary flag on stored thinking so the UI labels it "summarized thinking".
 - **FR-013**: System MUST capture Anthropic thinking blocks with signatures at the adapter's parse point and round-trip them byte-exact and order-stable through turns, rebuilds, rewrites and restarts (D5b, D12-as-amended, D15; ADR-095 D6–D8).
 - **FR-014**: System MUST omit thinking (and log the omission) when a thinking-enabled Anthropic request would lack the preceding blocks (ADR-095 D8.5).
-- **FR-015**: System MUST never map transcript thinking content into a provider-bound message (ADR-095 D8.3).
+- **FR-015**: System MUST never map transcript thinking content into a provider-bound message (ADR-095 D8.3): hydration carries an explicit `Type == thinking -> continue` BEFORE its role switch, plus an `outcome: "no_answer" -> continue` skip, and a guard test proves a thinking entry with role `assistant` PLANTED — and a no-answer notice — never reach provider-bound history (CRIT-002, MAJ-001).
 - **FR-016**: System MUST stop writing raw reasoning text or signatures to the debug log, recording lengths/counts only, from the ship date forward (D14; D17 for old logs).
 - **FR-017**: System MUST delete the messenger reasoning channel outright — config fields, env bindings, publish path, docs — with no shim (D1; CF11).
-- **FR-018**: System MUST replace the reasoning-only-answer fallback with a typed no-answer outcome whose notice text is **identical on every surface** — the persisted assistant entry's content IS the notice (messengers receive it as an ordinary reply; the parent agent receives it as the answer text; task runs count a reasoning-only try from the typed marker; the recap path treats it as a failed recap attempt) — plus a gentle SPA rendering naming provider and model, with Retry, in the approved console-strip style (D20, D26; MAJ-004).
+- **FR-018**: System MUST replace the reasoning-only-answer fallback with a typed no-answer outcome whose notice text is **identical on every surface** — the persisted assistant entry's content IS the notice (messengers receive it as an ordinary reply; the parent agent receives it as the answer text; task runs count a reasoning-only try from the typed marker; the recap path treats it as a failed recap attempt) — plus a gentle SPA rendering naming provider and model, with Retry, in the approved console-strip style via the catalogued `ConsoleNoticeStrip` component this feature publishes (§12, round-2 MAJ-013). **The notice is display- and delivery-only (T4):** it never enters the model's context — the LLM-context file records the round as the provider returned it (empty answer content), and hydration skips the notice entry (MAJ-001; D20, D26; round-1 MAJ-004).
 - **FR-019**: System MUST offer effort as named levels on a slider on the model-selection surfaces listed in Section 14 (per D28: not the per-message footer, the chat controls bar, or the remove-provider dialog; per-message and `/effort` per D27), sourced only from the catalog (D6, D7, D8; CF9). The per-message choice rides the outbound message's metadata — no new per-chat server state (D23).
 - **FR-020**: System MUST treat unset effort as "send nothing", displayed as "Default" (D9).
 - **FR-021**: System MUST keep each fallback candidate's effort independent (D10).
 - **FR-022**: System MUST store effort as an unvalidated plain string and resolve a catalog-missing level to the provider default plus a visible note (T1) — the note sits adjacent to the control and reads "This level is no longer offered for {model}. The provider's default applies until you pick a new level." (MIN-009).
 - **FR-023**: System MUST register `/effort` as one command with one behavior on every surface `/model` serves — web, CLI, messenger channels (D27; D8b; CF9) — mirroring `pkg/commands/cmd_model.go::modelCommand`; thinking display stays web-only.
-- **FR-024**: System MUST record thinking tokens in usage totals when the provider reports them, ungated (D11; ADR-095 Neutral).
+- **FR-024**: System MUST record thinking tokens in usage totals when the provider reports them, ungated (D11; ADR-095 Neutral); the v1 display surface is the per-model carrier read by the By-model breakdown of the usage screen (`src/components/screens/UsageScreen.tsx` breakdownTab `'model'`) — flat session totals stay unchanged (round-2 MIN-005).
 - **FR-025**: System MUST add no thinking surface to SSE or messenger channels, and no reasoning byte-count field to any ungated wire frame (ADR-095 D2 Boundary 4; D1; ADR-095 D7).
 - **FR-026**: System MUST land the feature's whole wire surface as one contract change before dependent code (T2; Hard Constraint #8).
 - **FR-027**: System SHOULD deliver the effort-variant data from the catalog change (WP-EXT — **our repo**, D25) and show Default-only for models it does not yet cover (D7, D9).
-- **FR-029**: System MUST place the `reasoning_effort` field on the correct wire schema per surface — agent primary (`Agent.yaml`/`AgentCreateRequestMain.yaml`, flat sibling), fallback candidates (`FallbackModel.yaml`, one schema for agent + recap chains), recap model (`MemorySettings.yaml`, flat sibling), instance default model (`DefaultModel.yaml`/`DefaultModelUpdateRequest.yaml`), and per-message (inbound chat-frame metadata, typed key next to `model_name`) — with the C5 resolution order (CRIT-001).
-- **FR-030**: System MUST store thinking as one `type: "thinking"` transcript entry per round (including tool-only rounds), with the entry ID minted at capture start so live frames and the stored row share one identity, and `turn_id` binding the row to its round (CRIT-002); every transcript reader's handling is per the Section 8.1 table.
+- **FR-029**: System MUST place the `reasoning_effort` field on the correct wire schema per surface — agent primary (`Agent.yaml`/`AgentCreateRequestMain.yaml`, flat sibling), fallback candidates (`FallbackModel.yaml`, one schema for agent + recap chains), recap model (`MemorySettings.yaml`, flat sibling), instance default model (`DefaultModel.yaml`/`DefaultModelUpdateRequest.yaml`), and per-message (inbound chat-frame metadata, typed key next to `model_name`) — with the C5 resolution order (CRIT-001), including: a per-message effort binds ONLY to the model it was chosen for, a serving fallback uses its own effort (D10), an inherited primary consults `DefaultModel.reasoning_effort`, and a model change clears the stored effort for that surface (MAJ-002).
+- **FR-030**: System MUST store thinking as one `type: "thinking"` transcript entry per round (including tool-only rounds), appended EXACTLY ONCE — at round end, or at cancel/error with the text-so-far; never rewritten (MAJ-010) — with the entry ID minted at capture start so live frames and the stored row share one identity, `turn_id` binding the row to its round, the entry carrying **NO `role`** and its display copy in the dedicated `thinking_text` field, never `content` (CRIT-002); no `reasoning_effort` on the entry (round-2 OBS-001); every transcript reader's handling is per the Section 8.1 table, each non-display reader stating its thinking exclusion explicitly.
 - **FR-031**: System MUST carry live thinking text from the provider adapters to the turn's capture via a gated accumulated-text callback — the only such path — and MUST NOT carry thinking text on `ToolCallProgress` (CRIT-003; ADR-095 D7).
 - **FR-032**: System MUST cap thinking-frame text at 65536 bytes and coalesce to at most one frame per 250 ms per round (MAJ-007).
 - **FR-033**: System MUST apply the hold-back rule so the live concatenation is prefix-or-masked at every split point (MAJ-006).
@@ -1298,7 +1349,7 @@ The feature modifies existing behavior — regression protection is mandatory.
 - **SC-001**: For a gated login (toggle off, rowless, or read-error), every gated boundary returns zero thinking bytes — proven by the byte-level boundary matrix dataset (all rows) passing.
 - **SC-002**: Toggle-on reveals stored thinking from sessions generated while the toggle was off — proven by the reveal scenario passing against pre-existing stored data.
 - **SC-003**: A full data-directory sweep after a thinking-enabled debug-logged turn finds reasoning text/signature material only in the context file and the redacted transcript — zero log matches.
-- **SC-004**: A thinking-enabled Anthropic tool-use turn completes across a forced mid-turn rebuild and a forced gateway restart without provider rejection.
+- **SC-004**: A thinking-enabled Anthropic tool-use turn completes across a forced mid-turn rebuild and a forced gateway restart, with the rebuilt/restarted request's `ThinkingBlocks` asserted byte-identical to the stored ones (deterministic oracle against a recorded mock, MAJ-008) — real-Anthropic confirmation stays a UAT row.
 - **SC-005**: The deletion sweep (config key, env var names, publish path, docs) returns zero hits, and connector publishing parity tests stay green.
 - **SC-006**: Every model surface in Section 14 renders exactly the active model's catalog variants plus "Default" — verified per surface, including the variant-less and stale-level datasets.
 - **SC-007**: Unset effort produces a provider request with no effort field; a stale level never blocks a turn.
@@ -1342,11 +1393,18 @@ The feature modifies existing behavior — regression protection is mandatory.
 | FR-025 | US-9, US-10, US-4 | OpenRouter's structured-reasoning gap… (no ungated fields); SSE non-implementation (test 12); Thinking text never rides ToolCallProgress… | 12, 15, 24 |
 | FR-026 | (all) | SC-009 / `make verify-contracts` | 8–17 (contract-first sequencing, Section 23) |
 | FR-027 | US-11, US-6 | Scenario Outline (effort) variant-less row | 19 |
-| FR-028 | US-2 | (Section 9.2 partial state; ADR-095 Neutral) | 18 (mid-attach check) |
+| FR-029 | US-6 | Per-message effort does not cross models (D10) / An agent riding the instance default model… / Changing the model clears the stored effort | 32 |
+| FR-030 | US-2, US-3 | Thinking from a tool-only round survives reload (CRIT-002) / A planted-role thinking entry… never reach provider-bound history | 26, 31, 35 |
+| FR-031 | US-2, US-4 | Thinking text never rides ToolCallProgress or tool output (CRIT-003) | 24, 28 |
+| FR-032 | US-2 | (Section 6 WS constraints) | 25 |
+| FR-033 | US-3 | A secret split across two stream pieces is still masked | 2 |
+| FR-034 | US-3 | A credential-shaped secret is masked in stored and shown thinking | 1 (dataset rows 8-9) |
+| FR-035 | US-11 | Catalog fields survive Omnipus's typed catalog round-trip (MAJ-002) | 23 |
+| FR-036 | US-7 | Thinking tokens land in usage totals | 22 |
 
-**Completeness check**: every FR-001…FR-027 and FR-029…FR-036 appears above (FR-028 deleted — OBS-003; its content is an accepted cost in Section 20); every BDD scenario in Section 15 appears in at least one row (Group A → FR-002/003/004/005; Group B → FR-001/006/007/008/009/032/033; Group C → FR-010…015/025/030/031; Group D → FR-019…023/024/027/029/035/036; Group E → FR-018/030; Group F → FR-016/017/025/031/034). FR-011 and FR-026 trace through the work-package sequencing (Section 23) and their proving scenarios.
+**Completeness check (re-derived by listing, round-2 MAJ-008):** the matrix above carries rows for FR-001…FR-027 minus FR-028 (deleted in round 1; its content is §20 row 11) and FR-029…FR-036 — every one of the 35 live FRs has a row. Scenario coverage by group: Group A → FR-002/003/004/005; Group B → FR-001/006/007/008/009/030/032/033; Group C → FR-010/011/012/013/014/015/025/030/031; Group D → FR-019/020/021/022/023/024/027/029/035/036; Group E → FR-018; Group F → FR-016/017/025/031/034. FR-011 and FR-026 trace through the work-package sequencing (Section 23) and their proving scenarios. Round-2 additions to the matrix: the CLI-token scenario (FR-002), the planted-role guard (FR-015), the three MAJ-002 effort scenarios (FR-029), and the notice-not-in-context scenario (FR-018).
 
-## 20. Ambiguity Warnings (residual risks the founder has already accepted — recorded, not open)
+## 20. Ambiguity Warnings (residual risks — status per row: founder-accepted where a D-number or ADR clause cites it, otherwise explicitly pending)
 
 | # | What's ambiguous / accepted risk | Likely agent assumption | Status |
 |---|---|---|---|
@@ -1354,15 +1412,15 @@ The feature modifies existing behavior — regression protection is mandatory.
 | 2 | Pre-existing raw reasoning in old context files and debug logs stays (D17) | an agent might build a one-time cleanup pass | **Accepted by founder** (D17; greenfield no-upgrade-path ruling 2026-09-15) — forward-only guarantees |
 | 3 | Toggle off→on mid-turn: the in-flight turn's not-yet-persisted thinking-so-far is not retro-served live; the SPA refetches | an agent might build retro-live delivery | **Accepted** (ADR-095 Neutral consequences) — refetch is the remedy |
 | 4 | Whole-string redaction re-scans the accumulated text per delta (O(n) per delta, bounded by the hold-back tail) | an agent might switch to per-piece redaction — that is the split-secret bug | **Accepted** (ADR-095 Negative consequences) — accepted for realistic thinking lengths |
-| 5 | Gated connections observe deliberate sequence gaps at thinking frames (BE-DESIGN.md's "byte-identical to every bound connection" narrowed, thinking frames only) | an agent might treat the gaps as a transport bug and "repair" them | **Accepted** (ADR-095 D2 records the narrowing) |
+| 5 | Gated connections observe deliberate sequence gaps at thinking frames (BE-DESIGN.md's "byte-identical to every bound connection" narrowed, thinking frames only) | an agent might treat the gaps as a transport bug and "repair" them | **Accepted by founder** (ADR-095 D2 records the narrowing) — but **PENDING Q1**: round-2 CRIT-001 showed the SPA's gap rule breaks the client side of this; the server-side guarantee stands, the delivery mechanism is Q1's |
 | 6 | Each toggle flip persists config and takes the full config-reload path | an agent might defer or batch the reload | **Accepted** (ADR-095 D1, review F14) — existing Users-row mutation precedent |
 | 7 | Operator-configured hooks (e.g. webhook tools) run outside the visibility gate; raw thinking (with signatures) persists at rest in the agent's LLM-context file; the `ThinkingBlocks` carrier changes a shared provider-protocol type | an agent might "close" these by gating hook payloads, stripping the context file, or forking the shared type | **Accepted** (ADR-095 — carried per MAJ-012) — the gate's promise is over client-visible delivery, not hook payloads or on-disk provider context; the shared-type change is additive |
 | 8 | At the "Default" effort state, thinking-capable Anthropic models produce NO thinking request and therefore no thinking rows — the product default is no Anthropic thinking (D24) | an agent might send a default level "to be helpful" | **Accepted** (D24) — the D24 hint ("choose a level to see thinking") is the product answer |
-| 9 | Live hold-back emits text only up to the trailing token-ish run; a long token-ish run delays live display (bounded, never blocks storage) | an agent might shrink or drop the hold-back to make live text instant | **Accepted** (MAJ-006 rule) — correctness over instant display |
-| 10 | Under journal pressure, live thinking may degrade to the gated snapshot path; beyond the 65536-byte frame cap live updates stop (stored copy still replays) | an agent might raise the caps silently or drop gated delivery instead | **Accepted** (MAJ-007) — bounded, visible degradation |
+| 9 | Live hold-back emits text only up to the trailing token-ish run; a long token-ish run delays live display (bounded, never blocks storage) | an agent might shrink or drop the hold-back to make live text instant | **Proposed by spec author, pending founder** (round-2 MAJ-007: no D-number or ADR clause decides it) — the hold-back RULE itself is specified and proving-tested; only the accepted latency is awaiting the founder |
+| 10 | Under journal pressure, live thinking may degrade to the gated snapshot path; beyond the 65536-byte frame cap live updates stop (stored copy still replays). Round-2 MAJ-006 sharpened the exposure: the journal is per SESSION (2048 frames / 1 MiB) plus 32 MiB global, so whole-text thinking frames evict other logins' catch-up frames in the same session and, under the global cap, other sessions' journals | an agent might raise the caps silently or drop gated delivery instead — or fix it unilaterally with journal supersede-by-`entry_id` | **PENDING Q3** (round-2 MAJ-007 relabel: was self-labelled "accepted"; the supersede rule and the toggle-off catch-up test land in part B with the founder's answer) |
 | 11 | A mid-turn attach shows thinking-so-far up to the last intermediate persist (the projection-class cost) | an agent might "complete" it with live frames of unknown count | **Accepted** (ADR-095 D2 Boundary 1 item 4; the deleted FR-028's content, OBS-003) — recorded here instead of a fake MAY requirement |
 
-No unresolved ambiguity remains: every question ADR-095's grill raised was answered by the founder (D15–D21), the grill-round-1 founder answers are D22–D28, and this spec's fact corrections (CF9's deleted helper; the #711 Storybook-demo correction, MAJ-010) are recorded in Sections 2.2 and 12; the grill-round-1 fixes are itemised in the Revision log at the end of this file.
+Status after fix round 2 part A: every finding that needed no founder decision is applied (Revision log — fix round 2, part A). Four findings REMAIN and are founder decisions — Q1–Q4 under "Pending founder decisions (grill round 2)" below; their sections carry visible PENDING markers instead of choices. Grill-round-1 fixes are itemised in the Revision log — fix round 1.
 
 ## 21. Evaluation Scenarios (Holdout — post-implementation only; NOT in the TDD plan or traceability)
 
@@ -1411,7 +1469,7 @@ No unresolved ambiguity remains: every question ADR-095's grill raised was answe
 ## 22. Assumptions
 
 - The catalog change (WP-EXT — our repo, D25) lands before WP-G/WP-H consume it; until then effort surfaces show Default-only (FR-027's graceful state) — this assumption is also the degradation path, so slippage degrades, it does not block. Omnipus-side parsing of the new fields (WP-G) is separate work (MAJ-002).
-- The #711 console-strip treatment exists today only as a Storybook demo (commit `02eeba8c5` on `feat/provider-messages-visual-demo`; MAJ-010) — this feature builds the notice inline with the approved Option-C visual language, or adopts #711's catalogued component if it lands first; exactly one visual language results either way (D20, D26).
+- The #711 console-strip treatment exists today only as a Storybook demo (commit `02eeba8c5` on `feat/provider-messages-visual-demo`; round-1 MAJ-010) — this feature OWNS the catalogued `ConsoleNoticeStrip` component (published through the four-part contract in WP-D) and #711 reuses it, so exactly one console-strip build ever exists (round-2 MAJ-013; D20, D26).
 - The Anthropic adapter switch (WP-E) is reviewed as one change with #750 per T3; its blast radius (every Anthropic-protocol-routed model, incl. DeepSeek/Moonshot/Z.ai/MiniMax per #750) is that work package's review scope, not re-derived here.
 - `@assistant-ui/react` 0.14.27 ships the reasoning parts (CF8) but D4 pins the tool-row collapse pattern as the UI idiom; the library parts are not required by this spec.
 - Out of scope, confirmed: Selection Toolbar (#274's other half), OpenRouter signed-block round-trip (#943, D21), Anthropic adaptive budget mode (D6), any migration or backfill (D17), messenger thinking of any kind (D1).
@@ -1435,9 +1493,16 @@ WP-0  T2 contract change (C1-C7 + the C5 per-surface effort table, Section 1)
       │                  (D2/D3/D19/D14; hub, replay, REST, toggle GET/PUT, audit)
       │                  └─► WP-D  frontend Reasoning row + notice + toggle UI
       │                          (D4, D11, D22, D26; MAJ-015 DisclosureRow,
-      │                           MAJ-018 slider a11y; EXTRACT-FIRST: ChatScreen
-      │                           additions land as components under
-      │                           src/components/chat/, MAJ-014)
+      │                           MAJ-018 slider a11y; publishes ConsoleNoticeStrip
+      │                           through the four-part contract, round-2 MAJ-013;
+      │                           EXTRACT-FIRST: ChatScreen additions land as
+      │                           components under src/components/chat/, and the
+      │                           chat-store work lands as a new
+      │                           src/store/chat/slices/thinking-frames.ts handler
+      │                           called from handleFrame + the replay-slice
+      │                           handler extracted from
+      │                           handleReplayAndStatusFrame — net line change <= 0
+      │                           per function, round-2 MAJ-014)
       │
       ├──► WP-E  Anthropic adapter switch + #750 caching fix (T3, one issue)
       │          └─► WP-F  signature capture + round-trip (D5b/D6/D7/D8)
@@ -1447,14 +1512,29 @@ WP-0  T2 contract change (C1-C7 + the C5 per-surface effort table, Section 1)
       └──► WP-G  effort plumbing (D7-D10, T1) + Omnipus-side catalog parser
                  plumbing (parse -> typed model -> served envelope, MAJ-002)
                  └─► WP-H  effort UI on every D28 surface + /effort on
-                         web+CLI+channels (D23, D27, D28)
+                         web+CLI+channels (D23, D27, D28); EXTRACT-FIRST:
+                         the per-message reasoning_effort metadata assembly
+                         is extracted OUT of
+                         src/store/chat/slices/outbound-lifecycle.ts::sendMessage
+                         (grandfathered 428) into a helper — net line change <= 0
+                         (round-2 MAJ-014; /effort CLI+channel write semantics
+                         PENDING Q2)
 
 WP-A  D1 deletion (messenger reasoning channel) — TOP-LEVEL SIBLING of WP-0,
-      contract-independent (needs no wire change): pkg/config/
-      config_channels_instance.go (26 fields), pkg/channels/base.go interface
-      method + 13 channel-package implementations, pkg/agent/loop.go publish
-      path (incl. PR #933's fix), env bindings, both shipped config files,
-      docs/connectors/*.md (13 docs) (MAJ-008)
+      contract-independent (needs no wire change). Inventory = every hit of
+      `grep -rln 'ReasoningChannelID|reasoning_channel_id|REASONING_CHANNEL_ID'
+      pkg cmd` (19 Go files: pkg/config/config_channels_instance.go and
+      pkg/config/config.go; pkg/agent/loop.go, loop_run_turn_response.go;
+      pkg/gateway/webchat_channel.go; pkg/channels/base.go — which implements
+      the method ONCE for the 13 channel packages that USE the inherited
+      implementation — and the per-channel files) PLUS
+      pkg/channels/README.md, docs/connectors/*.md (13 docs), the shipped
+      config files, and the AS-IS architecture doc's channel-config rows
+      (round-2 MIN-003). Shared file: WP-A and WP-C BOTH edit
+      pkg/agent/loop_run_turn_response.go (WP-A deletes the messenger
+      publish hook, WP-C replaces the debug fields) — sequence WP-A's deletion
+      first inside the same landing train or split the file's edits by
+      symbol; one writer at a time on that file.
 
 WP-I  proving tests (Section 15/16: boundary matrix, sweeps, bounded-gap #943,
       mid-turn rebuild, deletion zero-trace, tool-only-round thinking row,
@@ -1464,7 +1544,7 @@ WP-I  proving tests (Section 15/16: boundary matrix, sweeps, bounded-gap #943,
 
 **Relationship to the interview's dependency graph (OBS-002):** this graph supersedes the interview section 3 dependency graph's struck D12/D13 nodes — those amendments predate this spec (D15), and nothing here implements a struck clause.
 
-Sequencing rules from the interviewSequencing rules from the interview (§3) and T2/T3: WP-0 before every consumer; WP-A is a top-level sibling — contract-independent, landable in parallel; WP-E is one reviewed change with #750 (its own dedicated issue, filed by team-lead); WP-F after WP-E; WP-G after WP-EXT's data + WP-0; WP-B/WP-F own the C7 token-parse points and feed WP-G's usage display. Open items tracked outside this feature: #943 (bounded-gap test ships with WP-I; the fix does not), #274's Selection Toolbar (untouched).
+Sequencing rules from the interview (§3) and T2/T3: WP-0 before every consumer; WP-A is a top-level sibling — contract-independent, landable in parallel; WP-E is one reviewed change with #750 (its own dedicated issue, filed by team-lead); WP-F after WP-E; WP-G after WP-EXT's data + WP-0; WP-B/WP-F own the C7 token-parse points and feed WP-G's usage display. Open items tracked outside this feature: #943 (bounded-gap test ships with WP-I; the fix does not), #274's Selection Toolbar (untouched).
 
 ## 24. Clarifications
 
@@ -1479,9 +1559,29 @@ Sequencing rules from the interviewSequencing rules from the interview (§3) and
 
 ---
 
-## Open questions for the founder (fix round 1)
+## ADR-095 amendments needed (recorded here; the ADR itself is edited by the architect, not this spec)
 
-**None.** Every grill-round-1 finding was resolvable from authorities the spec already answers to: the founder's D22–D28 answers (this fix round's brief), D1–D21 + T1–T3 (the interview), ADR-095's accepted design (including its D1–D8 and proving-test list), and repo hard rules (contract-first T2, greenfield D17, delete-superseded D1, budgets). The review's "Questions for the founder" list (Q1–Q7) maps one-to-one onto D22–D28, which are already recorded in `docs/internal/specs/spec-thinking-reasoning.md`. Nothing here needed a new decision, so nothing is escalated. Round 2 of the grill proceeds on this revision.
+Two round-2 findings require one-line amendments to ADR-095 once the founder answers their questions; neither changes the ADR's decision structure, and this spec does not edit the ADR directly:
+
+1. **D7 (capture parse-only) — MAJ-005, no founder question needed.** The display copy now has TWO capture sources: the streaming accumulated-text callback (live frames) AND the post-strip response parse (stored text, the `final` frame's payload). Signatures remain parse-time only. The `final` frame carries the stored text, making live and reload byte-identical (US-3 AS1). The architect records this amendment with the ADR.
+2. **D2 Boundary 1 (per-connection filtering with deliberate seq gaps) — CRIT-001, awaits Q1.** Whichever mechanism the founder picks (skip-marker frame / `prev_seq` / other), Boundary 1's "gated connection sees deliberate seq gaps" sentence is amended to the new contiguous-sequence guarantee. The amendment lands with part B.
+
+## Pending founder decisions (grill round 2)
+
+Interviewed by team-lead per the spec process (founder interview after each grill, before its fix). Part B of this fix round applies the answers; until then the affected sections carry visible PENDING markers instead of choices.
+
+| # | Question (round-2 finding) | Options | Affected sections |
+|---|---|---|---|
+| Q1 | Hidden thinking frames create sequence gaps that the SPA's gap rule turns into dropped frames + re-attach storms for every toggle-off (default) user — CRIT-001 | (A) content-free `seq_skip` frame per hidden thinking frame (recommended by the review); (B) `prev_seq` on every sequenced frame; (C) unnumbered thinking frames (contradicts ADR-095's no-unsequenced-side-channel rule) | §1 (new contract row), §4, §6, §20 row 5, test 30; ADR-095 D2 amendment |
+| Q2 | What does `/effort <level>` write on CLI and messengers — an agent-wide persisted effort (like `/model`'s `ApplyAgentModel` path) or read-only display — MAJ-003 | (A) same as `/model`: persisted, agent-wide, documented as "anyone who can message the agent can change its effort" (review-recommended); (B) read-only on CLI/channels, set is web-only (revises D27) | §9.5, US-6 AS7, §14, FR-023, §8.2, §13 |
+| Q3 | Journal pressure: keep only the latest thinking frame per `entry_id` in the journal (supersede) or accept the degradation — MAJ-006 + §20 row 10 | (A) supersede same-`entry_id` thinking frames in the journal + the toggle-off catch-up test (review-recommended); (B) accept the degradation, reconnect falls back to snapshot | §1 C2, §6 WS constraints, §20 row 10, MAJ-006's test |
+| Q4 | Adapter coverage: v1 scope beyond Anthropic + OpenAI-compatible/OpenRouter (azure, codex/Responses-API, bedrock, CLI providers) — MAJ-004 | (A) v1 = the two specified families; others show Default-only and never show thinking rows (review-recommended); (B) include the OpenAI Responses-API family in v1 | §2.2 adapter matrix, C5, §16 dataset row 11, US-6 |
+
+---
+
+## Open questions for the founder (fix round 2)
+
+**None beyond Q1–Q4 above.** Every other round-2 finding was resolvable from existing authorities — T4 (the no-answer notice never enters model context), D10 (the serving fallback's own effort), D23 (effort is a property of the model choice), D26 (consumers get the same notice), ADR-095's D8.3 (display copy never enters provider-bound requests), the repo's hard rules (budgets, design-system publication contract) — and is applied in this part-A revision (itemised in the Revision log — fix round 2, part A). The round-2 review's "Questions for the founder" list is Q1–Q4 verbatim.
 
 ---
 
@@ -1529,3 +1629,37 @@ Review input: `docs/internal/specs/thinking-reasoning-spec-review.md` (verdict B
 | OBS-003 | FR-028 deleted; its content recorded as §20 row 11 (accepted mid-turn-attach projection-class cost) — no fake MAY requirement |
 
 Completeness: 3 CRITICAL + 18 MAJOR + 12 MINOR + 3 observations = 36 findings, all addressed above; 0 disputed (every reviewer code claim verified first-hand in this worktree before relying on it); 0 new open questions (see the preceding section).
+
+---
+
+## Revision log — fix round 2 (part A)
+
+Review input: `docs/internal/specs/thinking-reasoning-spec-review-round2.md` (verdict BLOCK, 24 findings). **Part A** applies every finding needing no founder decision; **Q1–Q4 are pending the founder's answers** (see "Pending founder decisions (grill round 2)") and land in part B — their rows below record the PENDING markers left in the text. Citations are `file::symbol`, never line numbers.
+
+| ID | What changed (section) or why not |
+|---|---|
+| CRIT-002 | CLOSED (no founder decision needed — the review's own escalation note says so). §1 C3 rewritten: the entry carries **NO `role`** and its text lives in the dedicated `thinking_text` field, never `content`; `reasoning_effort` dropped from the entry (round-2 OBS-001). §2.2 `pkg/agent/attach_hydrate.go::HydrateAgentHistoryFromTranscript` row changed from "No change" to the explicit `Type == thinking -> continue` BEFORE the role switch (verified role-keyed: handoff-prefix check, `EntryTypeToolCall` check, then `case "user"`/`case "assistant"`); §8.1 storage unit + reader table: every role-keyed reader's "naturally excluded" replaced by an explicit type filter or an explicitly stated exclusion (`pkg/agent/goal_triggers.go` matches `e.Role == "user"`; `pkg/agent/steer_reconstruct.go` matches `entries[i].Role == "user"`); Group C new planted-role scenario; test 31; FR-015/FR-030 rewritten |
+| MAJ-001 | C4 rewritten per T4 (`docs/internal/specs/spec-thinking-reasoning.md`, team-lead decision): the notice is display- and delivery-only — the LLM-context file records the round as the provider returned it (empty answer content, raw reasoning where D15 applies), hydration skips `outcome: "no_answer"` assistant entries, and a test proves the notice string never reaches the next provider request (test 31's second half + Group E's new scenario) |
+| MAJ-002 | §1 C5 resolution order rewritten: per-message effort binds ONLY to the model it was chosen for; the serving fallback candidate uses its own effort (D10, binding); an inherited primary consults `DefaultModel.reasoning_effort`; a model change clears the stored effort for that surface (the `pkg/agent/loop_slash.go::SwitchModel` → `ApplyAgentModel` path already shared with `/model`). BDD: "Per-message effort does not cross models (D10)", "An agent riding the instance default model…", "Changing the model clears the stored effort"; dataset rows 8–10; test 32; FR-029 extended |
+| MAJ-003 | **PENDING Q2.** §14's CLI+messengers row, §9.5 and the pending-decisions table carry the question and the affected sections; no write semantics chosen |
+| MAJ-004 | **PENDING Q4.** §16 dataset row 11 added (out-of-scope adapter → Default-only control, nothing sent) with the final adapter list marked pending; the full adapter matrix lands in part B with the founder's scope answer |
+| MAJ-005 | §1 C2: the `final: true` frame carries the STORED post-strip redacted text and the client replaces its row text with it — live and reload are byte-identical (US-3 AS1/FR-007); test 36 (orphan-markup reasoning: final-frame text == stored `thinking_text`); the ADR-095 D7 amendment (streaming display source added, signatures stay parse-only) recorded under the new "ADR-095 amendments needed" section — the ADR file itself is the architect's to edit |
+| MAJ-006 | **PENDING Q3** for the fix (journal supersede-by-`entry_id` + the toggle-off catch-up test). Applied now, fact-only: §6's caps text corrected — the journal is per SESSION hub (`pkg/gateway/ws_session_hub.go::hubJournalMaxFrames` 2048 / `hubJournalMaxBytes` 1 MiB) plus a 32 MiB global cap, NOT per connection — and §20 row 10 states the sharpened exposure |
+| MAJ-007 | §20 retitled "residual risks — status per row"; row 9 relabelled "Proposed by spec author, pending founder"; row 10 relabelled **PENDING Q3**; row 5 keeps "Accepted by founder" (ADR-095 D2 cites it) with a PENDING Q1 note on the client-side consequence |
+| MAJ-008 | Every claimed-but-absent round-1 fix applied for real: D16 scenario oracle now "asserted present" (deterministic); SC-004 and the restart scenario assert byte-identical `ThinkingBlocks` on the outgoing request; test 16's sweep plants a sentinel via the Group F scenario wording (mock-provider sentinel per test 24's pattern); `thinking_level`/`ThinkingLevel`/`parseThinkingLevel` added to the Group F sweep + test 17; path corrected to `pkg/gateway/webchat_channel.go` (verified: `pkg/channels/webchat_channel.go` does not exist); §6 Scope now carries the sweep exclusions; §19 gained FR-029…FR-036 rows, the FR-028 row is gone, and the completeness paragraph is re-derived by listing |
+| MAJ-009 | Deleted: the stale duplicate §9.2 (old "Thinking…" row) and §9.3 (old "#711 landed on feat/provider-messages" claim) blocks, the duplicate §9.6 and Group E headings, the duplicated §14 delivery statement, the §16 Gates stray quote, the duplicate `loop.go::handleReasoning` §2.2 row, the §23 "interviewSequencing" duplication, and the Group F stray line. "Thinking…" now appears only where it names/bans the existing `ThinkingIndicator` (7 occurrences, each a label-ban or indicator reference); duplicate-heading sweep: `grep -c "^### 9.2"` = 1, `^### 9.3` = 1, `^### 9.6` = 1, `^### Group E` = 1 |
+| MAJ-010 | §1 C3 + §8.1: the thinking entry is appended EXACTLY ONCE — at round end, or at cancel/error with the redacted text-so-far — never rewritten; mid-round state lives only in C2 frames and the journal; §9.2 Partial/Error rewritten to match (frames mid-round; the one entry at error); cancel scenario in §8.1 + test 35; field name `thinking_text` settled with CRIT-002 |
+| MAJ-011 | US-1 AS5, §5 edge case, FR-002 and dataset row 3 rewritten to the explicit predicate `show = !isCLIToken && userID != "" && row found && row.show_thinking && no read error` — keyed on HOW the caller authenticated (`pkg/gateway/auth.go::resolveBearerIdentity` sets `Username: "cli"` + the via-CLI-token flag; `pkg/gateway/websocket.go::authenticateWS` sets `wsConn.isCLIToken`), never the username; new Group A scenario (real `cli` account toggle ON stays hidden) + tests 8/10 extended |
+| MAJ-012 | §9.1 rewritten: own card in `src/components/settings/ChatSection.tsx` (verified purely-local today — `useChatPreferencesStore`, localStorage, no server states); loading = disabled switch over skeleton until the C1 GET resolves; GET error = catalogued `src/components/ui/FormError.tsx` + retry; PUT failure = revert + same inline error; saving = catalogued `src/components/ui/AutoSaveIndicator.tsx`; the Verbose-chat "local, per-device" copy stays scoped to its own card (D22's applies-to-this-login copy never shares it); component tests = test 33 |
+| MAJ-013 | §9.3/§12/§22: ownership decided — this feature publishes the catalogued `ConsoleNoticeStrip` (four-part contract: export + `design-system/catalog.json` entry + `@source` in `src/styles/library.css` + manifest entry) and #711 reuses IT; no inline one-off; §12's lead sentence corrected (the catalog has no console-strip component today — verified across its 53 entries) |
+| MAJ-014 | §2.2 new chat-store paragraph naming the grandfathered consumers (`src/store/chat/slices/frames.ts::handleFrame` 1773, `createFrameSlice` 1777, `src/store/chat/slices/replay-and-status-frames.ts::handleReplayAndStatusFrame` 580, `src/store/chat/slices/outbound-lifecycle.ts::sendMessage` 428 — store functions FAIL over 240, they do not warn); WP-D: extract-first `src/store/chat/slices/thinking-frames.ts` called from `handleFrame` + the replay handler extracted, net ≤ 0; WP-H: metadata assembly extracted out of `sendMessage`; store-level tests = test 34 |
+| MIN-001 | C1 path moved to `GET/PUT /auth/preferences/thinking` — the auth/account area next to `/auth/session` and `/auth/change-password` (grounded in `contracts/openapi.yaml`'s existing paths); `/user-context` named as the workspace USER.md resource it is; final path shape is the architect's |
+| MIN-002 | §8.1 `pkg/gateway/rest_tasks.go` row: "Gated strip" → "Naturally excluded (no change)" — the reader emits `judge_verdict` entries only (`if e.Type != session.EntryTypeJudgeVerdict { continue }`); Boundary 3 stays at its two serializers |
+| MIN-003 | §23 WP-A inventory rebuilt: every `ReasoningChannelID|reasoning_channel_id|REASONING_CHANNEL_ID` hit in `pkg`/`cmd` (19 Go files incl. `pkg/config/config.go` and `pkg/agent/loop_run_turn_response.go`), plus `pkg/channels/README.md`, the 13 connector docs, both shipped config files and the AS-IS doc's channel-config rows; `base.go` implements the method ONCE (13 packages use it); WP-A/WP-C shared-file note on `loop_run_turn_response.go` |
+| MIN-004 | C4 + §8.1 `session_end.go` row: "failed recap attempt (retry eligible)" is now concrete — a recap result with empty text after the strip is a candidate failure like `pkg/agent/session_end.go`'s transient-error candidate walk (`maxTransientRetries`/`isTransientStreamError`): next candidate tried, all failing → no recap persisted |
+| MIN-005 | Option (a): per-model carrier only; the named UI surface is the usage screen's By-model breakdown (`src/components/screens/UsageScreen.tsx` breakdownTab `'model'`, rows from the by-model map); new §14 reachability row; FR-024 extended; flat totals explicitly unchanged |
+| MIN-006 | Test 28 restated as the ADR's promise — a thinking sentinel never appears in ANY tool-result frame, toggle on or off (the old wording tested tool-result gating, the inverse); C4 names its done-frame schemas: `DoneStats.yaml` + the inline copy in `contracts/asyncapi.yaml` (where `truncation_reason` lives) |
+| OBS-001 | `reasoning_effort` dropped from the thinking entry (C3 + FR-030): no user story, UI state or test consumed it; effort resolves at request time per C5 |
+| OBS-002 | **PARTIAL (deliberate).** The log move + tag strip is sequencing work for AFTER this fix round (the reviewer's own suggestion) and this round's commit scope is this spec file alone; the round-2 part-B revision will append its log and then perform the move/tag-strip in one pass. The 1531-line size and finding-tag density are unchanged by design in part A |
+
+Part-A completeness: 24 findings — 18 applied in full (CRIT-002; MAJ-001/002/005/007/008/009/010/011/012/013/014; MIN-001…006; OBS-001), 1 partial by design (OBS-002), 5 carrying PENDING markers for part B (CRIT-001→Q1; MAJ-003→Q2; MAJ-006→Q3; MAJ-004→Q4; MAJ-007's row 10 folded into Q3). 0 disputed; every reviewer code claim re-verified first-hand in this worktree before relying on it (`pkg/agent/attach_hydrate.go::HydrateAgentHistoryFromTranscript`, `pkg/gateway/auth.go::resolveBearerIdentity`, `pkg/gateway/ws_session_hub.go` journal caps, `scripts/budgets/functions.txt`, `src/components/settings/ChatSection.tsx`, `design-system/catalog.json`, `pkg/gateway/rest_tasks.go` judge-verdict filter).
