@@ -36,10 +36,13 @@ func TestFix3SSRFPortlessLabelHost(t *testing.T) {
 	require.True(t, sc80.isAllowedGatewayOrigin("http://"+fix3Label+".localhost/app.js"),
 		"the label class is admitted for any path (FR-021, round-2 MAJ-006)")
 
-	// Narrow-scope pin: the exact-host /preview/ exception keeps requiring an
-	// explicit port — a portless URL is admitted by the label class only.
-	require.False(t, sc80.isAllowedGatewayOrigin("http://localhost/preview/a/b/"),
-		"a portless bare-host /preview/ URL stays refused — only the label class admits portless")
+	// Superseded scope (gate wave 3, comment-analyzer F1, fix9): on an
+	// implicit-80 gateway the minted Mode 2 URL is itself portless, so the
+	// exact-host /preview/ exception now admits it too (the agent must be able
+	// to open its own preview). Its full admitted/refused matrix is pinned in
+	// ssrf_fix9_test.go::TestFix9SSRFPortlessPreviewException.
+	require.True(t, sc80.isAllowedGatewayOrigin("http://localhost/preview/a/b/"),
+		"fix9: a portless bare-host /preview/ URL on an implicit-80 gateway is admitted")
 
 	sc5000 := NewSSRFChecker(nil)
 	sc5000.AllowGatewayOrigin("localhost", 5000)
