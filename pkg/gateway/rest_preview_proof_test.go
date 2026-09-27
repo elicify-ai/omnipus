@@ -250,20 +250,26 @@ func TestWebServeTool_StaticResultIncludesPath(t *testing.T) {
 // FR-013 (ADR-044) — proxy request-cookie strip + response Set-Cookie neutralize
 // ---------------------------------------------------------------------------
 
-// TestPreviewProxyStripsRequestCookies verifies FR-013 / S15: the reverse
-// proxy strips the operator's ENTIRE Cookie header (not just Authorization)
-// before forwarding to the dev server. A previewed app has no legitimate
-// need for the gateway's session/CSRF cookies — forwarding them would let a
-// compromised dev dependency read them (the read-vector half of the
-// session-riding threat the spec's Non-Behaviors section documents as an
-// accepted residual only for a directly-opened preview TAB, not the proxy).
+// TestPreviewProxyStripsRequestCookies verifies the ADR-094 credential filter
+// (FR-020, founder Q1) at the Director itself — api.HandlePreview, no
+// middleware chain in front. Two halves, one drive:
+//
+//   - (a) the reserved gateway cookie names (omnipus-session, csrf — exact,
+//     case-sensitive) and a Bearer the gateway's own validator accepts (the
+//     legacy env token, DS-4 row 12 semantics) are stripped;
+//   - (b) a foreign/app-set cookie forwards UNCHANGED.
+//
+// The pre-ADR-094 version of this test asserted a strip-ALL (no Cookie or
+// Authorization header at all) — the behavior FR-020 superseded. It failed
+// against the shipped filter with "was other=value" / "was Bearer
+// secret-token": the foreign-forward half was what the old oracle got
+// backwards. The full name-scoped matrix lives in
+// preview_credential_filter_red_test.go (DS-4 rows 1–12).
 func TestPreviewProxyStripsRequestCookies(t *testing.T) {
 	var gotCookie, gotAuth string
-	var sawCookieHeader bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotCookie = r.Header.Get("Cookie")
 		gotAuth = r.Header.Get("Authorization")
-		_, sawCookieHeader = r.Header["Cookie"]
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer upstream.Close()
@@ -276,16 +282,20 @@ func TestPreviewProxyStripsRequestCookies(t *testing.T) {
 	devReg, err := reg.Register("cookie-strip-agent", upstreamPort(t, upstream.URL), 0 /*pid*/, "npm run dev", 10)
 	require.NoError(t, err)
 
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "preview-proof-env-token")
+
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/preview/cookie-strip-agent/"+devReg.Token+"/api/data", nil)
 	r.Header.Set("Cookie", "omnipus-session=abc123; csrf=def456; other=value")
-	r.Header.Set("Authorization", "Bearer secret-token")
+	r.Header.Set("Authorization", "Bearer preview-proof-env-token")
 	api.HandlePreview(w, r)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	assert.False(t, sawCookieHeader, "FR-013: forwarded request must carry NO Cookie header at all")
-	assert.Empty(t, gotCookie, "FR-013: forwarded request must carry no Cookie value")
-	assert.Empty(t, gotAuth, "FR-013: forwarded request must carry no Authorization header")
+	assert.Equal(t, "other=value", gotCookie,
+		"FR-020 (founder Q1): the foreign cookie forwards unchanged and the reserved names "+
+			"(omnipus-session, csrf — exact, case-sensitive) are gone from the forwarded set")
+	assert.Empty(t, gotAuth,
+		"FR-020: a Bearer the gateway's own validator accepts (the legacy env token) is stripped")
 }
 
 // TestPreviewProxyNeutralizesSetCookie verifies FR-013 / S15: a dev-server
