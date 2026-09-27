@@ -24,10 +24,14 @@
 //   4. Our own replaces set a suppress flag so the search change they cause
 //      is not adopted again (no loop, no fight with projection).
 import { useEffect, useRef } from 'react'
-import { useNavigate, useRouterState } from '@tanstack/react-router'
+import { useBlocker, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from './leaveGate'
 import type { PanelContext } from './types'
+import {
+  confirmDiscardLibraryEdits,
+  isLibraryEditorDirty,
+} from '@/components/library/preview/unsavedGuard'
 
 type SearchRecord = Record<string, unknown>
 
@@ -62,6 +66,19 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
   const activePanel = useUiStore((s) => s.activePanel)
   const backForwardRef = useRef(false)
   const selfWriteRef = useRef(false)
+
+  // MAJ-205: URL-started transitions are intercepted before the route,
+  // address, or panel can move. App-started close/replace paths clear the
+  // dirty flag through leaveGateThen before their URL projection arrives,
+  // so they do not prompt twice.
+  useBlocker({
+    shouldBlockFn: async () => {
+      const current = useUiStore.getState().activePanel
+      if (current?.id !== 'library' || !isLibraryEditorDirty()) return false
+      return !(await confirmDiscardLibraryEdits())
+    },
+    enableBeforeUnload: false,
+  })
 
   const replaceSearch = (desired: 'library' | undefined) => {
     selfWriteRef.current = true
