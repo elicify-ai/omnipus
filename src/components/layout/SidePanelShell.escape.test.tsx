@@ -3,8 +3,10 @@
 //
 // Mixed file: SP-19's Browser exception, the discard-dialog precedence, the
 // guard-honouring close and focus-return-to-trigger are CHARACTERISATION
-// (green on wave-0 code); the MIN-208 input-method guards and the US-9 AS-3
-// focus-into-panel on open are RED.
+// (green on wave-0 code); the MIN-208 input-method guards (rewritten after
+// CHECK F1: they passed vacuously against the async close path — each now
+// flushes the async chain and ends with a positive-control close) and the
+// US-9 AS-3 focus-into-panel on open are RED.
 //
 // Oracles: side-panel-shell-spec.md §2/§5 — Escape closes the focused panel
 // unless the Browser panel (SP-19) or the discard dialog holds it; input
@@ -152,22 +154,54 @@ describe('Escape layering (§12 #13, US-6/US-7/SP-19) — characterisation, gree
 })
 
 describe('MIN-208 input-method guards (RED — onShellKeyDown checks only key/dialog/browser)', () => {
-  it('an Escape the page already handled (defaultPrevented) must NOT close the panel (MIN-208)', () => {
+  // The close path is ASYNC: onShellKeyDown → shell.requestClose() →
+  // guardThenClose awaits runGuard before it closes. A synchronous
+  // `expect(...).not.toBeNull()` right after fireEvent ran BEFORE the close
+  // landed and passed vacuously — commit 226746310 recorded these two as
+  // "2 RED", but the tree actually passed them (8 passed / 1 failed; the
+  // only RED was US-9 AS-3 focus-into-panel). Each test therefore (a) flushes
+  // the async close chain before asserting nothing closed, and (b) ends with
+  // a POSITIVE CONTROL — a plain Escape through the same async path, proven
+  // to close — so a future flush that is too short fails loudly here instead
+  // of passing vacuously again.
+  async function flushCloseChain() {
+    for (let i = 0; i < 5; i++) {
+      await act(async () => {
+        await Promise.resolve()
+      })
+    }
+  }
+
+  function fireGuardedEscape(target: HTMLElement, init: (ev: KeyboardEvent) => void) {
+    const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    init(ev)
+    fireEvent(target, ev)
+  }
+
+  it('an Escape the page already handled (defaultPrevented) must NOT close the panel (MIN-208)', async () => {
     renderShell([makeDef('library')])
     openPanel('library')
-    const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
-    ev.preventDefault()
-    fireEvent(screen.getByTestId('side-panel'), ev)
+    const panel = screen.getByTestId('side-panel')
+    fireGuardedEscape(panel, (ev) => ev.preventDefault())
+    await flushCloseChain()
     expect(usePanelShellStore.getState().activePanel).not.toBeNull()
+    // Positive control: a plain Escape through the SAME async close path.
+    fireEvent.keyDown(panel, { key: 'Escape' })
+    await waitFor(() => expect(usePanelShellStore.getState().activePanel).toBeNull())
   })
 
-  it('an Escape during IME composition (isComposing) must NOT close the panel (MIN-208)', () => {
+  it('an Escape during IME composition (isComposing) must NOT close the panel (MIN-208)', async () => {
     renderShell([makeDef('library')])
     openPanel('library')
-    const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
-    Object.defineProperty(ev, 'isComposing', { value: true })
-    fireEvent(screen.getByTestId('side-panel'), ev)
+    const panel = screen.getByTestId('side-panel')
+    fireGuardedEscape(panel, (ev) => {
+      Object.defineProperty(ev, 'isComposing', { value: true })
+    })
+    await flushCloseChain()
     expect(usePanelShellStore.getState().activePanel).not.toBeNull()
+    // Positive control: a plain Escape through the SAME async close path.
+    fireEvent.keyDown(panel, { key: 'Escape' })
+    await waitFor(() => expect(usePanelShellStore.getState().activePanel).toBeNull())
   })
 })
 

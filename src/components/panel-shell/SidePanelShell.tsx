@@ -12,7 +12,7 @@
 // Wave 0 (this demo): exercised through Storybook stories only — no route
 // wiring, no integration with the real app store (wave 1).
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import { ArrowsOutSimple, ArrowLeft, X } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
@@ -20,6 +20,7 @@ import { IconButton } from '@/components/ui/icon-button'
 import { ResizeSeparator } from '@/components/ui/resize-separator'
 import { getDiscardConfirmDialogOpen } from '@/components/library/preview/unsavedGuard'
 import { usePanelShell, usePanelShellHistory } from './usePanelShell'
+import { usePanelUrlHistory } from './usePanelUrlHistory'
 import { useSwipeToClose } from './useSwipeToClose'
 import { usePanelShellStore, PANEL_WIDTH_UNSET } from './panelShellStore'
 import { PANEL_MIN_PX, clampPanelWidth, panelDefaultWidth, panelWidthCeiling, isPhoneTakeover } from './panelWidth'
@@ -42,14 +43,10 @@ export interface SidePanelShellProps {
   chat: ReactNode
 }
 
-export function SidePanelShell({
-  panels,
-  username,
-  sidebarWidth = 0,
-  chat,
-}: SidePanelShellProps) {
+export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: SidePanelShellProps) {
   const shell = usePanelShell(panels, username)
   const activePanel = shell.activePanel
+  usePanelUrlHistory(activePanel)
   const storedWidth = usePanelShellStore((s) => s.panelWidth)
   const rowRef = useRef<HTMLDivElement>(null)
   const [rowWidth, setRowWidth] = useState(0)
@@ -61,6 +58,10 @@ export function SidePanelShell({
   useEffect(() => {
     const row = rowRef.current
     if (row === null) return
+    if (typeof ResizeObserver === 'undefined') {
+      setRowWidth(Math.round(row.getBoundingClientRect().width || window.innerWidth))
+      return
+    }
     const ro = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect.width ?? 0
       setRowWidth(Math.round(w))
@@ -80,24 +81,17 @@ export function SidePanelShell({
   // discard-confirm dialog is up (it owns its own Escape).
   const onShellKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Escape') return
+    if (e.defaultPrevented || e.nativeEvent.isComposing) return
     if (getDiscardConfirmDialogOpen()) return
     if (activePanel?.id === 'browser') return
     shell.requestClose()
   }
 
   // SP-17 applied width: re-derived at render from (stored, geometry).
-  const defaultWidth = useMemo(
-    () => panelDefaultWidth(rowWidth, sidebarWidth),
-    [rowWidth, sidebarWidth],
-  )
-  const ceiling = useMemo(
-    () => panelWidthCeiling(rowWidth, sidebarWidth),
-    [rowWidth, sidebarWidth],
-  )
+  const defaultWidth = useMemo(() => panelDefaultWidth(rowWidth, sidebarWidth), [rowWidth, sidebarWidth])
+  const ceiling = useMemo(() => panelWidthCeiling(rowWidth, sidebarWidth), [rowWidth, sidebarWidth])
   const appliedWidth =
-    storedWidth === PANEL_WIDTH_UNSET
-      ? defaultWidth
-      : clampPanelWidth(storedWidth, rowWidth, sidebarWidth)
+    storedWidth === PANEL_WIDTH_UNSET ? defaultWidth : clampPanelWidth(storedWidth, rowWidth, sidebarWidth)
 
   // Live width moves (drag + keyboard) go to a CSS custom property on the
   // row — bypassing React state so a 60fps drag never re-renders the panel
@@ -133,20 +127,52 @@ export function SidePanelShell({
 
   const def = activePanel === null ? undefined : panels.find((p) => p.id === activePanel.id)
   const panelOpen = activePanel !== null && def !== undefined
+  const headerRef = useRef<HTMLDivElement>(null)
+  const expandActionRef = useRef<{ id: PanelDefinition['id']; action: () => boolean } | null>(null)
+  const widthSettleListenerRef = useRef<{
+    id: PanelDefinition['id']
+    listener: (px: number) => void
+  } | null>(null)
+
+  useEffect(() => {
+    if (panelOpen) headerRef.current?.focus()
+  }, [activePanel?.id, activePanel?.context, panelOpen])
+
+  const registerExpand = useCallback((action: (() => boolean) | null) => {
+    if (activePanel === null) return
+    if (action === null) {
+      if (expandActionRef.current?.id === activePanel.id) expandActionRef.current = null
+      return
+    }
+    expandActionRef.current = { id: activePanel.id, action }
+  }, [activePanel])
+  const onWidthSettle = useCallback((listener: ((px: number) => void) | null) => {
+    if (activePanel === null) return
+    if (listener === null) {
+      if (widthSettleListenerRef.current?.id === activePanel.id) widthSettleListenerRef.current = null
+      return
+    }
+    widthSettleListenerRef.current = { id: activePanel.id, listener }
+  }, [activePanel])
 
   // SP-12 expand with fail-visible popup-block handling.
   const [expandBlocked, setExpandBlocked] = useState(false)
-  const handleExpand = () => {
+  const handleExpand = async () => {
     setExpandBlocked(false)
-    if (!shell.requestExpand()) setExpandBlocked(true)
+    const registered = expandActionRef.current
+    const expandAction = registered !== null && registered.id === activePanel?.id ? registered.action : undefined
+    const result = await shell.requestExpand(expandAction)
+    if (result === 'blocked') setExpandBlocked(true)
   }
 
   // Plain JSX builder (NOT a nested component — a nested component type
   // would remount the panel content on every shell render).
   const panelBody = (takeoverMode: boolean) => (
-    <div
+    <aside
       ref={swipeRef}
       id={def === undefined ? undefined : `side-panel-${def.id}`}
+      role="complementary"
+      aria-labelledby={def === undefined ? undefined : `side-panel-title-${def.id}`}
       data-testid="side-panel"
       data-takeover={takeoverMode ? 'true' : undefined}
       className={cn(
@@ -157,6 +183,8 @@ export function SidePanelShell({
       {def !== undefined && activePanel !== null && (
         <>
           <div
+            ref={headerRef}
+            tabIndex={-1}
             data-testid="side-panel-header"
             className="flex h-10 shrink-0 items-center gap-[var(--space-1)] border-b border-[var(--color-border)] px-[var(--space-2)]"
           >
@@ -165,10 +193,19 @@ export function SidePanelShell({
                 <ArrowLeft weight="bold" className="h-4 w-4" />
               </IconButton>
             )}
-            <span className="truncate text-[length:var(--type-body-compact-size)] font-medium">{def.title}</span>
+            <span
+              id={`side-panel-title-${def.id}`}
+              className="truncate text-[length:var(--type-body-compact-size)] font-medium"
+            >
+              {def.title}
+            </span>
             <span className="grow" />
             {expandBlocked && (
-              <span data-testid="panel-expand-error" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" role="status">
+              <span
+                data-testid="panel-expand-error"
+                className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
+                role="status"
+              >
                 Pop-up blocked — allow pop-ups to expand.
               </span>
             )}
@@ -190,11 +227,21 @@ export function SidePanelShell({
             </IconButton>
           </div>
           <div className="min-h-0 flex-1 overflow-hidden">
-            <def.content context={activePanel.context} close={shell.requestClose} expand={handleExpand} />
+            <Suspense fallback={null}>
+              <def.content
+                context={activePanel.context}
+                close={shell.requestClose}
+                expand={() => {
+                  void handleExpand()
+                }}
+                registerExpand={registerExpand}
+                onWidthSettle={onWidthSettle}
+              />
+            </Suspense>
           </div>
         </>
       )}
-    </div>
+    </aside>
   )
 
   const rowStyle = {
@@ -207,12 +254,13 @@ export function SidePanelShell({
       data-testid="panel-shell-row"
       data-takeover={takeover ? 'true' : undefined}
       onKeyDown={onShellKeyDown}
-      className="relative flex h-full w-full overflow-hidden bg-[var(--color-surface-1)]"
+      className="relative flex h-full min-w-0 flex-1 overflow-hidden bg-[var(--color-surface-1)]"
       style={rowStyle}
     >
       <div
         data-testid="chat-column"
         className={cn('flex h-full min-w-0 flex-1 flex-col', takeover && panelOpen && 'hidden')}
+        inert={takeover && panelOpen}
       >
         {chat}
       </div>
@@ -247,7 +295,11 @@ export function SidePanelShell({
                     usePanelShellStore.getState().setPanelWidth(px)
                   }
                 }}
-                onCommit={(px) => shell.settleWidth(px)}
+                onCommit={(px) => {
+                  shell.settleWidth(px)
+                  const registered = widthSettleListenerRef.current
+                  if (registered?.id === activePanel.id) registered.listener(px)
+                }}
                 onReset={shell.resetWidth}
               />
               {panelBody(false)}
@@ -255,7 +307,6 @@ export function SidePanelShell({
           )}
         </>
       )}
-      </div>
+    </div>
   )
 }
-

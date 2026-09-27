@@ -25,16 +25,17 @@ interface SwipeTrack {
   active: boolean
 }
 
-/** True when `target` (or any ancestor up to `root`) scrolls horizontally. */
-export function startsInHorizontallyScrollable(
-  target: Element | null,
-  root: Element,
-): boolean {
+/**
+ * True when `target` (or an ancestor up to `root`) can consume this
+ * rightward drag by scrolling toward its left edge. At scrollLeft=0 the
+ * scroller is already at that edge, so the panel recognizer owns the swipe.
+ */
+export function startsInHorizontallyScrollable(target: Element | null, root: Element): boolean {
   let node: Element | null = target
   while (node !== null && node !== root) {
     if (node.scrollWidth > node.clientWidth + 1) {
       const ox = window.getComputedStyle(node).overflowX
-      if (ox === 'auto' || ox === 'scroll') return true
+      if ((ox === 'auto' || ox === 'scroll') && node.scrollLeft > 0) return true
     }
     node = node.parentElement
   }
@@ -46,10 +47,7 @@ export function startsInHorizontallyScrollable(
  * ref to spread on the panel column element. `onClose` fires at most once
  * per completed gesture.
  */
-export function useSwipeToClose(options: {
-  enabled: boolean
-  onClose: () => void
-}): RefObject<HTMLDivElement | null> {
+export function useSwipeToClose(options: { enabled: boolean; onClose: () => void }): RefObject<HTMLDivElement | null> {
   const { enabled, onClose } = options
   const panelRef = useRef<HTMLDivElement | null>(null)
   const onCloseRef = useRef(onClose)
