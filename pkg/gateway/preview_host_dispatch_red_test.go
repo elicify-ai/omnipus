@@ -205,7 +205,12 @@ func piRedIsolatedURL(
 		h.api.servedSubdirs,
 		devReg, // nil → static mode
 		tools.WebServeDevConfig{
-			Tier3Commands: []string{"python3"},
+			// Two-token "binary subcommand" format (the codebase's Tier3Commands
+			// convention): a single-token entry is skipped at runtime by
+			// validateTier3Command's defense-in-depth, so "python3" alone would
+			// never admit the "python3 -m http.server <port>" command the dev
+			// subtests drive.
+			Tier3Commands: []string{"python3 -m"},
 			PortRange:     [2]int32{18000, 18999},
 			MaxConcurrent: 2,
 		},
