@@ -987,7 +987,13 @@ func turnErrorUserText(err error) string {
 	if errors.As(err, &curated) && llm.Code == CodeUnknown {
 		return curated.Error()
 	}
-	return llm.Message
+	// Task surfaces carry the PLAIN catalogue message for the typed code —
+	// this function's documented contract ("the contract's plain message").
+	// The provider-attributed templated sentence (§6's provider_message
+	// variant, set on LLMError.Message when TranslateLLMError has identity)
+	// is the chat-surface text delivered through WireLLMError, never this
+	// function's.
+	return defaultUserMessage(llm.Code)
 }
 
 // Typed turn-exit sentinels (ADR-066 D7, FR-034). runTurn's formerly silent
