@@ -559,42 +559,54 @@ func TestSessionWorker_DrainLoop_PersistentContinueFailure_BoundedRetryThenAband
 	// ("the primary response is not actually lost today; only the
 	// steering-queue side is silent") — it turns out to also hold for
 	// exit (a) via the identical deferred-guard mechanism.
-	var firstContent string
+	//
+	// Order between the two messages is deliberately NOT asserted:
+	// abandonQueuedSteering's own notice publish runs synchronously ahead of
+	// `return`, while processTurn's deferred response-guard fires on the way
+	// out — so the notice is observed to land BEFORE turn 1's own republished
+	// response, the reverse of what an outbound-channel reading in source
+	// order might suggest. The design note requires only that both exist and
+	// are distinct ("processed exactly once or the user is told it wasn't"),
+	// never an order — so both messages are collected first, then matched by
+	// content rather than by arrival position.
+	var firstMsg, secondMsg string
 	select {
 	case out := <-msgBus.OutboundChan():
-		firstContent = out.Content
-		if firstContent == "" {
-			t.Fatal("turn 1's own response was empty — unexpected for a plain mock provider call")
-		}
+		firstMsg = out.Content
 	default:
 		t.Fatal("expected at least one outbound message (turn 1's own response, via the existing " +
 			"deferred response guard) — got none")
 	}
-
+	select {
+	case out := <-msgBus.OutboundChan():
+		secondMsg = out.Content
+	default:
+		t.Fatal("expected a SECOND, distinct outbound message (the fail-loud notice about the abandoned " +
+			"steering queue) — got none: today's code has no abandon-and-notify step at all, it silently " +
+			"drops the queue's fate on the first Continue failure")
+	}
+	if firstMsg == "" || secondMsg == "" {
+		t.Fatalf("an outbound message was empty — want turn 1's own response and the fail-loud notice, "+
+			"both non-empty: first=%q second=%q", firstMsg, secondMsg)
+	}
+	if firstMsg == secondMsg {
+		t.Fatalf("the two outbound messages are identical (%q) — want turn 1's own response and a "+
+			"DISTINCT notice about the abandoned steering queue, not a re-publish", firstMsg)
+	}
 	// The specific wording below ("resend"/"could not be processed"/
 	// "problem") tracks the design note's OWN suggested copy ("Something
 	// like...") — a soft assumption, not a locked product string; flagged in
 	// the RED-pack report as adjustable if backend-lead phrases the notice
 	// differently.
-	select {
-	case out := <-msgBus.OutboundChan():
-		if out.Content == "" {
-			t.Fatal("notice content is empty — the whole point of the fail-loud design is a visible message")
-		}
-		if out.Content == firstContent {
-			t.Fatalf("second outbound message is identical to turn 1's own response (%q) — want a "+
-				"DISTINCT notice about the abandoned steering queue, not a re-publish", firstContent)
-		}
-		lower := strings.ToLower(out.Content)
-		if !strings.Contains(lower, "resend") && !strings.Contains(lower, "could not be processed") &&
-			!strings.Contains(lower, "problem") {
-			t.Fatalf("notice content = %q — does not look like the distinct fail-loud notice the design "+
-				"note describes (expected wording hinting at a failed/undeliverable follow-up)", out.Content)
-		}
-	default:
-		t.Fatal("expected a SECOND, distinct outbound message (the fail-loud notice about the abandoned " +
-			"steering queue) — got none: today's code has no abandon-and-notify step at all, it silently " +
-			"drops the queue's fate on the first Continue failure")
+	isNotice := func(s string) bool {
+		lower := strings.ToLower(s)
+		return strings.Contains(lower, "resend") || strings.Contains(lower, "could not be processed") ||
+			strings.Contains(lower, "problem")
+	}
+	if !isNotice(firstMsg) && !isNotice(secondMsg) {
+		t.Fatalf("neither outbound message looks like the distinct fail-loud notice the design note "+
+			"describes (expected wording hinting at a failed/undeliverable follow-up): first=%q second=%q",
+			firstMsg, secondMsg)
 	}
 
 	// No THIRD, competing outbound message should have been queued either.
