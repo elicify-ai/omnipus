@@ -31,6 +31,12 @@ func TestFixK3_ChosenGLMLowRefusedBeforeAnyRequest(t *testing.T) {
 	if !strings.Contains(res.ForLLM, "- glm (chosen): rejected: depth is not supported") {
 		t.Fatalf("want the spec refusal line, got:\n%s", res.ForLLM)
 	}
+	// The tool-level pre-flight refusal names the usable depth providers
+	// (spec: "Name the usable providers that honour depth"); a refusal that
+	// reaches the provider guard instead does not.
+	if !strings.Contains(res.ForLLM, "Providers that support depth:") {
+		t.Fatalf("want the providers list from the pre-flight refusal, got:\n%s", res.ForLLM)
+	}
 	if h := f.hitsOf("glm"); h != 0 {
 		t.Fatalf("glm hits = %d, want 0 (refusal precedes any request)", h)
 	}
@@ -51,6 +57,9 @@ func TestFixK3_FallbackGLMLowRefusedBeforeAnyRequest(t *testing.T) {
 	}
 	if !strings.Contains(res.ForLLM, "- glm (fallback): rejected: depth is not supported") {
 		t.Fatalf("want the spec refusal line for the fallback role, got:\n%s", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, "Providers that support depth:") {
+		t.Fatalf("want the providers list from the pre-flight refusal, got:\n%s", res.ForLLM)
 	}
 	if h := f.hitsOf("glm"); h != 0 {
 		t.Fatalf("glm hits = %d, want 0 (refusal precedes any request)", h)
