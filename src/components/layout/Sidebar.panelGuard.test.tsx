@@ -2,10 +2,18 @@
 // entry point of FR-013. ChatControls and the header Close are covered in
 // their own files. This one pins the sidebar LIBRARY button.
 //
-// RED: Sidebar.tsx's library button calls useUiStore.openLibraryPanel()
-// directly (read before writing, Sidebar.tsx library onClick). It never
-// consults confirmDiscardLibraryEdits / beforeLeave. A dirty Library is
-// replaced with no prompt.
+// Written against the §8.1 single-slice store (batch-2 squad-lead ruling):
+// `activePanel: { id, context } | null` with `openPanel(id, context)` /
+// `closePanel()` — "single slice replacing browserPanel/libraryPanel"
+// (side-panel-shell-spec.md §8.1/SP-7). The pack previously seeded the
+// RETIRED `libraryPanel` slice; that slice no longer exists on GREEN and the
+// sidebar entry point rides the single slice.
+//
+// RED on this pre-GREEN tree: the §8.1 API does not exist yet, so the
+// beforeEach gate fails every test with an explicit BLOCKED naming it (never
+// an unexplained TypeError). On GREEN the behavioural RED is: Sidebar.tsx's
+// library button replaces a dirty Library without consulting the
+// beforeLeave/confirmDiscardLibraryEdits guard (FR-013).
 //
 // Oracle: FR-013 — every entry point, sidebar included, runs the outgoing
 // panel's leave guard; cancel leaves the panel and the edit untouched.
@@ -141,10 +149,31 @@ function renderSidebar() {
   )
 }
 
+/** §8.1 single-slice view of the ui store (defensive: the slice does not
+ * exist on this pre-GREEN tree — see the BLOCKED gate below). */
+type Section81Store = {
+  activePanel: { id: string; context?: Record<string, unknown> } | null
+  openPanel: (id: string, context?: Record<string, unknown>) => void
+  closePanel: () => void
+}
+const s81 = () => useUiStore.getState() as unknown as Section81Store
+
+/** Fails every test with a STATED reason while the §8.1 slice is missing. */
+function requireSection81Api() {
+  const s = useUiStore.getState() as unknown as Record<string, unknown>
+  if (typeof s.openPanel !== 'function' || typeof s.closePanel !== 'function' || !('activePanel' in s)) {
+    throw new Error(
+      'BLOCKED: ui store has no §8.1 single-slice API (activePanel / openPanel(id, context) / closePanel()) — ' +
+        'required by side-panel-shell-spec.md §8.1/SP-7 (ONE slice replacing the retired libraryPanel/browserPanel)',
+    )
+  }
+}
+
 beforeEach(() => {
+  requireSection81Api()
   act(() => {
     useSidebarStore.setState({ isOpen: true, isPinned: true })
-    useUiStore.setState({ libraryPanel: { workspaceId: 'ws-1' }, browserPanel: null })
+    s81().openPanel('library', { workspaceId: 'ws-1' })
   })
   setLibraryEditorDirty(false)
   if (getDiscardConfirmDialogOpen()) resolveDiscardConfirmDialog(true)
@@ -161,7 +190,7 @@ describe('Sidebar LIBRARY button — leave guard (FR-013, §12 #8)', () => {
     renderSidebar()
     fireEvent.click(screen.getByTestId('sidebar-library-button'))
     await waitFor(() => expect(getDiscardConfirmDialogOpen()).toBe(true))
-    expect(useUiStore.getState().libraryPanel).toEqual({ workspaceId: 'ws-1' })
+    expect(s81().activePanel).toEqual({ id: 'library', context: { workspaceId: 'ws-1' } })
   })
 
   it('RED — cancelling the prompt leaves the Library panel and the edit in place', async () => {
@@ -172,7 +201,7 @@ describe('Sidebar LIBRARY button — leave guard (FR-013, §12 #8)', () => {
     act(() => {
       resolveDiscardConfirmDialog(false)
     })
-    expect(useUiStore.getState().libraryPanel).toEqual({ workspaceId: 'ws-1' })
+    expect(s81().activePanel).toEqual({ id: 'library', context: { workspaceId: 'ws-1' } })
     expect(getDiscardConfirmDialogOpen()).toBe(false)
   })
 })
