@@ -91,10 +91,13 @@ var aliasesReadSites = map[string]string{
 // migration, exempt the marker narrowly).
 const rolesMarkerToken = "roles_migrated_at"
 
-// rolesMarkerTokenRe strips every case-insensitive occurrence of the marker
-// from a literal, so onlyRolesMarkerToken can require that NOTHING ELSE in
-// the literal matches the greenfield regex.
-var rolesMarkerTokenRe = regexp.MustCompile(`(?i)` + regexp.QuoteMeta(rolesMarkerToken))
+// rolesMarkerTokenRe strips every case-insensitive, WHOLE-WORD occurrence of
+// the marker from a literal, so onlyRolesMarkerToken can require that NOTHING
+// ELSE in the literal matches the greenfield regex. The \b anchors matter:
+// `_` is a word character, so a longer marker that merely contains this one
+// (old_roles_migrated_at, roles_migrated_at_shim) is not stripped and stays
+// banned.
+var rolesMarkerTokenRe = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(rolesMarkerToken) + `\b`)
 
 // rolesMarkerExemptSites are the ONLY files allowed to carry the marker in a
 // string literal, keyed by greenfieldSiteKey — one row per sanctioned use,
@@ -210,6 +213,8 @@ func TestGreenfield_RolesMarkerExemptionEndToEnd(t *testing.T) {
 		{"NEW unrelated marker in the exempt file is flagged", "web_search_roles.go", "provider_migrated_at", 1},
 		{"sanctioned marker in a non-exempt pkg/config file is flagged", "providerstate.go", "roles_migrated_at", 1},
 		{"sanctioned marker beside another banned token is flagged", "web_search_roles.go", "roles_migrated_at deprecated", 1},
+		{"a longer marker that merely contains the sanctioned one (prefix) is flagged", "web_search_roles.go", "old_roles_migrated_at", 1},
+		{"a longer marker that merely contains the sanctioned one (suffix) is flagged", "web_search_roles.go", "roles_migrated_at_shim", 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

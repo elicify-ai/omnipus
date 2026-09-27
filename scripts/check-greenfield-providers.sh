@@ -682,6 +682,16 @@ GO
   expect "ADR-096: a NEW unrelated migration marker elsewhere in pkg/config is still red" 1
 
   fixture
+  cat > "$tmp/case/pkg/config/providerstate.go" <<'GO'
+package config
+
+func init() {
+	w["roles_migrated_at"] = web.RolesMigratedAt
+}
+GO
+  expect "ADR-096: the sanctioned line itself, copied into a non-exempt pkg/config file, is still red" 1
+
+  fixture
   cat > "$tmp/case/pkg/config/web_search_roles.go" <<'GO'
 package config
 
