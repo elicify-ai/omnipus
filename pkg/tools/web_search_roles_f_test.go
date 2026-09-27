@@ -260,7 +260,7 @@ func TestText_BothFail_BothNamed(t *testing.T) {
 	if !strings.Contains(res.ForLLM, "- tavily (default): upstream:") {
 		t.Fatalf("expected tavily line, got:\n%s", res.ForLLM)
 	}
-	if !strings.Contains(res.ForLLM, "- duckduckgo (fallback): upstream:") {
+	if !strings.Contains(res.ForLLM, "- duckduckgo (fallback): bad_response:") {
 		t.Fatalf("expected duckduckgo line, got:\n%s", res.ForLLM)
 	}
 }
