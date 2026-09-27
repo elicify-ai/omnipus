@@ -207,6 +207,7 @@ func mapBaiduRecencyFilter(rangeCode string) string {
 
 type BraveSearchProvider struct {
 	keyPool     *APIKeyPool
+	baseURL     string // ADR-094: "" → default at search time
 	proxy       string
 	client      *http.Client
 	ingestBound int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
@@ -313,7 +314,8 @@ type TavilySearchProvider struct {
 	baseURL     string
 	proxy       string
 	client      *http.Client
-	ingestBound int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
+	ingestBound int64  // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
+	searchDepth string // ADR-094: operator-set depth ceiling; "" → "advanced"
 }
 
 func (p *TavilySearchProvider) Search(
@@ -336,10 +338,11 @@ func (p *TavilySearchProvider) Search(
 			break
 		}
 
+		depth, _ := p.effectiveDepth("")
 		payload := map[string]any{
 			"api_key":             apiKey,
 			"query":               query,
-			"search_depth":        "advanced",
+			"search_depth":        depth,
 			"include_answer":      false,
 			"include_images":      false,
 			"include_raw_content": false,
@@ -431,7 +434,40 @@ func (p *TavilySearchProvider) Search(
 	return "", fmt.Errorf("all api keys failed, last error: %w", lastErr)
 }
 
+// effectiveDepth maps the agent-requested depth through the operator
+// ceiling: no agent depth means the operator's own depth (or "advanced");
+// an agent depth is clamped when it exceeds the ceiling (D20). The order is
+// ultra-fast < fast < basic < advanced.
+func (p *TavilySearchProvider) effectiveDepth(agentDepth string) (string, bool) {
+	ceiling := p.searchDepth
+	if ceiling == "" {
+		ceiling = "advanced"
+	}
+	if agentDepth == "" {
+		return ceiling, false
+	}
+	order := map[string]int{"ultra-fast": 0, "fast": 1, "basic": 2, "advanced": 3}
+	mapping := map[string]string{"low": "fast", "medium": "basic", "high": "advanced"}
+	mapped := mapping[agentDepth]
+	if order[mapped] > order[ceiling] {
+		return ceiling, true
+	}
+	return mapped, false
+}
+
+// honoursDepth: Tavily exposes search_depth (capability matrix).
+func (p *TavilySearchProvider) honoursDepth() bool { return true }
+
+// honoursSiteFilters: Tavily supports include_domains/exclude_domains.
+func (p *TavilySearchProvider) honoursSiteFilters() bool { return true }
+
+// SearchWithCaps is the ADR-094 capability-aware entry point for Tavily.
+func (p *TavilySearchProvider) SearchWithCaps(ctx context.Context, req searchRequest) (string, error) {
+	return p.searchCaps(ctx, req)
+}
+
 type DuckDuckGoSearchProvider struct {
+	baseURL     string // ADR-094: "" → default at search time
 	proxy       string
 	client      *http.Client
 	ingestBound int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
@@ -537,9 +573,11 @@ func stripTags(content string) string {
 
 type PerplexitySearchProvider struct {
 	keyPool     *APIKeyPool
+	baseURL     string // ADR-094: "" → default at search time
 	proxy       string
 	client      *http.Client
-	ingestBound int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
+	ingestBound int64  // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
+	contextSize string // ADR-094: operator-set search_context_size; "" → never sent
 }
 
 func (p *PerplexitySearchProvider) Search(
@@ -731,7 +769,8 @@ type GLMSearchProvider struct {
 	searchEngine string
 	proxy        string
 	client       *http.Client
-	ingestBound  int64 // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
+	ingestBound  int64  // ADR-066 D10: ingest_bound_bytes; ≤ 0 → config default
+	contentSize  string // ADR-094: "" → "medium"
 }
 
 func (p *GLMSearchProvider) Search(
@@ -750,7 +789,7 @@ func (p *GLMSearchProvider) Search(
 		"search_engine": p.searchEngine,
 		"search_intent": false,
 		"count":         count,
-		"content_size":  "medium",
+		"content_size":  p.effectiveContentSize(""),
 	}
 	if recencyFilter := mapGLMRecencyFilter(rangeCode); recencyFilter != "" {
 		payload["search_recency_filter"] = recencyFilter
@@ -912,6 +951,16 @@ type WebSearchTool struct {
 	BaseTool
 	provider   SearchProvider
 	maxResults int
+	// roles is the ADR-094 WS-TOOL live resolver. nil = the exact legacy
+	// path (schema, execution, and error text unchanged).
+	roles func() *config.WebToolsConfig
+	// dynamic is the ADR-094 provider map (catalogue id -> provider), built
+	// only when Roles is set; the R-table ladder dispatches over it.
+	dynamic map[string]SearchProvider
+	// callBudget is D17a: the whole call's wall-clock budget (0 → default).
+	callBudget time.Duration
+	// redact runs over every provider message that reaches the result text.
+	redact func(string) string
 }
 
 type WebSearchToolOptions struct {
@@ -949,10 +998,26 @@ type WebSearchToolOptions struct {
 	ExaAPIKeyRef string
 	ExaEnabled   bool
 
+	// ADR-094 WS-TOOL: per-provider base URLs and capability defaults. The
+	// base-URL fields let tests pin provider wire traffic; at production
+	// wiring they are empty and the provider defaults apply.
+	BraveBaseURL          string
+	DuckDuckGoBaseURL     string
+	PerplexityBaseURL     string
+	TavilySearchDepth     string // operator tavily.search_depth; "" -> "advanced" (legacy behaviour)
+	GLMContentSize        string // operator glm_search.content_size; "" -> "medium" (legacy behaviour)
+	PerplexityContextSize string // operator perplexity.search_context_size; "" -> never sent
+	ExaBaseURL            string // "" -> "https://api.exa.ai/search" at construction
+	CallBudget            time.Duration
+	Redact                func(string) string
+	Roles                 func() *config.WebToolsConfig
+
 	// Per-provider credential ref NAMES for the misconfiguration WARN — the
 	// warning names the configured ref so the operator knows which vault
 	// entry to check. Names only: a ref is a label, never a key value, and
-	// an empty ref simply means the wiring has not supplied one.
+	// an empty ref through the legacy path means the wiring has not supplied
+	// one. On the new path (Roles non-nil) these stay empty and the live
+	// resolver carries them instead.
 	PerplexityAPIKeyRef  string
 	BraveAPIKeyRef       string
 	TavilyAPIKeyRef      string
@@ -1031,6 +1096,8 @@ func newPerplexitySearchProvider(opts WebSearchToolOptions, ingestBound int64) (
 	}
 	provider := &PerplexitySearchProvider{
 		keyPool:     NewAPIKeyPool(opts.PerplexityAPIKeys),
+		baseURL:     opts.PerplexityBaseURL,
+		contextSize: opts.PerplexityContextSize,
 		proxy:       opts.Proxy,
 		client:      client,
 		ingestBound: ingestBound,
@@ -1051,6 +1118,7 @@ func newBraveSearchProvider(opts WebSearchToolOptions, ingestBound int64) (Searc
 	}
 	provider := &BraveSearchProvider{
 		keyPool:     NewAPIKeyPool(opts.BraveAPIKeys),
+		baseURL:     opts.BraveBaseURL,
 		proxy:       opts.Proxy,
 		client:      client,
 		ingestBound: ingestBound,
@@ -1096,6 +1164,7 @@ func newTavilySearchProvider(opts WebSearchToolOptions, ingestBound int64) (Sear
 		keyPool:     NewAPIKeyPool(opts.TavilyAPIKeys),
 		baseURL:     opts.TavilyBaseURL,
 		proxy:       opts.Proxy,
+		searchDepth: opts.TavilySearchDepth,
 		client:      client,
 		ingestBound: ingestBound,
 	}
@@ -1113,7 +1182,7 @@ func newDuckDuckGoSearchProvider(opts WebSearchToolOptions, ingestBound int64) (
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to create HTTP client for DuckDuckGo: %w", err)
 	}
-	provider := &DuckDuckGoSearchProvider{proxy: opts.Proxy, client: client, ingestBound: ingestBound}
+	provider := &DuckDuckGoSearchProvider{baseURL: opts.DuckDuckGoBaseURL, proxy: opts.Proxy, client: client, ingestBound: ingestBound}
 	if opts.DuckDuckGoMaxResults > 0 {
 		return provider, min(opts.DuckDuckGoMaxResults, 10), nil
 	}
@@ -1160,6 +1229,7 @@ func newGLMSearchProvider(opts WebSearchToolOptions, ingestBound int64) (SearchP
 		proxy:        opts.Proxy,
 		client:       client,
 		ingestBound:  ingestBound,
+		contentSize:  opts.GLMContentSize,
 	}
 	if opts.GLMSearchMaxResults > 0 {
 		return provider, min(opts.GLMSearchMaxResults, 10), nil
@@ -1202,26 +1272,22 @@ func newDuckDuckGoFallbackSearchProvider(opts WebSearchToolOptions, ingestBound 
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to create HTTP client for DuckDuckGo fallback: %w", err)
 	}
-	provider := &DuckDuckGoSearchProvider{proxy: opts.Proxy, client: client, ingestBound: ingestBound}
+	provider := &DuckDuckGoSearchProvider{baseURL: opts.DuckDuckGoBaseURL, proxy: opts.Proxy, client: client, ingestBound: ingestBound}
 	if opts.DuckDuckGoMaxResults > 0 {
 		return provider, min(opts.DuckDuckGoMaxResults, 10), nil
 	}
 	return provider, 0, nil
 }
 
-func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
-	var provider SearchProvider
-	maxResults := 10
-	ingestBound := effectiveIngestBound(int64(opts.IngestBoundBytes))
-
-	// A keyed provider that is enabled but has no resolved key is a
-	// misconfiguration the operator must see. Previously this WARN lived only
-	// in the final-fallback branch, so it could not fire while
-	// tools.web.duckduckgo.enabled ships true — a fully configured Tavily
-	// silently degraded to DuckDuckGo for two months with zero WARNs in the
-	// log. It now fires BEFORE selection, regardless of which branch wins,
-	// naming the affected providers and their configured credential refs
-	// (names only, never key values).
+// warnKeylessSearchProviders logs the misconfiguration WARN: a keyed
+// provider that is enabled but has no resolved key. Previously this WARN
+// lived only in the final-fallback branch, so it could not fire while
+// tools.web.duckduckgo.enabled ships true — a fully configured Tavily
+// silently degraded to DuckDuckGo for two months with zero WARNs in the
+// log. It fires BEFORE selection, regardless of which branch wins, naming
+// the affected providers and their configured credential refs (names only,
+// never key values).
+func warnKeylessSearchProviders(opts WebSearchToolOptions) {
 	if misconfigured := enabledButKeylessSearchProviders(opts); len(misconfigured) > 0 {
 		names := make([]string, 0, len(misconfigured))
 		refs := make([]string, 0, len(misconfigured))
@@ -1238,6 +1304,23 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 				"hint":      "the credential ref is configured but its key did not reach the process environment — check the vault entry and boot credential-injection logs",
 			})
 	}
+}
+
+func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
+	var provider SearchProvider
+	maxResults := 10
+	ingestBound := effectiveIngestBound(int64(opts.IngestBoundBytes))
+	roles := opts.Roles
+
+	// A keyed provider that is enabled but has no resolved key is a
+	// misconfiguration the operator must see. Previously this WARN lived only
+	// in the final-fallback branch, so it could not fire while
+	// tools.web.duckduckgo.enabled ships true — a fully configured Tavily
+	// silently degraded to DuckDuckGo for two months with zero WARNs in the
+	// log. It now fires BEFORE selection, regardless of which branch wins,
+	// naming the affected providers and their configured credential refs
+	// (names only, never key values).
+	warnKeylessSearchProviders(opts)
 
 	// Priority: Perplexity > Brave > SearXNG > Tavily > DuckDuckGo > Baidu Search > GLM Search
 	if opts.PerplexityEnabled && len(opts.PerplexityAPIKeys) > 0 {
@@ -1311,10 +1394,52 @@ func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
 		}
 	}
 
+	// ADR-094: with Roles set, build the FULL provider map so the R-table
+	// ladder can fail over across providers; the legacy single-provider
+	// chain above stays the path when Roles is nil.
+	var dynamic map[string]SearchProvider
+	if roles != nil {
+		dynamic = buildDynamicSearchProviders(opts, ingestBound)
+	}
+
 	return &WebSearchTool{
 		provider:   provider,
 		maxResults: maxResults,
+		roles:      roles,
+		dynamic:    dynamic,
+		callBudget: opts.CallBudget,
+		redact:     opts.Redact,
 	}, nil
+}
+
+// buildDynamicSearchProviders constructs the whole ADR-094 provider map.
+// A provider whose constructor errors (e.g. a malformed base URL) is simply
+// absent — the R-table then reports it "switched off" rather than failing
+// the boot.
+func buildDynamicSearchProviders(opts WebSearchToolOptions, ingestBound int64) map[string]SearchProvider {
+	dynamic := map[string]SearchProvider{}
+	if p, _, err := newPerplexitySearchProvider(opts, ingestBound); err == nil {
+		dynamic[config.SearchProviderPerplexity] = p
+	}
+	if p, _, err := newBraveSearchProvider(opts, ingestBound); err == nil {
+		dynamic[config.SearchProviderBrave] = p
+	}
+	p, _ := newSearXNGSearchProvider(opts)
+	dynamic[config.SearchProviderSearXNG] = p
+	if p, _, err := newTavilySearchProvider(opts, ingestBound); err == nil {
+		dynamic[config.SearchProviderTavily] = p
+	}
+	if p, _, err := newDuckDuckGoSearchProvider(opts, ingestBound); err == nil {
+		dynamic[config.SearchProviderDuckDuckGo] = p
+	}
+	if p, _, err := newBaiduSearchProvider(opts, ingestBound); err == nil {
+		dynamic[config.SearchProviderBaidu] = p
+	}
+	if p, _, err := newGLMSearchProvider(opts, ingestBound); err == nil {
+		dynamic[config.SearchProviderGLM] = p
+	}
+	dynamic[config.SearchProviderExa] = newExaProvider(opts)
+	return dynamic
 }
 
 func (t *WebSearchTool) Name() string {
@@ -1329,6 +1454,9 @@ func (t *WebSearchTool) Scope() ToolScope       { return ScopeGeneral }
 func (t *WebSearchTool) Category() ToolCategory { return CategoryWeb }
 
 func (t *WebSearchTool) Parameters() map[string]any {
+	if t.roles != nil {
+		return t.parametersDynamic()
+	}
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -1356,6 +1484,9 @@ func (t *WebSearchTool) Parameters() map[string]any {
 }
 
 func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	if t.roles != nil {
+		return t.executeDynamic(ctx, args)
+	}
 	query, ok := args["query"].(string)
 	if !ok || strings.TrimSpace(query) == "" {
 		return ErrorResult("query is required")
