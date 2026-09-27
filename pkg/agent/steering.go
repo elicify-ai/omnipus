@@ -617,7 +617,8 @@ func (al *AgentLoop) dequeueSteeringMessages() ([]providers.Message, []string) {
 		return nil, nil
 	}
 	scope, items := al.steering.dequeueItemsScope(manualSteeringScope)
-	return al.consumeDequeuedSteering(scope, items)
+	msgs, correlationIDs, _ := al.consumeDequeuedSteering(scope, items)
+	return msgs, correlationIDs
 }
 
 func (al *AgentLoop) dequeueSteeringMessagesForScope(scope string) ([]providers.Message, []string) {
@@ -625,7 +626,8 @@ func (al *AgentLoop) dequeueSteeringMessagesForScope(scope string) ([]providers.
 		return nil, nil
 	}
 	actualScope, items := al.steering.dequeueItemsScope(scope)
-	return al.consumeDequeuedSteering(actualScope, items)
+	msgs, correlationIDs, _ := al.consumeDequeuedSteering(actualScope, items)
+	return msgs, correlationIDs
 }
 
 func (al *AgentLoop) dequeueSteeringMessagesForScopeWithFallback(scope string) ([]providers.Message, []string) {
@@ -633,7 +635,25 @@ func (al *AgentLoop) dequeueSteeringMessagesForScopeWithFallback(scope string) (
 		return nil, nil
 	}
 	actualScope, items := al.steering.dequeueItemsScopeWithFallback(scope)
-	return al.consumeDequeuedSteering(actualScope, items)
+	msgs, correlationIDs, _ := al.consumeDequeuedSteering(actualScope, items)
+	return msgs, correlationIDs
+}
+
+// dequeueSteeringItemsForScopeWithFallback is dequeueSteeringMessagesForScopeWithFallback's
+// item-preserving sibling: used by callers that may need to RESTORE what they
+// just dequeued (Continue on a post-dequeue turn failure; abandonQueuedSteering
+// on its own panic-recovery path) and therefore need the original
+// steeringQueueItem values — wake field included — not just the flattened
+// msgs/correlationIDs slices. actualScope is the scope the dequeue actually
+// resolved to (scope itself, or the manual fallback scope), the same value a
+// restore call must pass to steeringQueue.prependItemsScope.
+func (al *AgentLoop) dequeueSteeringItemsForScopeWithFallback(scope string) (actualScope string, consumedItems []steeringQueueItem, msgs []providers.Message, correlationIDs []string) {
+	if al.steering == nil {
+		return normalizeSteeringScope(scope), nil, nil, nil
+	}
+	actualScope, items := al.steering.dequeueItemsScopeWithFallback(scope)
+	msgs, correlationIDs, consumedItems = al.consumeDequeuedSteering(actualScope, items)
+	return actualScope, consumedItems, msgs, correlationIDs
 }
 
 // consumeDequeuedSteering flattens dequeued steeringQueueItems into their
@@ -642,25 +662,35 @@ func (al *AgentLoop) dequeueSteeringMessagesForScopeWithFallback(scope string) (
 // none — that belongs to msgs[i]. Kept as a parallel slice rather than a
 // field on providers.Message itself: that struct is the literal wire shape
 // of an LLM provider request, never a carrier for receipt bookkeeping.
-func (al *AgentLoop) consumeDequeuedSteering(scope string, items []steeringQueueItem) ([]providers.Message, []string) {
+//
+// The third return value, consumedItems, is the ORIGINAL steeringQueueItem
+// for every index i that made it into msgs/correlationIDs — wake field and
+// all — so a caller that later needs to restore what it just consumed (e.g.
+// Continue on a post-dequeue turn failure, or abandonQueuedSteering's own
+// panic recovery) can call steeringQueue.prependItemsScope with the SAME
+// item shape that was dequeued, rather than reconstructing an approximation
+// from the flattened msgs/correlationIDs slices that drops the wake pointer.
+func (al *AgentLoop) consumeDequeuedSteering(scope string, items []steeringQueueItem) ([]providers.Message, []string, []steeringQueueItem) {
 	if len(items) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	msgs := make([]providers.Message, 0, len(items))
 	correlationIDs := make([]string, 0, len(items))
+	consumedItems := make([]steeringQueueItem, 0, len(items))
 	for i, item := range items {
 		if item.wake != nil {
 			if err := al.writeSteeringConsumedMarker(*item.wake); err != nil {
 				al.steering.prependItemsScope(scope, items[i:])
 				slog.Error("agent: steering wake not consumed; restored to queue",
 					"scope", scope, "message_id", item.wake.messageID, "error", err)
-				return msgs, correlationIDs
+				return msgs, correlationIDs, consumedItems
 			}
 		}
 		msgs = append(msgs, item.message)
 		correlationIDs = append(correlationIDs, item.correlationID)
+		consumedItems = append(consumedItems, item)
 	}
-	return msgs, correlationIDs
+	return msgs, correlationIDs, consumedItems
 }
 
 func (al *AgentLoop) writeSteeringConsumedMarker(wake steeringWake) error {
@@ -707,6 +737,25 @@ func (al *AgentLoop) continueWithSteeringMessages(
 		WorkspaceID: workspaceID,
 	})
 }
+
+// errContinuePostDequeueFailure marks a Continue failure that happened AFTER
+// steering messages were already destructively dequeued — continueWithSteeringMessages's
+// own turn (runAgentLoop -> runTurn) failed with an ordinary error (provider
+// error, mid-turn failure) — as opposed to one of the four PRE-dequeue guard
+// failures (active-turn guard, ensureHooksInitialized, ensureMCPInitialized,
+// agentForSession==nil), none of which ever touch the queue.
+//
+// session_worker.go's drain-loop retry checks errors.Is against this sentinel
+// to decide whether to keep retrying: a pre-dequeue failure never consumed
+// anything, so retrying from scratch is cheap and may recover a transient
+// init hiccup. A post-dequeue failure already restored the dequeued item(s)
+// to the queue (see Continue below) and ran a real, failed LLM turn against
+// them — retrying immediately would just redequeue the SAME restored item(s)
+// and repeat that same failed turn attempt rather than a cheap guard
+// recheck, so the drain loop breaks out of its retry loop on this sentinel
+// and lets abandonQueuedSteering dequeue-and-report the restored item(s)
+// straight away.
+var errContinuePostDequeueFailure = errors.New("continue: turn failed after dequeuing steering messages")
 
 func (al *AgentLoop) agentForSession(sessionKey string) *AgentInstance {
 	registry := al.GetRegistry()
@@ -765,7 +814,7 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, 
 		return "", fmt.Errorf("no agent available for session %q", sessionKey)
 	}
 
-	steeringMsgs, steeringCorrelationIDs := al.dequeueSteeringMessagesForScopeWithFallback(sessionKey)
+	actualScope, consumedItems, steeringMsgs, steeringCorrelationIDs := al.dequeueSteeringItemsForScopeWithFallback(sessionKey)
 	if len(steeringMsgs) == 0 {
 		return "", nil
 	}
@@ -776,7 +825,23 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, 
 		}
 	}
 
-	return al.continueWithSteeringMessages(ctx, agent, sessionKey, channel, chatID, workspaceID, steeringMsgs, steeringCorrelationIDs)
+	resp, err := al.continueWithSteeringMessages(ctx, agent, sessionKey, channel, chatID, workspaceID, steeringMsgs, steeringCorrelationIDs)
+	if err != nil {
+		// Gate finding, CRITICAL: continueWithSteeringMessages's own turn can
+		// fail with an ordinary error (provider error, mid-turn failure — the
+		// most realistic Continue failure mode) with the queue already
+		// destructively drained above and nothing restoring it. Restore the
+		// SAME items — wake field and all — exactly as consumeDequeuedSteering's
+		// own wake-write-failure branch does (steeringQueue.prependItemsScope),
+		// so this failure never silently discards a message nobody sees again.
+		// Wrapped in errContinuePostDequeueFailure so the drain-loop retry
+		// (session_worker.go processTurn) can tell this apart from a
+		// pre-dequeue guard failure and stop retrying immediately instead of
+		// re-running the same restored turn from scratch.
+		al.steering.prependItemsScope(actualScope, consumedItems)
+		return "", fmt.Errorf("%w: %v", errContinuePostDequeueFailure, err)
+	}
+	return resp, nil
 }
 
 func (al *AgentLoop) InterruptGraceful(hint string) error {
