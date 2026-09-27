@@ -30,7 +30,7 @@ func safeLogArgs(args ...any) []any {
 	return safe
 }
 
-func logsafeDebug(msg string, args ...any) { slog.Debug(msg, safeLogArgs(args)...) }
-func logsafeInfo(msg string, args ...any)  { slog.Info(msg, safeLogArgs(args)...) }
-func logsafeWarn(msg string, args ...any)  { slog.Warn(msg, safeLogArgs(args)...) }
-func logsafeError(msg string, args ...any) { slog.Error(msg, safeLogArgs(args)...) }
+func logsafeDebug(msg string, args ...any) { slog.Debug(msg, safeLogArgs(args...)...) }
+func logsafeInfo(msg string, args ...any)  { slog.Info(msg, safeLogArgs(args...)...) }
+func logsafeWarn(msg string, args ...any)  { slog.Warn(msg, safeLogArgs(args...)...) }
+func logsafeError(msg string, args ...any) { slog.Error(msg, safeLogArgs(args...)...) }

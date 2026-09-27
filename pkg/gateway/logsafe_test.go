@@ -1,7 +1,10 @@
 package gateway
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,4 +34,22 @@ func TestEscapedStringsContainNoRawLineBreaks(t *testing.T) {
 		assert.NotContains(t, value, "\n")
 		assert.NotContains(t, value, "\r")
 	}
+}
+
+// TestLogsafeHelpersKeepKeyValuePairs guards the variadic forwarding in the
+// logsafe* helpers: passing the args slice without "..." made slog see one
+// argument and log "!BADKEY=[...]" instead of the key/value pairs.
+func TestLogsafeHelpersKeepKeyValuePairs(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	logsafeError("probe", "stage", "refresh\ninjected", "count", 2)
+
+	out := buf.String()
+	assert.NotContains(t, out, "BADKEY", "helpers must forward args as key/value pairs")
+	assert.Contains(t, out, `stage=refresh\ninjected`)
+	assert.Equal(t, 1, strings.Count(out, "\n"), "one record, no forged line")
+	assert.Contains(t, out, "count=2")
 }
