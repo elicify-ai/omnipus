@@ -121,9 +121,11 @@ func (al *AgentLoop) clearRevivalFailure(sessionID string) {
 func (al *AgentLoop) runRevivedOrdinaryTurn(msg bus.InboundMessage, sessionKey string) {
 	// Tracked in activeRequests so shutdown drains it (#265), like the
 	// unroutable path.
-	al.activeRequests.Add(1)
+	if !al.beginActiveRequest() {
+		return
+	}
 	go func() {
-		defer al.activeRequests.Done()
+		defer al.endActiveRequest()
 
 		var (
 			response  string

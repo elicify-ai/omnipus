@@ -1397,8 +1397,10 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 		rt.ts.clearProviderCancel(providerCancel)
 	}()
 
-	rt.al.activeRequests.Add(1)
-	defer rt.al.activeRequests.Done()
+	if !rt.al.beginActiveRequest() {
+		return nil, context.Canceled
+	}
+	defer rt.al.endActiveRequest()
 
 	// §7.4 (D3, gate finding F1): a ROOT turn runs the fallback chain even
 	// with a single candidate — the chain owns the §7.4 per-candidate
