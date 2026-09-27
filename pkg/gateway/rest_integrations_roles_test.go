@@ -224,6 +224,21 @@ func seedTavilyKey(t *testing.T) {
 	t.Setenv("TAVILY_API_KEY", "k-tavily")
 }
 
+// storeWebSearchKeys pre-stores enabled providers' keys in the credential
+// store — the mechanism gateway-saved keys actually live in (ADR-004 boot
+// contract: the config refresh resolves enabled refs FROM THE STORE and
+// rejects a refresh whose enabled ref the store cannot resolve; env-only
+// keys are the InjectFromConfig lane, not the store lane). Fixtures that
+// mark a keyed provider enabled+ref'd must pre-store its key or the PUT's
+// internal refresh 500s before the handler's own logic runs.
+func storeWebSearchKeys(t *testing.T, api *restAPI, refs ...string) {
+	t.Helper()
+	require.NotNil(t, api.credStore, "roles tests need an unlocked credential store")
+	for _, ref := range refs {
+		require.NoError(t, api.credStore.Set(ref, "stored-key-for-"+strings.ToLower(ref)))
+	}
+}
+
 // --- GET: the resolved roles on the wire -----------------------------------
 
 // TestIntegrationRolesGET_DecidedRoles pins the read path for a migrated
@@ -399,7 +414,10 @@ func TestIntegrationRolesGET_AbsentFallback_AutomaticDuckDuckGo(t *testing.T) {
 // test, not the ref string.
 func TestIntegrationRolesGET_UnusableDefaultNotActive(t *testing.T) {
 	api, user, cfg := newRolesTestAPI(t)
-	// NOTE: no TAVILY_API_KEY in the environment — the ref resolves to "".
+	// NOTE: TAVILY_API_KEY is pinned EMPTY — this dev machine exports a real
+	// one, and "no key in env" is the state under test (APIKey() resolves the
+	// ref via os.Getenv at call time).
+	t.Setenv("TAVILY_API_KEY", "")
 	web := rolesFixtureWeb()
 	delete(web, "fallback_provider") // absent → R3
 	writeRolesWebConfig(t, api, web)
@@ -486,11 +504,16 @@ func TestIntegrationPut_SetDefaultWithKey_IsLiveAndReady(t *testing.T) {
 	writeRolesWebConfig(t, api, map[string]any{
 		"brave": seedBraveRef,
 	})
+	// The refresh resolves enabled refs from the STORE — store Brave's key
+	// the way production does (env alone is the InjectFromConfig lane).
+	storeWebSearchKeys(t, api, "BRAVE_API_KEY")
 	t.Setenv("BRAVE_API_KEY", "k-brave")
 
 	// The reload stands in for InjectFromConfig: the Tavily key becomes
 	// visible ONLY inside the reload. A handler that judged usability before
-	// the reload would see an empty key and answer 400.
+	// the reload would see an empty key and answer 400. (TAVILY_API_KEY is
+	// pinned empty first — this dev machine exports a real one.)
+	t.Setenv("TAVILY_API_KEY", "")
 	wireRolesReload(t, cfg, api, func() {
 		if os.Getenv("TAVILY_API_KEY") != "" {
 			t.Error("reload must run before the handler judges usability")
@@ -535,6 +558,7 @@ func TestIntegrationPut_SetFallback_RoleOnWire(t *testing.T) {
 	api, user, cfg := newRolesTestAPI(t)
 	seedTavilyKey(t)
 	writeRolesWebConfig(t, api, rolesFixtureWeb())
+	storeWebSearchKeys(t, api, "TAVILY_API_KEY")
 	wireRolesReload(t, cfg, api, nil, nil)
 
 	w := putRoles(t, api, user, "duckduckgo", `{"kind":"search","fallback":true}`)
@@ -565,6 +589,7 @@ func TestIntegrationPut_NoFallback_WritesNone(t *testing.T) {
 	web := rolesFixtureWeb()
 	delete(web, "fallback_provider") // absent → R3 would apply
 	writeRolesWebConfig(t, api, web)
+	storeWebSearchKeys(t, api, "TAVILY_API_KEY")
 	wireRolesReload(t, cfg, api, nil, nil)
 
 	w := putRoles(t, api, user, "tavily", `{"kind":"search","fallback":false}`)
@@ -647,6 +672,7 @@ func TestIntegrationPut_KeyOnlySave_NoRoleChange(t *testing.T) {
 	api, user, cfg := newRolesTestAPI(t)
 	seedTavilyKey(t)
 	writeRolesWebConfig(t, api, rolesFixtureWeb())
+	storeWebSearchKeys(t, api, "TAVILY_API_KEY")
 	wireRolesReload(t, cfg, api, nil, nil)
 
 	w := putRoles(t, api, user, "brave", `{"kind":"search","api_key":"k-brave-raw"}`)
@@ -671,6 +697,11 @@ func TestIntegrationPut_MaterializesAutomaticFallback(t *testing.T) {
 	web["brave"] = map[string]any{"enabled": true, "api_key_ref": "BRAVE_API_KEY"}
 	delete(web, "fallback_provider") // absent → R3 would apply
 	writeRolesWebConfig(t, api, web)
+	// Store lane (refresh resolves enabled refs from the store) AND env lane
+	// (the post-reload usability judgment resolves the ref via os.Getenv —
+	// this test's fake reload performs no injection).
+	storeWebSearchKeys(t, api, "TAVILY_API_KEY", "BRAVE_API_KEY")
+	t.Setenv("TAVILY_API_KEY", "k-tavily")
 	t.Setenv("BRAVE_API_KEY", "k-brave")
 	wireRolesReload(t, cfg, api, nil, nil)
 
