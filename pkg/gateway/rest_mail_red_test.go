@@ -36,11 +36,21 @@ var mailUpstreamClasses = map[string]bool{
 	"tls": true, "folder_missing": true, "server_error": true,
 }
 
-var mailRedIP atomic.Int32
+// mailRedIP counts issued client IPs. The pool must never repeat within the
+// process: the mail routes share several per-IP rate limiters with a 60 s
+// window (MC-20 mutations, MC-44 mint, preview serve), so a wide
+// `-run Mail` run issues far more requests than a small fixed pool holds,
+// and a reused IP carries another test's spent hits into the next window —
+// refusing an early request and failing the limit-boundary tests with
+// "request N of 10 was already 429". 10.0.0.0/8 holds 2^24 unique
+// addresses (16.7M calls before any wrap — beyond any test process);
+// tests that need a FIXED client IP call nextMailIP() once and hold the
+// value the limiter will see.
+var mailRedIP atomic.Uint32
 
 func nextMailIP() string {
 	n := mailRedIP.Add(1)
-	return fmt.Sprintf("198.51.100.%d", 20+(n%200))
+	return fmt.Sprintf("10.%d.%d.%d", (n>>16)&0xff, (n>>8)&0xff, n&0xff)
 }
 
 type mailRedEnv struct {
