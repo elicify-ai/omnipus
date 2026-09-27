@@ -86,9 +86,10 @@ func lifecycleToUnifiedStatus(to LifecycleState) (SessionStatus, bool) {
 //     and any boot path that has not wired the store yet); the UnifiedMeta
 //     mirror still proceeds.
 //   - us: the UnifiedStore holding sid's chat-transcript meta. nil means "no
-//     chat-transcript meta" (the delegate/subturn case — those sessions are
-//     never created via UnifiedStore.NewSession, so there is no meta.json to
-//     mirror onto). The delegate call sites pass nil.
+//     chat-transcript meta to mirror" (an unwired caller, or a session that
+//     was never minted). Delegate children do have meta — SteerLauncher.Launch
+//     mints it — and delegate_run.go::transitionLifecycle passes the tool's
+//     UnifiedStore so the mirror runs (issue #947). A nil store skips it.
 //   - to: the target LifecycleState.
 //   - reason: the FailedReason (set on the record for ANY state, but only
 //     REQUIRED — enforced by persistLocked — when to == LifecycleFailed).

@@ -311,6 +311,19 @@ test('steered session is reachable in its own live view without leaking child ou
   await expect(parentView.getByText('Steering update', { exact: false })).toHaveCount(0)
   await expect(parentView.locator('[data-testid="delegation-event-line"][data-event-kind="delegated"], [data-testid="delegation-event-line"][data-event-kind="started"]').filter({ hasText: LABEL_A })).toHaveCount(1)
 
+  // The pill assertion below is a POST-COMPLETION invariant — its own comment
+  // says "once the delegation has finished" — so the reload must not race the
+  // model. Gated on the delegation's own terminal event line (kind "finished",
+  // rendered from the persisted subagent_end), not on any wall-clock. Run-1
+  // evidence (local live run, 2026-09-27): every attempt reloaded ~17-20s into
+  // a 40-51s delegation and the pill truthfully read "1 running" through the
+  // whole 15s check window — the assertion fired on a LIVE delegation, not a
+  // phantom one. Every assertion above and below this gate is unchanged.
+  await expect(
+    parentView.locator('[data-testid="delegation-event-line"][data-event-kind="finished"]').filter({ hasText: LABEL_A }),
+    'child A must have finished before the reload — the pill check below is a post-completion invariant',
+  ).toBeVisible({ timeout: 240_000 })
+
   await parentView.reload()
   // CI run 36026415761: this segment used to wait 30s for the Activity bar to
   // reappear after a RELOAD of the completed parent session. It cannot: a
