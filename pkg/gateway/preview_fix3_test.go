@@ -267,8 +267,11 @@ func TestPreviewFix3_Mode1StaticCSPPin(t *testing.T) {
 
 // TestPreviewFix3_RedirectInPrefixDotSegments: an upstream redirect to
 // "<prefix>/feat/../next" normalises INSIDE the prefix and must be EMITTED
-// raw unchanged (DS-2 rows 1/6, FR-013, CR3) — RED today: the pre-normalise
-// dot-segment check 502s it.
+// RESOLVED (DS-2 rows 1/6, FR-013, CR3; DS-2's "Resolved origin/path"
+// column — what is checked is what is emitted). Test-oracle update,
+// backend-lead fix-round-4 2026-09-28: round 3 pinned the raw emit; the
+// round-4 gate finding and squad decision replace it with the resolved
+// emit (qa-lead's RED pack preview_fix3_red_test.go pins the same value).
 func TestPreviewFix3_RedirectInPrefixDotSegments(t *testing.T) {
 	h := newFix3Harness(t)
 	token := h.fix3RegisterDev(t, "fix3-redirect-agent")
@@ -279,9 +282,10 @@ func TestPreviewFix3_RedirectInPrefixDotSegments(t *testing.T) {
 
 	require.Equal(t, http.StatusFound, resp.StatusCode,
 		"A2 (DS-2 row 1): an in-prefix redirect keeps the upstream status")
-	assert.Equal(t, prefix+"/feat/../next", resp.Header.Get("Location"),
-		"RED (A2/CR3, FR-013): dot segments that normalise back INSIDE the prefix must "+
-			"emit — today the pre-normalisation dot check 502s them")
+	assert.Equal(t, prefix+"/next", resp.Header.Get("Location"),
+		"A2/CR3 (FR-013): dot segments that normalise back INSIDE the prefix must "+
+			"emit RESOLVED — the emitted Location is the normalised path the prefix "+
+			"check cleared, never the raw dot-segment form")
 }
 
 // TestPreviewFix3_RedirectPercentEncodedAgent: an agent id that must be
