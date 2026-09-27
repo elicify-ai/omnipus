@@ -310,7 +310,7 @@ export function resolveEffectivePreview(
 // constructor LOWER-CASES hostnames, so a tampered `http://MyApp.localhost/`
 // would parse to `myapp.localhost` and silently pass a parsed-hostname
 // lower-case check. FR-023 rejects non-lower-case labels outright.
-const ISOLATED_URL_REGEX = /^http:\/\/([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.localhost(?::(\d{1,5}))?(?:[\/?#].*)?$/
+const ISOLATED_URL_REGEX = /^http:\/\/([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.localhost(?::(\d{1,5}))?(?:[/?#].*)?$/
 
 /**
  * Validates a tool result's `isolated_url` against FR-005/FR-023 before the
