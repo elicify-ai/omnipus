@@ -558,6 +558,11 @@ func TestEnvImport_NotOnRefresh_AdminSaveWins(t *testing.T) {
 		assert.EqualValues(t, 150, mtiDiskGlobal(t, api), "the admin's save stays on disk")
 		assert.EqualValues(t, 150, mtiGetPerf(t, api)["max_tool_iterations"], "the admin's save stays in force")
 		assert.NotContains(t, mtiAllLogText(logs), mtiEnvImportLine, "no env import ran on the refresh")
+		// The admin's PUT itself writes the marker with the global (D6,
+		// TestGateFix_PerformancePUT_WritesImportMarker), so the retired env
+		// var can never overwrite this save on a later boot.
+		assert.Equal(t, true, mtiDiskDefaults(t, api)["max_tool_iterations_env_imported"],
+			"the admin save ends the one-time env import (D6)")
 	})
 
 	// The leg that can see an import: a Settings write of ANOTHER field
