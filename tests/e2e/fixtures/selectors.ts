@@ -285,12 +285,15 @@ export const dismissStaleDialogOverlay = async (page: Page): Promise<string[]> =
       // into a slow timeout instead of a clear failure.
       .toBe(0);
   } catch (err) {
-    // expect.poll (installed Playwright 1.61) never propagates callback errors
-    // mid-poll — it holds them and reports them at budget expiry as a plain
-    // matcher-failure error. So the sole failure mode here is the budget
-    // expiring; rewrap it as a REAL errors.TimeoutError (class-checkable by
-    // the drain helpers in bug-regression.spec.ts). The original message is
-    // embedded in full — no detail is swallowed by this rewrap.
+    // Two failure modes reach here. (1) The poll budget expires: Playwright
+    // 1.61 reports that as a plain matcher-failure ExpectError, not a
+    // TimeoutError, so it is rewrapped below as a REAL errors.TimeoutError
+    // (class-checkable by the drain helpers in bug-regression.spec.ts), with
+    // the original message embedded in full. (2) A poll callback error such
+    // as a closed page propagates immediately and is NOT a timeout: it is
+    // rethrown unchanged so the drain helpers fail loudly with the real cause.
+    // Playwright does not export TargetClosedError, so it is matched by name.
+    if (err instanceof Error && err.name === 'TargetClosedError') throw err;
     throw new errors.TimeoutError(
       `dismissStaleDialogOverlay: dialog overlay still present after ` +
         `${DIALOG_DRAIN_BUDGET_MS}ms of Escape-on-overlay retries. ` +
