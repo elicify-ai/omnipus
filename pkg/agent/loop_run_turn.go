@@ -1397,8 +1397,10 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 		rt.ts.clearProviderCancel(providerCancel)
 	}()
 
-	rt.al.activeRequests.Add(1)
-	defer rt.al.activeRequests.Done()
+	if !rt.al.beginActiveRequest() {
+		return nil, context.Canceled
+	}
+	defer rt.al.endActiveRequest()
 
 	if len(rt.activeCandidates) > 1 && rt.al.fallback != nil {
 		fbResult, fbErr := rt.al.fallback.Execute(
