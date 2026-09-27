@@ -51,7 +51,7 @@
 # verdict cannot be trusted in that case, so treat exit 2 as a HOLD.
 #
 # ENV OVERRIDES (all optional; defaults are the design's proposed numbers)
-#   DEV_CAPACITY_MIN_FREE_MEM_GB          default 4
+#   DEV_CAPACITY_MIN_FREE_MEM_GB          default 3 (founder, 2026-09-27; was 4)
 #   DEV_CAPACITY_MIN_FREE_DISK_GB         default 20
 #   DEV_CAPACITY_WORKSPACE_DIR            default /Users/danielpiatkowski/AI-Agent-Workspace
 #   DEV_CAPACITY_CPU_THRESHOLD_PCT        default 80
@@ -70,7 +70,7 @@
 
 set -u
 
-MIN_FREE_MEM_GB="${DEV_CAPACITY_MIN_FREE_MEM_GB:-4}"
+MIN_FREE_MEM_GB="${DEV_CAPACITY_MIN_FREE_MEM_GB:-3}"
 MIN_FREE_DISK_GB="${DEV_CAPACITY_MIN_FREE_DISK_GB:-20}"
 WORKSPACE_DIR="${DEV_CAPACITY_WORKSPACE_DIR:-/Users/danielpiatkowski/AI-Agent-Workspace}"
 CPU_THRESHOLD_PCT="${DEV_CAPACITY_CPU_THRESHOLD_PCT:-80}"
