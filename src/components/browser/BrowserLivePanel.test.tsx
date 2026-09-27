@@ -148,18 +148,24 @@ describe('exclusive popout ownership', () => {
     expect(screen.queryByTestId('browser-live-panel-docked')).not.toBeInTheDocument()
     expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0)
   })
-  it('keeps the dock unmounted through reload and Open browser, then restores its exact owner once after native close', () => {
+  it('keeps a different Browser identity docked and does not restore over it when the owned tab closes', () => {
     vi.useFakeTimers(); const child = popup(); openDock()
     fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
     act(() => { vi.advanceTimersByTime(2000) }) // Reload retains the same live WindowProxy.
     expect(useUiStore.getState().activePanel).toBeNull()
     act(() => useUiStore.getState().openPanel('browser', { sessionId: 'different', agentId: 'different' }))
-    expect(lifecycle).toEqual(['mounted', 'detached'])
-    expect(useUiStore.getState().activePanel).toBeNull()
-    expect(child.focus).toHaveBeenCalledTimes(1)
+    expect(lifecycle).toEqual(['mounted', 'detached', 'mounted'])
+    expect(useUiStore.getState().activePanel).toEqual({
+      id: 'browser',
+      context: { sessionId: 'different', agentId: 'different' },
+    })
+    expect(child.focus).not.toHaveBeenCalled()
     child.closed = true
     act(() => { vi.advanceTimersByTime(250) })
-    expect(useUiStore.getState().activePanel).toEqual({ id: 'browser', context: { sessionId: 's1', agentId: 'a1' } })
+    expect(useUiStore.getState().activePanel).toEqual({
+      id: 'browser',
+      context: { sessionId: 'different', agentId: 'different' },
+    })
     expect(lifecycle).toEqual(['mounted', 'detached', 'mounted'])
     act(() => useUiStore.getState().closePanel())
     act(() => { vi.advanceTimersByTime(2000) })

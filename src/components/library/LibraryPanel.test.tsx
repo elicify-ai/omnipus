@@ -64,6 +64,20 @@ vi.mock('./LibraryExplorer', () => ({
 
 import { LibraryPanel } from './LibraryPanel'
 
+function libraryPopup() {
+  const child = {
+    closed: false,
+    opener: {},
+    focus: vi.fn(),
+    close: vi.fn(),
+  }
+  child.close.mockImplementation(() => {
+    child.closed = true
+  })
+  vi.spyOn(window, 'open').mockReturnValue(child as unknown as Window)
+  return child
+}
+
 beforeEach(() => {
   mockLibraryExplorerProps.mockClear()
   useUiStore.setState({ activePanel: null, toasts: [] })
@@ -118,7 +132,7 @@ describe('LibraryPanel (always-docked)', () => {
 
   describe('onPopOut (C4 — carries the current selection, then closes the slide-out)', () => {
     it('opens the hash-routed pop-out URL with the current workspace in the query string', () => {
-      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      libraryPopup()
 
       render(<LibraryPanel />)
       act(() => {
@@ -127,7 +141,7 @@ describe('LibraryPanel (always-docked)', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
 
-      expect(openSpy).toHaveBeenCalledWith('/#/library?workspace=ws-1', '_blank', 'noopener,noreferrer')
+      expect(window.open).toHaveBeenCalledWith('/#/library?workspace=ws-1', '_blank')
 
       // C4: the slide-out closes now that the fullscreen tab shows the same
       // place — see LibraryPanel.tsx's module doc "C4 UPDATE" note for why
@@ -135,11 +149,11 @@ describe('LibraryPanel (always-docked)', () => {
       expect(useUiStore.getState().activePanel).toBeNull()
       expect(screen.queryByTestId('library-panel-docked')).not.toBeInTheDocument()
 
-      openSpy.mockRestore()
+      vi.mocked(window.open).mockRestore()
     })
 
     it('opens the pop-out with no query string at the virtual root, nothing selected', () => {
-      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      libraryPopup()
 
       render(<LibraryPanel />)
       act(() => {
@@ -148,13 +162,13 @@ describe('LibraryPanel (always-docked)', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
 
-      expect(openSpy).toHaveBeenCalledWith('/#/library', '_blank', 'noopener,noreferrer')
+      expect(window.open).toHaveBeenCalledWith('/#/library', '_blank')
 
-      openSpy.mockRestore()
+      vi.mocked(window.open).mockRestore()
     })
 
     it('carries a selected FILE as `path` in the pop-out URL', () => {
-      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      libraryPopup()
       mockLiveSelection = { path: '01-Areas/CRM/notes.md', folder: '01-Areas/CRM' }
 
       render(<LibraryPanel />)
@@ -166,17 +180,16 @@ describe('LibraryPanel (always-docked)', () => {
 
       // `path` wins over `folder` — a selected file already implies its own
       // folder (LibraryAddress/`selectedDir`), so only one needs to travel.
-      expect(openSpy).toHaveBeenCalledWith(
+      expect(window.open).toHaveBeenCalledWith(
         '/#/library?workspace=ws-1&path=01-Areas%2FCRM%2Fnotes.md',
         '_blank',
-        'noopener,noreferrer',
       )
 
-      openSpy.mockRestore()
+      vi.mocked(window.open).mockRestore()
     })
 
     it('carries a browsed FOLDER as `folder` in the pop-out URL when nothing is selected', () => {
-      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      libraryPopup()
       mockLiveSelection = { path: null, folder: '01-Areas/CRM' }
 
       render(<LibraryPanel />)
@@ -186,17 +199,16 @@ describe('LibraryPanel (always-docked)', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
 
-      expect(openSpy).toHaveBeenCalledWith(
+      expect(window.open).toHaveBeenCalledWith(
         '/#/library?workspace=ws-1&folder=01-Areas%2FCRM',
         '_blank',
-        'noopener,noreferrer',
       )
 
-      openSpy.mockRestore()
+      vi.mocked(window.open).mockRestore()
     })
 
     it('carries the workspace the operator actually navigated to in the docked panel, not the one it was opened with', () => {
-      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+      libraryPopup()
       // Opened at the virtual root, but the operator drilled into ws-live
       // inside the docked panel without closing it — libraryPanel.workspaceId
       // (the store's OPEN-TIME value) never learns about that on its own.
@@ -209,17 +221,20 @@ describe('LibraryPanel (always-docked)', () => {
 
       fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
 
-      expect(openSpy).toHaveBeenCalledWith('/#/library?workspace=ws-live', '_blank', 'noopener,noreferrer')
+      expect(window.open).toHaveBeenCalledWith('/#/library?workspace=ws-live', '_blank')
 
-      openSpy.mockRestore()
+      vi.mocked(window.open).mockRestore()
     })
   })
 
   describe('re-docking / re-targeting on pop-out close', () => {
     it('re-opens the docked panel for the workspace a pop-out announces closing, when nothing is currently docked', async () => {
+      libraryPopup()
       render(<LibraryPanel />)
-      expect(useUiStore.getState().activePanel).toBeNull()
-      expect(screen.queryByTestId('library-panel-docked')).not.toBeInTheDocument()
+      act(() => {
+        useUiStore.getState().openPanel('library', { workspaceId: 'ws-opened' })
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
 
       act(() => {
         announceLibraryPopoutClosed('ws-99')
@@ -247,18 +262,25 @@ describe('LibraryPanel (always-docked)', () => {
     // still holds for the empty-slot case: the continuously-known workspace
     // is what re-docks.)
     it('does NOT clobber an already-open panel when a pop-out announces closing', async () => {
+      libraryPopup()
       render(<LibraryPanel />)
       act(() => {
-        useUiStore.getState().openPanel('library', { workspaceId: 'ws-current' })
+        useUiStore.getState().openPanel('library', { workspaceId: 'ws-opened' })
       })
-      expect(useUiStore.getState().activePanel).toEqual({ id: 'library', context: { workspaceId: 'ws-current' } })
+      fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
+      act(() => {
+        useUiStore.getState().openPanel('browser', { sessionId: 's1', agentId: 'a1' })
+      })
 
       act(() => {
         announceLibraryPopoutClosed('ws-other')
       })
 
       await new Promise((resolve) => setTimeout(resolve, 10))
-      expect(useUiStore.getState().activePanel).toEqual({ id: 'library', context: { workspaceId: 'ws-current' } })
+      expect(useUiStore.getState().activePanel).toEqual({
+        id: 'browser',
+        context: { sessionId: 's1', agentId: 'a1' },
+      })
     })
 
     // Verifies the actual root-cause fix rather than just the guard removal:
@@ -269,7 +291,12 @@ describe('LibraryPanel (always-docked)', () => {
     // `pagehide` + BroadcastChannel is not a reliable delivery moment; the
     // continuous stream is the real source of truth.
     it('applies the CONTINUOUSLY-known workspace at close time, even when popout-closed itself carries a different/stale value (empty slot — MAJ-006)', async () => {
+      libraryPopup()
       render(<LibraryPanel />)
+      act(() => {
+        useUiStore.getState().openPanel('library', { workspaceId: 'ws-opened' })
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
 
       act(() => {
         announceLibraryWorkspaceChanged('ws-99')
@@ -286,7 +313,12 @@ describe('LibraryPanel (always-docked)', () => {
     })
 
     it('falls back to the popout-closed payload when no continuous workspace-changed broadcast was ever received (empty slot — MAJ-006)', async () => {
+      libraryPopup()
       render(<LibraryPanel />)
+      act(() => {
+        useUiStore.getState().openPanel('library', { workspaceId: 'ws-opened' })
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
 
       act(() => {
         announceLibraryPopoutClosed('ws-42')
@@ -298,7 +330,12 @@ describe('LibraryPanel (always-docked)', () => {
     })
 
     it('re-targets to the virtual root (undefined) when the pop-out closed there (empty slot — MAJ-006)', async () => {
+      libraryPopup()
       render(<LibraryPanel />)
+      act(() => {
+        useUiStore.getState().openPanel('library', { workspaceId: 'ws-opened' })
+      })
+      fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
 
       act(() => {
         announceLibraryWorkspaceChanged(undefined)
