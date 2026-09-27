@@ -737,7 +737,12 @@ func (al *AgentLoop) agentForSession(sessionKey string) *AgentInstance {
 // own to resolve it from (only the already-collapsed sessionKey/channel/
 // chatID), so it cannot recompute this value itself.
 func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, workspaceID string) (string, error) {
-	if active := al.GetActiveTurn(); active != nil {
+	// Bug 1 fix (design note "Caller survey"): the active-turn guard must be
+	// scoped to THIS session's own key, not the whole activeTurnStates map —
+	// GetActiveTurn() ranges the map and returns the first entry found
+	// regardless of which session is asking, so an unrelated session's
+	// genuinely active turn would wrongly block this session's own drain.
+	if active := al.GetActiveTurnBySession(sessionKey); active != nil {
 		return "", fmt.Errorf("turn %s is still active", active.TurnID)
 	}
 	if err := al.ensureHooksInitialized(ctx); err != nil {
@@ -747,14 +752,22 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, 
 		return "", err
 	}
 
-	steeringMsgs, steeringCorrelationIDs := al.dequeueSteeringMessagesForScopeWithFallback(sessionKey)
-	if len(steeringMsgs) == 0 {
-		return "", nil
-	}
-
+	// Bug 2 fix (design note "A bug inside the confirmed bug"): the
+	// agentForSession nil-check must run BEFORE the dequeue. Dequeuing is
+	// destructive (no peek-without-consume accessor exists) — if it ran first
+	// and this check then failed, the just-dequeued messages would sit in
+	// local variables that go out of scope on return, gone outright rather
+	// than merely stranded in the queue. This reorder is the invariant the
+	// drain-loop redesign (session_worker.go) depends on: every Continue
+	// error return must leave the steering queue exactly as it was.
 	agent := al.agentForSession(sessionKey)
 	if agent == nil {
 		return "", fmt.Errorf("no agent available for session %q", sessionKey)
+	}
+
+	steeringMsgs, steeringCorrelationIDs := al.dequeueSteeringMessagesForScopeWithFallback(sessionKey)
+	if len(steeringMsgs) == 0 {
+		return "", nil
 	}
 
 	if tool, ok := agent.Tools.Get("send_message"); ok {
