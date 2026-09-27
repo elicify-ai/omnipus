@@ -196,6 +196,16 @@ func (al *AgentLoop) endActiveGoal(sessionID string, store *session.UnifiedStore
 	case strings.HasPrefix(note, goalIdleExpiredNotePrefix):
 		pillState = goalPillExpired
 		goalState = generated.GoalStateExpired
+	case strings.HasPrefix(note, goalSessionEndedNotePrefix):
+		// FD1=A (#947 defect 1): a session-owned goal ends with its session.
+		// The note (prefix + the session-level cause, goal_child_completion.go::
+		// endSessionOwnedGoalOnTerminal) is stored as the record's
+		// TerminalReason, and the pill/state read `cleared` — an explicit
+		// ending, not an exhaustion-with-failed-pill. Without this case the
+		// default arm would classify a session cancel as EXHAUSTED and paint
+		// the failed pill over a goal the user did not see fail.
+		pillState = goalPillCleared
+		goalState = generated.GoalStateCleared
 	case strings.HasPrefix(note, goalAgentDeletedNotePrefix):
 		// UAT E-3 (goal_owner_deleted.go): the operator deleted the agent
 		// working this goal. That is an explicit operator action ending the
@@ -511,12 +521,12 @@ func (al *AgentLoop) dispatchDeferredGoalAdjudication(work *goalDeferredAdjudica
 			map[string]any{"session_id": work.sessionID})
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), goalJudgeRoundTimeout)
-	defer cancel()
-	al.runGoalAdjudication(
-		ctx, work.agentInst, work.workspaceID, work.sessionID, store, rec, work.claimText,
-		al.idleSteerDeliverer(work.sessionID, rec.GoalID, goalClaimDeferredSourceKind),
-	)
+	// (c) #947 defect 1: the single adjudication call became a bounded
+	// re-drive (goal_child_completion.go::redriveGoalAdjudication): the
+	// judge-unavailable arm is retried up to three attempts, each bounded by
+	// goalJudgeRoundTimeout, with a short backoff between; on exhaustion the
+	// child is failed visibly through the completion tail and the pair ends.
+	al.redriveGoalAdjudication(work)
 }
 
 // goalClaimUnparseableResults counts successful goal_claim tool calls whose
@@ -821,6 +831,12 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		}
 		gl.al.emitGoalStatusFrame(gl.sessionID, gl.rec.GoalID, gl.rec.Prompt, gl.rec.Round,
 			gl.rec.MaxRounds, "waiting on user", goalPillWaitingOnUser)
+		// (d) #947 defect 1: a parked goal-bearing steered child tells its
+		// parent through the one upward path — a wake-eligible question —
+		// instead of leaving the park silent to the one session that could
+		// answer it. The keeper's suppression while the park holds stays.
+		gl.al.deliverGoalParkUpward(gl.sessionID, false,
+			goalParkUpwardText(gl.toolEvidence, gl.result.finalContent))
 		return
 
 	case gl.marker.Present && gl.marker.Status == tools.GoalClaimStatusBlocked:
@@ -841,6 +857,11 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		}
 		gl.al.emitGoalStatusFrame(gl.sessionID, gl.rec.GoalID, gl.rec.Prompt, gl.rec.Round,
 			gl.rec.MaxRounds, "blocked", goalPillBlocked)
+		// (d) #947 defect 1: same upward delivery for a blocked park — a
+		// blocker message instead of silence (the claim's own reason travels
+		// as the text).
+		gl.al.deliverGoalParkUpward(gl.sessionID, true,
+			goalParkUpwardText(gl.toolEvidence, gl.result.finalContent))
 		return
 
 	case gl.marker.Present && gl.marker.Status == goalStatusMet && gl.marker.HasEvidence:
