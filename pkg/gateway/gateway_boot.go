@@ -1196,20 +1196,21 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		planStore:              stg.planStore, // ADR-049 D1: Plans REST surface (rest_plans.go) + plan_id FK check
 		credStore:              stg.credStore,
 		mediaStore:             stg.runningServices.MediaStore,
-		ssrfChecker:            agent.GetSSRFChecker(stg.agentLoop), // SEC-24: nil when SSRF disabled
-		sandboxResult:          stg.sandboxResult,                   // immutable post-boot snapshot
-		appliedConfig:          mustDeepCopyConfig(stg.cfg),         // boot-time snapshot for pending-restart diff
-		servedSubdirs:          stg.runningServices.servedSubdirs,   // web_serve static-mode token registry
-		devServers:             stg.runningServices.devServers,      // web_serve dev-mode process registry
-		approvalReg:            stg.approvalReg,                     // in-process tool-approval registry (FR-016)
-		builtinRegistry:        stg.builtinReg,                      // M16: central builtin registry (FR-001)
-		mcpRegistry:            stg.mcpReg,                          // M16: central MCP registry (FR-001)
-		skillRegistry:          skillRegistry,                       // ClawHub marketplace (search + install-by-slug)
-		allowGodMode:           stg.allowGodMode,                    // god-mode latch (2)
-		notifStore:             stg.runningServices.notifStore,      // #264: notification center
-		auditor:                stg.agentLoop.AuditLogger(),         // shared audit logger for REST mutations
-		selfWriteReg:           selfWriteReg,                        // suppress watcher reload on app-initiated writes
-		taskLock:               task.TaskFileLock,                   // shared striped lock for board task RMW
+		ssrfChecker:            agent.GetSSRFChecker(stg.agentLoop),                                 // SEC-24: nil when SSRF disabled
+		sandboxResult:          stg.sandboxResult,                                                   // immutable post-boot snapshot
+		appliedConfig:          mustDeepCopyConfig(stg.cfg),                                         // boot-time snapshot for pending-restart diff
+		servedSubdirs:          stg.runningServices.servedSubdirs,                                   // web_serve static-mode token registry
+		devServers:             stg.runningServices.devServers,                                      // web_serve dev-mode process registry
+		labelLimiters:          &previewLabelLimiter{buckets: make(map[string]*previewLabelBucket)}, // fix4: this gateway's own preview limiter (FR-027)
+		approvalReg:            stg.approvalReg,                                                     // in-process tool-approval registry (FR-016)
+		builtinRegistry:        stg.builtinReg,                                                      // M16: central builtin registry (FR-001)
+		mcpRegistry:            stg.mcpReg,                                                          // M16: central MCP registry (FR-001)
+		skillRegistry:          skillRegistry,                                                       // ClawHub marketplace (search + install-by-slug)
+		allowGodMode:           stg.allowGodMode,                                                    // god-mode latch (2)
+		notifStore:             stg.runningServices.notifStore,                                      // #264: notification center
+		auditor:                stg.agentLoop.AuditLogger(),                                         // shared audit logger for REST mutations
+		selfWriteReg:           selfWriteReg,                                                        // suppress watcher reload on app-initiated writes
+		taskLock:               task.TaskFileLock,                                                   // shared striped lock for board task RMW
 	}
 	stg.api.cronService.Store(stg.runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
 	// D-107: the Library REST write handlers broadcast a library_changed WS

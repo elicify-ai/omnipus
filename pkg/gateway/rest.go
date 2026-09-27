@@ -211,6 +211,15 @@ type restAPI struct {
 	// directory. Nil when web_serve is not configured.
 	servedSubdirs *agent.ServedSubdirs
 
+	// labelLimiters is THIS gateway instance's preview per-label rate
+	// limiter (fix4): admission state belongs to the restAPI/dispatcher
+	// instance, not to package state, so two instances in one process
+	// (boot plus tests, or parallel harnesses) never throttle each other
+	// through a shared map. Set at boot and in the preview chain harness;
+	// nil (bare test literals) falls back to the package default
+	// previewLabelLimiters — see previewLabelLimiter().
+	labelLimiters *previewLabelLimiter
+
 	// approvalReg is the in-process tool-approval registry (FR-016, FR-070).
 	// Injected at boot by the gateway; nil in test setups that do not exercise approvals.
 	approvalReg *approvalRegistryV2
