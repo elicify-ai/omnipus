@@ -21,10 +21,14 @@ package gateway
 // nothing here re-implements the rule.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -47,8 +51,13 @@ const (
 	// to have changed, the server simply could not tell.
 	maxToolIterationsAgentsReadFailedCode = "max_tool_iterations_agents_read_failed"
 	// performanceReloadFailedCode: the save is committed (config.json and
-	// any lowered agents are on disk) but the registry reload failed, so the
-	// running agents do not use the new limit yet.
+	// any lowered agents are on disk, nothing rolled back) but not in force.
+	// Two stages (PerformanceReloadFailedDetails.stage): refresh — the
+	// in-memory config refresh failed, the running config was NOT swapped
+	// and GET /performance still shows the old values; reload — the
+	// in-memory config was swapped but the agent registry reload failed, so
+	// agents' next turns keep the old limits. Either way the new values
+	// apply after the next reload or restart.
 	performanceReloadFailedCode           = "performance_reload_failed"
 	maxToolIterationsAgentsReadMessage    = "could not read the agents"
 	maxToolIterationsPreviewValueMessage  = "value must be between 1 and 1000"
@@ -128,8 +137,16 @@ func maxToolIterationsAffectedSet(store maxToolIterationsAgentStore, defaults *c
 	return maxToolIterationsLoweringSet(store, value)
 }
 
-// liveAgentDefaults returns the in-memory agents.defaults, or nil when no
-// config is loaded.
+// liveAgentDefaults returns the agents.defaults the D11/D16 decisions
+// (preview, pre-check, deciding check, audit old value) run against: the
+// in-memory copy with the global tool-iteration limit taken from config.json
+// as SAVED — the value PUT /performance's own write builds on. After a
+// refresh-stage performance_reload_failed the in-memory config still holds
+// the old global while config.json holds the new one; deciding raise-vs-lower
+// from the stale copy could call a lowering a raise and lower no agent
+// without consent (D11). Falls back to the in-memory value (WARN) only when
+// config.json cannot be read or parsed — the write itself then fails too.
+// nil when no config is loaded.
 func (a *restAPI) liveAgentDefaults() *config.AgentDefaults {
 	if a.agentLoop == nil {
 		return nil
@@ -138,7 +155,49 @@ func (a *restAPI) liveAgentDefaults() *config.AgentDefaults {
 	if cfg == nil {
 		return nil
 	}
-	return &cfg.Agents.Defaults
+	d := cfg.Agents.Defaults
+	value, missing, err := savedGlobalMaxToolIterations(a.configPath())
+	if err != nil {
+		logsafeWarn("rest: tool-iteration limit: could not read the saved global from config.json; "+
+			"using the in-memory value", "error_type", fmt.Sprintf("%T", err))
+		return &d
+	}
+	d.MaxToolIterations = value
+	d.MaxToolIterationsKeyMissing = missing
+	return &d
+}
+
+// savedGlobalMaxToolIterations reads agents.defaults.max_tool_iterations from
+// config.json the way config loading does (pkg/config/max_tool_iterations.go
+// ::applyMaxToolIterationsOnLoad): the value is bound by encoding/json, and
+// the key counts as missing when agents.defaults has no exact
+// "max_tool_iterations" member or it is null.
+func savedGlobalMaxToolIterations(path string) (value int, missing bool, err error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false, err
+	}
+	var typed struct { // not-wire-format: decode-only probe of config.json on disk; never crosses the gateway/SPA boundary.
+		Agents struct {
+			Defaults struct {
+				MaxToolIterations int `json:"max_tool_iterations"`
+			} `json:"defaults"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(raw, &typed); err != nil {
+		return 0, false, err
+	}
+	var probe struct { // not-wire-format: decode-only probe of config.json on disk; never crosses the gateway/SPA boundary.
+		Agents struct {
+			Defaults map[string]json.RawMessage `json:"defaults"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return 0, false, err
+	}
+	v, ok := probe.Agents.Defaults["max_tool_iterations"]
+	missing = !ok || bytes.Equal(bytes.TrimSpace(v), []byte("null"))
+	return typed.Agents.Defaults.MaxToolIterations, missing, nil
 }
 
 // agentsReadFailure is the 500 for a failed agent-store read on the lowering
@@ -480,23 +539,55 @@ func (a *restAPI) writePerformanceLocked(ctx context.Context, upd *maxToolIterat
 		// config.json is already written when only the refresh failed: the
 		// save is committed, so rolling the agents back would contradict
 		// the written global and "nothing was changed" would be false.
+		// The raw writeErr is never logged or returned here: a refresh
+		// failure's text can carry a credential reference NAME (from
+		// refreshConfigAndRewireServices' credential resolution; CodeQL
+		// clear-text-logging on PR #932). Only a fixed stage / cause class
+		// leaves this function; refreshConfigAndRewireServices logs its
+		// roster and credential causes itself (not a config load failure).
 		var refreshErr *configRefreshError
 		if errors.As(writeErr, &refreshErr) {
 			logsafeError("rest: PUT /performance: config.json written but the in-memory refresh failed; "+
-				"keeping the lowered agents", "lowered_agents", len(done), "error", writeErr)
-			out.notApplied = writeErr
+				"keeping the lowered agents (roster/credential causes are logged by refreshConfigAndRewireServices)",
+				"stage", "refresh", "lowered_agents", len(done))
+			out.notApplied = errPerformanceRefreshFailed
 			a.commitPerformanceOutcome(ctx, &out, upd, done, oldGlobal)
 			return out, nil
 		}
+		cause := configWriteFailure(writeErr)
 		if len(done) > 0 {
-			return out, a.loweringFailure(ctx, store, defaults, upd, done, "", writeErr)
+			return out, a.loweringFailure(ctx, store, defaults, upd, done, "", cause)
 		}
-		logsafeError("rest: PUT /performance: could not write config.json", "error", writeErr)
+		logsafeError("rest: PUT /performance: could not write config.json", "cause", cause.Error())
 		return out, &performanceWriteError{status: http.StatusInternalServerError,
-			body: gen.ErrorResponse{Error: fmt.Sprintf("could not update performance settings: %v", writeErr)}}
+			body: gen.ErrorResponse{Error: "could not update performance settings: " + cause.Error()}}
 	}
 	a.commitPerformanceOutcome(ctx, &out, upd, done, oldGlobal)
 	return out, nil
+}
+
+// errPerformanceRefreshFailed stands in for a configRefreshError in the
+// outcome: fixed text, no credential-derived detail.
+var errPerformanceRefreshFailed = errors.New("config.json written but the in-memory refresh failed")
+
+// configWriteFailure maps a non-refresh updateConfigJSONLocked failure to a
+// fixed, credential-free description (the cause class only): the file
+// could not be read, parsed or written.
+func configWriteFailure(err error) error {
+	var pathErr *fs.PathError
+	var syntaxErr *json.SyntaxError
+	switch {
+	case errors.Is(err, fs.ErrPermission):
+		return errors.New("config.json: permission denied")
+	case errors.Is(err, fs.ErrNotExist):
+		return errors.New("config.json: file not found")
+	case errors.As(err, &syntaxErr):
+		return errors.New("config.json: invalid JSON")
+	case errors.As(err, &pathErr):
+		return fmt.Errorf("config.json: %s failed", pathErr.Op)
+	default:
+		return errors.New("config.json could not be written")
+	}
 }
 
 // commitPerformanceOutcome records a committed write: the lowered agents in

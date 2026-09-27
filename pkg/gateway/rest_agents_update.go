@@ -303,7 +303,7 @@ func (uf *restAPIUpdateAgentFlow) validateMaxToolIterations() bool {
 		return false
 	}
 	if err := config.ValidateAgentMaxToolIterations(*uf.ru.req.MaxToolIterations, &uf.cfg.Agents.Defaults); err != nil {
-		jsonErr(uf.w, http.StatusBadRequest, err.Error())
+		jsonErrField(uf.w, http.StatusBadRequest, err.Error(), maxToolIterationsFieldName)
 		return true
 	}
 	return false
@@ -938,11 +938,18 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 	// edit of config.json lowering the global, applied by the file-watcher
 	// or manual reload (both read config.json outside configMu). In that
 	// interleaving the agent can end up above the new global; the resolver
-	// then caps and flags it (D1) — never unbounded.
+	// then caps and flags it (D1) — never unbounded. Second stale case: after
+	// a PUT /performance answered performance_reload_failed at stage
+	// "refresh", config.json holds the new global but the in-memory config
+	// this check reads still holds the old one until the next reload or
+	// restart. If the saved global is LOWER, a value between the two passes
+	// here and is then capped and flagged (D1) once the saved global is
+	// loaded — never unbounded; if it is HIGHER, a value between the two is
+	// refused until then.
 	if rp.ru.req.MaxToolIterations != nil {
 		if err := config.ValidateAgentMaxToolIterations(*rp.ru.req.MaxToolIterations,
 			&rp.ru.a.agentLoop.GetConfig().Agents.Defaults); err != nil {
-			return &requestRefusalError{msg: err.Error()}
+			return &requestRefusalError{msg: err.Error(), field: maxToolIterationsFieldName}
 		}
 	}
 

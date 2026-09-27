@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -217,7 +218,8 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 		// Saved but not applied: config.json (and any lowered agents) are
 		// written, the in-memory refresh failed — same answer as a failed
 		// registry reload below.
-		writePerformanceReloadFailed(w, outcome, outcome.notApplied)
+		writePerformanceReloadFailed(w, outcome, gen.PerformanceReloadFailedDetailsStageRefresh,
+			performanceChangedFields(&req))
 		return
 	}
 
@@ -236,7 +238,8 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 	// keeps the limit it started with (D18).
 	if outcome.globalChanged || len(outcome.lowered) > 0 {
 		if err := a.triggerReloadAndWait(); err != nil {
-			writePerformanceReloadFailed(w, outcome, err)
+			writePerformanceReloadFailed(w, outcome, gen.PerformanceReloadFailedDetailsStageReload,
+				performanceChangedFields(&req))
 			return
 		}
 	}
@@ -250,24 +253,90 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 }
 
 // writePerformanceReloadFailed answers a PUT whose writes are COMMITTED
-// (config.json and any lowered agents are on disk and audited) but whose
-// in-memory refresh or registry reload failed: 500 with code performance_reload_failed, so the
-// client can say "saved, not applied yet" instead of "failed". The lowered
-// agents, if any, travel in details.lowered_agents — GET /performance does
-// not carry them (PerformanceSettings.max_tool_iterations_lowered_agents is
-// PUT-only), so this response is the only place the summary survives.
-func writePerformanceReloadFailed(w http.ResponseWriter, outcome performanceWriteOutcome, err error) {
-	logsafeError("rest: PUT /performance: settings saved but the reload failed",
-		"error", err, "lowered_agents", len(outcome.lowered))
-	code := performanceReloadFailedCode
-	body := gen.ErrorResponse{
-		Error: "performance settings saved but the reload failed; the new tool-iteration limit " +
-			"applies after the next reload or restart",
-		Code: &code,
+// (config.json and any lowered agents are on disk and audited) but not in
+// force: 500 with code performance_reload_failed and a
+// PerformanceReloadFailedError body, so the client can say "saved, not
+// applied yet" instead of "failed". stage says how far the apply got —
+// refresh: the in-memory config was NOT swapped (GET /performance still
+// shows the old values); reload: the in-memory config was swapped but the
+// agent registry reload failed. The lowered agents travel in
+// details.lowered_agents — GET /performance does not carry them
+// (PerformanceSettings.max_tool_iterations_lowered_agents is PUT-only), so
+// this response is the only place the summary survives.
+func writePerformanceReloadFailed(w http.ResponseWriter, outcome performanceWriteOutcome,
+	stage gen.PerformanceReloadFailedDetailsStage, changed []gen.PerformanceReloadFailedDetailsChangedFields,
+) {
+	// The cause is NOT logged here: its text can carry a credential
+	// reference name (CodeQL clear-text logging, PR #932). For the refresh
+	// stage, refreshConfigAndRewireServices logs its roster and credential
+	// causes itself (a config load failure there is not logged); the reload
+	// stage's cause is logged by waitForReloadOutcome ("config reload
+	// failed").
+	logsafeError("rest: PUT /performance: settings saved but not applied",
+		"stage", string(stage), "lowered_agents", len(outcome.lowered))
+	lowered := outcome.lowered
+	if lowered == nil {
+		lowered = []gen.MaxToolIterationAgentChange{}
 	}
-	if len(outcome.lowered) > 0 {
-		details := map[string]any{"lowered_agents": outcome.lowered}
-		body.Details = &details
+	writeJSON(w, http.StatusInternalServerError, gen.PerformanceReloadFailedError{
+		Error: performanceReloadFailedMessage(stage, changed),
+		Code:  performanceReloadFailedCode,
+		Details: gen.PerformanceReloadFailedDetails{
+			Stage:         stage,
+			ChangedFields: changed,
+			LoweredAgents: lowered,
+		},
+	})
+}
+
+// performanceChangedFields lists, in contract enum order, the Performance
+// fields present in the PUT body — the settings this request changed.
+func performanceChangedFields(req *gen.PerformanceSettingsUpdate) []gen.PerformanceReloadFailedDetailsChangedFields {
+	out := make([]gen.PerformanceReloadFailedDetailsChangedFields, 0, 4)
+	if req.MaxParallelAgents != nil {
+		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents)
 	}
-	writeJSON(w, http.StatusInternalServerError, body)
+	if req.ToolsOnDemand != nil {
+		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand)
+	}
+	if req.GoalMaxRounds != nil {
+		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds)
+	}
+	if req.MaxToolIterations != nil {
+		out = append(out, gen.PerformanceReloadFailedDetailsChangedFieldsMaxToolIterations)
+	}
+	return out
+}
+
+// performanceSettingLabels names each Performance field in user-facing text.
+var performanceSettingLabels = map[gen.PerformanceReloadFailedDetailsChangedFields]string{
+	gen.PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents: "the parallel-agent limit",
+	gen.PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand:     "tools on demand",
+	gen.PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds:     "the goal round budget",
+	gen.PerformanceReloadFailedDetailsChangedFieldsMaxToolIterations: "the tool-iteration limit",
+}
+
+// performanceReloadFailedMessage builds the human-readable error from the
+// fields this request actually changed and the stage the apply reached.
+func performanceReloadFailedMessage(stage gen.PerformanceReloadFailedDetailsStage,
+	changed []gen.PerformanceReloadFailedDetailsChangedFields,
+) string {
+	names := make([]string, 0, len(changed))
+	for _, f := range changed {
+		names = append(names, performanceSettingLabels[f])
+	}
+	what := "the new performance settings"
+	switch len(names) {
+	case 0:
+	case 1:
+		what = names[0]
+	default:
+		what = strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	}
+	if stage == gen.PerformanceReloadFailedDetailsStageRefresh {
+		return "performance settings saved but not applied: the running configuration could not be refreshed; " +
+			what + " will apply after the next reload or restart"
+	}
+	return "performance settings saved but the agent reload failed; " +
+		what + " will apply to agents after the next reload or restart"
 }

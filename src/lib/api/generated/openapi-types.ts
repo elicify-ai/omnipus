@@ -8690,7 +8690,7 @@ export interface components {
              *       "--no-chrome",
              *       "--model <configured model> (only when a model is configured)",
              *       "--dangerously-skip-permissions",
-             *       "--max-turns <configured max turns> (only when a turn cap is configured)"
+             *       "--max-turns <the agent's tool-iteration limit> (always passed; a run without a turn cap is refused)"
              *     ]
              */
             auto_applied_flags: string[];

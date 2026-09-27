@@ -296,7 +296,7 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 				"--no-chrome",
 				"--model <configured model> (only when a model is configured)",
 				"--dangerously-skip-permissions",
-				"--max-turns <configured max turns> (only when a turn cap is configured)",
+				"--max-turns <the agent's tool-iteration limit> (always passed; a run without a turn cap is refused)",
 			},
 			Notes: "The prompt is delivered via stdin, with no positional prompt argument at all — never via a --prompt flag. --resume/--session-id are never passed; every run starts a fresh claude session. --dangerously-skip-permissions is passed unconditionally (operator decision, issue #488, reversing the original FR-5.3/US-5 stance of using --permission-mode acceptEdits instead) — this matches codex/opencode, which already ran permission-bypassed; see the tracked issue for the sandbox-boundary follow-up this reversal implies for claude specifically. Operator cli_args are appended after this list; a redundant --dangerously-skip-permissions or an attempt to change --output-format away from stream-json is dropped with a WARN (see argsafety.go) — the latter because the driver's own NDJSON stream parser requires stream-json output.",
 		},
@@ -961,7 +961,11 @@ func (a *restAPI) withToolPolicyCoverageGuard(
 		}
 		var refusal *requestRefusalError
 		if errors.As(err, &refusal) {
-			jsonErr(w, http.StatusBadRequest, refusal.msg)
+			if refusal.field != "" {
+				jsonErrField(w, http.StatusBadRequest, refusal.msg, refusal.field)
+			} else {
+				jsonErr(w, http.StatusBadRequest, refusal.msg)
+			}
 			return false
 		}
 		logsafeError(persistErrLogMsg, "error_type", fmt.Sprintf("%T", err))
@@ -975,7 +979,16 @@ func (a *restAPI) withToolPolicyCoverageGuard(
 // must run under a.configMu (so it sees the config in force at write time)
 // refuses the request; withToolPolicyCoverageGuard maps it to 400 with msg.
 // Used by the #904 per-agent tool-iteration D10 check (above the global).
-type requestRefusalError struct{ msg string }
+// field, when set, is sent as ErrorResponse.field (the request field the
+// refusal is about).
+type requestRefusalError struct {
+	msg   string
+	field string
+}
+
+// maxToolIterationsFieldName is ErrorResponse.field on every per-agent
+// tool-iteration refusal (#904): the SPA attributes the error by it.
+const maxToolIterationsFieldName = "max_tool_iterations"
 
 func (e *requestRefusalError) Error() string { return e.msg }
 

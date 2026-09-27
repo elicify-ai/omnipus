@@ -18,6 +18,8 @@ package gateway
 // not an edge case.
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -74,6 +76,57 @@ func preserveProtectedAgentDefaults(m map[string]any, saved map[string]any) erro
 	}
 	for leaf, v := range saved {
 		defaults[leaf] = v
+	}
+	return nil
+}
+
+// protectedAgentDefaultsValues is what config.json's agents.defaults
+// carries for the two #904 leaves AS encoding/json BINDS THEM — decoded
+// through struct tags identical to config.AgentDefaults', so every key
+// spelling the loader would accept (case variants, Unicode simple folds like
+// U+017F 'ſ' ≡ 's') lands here exactly as it would on boot. Raw bytes, so an
+// invalid stored value (a string, a float) is compared as-is instead of
+// failing the decode.
+type protectedAgentDefaultsValues struct { // not-wire-format: decode-only probe of config.json on disk; never crosses the gateway/SPA boundary.
+	Agents struct {
+		Defaults struct {
+			MaxToolIterations            json.RawMessage `json:"max_tool_iterations"`
+			MaxToolIterationsEnvImported json.RawMessage `json:"max_tool_iterations_env_imported"`
+		} `json:"defaults"`
+	} `json:"agents"`
+}
+
+// protectedAgentDefaultsFingerprint marshals m the way updateConfigJSONLocked
+// writes it (sorted keys — the order a later duplicate-fold key wins in) and
+// decodes the two protected values out of it.
+func protectedAgentDefaultsFingerprint(m map[string]any) (protectedAgentDefaultsValues, error) {
+	var v protectedAgentDefaultsValues
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return v, err
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return v, err
+	}
+	return v, nil
+}
+
+// checkProtectedAgentDefaultsUnchanged refuses (400, nothing written) a
+// generic config write whose merged result would change the global
+// tool-iteration limit or its env-import marker — value-based, so it holds
+// even for a key spelling blockedPaths does not recognise (precedent:
+// pkg/sysagent/tools/config.go::checkPerformanceOnlyConfigUnchanged).
+func checkProtectedAgentDefaultsUnchanged(before protectedAgentDefaultsValues, merged map[string]any) error {
+	after, err := protectedAgentDefaultsFingerprint(merged)
+	if err != nil {
+		return &requestRefusalError{msg: "the agents section of this write does not decode: " + err.Error()}
+	}
+	b, a := before.Agents.Defaults, after.Agents.Defaults
+	if !bytes.Equal(b.MaxToolIterations, a.MaxToolIterations) ||
+		!bytes.Equal(b.MaxToolIterationsEnvImported, a.MaxToolIterationsEnvImported) {
+		return &requestRefusalError{msg: fmt.Sprintf(
+			"this write would change %s or %s, which are changed only in Settings → Performance",
+			config.AgentsDefaultsMaxToolIterations, config.AgentsDefaultsMaxToolIterationsEnvImported)}
 	}
 	return nil
 }
