@@ -299,7 +299,11 @@ async function globalSetup(): Promise<void> {
     // surface and the SPA must never see it; a plain file the browser never
     // reads keeps that guarantee while giving server-side callers a stable
     // credential.
-    const bearerFile = path.join(path.dirname(AUTH_FILE), 'admin-reload-bearer.txt');
+    // On a fresh CI checkout fixtures/.auth/ does not exist yet (it is
+    // gitignored and only created in Step 3 below), so create it here first.
+    const bearerDir = path.dirname(AUTH_FILE);
+    fs.mkdirSync(bearerDir, { recursive: true });
+    const bearerFile = path.join(bearerDir, 'admin-reload-bearer.txt');
     fs.writeFileSync(bearerFile, json.token, { mode: 0o600 });
   } finally {
     await ctx.dispose();
