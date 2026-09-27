@@ -77,10 +77,10 @@ describe('panel registry — wave-1 registrations (§12 #1, SC-002)', () => {
     expect(library).toBeDefined()
     expect(library?.title).toBe('Library')
     const target = library?.expandTarget({ workspaceId: 'ws-1' })
-    expect(typeof target === 'string' || typeof (target as { to?: string })?.to === 'string').toBe(
+    expect(typeof target === 'string' || typeof (target as unknown as { to?: string })?.to === 'string').toBe(
       true,
     )
-    const s = typeof target === 'string' ? target : String((target as { to?: string }).to)
+    const s = typeof target === 'string' ? target : String((target as unknown as { to?: string }).to)
     expect(s).toContain('/library')
     expect(s).toContain('ws-1')
   })
@@ -91,7 +91,7 @@ describe('panel registry — wave-1 registrations (§12 #1, SC-002)', () => {
     expect(browser).toBeDefined()
     expect(browser?.title).toBe('Browser')
     const target = browser?.expandTarget({ sessionId: 's1', agentId: 'a1' })
-    const s = typeof target === 'string' ? target : String((target as { to?: string }).to)
+    const s = typeof target === 'string' ? target : String((target as unknown as { to?: string }).to)
     expect(s).toContain('/browser-live')
     expect(s).toContain('session=')
     expect(s).contains('agent=')

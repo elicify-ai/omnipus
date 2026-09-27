@@ -13,7 +13,7 @@
 // Oracles: side-panel-shell-spec.md §1/§2 (header owns the three controls),
 // §2.1 (Library content fills the shell), US-9 AS-4 (landmark).
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SidePanelShell } from '@/components/panel-shell/SidePanelShell'
 import { usePanelShellStore } from '@/components/panel-shell/panelShellStore'
