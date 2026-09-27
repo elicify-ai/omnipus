@@ -1440,12 +1440,28 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 		retryCtx = providers.WithStreamedBytesCheck(retryCtx, func() int64 {
 			return rt.providerCallStreamedBytes.Load()
 		})
+		// F1 (read paths): one image attach per candidate, reused across the
+		// §7.4 in-place retries of that candidate — the retry must re-send
+		// the same request, and a re-attach re-runs the authorization
+		// recheck per call (the inspection-media boundary test pins
+		// 2 candidates → 2 rechecks, not 4). Scope: THIS provider round
+		// only; every new round (new callProviderOnce) attaches fresh.
+		rt.providerCallAttachCache = make(map[string][]providers.Message)
 		chain := rt.al.fallback
 		if len(rt.activeCandidates) == 1 {
 			// F1: single-candidate root turns run on a throwaway tracker so a
 			// final failure never marks the SHARED chain's tracker (see the
-			// gate comment).
-			chain = rt.al.fallback.WithCooldown(providers.NewCooldownTracker())
+			// gate comment), and on a budget-free copy of the chain: the
+			// per-candidate budget (120 s default) would clamp a turn ctx
+			// carrying its own longer deadline — JUDGE-FR-049 observed exactly
+			// that (the Judge turn's operator-configured 420 s clipped to
+			// 120 s, the UAT E-14 defect FR-049 exists to prevent). With one
+			// candidate there is nothing to split the budget across, so the
+			// turn's own deadline governs, exactly as the plain path passes
+			// the ctx through. The §7.4 retry loop, its fresh-per-call budget
+			// rule and the C-10 guard are budget-independent and keep
+			// running.
+			chain = rt.al.fallback.WithCooldown(providers.NewCooldownTracker()).WithoutPerCandidateTimeout()
 		}
 		fbResult, fbErr := chain.Execute(
 			retryCtx,
@@ -1468,7 +1484,24 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 				}
 				cat := rt.al.getCapabilityCatalog()
 				budget := resizeBudgetForModel(cat, provider, model, int(catalog.DefaultResizeLimits.MaxBytes))
-				candidateMessages, imageErr := attachTurnInspectionImagesWithBudget(ctx, messagesForCall, rt.inspectionImages, modelSupportsImage(cat, provider, model), budget)
+				// §7.4 (read paths): one attach per candidate, reused across
+				// this candidate's in-place retries — same request re-sent
+				// (cache reset per round in callProviderOnce; see
+				// runProviderAttempt's block for the cache-miss-on-error rule).
+				attachKey := provider + "/" + model
+				candidateMessages, imageErr := func() ([]providers.Message, error) {
+					if cached, ok := rt.providerCallAttachCache[attachKey]; ok {
+						return cached, nil
+					}
+					m, err := attachTurnInspectionImagesWithBudget(ctx, messagesForCall, rt.inspectionImages, modelSupportsImage(cat, provider, model), budget)
+					if err != nil {
+						return nil, err
+					}
+					if rt.providerCallAttachCache != nil {
+						rt.providerCallAttachCache[attachKey] = m
+					}
+					return m, nil
+				}()
 				if imageErr != nil {
 					return nil, imageErr
 				}

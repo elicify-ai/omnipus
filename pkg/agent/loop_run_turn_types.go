@@ -38,6 +38,13 @@ type agentLoopRunTurn struct {
 	// prevents retrying a 429 after partial output without optional streamer
 	// methods.
 	providerCallStreamedBytes atomic.Int64
+	// providerCallAttachCache scopes ONE provider round (one callProviderOnce):
+	// candidate key → the messages with this candidate's inspection media
+	// attached. §7.4's in-place retries re-invoke the run closure for the SAME
+	// candidate — the retry must re-send the same request, so the attach (and
+	// its per-call Reauthorize) runs once per candidate, not once per call.
+	// Reset on every callProviderOnce entry: a new round attaches fresh.
+	providerCallAttachCache map[string][]providers.Message
 }
 
 // agentLoopRunTurnFallbacks carries the shared state of runTurn across its stages.

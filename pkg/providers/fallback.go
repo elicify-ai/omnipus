@@ -53,6 +53,25 @@ func (fc *FallbackChain) WithCooldown(ct *CooldownTracker) *FallbackChain {
 	return &cp
 }
 
+// WithoutPerCandidateTimeout returns a shallow copy of the chain with the
+// per-candidate budget DISABLED: candidateBudget passes the parent ctx
+// through unchanged, exactly as the plain (non-chain) path passes the turn
+// ctx to the provider. §7.4 gate finding F1 routes single-candidate root
+// turns through Execute — whose per-candidate budget (120 s default) would
+// otherwise clamp a turn ctx that carries its own, longer deadline
+// (JUDGE-FR-049: the Judge turn's operator-configured 420 s was clipped to
+// 120 s — the exact UAT E-14 defect FR-049 exists to prevent). A
+// single-candidate chain has no other candidates competing for the budget,
+// so there is nothing to split fairly and the turn's own deadline governs;
+// the §7.4 in-place retry loop, its fresh-per-call budget rule and the C-10
+// zero-stream guard are budget-independent and keep running (a retry wait is
+// bounded by the turn ctx itself, cancellable per C-12).
+func (fc *FallbackChain) WithoutPerCandidateTimeout() *FallbackChain {
+	cp := *fc
+	cp.perCandidateTimeout = 0
+	return &cp
+}
+
 func (fc *FallbackChain) now() time.Time {
 	if fc.nowFunc != nil {
 		return fc.nowFunc()

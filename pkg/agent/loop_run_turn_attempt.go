@@ -39,9 +39,24 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 	var imageErr error
 	cat := rt.al.getCapabilityCatalog()
 	budget := resizeBudgetForModel(cat, providerName, model, int(catalog.DefaultResizeLimits.MaxBytes))
-	messagesForCall, imageErr = attachTurnInspectionImagesWithBudget(ctx, messagesForCall, rt.inspectionImages, modelSupportsImage(cat, providerName, model), budget)
-	if imageErr != nil {
-		return nil, imageErr
+	// §7.4 (read paths): reuse this round's attach for this candidate — the
+	// in-place retry re-sends the same request, so the attach (and its
+	// per-call Reauthorize) runs once per candidate, not once per call
+	// (the inspection-media boundary test pins 2 candidates → 2 rechecks).
+	// Reading a nil cache is safe; a nil cache (delegated retry path) keeps
+	// the attach-per-call behavior. Cache-miss on ERROR: a failed attach is
+	// re-attempted on the next call, as before.
+	attachKey := providerName + "/" + model
+	if cached, ok := rt.providerCallAttachCache[attachKey]; ok {
+		messagesForCall = cached
+	} else {
+		messagesForCall, imageErr = attachTurnInspectionImagesWithBudget(ctx, messagesForCall, rt.inspectionImages, modelSupportsImage(cat, providerName, model), budget)
+		if imageErr != nil {
+			return nil, imageErr
+		}
+		if rt.providerCallAttachCache != nil {
+			rt.providerCallAttachCache[attachKey] = messagesForCall
+		}
 	}
 	// Use streaming if the provider supports it and we have a streamer for this channel.
 	if sp, ok := p.(providers.StreamingProvider); ok && rt.al.bus != nil {
