@@ -2,6 +2,7 @@ import { expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
+import { E2E_MODEL } from './fixtures/e2e-model';
 
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
@@ -269,7 +270,10 @@ test('(g) session with deleted agent shows read-only transcript and "Agent remov
       name: `TempAgent-${Date.now()}`,
       soul: 'Temporary agent test soul',
       type: 'Main',
-      model: 'openrouter/google/gemini-2.0-flash-001',
+      // Central e2e model (config plumbing only — test (g) never sends a chat
+      // turn to this agent; it creates it, sessions it, deletes it, and
+      // asserts the ghost-session banner).
+      model: E2E_MODEL,
     },
   });
   expect(resp.ok(), `create agent failed: ${resp.status()} ${await resp.text()}`).toBeTruthy();

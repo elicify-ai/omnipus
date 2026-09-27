@@ -53,7 +53,10 @@ test.describe('create agent wizard', () => {
     const name = `E2E Test Agent ${Date.now()}`
     await page.getByTestId('wizard-name').fill(name)
     if (opts.type === 'subagent_3p') {
-      // External agents use a free-text model slug.
+      // Deliberately an ARBITRARY free-text slug, not the central e2e model
+      // (E2E_MODEL): this probe asserts the wizard accepts any well-formed
+      // external model string, and the created subagent_3p agent is never
+      // used for a real chat turn in this file (wizard CRUD only).
       await page.getByTestId('wizard-model').fill('claude-sonnet-4-6')
     } else {
       await selectFirstModel(page)

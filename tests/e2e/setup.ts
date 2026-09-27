@@ -18,6 +18,7 @@ import { createServer } from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { E2E_MODEL } from './fixtures/e2e-model.js';
 
 // Default binary used when OMNIPUS_BINARY is not set.
 export const DEFAULT_OMNIPUS_BINARY = '/tmp/omnipus-ci';
@@ -402,7 +403,9 @@ export async function onboardAdmin(
           process.env.OPENROUTER_API_KEY ??
           process.env.OPENROUTER_API_KEY_CI ??
           'sk-test-placeholder',
-        model: 'openai/gpt-4o',
+        // Central e2e model — see fixtures/e2e-model.ts. (Was openai/gpt-4o,
+        // a literal this shared helper kept picking up independently.)
+        model: E2E_MODEL,
       },
       admin: { username, password },
     }),

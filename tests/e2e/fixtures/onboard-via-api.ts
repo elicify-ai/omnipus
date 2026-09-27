@@ -1,4 +1,5 @@
 import { type APIRequestContext, request } from '@playwright/test';
+import { E2E_MODEL } from './e2e-model.js';
 
 const DEFAULT_PROVIDER_ID = 'openrouter';
 // deepseek/deepseek-v4.1-flash — the project's standard model for all e2e tests (mirrored in the
@@ -14,7 +15,6 @@ const DEFAULT_PROVIDER_ID = 'openrouter';
 // evals/cmd/eval-runner/main.go) intentionally stay on z-ai/glm-5-turbo (a LIVE
 // model whose eval baselines depend on it) — the E2E-vs-evals difference is
 // deliberate.
-const DEFAULT_MODEL = 'deepseek/deepseek-v4.1-flash';
 const DEFAULT_USERNAME = 'admin';
 const DEFAULT_PASSWORD = 'admin123';
 
@@ -89,7 +89,7 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
           auth_method: 'api_key',
           id: opts.providerID ?? DEFAULT_PROVIDER_ID,
           api_key: apiKey,
-          model: opts.model ?? DEFAULT_MODEL,
+          model: opts.model ?? E2E_MODEL,
         },
         admin: {
           username: opts.username ?? DEFAULT_USERNAME,
