@@ -660,22 +660,27 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 		// a uniform bounded retry is simpler to review and just as safe.
 		var continued string
 		var continueErr error
+		var attemptsMade int
 	retryLoop:
 		for attempt := 0; attempt < continueDrainMaxRetries; attempt++ {
+			attemptsMade = attempt + 1
 			continued, continueErr = al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID)
 			if continueErr == nil {
 				break
 			}
 			// Gate finding, CRITICAL: a POST-dequeue failure means Continue
-			// already restored the dequeued message(s) to the queue (see
-			// Continue's own restore, steering.go) after a REAL, failed LLM
-			// turn attempt against them. Retrying immediately here would just
-			// redequeue that same restored item and repeat the identical
-			// failed turn rather than a cheap pre-flight recheck — break out
-			// now and let abandonQueuedSteering below dequeue-and-report it
-			// straight away. A PRE-dequeue failure (active-turn guard,
-			// hooks/MCP init, agentForSession==nil) never touched the queue,
-			// so it keeps the existing bounded-retry-with-backoff behavior.
+			// already ran runTurn's ordinary, tool-capable turn pipeline (the
+			// same one every other turn uses) against the dequeued
+			// message(s) before it errored — not a cheap pre-flight guard.
+			// Retrying that here at the outer drain-loop level would
+			// re-invoke the same tool-capable pipeline from scratch against
+			// identical restored content, risking re-firing a tool call that
+			// already succeeded inside the failed attempt — break out now
+			// and let abandonQueuedSteering below dequeue-and-report it
+			// straight away instead. The four PRE-dequeue causes (active-turn
+			// guard, hooks/MCP init, agentForSession==nil) never call runTurn
+			// at all, so they have no such risk and correctly keep the
+			// existing bounded-retry-with-backoff behavior.
 			if errors.Is(continueErr, errContinuePostDequeueFailure) {
 				break
 			}
@@ -693,7 +698,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 			}
 		}
 		if continueErr != nil {
-			w.abandonQueuedSteering(ctx, target, continueErr, continueDrainMaxRetries)
+			w.abandonQueuedSteering(ctx, target, continueErr, attemptsMade)
 			return
 		}
 		if continued == "" {

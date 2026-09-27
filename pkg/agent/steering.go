@@ -746,15 +746,22 @@ func (al *AgentLoop) continueWithSteeringMessages(
 // agentForSession==nil), none of which ever touch the queue.
 //
 // session_worker.go's drain-loop retry checks errors.Is against this sentinel
-// to decide whether to keep retrying: a pre-dequeue failure never consumed
-// anything, so retrying from scratch is cheap and may recover a transient
-// init hiccup. A post-dequeue failure already restored the dequeued item(s)
-// to the queue (see Continue below) and ran a real, failed LLM turn against
-// them — retrying immediately would just redequeue the SAME restored item(s)
-// and repeat that same failed turn attempt rather than a cheap guard
-// recheck, so the drain loop breaks out of its retry loop on this sentinel
-// and lets abandonQueuedSteering dequeue-and-report the restored item(s)
-// straight away.
+// to decide whether to keep retrying, and the reason the two classes are
+// treated differently is cost/side-effect asymmetry, not the error already
+// having "had its turn" at classification. The four pre-dequeue causes fail
+// before runTurn ever starts, so retrying them re-runs a cheap, local,
+// no-LLM-call guard — safe to repeat. A post-dequeue failure means Continue
+// already ran runTurn's ordinary, tool-capable turn pipeline (the same one
+// every other turn uses, not a restricted variant) against the dequeued
+// item(s) before it errored. Retrying that at the outer drain-loop level
+// would re-invoke the same tool-capable pipeline from scratch against
+// identical restored content, risking re-firing a tool call that already
+// succeeded inside the failed attempt — a risk the four pre-dequeue causes
+// structurally cannot have, since none of them ever reach runTurn. So the
+// drain loop breaks out of its retry loop on this sentinel and lets
+// abandonQueuedSteering dequeue-and-report the restored item(s) straight
+// away, trading a possible one-off transient miss for never risking a
+// duplicated side effect.
 var errContinuePostDequeueFailure = errors.New("continue: turn failed after dequeuing steering messages")
 
 func (al *AgentLoop) agentForSession(sessionKey string) *AgentInstance {
