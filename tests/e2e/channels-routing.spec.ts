@@ -190,6 +190,10 @@ const ROUTING_AGENT_REQUIRED = {
   // whole GET /agents payload, so the panel renders "Couldn't load agent list."
   // instead of routing-agent-select. false = healthy (has a usable model).
   needs_model: false,
+  // Required by Agent.yaml since #904 (tool-iteration limit): omitting either
+  // makes AgentSchema reject GET /agents. "global" + false = rides the global.
+  max_tool_iterations_source: 'global' as const,
+  max_tool_iterations_override_ignored: false,
 }
 // `revision` is REQUIRED on the Agent and Workspace schemas under ADR-090
 // (ConfigurationRevision, ^[a-f0-9]{64}$) — a stub missing it makes the SPA's

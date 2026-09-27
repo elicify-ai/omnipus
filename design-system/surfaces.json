@@ -6140,6 +6140,10 @@
       "lane": 5
     },
     {
+      "source": "src/components/agents/useToolIterationLimitRefusal.ts",
+      "lane": 5
+    },
+    {
       "source": "src/components/agents/CliPathValidationHint.tsx",
       "lane": 5
     },

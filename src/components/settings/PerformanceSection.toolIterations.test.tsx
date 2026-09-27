@@ -93,7 +93,11 @@ beforeEach(() => {
   vi.mocked(api.fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
 })
 
-describe('PerformanceSection — global max tool iterations (#904)', () => {
+// One suite title shared by three describe blocks: full test names stay
+// unchanged; the split only keeps each block under the function-size budget.
+const SUITE = 'PerformanceSection — global max tool iterations (#904)'
+
+describe(SUITE, () => {
   it('shows the in-force global beside the other Performance budgets (US-1 AS-1, D3)', async () => {
     renderSection()
     await waitFor(() => expect(screen.getByLabelText(LABEL)).toHaveValue(300))
@@ -256,7 +260,9 @@ describe('PerformanceSection — global max tool iterations (#904)', () => {
     fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '210' } })
     expect(screen.queryByTestId('performance-max-tool-iterations-lowered-summary')).not.toBeInTheDocument()
   })
+})
 
+describe(SUITE, () => {
   it('on a 409 drift, reloads the dialog with the fresh list, announces the change, focuses the list and needs a fresh Confirm (US-6 AS-6, D16)', async () => {
     vi.mocked(api.fetchMaxToolIterationsLoweringPreview).mockResolvedValue({ value: 200, agents: [AGENT_A] })
     const fresh: MaxToolIterationsLoweringPreview = { value: 200, agents: [AGENT_A, AGENT_B] }
@@ -394,7 +400,9 @@ describe('PerformanceSection — global max tool iterations (#904)', () => {
     expect(screen.queryByTestId('performance-max-tool-iterations-save-btn')).not.toBeInTheDocument()
     expect(screen.queryByText(/Failed to save the tool-call limit/)).not.toBeInTheDocument()
   })
+})
 
+describe(SUITE, () => {
   describe('a stage-refresh reload failure (config.json written, in-memory config NOT swapped)', () => {
     const REFRESH_TEXT = 'performance settings saved but the reload failed; the new tool-iteration limit applies after the next reload or restart'
 
