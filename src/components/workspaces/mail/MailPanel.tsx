@@ -1,0 +1,604 @@
+// MailPanel.tsx — the workspace Mail panel CONTENT (email-mail-view-spec.md
+// §16, US-3..US-8): folder rail, message list, reading pane, compose, the
+// watcher banner and per-state error surfaces. It plugs into the shared
+// side-panel shell (SP-8): the docked host (MailPanelHost, separate file)
+// renders this component when the ui store's activePanel is 'mail' — Mail is
+// panel CONTENT, never a shell edit.
+//
+// Oracle contract (MailPanel.states.test.tsx): props { workspaceId }; reads
+// fetchMailboxes/fetchMailFolders/fetchMailMessages/fetchMailSummary from
+// '@/lib/api'; folders refetch every 30s while mounted, never after unmount
+// (D25); error shows the error CLASS (e.g. connect_refused) + Retry, never
+// the empty-state text; the US-6 read-by-agent tag appears exactly once per
+// flagged message; watcher backoff renders "Retrying at …" (D29/R2-8).
+import { useEffect, useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useUiStore } from '@/store/ui'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  fetchMailboxes,
+  fetchMailFolders,
+  fetchMailMessages,
+  fetchMailMessage,
+  markMailSeen,
+  fetchMailSummary,
+  sendMailMessage,
+  saveMailDraft,
+  sendMailDraft,
+  discardMailDraft,
+  mintMailHtmlPreviewToken,
+  fetchMailAttachment,
+} from '@/lib/api'
+import type {
+  Mailbox,
+  MailboxNewMailSummary,
+  MailMessage,
+  MailMessageSummary,
+} from '@/lib/api'
+import { MailFolderRail } from './MailFolderRail'
+import { MailMessageList, mailMessageRef } from './MailMessageList'
+import { MailPreviewPane } from './MailPreviewPane'
+import { MailHtmlFrame } from './MailHtmlFrame'
+import { MailComposeDialog } from './MailComposeDialog'
+import type { MailComposeBody } from './MailComposeDialog'
+import { readMailPanelIntent, writeMailPanelIntent } from './mailPanelIntent'
+import type { MailPanelIntent } from './mailPanelIntent'
+import { formatMailDate, formatMailTime, formatMailBytes } from './mail-format'
+
+/** Folders refetch cadence — D25: while mounted only (refetchInterval is
+ * observer-bound, so unmount stops it). */
+const FOLDERS_REFETCH_MS = 30_000
+/** The watcher banner refreshes with the folders cadence. */
+const SUMMARY_REFETCH_MS = 30_000
+
+/** Extract the error CLASS for display (US-3 AS-4): ApiError.code when
+ * present, else the message. Never a generic string alone — the class IS
+ * the diagnosis. */
+function mailErrorCode(err: unknown): string {
+  if (err instanceof Error && 'code' in err && typeof (err as { code?: unknown }).code === 'string') {
+    return (err as { code: string }).code
+  }
+  if (err instanceof Error && err.message) return err.message
+  return 'unknown_error'
+}
+
+/** File → base64 (MC-32 attach path) — chunked btoa to dodge call-stack
+ * limits on large files. */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result
+      if (typeof result !== 'string') {
+        reject(new Error('Could not read attachment'))
+        return
+      }
+      const base64 = result.slice(result.indexOf(',') + 1)
+      resolve(base64)
+    }
+    reader.onerror = () => reject(new Error('Could not read attachment'))
+    reader.readAsDataURL(file)
+  })
+}
+
+export interface MailPanelProps {
+  workspaceId: string
+}
+
+const FOLDERS_KEY = ['mail-folders'] as const
+const MESSAGES_KEY = ['mail-messages'] as const
+const DETAIL_KEY = ['mail-detail'] as const
+
+export function MailPanel({ workspaceId }: MailPanelProps) {
+  const queryClient = useQueryClient()
+  const addToast = useUiStore((s) => s.addToast)
+
+  // ── Mailbox resolution (FR-010 / SP-23) ───────────────────────────────
+  const mailboxesQuery = useQuery({
+    queryKey: ['mailboxes'],
+    queryFn: fetchMailboxes,
+    staleTime: 60_000,
+  })
+  const workspaceMailboxes = useMemo(() => {
+    const list = mailboxesQuery.data
+    if (!list) return []
+    return list.filter((mb) => mb.enabled && mb.configured && mb.workspace_id === workspaceId)
+  }, [mailboxesQuery.data, workspaceId])
+
+  // Per-workspace intent (FR-010): sessionStorage-backed selection.
+  const [intent, setIntent] = useState<MailPanelIntent>(() =>
+    readMailPanelIntent(workspaceId),
+  )
+  const agentId = useMemo(() => {
+    if (intent.agentId !== null) {
+      const stored = workspaceMailboxes.find((mb) => mb.agent_id === intent.agentId)
+      if (stored !== undefined) return intent.agentId
+    }
+    return workspaceMailboxes[0]?.agent_id ?? null
+  }, [intent.agentId, workspaceMailboxes])
+  const folder: string = intent.folder ?? 'inbox'
+  // The open message ref — session state, not persisted (a fresh panel opens
+  // with the list, not a message). Reset when folder/mailbox changes.
+  // The open message ref — `uid:…` from a list click, or a deep-link ref
+  // (uid:… / mid:…) consumed ONCE from the per-workspace intent at mount.
+  const [selectedRef, setSelectedRef] = useState<string | null>(() =>
+    readMailPanelIntent(workspaceId).messageRef,
+  )
+
+  // Persist the per-workspace intent whenever mailbox/folder selection moves
+  // (FR-010). Effect-based so programmatic and click-driven changes persist.
+  useEffect(() => {
+    writeMailPanelIntent(workspaceId, { agentId, folder })
+  }, [workspaceId, agentId, folder])
+
+  // ── Queries ───────────────────────────────────────────────────────────
+  const foldersQuery = useQuery({
+    queryKey: [...FOLDERS_KEY, workspaceId, agentId],
+    queryFn: () => fetchMailFolders(workspaceId, agentId as string),
+    enabled: agentId !== null,
+    refetchInterval: FOLDERS_REFETCH_MS,
+    refetchIntervalInBackground: false,
+  })
+  const messagesQuery = useQuery({
+    queryKey: [...MESSAGES_KEY, workspaceId, agentId, folder],
+    queryFn: () => fetchMailMessages(workspaceId, agentId as string, folder),
+    enabled: agentId !== null && foldersQuery.isSuccess && folder !== null,
+    retry: false,
+  })
+  const summaryQuery = useQuery({
+    queryKey: ['mail-summary', workspaceId],
+    queryFn: () => fetchMailSummary(workspaceId),
+    refetchInterval: SUMMARY_REFETCH_MS,
+    refetchIntervalInBackground: false,
+  })
+
+  // ── Detail query + mark-seen (B-27) ──────────────────────────────────
+  const detailQuery = useQuery({
+    queryKey: [...DETAIL_KEY, workspaceId, agentId, folder, selectedRef],
+    queryFn: () => fetchMailMessage(workspaceId, agentId as string, folder, selectedRef as string),
+    enabled: agentId !== null && folder !== null && selectedRef !== null,
+    retry: false,
+  })
+  const detail: MailMessage | null = detailQuery.data ?? null
+  const seenMutation = useMutation({
+    mutationFn: (ref: string) => markMailSeen(workspaceId, agentId as string, folder, ref),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: FOLDERS_KEY })
+      void queryClient.invalidateQueries({ queryKey: MESSAGES_KEY })
+    },
+  })
+
+  // ── Draft actions (US-7, D12/D23) ────────────────────────────────────
+  const draftSave = useMutation({
+    mutationFn: (next: { to: string; subject: string; bodyMarkdown: string }) => {
+      const d = detail as MailMessage
+      return saveMailDraft(workspaceId, agentId as string, selectedRef as string, {
+        to: next.to.split(',').map((s) => s.trim()).filter(Boolean),
+        subject: next.subject,
+        body_markdown: next.bodyMarkdown,
+        uidvalidity: d.uidvalidity,
+        uid: d.uid,
+        keep_attachment_parts: d.attachments.map((a) => a.part_index),
+      })
+    },
+    onSuccess: (updated) => {
+      void queryClient.invalidateQueries({ queryKey: MESSAGES_KEY })
+      void queryClient.invalidateQueries({ queryKey: DETAIL_KEY })
+      addToast({ message: updated.draft_cleanup_warning ?? 'Draft saved', variant: updated.draft_cleanup_warning ? 'warning' : 'success' })
+    },
+    onError: (err) => addToast({ message: mailErrorCode(err), variant: 'error' })
+  })
+
+  const draftSend = useMutation({
+    mutationFn: () => {
+      const d = detail as MailMessage
+      return sendMailDraft(workspaceId, agentId as string, selectedRef as string, {
+        to: d.to,
+        subject: d.subject,
+        body_markdown: d.body_markdown ?? '',
+        uidvalidity: d.uidvalidity,
+        uid: d.uid,
+      })
+    },
+    onSuccess: (res) => {
+      void queryClient.invalidateQueries({ queryKey: FOLDERS_KEY })
+      void queryClient.invalidateQueries({ queryKey: MESSAGES_KEY })
+      void queryClient.invalidateQueries({ queryKey: DETAIL_KEY })
+      addToast({
+        message: res.draft_cleanup_warning ?? 'Draft sent',
+        variant: res.draft_cleanup_warning ? 'warning' : 'success',
+      })
+    },
+    onError: (err) => addToast({ message: mailErrorCode(err), variant: 'error' })
+  })
+
+  const draftDiscard = useMutation({
+    mutationFn: () => discardMailDraft(workspaceId, agentId as string, selectedRef as string),
+    onSuccess: () => {
+      setSelectedRef(null)
+      void queryClient.invalidateQueries({ queryKey: MESSAGES_KEY })
+      void queryClient.invalidateQueries({ queryKey: FOLDERS_KEY })
+      addToast({ message: 'Draft discarded', variant: 'success' })
+    },
+    onError: (err) => addToast({ message: mailErrorCode(err), variant: 'error' })
+  })
+
+  // Mark seen on open (B-27, US-6): after a successful detail fetch of an
+  // unseen message outside Drafts. Invalidates folders + list (unread count
+  // drops) via the seen mutation's onSuccess.
+  useEffect(() => {
+    if (detailQuery.isSuccess && detail !== null && detail.seen === false && folder !== 'drafts' && selectedRef !== null && !seenMutation.isPending) {
+      seenMutation.mutate(selectedRef)
+    }
+  })
+
+  // Compose dialog state: null = closed. reply carries the open message's
+  // identity for In-Reply-To (US-5 AS-3).
+  const [compose, setCompose] = useState<{ mode: 'new' | 'reply' } | null>(null)
+
+  // ── Compose send (US-5) ───────────────────────────────────────────────
+  const composeSend = useMutation({
+    mutationFn: async (body: MailComposeBody) => {
+      const attachments = await Promise.all(
+        body.attachments.map(async (file) => ({
+          filename: file.name,
+          content_type: file.type || 'application/octet-stream',
+          data_base64: await fileToBase64(file),
+        })),
+      )
+      return sendMailMessage(workspaceId, agentId as string, {
+        to: body.to,
+        cc: body.cc.length > 0 ? body.cc : undefined,
+        bcc: body.bcc.length > 0 ? body.bcc : undefined,
+        subject: body.subject,
+        body_markdown: body.body_markdown,
+        in_reply_to: body.in_reply_to,
+        attachments: attachments.length > 0 ? attachments : undefined,
+      })
+    },
+    onSuccess: (res) => {
+      void queryClient.invalidateQueries({ queryKey: FOLDERS_KEY })
+      void queryClient.invalidateQueries({ queryKey: MESSAGES_KEY })
+      addToast({
+        message: res.save_warning ?? 'Message sent',
+        variant: res.save_warning ? 'warning' : 'success',
+      })
+    },
+    onError: (err) => addToast({ message: mailErrorCode(err), variant: 'error' })
+  })
+
+  // ── HTML preview (D13/D17): token minted per body, re-minted on Load
+  // images (load_remote: true). Never a local boolean — the parent owns the
+  // re-mint, so remote content stays server-gated.
+  const [loadRemote, setLoadRemote] = useState(false)
+  useEffect(() => { setLoadRemote(false) }, [selectedRef])
+  const htmlTokenQuery = useQuery({
+    queryKey: ['mail-html-token', workspaceId, agentId, folder, selectedRef, loadRemote],
+    queryFn: () => mintMailHtmlPreviewToken({
+      workspace_id: workspaceId,
+      agent_id: agentId as string,
+      folder,
+      message_ref: selectedRef as string,
+      load_remote: loadRemote,
+    }),
+    enabled: detail?.has_html === true,
+    staleTime: 0,
+    gcTime: 0,
+  })
+
+  // ── Watcher banner data (D29/R2-8) ───────────────────────────────────
+  const watcherItem: MailboxNewMailSummary | null = useMemo(() => {
+    const items = summaryQuery.data?.items ?? []
+    if (agentId !== null) {
+      const mine = items.find((item) => item.agent_id === agentId)
+      if (mine !== undefined) return mine
+    }
+    return items.length > 0 ? (items[0] as MailboxNewMailSummary) : null
+  }, [summaryQuery.data, agentId])
+
+  const refreshWatcher = () => {
+    void queryClient.invalidateQueries({ queryKey: ['mail-summary', workspaceId] })
+    void queryClient.invalidateQueries({ queryKey: FOLDERS_KEY })
+  }
+
+  const replyTarget = detail === null ? null : { from: detail.from ?? '', subject: detail.subject ?? '', messageId: detail.message_id ?? '' }
+
+  return (
+    <div data-testid="mail-panel" className="flex h-full min-h-0 w-full flex-col bg-[var(--color-surface-0)]">
+      <div className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]">
+        <Select
+          value={agentId ?? undefined}
+          onValueChange={(next) => { setIntent((prev) => ({ ...prev, agentId: next })); setSelectedRef(null) }}
+        >
+          <SelectTrigger
+            aria-label="Mailbox"
+            className="h-8 w-[220px] shrink-0 text-[length:var(--type-body-compact-size)]"
+          >
+            <SelectValue placeholder={mailboxesQuery.isLoading ? 'Loading mailboxes…' : 'Choose a mailbox'} />
+          </SelectTrigger>
+          <SelectContent>
+            {workspaceMailboxes.map((mb) => (
+              <SelectItem key={mb.agent_id} value={mb.agent_id}>
+                {mb.username ?? mb.agent_id}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <div className="min-w-0 flex-1" />
+        <Button size="sm" className="gap-[var(--space-1)]" onClick={() => setCompose({ mode: 'new' })}>
+          Compose
+        </Button>
+      </div>
+      {watcherItem?.watcher_state === 'backoff' && (
+        <div
+          role="status"
+          data-testid="mail-connection-banner"
+          className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-[var(--space-3)] py-[var(--space-2)]"
+        >
+          <p className="min-w-0 flex-1 text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
+            {watcherItem.last_error_class === null
+              ? 'Mail watcher is retrying'
+              : `Mail watcher error: ${watcherItem.last_error_class}`}
+            {watcherItem.next_attempt_at !== null && (
+              <> — retrying at {formatMailTime(watcherItem.next_attempt_at)}</>
+            )}
+          </p>
+          <Button variant="outline" size="sm" className="shrink-0" onClick={refreshWatcher}>
+            Retry now
+          </Button>
+        </div>
+      )}
+      {mailboxesQuery.isError && (
+        <div role="alert" className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-error)_10%,transparent)] px-[var(--space-3)] py-[var(--space-2)]">
+          <p className="min-w-0 flex-1 text-[length:var(--type-caption-size)] text-[var(--color-error)]">
+            {mailErrorCode(mailboxesQuery.error)}
+          </p>
+          <Button variant="outline" size="sm" className="shrink-0" onClick={() => void mailboxesQuery.refetch()}>
+            Retry
+          </Button>
+        </div>
+      )}
+      {workspaceMailboxes.length === 0 && !mailboxesQuery.isError && !mailboxesQuery.isLoading && (
+        <div
+          data-testid="mail-choose-mailbox"
+          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-[var(--space-2)] p-[var(--space-5)] text-center"
+        >
+          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+            No mailbox is configured for this workspace yet.
+          </p>
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+            Connect an email account on the agent&apos;s Connectors screen to use Mail here.
+          </p>
+        </div>
+      )}
+      {agentId !== null && (
+        <div className="flex min-h-0 flex-1">
+          <MailFolderRail
+            folders={foldersQuery.data?.folders ?? []}
+            active={folder}
+            onFolderChange={(slug) => { setIntent((prev) => ({ ...prev, folder: slug })); setSelectedRef(null) }}
+            className="hidden sm:flex"
+          />
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="mail-list-zone">
+            {foldersQuery.isError ? (
+              <div
+                role="alert"
+                data-testid="mail-folders-error"
+                className="flex flex-1 flex-col items-center justify-center gap-[var(--space-2)] p-[var(--space-4)]"
+              >
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
+                  {mailErrorCode(foldersQuery.error)}
+                </p>
+                <Button variant="outline" size="sm" onClick={() => void foldersQuery.refetch()}>
+                  Retry
+                </Button>
+              </div>
+            ) : (
+              <>
+                {messagesQuery.isPending && (
+                  <div className="flex-1 p-[var(--space-3)]" data-testid="mail-list-loading">
+                    <ListSkeleton />
+                  </div>
+                )}
+                {messagesQuery.isError && (
+                  <div
+                    role="alert"
+                    data-testid="mail-messages-error"
+                    className="flex flex-1 flex-col items-center justify-center gap-[var(--space-2)] p-[var(--space-4)]"
+                  >
+                    <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
+                      {mailErrorCode(messagesQuery.error)}
+                    </p>
+                    <Button variant="outline" size="sm" onClick={() => void messagesQuery.refetch()}>
+                      Retry
+                    </Button>
+                  </div>
+                )}
+                {messagesQuery.isSuccess && (
+                  <MailMessageList
+                    messages={messagesQuery.data.messages}
+                    selectedRef={selectedRef}
+                    onSelect={(message) => setSelectedRef(`uid:${message.uid}`)}
+                  />
+                )}
+              </>
+            )}
+          </div>
+          <div className="hidden min-h-0 min-w-0 flex-1 md:flex" data-testid="mail-reading-zone">
+            {selectedRef === null && (
+              <div className="flex flex-1 items-center justify-center p-[var(--space-5)]">
+                <p className="text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+                  Select a message to read
+                </p>
+              </div>
+            )}
+            {selectedRef !== null && detailQuery.isPending && (
+              <div className="flex flex-1 items-center justify-center p-[var(--space-5)]">
+                <div className="h-6 w-6 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin" aria-label="Loading message" />
+              </div>
+            )}
+            {selectedRef !== null && detailQuery.isError && (
+              <div className="flex flex-1 flex-col items-center justify-center gap-[var(--space-2)] p-[var(--space-4)]">
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
+                  {mailErrorCode(detailQuery.error)}
+                </p>
+                <Button variant="outline" size="sm" onClick={() => void detailQuery.refetch()}>
+                  Retry
+                </Button>
+              </div>
+            )}
+            {detail !== null && detailQuery.isSuccess && (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]">
+                  <p className="min-w-0 flex-1 truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                    From {detail.from ?? 'unknown'} · {formatMailDate(detail.date)}
+                  </p>
+                  {folder !== 'drafts' && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setCompose({ mode: 'reply' })}
+                    >
+                      Reply
+                    </Button>
+                  )}
+                </div>
+                {detail.is_draft === true ? (
+                  <MailPreviewPane
+                    state={detail.is_omnipus_draft === false ? 'foreign' : 'draft'}
+                    subject={detail.subject ?? ''}
+                    bodyMarkdown={detail.body_markdown ?? detail.body_text ?? ''}
+                    to={detail.to.join(', ')}
+                    sentOn={folder === 'sent' ? formatMailDate(detail.date) : undefined}
+                    onSave={(next) => draftSave.mutate(next)}
+                    onSend={() => draftSend.mutate()}
+                    onDiscard={() => draftDiscard.mutate()}
+                  />
+                ) : folder === 'sent' ? (
+                  <MailPreviewPane
+                    state="sent"
+                    subject={detail.subject ?? ''}
+                    bodyMarkdown={detail.body_markdown ?? detail.body_text ?? ''}
+                    to={detail.to.join(', ')}
+                    sentOn={formatMailDate(detail.date)}
+                    onSave={() => undefined}
+                    onSend={() => undefined}
+                    onDiscard={() => undefined}
+                  />
+                ) : (
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    {detail.has_html === true && htmlTokenQuery.data !== undefined ? (
+                      <MailHtmlFrame
+                        tokenUrl={`/mail-preview/html/${htmlTokenQuery.data.token}`}
+                        onLoadImages={() => setLoadRemote(true)}
+                        showLoadImages={!loadRemote}
+                        title="Mail body"
+                      />
+                    ) : (
+                      <pre className="whitespace-pre-wrap p-[var(--space-3)] text-[length:var(--type-body-size)] text-[var(--color-secondary)]">
+                        {detail.body_markdown ?? detail.body_text ?? ''}
+                      </pre>
+                    )}
+                    {detail.attachments.length > 0 && (
+                      <div className="border-t border-[var(--color-border)] p-[var(--space-3)]">
+                        <AttachmentList
+                          workspaceId={workspaceId}
+                          agentId={agentId as string}
+                          folder={folder}
+                          messageRef={selectedRef as string}
+                          attachments={detail.attachments}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      <MailComposeDialog
+        open={compose !== null}
+        mode={compose?.mode ?? 'new'}
+        replyTo={compose?.mode === 'reply' && replyTarget !== null ? replyTarget : undefined}
+        onSend={(body) => {
+          composeSend.mutate(body)
+          setCompose(null)
+        }}
+        onClose={() => setCompose(null)}
+      />
+    </div>
+  )
+}
+
+/** Attachments of an open message (D28): filename, size, download via the
+ * part_index-addressed endpoint (stable part references, never positions). */
+function AttachmentList({ workspaceId, agentId, folder, messageRef, attachments }: {
+  workspaceId: string
+  agentId: string
+  folder: string
+  messageRef: string
+  attachments: MailMessage['attachments']
+}) {
+  return (
+    <ul aria-label="Attachments" className="flex flex-col gap-[var(--space-1)]">
+      {attachments.map((attachment) => (
+        <li key={attachment.part_index} className="flex items-center gap-[var(--space-2)]">
+          <span className="min-w-0 flex-1 truncate text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
+            {attachment.filename}
+          </span>
+          <span className="shrink-0 text-[length:var(--type-caption-size)] text-[var(--color-text-tertiary)]">
+            {formatMailBytes(attachment.size_bytes)}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              void downloadMailAttachment({ workspaceId, agentId, folder, messageRef, partIndex: attachment.part_index, filename: attachment.filename })
+            }}
+          >
+            Download
+          </Button>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** Download one attachment: fetch the blob (part_index-addressed), save via
+ * a temporary object URL. */
+async function downloadMailAttachment(args: {
+  workspaceId: string
+  agentId: string
+  folder: string
+  messageRef: string
+  partIndex: number
+  filename: string
+}): Promise<void> {
+  const blob = await fetchMailAttachment(args.workspaceId, args.agentId, args.folder, args.messageRef, args.partIndex)
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = args.filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+/** Three shimmer rows for the list-loading state. */
+function ListSkeleton() {
+  return (
+    <div aria-hidden="true" className="flex flex-col gap-[var(--space-2)]">
+      {[0, 1, 2].map((row) => (
+        <div key={row} className="h-12 rounded-md bg-[color-mix(in_srgb,var(--color-surface-3)_100%,transparent)] animate-pulse" />
+      ))}
+    </div>
+  )
+}

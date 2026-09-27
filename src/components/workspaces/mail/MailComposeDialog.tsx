@@ -13,9 +13,12 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { formatMailBytes } from './mail-format'
 
-/** The compose send payload, as handed to `onSend`. */
+/** The compose send payload, as handed to `onSend`. Cc/Bcc ride the wire
+ * too (D26) — the oracle pins the required fields via objectContaining. */
 export interface MailComposeBody {
   to: string[]
+  cc: string[]
+  bcc: string[]
   subject: string
   body_markdown: string
   in_reply_to: string | null
@@ -107,6 +110,8 @@ export function MailComposeDialog({ open, mode, replyTo, onSend, onClose }: Mail
     }
     onSend({
       to,
+      cc: splitRecipients(values.cc),
+      bcc: splitRecipients(values.bcc),
       subject: values.subject,
       body_markdown: values.body,
       in_reply_to: mode === 'reply' && replyTo ? replyTo.messageId : null,
