@@ -308,7 +308,7 @@ REPO="$(new_repo_with_feature_branch)"
 printf '# ADR-097\n' > "$REPO/docs/internal/architecture/ADR-097-some-new-thing.md"
 git -C "$REPO" add -A
 git -C "$REPO" commit --quiet -m "add legacy-numbered ADR"
-OUTPUT=$(env -u CHECK_ADR_ID_SCHEME_BASE_REF GITHUB_BASE_REF=main REPO_ROOT="$REPO" bash "$LINT_SCRIPT" 2>&1)
+OUTPUT=$(env -u CHECK_ADR_ID_SCHEME_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH GITHUB_BASE_REF=main REPO_ROOT="$REPO" bash "$LINT_SCRIPT" 2>&1)
 EXIT_CODE=$?
 assert_exit_code "github-base-finding-exit" 1 "$EXIT_CODE"
 assert_output_contains "github-base-finding-name" "ADR-097-some-new-thing.md" "$OUTPUT"
@@ -322,7 +322,7 @@ REPO="$(new_repo_with_feature_branch)"
 printf '# Fresh\n' > "$REPO/docs/internal/architecture/ADR-20260927-github-base-fresh.md"
 git -C "$REPO" add -A
 git -C "$REPO" commit --quiet -m "add correct new-scheme ADR"
-OUTPUT=$(env -u CHECK_ADR_ID_SCHEME_BASE_REF GITHUB_BASE_REF=main REPO_ROOT="$REPO" bash "$LINT_SCRIPT" 2>&1)
+OUTPUT=$(env -u CHECK_ADR_ID_SCHEME_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH GITHUB_BASE_REF=main REPO_ROOT="$REPO" bash "$LINT_SCRIPT" 2>&1)
 EXIT_CODE=$?
 assert_exit_code "github-base-clean-exit" 0 "$EXIT_CODE"
 assert_output_contains "github-base-clean-resolved" "against main," "$OUTPUT"
