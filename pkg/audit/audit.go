@@ -430,8 +430,15 @@ type LoggerConfig struct {
 	Dir            string   // Directory for audit files
 	MaxSizeBytes   int64    // File rotation threshold (default 50MB)
 	RetentionDays  int      // Days to retain rotated files (default 90)
-	RedactPatterns []string // Custom redaction patterns
-	RedactEnabled  bool     // Enable redaction
+	RedactPatterns []string // Custom redaction patterns, added to the audit credential set
+
+	// RedactEnabled turns on credential redaction of Parameters, Details
+	// (recursive) and Command before each entry is signed and written. The
+	// production logger (pkg/agent initializeAudit) always sets it (#914).
+	// Redaction uses the credential patterns only — email addresses are
+	// kept, because the audit log must record mail recipients and
+	// Message-IDs in full (MC-19). See newAuditRedactor.
+	RedactEnabled bool
 
 	// AuditLogRequested signals that the operator explicitly enabled audit
 	// logging (cfg.Sandbox.AuditLog == true). When true, NewLogger returns a
@@ -567,7 +574,7 @@ func NewLogger(cfg LoggerConfig) (*Logger, error) {
 	var redactor *Redactor
 	if cfg.RedactEnabled {
 		var err error
-		redactor, err = NewRedactor(cfg.RedactPatterns)
+		redactor, err = newAuditRedactor(cfg.RedactPatterns)
 		if err != nil {
 			return nil, fmt.Errorf("audit: invalid redaction pattern: %w", err)
 		}
