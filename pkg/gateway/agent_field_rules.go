@@ -36,8 +36,10 @@ import (
 // AgentUpdateRequest property a subagent_3p (External CLI) agent rejects on
 // PUT (400 "subagent_3p agents do not support <field>; this is fixed at
 // create time."). The external runner (claude-code / codex / opencode)
-// manages its own tool loop, isolation, retries, and per-turn budget, so
-// these fields are CLI-owned and cannot be tuned through Omnipus at runtime.
+// manages its own tool loop, isolation and retries, so these fields are
+// CLI-owned and cannot be tuned through Omnipus at runtime. The per-turn
+// budget is NOT CLI-owned: Omnipus always passes the agent's tool-iteration
+// limit as the CLI's turn cap (see max_tool_iterations below).
 // auto_approve_disabled (ADR-092) is forbidden for the same reason
 // tools_cfg is: it tightens the per-tool ask/allow/deny resolution the
 // external CLI never goes through — the runner has no ask/allow/deny
