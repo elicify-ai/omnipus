@@ -781,3 +781,111 @@ func TestIntegrationPut_DefaultKeyUnresolvedAfterReload_400KeepsWrites(t *testin
 	assert.Equal(t, "tavily", web["default_provider"],
 		"the rejection happens after the write; the write stays")
 }
+
+// rawIntegrationBody decodes a response body into a raw JSON map so a test
+// can distinguish a JSON null from an absent key — a typed decode into
+// gen.IntegrationProvidersResponse cannot (both become a nil *string),
+// which is exactly the gap the first implementation fell through.
+func rawIntegrationBody(t *testing.T, w *httptest.ResponseRecorder) map[string]json.RawMessage {
+	t.Helper()
+	var m map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &m))
+	return m
+}
+
+// rawIntegrationGet runs the GET handler without decoding, returning the raw
+// recorder so null-vs-absent assertions can read the body directly.
+func rawIntegrationGet(t *testing.T, api *restAPI, user *config.UserConfig) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/integrations/providers", nil)
+	req = req.WithContext(context.WithValue(req.Context(), UserContextKey{}, user))
+	w := httptest.NewRecorder()
+	api.HandleIntegrationProviders(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	return w
+}
+
+// TestIntegrationRolesGET_FallbackSearchNullContract pins the null-vs-absent
+// wire rule on the RAW response body (contract, IntegrationProvidersResponse
+// .fallback_search): "id of the resolved fallback, or null when there is
+// none … Absent when the roles are not yet decided." A typed decode cannot
+// see the difference; this test exists so it never regresses silently again.
+func TestIntegrationRolesGET_FallbackSearchNullContract(t *testing.T) {
+	t.Run("decided + explicit none -> present, null", func(t *testing.T) {
+		api, user, cfg := newRolesTestAPI(t)
+		writeRolesWebConfig(t, api, rolesFixtureWeb()) // fallback_provider: "none"
+		_ = cfg
+
+		m := rawIntegrationBody(t, rawIntegrationGet(t, api, user))
+		raw, present := m["fallback_search"]
+		require.True(t, present, "decided: the key must be present (body=%s)", m)
+		assert.Equal(t, "null", string(raw), "explicit none is the \"No fallback\" state")
+	})
+
+	t.Run("decided + stored absent + no automatic fallback -> present, null", func(t *testing.T) {
+		api, user, _ := newRolesTestAPI(t)
+		fixture := rolesFixtureWeb()
+		delete(fixture, "fallback_provider") // stored value absent
+		fixture["default_provider"] = "duckduckgo" // R3 auto-DDG needs default != ddg
+		writeRolesWebConfig(t, api, fixture)
+
+		m := rawIntegrationBody(t, rawIntegrationGet(t, api, user))
+		raw, present := m["fallback_search"]
+		require.True(t, present, "decided: the key must be present (body=%s)", m)
+		assert.Equal(t, "null", string(raw), "stored absent + no auto fallback is still the \"No fallback\" state")
+	})
+
+	t.Run("decided + provider fallback -> present, string id", func(t *testing.T) {
+		api, user, _ := newRolesTestAPI(t)
+		fixture := rolesFixtureWeb()
+		fixture["fallback_provider"] = "duckduckgo" // a real stored fallback
+		writeRolesWebConfig(t, api, fixture)
+
+		m := rawIntegrationBody(t, rawIntegrationGet(t, api, user))
+		raw, present := m["fallback_search"]
+		require.True(t, present, "decided: the key must be present (body=%s)", m)
+		assert.Equal(t, `"duckduckgo"`, string(raw), "the resolved fallback id")
+	})
+
+	t.Run("undecided -> key absent", func(t *testing.T) {
+		api, user, _ := newRolesTestAPI(t) // no marker: undecided
+		m := rawIntegrationBody(t, rawIntegrationGet(t, api, user))
+		_, present := m["fallback_search"]
+		assert.False(t, present, "undecided: the key must be absent (body=%s)", m)
+	})
+}
+
+// TestIntegrationPut_FallbackSearchNullContract applies the same raw-JSON
+// rule to the PUT response, which returns the same shape.
+func TestIntegrationPut_FallbackSearchNullContract(t *testing.T) {
+	t.Run("saved none -> present, null", func(t *testing.T) {
+		api, user, _ := newRolesTestAPI(t)
+		writeRolesWebConfig(t, api, rolesFixtureWeb())
+		storeWebSearchKeys(t, api, "TAVILY_API_KEY")
+
+		w := putRoles(t, api, user, "tavily", `{"kind":"search","fallback":false}`)
+		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+		m := rawIntegrationBody(t, w)
+		raw, present := m["fallback_search"]
+		require.True(t, present, "decided: the key must be present (body=%s)", m)
+		assert.Equal(t, "null", string(raw), "the saved none must read back as the No-fallback state")
+	})
+
+	t.Run("saved fallback -> present, string id", func(t *testing.T) {
+		api, user, _ := newRolesTestAPI(t)
+		fixture := rolesFixtureWeb()
+		fixture["default_provider"] = "brave"
+		fixture["brave"] = map[string]any{"enabled": true, "api_key_ref": "BRAVE_API_KEY"}
+		writeRolesWebConfig(t, api, fixture)
+		storeWebSearchKeys(t, api, "TAVILY_API_KEY", "BRAVE_API_KEY")
+
+		w := putRoles(t, api, user, "tavily", `{"kind":"search","fallback":true}`)
+		require.Equal(t, 200, w.Code, "body=%s", w.Body.String())
+
+		m := rawIntegrationBody(t, w)
+		raw, present := m["fallback_search"]
+		require.True(t, present, "decided: the key must be present (body=%s)", m)
+		assert.Equal(t, `"tavily"`, string(raw), "the saved fallback id")
+	})
+}
