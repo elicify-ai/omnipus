@@ -209,22 +209,54 @@ func (w *Watcher) runCycle(ctx context.Context) error {
 
 // probe reads the mailbox's live counters without touching any flag. The
 // STATUS-based path is used whenever the transport exposes it (*Client).
+// With a budget wired (A8), the dial itself is gated through Budget.TryCall
+// (non-blocking): a refusal — account in backoff or both slots busy —
+// surfaces as the ErrMailSkipped sentinel (Cycle's skip branch handles it;
+// the dial function never runs). A nil budget dials directly, unchanged —
+// nil = ungated, which the unit tests driving a bare Watcher rely on.
 func (w *Watcher) probe(ctx context.Context) (int, uint32, uint32, error) {
-	if sp, ok := w.cfg.Transport.(MailboxStatuser); ok {
-		return sp.MailboxStatus(ctx)
+	var unseen int
+	var uidnext, uidvalidity uint32
+	dial := func(ctx context.Context) error {
+		if sp, ok := w.cfg.Transport.(MailboxStatuser); ok {
+			u, n, v, err := sp.MailboxStatus(ctx)
+			if err != nil {
+				return err
+			}
+			unseen, uidnext, uidvalidity = u, n, v
+			return nil
+		}
+		msgs, err := w.cfg.Transport.ReadInbox(ctx, InboxOptions{Limit: 25, UnseenOnly: true})
+		if err != nil {
+			return err
+		}
+		var maxUID uint32
+		for i := range msgs {
+			if msgs[i].UID > maxUID {
+				maxUID = msgs[i].UID
+			}
+		}
+		unseen = len(msgs)
+		uidnext = maxUID + 1
+		return nil
 	}
-	msgs, err := w.cfg.Transport.ReadInbox(ctx, InboxOptions{Limit: 25, UnseenOnly: true})
+	if w.cfg.Budget == nil {
+		// Ungated (unit tests driving a bare Watcher): dial directly.
+		if err := dial(ctx); err != nil {
+			return 0, 0, 0, err
+		}
+		return unseen, uidnext, uidvalidity, nil
+	}
+	err := w.cfg.Budget.TryCall(ctx, MailBudgetRequest{
+		Account:     accountKeyOf(w.cfg.Transport, w.cfg.AgentID, w.cfg.WorkspaceID),
+		AgentID:     w.cfg.AgentID,
+		WorkspaceID: w.cfg.WorkspaceID,
+		Operation:   "watcher_cycle",
+	}, dial)
 	if err != nil {
 		return 0, 0, 0, err
 	}
-
-	var maxUID uint32
-	for i := range msgs {
-		if msgs[i].UID > maxUID {
-			maxUID = msgs[i].UID
-		}
-	}
-	return len(msgs), maxUID + 1, 0, nil
+	return unseen, uidnext, uidvalidity, nil
 }
 
 // recordSuccess updates the in-memory and persisted state after a clean cycle.
