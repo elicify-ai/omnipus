@@ -135,7 +135,10 @@ func TestFixS1_ExaSSRFBlocksPrivateBaseURLAndKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWebSearchTool: %v", err)
 	}
-	exa := tool.dynamic[config.SearchProviderExa].(*ExaSearchProvider)
+	exa, ok := tool.dynamic[config.SearchProviderExa].(*ExaSearchProvider)
+	if !ok || exa == nil {
+		t.Fatalf("exa provider = %T, want *ExaSearchProvider", tool.dynamic[config.SearchProviderExa])
+	}
 	_, err = exa.Search(context.Background(), "golang", 1, "")
 	if err == nil || !strings.Contains(err.Error(), "SSRF") {
 		t.Fatalf("err = %v, want an SSRF refusal (hits=%d auth-sent=%v)", err, hits.Load(), sawAuth.Load())
