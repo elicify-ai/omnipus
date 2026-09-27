@@ -6,7 +6,7 @@ toolchain go1.26.5
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/adhocore/gronx v1.19.6
+	github.com/adhocore/gronx v1.20.4
 	github.com/anthropics/anthropic-sdk-go v1.48.0
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.20
