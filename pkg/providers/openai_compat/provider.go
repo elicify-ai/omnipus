@@ -222,7 +222,10 @@ func (p *Provider) Chat(
 }
 
 // ChatStream implements streaming via OpenAI-compatible SSE (stream: true).
-// onChunk receives the accumulated text so far on each text delta.
+// onChunk receives the accumulated text so far on each text delta; onReasoning
+// likewise receives the accumulated reasoning display text so far on each
+// reasoning-bearing delta (nil = the caller does not want live reasoning
+// text; the ReasoningBytes watchdog signal keeps firing either way).
 func (p *Provider) ChatStream(
 	ctx context.Context,
 	messages []Message,
@@ -231,6 +234,7 @@ func (p *Provider) ChatStream(
 	options map[string]any,
 	onChunk func(accumulated string),
 	onProgress protocoltypes.OnToolCallProgress,
+	onReasoning func(accumulated string),
 ) (*LLMResponse, error) {
 	if p.apiBase == "" {
 		return nil, fmt.Errorf("API base not configured")
@@ -287,7 +291,7 @@ func (p *Provider) ChatStream(
 	watch := common.WatchStreamStall(ctx, func() { _ = resp.Body.Close() }, stall)
 	defer watch.Stop()
 
-	return parseStreamResponse(ctx, resp.Body, onChunk, onProgress, watch)
+	return parseStreamResponse(ctx, resp.Body, onChunk, onProgress, onReasoning, watch)
 }
 
 // parseStreamResponse parses an OpenAI-compatible SSE stream. watch, when
@@ -300,6 +304,7 @@ func parseStreamResponse(
 	reader io.Reader,
 	onChunk func(accumulated string),
 	onProgress protocoltypes.OnToolCallProgress,
+	onReasoning func(accumulated string),
 	watch *common.StreamStallWatch,
 ) (*LLMResponse, error) {
 	var textContent strings.Builder
@@ -307,6 +312,16 @@ func parseStreamResponse(
 	var usage *UsageInfo
 	var totalArgsBytes int
 	var totalReasoningBytes int
+	// Reasoning display text, kept per response field: `reasoning` spellings
+	// accumulate into reasoningAccum (LLMResponse.Reasoning);
+	// `reasoning_content` spellings AND text-bearing `reasoning_details`
+	// entries accumulate into reasoningContentAccum (LLMResponse.
+	// ReasoningContent — the details array has no same-named string field).
+	// One builder per field keeps the callback's cumulative value identical
+	// to what the final field ends up holding, and preserves stream order
+	// when a provider mixes reasoning_content with text-bearing details.
+	var reasoningAccum strings.Builder
+	var reasoningContentAccum strings.Builder
 
 	// Tool call assembly: OpenAI streams tool calls as incremental deltas
 	type toolAccum struct {
@@ -401,6 +416,37 @@ func parseStreamResponse(
 				TotalArgsBytes: totalArgsBytes,
 				ReasoningBytes: totalReasoningBytes,
 			})
+
+			// WP-B (D5a): keep the reasoning TEXT, not just the watchdog's
+			// byte count above. Same first-non-empty-wins precedence
+			// reasoningDeltaBytes documents (reasoning > reasoning_content >
+			// reasoning_details), so OpenRouter's duplicated string+details
+			// payload is kept once, not twice. The winning spelling's text
+			// accumulates into its response field's own builder — reasoning
+			// → Reasoning; reasoning_content and text-bearing
+			// reasoning_details (which have no same-named string field) →
+			// ReasoningContent — and onReasoning fires with that field's
+			// cumulative value, exactly what the final LLMResponse field
+			// ends up holding. An encrypted-only delta is opaque
+			// ciphertext, never display text: it is kept nowhere, but the
+			// watchdog above already counted its bytes. Nil onReasoning is
+			// free: the gate-off shape must not touch this path's progress
+			// signal, and doesn't.
+			if display := reasoningDisplayText(
+				choice.Delta.Reasoning, choice.Delta.ReasoningContent, choice.Delta.ReasoningDetails,
+			); display != "" {
+				if choice.Delta.Reasoning != "" {
+					reasoningAccum.WriteString(display)
+					if onReasoning != nil {
+						onReasoning(reasoningAccum.String())
+					}
+				} else {
+					reasoningContentAccum.WriteString(display)
+					if onReasoning != nil {
+						onReasoning(reasoningContentAccum.String())
+					}
+				}
+			}
 		}
 
 		// Accumulate tool call deltas.
@@ -516,10 +562,12 @@ func parseStreamResponse(
 	}
 
 	return &LLMResponse{
-		Content:      textContent.String(),
-		ToolCalls:    toolCalls,
-		FinishReason: finishReason,
-		Usage:        usage,
+		Content:          textContent.String(),
+		ReasoningContent: reasoningContentAccum.String(),
+		Reasoning:        reasoningAccum.String(),
+		ToolCalls:        toolCalls,
+		FinishReason:     finishReason,
+		Usage:            usage,
 	}, nil
 }
 
@@ -555,6 +603,31 @@ func reasoningDeltaBytes(reasoning, reasoningContent string, details []streamRea
 		n += len(d.Text) + len(d.Summary) + len(d.Data)
 	}
 	return n
+}
+
+// reasoningDisplayText returns the display text one streamed reasoning delta
+// carries, under the same first-non-empty-wins precedence reasoningDeltaBytes
+// documents (reasoning > reasoning_content > reasoning_details): OpenRouter
+// sends `reasoning` AND `reasoning_details` in the same delta with the same
+// text, and that text is kept once, not twice. Within reasoning_details,
+// text-bearing entries (reasoning.text, reasoning.summary) are display text;
+// reasoning.encrypted entries are opaque ciphertext and never are. Returns ""
+// when the delta carries no displayable reasoning text — such a delta (e.g.
+// encrypted-only details) still counts toward the stall watchdog through
+// reasoningDeltaBytes; it just has nothing to keep.
+func reasoningDisplayText(reasoning, reasoningContent string, details []streamReasoningDetail) string {
+	if reasoning != "" {
+		return reasoning
+	}
+	if reasoningContent != "" {
+		return reasoningContent
+	}
+	var display strings.Builder
+	for _, d := range details {
+		display.WriteString(d.Text)
+		display.WriteString(d.Summary)
+	}
+	return display.String()
 }
 
 func buildToolsList(tools []ToolDefinition, nativeSearch bool) []any {

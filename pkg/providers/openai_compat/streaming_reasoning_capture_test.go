@@ -96,7 +96,7 @@ func TestParseStreamResponse_KeepsStreamedReasoningTextInResponseFields(t *testi
 				t.Context(),
 				strings.NewReader(reasoningOnlyStream(reasoningCaptureChunks, tc.chunkJSON)),
 				func(acc string) { textCallbacks = append(textCallbacks, acc) },
-				nil, nil)
+				nil, nil, nil)
 			if err != nil {
 				t.Fatalf("parseStreamResponse() error = %v", err)
 			}
@@ -134,7 +134,7 @@ func TestParseStreamResponse_MixedReasoningSpellingsAccumulatePerField(t *testin
 	b.WriteString(`data: {"choices":[{"delta":{"content":"Done."},"finish_reason":"stop"}]}` + "\n\n")
 	b.WriteString("data: [DONE]\n\n")
 
-	resp, err := parseStreamResponse(t.Context(), strings.NewReader(b.String()), nil, nil, nil)
+	resp, err := parseStreamResponse(t.Context(), strings.NewReader(b.String()), nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("parseStreamResponse() error = %v", err)
 	}

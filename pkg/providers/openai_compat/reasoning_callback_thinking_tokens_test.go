@@ -182,7 +182,7 @@ func TestOpenAINonStreamUsage_ReasoningTokensBecomeThinkingTokens(t *testing.T) 
 		{
 			name:      "reported reasoning_tokens lands in ThinkingTokens, CompletionTokens untouched",
 			usageJSON: `{"prompt_tokens":25,"completion_tokens":100,"total_tokens":125,"completion_tokens_details":{"reasoning_tokens":42}}`,
-			want: UsageInfo{PromptTokens: 25, CompletionTokens: 100, TotalTokens: 125, ThinkingTokens: 42},
+			want:      UsageInfo{PromptTokens: 25, CompletionTokens: 100, TotalTokens: 125, ThinkingTokens: 42},
 		},
 		{
 			name:      "unreported reasoning_tokens leaves ThinkingTokens zero, never a guessed default",
