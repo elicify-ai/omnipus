@@ -235,6 +235,13 @@ type Watcher struct {
 	// out. See watch_test.go.
 	testOnApply      func(relPath string, removed bool)
 	testOnSweepStart func()
+
+	// testOnTimerFired is test-only instrumentation: called from the debounce
+	// timer's own callback goroutine just before the delivery send, nil in
+	// every production Watcher. armSeq identifies the specific AfterFunc arm
+	// (1-based, in run()'s arm order) so a test can assert no single armed
+	// callback ever executes twice. See watch_test.go.
+	testOnTimerFired func(relPath string, armSeq uint64)
 }
 
 // watchBackend is the platform backend Start uses to begin watching. It
@@ -394,6 +401,7 @@ func (w *Watcher) run() {
 	pending := make(map[string]bool) // relPath -> removed
 	timers := make(map[string]*time.Timer)
 	dueCh := make(chan string, dueBuffer)
+	var armSeq uint64
 
 	var burstCount int
 	var burstWindowStart time.Time
@@ -518,7 +526,12 @@ func (w *Watcher) run() {
 				// N saves to one file collapse to one update.
 				t.Reset(w.debounce)
 			} else {
+				armSeq++
+				seq := armSeq
 				timers[relPath] = time.AfterFunc(w.debounce, func() {
+					if w.testOnTimerFired != nil {
+						w.testOnTimerFired(relPath, seq)
+					}
 					select {
 					case dueCh <- relPath:
 					case <-w.stopCh:
