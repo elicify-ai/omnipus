@@ -15,7 +15,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useUiStore } from '@/store/ui'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -38,13 +37,11 @@ import {
   fetchMailAttachment,
 } from '@/lib/api'
 import type {
-  Mailbox,
   MailboxNewMailSummary,
   MailMessage,
-  MailMessageSummary,
 } from '@/lib/api'
 import { MailFolderRail } from './MailFolderRail'
-import { MailMessageList, mailMessageRef } from './MailMessageList'
+import { MailMessageList } from './MailMessageList'
 import { MailPreviewPane } from './MailPreviewPane'
 import { MailHtmlFrame } from './MailHtmlFrame'
 import { MailComposeDialog } from './MailComposeDialog'
@@ -136,7 +133,10 @@ export function MailPanel({ workspaceId }: MailPanelProps) {
   // Persist the per-workspace intent whenever mailbox/folder selection moves
   // (FR-010). Effect-based so programmatic and click-driven changes persist.
   useEffect(() => {
-    writeMailPanelIntent(workspaceId, { agentId, folder })
+    // messageRef: null — the consume-once deep-link ref was already lifted
+    // into selectedRef at mount; persisting it again would re-select the same
+    // message on the panel's next open (FR-010 intent must not replay).
+    writeMailPanelIntent(workspaceId, { agentId, folder, messageRef: null })
   }, [workspaceId, agentId, folder])
 
   // ── Queries ───────────────────────────────────────────────────────────
@@ -285,7 +285,9 @@ export function MailPanel({ workspaceId }: MailPanelProps) {
     queryFn: () => mintMailHtmlPreviewToken({
       workspace_id: workspaceId,
       agent_id: agentId as string,
-      folder,
+      // The folder rail only offers the contract's three folders
+      // (MailFolderRail), so the narrowing is guaranteed by construction.
+      folder: folder as 'inbox' | 'sent' | 'drafts',
       message_ref: selectedRef as string,
       load_remote: loadRemote,
     }),

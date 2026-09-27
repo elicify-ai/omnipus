@@ -37,6 +37,7 @@ import { Route as AppWorkspacesWorkspaceIdCalendarRouteImport } from './routes/_
 import { Route as AppWorkspacesWorkspaceIdChatRouteImport } from './routes/_app/workspaces.$workspaceId.chat'
 import { Route as AppWorkspacesWorkspaceIdGraphRouteImport } from './routes/_app/workspaces.$workspaceId.graph'
 import { Route as AppWorkspacesWorkspaceIdListRouteImport } from './routes/_app/workspaces.$workspaceId.list'
+import { Route as AppWorkspacesWorkspaceIdMailRouteImport } from './routes/_app/workspaces.$workspaceId.mail'
 import { Route as AppWorkspacesWorkspaceIdMediaRouteImport } from './routes/_app/workspaces.$workspaceId.media'
 import { Route as AppWorkspacesWorkspaceIdSettingsRouteImport } from './routes/_app/workspaces.$workspaceId.settings'
 import { Route as AppWorkspacesWorkspaceIdTeamRouteImport } from './routes/_app/workspaces.$workspaceId.team'
@@ -187,6 +188,12 @@ const AppWorkspacesWorkspaceIdListRoute =
     path: '/list',
     getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
   } as any)
+const AppWorkspacesWorkspaceIdMailRoute =
+  AppWorkspacesWorkspaceIdMailRouteImport.update({
+    id: '/mail',
+    path: '/mail',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
 const AppWorkspacesWorkspaceIdMediaRoute =
   AppWorkspacesWorkspaceIdMediaRouteImport.update({
     id: '/media',
@@ -233,6 +240,7 @@ export interface FileRoutesByFullPath {
   '/workspaces/$workspaceId/chat': typeof AppWorkspacesWorkspaceIdChatRoute
   '/workspaces/$workspaceId/graph': typeof AppWorkspacesWorkspaceIdGraphRoute
   '/workspaces/$workspaceId/list': typeof AppWorkspacesWorkspaceIdListRoute
+  '/workspaces/$workspaceId/mail': typeof AppWorkspacesWorkspaceIdMailRoute
   '/workspaces/$workspaceId/media': typeof AppWorkspacesWorkspaceIdMediaRoute
   '/workspaces/$workspaceId/settings': typeof AppWorkspacesWorkspaceIdSettingsRoute
   '/workspaces/$workspaceId/team': typeof AppWorkspacesWorkspaceIdTeamRoute
@@ -263,6 +271,7 @@ export interface FileRoutesByTo {
   '/workspaces/$workspaceId/chat': typeof AppWorkspacesWorkspaceIdChatRoute
   '/workspaces/$workspaceId/graph': typeof AppWorkspacesWorkspaceIdGraphRoute
   '/workspaces/$workspaceId/list': typeof AppWorkspacesWorkspaceIdListRoute
+  '/workspaces/$workspaceId/mail': typeof AppWorkspacesWorkspaceIdMailRoute
   '/workspaces/$workspaceId/media': typeof AppWorkspacesWorkspaceIdMediaRoute
   '/workspaces/$workspaceId/settings': typeof AppWorkspacesWorkspaceIdSettingsRoute
   '/workspaces/$workspaceId/team': typeof AppWorkspacesWorkspaceIdTeamRoute
@@ -297,6 +306,7 @@ export interface FileRoutesById {
   '/_app/workspaces/$workspaceId/chat': typeof AppWorkspacesWorkspaceIdChatRoute
   '/_app/workspaces/$workspaceId/graph': typeof AppWorkspacesWorkspaceIdGraphRoute
   '/_app/workspaces/$workspaceId/list': typeof AppWorkspacesWorkspaceIdListRoute
+  '/_app/workspaces/$workspaceId/mail': typeof AppWorkspacesWorkspaceIdMailRoute
   '/_app/workspaces/$workspaceId/media': typeof AppWorkspacesWorkspaceIdMediaRoute
   '/_app/workspaces/$workspaceId/settings': typeof AppWorkspacesWorkspaceIdSettingsRoute
   '/_app/workspaces/$workspaceId/team': typeof AppWorkspacesWorkspaceIdTeamRoute
@@ -331,6 +341,7 @@ export interface FileRouteTypes {
     | '/workspaces/$workspaceId/chat'
     | '/workspaces/$workspaceId/graph'
     | '/workspaces/$workspaceId/list'
+    | '/workspaces/$workspaceId/mail'
     | '/workspaces/$workspaceId/media'
     | '/workspaces/$workspaceId/settings'
     | '/workspaces/$workspaceId/team'
@@ -361,6 +372,7 @@ export interface FileRouteTypes {
     | '/workspaces/$workspaceId/chat'
     | '/workspaces/$workspaceId/graph'
     | '/workspaces/$workspaceId/list'
+    | '/workspaces/$workspaceId/mail'
     | '/workspaces/$workspaceId/media'
     | '/workspaces/$workspaceId/settings'
     | '/workspaces/$workspaceId/team'
@@ -394,6 +406,7 @@ export interface FileRouteTypes {
     | '/_app/workspaces/$workspaceId/chat'
     | '/_app/workspaces/$workspaceId/graph'
     | '/_app/workspaces/$workspaceId/list'
+    | '/_app/workspaces/$workspaceId/mail'
     | '/_app/workspaces/$workspaceId/media'
     | '/_app/workspaces/$workspaceId/settings'
     | '/_app/workspaces/$workspaceId/team'
@@ -605,6 +618,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWorkspacesWorkspaceIdListRouteImport
       parentRoute: typeof AppWorkspacesWorkspaceIdRoute
     }
+    '/_app/workspaces/$workspaceId/mail': {
+      id: '/_app/workspaces/$workspaceId/mail'
+      path: '/mail'
+      fullPath: '/workspaces/$workspaceId/mail'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdMailRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
     '/_app/workspaces/$workspaceId/media': {
       id: '/_app/workspaces/$workspaceId/media'
       path: '/media'
@@ -649,6 +669,7 @@ interface AppWorkspacesWorkspaceIdRouteChildren {
   AppWorkspacesWorkspaceIdChatRoute: typeof AppWorkspacesWorkspaceIdChatRoute
   AppWorkspacesWorkspaceIdGraphRoute: typeof AppWorkspacesWorkspaceIdGraphRoute
   AppWorkspacesWorkspaceIdListRoute: typeof AppWorkspacesWorkspaceIdListRoute
+  AppWorkspacesWorkspaceIdMailRoute: typeof AppWorkspacesWorkspaceIdMailRoute
   AppWorkspacesWorkspaceIdMediaRoute: typeof AppWorkspacesWorkspaceIdMediaRoute
   AppWorkspacesWorkspaceIdSettingsRoute: typeof AppWorkspacesWorkspaceIdSettingsRoute
   AppWorkspacesWorkspaceIdTeamRoute: typeof AppWorkspacesWorkspaceIdTeamRoute
@@ -663,6 +684,7 @@ const AppWorkspacesWorkspaceIdRouteChildren: AppWorkspacesWorkspaceIdRouteChildr
     AppWorkspacesWorkspaceIdChatRoute: AppWorkspacesWorkspaceIdChatRoute,
     AppWorkspacesWorkspaceIdGraphRoute: AppWorkspacesWorkspaceIdGraphRoute,
     AppWorkspacesWorkspaceIdListRoute: AppWorkspacesWorkspaceIdListRoute,
+    AppWorkspacesWorkspaceIdMailRoute: AppWorkspacesWorkspaceIdMailRoute,
     AppWorkspacesWorkspaceIdMediaRoute: AppWorkspacesWorkspaceIdMediaRoute,
     AppWorkspacesWorkspaceIdSettingsRoute:
       AppWorkspacesWorkspaceIdSettingsRoute,
