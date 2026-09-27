@@ -58,7 +58,10 @@ func TestFix3LimiterMapBounded(t *testing.T) {
 	l := &previewLabelLimiter{buckets: make(map[string]*previewLabelBucket)}
 	admitted := 0
 	for i := 0; i < 200; i++ {
-		if l.allow(fmt.Sprintf("unk%03d", i)) {
+		// Drive the NON-RESOLVING admission path (fix4: allow() is the
+		// resolving path and gives each label its own bucket; unknown labels
+		// reach admit(label, false) from previewHostDispatchMW).
+		if l.admit(fmt.Sprintf("unk%03d", i), false) {
 			admitted++
 		}
 	}
