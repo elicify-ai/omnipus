@@ -308,10 +308,12 @@ func (sc *SSRFChecker) CloneWithGatewayOrigin(host string, port int) *SSRFChecke
 // isAllowedGatewayOrigin reports whether rawURL's literal (pre-resolution)
 // host:port exactly matches the gateway origin configured via
 // AllowGatewayOrigin, AND rawURL's path starts with
-// requiredGatewayOriginPathPrefix (ADR-073). Fails closed: if no gateway
-// origin has been configured, rawURL carries no explicit port, the port
-// doesn't match, or the path isn't under /preview/, this always returns
-// false and CheckURL falls through to the full SSRF path.
+// requiredGatewayOriginPathPrefix (ADR-073) — or the URL belongs to the
+// ADR-094 Mode 1 label class. Fails closed: if no gateway origin has been
+// configured, the port doesn't match (a portless URL's EFFECTIVE port — its
+// scheme default, 80 http / 443 https — must equal the wired gateway port),
+// or the path isn't under /preview/ (exact-host exception), this always
+// returns false and CheckURL falls through to the full SSRF path.
 //
 // The host:port match is on host:port only, NOT scheme: both http:// and
 // https:// to the configured gateway host:port are accepted. This is
@@ -335,16 +337,22 @@ func (sc *SSRFChecker) isAllowedGatewayOrigin(rawURL string) bool {
 			return false
 		}
 	} else {
-		// fix3 (SL-F2): a PORTLESS URL's effective port is its scheme
-		// default (80 http / 443 https). The mint
-		// (pkg/gateway/middleware/preview_label.go::PreviewIsolatedURL)
-		// emits exactly this portless form for an implicit-80 canonical
-		// origin (spec DS-3 row 10), so the label class admits it when the
-		// wired gateway port IS the scheme default. Only the label class is
-		// ever admitted portless — the exact-host /preview/ exception below
-		// keeps requiring the literal host:port token (serve_web always
-		// emits an explicit port there), so its scope is unchanged, and a
-		// portless URL against any other wired port is still refused.
+		// A PORTLESS URL's effective port is its scheme default (80 http /
+		// 443 https). Both mints emit exactly this portless form on an
+		// implicit-80/443 canonical origin, where canonicalGatewayOrigin /
+		// resolveMainOrigin drop the port: the Mode 1 isolated_url
+		// (pkg/gateway/middleware/preview_label.go::PreviewIsolatedURL,
+		// spec DS-3 row 10) since fix3 (SL-F2), and the Mode 2 URL
+		// (pkg/tools/web_serve.go::executeStatic builds
+		// origin + "/preview/<agent>/<token>/" from that origin) since
+		// fix9 (gate wave-3 F1). fix9: the exact-host /preview/ exception
+		// therefore ALSO admits the portless form, mirroring fix3's
+		// label-class admission, under the same fail-closed rules as the
+		// explicit-port branch below: the scheme must be http(s), the
+		// scheme-default port must equal the wired gateway port (a portless
+		// URL against any other wired port is refused), the host must match
+		// the configured gateway host (or the localhost-only resolved-
+		// loopback literals), and the path must stay under /preview/.
 		if !schemeIsHTTPish(rawURL) {
 			return false
 		}
@@ -352,10 +360,6 @@ func (sc *SSRFChecker) isAllowedGatewayOrigin(rawURL string) bool {
 			return false
 		}
 		host = strings.ToLower(extractHost(rawURL))
-		if label, _, isLabel := middleware.ParsePreviewLabelHost(host); isLabel && middleware.IsValidPreviewLabel(label) {
-			return true
-		}
-		return false
 	}
 
 	host = strings.ToLower(host)
@@ -600,9 +604,12 @@ func extractHost(rawURL string) string {
 // "localhost:5000"), before any resolution or CIDR check runs.
 //
 // ok is false when the URL has no explicit port (e.g. a bare
-// "https://example.com" defaulting to 443) — the gateway-origin exception
-// never matches a portless URL, since serve_web always emits an explicit
-// port and a portless host can never be the literal token it produces.
+// "https://example.com" defaulting to 443). That is NOT "never matches":
+// since fix3 (SL-F2) the portless label class and since fix9 (wave-3 F1)
+// the portless exact-host /preview/ exception are matched from the scheme-
+// default effective port instead — isAllowedGatewayOrigin routes a portless
+// URL down its scheme-default-port branch. ok=false only means the literal
+// port token is absent.
 func extractHostPort(rawURL string) (host, port string, ok bool) {
 	_, authority, hadPort := stripURLToAuthority(rawURL)
 	if !hadPort {

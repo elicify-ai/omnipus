@@ -886,9 +886,11 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerAncillaryRoutes() {
 // tested reference helper — FR-023a documents the /preview/ exemption it
 // would need — but it is not wired into gateway.go for ANY route, so this is
 // not something /preview/ specifically forgoes.) It DOES inherit the global
-// configSnapshotMiddleware (and the CSRF middleware, which exempts the
-// /preview/ prefix — see middleware/csrf.go's defaultExemptPrefixes) because
-// those are wrapped around the whole main mux in gateway.go, not per-route.
+// configSnapshotMiddleware (and the CSRF middleware — its
+// defaultExemptPrefixes set lists PreviewPathPrefix, WebhookPathPrefix and
+// LibraryPreviewPathPrefix, which is why /preview/ is exempt while /serve/
+// and /dev/ are not) because those are wrapped around the whole main mux in
+// gateway.go, not per-route.
 // HandlePreview itself checks cfg.IsPreviewEnabled() live on every request
 // and 404s when disabled (FR-006) — toggling it never requires a restart.
 //
@@ -934,7 +936,8 @@ const (
 // state-changing method (POST/PUT/PATCH/DELETE) never actually reaches this
 // handler: /serve/ and /dev/ are deliberately NOT in the CSRF
 // exempt-prefixes set (middleware/csrf.go's defaultExemptPrefixes, which
-// lists only middleware.PreviewPathPrefix), so the CSRF middleware rejects
+// lists PreviewPathPrefix, WebhookPathPrefix and LibraryPreviewPathPrefix —
+// never /serve/ or /dev/), so the CSRF middleware rejects
 // those methods with 403 first. Either outcome — this handler's 404 or the
 // CSRF middleware's 403 — keeps the retired prefixes off the 200 SPA shell,
 // which is the invariant that matters.
