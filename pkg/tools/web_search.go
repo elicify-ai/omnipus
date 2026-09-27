@@ -835,6 +835,12 @@ func (t *WebSearchTool) executeNotUsableDefault(
 		return ErrorResult(strings.Join(lines, "\n"))
 	}
 	// R6: the fallback runs; the default is named in a note or an error line.
+	// Pre-flight the fallback as this path's first runner (K3): depth low on
+	// GLM (or depth/site-filter asks a provider cannot honour) is refused
+	// before any request fires.
+	if res := t.preflightCheck(entries, fb, "fallback", req); res != nil {
+		return res
+	}
 	text, spErr := t.runProvider(ctx, start, fb, req)
 	if spErr == nil {
 		notes := t.excludeNote(entries, entries.fallbackID, req)
@@ -872,6 +878,12 @@ func (t *WebSearchTool) executeChosen(
 	if id == entries.defaultID && !usesCap {
 		req.namedID = ""
 		return t.executeDefaultPath(ctx, cfg, entries, req, start)
+	}
+	// Pre-flight: the chosen provider is about to be the first runner; the
+	// same capability refusals that guard the default path guard it here
+	// (K3): depth on a non-depth provider, GLM low, site filters.
+	if res := t.preflightCheck(entries, id, "chosen", req); res != nil {
+		return res
 	}
 	// Usable pick: one named attempt.
 	text, spErr := t.runProvider(ctx, start, id, req)
@@ -1315,6 +1327,13 @@ func (p *GLMSearchProvider) SearchWithCaps(ctx context.Context, req searchReques
 // searchCaps mirrors the legacy GLM request with content_size from the
 // agent's depth (D-GLM row).
 func (p *GLMSearchProvider) searchCaps(ctx context.Context, req searchRequest) (string, error) {
+	// FR-015: GLM has no low content_size value. Agent depth low is refused
+	// here — final class, no request fires — on every path that reaches this
+	// provider, so a hop or a fallback can never route a low-depth ask to
+	// GLM even where the tool-level pre-flight does not run.
+	if req.depth == "low" {
+		return "", &searchProviderError{class: classRejected, msg: "depth is not supported"}
+	}
 	// K1: the key is read at call time (D4a); an empty effective key is
 	// "not usable" (D16), never a hop.
 	apiKey := p.currentKey()
