@@ -772,6 +772,19 @@ func (pe *PlanEngine) sweepToFailedInterrupted(ls *session.LifecycleStore, rec *
 	// invariant; explicitly nil it for clarity (the swept session is no longer
 	// awaiting input — it was interrupted).
 	failed.NeedsInput = nil
+	// A current-generation Stop is an instruction ("do not run this
+	// generation"). Landing failed(interrupted) carries that instruction
+	// out, so the marker is spent — the same clear that
+	// steer_cancel.go's terminal write and
+	// steer_completion.go::completeSteeredTurn perform before a terminal
+	// persist. persistLocked rejects a terminal record that still carries
+	// one, and copying Stop wholesale made every boot warn and skip this
+	// session forever (issue #947). An older marker
+	// (Stop.Generation < Generation) is inert history and stays.
+	// failed is a shallow copy: nil its Stop field only.
+	if failed.Stop != nil && failed.Stop.Generation == failed.Generation {
+		failed.Stop = nil
+	}
 	if err := ls.Persist(&failed); err != nil {
 		return err
 	}

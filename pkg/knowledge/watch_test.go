@@ -641,3 +641,123 @@ func TestWatcher_StopWaitsForInFlightSweep(t *testing.T) {
 		t.Fatal("Stop() did not return within 5s")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Debounce race in run()'s raw-events branch: a raw event for a path whose
+// debounce timer has ALREADY FIRED but whose delivery is not yet consumed
+// takes the timers-map "exists" branch and calls t.Reset on an expired
+// AfterFunc timer. Reset then returns false AND SCHEDULES THE SAME CALLBACK
+// TO RUN AGAIN (stdlib-verified: reset_returned=false, executions=2), so one
+// quiet period produces a second delivery a correct debounce never sends.
+// Asserted at the MECHANISM level (no armed callback executes twice) because
+// applyOne counting is structurally blind here: the extra delivery consumes
+// or STEALS the next cycle's pending/timers entry instead of adding an apply,
+// so an apply count can read 1 on broken code and 2 on correct code.
+//
+// testOnTimerFired is held BEFORE the callback's delivery send, which makes
+// the fired-but-undelivered window deterministic: while it is held, dueCh is
+// still empty, so the second save injected below is the ONLY ready select
+// case and run() is guaranteed to process it through the Reset path — no
+// timing guess, and the select's usual uniform-random pick never arises.
+// ---------------------------------------------------------------------------
+
+func TestWatcher_ResetOnFiredTimerDoesNotRescheduleCallback(t *testing.T) {
+	orig := watchBackend
+	t.Cleanup(func() { watchBackend = orig })
+	watchBackend = func(string, chan<- fsEvent, chan<- struct{}, <-chan struct{}) (<-chan error, error) {
+		// Silent backend: the injected events below are the only source, so
+		// the interleaving is fully test-controlled.
+		ch := make(chan error)
+		return ch, nil
+	}
+
+	home, root := t.TempDir(), t.TempDir()
+	ix := b2Open(t, home, root)
+
+	const debounce = 150 * time.Millisecond
+	w := NewWatcher(ix, WatchOptions{Debounce: debounce, Logger: testWatchLogger()})
+
+	var releaseOnce sync.Once
+	releaseCh := make(chan struct{})
+	release := func() { releaseOnce.Do(func() { close(releaseCh) }) }
+	t.Cleanup(release) // a callback held in the hook must never hang Stop in t.Cleanup
+
+	var mu sync.Mutex
+	fired := map[uint64]int{} // armSeq -> execution count of that armed callback
+	firedCh := make(chan uint64, 1)
+	w.testOnTimerFired = func(relPath string, armSeq uint64) {
+		if relPath != "race.md" {
+			return
+		}
+		mu.Lock()
+		fired[armSeq]++
+		n := fired[armSeq]
+		mu.Unlock()
+		if n == 1 {
+			select {
+			case firedCh <- armSeq:
+			default:
+			}
+			<-releaseCh // hold BEFORE the delivery send: the danger window itself
+		}
+	}
+
+	var applyCount int64
+	w.testOnApply = func(relPath string, _ bool) {
+		if relPath == "race.md" {
+			atomic.AddInt64(&applyCount, 1)
+		}
+	}
+
+	if err := w.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(w.Stop)
+
+	// Save 1 arms the debounce timer for race.md.
+	select {
+	case w.rawEvents <- fsEvent{relPath: "race.md", removed: false}:
+	case <-time.After(time.Second):
+		t.Fatal("could not inject save 1: run()'s select loop is not consuming rawEvents")
+	}
+
+	// Enter the danger window deterministically: the timer has FIRED (its
+	// callback is live and held before the delivery send, so dueCh is still
+	// empty) while timers["race.md"] is still present.
+	select {
+	case <-firedCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("debounce timer never fired — watcher or hook broken")
+	}
+
+	// Save 2 arrives inside that window. rawEvents is the ONLY ready select
+	// case (the held callback has not sent), so run() is guaranteed to take
+	// the timers-map "exists" branch: t.Reset on an already-fired AfterFunc
+	// timer. On the buggy code that re-schedules the SAME callback.
+	select {
+	case w.rawEvents <- fsEvent{relPath: "race.md", removed: false}:
+	case <-time.After(time.Second):
+		t.Fatal("could not inject save 2")
+	}
+
+	// Complete the burst: both saves were inside one quiet period.
+	release()
+
+	// Negative window, several multiples of the debounce (this file's stated
+	// pattern for proving something did NOT happen): a correct fix may
+	// legitimately arm a FRESH timer for save 2, which then fires and
+	// delivers once within this window. What must never happen is any single
+	// ARMED callback executing twice.
+	time.Sleep(debounce * 4)
+
+	mu.Lock()
+	defer mu.Unlock()
+	for seq, n := range fired {
+		if n != 1 {
+			t.Fatalf("debounce timer callback (arm %d) executed %d times for one save burst, want exactly 1 — Reset on an already-fired timer re-scheduled the same callback (ignored-return-value race, watch.go raw-events branch)", seq, n)
+		}
+	}
+	if got := atomic.LoadInt64(&applyCount); got != 1 {
+		t.Fatalf("applyOne ran %d times for one file's save burst, want exactly 1", got)
+	}
+}
