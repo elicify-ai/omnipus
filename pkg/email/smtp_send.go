@@ -32,10 +32,7 @@ func sendSMTPWithSTARTTLS(ctx context.Context, addr string, auth smtp.Auth, from
 	}
 	cl, err := smtp.NewClient(conn, host)
 	if err != nil {
-		if cerr := ctx.Err(); cerr != nil {
-			return cerr
-		}
-		return fmt.Errorf("SMTP client (greeting): %w", err)
+		return smtpStep(ctx, err, "SMTP client (greeting)")
 	}
 	defer cl.Close()
 
@@ -67,10 +64,7 @@ func sendSMTPS(ctx context.Context, addr, username, password, from string, rcpts
 	conn := tls.Client(raw, tlsCfg)
 	cl, err := smtp.NewClient(conn, tlsCfg.ServerName)
 	if err != nil {
-		if cerr := ctx.Err(); cerr != nil {
-			return cerr
-		}
-		return fmt.Errorf("SMTP client (greeting): %w", err)
+		return smtpStep(ctx, err, "SMTP client (greeting)")
 	}
 	defer cl.Close()
 

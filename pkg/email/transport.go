@@ -992,15 +992,22 @@ func (c *Client) Send(ctx context.Context, req SendRequest) error {
 // To+Cc+Bcc after de-duplication, capped at 50.
 const maxOutboundRecipients = 50
 
-// smtpStep re-reports a failed SMTP step as the context error when the
-// caller's context expired (MC-21: the deadline, not a socket timeout, is the
-// truthful cause), and wraps it with the step label otherwise.
+// smtpStep re-reports a failed SMTP step. A done context returns bare ctx.Err()
+// (MC-21: the deadline, not a socket timeout, is the truthful cause); a
+// deadline-flavored failure with a still-live ctx — the raw connection's
+// deadline clock and the caller's context timer are independent clocks, so a
+// blocked step can fail timeout-flavored a hair before ctx.Err() transitions —
+// is normalized to context.DeadlineExceeded under the step label; anything
+// else keeps the labeled raw wrap.
 func smtpStep(ctx context.Context, err error, label string) error {
 	if err == nil {
 		return nil
 	}
 	if cerr := ctx.Err(); cerr != nil {
 		return cerr
+	}
+	if isDeadlineFlavored(err) {
+		return fmt.Errorf("%s: %w", label, context.DeadlineExceeded)
 	}
 	return fmt.Errorf("%s: %w", label, err)
 }
@@ -1047,12 +1054,27 @@ func classifyDialErr(ctx context.Context, err error) error {
 	if cerr := ctx.Err(); cerr != nil {
 		return cerr
 	}
-	var neterr net.Error
-	if errors.Is(err, os.ErrDeadlineExceeded) ||
-		(errors.As(err, &neterr) && neterr.Timeout()) {
+	if isDeadlineFlavored(err) {
 		return fmt.Errorf("dial: %w", context.DeadlineExceeded)
 	}
 	return fmt.Errorf("dial: %w", err)
+}
+
+// isDeadlineFlavored reports whether err is a timeout/deadline failure —
+// wrapping os.ErrDeadlineExceeded, or a net.Error whose Timeout() is true
+// (the poller's i/o timeout, or the network stack's ETIMEDOUT). The raw
+// connection's deadline clock and the caller's context timer are independent
+// clocks: a blocked dial or step can fail deadline-flavored a hair before
+// ctx.Err() transitions to non-nil, and a deadline-flavored failure IS the
+// deadline firing as far as the caller is concerned. Exactly one place knows
+// what "deadline-flavored" means; classifyDialErr and smtpStep both consult it.
+func isDeadlineFlavored(err error) bool {
+	if err == nil {
+		return false
+	}
+	var neterr net.Error
+	return errors.Is(err, os.ErrDeadlineExceeded) ||
+		(errors.As(err, &neterr) && neterr.Timeout())
 }
 
 // buildEmailBody constructs an RFC 5322-compliant message. A body that parses
