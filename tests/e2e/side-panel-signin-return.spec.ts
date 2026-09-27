@@ -67,12 +67,15 @@ test.afterAll(async () => {
   await browser.close()
 })
 
+// squad-lead ruling (batch 2): calendar is unregistered until wave 3
+// (§8.2/§10, §12 dataset row 7) — wave 1 exercises W11's sign-in return with
+// the registered `library` panel; re-run with ?panel=calendar in wave 3.
 test('W11 — sign-in returns to the opened panel link, not /', async ({ page }) => {
-  const target = `/#/workspaces/${workspaceId}/chat?panel=calendar`
+  const target = `/#/workspaces/${workspaceId}/chat?panel=library`
   await page.goto(target)
   await loginAs(page, 'admin', 'admin123')
   await expect(page).toHaveURL(new RegExp(`/workspaces/${workspaceId}/chat`))
-  await expect(page).toHaveURL(/panel=calendar/)
+  await expect(page).toHaveURL(/panel=library/)
   await expect(page).not.toHaveURL(/#\/$/)
-  await expect(page.getByTestId('side-panel-header')).toContainText('Calendar')
+  await expect(page.getByTestId('side-panel-header')).toContainText('Library')
 })

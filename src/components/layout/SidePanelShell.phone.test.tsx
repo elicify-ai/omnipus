@@ -264,10 +264,33 @@ describe('SP-26 scroller non-conflict (RED — recognizer ignores scroll positio
     const scroller = screen.getByTestId('probe-scroller')
     Object.defineProperty(scroller, 'scrollWidth', { value: 600, configurable: true })
     Object.defineProperty(scroller, 'clientWidth', { value: 200, configurable: true })
+    // SP-26's exact rule: the scroller owns the gesture when it "can scroll
+    // horizontally in the drag's direction"; the edge-swipe recognizer takes
+    // over only "on such a scroller already at its left end". The drag runs
+    // rightward, so the scroller must NOT start at its left end — start it
+    // mid-range (scrollLeft=100 of max 400) or the test would exercise the
+    // handover rule instead of the non-conflict rule.
+    Object.defineProperty(scroller, 'scrollLeft', { value: 100, configurable: true })
     await act(async () => {
       swipe(scroller, [[8, 100], [128, 100]])
     })
+    // The close path is async (guardThenClose awaits runGuard): flush the
+    // chain before the did-NOT-close claim, then prove the instrument with a
+    // positive control — the same gesture on the PANEL itself closes (via
+    // waitFor), so a too-short flush fails loudly here instead of passing
+    // vacuously.
+    for (let i = 0; i < 5; i++) {
+      await act(async () => {
+        await Promise.resolve()
+      })
+    }
     expect(usePanelShellStore.getState().activePanel).not.toBeNull()
+    await act(async () => {
+      swipe(screen.getByTestId('side-panel'), [[8, 200], [64, 210], [128, 220]])
+    })
+    await waitFor(() => {
+      expect(usePanelShellStore.getState().activePanel).toBeNull()
+    })
   })
 
   it('RED — a scroller ALREADY AT ITS LEFT END hands the gesture to the recognizer (SP-26): the swipe CLOSES', async () => {
