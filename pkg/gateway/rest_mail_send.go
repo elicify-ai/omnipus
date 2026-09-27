@@ -167,6 +167,13 @@ func (a *restAPI) handleMailSendInner(w http.ResponseWriter, r *http.Request, wo
 		"workspace_id": workspaceID, "agent_id": agentID,
 		"message_id": out.MessageID, "recipients_count": total,
 		"attachment_count": attCount, "sent_saved": resp.SentSaved,
+		// MC-19/D46 full fields: addresses (incl. Bcc), origin, argument
+		// hash, per-attachment records, and the folder the send produced.
+		"recipients":  mailAuditRecipients(req.To, derefStrings(req.Cc), derefStrings(req.Bcc)),
+		"origin":      "human",
+		"arg_hash":    mailAuditArgHash(req),
+		"folder":      client.SentFolderName(),
+		"attachments": mailAuditAttachments(in.Attachments),
 	})
 	jsonOK(w, resp)
 }

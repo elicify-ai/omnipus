@@ -386,13 +386,18 @@ const (
 	// operator asked to delete the credential but it remains encrypted at rest.
 	EventChannelInstanceDeleted = "channel.instance.deleted"
 
-	// Mail panel mutation events (email-mail-view-spec 2.3, MC-19): every
+	// Mail panel mutation events (email-mail-view-spec 2.3, MC-19/D46): every
 	// human-initiated mutation from the Mail panel carries an audit entry.
 	// Fields emitted by the gateway handlers: {workspace_id, agent_id,
 	// message_id, recipients_count, attachment_count}; draft events add
-	// {ref_folder: "drafts", uid, uidvalidity}. Recipients are recorded only
-	// as a COUNT — addresses are PII and the auditor redacts email
-	// addresses anyway.
+	// {ref_folder: "drafts", uid, uidvalidity}. Per the founder's D46 ruling,
+	// the events also carry the FULL field set: recipients (the complete
+	// address list, incl. Bcc), origin (human | agent-draft | owner-draft),
+	// arg_hash (FR-080 ArgsHash), folder, and — for attachment-bearing
+	// sends — per-attachment {filename, size_bytes} records. An earlier
+	// count-only comment claimed addresses are PII the auditor redacts; that
+	// claim was never true (the audit log is operator-readable, plaintext)
+	// and is superseded by D46.
 	EventMailPanelSend = "mail.panel.send"
 
 	// EventMailPanelDraftUpdated — INFO. The panel edited a draft (D12/D23):

@@ -186,6 +186,12 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 		"workspace_id": workspaceID, "agent_id": agentID,
 		"message_id": out.MessageID, "attachment_count": len(in.Attachments),
 		"uid": newUID, "uidvalidity": newUV,
+		// MC-19/D46 full fields.
+		"recipients":  mailAuditRecipients(req.To, derefStrings(req.Cc), derefStrings(req.Bcc)),
+		"origin":      mailDraftOrigin(cur.IsOmnipusDraft),
+		"arg_hash":    mailAuditArgHash(req),
+		"folder":      client.DraftsFolderName(),
+		"attachments": mailAuditAttachments(in.Attachments),
 	})
 	resp := gen.MailMessage{
 		Folder: gen.MailMessageFolderDrafts, Uid: int(newUID), Uidvalidity: int(newUV),
@@ -238,6 +244,12 @@ func (a *restAPI) handleMailDraftDiscard(w http.ResponseWriter, r *http.Request,
 		"workspace_id": workspaceID, "agent_id": agentID,
 		"message_id": bracketMessageID(cur.MessageID), "uid": uid, "uidvalidity": uv,
 		"expunged": expunged,
+		// MC-19/D46 full fields. A discard has no request args: the
+		// recipients are the draft's own stored addresses.
+		"recipients": cur.To,
+		"origin":     mailDraftOrigin(cur.IsOmnipusDraft),
+		"arg_hash":   mailAuditArgHash(nil),
+		"folder":     client.DraftsFolderName(),
 	})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -453,6 +465,12 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 		"message_id": key, "recipients_count": len(to) + len(cc) + len(derefStrings(req.Bcc)),
 		"attachment_count": len(in.Attachments), "sent_saved": resp.SentSaved,
 		"draft_cleanup_warning": cleanupWarn != "", "expunged": expunged,
+		// MC-19/D46 full fields.
+		"recipients":  mailAuditRecipients(to, cc, derefStrings(req.Bcc)),
+		"origin":      mailDraftOrigin(cur.IsOmnipusDraft),
+		"arg_hash":    mailAuditArgHash(req),
+		"folder":      client.DraftsFolderName(),
+		"attachments": mailAuditAttachments(mailAuditDraftBodyPart(in.Attachments)),
 	})
 	jsonOK(w, resp)
 }
