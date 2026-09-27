@@ -388,7 +388,16 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     // always-visible summary — it now lives in the collapsed list instead.
     expect(screen.queryByText(/asking for a mounted folder; installing a skill/i)).not.toBeInTheDocument()
     expect(screen.getByText(/tools set to .ask. run without a prompt when it.s safe/i)).toBeInTheDocument()
-    expect(screen.getByText(/they stay inside your workspace\./i)).toBeInTheDocument()
+    // #920 founder decision D3 (2026-09-27): under Auto, reading, listing and
+    // searching run outside the workspace too; only writing keeps the
+    // workspace rule. The old "they stay inside your workspace." claim is
+    // false for reads and must be gone.
+    expect(
+      screen.getByText(
+        /reading, listing and searching run anywhere except omnipus.s protected files, and writing runs without a prompt only inside your workspace and its mounted folders\./i,
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/they stay inside your workspace/i)).not.toBeInTheDocument()
     // The old "and the sandbox" clause is gone — it claimed a guarantee
     // that no longer holds once Auto works without an enforcing sandbox.
     expect(screen.queryByText(/workspace and the sandbox/i)).not.toBeInTheDocument()
@@ -467,7 +476,12 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
       within(content).getByText('Adding or removing connected (MCP) servers, and MCP tools not marked safe'),
     ).toBeInTheDocument()
     expect(within(content).getByText('Browser scripts and uploads')).toBeInTheDocument()
-    expect(within(content).getByText('Mounting a folder, or files outside your workspace')).toBeInTheDocument()
+    expect(
+      within(content).getByText('Mounting a folder, or writing files outside your workspace'),
+    ).toBeInTheDocument()
+    // #920 D3: the old label implied any file outside the workspace asks —
+    // false for reading, listing and searching under Auto.
+    expect(within(content).queryByText('Mounting a folder, or files outside your workspace')).not.toBeInTheDocument()
   })
 
   it('the turn-on confirmation dialog is short (2-3 sentences) and points at the card’s own collapsed list rather than restating it', async () => {
@@ -496,7 +510,12 @@ describe('SecuritySection — ADR-092 Auto-approve global switch', () => {
     // must use the same wording as the card — "stay inside your
     // workspace", with no "and the sandbox" (false once Auto runs with no
     // sandbox enforcing).
-    expect(dialog).toHaveTextContent(/they stay inside your workspace\./i)
+    // #920 D3 (2026-09-27): reads are no longer workspace-bound under Auto —
+    // the dialog must say so, in the same words as the card.
+    expect(dialog).toHaveTextContent(
+      /reading, listing and searching run anywhere except omnipus.s protected files, and writing runs without a prompt only inside your workspace and its mounted folders\./i,
+    )
+    expect(dialog).not.toHaveTextContent(/they stay inside your workspace/i)
     expect(dialog).not.toHaveTextContent(/workspace and the sandbox/i)
     // The old "not available on Windows" wording is gone — replaced by the
     // same no-sandbox caveat the card itself shows.
