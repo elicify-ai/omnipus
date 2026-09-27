@@ -14,6 +14,7 @@ import {
   MaxToolIterationsLoweringConflict as MaxToolIterationsLoweringConflictSchema,
   ErrorResponse as ErrorResponseSchema,
   MaxToolIterationAgentChange as MaxToolIterationAgentChangeSchema,
+  PerformanceReloadFailedError as PerformanceReloadFailedErrorSchema,
 } from '@/lib/api/generated/schemas'
 import type {
   RetentionConfig,
@@ -30,6 +31,8 @@ import type {
   MaxToolIterationsLoweringConflict,
   MaxToolIterationAgentChange,
   ErrorResponse,
+  PerformanceReloadFailedDetails,
+  PerformanceReloadFailedError as PerformanceReloadFailedBody,
 } from '@/lib/api/generated/openapi-types'
 import { ApiError, isApiError } from '../api-error'
 import { REAUTH_HEADER } from './auth'
@@ -386,7 +389,7 @@ export async function updatePerformanceSettings(
       body: JSON.stringify(body),
     }, PerformanceSettingsSchema)
   } catch (err) {
-    throw performanceWriteError(err)
+    throw performanceWriteError(err, body)
   }
 }
 
@@ -430,28 +433,82 @@ export function isMaxToolIterationsLoweringConflict(
 
 /**
  * PerformanceReloadFailedError is PUT /performance's 500
- * `performance_reload_failed`: the new settings WERE saved to config.json, but
- * the running agents could not be reloaded to use them yet. It is not a failed
- * save — the screen clears its dirty state and re-reads GET /performance — so
- * its userMessage says exactly that instead of the generic 5xx text.
- * `loweredAgents` is the body's `details.lowered_agents` (the agents this
- * request lowered; GET /performance does not carry them).
+ * `performance_reload_failed` (body: the generated PerformanceReloadFailedError
+ * schema): every write of the request IS committed to config.json, but the new
+ * values are not in force yet. It is never a failed save, so its userMessage
+ * always starts "Saved, but not applied yet".
+ *
+ *   - `stage` is details.stage. `refresh`: the in-memory configuration was not
+ *     swapped, so GET /performance still shows the OLD values — the screen must
+ *     keep the saved values on show instead of re-syncing to it. `reload`: GET
+ *     shows the new values; only the agents' reload failed. `null`: the body did
+ *     not say (malformed or missing details) — treated like `refresh`, the one
+ *     reading that never shows a stale value as current.
+ *   - `changedFields` is details.changed_fields (empty when unreadable).
+ *   - `loweredAgents` is details.lowered_agents — GET /performance does not
+ *     carry them. `loweredUnknown` is true when agents may have been lowered
+ *     but the list could not be read (malformed, or missing although the
+ *     request confirmed a lowering): the screen must say so, not stay silent.
  */
 export const PERFORMANCE_RELOAD_FAILED_CODE = 'performance_reload_failed'
 
-export class PerformanceReloadFailedError extends ApiError {
-  readonly loweredAgents: MaxToolIterationAgentChange[]
+export type PerformanceReloadStage = PerformanceReloadFailedDetails['stage']
+export type PerformanceChangedField = PerformanceReloadFailedDetails['changed_fields'][number]
 
-  constructor(serverMessage: string, bodyText: string, cause: unknown, loweredAgents: MaxToolIterationAgentChange[] = []) {
-    const detail = serverMessage.trim()
-    super(500, `Saved, but not applied yet${detail ? `: ${detail}` : '.'}`, {
+export interface PerformanceReloadFailure { // not-wire-format: constructor options for PerformanceReloadFailedError, parsed from the generated PerformanceReloadFailedError body
+  stage: PerformanceReloadStage | null
+  changedFields: PerformanceChangedField[]
+  loweredAgents: MaxToolIterationAgentChange[]
+  loweredUnknown: boolean
+}
+
+const CHANGED_FIELD_LABELS: Record<PerformanceChangedField, string> = {
+  max_parallel_agents: 'agents running at once',
+  tools_on_demand: 'on-demand tool loading',
+  goal_max_rounds: 'goal tries',
+  max_tool_iterations: 'tool-call limit',
+}
+
+function reloadFailedMessage(serverMessage: string, f: PerformanceReloadFailure): string {
+  const detail = serverMessage.trim()
+  const named = f.changedFields.map((k) => CHANGED_FIELD_LABELS[k]).join(', ')
+  const fallback = named ? `the new ${named} will be used after a restart or reload` : ''
+  const text = detail || fallback
+  if (f.stage === 'reload') {
+    return `Saved, but not applied yet${text ? `: ${text}` : ' — the running agents keep the old values until a restart or reload.'}`
+  }
+  return `Saved, but not applied yet — saved to the settings file; takes effect after a restart or reload${text ? `: ${text}` : '.'}`
+}
+
+export class PerformanceReloadFailedError extends ApiError {
+  readonly stage: PerformanceReloadStage | null
+  readonly changedFields: PerformanceChangedField[]
+  readonly loweredAgents: MaxToolIterationAgentChange[]
+  readonly loweredUnknown: boolean
+
+  constructor(serverMessage: string, bodyText: string, cause: unknown, failure: Partial<PerformanceReloadFailure> = {}) {
+    const f: PerformanceReloadFailure = {
+      stage: failure.stage ?? null,
+      changedFields: failure.changedFields ?? [],
+      loweredAgents: failure.loweredAgents ?? [],
+      loweredUnknown: failure.loweredUnknown ?? false,
+    }
+    super(500, reloadFailedMessage(serverMessage, f), {
       code: PERFORMANCE_RELOAD_FAILED_CODE,
       body: bodyText,
       cause,
     })
     this.name = 'PerformanceReloadFailedError'
-    this.loweredAgents = loweredAgents
+    this.stage = f.stage
+    this.changedFields = f.changedFields
+    this.loweredAgents = f.loweredAgents
+    this.loweredUnknown = f.loweredUnknown
     Object.setPrototypeOf(this, PerformanceReloadFailedError.prototype)
+  }
+
+  /** True only when GET /performance is known to show the saved values. */
+  get inMemoryUpdated(): boolean {
+    return this.stage === 'reload'
   }
 }
 
@@ -462,44 +519,60 @@ export function isPerformanceReloadFailed(err: unknown): err is PerformanceReloa
 // performanceWriteError re-parses a PUT /performance failure body against the
 // generated Zod schemas. A 409 that does not match the conflict envelope stays
 // a plain 409 ApiError (never misreported as a different status), exactly as
-// library.ts::libraryConflictErrorFromResponse does. A 500 carrying one of
-// #904's own codes (every `max_tool_iterations_*` failure — the lowering and
-// rollback failures, an agent read/list failure during a lowering — and
-// `performance_reload_failed`) keeps the server's message, which says what
-// was and was not written; any other 500 keeps the generic 5xx default so
-// internal detail is never shown.
-function performanceWriteError(err: unknown): unknown {
-  if (!isApiError(err) || err.body === undefined) return err
+// library.ts::libraryConflictErrorFromResponse does. A 500
+// `performance_reload_failed` is ALWAYS a PerformanceReloadFailedError — a
+// malformed or missing details object or an empty message degrades what it can
+// say, never turns a committed save into a generic failure. Any other 500
+// carrying one of #904's own codes (every `max_tool_iterations_*` failure)
+// keeps the server's message, which says what was and was not written; any
+// other 500 keeps the generic 5xx default so internal detail is never shown.
+function performanceWriteError(err: unknown, body: PerformanceSettingsUpdate): unknown {
+  if (!isApiError(err)) return err
   let raw: unknown
   try {
-    raw = JSON.parse(err.body) as unknown
+    raw = err.body === undefined ? undefined : (JSON.parse(err.body) as unknown)
   } catch {
-    return err
+    raw = undefined
   }
   if (err.status === 409) {
     const parsed = (MaxToolIterationsLoweringConflictSchema as ZodType<MaxToolIterationsLoweringConflict>).safeParse(raw)
-    return parsed.success ? new MaxToolIterationsLoweringConflictError(parsed.data, err.body) : err
+    return parsed.success ? new MaxToolIterationsLoweringConflictError(parsed.data, err.body ?? '') : err
   }
-  const ownCode = err.code === PERFORMANCE_RELOAD_FAILED_CODE || (err.code ?? '').startsWith('max_tool_iterations_')
-  if (err.status !== 500 || !ownCode) return err
+  if (err.status !== 500) return err
+  if (err.code === PERFORMANCE_RELOAD_FAILED_CODE) return reloadFailedError(err, raw, body)
+  if (!(err.code ?? '').startsWith('max_tool_iterations_')) return err
   const parsed = (ErrorResponseSchema as ZodType<ErrorResponse>).safeParse(raw)
   if (!parsed.success || parsed.data.error.trim() === '') return err
-  if (err.code === PERFORMANCE_RELOAD_FAILED_CODE) {
-    return new PerformanceReloadFailedError(parsed.data.error, err.body, err, reloadFailedLoweredAgents(parsed.data.details))
-  }
   return new ApiError(err.status, parsed.data.error, { code: err.code, body: err.body, cause: err })
 }
 
-// reloadFailedLoweredAgents reads `details.lowered_agents` from a
-// performance_reload_failed body with the generated schema. Absent means the
-// request lowered nobody; a malformed list is reported, never guessed at.
-function reloadFailedLoweredAgents(details: ErrorResponse['details']): MaxToolIterationAgentChange[] {
-  const raw = (details as Record<string, unknown> | undefined)?.lowered_agents
-  if (raw === undefined) return []
-  const parsed = (MaxToolIterationAgentChangeSchema as ZodType<MaxToolIterationAgentChange>).array().safeParse(raw)
-  if (parsed.success) return parsed.data
-  console.warn('[api] performance_reload_failed: details.lowered_agents did not match MaxToolIterationAgentChange[]', parsed.error)
-  return []
+// reloadFailedError reads the body with the generated
+// PerformanceReloadFailedError schema. When it does not match, it salvages
+// what it can (the message, a well-formed lowered list) and reports the rest
+// as unknown rather than guessing.
+function reloadFailedError(err: ApiError, raw: unknown, body: PerformanceSettingsUpdate): PerformanceReloadFailedError {
+  const bodyText = err.body ?? ''
+  const typed = (PerformanceReloadFailedErrorSchema as ZodType<PerformanceReloadFailedBody>).safeParse(raw)
+  if (typed.success) {
+    const d = typed.data.details
+    return new PerformanceReloadFailedError(typed.data.error, bodyText, err, {
+      stage: d.stage,
+      changedFields: d.changed_fields,
+      loweredAgents: d.lowered_agents,
+    })
+  }
+  console.warn('[api] performance_reload_failed: body did not match PerformanceReloadFailedError', typed.error)
+  const obj = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const message = typeof obj.error === 'string' ? obj.error : ''
+  const details = obj.details !== null && typeof obj.details === 'object' ? (obj.details as Record<string, unknown>) : {}
+  const lowered = (MaxToolIterationAgentChangeSchema as ZodType<MaxToolIterationAgentChange>).array().safeParse(details.lowered_agents)
+  const confirmedLowering = (body.confirmed_lowering?.length ?? 0) > 0
+  const loweredUnknown = lowered.success ? false : details.lowered_agents !== undefined || confirmedLowering
+  return new PerformanceReloadFailedError(message, bodyText, err, {
+    stage: null,
+    loweredAgents: lowered.success ? lowered.data : [],
+    loweredUnknown,
+  })
 }
 
 // ── Memory Settings ───────────────────────────────────────────────────────────
