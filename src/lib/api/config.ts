@@ -32,6 +32,7 @@ import type {
   MaxToolIterationAgentChange,
   ErrorResponse,
   PerformanceReloadFailedDetails,
+  PerformancePendingApply,
   PerformanceReloadFailedError as PerformanceReloadFailedBody,
 } from '@/lib/api/generated/openapi-types'
 import { ApiError, isApiError } from '../api-error'
@@ -479,6 +480,16 @@ function reloadFailedMessage(serverMessage: string, f: PerformanceReloadFailure)
     return `Saved, but not applied yet${text ? `: ${text}` : ' — the running agents keep the old values until a restart or reload.'}`
   }
   return `Saved, but not applied yet — saved to the settings file; takes effect after a restart or reload${text ? `: ${text}` : '.'}`
+}
+
+/**
+ * The "saved, but not applied yet" text for the server's pending-apply state
+ * (GET /performance pending_apply, #904) when this page holds no failure
+ * message of its own — e.g. after a page reload. Same wording as a
+ * PerformanceReloadFailedError with an empty server message.
+ */
+export function performancePendingApplyMessage(p: PerformancePendingApply): string {
+  return reloadFailedMessage('', { stage: p.stage, changedFields: p.changed_fields, loweredAgents: [], loweredUnknown: false })
 }
 
 export class PerformanceReloadFailedError extends ApiError {

@@ -407,8 +407,14 @@ describe(SUITE, () => {
     const REFRESH_TEXT = 'performance settings saved but the reload failed; the new tool-iteration limit applies after the next reload or restart'
 
     // Lower 300 → 200 (no agents affected); the PUT answers performance_reload_failed
-    // stage refresh, and every GET afterwards still reports the OLD in-memory 300.
+    // stage refresh, and every GET afterwards still reports the OLD in-memory 300
+    // plus the server's pending-apply state (#904 round 3, PerformancePendingApply).
     async function refreshFailure(extra: Partial<api.PerformanceReloadFailure> = {}) {
+      vi.mocked(api.fetchPerformanceSettings).mockResolvedValueOnce(SETTINGS)
+      vi.mocked(api.fetchPerformanceSettings).mockResolvedValue({
+        ...SETTINGS,
+        pending_apply: { stage: 'refresh', changed_fields: ['max_tool_iterations'] },
+      })
       vi.mocked(api.fetchMaxToolIterationsLoweringPreview).mockResolvedValue({ value: 200, agents: [] })
       vi.mocked(api.updatePerformanceSettings).mockRejectedValueOnce(
         new api.PerformanceReloadFailedError(REFRESH_TEXT, '{}', null, { stage: 'refresh', changedFields: ['max_tool_iterations'], ...extra }),
@@ -460,6 +466,8 @@ describe(SUITE, () => {
       vi.mocked(api.fetchMaxToolIterationsLoweringPreview).mockClear()
       vi.mocked(api.fetchMaxToolIterationsLoweringPreview).mockResolvedValue({ value: 300, agents: [] })
       vi.mocked(api.updatePerformanceSettings).mockResolvedValueOnce({ ...SETTINGS, max_tool_iterations: 300 })
+      // The successful PUT applied everything: GET no longer reports pending_apply.
+      vi.mocked(api.fetchPerformanceSettings).mockResolvedValue(SETTINGS)
       // 300 is what GET (stale) reports, but config.json holds 200: a real change.
       fireEvent.change(screen.getByLabelText(LABEL), { target: { value: '300' } })
       await waitFor(() => expect(api.fetchMaxToolIterationsLoweringPreview).toHaveBeenCalledWith(300), WAIT)
