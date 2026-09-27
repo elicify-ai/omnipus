@@ -32,6 +32,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -521,6 +522,30 @@ func TestSessionWorker_DrainLoop_PersistentContinueFailure_BoundedRetryThenAband
 	if elapsed > 5*time.Second {
 		t.Fatalf("drain loop took %v to give up — want a bounded retry budget, not an unbounded/hanging retry", elapsed)
 	}
+	// Floor (pr-test-analyzer finding): assertion (i) above only bounded the
+	// CEILING (not hung/unbounded). Without a floor, an implementation that
+	// gives up on the FIRST failure with no retry at all (0 real backoff
+	// sleeps) would pass just as well as the real bounded-retry design —
+	// the assertion could not tell "retried, then abandoned" apart from
+	// "never retried at all". continueDrainBackoff (session_worker.go) is
+	// []time.Duration{100 * time.Millisecond, 300 * time.Millisecond, 700 *
+	// time.Millisecond} — read directly from that var, not guessed — and
+	// every one of continueDrainMaxRetries==3's attempts is a genuine
+	// failure here (the broken-hook mechanism above is permanent and
+	// deterministic), so the drain loop's own retry-for-loop
+	// (session_worker.go processTurn, `for attempt := 0; attempt <
+	// continueDrainMaxRetries; attempt++`) sleeps ALL THREE backoff
+	// entries — attempt 2 (the last, index 2) still satisfies `attempt <
+	// len(continueDrainBackoff)` (2 < 3) and sleeps backoff[2] too — for a
+	// minimum of 100+300+700 = 1100ms before abandonQueuedSteering ever
+	// runs. 900ms leaves a safety margin below that 1100ms floor for
+	// scheduler jitter while still failing an implementation that skips
+	// the retries.
+	if elapsed < 900*time.Millisecond {
+		t.Fatalf("drain loop finished in %v — want at least ~1.1s (continueDrainBackoff's own "+
+			"100ms+300ms+700ms schedule, session_worker.go) to have actually elapsed before "+
+			"abandonment; a near-instant finish means the bounded retries never really ran", elapsed)
+	}
 
 	// (ii) On exhaustion the queue must be dequeued-and-reported — not left
 	// silently stuck forever, and not left non-empty.
@@ -614,5 +639,262 @@ func TestSessionWorker_DrainLoop_PersistentContinueFailure_BoundedRetryThenAband
 	case extra := <-msgBus.OutboundChan():
 		t.Fatalf("unexpected THIRD outbound message %q — expected exactly turn 1's response plus one notice", extra.Content)
 	default:
+	}
+}
+
+// errScopeFixSimulatedTurnFailure is the fixed error scopeFixErrorAfterCallProvider
+// returns from its erroring calls onward. Its text deliberately matches none
+// of providers.ClassifyError's known provider-error patterns and none of
+// isTransientStreamError's substrings (loop.go: "streaming read error:",
+// "http2: response body closed", "connection reset by peer", etc. — read in
+// full before choosing this wording) so
+// agentLoopRunTurnResponseCallLLMWithRetries.classifyFailure
+// (loop_run_turn_response.go) takes its "ClassifyError returned nil ... not a
+// transient stream error ... genuinely unknown error. Don't retry" branch and
+// breaks on the FIRST failing attempt — exactly one provider.Chat call per
+// logical turn, with no internal retry silently consuming extra calls this
+// test isn't accounting for.
+var errScopeFixSimulatedTurnFailure = errors.New(
+	"scope-fix: simulated genuine runTurn failure (ordinary provider error) inside " +
+		"Continue's own dequeued-message turn")
+
+// scopeFixErrorAfterCallProvider is a minimal LLM-provider test double (the
+// correct mock boundary — the process edge, not the unit under test): every
+// call before errAtCall (0-indexed) returns beforeResp; errAtCall and every
+// call after returns errScopeFixSimulatedTurnFailure. This is the mechanism
+// the CHECK finding needs: turn 1 must complete NORMALLY (so a real steering
+// message can be enqueued and later genuinely dequeued), and only Continue's
+// OWN internal turn — the one the drain loop's retry starts via
+// continueWithSteeringMessages -> runAgentLoop -> runTurn
+// (pkg/agent/steering.go:687-709, pkg/agent/loop.go:1783) — must then fail
+// with a genuine post-dequeue error, never one of the four PRE-dequeue causes
+// (active-turn guard, ensureHooksInitialized, ensureMCPInitialized,
+// agentForSession==nil) the sibling tests in this file already cover.
+type scopeFixErrorAfterCallProvider struct {
+	mu         sync.Mutex
+	calls      int
+	errAtCall  int
+	beforeResp string
+}
+
+func (p *scopeFixErrorAfterCallProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	idx := p.calls
+	p.calls++
+	if idx >= p.errAtCall {
+		return nil, errScopeFixSimulatedTurnFailure
+	}
+	return &providers.LLMResponse{Content: p.beforeResp}, nil
+}
+
+func (p *scopeFixErrorAfterCallProvider) GetDefaultModel() string { return "scope-fix-error-mock" }
+
+func (p *scopeFixErrorAfterCallProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+// TestSessionWorker_DrainLoop_PostDequeueContinueFailure_MustNotSilentlyDropMessage
+// is the RED test for the gate finding on commit 3620ba937 (code-reviewer,
+// CRITICAL, deterministic): Continue's Bug-1/Bug-2 reorder fix only protects
+// the four PRE-dequeue failure causes. Once dequeueSteeringMessagesForScopeWithFallback
+// succeeds, the dequeued messages are handed to continueWithSteeringMessages
+// -> runAgentLoop -> runTurn (steering.go:687-709/loop.go:1783); any ordinary
+// error runTurn returns propagates straight out
+// (`if err != nil { return "", err }`, loop.go ~1836-1838) with the queue
+// ALREADY DRAINED and nothing anywhere restoring those items — the only two
+// prependItemsScope callers are consumeDequeuedSteering's own
+// wake-write-failure branch and abandonQueuedSteering's own panic recovery;
+// neither applies to this failure path.
+//
+// Spec (desired, "each queued message is either processed exactly once or the
+// user is told it wasn't" — this file's own design-note quote, already relied
+// on by TestSessionWorker_DrainLoop_PersistentContinueFailure_BoundedRetryThenAbandonAndNotify
+// above): since this message is never actually processed (no continuation
+// response derived from its content is ever published on this path) and
+// nothing restores it to the queue, the ONLY way the invariant can hold is a
+// DISTINCT fail-loud notice, exactly like abandonQueuedSteering already
+// publishes ("Your follow-up message could not be processed and was not
+// delivered — please resend it.", session_worker.go) on its own, differently
+// caused, failure path.
+//
+// TODAY (bug, confirmed by direct reading of session_worker.go's drain-loop
+// retry-for-loop, processTurn ~661-681): attempt 0 of the bounded retry calls
+// al.Continue, which dequeues the one queued message and then fails inside
+// its own runTurn call (continueErr != nil) — the backoff sleep fires and
+// attempt 1 runs. Attempt 1 calls al.Continue again; the queue is now EMPTY
+// (attempt 0 already drained it), so Continue hits its own
+// `if len(steeringMsgs) == 0 { return "", nil }` early return and reports a
+// "successful" empty result — continueErr is nil, so the retry-for-loop's own
+// `if continueErr == nil { break }` fires after only 2 attempts, not 3. Back
+// in processTurn: continueErr (the LAST attempt's value, nil) makes
+// `if continueErr != nil` (session_worker.go ~672) false, so
+// abandonQueuedSteering — the ONLY place that publishes a fail-loud notice —
+// is never called; `continued == ""` (also from attempt 1) then triggers the
+// bare `return` at ~677. No log, no notice: the message that attempt 0's
+// Continue call genuinely dequeued and lost is gone with zero record.
+func TestSessionWorker_DrainLoop_PostDequeueContinueFailure_MustNotSilentlyDropMessage(t *testing.T) {
+	cfg := newContinueScopeFixConfig(t)
+	msgBus := bus.NewMessageBus()
+	// idx 0 (turn 1's own call) succeeds; idx 1 (Continue attempt 0's own
+	// internal turn, run from inside the drain loop) and every call after
+	// that fails — deterministic and permanent, exactly like the sibling
+	// persistent-failure test's broken-hook mechanism, but reached via a
+	// genuine post-dequeue runTurn failure instead of a pre-dequeue guard.
+	provider := &scopeFixErrorAfterCallProvider{errAtCall: 1, beforeResp: "turn1-response"}
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+
+	msg := bus.InboundMessage{
+		Channel: "test",
+		Sender:  bus.SenderInfo{CanonicalID: "user-d"},
+		ChatID:  "chat-post-dequeue-failure",
+		Content: "first message for the post-dequeue failure test",
+		Peer:    bus.Peer{Kind: bus.PeerDirect, ID: "user-d"},
+	}
+
+	target, err := al.buildContinuationTarget(msg)
+	if err != nil {
+		t.Fatalf("buildContinuationTarget unexpected error: %v — this test needs routing to succeed "+
+			"so only Continue's own internal turn (via the scripted provider error) fails, not target "+
+			"resolution", err)
+	}
+	if target == nil {
+		t.Fatal("buildContinuationTarget returned a nil target for an ordinary chat message")
+	}
+
+	w := newSessionWorker(target.SessionKey, al, func() {})
+
+	// Same synchronization technique as
+	// TestSessionWorker_DrainLoop_PersistentContinueFailure_BoundedRetryThenAbandonAndNotify
+	// above (see that test's own harness-fix comment for why): EventBus.SetSyncTap
+	// on EventKindTurnEnd blocks turn 1's own runTurn call from returning
+	// until this goroutine releases it, which is exactly the window after
+	// turn 1's iteration loop has made its last steering-continuation
+	// decision (so its own inner poll can no longer swallow the message
+	// into the SAME turn) and strictly before processTurn's own
+	// `for !w.closeSteeringWhenDrained(...)` drain-tail loop runs (runTurn
+	// has not yet returned to processTurn).
+	turnEndReached := make(chan struct{})
+	releaseTurnEnd := make(chan struct{})
+	var tapOnce sync.Once
+	al.eventBus.SetSyncTap(func(evt Event) {
+		if evt.Kind != EventKindTurnEnd {
+			return
+		}
+		tapOnce.Do(func() {
+			close(turnEndReached)
+			<-releaseTurnEnd
+		})
+	})
+	defer al.eventBus.SetSyncTap(nil)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.processTurn(context.Background(), msg)
+	}()
+
+	select {
+	case <-turnEndReached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for turn 1's own runTurn call to finish (EventKindTurnEnd never observed)")
+	}
+
+	if _, err := al.EnqueueSteeringMessage(target.SessionKey, testDefaultAgentID, providers.Message{
+		Role: "user", Content: "late follow-up that Continue will dequeue and then lose",
+	}, ""); err != nil {
+		t.Fatalf("EnqueueSteeringMessage unexpected error: %v", err)
+	}
+
+	close(releaseTurnEnd)
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for processTurn to return")
+	}
+
+	// (1) Exactly two REAL provider calls: turn 1's own, plus Continue's own
+	// dequeued-message turn (attempt 0 of the drain loop) that fails. A
+	// count of 1 would mean Continue never got past a pre-dequeue guard and
+	// this test exercised nothing new; a count > 2 would mean attempt 1 (or
+	// later) also reached the provider, which would mean the queue was NOT
+	// already empty on attempt 1 as the finding describes.
+	if got := provider.callCount(); got != 2 {
+		t.Fatalf("provider call count = %d, want 2 (turn 1 + Continue attempt 0's own failing turn)", got)
+	}
+
+	// (2) The queued follow-up is genuinely gone from the queue — Continue's
+	// dequeue is destructive and nothing restores it on this failure path.
+	if got := al.pendingSteeringCountForScope(target.SessionKey); got != 0 {
+		t.Fatalf("pending count after the drain loop finished = %d, want 0 (Continue's dequeue is "+
+			"destructive; the message cannot still be sitting in the queue)", got)
+	}
+
+	// (3) inTurn must end up cleared (processTurn's own function-level defer
+	// clears it unconditionally on every return) — sanity check, not itself
+	// the RED signal.
+	if w.inTurn.Load() {
+		t.Fatal("worker inTurn still true after processTurn returned")
+	}
+
+	// (4) THE assertion under test: collect every outbound message and
+	// require a DISTINCT fail-loud notice about the lost follow-up, beyond
+	// turn 1's own response. Order is not asserted (drain-loop notices can
+	// legitimately land before or after the turn's own deferred publish —
+	// see the sibling persistent-failure test's own correction note on this
+	// exact point).
+	var outbound []string
+collectOutbound:
+	for {
+		select {
+		case out := <-msgBus.OutboundChan():
+			outbound = append(outbound, out.Content)
+		default:
+			break collectOutbound
+		}
+	}
+
+	if len(outbound) == 0 {
+		t.Fatal("expected at least turn 1's own response on the outbound channel — got none")
+	}
+
+	isNotice := func(s string) bool {
+		lower := strings.ToLower(s)
+		return strings.Contains(lower, "resend") || strings.Contains(lower, "could not be processed") ||
+			strings.Contains(lower, "problem")
+	}
+
+	sawNotice := false
+	for _, m := range outbound {
+		if isNotice(m) {
+			sawNotice = true
+			break
+		}
+	}
+
+	if !sawNotice {
+		t.Fatalf("TODAY'S BUG: no fail-loud notice was published about the lost follow-up — got %d "+
+			"outbound message(s) %q. Mechanism: attempt 0 of the drain loop's bounded retry dequeues the "+
+			"message then fails inside Continue's own runTurn call (continueErr != nil); nothing restores "+
+			"the message to the queue; attempt 1 finds the queue already empty and returns (\"\", nil), so "+
+			"the retry-for-loop's `if continueErr == nil { break }` exits with continueErr==nil — "+
+			"processTurn's `if continueErr != nil` check (session_worker.go ~line 672) never sees the "+
+			"attempt-0 error, abandonQueuedSteering (the only fail-loud-notice publisher) is never called, "+
+			"and `continued == \"\"` triggers a bare return: the message is silently gone with zero record, "+
+			"worse than even a logged WarnCF", len(outbound), outbound)
+	}
+
+	if len(outbound) < 2 {
+		t.Fatalf("expected at least 2 distinct outbound messages (turn 1's own response AND the fail-loud "+
+			"notice) — got %d: %q", len(outbound), outbound)
 	}
 }
