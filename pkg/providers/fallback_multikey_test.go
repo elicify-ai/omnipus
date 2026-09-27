@@ -27,15 +27,18 @@ func TestMultiKeyFailover(t *testing.T) {
 	cooldown := NewCooldownTracker()
 	chain := NewFallbackChain(cooldown)
 
-	// Mock run function: first call fails with 429, second succeeds
+	// Mock run function: the first key rate-limits on every call. §7.4
+	// (C-8/MAJ-101) retries THIS candidate in place up to 3 total calls,
+	// marks it failed once after its last failure, then the chain moves to
+	// the second key, which succeeds.
 	callCount := 0
 	mockRun := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
 		callCount++
-		if callCount == 1 {
-			// First call: simulate rate limit
+		if callCount <= 3 {
+			// First key: rate limit on all three §7.4 in-place attempts.
 			return nil, errors.New("http error: status 429 - rate limit exceeded")
 		}
-		// Second call: success
+		// Second key: success
 		return &LLMResponse{
 			Content: "Hello from key2!",
 		}, nil
@@ -55,13 +58,19 @@ func TestMultiKeyFailover(t *testing.T) {
 		t.Errorf("expected response from key2, got: %s", result.Response.Content)
 	}
 
-	if callCount != 2 {
-		t.Errorf("expected 2 calls (1 fail + 1 success), got %d", callCount)
+	// §7.4: 3 in-place rate-limit calls on key1 + 1 success on key2.
+	if callCount != 4 {
+		t.Errorf("expected 4 calls (3 rate-limited on key1 + 1 success on key2), got %d", callCount)
 	}
 
-	// Verify first attempt was recorded
+	// The first key is marked failed exactly once, after its last failure;
+	// the in-place retries themselves record no attempts.
 	if len(result.Attempts) != 1 {
-		t.Errorf("expected 1 failed attempt recorded, got %d", len(result.Attempts))
+		t.Fatalf("expected 1 failed attempt recorded (key1 marked once), got %d", len(result.Attempts))
+	}
+
+	if result.Attempts[0].Model != "glm-4.7" {
+		t.Errorf("expected failed attempt to name key1 (glm-4.7), got: %s", result.Attempts[0].Model)
 	}
 
 	if result.Attempts[0].Reason != FailoverRateLimit {
