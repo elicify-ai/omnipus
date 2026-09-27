@@ -10,6 +10,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -117,4 +118,96 @@ func TestCallProviderOnce_SingleCandidateAlways429_ExhaustsThreeCalls_F1(t *test
 	require.Error(t, err, "an always-429 candidate must fail the turn after exhausting its retries")
 	assert.GreaterOrEqual(t, provider.callIdx, 3,
 		"C-8: the single candidate must get its 3 total calls")
+}
+
+// f1ScriptedProvider is a two-mode provider: fail429 answers every call with
+// a rate limit until switched off, then answers with content. The switch is
+// what lets ONE AgentLoop drive a failing turn and then a live turn.
+type f1ScriptedProvider struct {
+	mu      sync.Mutex
+	fail429 bool
+	calls   int
+}
+
+func (p *f1ScriptedProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls++
+	if p.fail429 {
+		return nil, errors.New("429 Too Many Requests")
+	}
+	return &providers.LLMResponse{Content: "second turn answered", ToolCalls: []providers.ToolCall{}}, nil
+}
+
+func (p *f1ScriptedProvider) GetDefaultModel() string { return "test-model" }
+
+func (p *f1ScriptedProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+func (p *f1ScriptedProvider) setFail429(v bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.fail429 = v
+}
+
+// CHECK finding (audit of the F1 fix): the throwaway cooldown tracker is the
+// single-candidate chain's central safety property — today's plain path marks
+// nothing, so a turn-1 429 exhaustion must never mark the SHARED chain's
+// tracker; if it did, turn 2's only candidate would be cooldown-skipped and
+// the turn would fail with a generic all-skipped exhaustion instead of
+// reaching the provider. The two single-turn F1 tests above cannot see this
+// (the difference only exists BETWEEN turns on one AgentLoop) — proven by
+// mutation: removing WithCooldown(NewCooldownTracker()) leaves both green.
+// This test pins the property on a second turn.
+func TestCallProviderOnce_SingleCandidateExhaustion_NeverCooldownSkipsNextTurn_F1(t *testing.T) {
+	provider := &f1ScriptedProvider{fail429: true}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				DefaultModel:      config.DefaultModel{Model: "test-model"},
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+			List: []config.AgentConfig{{ID: "mia"}},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(func() { msgBus.Close() })
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+	t.Cleanup(al.Close)
+
+	run := func(session string) error {
+		_, err := al.runAgentLoop(context.Background(), al.GetRegistry().GetDefaultAgent(), processOptions{
+			SessionKey:      session,
+			Channel:         "web",
+			ChatID:          "f1-cd-chat",
+			UserMessage:     "hello",
+			DefaultResponse: defaultResponse,
+			SendResponse:    false,
+		})
+		return err
+	}
+
+	err := run("f1-cd-turn-1")
+	require.Error(t, err, "turn 1 (always-429) must fail after exhausting its 3 calls")
+	require.GreaterOrEqual(t, provider.callCount(), 3,
+		"C-8: turn 1 must get its 3 total calls before failing")
+
+	provider.setFail429(false)
+	err = run("f1-cd-turn-2")
+	require.NoError(t, err,
+		"turn 2 must run: a turn-1 429 exhaustion must never mark the SHARED tracker "+
+			"(F1's throwaway tracker) — a cooldown-skip here would fail the turn with a "+
+			"generic all-skipped exhaustion instead of reaching the provider")
+	require.GreaterOrEqual(t, provider.callCount(), 4,
+		"turn 2 must actually reach the provider, not skip it in cooldown")
 }
